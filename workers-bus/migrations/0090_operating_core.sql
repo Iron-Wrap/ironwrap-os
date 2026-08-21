@@ -1,8 +1,5 @@
 -- 0090_operating_core.sql - tenant-owned D1 operating-core facts.
 --
--- Extracted from #122 without renaming shipped 0069_customer_portal_decision_intents.sql.
--- IRO-195 stack filenames 0070-0078 are not reused.
---
 -- The inbound envelope and its raw R2 object remain the source evidence.  These tables contain
 -- only the validated facts needed by the owned operating surface and the temporary Frappe
 -- projection.  Provider payloads are deliberately not copied here.

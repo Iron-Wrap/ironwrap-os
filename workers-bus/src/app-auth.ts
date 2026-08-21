@@ -1,5 +1,4 @@
 import { gmailConfigured, sendGmail } from "./google.ts";
-import { frappeReadConfigured } from "./frappe-read.ts";
 import * as authStore from "./app-auth-store.ts";
 import {
   APP_DEVICE_PROOF_HEADER,
@@ -46,7 +45,6 @@ export function appBffConfigured(env: AppEnv): boolean {
   const emailReady = gmailConfigured(env) || String(env.APP_ALLOW_INSECURE_LOCAL) === "true";
   return !!tenantId && !!publicTenant(env) && !!origin &&
     nonEmpty(env.APP_AUTH_PEPPER) && env.APP_AUTH_PEPPER.trim().length >= 32 &&
-    frappeReadConfigured(env) &&
     emailReady;
 }
 
@@ -136,8 +134,6 @@ export function parseProvisionAppUser(
   if (value.frappe_user_id !== null && value.frappe_user_id !== undefined && !frappeUserId) {
     return { ok: false, error: "invalid_frappe_user_id" };
   }
-  if (role === "field" && !frappeUserId) return { ok: false, error: "field_requires_frappe_user_id" };
-
   return {
     ok: true,
     value: {

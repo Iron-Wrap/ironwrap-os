@@ -44,10 +44,6 @@ const REQUIRED_ENV_NAMES = [
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
   "ERPNEXT_INTEGRATION_USER",
-  "FLEET_CAPTURE_FRAPPE_API_KEY",
-  "FLEET_CAPTURE_FRAPPE_API_SECRET",
-  "WORK_PACKAGE_FRAPPE_API_KEY",
-  "WORK_PACKAGE_FRAPPE_API_SECRET",
   "QB_WEBHOOK_TOKEN",
   "QB_EXPECTED_REALM_ID",
   "QB_RECONCILIATION_ISSUER_USER",
@@ -171,13 +167,17 @@ const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter(
     !FACET_ENABLE_TIME_ENV_NAMES.has(name),
 );
 
+const LEFTOVER_FRAPPE_RAIL_SECRETS = [
+  ["FLEET_CAPTURE_FRAPPE_API_KEY", 10],
+  ["FLEET_CAPTURE_FRAPPE_API_SECRET", 16],
+  ["WORK_PACKAGE_FRAPPE_API_KEY", 10],
+  ["WORK_PACKAGE_FRAPPE_API_SECRET", 16],
+];
+
 const SECRET_ENV_NAMES = [
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
-  "FLEET_CAPTURE_FRAPPE_API_KEY",
-  "FLEET_CAPTURE_FRAPPE_API_SECRET",
-  "WORK_PACKAGE_FRAPPE_API_KEY",
-  "WORK_PACKAGE_FRAPPE_API_SECRET",
+  ...LEFTOVER_FRAPPE_RAIL_SECRETS.map(([name]) => name),
   "QB_WEBHOOK_TOKEN",
   "QB_RECONCILIATION_ISSUER_API_KEY",
   "QB_RECONCILIATION_ISSUER_API_SECRET",
@@ -718,6 +718,10 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const restoreIndexes = shellCsvAssignment(d1Restore, "REQUIRED_INDEX_BINDINGS");
   const backupTriggers = shellCsvAssignment(d1Backup, "REQUIRED_TRIGGER_BINDINGS");
   const restoreTriggers = shellCsvAssignment(d1Restore, "REQUIRED_TRIGGER_BINDINGS");
+  const migrationTableCount = migrationInventory.tables.length;
+  const migrationIndexCount = migrationInventory.indexBindings.length;
+  const migrationTriggerCount = migrationInventory.triggerBindings.length;
+  const migrationSchemaSummary = `${migrationTableCount} migration-defined tables, ${migrationIndexCount} indexes, and ${migrationTriggerCount} triggers`;
   checks.push(check(
     "contract.d1.schema_inventory",
     migrationInventory.ok &&
@@ -733,7 +737,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       JSON.stringify(restoreIndexes) === JSON.stringify(migrationInventory.indexBindings) &&
       JSON.stringify(backupTriggers) === JSON.stringify(migrationInventory.triggerBindings) &&
       JSON.stringify(restoreTriggers) === JSON.stringify(migrationInventory.triggerBindings),
-    "D1 backup and restore inventories match all 155 migration-defined tables, 224 indexes, and 361 triggers",
+    `D1 backup and restore inventories match all ${migrationSchemaSummary}`,
     "D1 backup and restore inventories must exactly match the migration-defined table, index, and trigger schema",
   ));
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
@@ -744,8 +748,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") &&
       d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("facet_design_evidence_associations") &&
       d1Backup.includes("newo_reconciliation_runs") && d1Backup.includes("customer_portal_acceptance_events") &&
-      d1Backup.includes("hermes_desktop_results") && d1Backup.includes("REQUIRED_TABLE_COUNT=155") &&
-      d1Backup.includes("REQUIRED_INDEX_COUNT=224") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=361") &&
+      d1Backup.includes("hermes_desktop_results") && d1Backup.includes(`REQUIRED_TABLE_COUNT=${migrationTableCount}`) &&
+      d1Backup.includes(`REQUIRED_INDEX_COUNT=${migrationIndexCount}`) && d1Backup.includes(`REQUIRED_TRIGGER_COUNT=${migrationTriggerCount}`) &&
       d1Backup.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Backup.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Backup.includes("idx_dead_letter_open_measurement=dead_letter") &&
@@ -766,8 +770,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Backup.includes("verify_hermes_semantics") && d1Backup.includes("type='index'") && d1Backup.includes("type='trigger'") &&
       d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256=") &&
       d1Backup.includes("required_indexes=") && d1Backup.includes("required_triggers="),
-    "D1 backup proves all 155 tables, 224 indexes, 361 triggers, Hermes, access-role, and measurement-evidence semantics, and a hashed manifest",
-    "D1 backup must validate all 155 migration-defined tables, 224 indexes, and 359 trigger bindings before encryption",
+    `D1 backup proves all ${migrationSchemaSummary}, Hermes, access-role, and measurement-evidence semantics, and a hashed manifest`,
+    `D1 backup must validate all ${migrationSchemaSummary} before encryption`,
   ));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
   checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
@@ -781,8 +785,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") &&
       d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("facet_design_evidence_associations") &&
       d1Restore.includes("newo_reconciliation_runs") && d1Restore.includes("customer_portal_acceptance_events") &&
-      d1Restore.includes("hermes_desktop_results") && d1Restore.includes("REQUIRED_TABLE_COUNT=155") &&
-      d1Restore.includes("REQUIRED_INDEX_COUNT=224") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=361") &&
+      d1Restore.includes("hermes_desktop_results") && d1Restore.includes(`REQUIRED_TABLE_COUNT=${migrationTableCount}`) &&
+      d1Restore.includes(`REQUIRED_INDEX_COUNT=${migrationIndexCount}`) && d1Restore.includes(`REQUIRED_TRIGGER_COUNT=${migrationTriggerCount}`) &&
       d1Restore.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Restore.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Restore.includes("idx_dead_letter_open_measurement=dead_letter") &&
@@ -801,7 +805,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") &&
       d1Restore.includes("verify_hermes_semantics") && d1Restore.includes("required_indexes") &&
       d1Restore.includes("required_triggers") && d1Restore.includes("no remote mutation performed"),
-    "D1 restore verifies all 155 tables, 224 indexes, 361 triggers, and Hermes, access-role, and measurement-evidence semantics before remote mutation",
+    `D1 restore verifies all ${migrationSchemaSummary}, plus Hermes, access-role, and measurement-evidence semantics before remote mutation`,
     "D1 restore must verify ciphertext, manifest, SQL import, integrity, every migration-defined table, index, and trigger locally first",
   ));
   checks.push(check(
@@ -812,7 +816,9 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') &&
       d1Restore.includes("target must be an empty dedicated drill database") &&
       d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-index-verify.sql") &&
-      d1Restore.includes("sql AS index_sql") && d1Restore.includes("target-trigger-verify.sql") &&
+      d1Restore.includes("sql AS index_sql") && d1Restore.includes("target-trigger-verify.json") &&
+      d1Restore.includes("run_trigger_verification_batch") &&
+      d1Restore.includes("MAX_REMOTE_READ_COMMAND_LENGTH") &&
       d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") &&
       d1Restore.includes("hermes_desktop_results_one_accepted_handoff") &&
       d1Restore.includes("idx_measurement_intake_receipts_ocr_review") &&
@@ -826,7 +832,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') &&
       d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') &&
       d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"),
-    "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all 155 tables, 224 indexes, and 359 trigger bindings",
+    `remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all ${migrationSchemaSummary}`,
     "remote D1 restore must reject unsafe targets, match all table counts, indexes, and trigger bindings, and use a distinct ephemeral write token",
   ));
   checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
@@ -947,11 +953,6 @@ export async function validateLiveEnv({
     D1_BACKUP_API_TOKEN: 24,
     RCLONE_CONFIG_R2_ACCESS_KEY_ID: 16,
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: 32,
-    // Frappe API keys/secrets, same shape as the QuickBooks issuer pair above.
-    FLEET_CAPTURE_FRAPPE_API_KEY: 10,
-    FLEET_CAPTURE_FRAPPE_API_SECRET: 16,
-    WORK_PACKAGE_FRAPPE_API_KEY: 10,
-    WORK_PACKAGE_FRAPPE_API_SECRET: 16,
     ...(facetDesignIngestEnabled ? {
       FACET_DESIGN_INGEST_HMAC_KEY: 32,
     } : {}),
@@ -973,18 +974,27 @@ export async function validateLiveEnv({
   }
   checks.push(check("live.secret.admin_consistency", env.ADMIN_TOKEN === env.IRONWRAP_ADMIN_TOKEN, "admin token bindings are consistent", "ADMIN_TOKEN and IRONWRAP_ADMIN_TOKEN must reference the same secret"));
   checks.push(check("live.secret.effect_runtime_consistency", env.EFFECT_RUNTIME_TOKEN === env.IRONWRAP_EFFECT_RUNTIME_TOKEN, "effect-runtime token bindings are consistent", "EFFECT_RUNTIME_TOKEN and IRONWRAP_EFFECT_RUNTIME_TOKEN must reference the same dedicated secret"));
+  const leftoverFrappeRailValues = [];
+  for (const [name, minimum] of LEFTOVER_FRAPPE_RAIL_SECRETS) {
+    const value = env[name];
+    if (value === undefined || value === "") {
+      continue;
+    }
+    checks.push(check(
+      `live.secret.${name}`,
+      validSecret(env, name, minimum),
+      `${name} is non-placeholder and meets the minimum length`,
+      `${name} is missing, placeholder, malformed, or too short`,
+    ));
+    leftoverFrappeRailValues.push(value);
+  }
   const purposeSecrets = [
     env.ERPNEXT_API_KEY,
     env.ERPNEXT_API_SECRET,
+    ...leftoverFrappeRailValues,
     env.QB_WEBHOOK_TOKEN,
     env.QB_RECONCILIATION_ISSUER_API_KEY,
     env.QB_RECONCILIATION_ISSUER_API_SECRET,
-    // Isolation is only real if these differ from ERPNEXT_API_KEY/SECRET above: this
-    // uniqueness assertion is what makes "dedicated" a checked fact, not a naming habit.
-    env.FLEET_CAPTURE_FRAPPE_API_KEY,
-    env.FLEET_CAPTURE_FRAPPE_API_SECRET,
-    env.WORK_PACKAGE_FRAPPE_API_KEY,
-    env.WORK_PACKAGE_FRAPPE_API_SECRET,
     env.FRAPPE_API_KEY,
     env.FRAPPE_API_SECRET,
     env.ADMIN_TOKEN,

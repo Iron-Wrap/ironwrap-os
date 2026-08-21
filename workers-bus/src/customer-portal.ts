@@ -1,5 +1,4 @@
 import {
-  appBffConfigured,
   appPublicOrigin,
   authRequestContext,
   configuredTenantId,
@@ -19,40 +18,26 @@ import {
   touchCustomerPortalLink,
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
+import { gmailConfigured } from "./google.ts";
 import {
-  listCustomerPortalFrappeResource,
-  type FrappeRow,
-} from "./frappe-read.ts";
+  readNativeCommercialJobPacket,
+  readNativeJobCore,
+  type NativeCommercialJobPacket,
+  type NativeJobCoreRecord,
+} from "./native-job-packet-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
-import { customerAcceptanceBackendConfigured } from "./customer-acceptance-config.ts";
-import { customerDecisionBackendConfigured } from "./customer-decision-config.ts";
+import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
 const PORTAL_ACCESS_IP_LIMIT = 120;
 const PORTAL_MIN_TTL_MS = 60 * 60 * 1000;
 const PORTAL_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const MAX_OPTION_PAYLOAD_BYTES = 16_000;
-/** `Option Package.tier`'s own Select order; anything else is projected as an untiered card. */
-const OPTION_TIER_ORDER = ["Good", "Better", "Best", "Custom"];
-
-export interface CustomerPortalOptionPackage {
-  id: string;
-  package_name: string | null;
-  tier: string | null;
-  material_system: string | null;
-  price_delta: number | null;
-  currency: string | null;
-  /** Parsed `options_json`; `null` whenever the office left it empty or it is not an object. */
-  options: Record<string, unknown> | null;
-  warranty_summary: string | null;
-}
 
 export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
   contract_acceptance_available: boolean;
-  material_decision_available: boolean;
   source_updated_at: string | null;
   read_model_generated_at: string;
   job: {
@@ -87,7 +72,6 @@ export interface CustomerPortalReadModel {
     text: string | null;
     version: string | null;
   }>;
-  option_packages: CustomerPortalOptionPackage[];
   progress: Array<{
     id: string;
     type: string | null;
@@ -117,10 +101,19 @@ export function customerPortalEnabled(env: AppEnv): boolean {
 /** Optional feature gates must not make the core Worker unready while disabled. */
 export function customerPortalConfigured(env: AppEnv): boolean {
   if (!customerPortalEnabled(env)) return true;
-  // Keep customer links fail-closed whenever the office control plane that can revoke them is
-  // unavailable. appBffConfigured intentionally returns true for a disabled optional BFF, so
-  // require the explicit enablement flag here as well.
-  return String(env.APP_BFF_ENABLED) === "true" && appBffConfigured(env);
+  // Link revocation belongs to the authenticated office control plane, but portal reads no longer
+  // depend on the separate Frappe adapter used by other office surfaces.
+  const emailReady =
+    gmailConfigured(env) || String(env.APP_ALLOW_INSECURE_LOCAL) === "true";
+  return (
+    String(env.APP_BFF_ENABLED) === "true" &&
+    !!env.DB &&
+    !!configuredTenantId(env) &&
+    !!publicTenant(env) &&
+    !!appPublicOrigin(env) &&
+    (env.APP_AUTH_PEPPER?.trim().length ?? 0) >= 32 &&
+    emailReady
+  );
 }
 
 /**
@@ -182,7 +175,7 @@ export async function handleCustomerPortalResolve(
     });
     return portalJson(model);
   } catch {
-    // A Frappe/D1 outage says nothing about whether a supplied capability was valid.
+    // A D1 outage says nothing about whether a supplied capability was valid.
     return portalUnavailable();
   }
 }
@@ -214,7 +207,7 @@ export async function handleCustomerPortalLinks(
     url.pathname === "/api/v1/customer-portal/links"
   ) {
     const roofJobId = url.searchParams.get("roof_job_id");
-    if (roofJobId !== null && !validFrappeName(roofJobId))
+    if (roofJobId !== null && !validResourceId(roofJobId))
       return portalJson({ error: "invalid_roof_job" }, 400);
     try {
       const links = await listCustomerPortalLinks(
@@ -248,11 +241,11 @@ export async function handleCustomerPortalLinks(
         : "";
     const now = new Date();
     const expiresAt = parsedExpiry(parsed.value.expires_at, now);
-    if (!validFrappeName(roofJobId))
+    if (!validResourceId(roofJobId))
       return portalJson({ error: "invalid_roof_job" }, 400);
     if (!expiresAt) return portalJson({ error: "invalid_expiry" }, 400);
     try {
-      const binding = await customerJobBinding(env, roofJobId);
+      const binding = await customerJobBinding(env, tenantId, roofJobId);
       if (!binding) return portalJson({ error: "customer_job_not_found" }, 404);
       const rawToken = randomToken();
       const createdAt = now.toISOString();
@@ -339,306 +332,106 @@ export async function buildCustomerPortalReadModel(
   env: AppEnv,
   link: CustomerPortalLinkRecord,
 ): Promise<CustomerPortalReadModel | null> {
-  const jobs = await listCustomerPortalFrappeResource(
-    env,
-    "Roof Job",
-    [["Roof Job", "name", "=", link.roof_job_id]],
-    1,
-  );
-  const job = jobs[0];
+  const core = await readNativeJobCore(env, link.tenant_id, link.roof_job_id);
+  const job = core?.job;
   if (
     !job ||
-    text(job.name, 140) !== link.roof_job_id ||
-    text(job.customer, 140) !== link.customer_id
+    job.roof_job_id !== link.roof_job_id ||
+    job.customer_id !== link.customer_id
   )
     return null;
 
-  const [
-    quotes,
-    proposalPacks,
-    clauses,
-    evidence,
-    completionPackets,
-    warrantyPackets,
-    optionPackages,
-  ] = await Promise.all([
-    listCustomerPortalFrappeResource(
-      env,
-      "Customer Quote",
-      [["Customer Quote", "roof_job", "=", link.roof_job_id]],
-      20,
-    ),
-    listCustomerPortalFrappeResource(
-      env,
-      "Proposal Evidence Pack",
-      [["Proposal Evidence Pack", "roof_job", "=", link.roof_job_id]],
-      20,
-    ),
-    listCustomerPortalFrappeResource(
-      env,
-      "Scope Clause",
-      [["Scope Clause", "roof_job", "=", link.roof_job_id]],
-      50,
-    ),
-    listCustomerPortalFrappeResource(
-      env,
-      "Evidence Item",
-      [["Evidence Item", "roof_job", "=", link.roof_job_id]],
-      50,
-    ),
-    listCustomerPortalFrappeResource(
-      env,
-      "Completion Packet",
-      [["Completion Packet", "roof_job", "=", link.roof_job_id]],
-      10,
-    ),
-    listCustomerPortalFrappeResource(
-      env,
-      "Warranty Packet",
-      [["Warranty Packet", "roof_job", "=", link.roof_job_id]],
-      10,
-    ),
-    // Approved-only, filtered again below. Draft and Needs Review packages are office work in
-    // progress; a portal capability must not expose an option the office has not published.
-    listCustomerPortalFrappeResource(
-      env,
-      "Option Package",
-      [
-        ["Option Package", "roof_job", "=", link.roof_job_id],
-        ["Option Package", "status", "=", "Approved"],
-      ],
-      10,
-    ),
-  ]);
-
-  const quoteName = text(job.quotation, 140);
-  const quote = quoteName
-    ? quotes.find(
-        (row) =>
-          text(row.name, 140) === quoteName &&
-          text(row.roof_job, 140) === link.roof_job_id &&
-          text(row.customer, 140) === link.customer_id &&
-          customerQuoteStatus(text(row.status, 80)),
-      )
-    : undefined;
-  // Quote terms are customer-visible only through a separately published, quote-owned proof
-  // pack. An approved quote by itself remains office-only: a portal link must not bypass the
-  // Owner Operator publication gate.
-  const proposal = quote
-    ? newest(
-        proposalPacks.filter(
-          (row) =>
-            text(row.roof_job, 140) === link.roof_job_id &&
-            text(row.quotation, 140) === quoteName &&
-            customerProposalStatus(text(row.status, 80)),
-        ),
-      )
-    : undefined;
-  const scopeRows = proposal
-    ? clauses.filter(
-        (row) =>
-          text(row.roof_job, 140) === link.roof_job_id &&
-          text(row.customer_quote, 140) === quoteName &&
-          text(row.status, 80) === "Approved" &&
-          truthy(row.customer_visible),
-      )
-    : [];
-  const scope = scopeRows
-    .map((row) => ({
-      id: text(row.scope_clause_id, 140) ?? text(row.name, 140) ?? "",
-      type: text(row.clause_type, 120),
-      title: text(row.title, 500),
-      text: text(row.clause_text, 8_000),
-      version: text(row.version, 120),
-    }))
-    .filter((row) => row.id)
-    .sort((left, right) => (left.title ?? "").localeCompare(right.title ?? ""));
-  const progress = evidence
-    .filter(
-      (row) =>
-        text(row.roof_job, 140) === link.roof_job_id &&
-        truthy(row.customer_safe) &&
-        text(row.sync_state, 80) === "Verified",
-    )
-    .map((row) => ({
-      id: text(row.evidence_id, 140) ?? text(row.name, 140) ?? "",
-      type: text(row.evidence_type, 120),
-      proof_slot: text(row.proof_slot, 120),
-      captured_at: iso(row.captured_at),
-      summary: text(row.summary, 600),
-    }))
-    .filter((row) => row.id)
-    .sort((left, right) =>
-      (right.captured_at ?? "").localeCompare(left.captured_at ?? ""),
+  const commercial = await readNativeCommercialJobPacket(
+    env,
+    link.tenant_id,
+    link.roof_job_id,
+    50,
+  );
+  const published =
+    commercial?.partial_sources.length === 0
+      ? currentPublishedCommercial(commercial, link)
+      : null;
+  const sourceTimestamps = [job.updated_at];
+  if (published) {
+    sourceTimestamps.push(
+      published.quote.created_at,
+      published.proposal.created_at,
+      published.publication.occurred_at,
     );
-  const optionRows = optionPackages.filter(
-    (row) =>
-      text(row.roof_job, 140) === link.roof_job_id &&
-      text(row.status, 80) === "Approved",
+    if (published.acceptance)
+      sourceTimestamps.push(published.acceptance.accepted_at);
+  }
+  const contractAcceptanceAvailable = await customerContractAcceptanceAvailable(
+    env,
+    {
+      tenant_id: link.tenant_id,
+      roof_job_id: link.roof_job_id,
+      customer_id: link.customer_id,
+    },
   );
-  const options = optionRows
-    .map((row) => ({
-      id: text(row.option_package_id, 140) ?? text(row.name, 140) ?? "",
-      package_name: text(row.package_name, 200),
-      tier: customerOptionTier(text(row.tier, 40)),
-      material_system: text(row.material_system, 300),
-      price_delta: number(row.price_delta),
-      currency: text(row.currency, 8),
-      options: optionPayload(row.options_json),
-      warranty_summary: text(row.warranty_summary, 2_000),
-    }))
-    .filter((row) => row.id)
-    .sort(
-      (left, right) =>
-        OPTION_TIER_ORDER.indexOf(left.tier ?? "") -
-          OPTION_TIER_ORDER.indexOf(right.tier ?? "") ||
-        (left.package_name ?? left.id).localeCompare(
-          right.package_name ?? right.id,
-        ),
-    );
-  const completion = newest(
-    completionPackets.filter(
-      (row) =>
-        text(row.roof_job, 140) === link.roof_job_id &&
-        text(row.status, 80) === "Approved",
-    ),
-  );
-  const warranty = newest(
-    warrantyPackets.filter(
-      (row) =>
-        text(row.roof_job, 140) === link.roof_job_id &&
-        text(row.status, 80) === "Issued",
-    ),
-  );
-  const rowsUsed = [
-    job,
-    ...(proposal && quote ? [quote] : []),
-    ...(proposal ? [proposal] : []),
-    ...scopeRows,
-    ...evidence,
-    ...completionPackets,
-    ...warrantyPackets,
-    ...optionRows,
-  ];
 
   return {
     version: 1,
     brand: customerPortalBrand(job, env),
-    contract_acceptance_available: customerContractAcceptanceAvailable(env),
-    material_decision_available: customerMaterialDecisionAvailable(env),
-    source_updated_at: latestModified(rowsUsed),
+    contract_acceptance_available: contractAcceptanceAvailable,
+    source_updated_at: latestTimestamp(sourceTimestamps),
     read_model_generated_at: new Date().toISOString(),
     job: {
       job_number: text(job.job_number, 140),
       service_type: text(job.service_type, 120),
       status: text(job.job_status, 120),
     },
-    proposal:
-      proposal && quote
-        ? {
-            status: proposal ? text(proposal.status, 80) : null,
-            prepared_at: proposal ? iso(proposal.prepared_at) : null,
-            approved_at: proposal ? iso(proposal.approved_at) : null,
-            signed_at: proposal ? iso(proposal.signed_at) : null,
-            quote: quote
-              ? {
-                  version: number(quote.quote_version),
-                  status: text(quote.status, 80),
-                  total: number(quote.quote_total),
-                  currency: text(quote.currency, 8),
-                  deposit_amount: number(quote.deposit_amount),
-                  balance_due: number(quote.balance_due),
-                  payment_status: text(quote.payment_status, 80),
-                  payment_due_date: iso(quote.payment_due_date),
-                  valid_until: iso(quote.valid_until),
-                  scope_summary: text(quote.scope_summary, 8_000),
-                  assumptions: text(quote.assumptions, 8_000),
-                  exclusions: text(quote.exclusions, 8_000),
-                }
-              : null,
-          }
-        : null,
-    scope,
-    option_packages: options,
-    progress,
-    closeout: completion
+    proposal: published
       ? {
-          approved_at: iso(completion.approved_at),
-          warranty_ready: truthy(completion.warranty_ready),
+          status: published.acceptance ? "Signed" : "Sent",
+          prepared_at: iso(published.proposal.created_at),
+          approved_at: null,
+          signed_at: iso(published.acceptance?.accepted_at),
+          quote: {
+            version: published.quote.revision_number,
+            status: published.acceptance
+              ? "Accepted"
+              : published.quote.status === "expired"
+                ? "Expired"
+                : "Approved",
+            total: moneyFromCents(published.quote.total_cents),
+            currency: text(published.quote.currency, 8),
+            deposit_amount: null,
+            balance_due: null,
+            payment_status: null,
+            payment_due_date: null,
+            valid_until: iso(published.quote.valid_until),
+            scope_summary: null,
+            assumptions: null,
+            exclusions: null,
+          },
         }
       : null,
-    warranty: warranty
-      ? {
-          status: text(warranty.status, 80),
-          material_system: text(warranty.material_system, 500),
-          terms: text(warranty.warranty_terms, 8_000),
-          coverage_start: iso(warranty.coverage_start),
-          coverage_years: number(warranty.coverage_years),
-          exclusions: text(warranty.exclusions, 8_000),
-          issued_at: iso(warranty.issued_at),
-        }
-      : null,
+    // Native work evidence has no customer-safe publication fact yet. Never infer one from
+    // verification alone; the UI renders an explicit "not published yet" state for an empty list.
+    scope: [],
+    progress: [],
+    closeout: null,
+    warranty: null,
   };
 }
 
 async function customerJobBinding(
   env: AppEnv,
+  tenantId: string,
   roofJobId: string,
 ): Promise<{ roofJobId: string; customerId: string } | null> {
-  const rows = await listCustomerPortalFrappeResource(
-    env,
-    "Roof Job",
-    [["Roof Job", "name", "=", roofJobId]],
-    1,
-  );
-  const row = rows[0];
-  const name = row ? text(row.name, 140) : null;
-  const customer = row ? text(row.customer, 140) : null;
-  return name === roofJobId && customer
-    ? { roofJobId: name, customerId: customer }
+  const core = await readNativeJobCore(env, tenantId, roofJobId);
+  return core?.job.roof_job_id === roofJobId && core.job.customer_id
+    ? { roofJobId: core.job.roof_job_id, customerId: core.job.customer_id }
     : null;
 }
 
-function customerPortalBrand(job: FrappeRow, env: AppEnv): string {
+function customerPortalBrand(job: NativeJobCoreRecord, env: AppEnv): string {
   const brand = text(job.brand, 80)?.toLowerCase();
   if (brand === "ironwrap") return "IronWrap Exteriors";
   if (brand === "iroof") return "iRoof Alberta";
   return publicTenant(env)?.brand ?? "IronWrap";
-}
-
-function customerContractAcceptanceAvailable(env: AppEnv): boolean {
-  return customerPortalEnabled(env) &&
-    customerPortalConfigured(env) &&
-    customerAcceptanceBackendConfigured(env);
-}
-
-function customerMaterialDecisionAvailable(env: AppEnv): boolean {
-  return customerPortalEnabled(env) &&
-    customerPortalConfigured(env) &&
-    customerDecisionBackendConfigured(env);
-}
-
-/**
- * The office may leave `options_json` empty, half-written, or holding a bare array. None of those
- * is an error worth failing a whole portal read over — the card simply renders without a detail
- * list. A parsed value is projected as-is and never trusted as markup by the PWA.
- */
-function optionPayload(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!raw || raw.length > MAX_OPTION_PAYLOAD_BYTES) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function customerOptionTier(value: string | null): string | null {
-  return value && OPTION_TIER_ORDER.includes(value) ? value : null;
 }
 
 function publicLink(link: CustomerPortalLinkRecord): Record<string, unknown> {
@@ -665,23 +458,81 @@ function parsedExpiry(value: unknown, now: Date): string | null {
   return new Date(time).toISOString();
 }
 
-function customerQuoteStatus(value: string | null): boolean {
-  return value === "Approved" || value === "Accepted" || value === "Expired";
+type PublishedCommercial = {
+  quote: NativeCommercialJobPacket["quotes"][number];
+  proposal: NativeCommercialJobPacket["proposals"][number];
+  publication: NativeCommercialJobPacket["publications"][number];
+  acceptance: NativeCommercialJobPacket["acceptances"][number] | null;
+};
+
+function currentPublishedCommercial(
+  packet: NativeCommercialJobPacket,
+  link: CustomerPortalLinkRecord,
+): PublishedCommercial | null {
+  const latestByPack = new Map<
+    string,
+    NativeCommercialJobPacket["publications"][number]
+  >();
+  for (const publication of packet.publications) {
+    const current = latestByPack.get(publication.proposal_pack_id);
+    if (
+      !current ||
+      publication.publication_version > current.publication_version ||
+      (publication.publication_version === current.publication_version &&
+        publication.occurred_at > current.occurred_at)
+    ) {
+      latestByPack.set(publication.proposal_pack_id, publication);
+    }
+  }
+
+  const candidates: PublishedCommercial[] = [];
+  for (const publication of latestByPack.values()) {
+    if (
+      publication.tenant_id !== link.tenant_id ||
+      publication.state !== "published"
+    )
+      continue;
+    const proposal = packet.proposals.find(
+      (row) =>
+        row.tenant_id === link.tenant_id &&
+        row.proposal_revision_id === publication.proposal_revision_id &&
+        row.proposal_pack_id === publication.proposal_pack_id &&
+        row.roof_job_id === link.roof_job_id &&
+        row.customer_id === link.customer_id,
+    );
+    if (!proposal) continue;
+    const quote = packet.quotes.find(
+      (row) =>
+        row.tenant_id === link.tenant_id &&
+        row.quote_revision_id === proposal.quote_revision_id &&
+        row.roof_job_id === link.roof_job_id &&
+        row.customer_id === link.customer_id &&
+        row.terms_hash === proposal.terms_hash &&
+        (row.status === "approved" || row.status === "expired"),
+    );
+    if (!quote) continue;
+    const acceptance =
+      packet.acceptances
+        .filter(
+          (row) =>
+            row.tenant_id === link.tenant_id &&
+            row.quote_revision_id === quote.quote_revision_id &&
+            row.proposal_revision_id === proposal.proposal_revision_id &&
+            row.roof_job_id === link.roof_job_id &&
+            row.customer_id === link.customer_id &&
+            row.terms_hash === proposal.terms_hash,
+        )
+        .sort((left, right) =>
+          right.accepted_at.localeCompare(left.accepted_at),
+        )[0] ?? null;
+    candidates.push({ quote, proposal, publication, acceptance });
+  }
+  return candidates.length === 1 ? candidates[0]! : null;
 }
 
-function customerProposalStatus(value: string | null): boolean {
-  return value === "Approved" || value === "Sent" || value === "Signed";
-}
-
-function newest(rows: FrappeRow[]): FrappeRow | undefined {
-  return [...rows].sort((left, right) =>
-    (iso(right.modified) ?? "").localeCompare(iso(left.modified) ?? ""),
-  )[0];
-}
-
-function latestModified(rows: FrappeRow[]): string | null {
-  return rows.reduce<string | null>((latest, row) => {
-    const value = iso(row.modified);
+function latestTimestamp(values: string[]): string | null {
+  return values.reduce<string | null>((latest, raw) => {
+    const value = iso(raw);
     return value && (!latest || value > latest) ? value : latest;
   }, null);
 }
@@ -698,19 +549,15 @@ function iso(value: unknown): string | null {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
-function number(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function truthy(value: unknown): boolean {
-  return value === true || value === 1 || value === "1";
+function moneyFromCents(value: number): number | null {
+  return Number.isSafeInteger(value) ? value / 100 : null;
 }
 
 function officeRole(auth: AuthContext): boolean {
   return auth.session.role === "owner" || auth.session.role === "ops";
 }
 
-function validFrappeName(value: string): boolean {
+function validResourceId(value: string): boolean {
   return /^[A-Za-z0-9._:-]{3,140}$/.test(value);
 }
 

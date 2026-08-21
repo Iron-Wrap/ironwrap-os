@@ -46,12 +46,21 @@ export const quickBooksBlockerCodes = [
   "provider_response_uncertain",
   "provider_readback_drift",
   "provider_invoice_missing",
+  "native_final_invoice_basis_missing",
+  "native_final_invoice_basis_invalid",
+  "native_final_invoice_binding_pending",
+  "native_final_invoice_reconciliation_pending",
+  // Stored-row compatibility only. New executable paths do not emit these retired values.
   "frappe_bind_pending",
   "frappe_resolver_pending",
 ] as const;
 
 export const quickBooksNextSteps = [
   "connect_quickbooks",
+  "complete_native_invoice_basis",
+  "fix_native_mapping",
+  "reconcile_native_invoice",
+  // Stored-row compatibility only. New executable paths do not emit these retired values.
   "fix_frappe_mapping",
   "resolve_commercial_policy",
   "refresh_candidate",
@@ -71,16 +80,18 @@ const quickBooksCitationSchema = z
   .object({
     id: safeId,
     label: z.enum(["completion_packet", "accepted_quote", "accepted_change", "commercial_policy"]),
-    source: z.enum(["Frappe", "R2"]),
+    source: z.enum(["IronWrap", "Frappe", "R2"]),
     source_ref: boundedText(3, 320),
     sha256: sha256Schema,
   })
   .strict()
   .superRefine((citation, context) => {
-    const valid =
-      citation.source === "Frappe"
-        ? /^Frappe:[A-Za-z][A-Za-z ]{1,63}:[A-Za-z0-9:_-]{1,160}$/.test(citation.source_ref)
-        : /^R2:[A-Za-z0-9][A-Za-z0-9/_.:-]{1,317}$/.test(citation.source_ref);
+    const recordSource = citation.source === "IronWrap" || citation.source === "Frappe";
+    const valid = recordSource
+      ? new RegExp(`^${citation.source}:[A-Za-z][A-Za-z ]{1,63}:[A-Za-z0-9:_-]{1,160}$`).test(
+          citation.source_ref,
+        )
+      : /^R2:[A-Za-z0-9][A-Za-z0-9/_.:-]{1,317}$/.test(citation.source_ref);
     if (!valid) {
       context.addIssue({
         code: "custom",
@@ -140,7 +151,7 @@ export const quickBooksFinalInvoiceResponseSchema = z
           .object({
             subtotal: moneySchema,
             tax: moneySchema,
-            already_invoiced: z.literal("0.00"),
+            already_invoiced: moneySchema,
             final_balance: moneySchema,
           })
           .strict(),

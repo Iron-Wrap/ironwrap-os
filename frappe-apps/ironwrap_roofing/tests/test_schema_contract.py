@@ -395,15 +395,6 @@ class DocTypeContractTests(unittest.TestCase):
                     if row["role"] != SYSTEM_MANAGER:
                         self.assertFalse({"export", "import", "share"} & row.keys())
 
-    def test_customer_acceptance_service_cannot_create_customer_quotes(self) -> None:
-        _, quote = self.doctypes["Customer Quote"]
-        service = next(
-            row
-            for row in quote["permissions"]
-            if row["role"] == "IronWrap Customer Acceptance Service"
-        )
-        self.assertEqual(service, {"delete": 0, "read": 1, "role": service["role"], "write": 1})
-
     def test_launch_proof_reader_can_only_read_instant_estimate_sessions(self) -> None:
         grants = [
             (name, row)

@@ -39,6 +39,7 @@ import {
 } from "./field-formatting";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
+import { WorkPackageIssueForm } from "./work-package-issue-form";
 
 const FIELD_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -154,11 +155,17 @@ function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offl
     assignment: model.assignment,
     allowed_actions: model.allowed_actions,
     packet: { work_package: workPackage },
+    scope: {
+      work_object_type: model.work_object.workObjectType,
+      work_object_id: model.work_object.workObjectId,
+      physical_context_type: model.work_object.physicalContextType,
+      physical_context_id: model.work_object.physicalContextId,
+    },
   };
   const captureAllowed =
     session.user.role === "field" && model.allowed_actions.includes("field.checkin.create");
   return (
-    <RoleGuard surface="field">
+    <RoleGuard surface="job">
       <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
         <Button asChild variant="ghost" size="compact">
           <Link to="/today">
@@ -392,6 +399,7 @@ type WorkPackagePanelModel = {
   assignment: JobResponse["assignment"];
   allowed_actions: string[];
   packet: Pick<JobResponse["packet"], "work_package">;
+  scope?: TypedWorkObjectScope | null;
 };
 
 type FieldWorkPackage = NonNullable<JobResponse["packet"]["work_package"]>;
@@ -441,9 +449,8 @@ function workPackageActionPayload(
 function fieldPacketQueryKey(
   session: ReturnType<typeof useSession>,
   jobId: string,
-  workPackage: FieldWorkPackage,
+  scope: TypedWorkObjectScope | null,
 ) {
-  const scope = workObjectScopeForPackage(workPackage);
   return scope
     ? [
         "work-object",
@@ -493,20 +500,41 @@ function WorkPackagePanel({
     return () => window.clearInterval(interval);
   }, [savedAction]);
 
+  const issueScope = model.scope ?? (workPackage ? workObjectScopeForPackage(workPackage) : null);
+  const issueForm = (
+    <WorkPackageIssueForm
+      session={session}
+      assignment={model.assignment}
+      workPackage={workPackage}
+      endpoint={workPackageEndpointBase(model.job.id, issueScope)}
+      allowed={model.allowed_actions.includes("work_package.issue")}
+      offline={offline}
+      onIssued={async () => {
+        await queryClient.invalidateQueries({
+          queryKey: fieldPacketQueryKey(session, model.job.id, issueScope),
+        });
+      }}
+    />
+  );
+
   if (!workPackage) {
     return (
-      <section
-        className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
-        aria-labelledby="work-package-heading"
-      >
-        <p className="text-sm font-semibold text-warning">Work plan</p>
-        <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
-          No work plan is ready
-        </h2>
-        <p className="mt-2 leading-6 text-muted">
-          Do not start or restart work. Go online for the latest plan, or call production.
-        </p>
-      </section>
+      <div className="space-y-5">
+        {issueForm}
+        <section
+          className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
+          aria-labelledby="work-package-heading"
+        >
+          <p className="text-sm font-semibold text-warning">Work plan</p>
+          <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+            No work plan is ready
+          </h2>
+          <p className="mt-2 leading-6 text-muted">
+            Do not start, resume, release a hold point, or change scope. Go online for the latest
+            issued plan, or call production.
+          </p>
+        </section>
+      </div>
     );
   }
 
@@ -579,7 +607,11 @@ function WorkPackagePanel({
       const latest = await getOutboxAction(action.deviceActionId);
       if (latest) setSavedAction(latest);
       await queryClient.invalidateQueries({
-        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
+        queryKey: fieldPacketQueryKey(
+          session,
+          model.job.id,
+          workObjectScopeForPackage(activeWorkPackage),
+        ),
       });
     } catch (error) {
       setActionError(messageFor(error));
@@ -627,7 +659,11 @@ function WorkPackagePanel({
         deviceProof: getDeviceSecret,
       });
       await queryClient.invalidateQueries({
-        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
+        queryKey: fieldPacketQueryKey(
+          session,
+          model.job.id,
+          workObjectScopeForPackage(activeWorkPackage),
+        ),
       });
     } catch (error) {
       setActionError(messageFor(error));
@@ -661,7 +697,11 @@ function WorkPackagePanel({
         deviceProof: getDeviceSecret,
       });
       await queryClient.invalidateQueries({
-        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
+        queryKey: fieldPacketQueryKey(
+          session,
+          model.job.id,
+          workObjectScopeForPackage(activeWorkPackage),
+        ),
       });
     } catch (error) {
       setActionError(messageFor(error));
@@ -675,6 +715,7 @@ function WorkPackagePanel({
       className="border-2 border-foreground bg-surface-raised"
       aria-labelledby="work-package-heading"
     >
+      {issueForm}
       <header className="border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

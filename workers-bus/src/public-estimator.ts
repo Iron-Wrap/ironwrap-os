@@ -37,8 +37,6 @@ export type PublicEstimatorEnv = Env & {
   PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX?: string;
   PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX?: string;
   PUBLIC_ESTIMATE_RANGE_RULES_JSON?: string;
-  ERPNEXT_ENABLED?: string;
-  ERPNEXT_INTEGRATION_USER?: string;
 };
 
 interface RateLimitConfig {
@@ -136,7 +134,7 @@ export async function handlePublicInstantEstimate(
       return withCors(publicJson({ error: "idempotency_conflict" }, 409), origin.origin);
     }
     // Turnstile tokens are intentionally single-use. A byte-for-byte retry must
-    // re-drive the durable mirror without asking the browser for a new token.
+    // re-drive native materialization without asking the browser for a new token.
     const ingest = dependencies.ingest ?? handleEstimateIngest;
     try {
       const response = await ingest(env, existing.payload_json, "application/json", parsed.value.clientSubmissionId);
@@ -218,11 +216,10 @@ export function publicEstimateConfiguration(env: PublicEstimatorEnv): PublicEsti
   const rateLimitPepper = secretAtLeast(env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER, 32);
   const rateLimit = rateLimitConfig(env);
   const legacyRangesDisabled = exactEmptyArray(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON);
-  const erpConsentMirrorReady = String(env.ERPNEXT_ENABLED) !== "true" || !!nonEmpty(env.ERPNEXT_INTEGRATION_USER);
   return {
     activated,
     ready: activated && allowedOrigins.size > 0 && allowedBrands.size > 0 && !!consentJurisdiction && !!siteKey && !!turnstileSecret &&
-      !!rateLimitPepper && !!rateLimit && legacyRangesDisabled && erpConsentMirrorReady,
+      !!rateLimitPepper && !!rateLimit && legacyRangesDisabled,
     allowedOrigins,
     allowedBrands,
     consentJurisdiction,

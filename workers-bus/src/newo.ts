@@ -22,9 +22,9 @@ import {
   upsertNewoSession,
   type NewoSessionRecord,
 } from "./newo-store.ts";
-import { pushNewoSessionToErpNext, pushToErpNext } from "./erpnext.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import { handleNewoCallerLookup } from "./newo-caller.ts";
+import { materializeOperatingCore, tenantIdFrom } from "./operating-core.ts";
 import * as store from "./store.ts";
 
 export { canonicalJson, sha256Hex } from "./newo-hash.ts";
@@ -220,52 +220,121 @@ export async function handleNewoQueueMessage(
   if (!session) throw new Error("newo_session_missing");
   const now = new Date().toISOString();
   if (deadLetter) {
-    await markNewoSessionSync(env, session.session_id, "dead", "newo_sync_retries_exhausted", now);
+    await markNewoSessionSync(
+      env,
+      session.session_id,
+      "dead",
+      "newo_native_projection_retries_exhausted",
+      now,
+    );
     await store.recordDeadLetter(env, {
       envelope_id: receipt.envelope_id,
-      stage: "newo_frappe_sync",
-      error: "newo_sync_retries_exhausted",
+      stage: "newo_native_projection",
+      error: "newo_native_projection_retries_exhausted",
       payload_json: JSON.stringify({ event_id: eventId, session_id: session.session_id }),
     });
     await sendOwnerAlert(
       env,
-      "Newo session sync requires recovery",
-      `<p>Session ${escapeHtml(session.session_id)} exhausted its Frappe synchronization retries.</p>`,
+      "Newo native projection requires recovery",
+      `<p>Session ${escapeHtml(session.session_id)} exhausted its native projection retries.</p>`,
     ).catch(() => {});
     return;
   }
 
   try {
-    const envelope = receipt.envelope_id ? await store.getEnvelope(env, receipt.envelope_id) : null;
-    const links = envelope ? await pushToErpNext(env, envelope) : null;
-    const synced = await pushNewoSessionToErpNext(env, session, {
-      leadEnvelopeName: links?.name,
-      roofingPropertyName: links?.roofingPropertyName,
-      roofJobName: links?.roofJobName,
-    });
-    if (!synced) throw new Error("frappe_disabled");
+    const projection = await projectNewoSessionToNativeCore(env, receipt.envelope_id, session);
     await markNewoSessionSync(env, session.session_id, "synced", null, now);
     await store.recordAudit(env, {
-      automation: "newo_frappe_sync",
+      automation: "newo_native_projection",
       trigger: "queue",
       envelope_id: receipt.envelope_id,
       source_ids: `event:${eventId},session:${session.session_id}`,
-      target_ids: [
-        `reception_session:${synced.receptionSessionName}`,
-        synced.appointmentRequestName
-          ? `appointment_request:${synced.appointmentRequestName}`
-          : null,
-        synced.automationIncidentName
-          ? `automation_incident:${synced.automationIncidentName}`
-          : null,
-      ].filter(Boolean).join(","),
-      action: "sync",
+      target_ids: projection.targetIds.join(","),
+      action: projection.action,
       result: "ok",
     });
   } catch (error) {
     await markNewoSessionSync(env, session.session_id, "failed", String(error), now).catch(() => {});
     throw error;
   }
+}
+
+interface NewoNativeProjection {
+  action: "materialize" | "readback" | "session_readback";
+  targetIds: string[];
+}
+
+async function projectNewoSessionToNativeCore(
+  env: Env,
+  receiptEnvelopeId: string | null,
+  session: NewoSessionRecord,
+): Promise<NewoNativeProjection> {
+  if ((session.lead_envelope_id ?? null) !== receiptEnvelopeId) {
+    throw new Error("newo_native_envelope_mismatch");
+  }
+  if (session.verification_status === "ambiguous" || session.verification_status === "verification_failed") {
+    throw new Error(`newo_native_association_${session.verification_status}`);
+  }
+  if (session.verification_status === "verified") {
+    return await readVerifiedNativeAssociation(env, session);
+  }
+  if (!receiptEnvelopeId) {
+    return { action: "session_readback", targetIds: [`newo_session:${session.session_id}`] };
+  }
+
+  const envelope = await store.getEnvelope(env, receiptEnvelopeId);
+  if (!envelope) throw new Error("newo_native_envelope_missing");
+  const operating = await materializeOperatingCore(env, envelope);
+  return {
+    action: operating.reused ? "readback" : "materialize",
+    targetIds: [
+      `newo_session:${session.session_id}`,
+      `lead:${operating.leadId}`,
+      `customer:${operating.customerId}`,
+      ...(operating.propertyId ? [`property:${operating.propertyId}`] : []),
+      `roof_job:${operating.roofJobId}`,
+    ],
+  };
+}
+
+async function readVerifiedNativeAssociation(
+  env: Env,
+  session: NewoSessionRecord,
+): Promise<NewoNativeProjection> {
+  const customerId = session.matched_customer_id?.trim();
+  const propertyKey = session.matched_property_id?.trim();
+  const roofJobId = session.matched_roof_job_id?.trim();
+  if (!customerId || !propertyKey || !roofJobId) {
+    throw new Error("newo_native_association_incomplete");
+  }
+
+  // `matched_property_id` is a legacy schema name. Native caller lookup stores the tenant-owned
+  // property key there, so the readback can verify the exact customer/property/job relationship.
+  const association = await env.DB.prepare(
+    `SELECT j.roof_job_id, j.customer_id, j.property_id, p.property_key
+       FROM operating_roof_jobs j
+       JOIN operating_customers c
+         ON c.tenant_id = j.tenant_id AND c.customer_id = j.customer_id
+       JOIN operating_properties p
+         ON p.tenant_id = j.tenant_id AND p.property_id = j.property_id
+      WHERE j.tenant_id = ? AND j.roof_job_id = ? AND j.customer_id = ?
+        AND p.property_key = ?`,
+  ).bind(tenantIdFrom(env), roofJobId, customerId, propertyKey).first<{
+    roof_job_id: string;
+    customer_id: string;
+    property_id: string;
+    property_key: string;
+  }>();
+  if (!association) throw new Error("newo_native_association_mismatch");
+  return {
+    action: "readback",
+    targetIds: [
+      `newo_session:${session.session_id}`,
+      `customer:${association.customer_id}`,
+      `property:${association.property_id}`,
+      `roof_job:${association.roof_job_id}`,
+    ],
+  };
 }
 
 export async function reconcileNewoSessions(
@@ -559,7 +628,14 @@ async function acceptEvent(
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
     await env.NEWO_QUEUE.send({ newo_event_id: event.event_id });
-    if (response.envelope_id) await env.JN_QUEUE.send({ envelope_id: response.envelope_id });
+    if (
+      response.envelope_id
+      && existingSession?.verification_status !== "verified"
+      && existingSession?.verification_status !== "ambiguous"
+      && existingSession?.verification_status !== "verification_failed"
+    ) {
+      await env.JN_QUEUE.send({ envelope_id: response.envelope_id });
+    }
     scheduleNotifications(env, ctx, event, envelope);
     await completeNewoReceipt(env, event.event_id, response.envelope_id, response, new Date().toISOString());
     return json(response);
@@ -599,6 +675,14 @@ async function ensureSessionEnvelope(
     occurred_at: event.occurred_at,
     contact: event.contact,
     intent: event.intent,
+    address_line1: event.contact.address.line1,
+    city: event.contact.address.city,
+    province: event.contact.address.province,
+    postal_code: event.contact.address.postal_code,
+    service: event.intent.service,
+    service_intent: [event.intent.service, event.intent.division, event.intent.message]
+      .filter(Boolean).join(" "),
+    message: event.intent.message,
     consent: event.consent,
     appointment: event.appointment,
     outcome: event.outcome,

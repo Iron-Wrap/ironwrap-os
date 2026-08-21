@@ -28,7 +28,11 @@ function salesPayload() {
         transport_status: "received",
         intent_queue: "Estimator",
         contact: { display_name: "Pat Prospect", phone: "+14035559999", email: "pat@example.com" },
-        triage: { status: "Untriaged", summary: "Confirm the inspection window." },
+        triage: {
+          status: "Untriaged",
+          summary: "Confirm the inspection window.",
+          version: 1,
+        },
         job: {
           id: "JOB-A",
           job_number: "IW-1001",
@@ -89,6 +93,7 @@ function salesPayload() {
             },
           ],
         },
+        partial_fields: [],
         attention: ["triage_unresolved", "estimate_needs_review", "quote_needs_review"],
       },
     ],

@@ -114,7 +114,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0091_authority_readback_subject_scope.sql`; `node tools/validate-documentation.mjs`
+   `0105_facet_native_design_projection.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -197,7 +197,6 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
    | site config key | identity | provisioned in |
    |---|---|---|
-   | `ironwrap_customer_acceptance_service_user` | IronWrap Customer Acceptance Service | step 3.4 pair, dedicated user |
    | `ironwrap_customer_decision_service_user` | IronWrap Customer Decision Service | step 3.4 pair, dedicated user |
    | `ironwrap_fleet_capture_issuer_user` | IronWrap Fleet Capture Issuer | dedicated user, own key pair (this step) |
    | `ironwrap_work_package_issuer_user` | IronWrap Work Package Issuer | dedicated user, own key pair (this step) |
@@ -313,7 +312,7 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 67 D1 migrations through `0091_authority_readback_subject_scope.sql` applied to the tenant database.
+- [ ] All 81 D1 migrations through `0105_facet_native_design_projection.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

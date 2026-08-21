@@ -787,11 +787,11 @@ function facetCard(evidence: FacetV2WorkflowEvidence): StandardNowCard {
   const citationId = `facet:${evidence.event_id}`;
   const next =
     evidence.projection_state === "awaiting_projection"
-      ? "The signed choice is waiting for a new draft."
+      ? "The signed choice is waiting for its native design projection."
       : evidence.projection_state === "projected"
-        ? "A new draft was made from the signed choice."
+        ? "The signed choice is recorded as native design authority."
         : evidence.projection_state === "held"
-          ? "This signed choice is on hold and will not make a new draft."
+          ? "This signed choice is on hold and will not change the accepted design."
           : "The signed choice needs a check.";
   return {
     id: citationId,
@@ -940,7 +940,7 @@ function quickBooksHoldCard(
 ): StandardNowCard {
   const id = `qbo-final-invoice-hold:${hold.roof_job_id}:${hold.blocker_code}`;
   const href = "/accounting/quickbooks" as const;
-  const detail = "Fix the job record before you check for the invoice again.";
+  const detail = `${hold.blocker_code.replaceAll("_", " ")}. Fix the source record before you check for the invoice again.`;
   return {
     id,
     tone: "critical",

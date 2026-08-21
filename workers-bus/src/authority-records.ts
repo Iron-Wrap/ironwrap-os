@@ -96,6 +96,16 @@ export interface AuthorityRecordReadback {
   tenant_id: string;
   authority_record_id: string;
   authority_version: number;
+  subject_type: string | null;
+  subject_role: string | null;
+  person_user: string | null;
+  organization: string | null;
+  authority_kind: string | null;
+  authority_scope: string | null;
+  scope_type: string | null;
+  scope_ref: string | null;
+  roof_job: string | null;
+  scope_json: string | null;
   issuer_name: string;
   issuer_jurisdiction: string;
   issuer_reference: string;
@@ -114,6 +124,16 @@ export interface RecordAuthorityReadbackInput {
   tenantId: string;
   authorityRecordId: string;
   authorityVersion: number;
+  subjectType: string;
+  subjectRole: string;
+  personUser: string | null;
+  organization: string | null;
+  authorityKind: string;
+  authorityScope: string;
+  scopeType: string;
+  scopeRef: string;
+  roofJob: string | null;
+  scopeJson: string;
   issuerName: string;
   issuerJurisdiction: string;
   issuerReference: string;
@@ -285,6 +305,16 @@ export async function recordAuthorityReadback(
     action_id: input.actionId,
     authority_record_id: input.authorityRecordId,
     authority_version: input.authorityVersion,
+    subject_type: input.subjectType,
+    subject_role: input.subjectRole,
+    person_user: input.personUser,
+    organization: input.organization,
+    authority_kind: input.authorityKind,
+    authority_scope: input.authorityScope,
+    scope_type: input.scopeType,
+    scope_ref: input.scopeRef,
+    roof_job: input.roofJob,
+    scope_json: input.scopeJson,
     evidence_refs_json: input.evidenceRefsJson,
     evidence_sha256: input.evidenceSha256,
     issuer_jurisdiction: input.issuerJurisdiction,
@@ -318,17 +348,29 @@ export async function recordAuthorityReadback(
   const inserted = await env.DB.prepare(
     `INSERT INTO authority_record_readbacks
        (readback_id, tenant_id, authority_record_id, authority_version,
+        subject_type, subject_role, person_user, organization, authority_kind,
+        authority_scope, scope_type, scope_ref, roof_job, scope_json,
         issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
         verification_state, evidence_refs_json, evidence_sha256,
         authority_state_digest_sha256, observed_by_user_id, observed_at,
         observation_fingerprint_sha256, action_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT DO NOTHING`,
   ).bind(
     input.readbackId,
     input.tenantId,
     input.authorityRecordId,
     input.authorityVersion,
+    input.subjectType,
+    input.subjectRole,
+    input.personUser,
+    input.organization,
+    input.authorityKind,
+    input.authorityScope,
+    input.scopeType,
+    input.scopeRef,
+    input.roofJob,
+    input.scopeJson,
     input.issuerName,
     input.issuerJurisdiction,
     input.issuerReference,
@@ -370,6 +412,8 @@ export async function listAuthorityRecordReadbacks(
   const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(100, limit)) : 50;
   const rows = await env.DB.prepare(
     `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
@@ -418,6 +462,8 @@ async function authorityReadbackByIdentity(
 ): Promise<AuthorityRecordReadback | null> {
   return await env.DB.prepare(
     `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
@@ -436,6 +482,8 @@ async function authorityReadbackByEvidence(
 ): Promise<AuthorityRecordReadback | null> {
   return await env.DB.prepare(
     `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
@@ -493,6 +541,16 @@ function validateReadbackInput(input: RecordAuthorityReadbackInput): void {
   if (!TENANT_ID.test(input.tenantId) || !OPAQUE_ID.test(input.readbackId) ||
       !OPAQUE_ID.test(input.authorityRecordId) ||
       !Number.isInteger(input.authorityVersion) || input.authorityVersion < 1 ||
+      !boundedText(input.subjectType, 2, 120) ||
+      !boundedText(input.subjectRole, 2, 200) ||
+      !nullableBoundedText(input.personUser, 200) ||
+      !nullableBoundedText(input.organization, 200) ||
+      !boundedText(input.authorityKind, 2, 200) ||
+      !boundedText(input.authorityScope, 2, 240) ||
+      !boundedText(input.scopeType, 2, 120) ||
+      !boundedText(input.scopeRef, 1, 240) ||
+      !nullableBoundedText(input.roofJob, 200) ||
+      !boundedText(input.scopeJson, 2, 20_000) ||
       !boundedText(input.issuerName, 2, 200) ||
       !boundedText(input.issuerJurisdiction, 2, 160) ||
       !boundedText(input.issuerReference, 3, 240) ||
@@ -531,6 +589,10 @@ function validEvidenceRefsJson(value: string): boolean {
 function boundedText(value: unknown, min: number, max: number): value is string {
   return typeof value === "string" && value.trim().length >= min && value.trim().length <= max &&
     !/[\u0000-\u001f]/.test(value);
+}
+
+function nullableBoundedText(value: unknown, max: number): value is string | null {
+  return value === null || boundedText(value, 1, max);
 }
 
 function isReadbackState(value: unknown): value is AuthorityReadbackState {

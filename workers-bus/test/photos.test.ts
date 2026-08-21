@@ -1,10 +1,11 @@
-// Unit tests for the Jobsite-photo intake pure logic (node --test, type-stripped — no install).
+// Unit tests for the Jobsite-photo intake (node --test, type-stripped — no install).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { handlePhotoIngest, parsePhotoSubmission, photoFileName } from "../src/photos.ts";
 import { jobFolderName, safeSegment } from "../src/google.ts";
 import { isVoiceNoteUri } from "../src/core.ts";
-import { withErpReadback, withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 test("parsePhotoSubmission: normalized shape", () => {
   const s = parsePhotoSubmission({
@@ -72,39 +73,112 @@ test("safeSegment + jobFolderName", () => {
   assert.equal(jobFolderName("1008", null, "iroof"), "1008 (iroof)");     // brand without customer
 });
 
-test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync without Drive", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
-    if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-    if (url.includes("/api/resource/Field%20Check-in?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Evidence%20Item")) {
-      return json({ data: { name: `EV-000${fetches.filter((f) => f.url.endsWith("/api/resource/Evidence%20Item")).length}` } });
-    }
-    if (url.endsWith("/api/resource/Field%20Check-in")) return json({ data: { name: "FCI-0001" } });
-    throw new Error(`unexpected fetch ${url}`);
-  }));
+class SqliteD1 {
+  readonly raw = new DatabaseSync(":memory:");
 
-  const writes: Array<{ sql: string; args: unknown[] }> = [];
+  constructor() {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    for (const migration of [
+      "0001_init.sql",
+      "0009_replay_approval_audit.sql",
+      "0090_operating_core.sql",
+      "0104_native_photo_evidence_authority.sql",
+    ]) {
+      this.raw.exec(
+        readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"),
+      );
+    }
+    seedNativeRoofJob(this.raw, { tenantId: "ironwrap", jobNumber: "26-0001" });
+  }
+
+  prepare(sql: string) {
+    return {
+      bind: (...args: unknown[]) => new SqliteStatement(this.raw, sql, args),
+    };
+  }
+}
+
+class SqliteStatement {
+  private readonly db: DatabaseSync;
+  private readonly sql: string;
+  private readonly args: unknown[];
+
+  constructor(db: DatabaseSync, sql: string, args: unknown[]) {
+    this.db = db;
+    this.sql = sql;
+    this.args = args;
+  }
+
+  async first<T>(): Promise<T | null> {
+    return (this.db.prepare(this.sql).get(...this.args) ?? null) as T | null;
+  }
+
+  async all<T>(): Promise<{ results: T[] }> {
+    return { results: this.db.prepare(this.sql).all(...this.args) as T[] };
+  }
+
+  async run(): Promise<{ success: true; meta: { changes: number } }> {
+    const result = this.db.prepare(this.sql).run(...this.args);
+    return { success: true, meta: { changes: Number(result.changes ?? 0) } };
+  }
+}
+
+function seedNativeRoofJob(
+  db: DatabaseSync,
+  input: { tenantId: string; jobNumber: string },
+): void {
+  const suffix = input.jobNumber.replace(/[^A-Za-z0-9.-]/g, "-");
+  const envelopeId = `ow.seed.${input.tenantId}.${suffix}`;
+  const now = "2026-07-16T10:00:00.000Z";
+  db.prepare(
+    `INSERT INTO envelopes (
+       envelope_id, source, contact_name, contact_email, job_ref, payload_json,
+       ts, status, created_at, updated_at
+     ) VALUES (?, 'manual', 'Photo fixture', ?, ?, '{}', ?, 'reconciled', ?, ?)`,
+  ).run(envelopeId, `${suffix.toLowerCase()}@example.com`, input.jobNumber, now, now, now);
+  db.prepare(
+    `INSERT INTO operating_leads (
+       lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
+       job_ref, lifecycle_status, created_at, updated_at
+     ) VALUES (?, ?, ?, 'manual', 'Photo fixture', ?, ?, 'converted', ?, ?)`,
+  ).run(`lead.${input.tenantId}.${suffix}`, input.tenantId, envelopeId,
+    `${suffix.toLowerCase()}@example.com`, input.jobNumber, now, now);
+  db.prepare(
+    `INSERT INTO operating_customers (
+       customer_id, tenant_id, source_envelope_id, display_name, contact_email,
+       lifecycle_status, created_at, updated_at
+     ) VALUES (?, ?, ?, 'Photo fixture', ?, 'active', ?, ?)`,
+  ).run(`customer.${input.tenantId}.${suffix}`, input.tenantId, envelopeId,
+    `${suffix.toLowerCase()}@example.com`, now, now);
+  db.prepare(
+    `INSERT INTO operating_roof_jobs (
+       roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
+       job_number, service_type, job_status, current_gate_state, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'photo', 'in_progress', 'in_progress', ?, ?)`,
+  ).run(
+    `roof.${input.tenantId}.${suffix}`,
+    input.tenantId,
+    `lead.${input.tenantId}.${suffix}`,
+    `customer.${input.tenantId}.${suffix}`,
+    envelopeId,
+    input.jobNumber,
+    now,
+    now,
+  );
+}
+
+test("handlePhotoIngest: raw capture plus native photo evidence without Drive or ERPNext", async () => {
   const rawWrites: Array<{ key: string; body: string }> = [];
-  const env = withTestEffectRuntime({
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
-    RAW: { put: async (key: string, body: string) => { rawWrites.push({ key, body }); } },
-    DB: {
-      prepare(sql: string) {
-        return {
-          bind(...args: unknown[]) {
-            return { run: async () => { writes.push({ sql, args }); return { success: true }; } };
-          },
-        };
+  const db = new SqliteD1();
+  const env = {
+    APP_TENANT_ID: "ironwrap",
+    RAW: {
+      put: async (key: string, body: string) => {
+        rawWrites.push({ key, body });
       },
     },
-  });
+    DB: db,
+  };
 
   const res = await handlePhotoIngest(env as never, JSON.stringify({
     job_number: "26-0001",
@@ -112,49 +186,67 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
     caption: "north wall progress",
   }), "application/json");
   const body = await res.json() as {
-    erpnext_evidence_ids?: string[];
-    erpnext_field_check_in_id?: string;
-    erpnext_error?: string | null;
+    native_submission_id?: string;
+    native_evidence_ids?: string[];
+    native_association_status?: string;
     uploaded?: number;
     note?: string;
+    error?: string;
   };
 
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 200, JSON.stringify(body));
   assert.equal(body.uploaded, 0);
-  assert.equal(body.erpnext_error, null);
-  assert.deepEqual(body.erpnext_evidence_ids, ["EV-0001", "EV-0002"]);
-  assert.equal(body.erpnext_field_check_in_id, "FCI-0001");
+  assert.equal(body.native_association_status, "matched");
+  assert.match(body.native_submission_id ?? "", /^psub_[0-9a-f]{64}$/);
+  assert.equal(body.native_evidence_ids?.length, 2);
+  assert.ok(body.native_evidence_ids?.every((id) => /^pevi_[0-9a-f]{64}$/.test(id)));
   assert.match(body.note ?? "", /drive_not_configured/);
   assert.equal(rawWrites.length, 1);
   assert.match(rawWrites[0].key, /^raw\/photos\/\d{4}-\d{2}-\d{2}\/ow_/);
 
-  const evidenceBodies = fetches
-    .filter((f) => f.url.endsWith("/api/resource/Evidence%20Item"))
-    .map((f) => JSON.parse(String(f.init.body)));
-  assert.equal(evidenceBodies.length, 2);
-  assert.ok(evidenceBodies.every((e) => e.roof_job === "RJ-0001"));
-  assert.ok(evidenceBodies.every((e) => e.evidence_type === "Photo"));
-  assert.ok(evidenceBodies.every((e) => e.source_system === "Jotform"));
-  assert.ok(evidenceBodies.every((e) => e.customer_safe === 0));
-  assert.ok(evidenceBodies[0].evidence_id.startsWith("evidence:photo:ow_"));
-  assert.equal(evidenceBodies[0].source_uri, "https://jotform.example/uploads/a.jpg");
-  assert.equal(evidenceBodies[0].summary.includes("north wall progress"), true);
+  const submission = db.raw.prepare(
+    `SELECT job_number, association_status, photo_count, caption FROM native_photo_evidence_submissions`,
+  ).get() as { job_number: string; association_status: string; photo_count: number; caption: string };
+  assert.equal(submission.job_number, "26-0001");
+  assert.equal(submission.association_status, "matched");
+  assert.equal(submission.photo_count, 2);
+  assert.equal(submission.caption, "north wall progress");
 
-  const checkIn = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Field%20Check-in"))?.init.body));
-  assert.ok(checkIn.checkin_id.startsWith("field:ow_"));
-  assert.equal(checkIn.roof_job, "RJ-0001");
-  assert.equal(checkIn.job_number, "26-0001");
-  assert.equal(checkIn.source_system, "Jotform");
-  assert.equal(checkIn.status, "Received");
-  assert.equal(checkIn.photo_count, 2);
-  assert.deepEqual(JSON.parse(checkIn.evidence_ids_json), ["EV-0001", "EV-0002"]);
-  assert.equal(checkIn.notes, "north wall progress");
-  assert.match(checkIn.raw_key, /^raw\/photos\/\d{4}-\d{2}-\d{2}\/ow_/);
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("erpnext_photo") &&
-    w.args.includes("evidence_item:EV-0001,evidence_item:EV-0002,field_check_in:FCI-0001")));
+  const items = db.raw.prepare(
+    `SELECT source_uri, evidence_type FROM native_photo_evidence_items ORDER BY item_index`,
+  ).all() as Array<{ source_uri: string; evidence_type: string }>;
+  assert.equal(items.length, 2);
+  assert.equal(items[0].source_uri, "https://jotform.example/uploads/a.jpg");
+  assert.equal(items[0].evidence_type, "photo");
+  assert.equal(items[1].source_uri, "https://jotform.example/uploads/b.png");
+
+  const audits = db.raw.prepare(
+    `SELECT automation, action, result FROM audit_log ORDER BY id`,
+  ).all() as Array<{ automation: string; action: string; result: string }>;
+  assert.ok(audits.some((row) => row.automation === "native_photo_evidence" && row.action === "matched"));
+  assert.equal(
+    audits.some((row) => row.automation === "erpnext_photo"),
+    false,
+  );
 });
 
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-}
+test("handlePhotoIngest: unknown job numbers stay native unmatched instead of writing Frappe", async () => {
+  const db = new SqliteD1();
+  const env = {
+    APP_TENANT_ID: "ironwrap",
+    RAW: { put: async () => {} },
+    DB: db,
+  };
+  const res = await handlePhotoIngest(env as never, JSON.stringify({
+    job_number: "missing-job",
+    photos: ["https://jotform.example/uploads/a.jpg"],
+  }), "application/json");
+  const body = await res.json() as { native_association_status?: string };
+  assert.equal(res.status, 200);
+  assert.equal(body.native_association_status, "unmatched");
+  const row = db.raw.prepare(
+    `SELECT association_error, roof_job_id FROM native_photo_evidence_submissions`,
+  ).get() as { association_error: string; roof_job_id: string | null };
+  assert.equal(row.association_error, "job_not_found");
+  assert.equal(row.roof_job_id, null);
+});

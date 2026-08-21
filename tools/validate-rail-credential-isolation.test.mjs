@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -500,12 +501,35 @@ test("a shared writer declared without an executable contract is rejected", asyn
   );
 });
 
-test("a rail set that declares no shared writer at all is rejected", async () => {
-  // De-listing the writer would otherwise delete the behavioural check with a one-line edit.
-  await assert.rejects(
-    verifyRailCredentialRouting({ rails: [RAIL], load: loading(WRITERS.healthy) }),
-    /no shared writer is declared on any rail/,
-  );
+test("a rail set that declares no shared writer is accepted once the shared writer is retired", async () => {
+  // Native cutover deleted workers-bus/src/frappe-field.ts. With no shared writer
+  // left on disk, writers==0 is retirement, not a silent de-list.
+  const result = await verifyRailCredentialRouting({
+    rails: [RAIL],
+    load: loading(WRITERS.healthy),
+    sharedWriterPath: join(root, "workers-bus/src/frappe-field.ts"),
+  });
+  assert.deepEqual(result, { writers: 0, probes: 0 });
+});
+
+test("a rail set that de-lists a still-shipped shared writer is rejected", async () => {
+  // De-listing the writer would otherwise delete the behavioural check with a one-line edit
+  // while the shared writer keeps shipping. The floor only fires when the file still exists.
+  const staging = mkdtempSync(join(tmpdir(), "ironwrap-shared-writer-"));
+  const phantom = join(staging, "frappe-field.ts");
+  writeFileSync(phantom, "// still shipping\n");
+  try {
+    await assert.rejects(
+      verifyRailCredentialRouting({
+        rails: [RAIL],
+        load: loading(WRITERS.healthy),
+        sharedWriterPath: phantom,
+      }),
+      /still exists but no shared writer is declared/,
+    );
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
 });
 
 test("a Worker module that issues a rail without being declared a source is rejected", () => {

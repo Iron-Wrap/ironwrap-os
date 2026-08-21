@@ -84,6 +84,9 @@ import {
   taxBindingSetSha256,
 } from "./accounting-tax-snapshots.ts";
 import {
+  readNativeInitialProviderMapping,
+} from "./native-final-invoice-producer.ts";
+import {
   reobserveAccountingIntent,
   resolveAccountingObservationBinding,
   type AccountingObservationBinding,
@@ -359,6 +362,29 @@ async function deriveIntent(
 
   try {
     const tenantId = auth.session.tenant_id;
+    const mapping = await readNativeInitialProviderMapping(env, tenantId, roofJobId);
+    if (mapping.status === "ambiguous") {
+      return json({ error: "provider_mapping_ambiguous" }, 409);
+    }
+    if (mapping.status === "missing") {
+      return json({
+        error: "provider_mapping_missing",
+        next_step: "record_native_provider_mapping",
+      }, 409);
+    }
+    if (mapping.status === "found") {
+      const binding = mapping.value;
+      if (
+        binding.realm_id !== realmId
+        || binding.qbo_customer_id !== customerRef
+        || binding.qbo_item_id !== itemRef
+        || binding.qbo_tax_code_id !== taxCodeRef
+        || binding.jurisdiction !== jurisdiction
+        || binding.tax_code !== taxCode
+      ) {
+        return json({ error: "provider_mapping_request_mismatch" }, 409);
+      }
+    }
     // Section 5.4 binds the snapshot at derivation and never rewrites it. No current snapshot is a
     // refusal, not a derivation with an unbound rate: `tax_mapping_missing` is the blocker
     // vocabulary PR #43 already established for exactly this.

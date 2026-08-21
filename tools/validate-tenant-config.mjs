@@ -143,7 +143,10 @@ for (const { file, doc } of tenants) {
     assert.ok(packet.includes.includes(part), `${file} assigned packet missing ${part}`);
   }
 
-  assert.equal(doc.agents?.approval_policy, "dry_run_then_human_approval", `${file} agents.approval_policy mismatch`);
+  const expectedApprovalPolicy = doc.tenant.id === "ironwrap"
+    ? "versioned_policy_permit"
+    : "dry_run_then_human_approval";
+  assert.equal(doc.agents?.approval_policy, expectedApprovalPolicy, `${file} agents.approval_policy mismatch`);
   const writeGuards = doc.agents?.write_guard_envs;
   assert.ok(Array.isArray(writeGuards), `${file} agents.write_guard_envs must be an array`);
   for (const guard of [

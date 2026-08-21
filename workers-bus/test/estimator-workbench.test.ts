@@ -1,19 +1,33 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { buildEstimatorWorkbenchReadModel } from "../src/app-read-models.ts";
-import { OFFICE_ESTIMATOR_READ_FIELDS } from "../src/frappe-read.ts";
-import {
-  approvedPricingPolicySnapshot,
-  type PriceList,
-} from "../src/pricing.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import {
+  canonicalJson as facetCanonicalJson,
+  type FacetV2CustomerDecisionEvent,
+} from "../src/facet-design-v2-protocol.ts";
+import { importEstimatorEvidenceFromNativeSources } from "../src/estimator-native.ts";
+import { canonicalJson } from "../src/newo-hash.ts";
+import type { PriceList } from "../src/pricing.ts";
 
-const MODIFIED = "2026-07-11T10:00:00.000Z";
-const PRICING_AS_OF = new Date("2026-08-13T12:00:00.000Z");
-const RAW_KEY = "raw/measurements/2026-07-11/ow_01234567-89ab-cdef-0123-456789abcdef.json";
-const RAW_SHA256 = "a".repeat(64);
+const NOW = new Date("2026-08-21T10:00:00.000Z");
+const TENANT = "ironwrap";
+const JOB_ID = "job:estimator:0001";
+const JOB_NUMBER = "IW-EST-0001";
+const OWNER_ID = "appu_owner_0001";
+const OPS_ID = "appu_ops_0001";
+const CUSTOMER_ID = "customer:estimator:0001";
+const QUOTE_ID = "customer-quote:estimator:0001";
+const QUOTE_REVISION_ID = "quote-revision:estimator:0001";
+const RECEIPT_ID = `measurement_${"a".repeat(64)}`;
+const MEASUREMENT_ID = `measurement:${"f".repeat(64)}`;
+const FACET_EVENT_ID = "44444444-4444-4444-8444-444444444444";
+
 const GEOMETRY_XML = [
   "<APPLICAD_EXPORT>",
   '<POINT id="P1" data="0,0,0"/>',
@@ -23,1500 +37,1055 @@ const GEOMETRY_XML = [
   '<LINE id="L1" path="P1,P2" type="EAVE" length="10"/>',
   '<LINE id="L2" path="P2,P3" type="RIDGE" length="10"/>',
   '<LINE id="L3" path="P3,P4" type="EAVE" length="10"/>',
-  '<LINE id="L4" path="P4,P1" type="EAVE" length="12"/>',
-  '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" mat="Asphalt"/>',
+  '<LINE id="L4" path="P4,P1" type="EAVE" length="10"/>',
+  '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" mat="Metal"/>',
   "</APPLICAD_EXPORT>",
 ].join("");
 
-const ROOF_GRAPH = {
-  schema_version: "roof_graph/v1",
-  revision: RAW_SHA256,
-  source: {
-    raw_key: RAW_KEY,
-    raw_sha256: RAW_SHA256,
-    provider: "AppliCad",
-    ingested_at: MODIFIED,
-    capture: { captured_at: null, provenance: "not_supplied" },
+const PRICE_LIST: PriceList = {
+  currency: "CAD",
+  panel: {
+    sku: "PNL-26G",
+    unit: "lf",
+    rateCents: 500,
+    sourceRef: "inventory:item:panel-26g",
   },
-  coordinate_system: {
-    kind: "local_3d",
-    crs: null,
-    transform: null,
-    provenance: "not_declared_by_source",
+  trims: {
+    eave_drip: {
+      sku: "TRM-EAVE",
+      unit: "stick",
+      rateCents: 2_000,
+      sourceRef: "inventory:item:eave",
+    },
+    ridge_cap: {
+      sku: "TRM-RIDGE",
+      unit: "stick",
+      rateCents: 3_000,
+      sourceRef: "inventory:item:ridge",
+    },
   },
-  points: [
-    { id: "P1", x: 0, y: 0, z: 0 },
-    { id: "P2", x: 10, y: 0, z: 0 },
-    { id: "P3", x: 10, y: 10, z: 0 },
-    { id: "P4", x: 0, y: 10, z: 0 },
-  ],
-  edges: [
-    { id: "L1", from: "P1", to: "P2" },
-    { id: "L2", from: "P2", to: "P3" },
-    { id: "L3", from: "P3", to: "P4" },
-    { id: "L4", from: "P4", to: "P1" },
-  ],
-  facets: [{ id: "F1", lineIds: ["L1", "L2", "L3", "L4"], type: "Roof", ringClosed: true }],
-  checks: [{ check: "line_length", target: "L4", ok: false, detail: "source mismatch" }],
-  needs_review: true,
-  measurements: { roof_area: 100 },
-  source_refs: { roof_area: "POLYGON[type=Roof]" },
+  fasteners: {
+    clips: { sku: "CLIP", rateCents: 100, sourceRef: "inventory:item:clip" },
+    clipScrews: {
+      sku: "SCREW-CLIP",
+      rateCents: 20,
+      sourceRef: "inventory:item:clip-screw",
+    },
+    trimScrews: {
+      sku: "SCREW-TRIM",
+      rateCents: 25,
+      sourceRef: "inventory:item:trim-screw",
+    },
+  },
+  labor: {
+    sku: "LABOR-INSTALL",
+    ratePerSquareCents: 45_000,
+    sourceRef: "pricing:labour:install",
+  },
+  approvedPolicy: {
+    schemaVersion: "ironwrap.pricing-policy.v1",
+    tenantId: TENANT,
+    policyId: "retail-metal",
+    revision: 3,
+    effectiveAt: "2026-08-01T00:00:00.000Z",
+    expiresAt: "2026-08-31T23:59:59.999Z",
+    pricing: { method: "markup", rateBps: 1_000 },
+    freightCents: 15_000,
+    contingencyRateBps: 250,
+    minimumChargeCents: 100_000,
+    taxRateBps: 500,
+  },
 };
 
-const rows: Record<string, Array<Record<string, unknown>>> = {
-  "Roof Job": [
-    {
-      name: "JOB-A",
-      roof_job_id: "roof_job_a",
-      job_number: "IW-1001",
-      brand: "ironwrap",
-      service_type: "Roof replacement",
-      job_status: "Proposal",
-      workflow_profile: "Residential Retail",
-      modified: MODIFIED,
-      customer: "CUSTOMER-A",
-      internal_financial_note: "private-job-note",
-    },
-  ],
-  "Measurement Report": [
-    {
-      name: "MEASURE-A",
-      measurement_id: "measure_a",
-      roof_job: "JOB-A",
-      provider: "AppliCad",
-      review_status: "Needs Review",
-      parsed_at: MODIFIED,
-      approved_at: null,
-      raw_key: RAW_KEY,
-      roof_graph_revision: RAW_SHA256,
-      roof_graph_json: JSON.stringify(ROOF_GRAPH),
-      report_url: "https://private.example/report",
-      modified: MODIFIED,
-      measurements: [
-        {
-          metric: "roof_area",
-          value: 100,
-          unit: "sq ft",
-          confidence: "deterministic",
-          source_ref: "POLYGON[type=Roof]",
-          needs_review: 1,
-          hidden_private_detail: "do-not-expose",
-        },
-      ],
-    },
-  ],
-  "Material Takeoff": [
-    {
-      name: "TAKEOFF-A",
-      takeoff_id: "takeoff_a",
-      roof_job: "JOB-A",
-      measurement_report: "MEASURE-A",
-      status: "Needs Review",
-      prepared_at: MODIFIED,
-      approved_at: null,
-      assumptions: "Waste includes valleys.",
-      exclusions: "Deck repairs require separate approval.",
-      source_measurements_json: "private-json",
-      modified: MODIFIED,
-      items: [
-        {
-          category: "Shingle",
-          item_name: "Architectural shingles",
-          quantity: 12.5,
-          unit: "squares",
-          waste_factor: 12,
-          source_ref: "roof_area",
-          confidence: "deterministic",
-          needs_review: 1,
-          supplier_cost: 9999,
-        },
-      ],
-    },
-  ],
-  "Customer Quote": [
-    {
-      name: "QUOTE-A",
-      customer_quote_id: "quote_a",
-      roof_job: "JOB-A",
-      quote_version: 3,
-      status: "Needs Review",
-      price_book_version: "2026-07-11",
-      pricing_effective_at: MODIFIED,
-      subtotal: 12000,
-      tax_amount: 600,
-      tax_code: "GST",
-      tax_rate: 5,
-      quote_total: 12600,
-      currency: "CAD",
-      deposit_amount: 2500,
-      amount_due: 2500,
-      amount_paid: 0,
-      balance_due: 12600,
-      payment_status: "Not Due",
-      payment_due_date: null,
-      valid_until: "2026-07-25",
-      prepared_at: MODIFIED,
-      approved_at: null,
-      accepted_at: null,
-      scope_summary: "Replace roof system and flashings.",
-      assumptions: "One existing layer.",
-      exclusions: "Deck repairs excluded.",
-      supersedes: "QUOTE-OLD",
-      correction_reason: "Supplier price notice",
-      tax_policy_snapshot_json: "private-tax-json",
-      quote_summary_json: "private-quote-json",
-      modified: MODIFIED,
-    },
-  ],
-  "Proposal Evidence Pack": [
-    {
-      name: "PACK-A",
-      pack_id: "pack_a",
-      roof_job: "JOB-A",
-      quotation: "QUOTE-A",
-      status: "Draft",
-      prepared_at: MODIFIED,
-      approved_at: null,
-      signed_at: null,
-      assumptions: "One existing layer.",
-      exclusions: "Deck repairs excluded.",
-      evidence_summary_json: "private-evidence-json",
-      customer_message: "private-message",
-      modified: MODIFIED,
-    },
-  ],
-  "Scope Clause": [
-    {
-      name: "CLAUSE-A",
-      scope_clause_id: "clause_a",
-      roof_job: "JOB-A",
-      clause_type: "Risk",
-      title: "Deck condition",
-      clause_text: "Hidden deck conditions require evidence and written approval.",
-      version: "v2",
-      status: "Approved",
-      source_ref: "Alberta contract policy",
-      customer_visible: 1,
-      approved_at: MODIFIED,
-      notes: "private-clause-note",
-      modified: MODIFIED,
-    },
-  ],
-};
+class SqliteD1 {
+  readonly raw = new DatabaseSync(":memory:");
 
-function auth(role: AppRole): AuthContext {
-  return {
-    rawSessionToken: "s".repeat(43),
-    csrfToken: "csrf",
-    permissions:
-      role === "field"
-        ? ["session:read", "jobs:read:assigned", "field:write:assigned"]
-        : ["session:read", "jobs:read:any", "owner:read", "sales:read", "estimator:read"],
-    session: {
-      session_hash: "a".repeat(64),
-      session_created_at: MODIFIED,
-      session_expires_at: "2026-07-11T22:00:00.000Z",
-      revoked_at: null,
-      user_id: `appu_${role}`,
-      tenant_id: "ironwrap",
-      email_normalized: `${role}@example.com`,
-      display_name: role,
-      role,
-      frappe_user_id: `${role}@example.com`,
-      active: 1,
-      created_by: "owner@example.com",
-      created_at: MODIFIED,
-      updated_at: MODIFIED,
-    },
-  };
+  constructor() {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    const directory = new URL("../migrations/", import.meta.url);
+    for (const file of readdirSync(directory)
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
+      this.raw.exec(readFileSync(new URL(file, directory), "utf8"));
+    }
+  }
+
+  prepare(sql: string) {
+    return new SqliteStatement(this.raw, this.raw.prepare(sql));
+  }
+
+  async batch(statements: SqliteStatement[]) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
 }
 
-function env(
-  rawText = JSON.stringify({
-    source_xml: GEOMETRY_XML,
-    internal_note: "never expose source bytes",
-  }),
-): AppEnv {
-  return {
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "read-key",
-    ERPNEXT_API_SECRET: "read-secret",
-    RAW: {
-      get: async (key: string) =>
-        key === RAW_KEY
-          ? {
-              size: new TextEncoder().encode(rawText).byteLength,
-              text: async () => rawText,
-            }
-          : null,
-    },
-  } as never;
+class SqliteStatement {
+  private readonly database: DatabaseSync;
+  private readonly statement: StatementSync;
+  private readonly args: unknown[];
+
+  constructor(
+    database: DatabaseSync,
+    statement: StatementSync,
+    args: unknown[] = [],
+  ) {
+    this.database = database;
+    this.statement = statement;
+    this.args = args;
+  }
+
+  bind(...args: unknown[]) {
+    return new SqliteStatement(this.database, this.statement, args);
+  }
+
+  async first<T>(): Promise<T | null> {
+    return (this.statement.get(...this.args) ?? null) as T | null;
+  }
+
+  async all<T>(): Promise<{ results: T[] }> {
+    return { results: this.statement.all(...this.args) as T[] };
+  }
+
+  async run(): Promise<{ success: true; meta: { changes: number } }> {
+    const result = this.statement.run(...this.args);
+    return { success: true, meta: { changes: Number(result.changes) } };
+  }
 }
 
-function installFrappeMock(
-  dataset: Record<string, Array<Record<string, unknown>>> = rows,
+interface Fixture {
+  db: SqliteD1;
+  env: AppEnv;
+  objects: Map<string, string>;
+  measurementRawKey: string;
+  facetRawKey: string;
+}
+
+async function fixture(
   options: {
-    oversizedMeasurementDetail?: boolean;
-    detailRows?: Record<string, Record<string, unknown>>;
+    importEvidence?: boolean;
+    includeFacet?: boolean;
+    includeCommercial?: boolean;
+    includeExtensions?: boolean;
+    priceList?: boolean;
   } = {},
-) {
-  const original = globalThis.fetch;
-  const requests: Array<{
-    doctype: string;
-    name: string | null;
-    fields: string[];
-    filters: unknown[];
-    limit: number | null;
-  }> = [];
-  globalThis.fetch = async (input) => {
-    const url = new URL(
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-    );
-    const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-    const resource = segments.lastIndexOf("resource");
-    const doctype = segments[resource + 1] ?? "";
-    const name = segments[resource + 2] ?? null;
-    const fields = JSON.parse(url.searchParams.get("fields") ?? "[]") as string[];
-    const filters = JSON.parse(url.searchParams.get("filters") ?? "[]") as unknown[];
-    const limit = Number(url.searchParams.get("limit_page_length"));
-    requests.push({
-      doctype,
-      name,
-      fields,
-      filters,
-      limit: Number.isSafeInteger(limit) ? limit : null,
-    });
-    const source = dataset[doctype] ?? [];
-    if (name) {
-      const document = options.detailRows?.[`${doctype}/${name}`] ?? source.find((row) => row.name === name);
-      if (document && options.oversizedMeasurementDetail && doctype === "Measurement Report") {
-        const body = JSON.stringify({ data: { ...document, padding: "x".repeat(800 * 1024) } });
-        return new Response(body, {
-          headers: {
-            "content-length": String(new TextEncoder().encode(body).byteLength),
-            "content-type": "application/json",
-          },
-        });
-      }
-      return document
-        ? Response.json({ data: document })
-        : Response.json({ error: "not_found" }, { status: 404 });
-    }
-    return Response.json({
-      data: source.filter((row) => filters.every((filter) => matchesFilter(row, filter))),
-    });
-  };
-  return {
-    requests,
-    restore: () => {
-      globalThis.fetch = original;
-    },
-  };
-}
-
-function matchesFilter(row: Record<string, unknown>, raw: unknown): boolean {
-  if (!Array.isArray(raw)) return false;
-  const [, field, operator, expected] = raw;
-  if (operator === "=") return String(row[String(field)] ?? "") === String(expected ?? "");
-  return false;
-}
-
-test("estimator workbench derives safe measurement geometry and commercial traceability without raw leakage", async () => {
-  const mock = installFrappeMock();
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.job.job_number, "IW-1001");
-    assert.deepEqual(model.allowed_actions.at(-1), "estimator.read");
-    assert.equal(model.measurements.selected?.geometry.state, "needs_review");
-    assert.equal(model.measurements.selected?.geometry.failed_check_count, 1);
-    assert.equal(model.measurements.selected?.geometry.facets[0]?.declared_area, 100);
-    assert.equal(model.measurements.selected?.geometry.facets[0]?.computed_area, 100);
-    assert.equal(model.measurements.selected?.metrics[0]?.source_ref, "POLYGON[type=Roof]");
-    assert.deepEqual(model.measurements.selected?.roof_graph, {
-      state: "needs_review",
-      revision: "roof_graph/v1",
-      source: "not_supplied",
-      provider: "AppliCad",
-      confidence: null,
-      review_status: "Needs Review",
-      captured_at: null,
-      units: null,
-      points: [
-        { id: "P1", x: 0, y: 0 },
-        { id: "P2", x: 10, y: 0 },
-        { id: "P3", x: 10, y: 10 },
-        { id: "P4", x: 0, y: 10 },
-      ],
-      edges: [
-        { id: "L1", start_point_id: "P1", end_point_id: "P2" },
-        { id: "L2", start_point_id: "P2", end_point_id: "P3" },
-        { id: "L3", start_point_id: "P3", end_point_id: "P4" },
-        { id: "L4", start_point_id: "P4", end_point_id: "P1" },
-      ],
-      facets: [{
-        id: "F1",
-        label: "Roof",
-        point_ids: ["P1", "P2", "P3", "P4"],
-        confidence: null,
-        review_status: "Needs Review",
-      }],
-      check_count: 1,
-      failed_check_count: 1,
-    });
-    assert.equal(model.takeoffs.selected?.items[0]?.source_ref, "roof_area");
-    assert.deepEqual(model.lineage, {
-      measurement_to_takeoff: "linked",
-      quote_to_proposal: "linked",
-    });
-    assert.equal(model.quote?.price_book_version, "2026-07-11");
-    assert.equal(model.proposal?.status, "Draft");
-    assert.equal(model.scope_clauses[0]?.customer_visible, true);
-
-    const serialized = JSON.stringify(model);
-    for (const secret of [
-      RAW_KEY,
-      RAW_SHA256,
-      GEOMETRY_XML,
-      "private-job-note",
-      "private-json",
-      "private-tax-json",
-      "private-quote-json",
-      "private-evidence-json",
-      "private-message",
-      "private-clause-note",
-      "do-not-expose",
-      "never expose source bytes",
-    ])
-      assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
-
-    const reportList = mock.requests.find(
-      (request) => request.doctype === "Measurement Report" && request.name === null,
-    );
-    assert.deepEqual(reportList?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Measurement Report"]);
-    assert.equal(reportList?.fields.includes("raw_key"), false);
-    const reportDetail = mock.requests.find(
-      (request) => request.doctype === "Measurement Report" && request.name === "MEASURE-A",
-    );
-    assert.ok(
-      reportDetail,
-      "selected report should be read only through the fixed direct-detail contract",
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator economics exposes separated source-bound cents without actor or tax leakage", async () => {
-  const economicsRows = {
-    ...rows,
-    "Customer Quote": [
-      {
-        name: "QUOTE-A",
-        customer_quote_id: "quote_a",
-        roof_job: "JOB-A",
-        quote_version: 3,
-        status: "Accepted",
-        subtotal: "12000.00",
-        tax_amount: "600.00",
-        quote_total: "12600.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Supplier Quote": [
-      {
-        name: "SUPPLIER-QUOTE-A",
-        roof_job: "JOB-A",
-        status: "Approved",
-        quote_total: "5000.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Supplier Order": [
-      {
-        name: "SUPPLIER-ORDER-A",
-        roof_job: "JOB-A",
-        source_quote: "SUPPLIER-QUOTE-A",
-        status: "Ordered",
-        modified: MODIFIED,
-      },
-    ],
-    "Material Lot": [
-      { name: "LOT-A", roof_job: "JOB-A", status: "Available", modified: MODIFIED },
-    ],
-    "Payment Milestone": [
-      {
-        name: "INVOICE-A",
-        roof_job: "JOB-A",
-        milestone_type: "Invoice",
-        status: "Matched",
-        subtotal: "12000.00",
-        tax_amount: "600.00",
-        total_amount: "12600.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-      {
-        name: "PAYMENT-A",
-        roof_job: "JOB-A",
-        milestone_type: "Payment",
-        status: "Matched",
-        total_amount: "3000.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Job Cost Event": [
-      {
-        name: "COST-A",
-        job_cost_event_id: "COST-A",
-        tenant: "ironwrap",
-        roof_job: "JOB-A",
-        event_kind: "cost",
-        category: "Material",
-        quantity: 1,
-        unit: "lot",
-        amount_cents: 450000,
-        amount_basis: "Net of Recoverable Tax",
-        currency: "CAD",
-        source_doctype: "Material Lot",
-        source_name: "LOT-A",
-        source_digest: "a".repeat(64),
-        source_evidence: "EVID-A",
-        accounting_state: "Operational",
-        approved_by: "private-finance@example.com",
-        modified: MODIFIED,
-      },
-    ],
-  };
-  const mock = installFrappeMock(economicsRows);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.economics.metrics.forecast_revenue.known_cents, 1_200_000);
-    assert.equal(model.economics.metrics.forecast_cost.known_cents, 500_000);
-    assert.equal(model.economics.metrics.committed_cost.known_cents, 500_000);
-    assert.equal(model.economics.metrics.accrued_actual_cost.known_cents, 450_000);
-    assert.equal(model.economics.metrics.invoiced_revenue_ex_tax.known_cents, 1_200_000);
-    assert.equal(model.economics.metrics.cash_collected.known_cents, 300_000);
-    assert.equal(model.economics.metrics.actual_profit.amount_cents, null);
-    const request = mock.requests.find((item) => item.doctype === "Job Cost Event");
-    assert.ok(request);
-    assert.deepEqual(request.filters, [
-      ["Job Cost Event", "tenant", "=", "ironwrap"],
-      ["Job Cost Event", "roof_job", "=", "JOB-A"],
-    ]);
-    assert.equal(request.fields.includes("approved_by"), false);
-    assert.equal(
-      OFFICE_ESTIMATOR_READ_FIELDS["Job Cost Event"].includes("approved_by" as never),
-      false,
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench fails closed when persisted roof graph provenance disagrees with its report", async () => {
-  const dataset = {
-    ...rows,
-    "Measurement Report": rows["Measurement Report"].map((row) => ({
-      ...row,
-      roof_graph_json: JSON.stringify({
-        ...ROOF_GRAPH,
-        source: { ...ROOF_GRAPH.source, provider: "Other Provider" },
-      }),
-    })),
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.deepEqual(model?.measurements.selected?.roof_graph, {
-      state: "unavailable",
-      revision: null,
-      source: null,
-      provider: null,
-      confidence: null,
-      review_status: "Unavailable",
-      captured_at: null,
-      units: null,
-      points: [],
-      edges: [],
-      facets: [],
-      check_count: 0,
-      failed_check_count: 0,
-    });
-    const serialized = JSON.stringify(model);
-    assert.equal(serialized.includes(RAW_KEY), false);
-    assert.equal(serialized.includes(RAW_SHA256), false);
-    assert.equal(serialized.includes("Other Provider"), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench projects only an allowlisted visual preview with measurement provenance", async () => {
-  const allowedPreview = "https://preview.ironwrap.example/models/visual-a.png?signature=opaque";
-  const blockedPreview = "https://untrusted.example/models/visual-a.png";
-  const dataset = {
-    ...rows,
-    "Visual Property Model": [{
-      name: "VISUAL-A",
-      roof_job: "JOB-A",
-      provider: "Renoworks Capture",
-      status: "Approved",
-      confidence: 82,
-      needs_review: 0,
-      screenshots_json: JSON.stringify([blockedPreview, allowedPreview]),
-      captured_at: MODIFIED,
-      approved_at: MODIFIED,
-      model_uri: "https://private.example/models/visual-a.glb",
-      raw_key: "raw/visual/visual-a.json",
-      provider_model_id: "provider-private-id",
-      modified: MODIFIED,
-    }],
-    "Roof Area": [{
-      name: "ROOF-AREA-A",
-      roof_job: "JOB-A",
-      visual_model: "VISUAL-A",
-      measurement_report: "MEASURE-A",
-      modified: MODIFIED,
-    }],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(
-      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
-      auth("owner"),
-      "JOB-A",
-    );
-    assert.ok(model?.visual_model);
-    assert.equal(model.visual_model.model_state, "approved");
-    assert.equal(model.visual_model.approval_recorded, true);
-    assert.equal(model.visual_model.measurement_link, "selected_measurement");
-    assert.deepEqual(model.visual_model.preview, { state: "available", url: allowedPreview });
-
-    const serialized = JSON.stringify(model);
-    for (const privateValue of [
-      "https://private.example/models/visual-a.glb",
-      "raw/visual/visual-a.json",
-      "provider-private-id",
-      blockedPreview,
-    ]) assert.equal(serialized.includes(privateValue), false, `leaked ${privateValue}`);
-
-    const visualList = mock.requests.find(
-      (request) => request.doctype === "Visual Property Model" && request.name === null,
-    );
-    assert.deepEqual(visualList?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Visual Property Model"]);
-    for (const field of ["model_uri", "raw_key", "provider_model_id", "screenshots_json", "measurements_json"]) {
-      assert.equal(visualList?.fields.includes(field), false, `visual list leaked ${field}`);
-    }
-    assert.ok(
-      mock.requests.some(
-        (request) => request.doctype === "Visual Property Model" && request.name === "VISUAL-A",
-      ),
-      "selected visual model should be read only through the fixed direct-detail contract",
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench fails closed for an unapproved model and a blocked preview origin", async () => {
-  const blockedPreview = "https://untrusted.example/models/unapproved.png";
-  const dataset = {
-    ...rows,
-    "Visual Property Model": [{
-      name: "VISUAL-REVIEW",
-      roof_job: "JOB-A",
-      provider: "Provider",
-      status: "Approved",
-      confidence: 55,
-      needs_review: 1,
-      screenshots_json: JSON.stringify([blockedPreview]),
-      captured_at: MODIFIED,
-      approved_at: MODIFIED,
-      modified: MODIFIED,
-    }],
-    "Roof Area": [],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(
-      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
-      auth("ops"),
-      "JOB-A",
-    );
-    assert.ok(model?.visual_model);
-    assert.equal(model.visual_model.model_state, "needs_review");
-    assert.equal(model.visual_model.review_required, true);
-    assert.equal(model.visual_model.approval_recorded, false);
-    assert.equal(model.visual_model.measurement_link, "unlinked");
-    assert.deepEqual(model.visual_model.preview, { state: "blocked", url: null });
-    assert.equal(JSON.stringify(model).includes(blockedPreview), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench marks malformed visual preview payloads and other measurement links safely", async () => {
-  const malformedScreenshotPayload = "{not-an-array";
-  const dataset = {
-    ...rows,
-    "Visual Property Model": [{
-      name: "VISUAL-OTHER",
-      roof_job: "JOB-A",
-      provider: "Provider",
-      status: "Needs Review",
-      confidence: 70,
-      needs_review: 1,
-      screenshots_json: malformedScreenshotPayload,
-      captured_at: MODIFIED,
-      approved_at: null,
-      modified: MODIFIED,
-    }],
-    "Roof Area": [{
-      name: "ROOF-AREA-OTHER",
-      roof_job: "JOB-A",
-      visual_model: "VISUAL-OTHER",
-      measurement_report: "MEASURE-OTHER",
-      modified: MODIFIED,
-    }],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.ok(model?.visual_model);
-    assert.equal(model.visual_model.model_state, "needs_review");
-    assert.equal(model.visual_model.measurement_link, "other_measurement");
-    assert.deepEqual(model.visual_model.preview, { state: "invalid", url: null });
-    assert.equal(JSON.stringify(model).includes(malformedScreenshotPayload), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench suppresses an invalid visual model detail rather than projecting it", async () => {
-  const dataset = {
-    ...rows,
-    "Visual Property Model": [{
-      name: "VISUAL-INVALID",
-      roof_job: "JOB-A",
-      provider: "Provider",
-      status: "Approved",
-      confidence: 101,
-      needs_review: 0,
-      screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/invalid.png"]),
-      captured_at: MODIFIED,
-      approved_at: MODIFIED,
-      modified: MODIFIED,
-    }],
-    "Roof Area": [],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(
-      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
-      auth("owner"),
-      "JOB-A",
-    );
-    assert.deepEqual(model?.visual_model, {
-      provider: null,
-      model_state: "unavailable",
-      confidence: null,
-      review_required: true,
-      approval_recorded: false,
-      captured_at: null,
-      approved_at: null,
-      measurement_link: "unavailable",
-      preview: { state: "unavailable", url: null },
-    });
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench rejects a stale visual detail that no longer belongs to the selected roof job", async () => {
-  const dataset = {
-    ...rows,
-    "Visual Property Model": [{
-      name: "VISUAL-STALE",
-      roof_job: "JOB-A",
-      provider: "Provider",
-      status: "Approved",
-      confidence: 80,
-      needs_review: 0,
-      screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/stale.png"]),
-      captured_at: MODIFIED,
-      approved_at: MODIFIED,
-      modified: MODIFIED,
-    }],
-    "Roof Area": [],
-  };
-  const mock = installFrappeMock(dataset, {
-    detailRows: {
-      "Visual Property Model/VISUAL-STALE": {
-        ...dataset["Visual Property Model"][0],
-        roof_job: "JOB-OTHER",
-      },
-    },
-  });
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(
-      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
-      auth("owner"),
-      "JOB-A",
-    );
-    assert.equal(model?.visual_model?.model_state, "unavailable");
-    assert.equal(model?.visual_model?.preview.url, null);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench does not select a visual model from a truncated source window", async () => {
-  const visualModels = Array.from({ length: 100 }, (_, index) => ({
-    name: `VISUAL-${index}`,
-    roof_job: "JOB-A",
-    provider: "Provider",
-    status: "Approved",
-    confidence: 80,
-    needs_review: 0,
-    screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/window.png"]),
-    captured_at: MODIFIED,
-    approved_at: MODIFIED,
-    modified: MODIFIED,
-  }));
-  const mock = installFrappeMock({ ...rows, "Visual Property Model": visualModels, "Roof Area": [] });
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(
-      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
-      auth("owner"),
-      "JOB-A",
-    );
-    assert.equal(model?.visual_model?.model_state, "unavailable");
-    assert.equal(
-      mock.requests.some((request) => request.doctype === "Visual Property Model" && request.name !== null),
-      false,
-      "a partial visual window must not be promoted through a direct record read",
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench projects restricted insurance evidence without claim or storage leakage", async () => {
-  const dataset = {
-    ...rows,
-    "Insurance Supplement": [{
-      name: "SUPPLEMENT-A",
-      insurance_supplement_id: "private-claim-reference",
-      roof_job: "JOB-A",
-      version: 1,
-      status: "Ready for Human Review",
-      measurement_report: "MEASURE-A",
-      invoice_required: 1,
-      claim_reference: "private-claim-reference",
-      policy_reference: "private-policy-reference",
-      adjuster_reference: "private-adjuster-reference",
-      supplement_basis: "private-carrier-scope-analysis",
-      evidence_manifest_json: "{\"private\":\"manifest\"}",
-      approved_at: null,
-      submitted_at: null,
-      carrier_response_at: null,
-      closed_at: null,
-      modified: MODIFIED,
-      evidence: [
-        { evidence_item: "private-evidence-carrier", evidence_role: "Carrier Scope" },
-        { evidence_item: "private-evidence-code", evidence_role: "Code/Manufacturer" },
-        { evidence_item: "private-evidence-photo", evidence_role: "Photo" },
-        { evidence_item: "private-evidence-invoice", evidence_role: "Invoice" },
-      ],
-    }],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.deepEqual(model?.insurance_supplements, [{
-      presentation_key: "insurance-supplement-1",
-      version: 1,
-      status: "Ready for Human Review",
-      measurement_state: "review_required",
-      evidence_roles: ["Carrier Scope", "Code/Manufacturer", "Photo", "Invoice"],
-      missing_requirements: ["approved_measurement"],
-      invoice_state: "recorded",
-      approval_recorded: false,
-      submission_recorded: false,
-      carrier_response_recorded: false,
-      closed_recorded: false,
-    }]);
-    const serialized = JSON.stringify(model);
-    for (const privateValue of [
-      "private-claim-reference",
-      "private-policy-reference",
-      "private-adjuster-reference",
-      "private-carrier-scope-analysis",
-      "SUPPLEMENT-A",
-      "private-evidence-carrier",
-      "private-evidence-invoice",
-      "manifest",
-    ]) assert.equal(serialized.includes(privateValue), false);
-
-    const list = mock.requests.find(
-      (request) => request.doctype === "Insurance Supplement" && request.name === null,
-    );
-    assert.deepEqual(list?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Insurance Supplement"]);
-    for (const forbiddenField of [
-      "claim_reference",
-      "insurance_supplement_id",
-      "policy_reference",
-      "adjuster_reference",
-      "supplement_basis",
-      "evidence_manifest_json",
-    ]) assert.equal(list?.fields.includes(forbiddenField), false);
-    const detail = mock.requests.find(
-      (request) => request.doctype === "Insurance Supplement" && request.name === "SUPPLEMENT-A",
-    );
-    assert.ok(detail);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench never places an internal supplement document name in stale browser state", async () => {
-  const dataset = {
-    ...rows,
-    "Insurance Supplement": [{
-      name: "SUPPLEMENT-A",
-      insurance_supplement_id: "supplement_a",
-      roof_job: "JOB-A",
-      version: 1,
-      status: "Draft",
-      measurement_report: null,
-      invoice_required: 1,
-      approved_at: null,
-      submitted_at: null,
-      carrier_response_at: null,
-      closed_at: null,
-      modified: MODIFIED,
-    }],
-  };
-  const mock = installFrappeMock(dataset, {
-    detailRows: { "Insurance Supplement/SUPPLEMENT-A": {} },
-  });
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.deepEqual(model?.insurance_supplements[0]?.missing_requirements, ["source_detail_unavailable"]);
-    assert.ok(model?.stale_fields.includes("insurance_supplements.detail_unavailable"));
-    assert.equal(JSON.stringify(model).includes("SUPPLEMENT-A"), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench requests restricted supplement evidence only for an owner or configured estimator identity", async () => {
-  const dataset = {
-    ...rows,
-    "Insurance Supplement": [{
-      name: "PRIVATE-SUPPLEMENT-DOCUMENT",
-      insurance_supplement_id: "private-claim-reference",
-      roof_job: "JOB-A",
-      version: 1,
-      status: "Draft",
-      measurement_report: null,
-      invoice_required: 1,
-      approved_at: null,
-      submitted_at: null,
-      carrier_response_at: null,
-      closed_at: null,
-      modified: MODIFIED,
-      evidence: [],
-    }],
-  };
-  const unconfigured = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
-    assert.deepEqual(model?.insurance_supplements, []);
-    assert.equal(unconfigured.requests.some((request) => request.doctype === "Insurance Supplement"), false);
-  } finally {
-    unconfigured.restore();
-  }
-
-  const configured = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel({
-      ...env(),
-      APP_INSURANCE_ESTIMATOR_FRAPPE_USERS: "reviewer@example.com, OPS@example.com",
-    }, auth("ops"), "JOB-A");
-    assert.equal(model?.insurance_supplements.length, 1);
-    assert.equal(model?.insurance_supplements[0]?.presentation_key, "insurance-supplement-1");
-    assert.equal(JSON.stringify(model).includes("PRIVATE-SUPPLEMENT-DOCUMENT"), false);
-    assert.ok(configured.requests.some((request) => request.doctype === "Insurance Supplement"));
-  } finally {
-    configured.restore();
-  }
-});
-
-test("estimator workbench grants the draft-revision entry only for a configured isolated broker and versioned non-accepted source", async () => {
-  const configured = {
-    ...env(),
-    APP_ALLOW_INSECURE_LOCAL: "true",
-    APP_QUOTE_REVISION_BROKER_URL: "http://127.0.0.1:8789",
-    APP_QUOTE_REVISION_BROKER_KEY_ID: "quote-revision-test-key",
-    QUOTE_REVISION_BROKER_SHARED_SECRET: "q".repeat(48),
-    APP_APPROVAL_APPROVER_ID: "owner@example.com",
-    APP_APPROVAL_MAX_SESSION_AGE_SECONDS: "900",
-  } as AppEnv;
-
-  const configuredMock = installFrappeMock();
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
-    assert.ok(model?.allowed_actions.includes("quote_revision_approval.prepare"));
-  } finally {
-    configuredMock.restore();
-  }
-
-  const acceptedRows = {
-    ...rows,
-    "Customer Quote": rows["Customer Quote"].map((row) => ({ ...row, status: "Accepted" })),
-  };
-  const acceptedMock = installFrappeMock(acceptedRows);
-  try {
-    const accepted = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
-    assert.equal(accepted?.allowed_actions.includes("quote_revision_approval.prepare"), false);
-  } finally {
-    acceptedMock.restore();
-  }
-
-  const unversionedRows = {
-    ...rows,
-    "Customer Quote": rows["Customer Quote"].map((row) => ({ ...row, quote_version: null })),
-  };
-  const unversionedMock = installFrappeMock(unversionedRows);
-  try {
-    const unversioned = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
-    assert.equal(unversioned?.allowed_actions.includes("quote_revision_approval.prepare"), false);
-  } finally {
-    unversionedMock.restore();
-  }
-});
-
-test("estimator workbench does not join a remeasurement to an unlinked takeoff or an older proposal", async () => {
-  const dataset = {
-    ...rows,
-    "Measurement Report": [
-      ...rows["Measurement Report"],
-      {
-        ...rows["Measurement Report"][0],
-        name: "MEASURE-B",
-        measurement_id: "measure_b",
-        modified: "2026-07-12T10:00:00.000Z",
-      },
-    ],
-    "Customer Quote": [
-      ...rows["Customer Quote"],
-      {
-        ...rows["Customer Quote"][0],
-        name: "QUOTE-OLD",
-        customer_quote_id: "quote_old",
-        quote_version: 2,
-        modified: "2026-07-14T10:00:00.000Z",
-      },
-    ],
-    "Proposal Evidence Pack": [
-      {
-        ...rows["Proposal Evidence Pack"][0],
-        quotation: "QUOTE-OLD",
-        modified: "2026-07-14T10:00:00.000Z",
-      },
-    ],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.measurements.selected?.id, "measure_b");
-    assert.equal(model.takeoffs.selected, null);
-    assert.equal(model.lineage.measurement_to_takeoff, "mismatch");
-    assert.equal(model.quote?.id, "quote_a", "highest quote_version wins over modified timestamp");
-    assert.equal(model.proposal, null);
-    assert.equal(model.lineage.quote_to_proposal, "mismatch");
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench exposes immutable revision and scope-change decisions without pricing a new quote", async () => {
-  const dataset = {
-    ...rows,
-    "Measurement Report": [{ ...rows["Measurement Report"][0] }],
-    "Material Takeoff": [{ ...rows["Material Takeoff"][0], status: "Approved" }],
-    "Customer Quote": [
-      { ...rows["Customer Quote"][0], status: "Approved" },
-      {
-        ...rows["Customer Quote"][0],
-        name: "QUOTE-B",
-        customer_quote_id: "quote_b",
-        quote_version: 4,
-        status: "Approved",
-        price_book_version: "2026-07-12",
-        pricing_effective_at: "2026-07-12T10:00:00.000Z",
-        subtotal: 12400,
-        tax_amount: 620,
-        quote_total: 13020,
-        deposit_amount: 3000,
-        amount_due: 3000,
-        balance_due: 13020,
-        scope_summary: "Replace roof system, flashings, and one added ridge vent.",
-        assumptions: "One existing layer and clear driveway.",
-        exclusions: "Deck repairs excluded pending written change order.",
-        supersedes: "QUOTE-A",
-        correction_reason: "Supplier price notice and revised ridge ventilation scope.",
-        modified: "2026-07-14T10:00:00.000Z",
-      },
-    ],
-    "Proposal Evidence Pack": [{
-      ...rows["Proposal Evidence Pack"][0],
-      name: "PACK-B",
-      pack_id: "pack_b",
-      quotation: "QUOTE-B",
-      modified: "2026-07-14T10:00:00.000Z",
-    }],
-    "Change Order": [
-      {
-        name: "CHANGE-B",
-        change_order_id: "change_b",
-        roof_job: "JOB-A",
-        customer_quote: "QUOTE-B",
-        change_number: "CO-02",
-        version: 1,
-        status: "Presented",
-        title: "Ridge ventilation addition",
-        reason: "Field ventilation condition needs customer decision.",
-        scope_delta: "Add ridge vent after written customer approval.",
-        currency: "CAD",
-        subtotal: 400,
-        tax_amount: 20,
-        total_amount: 420,
-        price_book_version: "2026-07-12",
-        requested_at: "2026-07-14T10:00:00.000Z",
-        approved_at: "2026-07-14T10:30:00.000Z",
-        accepted_at: null,
-        correction_reason: null,
-        tax_policy_snapshot_json: "private-change-tax-policy",
-        notes: "private-change-note",
-        modified: "2026-07-14T10:00:00.000Z",
-      },
-      {
-        name: "CHANGE-A",
-        change_order_id: "change_a",
-        roof_job: "JOB-A",
-        customer_quote: "QUOTE-A",
-        change_number: "CO-01",
-        version: 1,
-        status: "Accepted",
-        title: "Prior scope decision",
-        reason: "Prior accepted condition.",
-        scope_delta: "Prior accepted scope change.",
-        currency: "CAD",
-        subtotal: 100,
-        tax_amount: 5,
-        total_amount: 105,
-        price_book_version: "2026-07-11",
-        requested_at: MODIFIED,
-        approved_at: MODIFIED,
-        accepted_at: MODIFIED,
-        correction_reason: null,
-        modified: MODIFIED,
-      },
-    ],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const verifiedGeometry = JSON.stringify({
-      source_xml: GEOMETRY_XML.replace('length="12"', 'length="10"'),
-    });
-    const model = await buildEstimatorWorkbenchReadModel(env(verifiedGeometry), auth("owner"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.measurements.selected?.geometry.state, "recomputed");
-    assert.equal(model.quote?.id, "quote_b");
-    assert.deepEqual(model.pricing_snapshot, {
-      state: "recorded",
-      quote_id: "quote_b",
-      quote_version: 4,
-      price_book_version: "2026-07-12",
-      pricing_effective_at: "2026-07-12T10:00:00.000Z",
-      valid_until: "2026-07-25",
-    });
-    assert.equal(model.quote_revision.state, "compared");
-    assert.equal(model.quote_revision.prior_quote?.id, "quote_a");
-    assert.equal(model.quote_revision.delta?.quote_total, 420);
-    assert.equal(model.quote_revision.delta?.scope_summary_changed, true);
-    assert.equal(model.scope_changes[0]?.quote_link, "selected_quote");
-    assert.equal(model.scope_changes[0]?.status, "Presented");
-    assert.equal(model.scope_changes[1]?.quote_link, "other_quote");
-    assert.deepEqual(model.proposal_readiness, {
-      state: "blocked",
-      reasons: ["scope_change_unresolved"],
-    });
-    const serialized = JSON.stringify(model);
-    assert.equal(serialized.includes("private-change-tax-policy"), false);
-    assert.equal(serialized.includes("private-change-note"), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench fails closed when a direct report response exceeds the read boundary", async () => {
-  const mock = installFrappeMock(rows, { oversizedMeasurementDetail: true });
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.measurements.selected?.geometry.state, "unavailable");
-    assert.equal(model.measurements.selected?.geometry.reason, "measurement_detail_too_large");
-    assert.equal(model.stale_fields.includes("measurements.selected_detail"), true);
-    assert.equal(JSON.stringify(model).includes(RAW_KEY), false);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench caps child detail rows and preserves the truncation signal", async () => {
-  const dataset = {
-    ...rows,
-    "Measurement Report": [{
-      ...rows["Measurement Report"][0],
-      measurements: Array.from({ length: 350 }, (_, index) => ({
-        metric: `metric_${index}`,
-        value: index,
-        unit: "sq ft",
-        confidence: "reported",
-        source_ref: "provider",
-        needs_review: 0,
-      })),
-    }],
-  };
-  const mock = installFrappeMock(dataset);
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
-    assert.equal(model?.measurements.selected?.metrics.length, 120);
-    assert.equal(model?.measurements.selected?.metrics_truncated, true);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench rejects direct detail that no longer belongs to the selected roof job", async () => {
-  const detailRows = {
-    "Measurement Report/MEASURE-A": {
-      ...rows["Measurement Report"][0],
-      roof_job: "JOB-OTHER",
-    },
-  };
-  const mock = installFrappeMock(rows, { detailRows });
-  try {
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
-    assert.ok(model);
-    assert.equal(model.measurements.selected?.geometry.reason, "measurement_detail_mismatch");
-    assert.equal(model.stale_fields.includes("measurements.selected_detail"), true);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench bounds provider-controlled geometry labels before returning the browser DTO", async () => {
-  const mock = installFrappeMock();
-  try {
-    const oversizedId = `F${"x".repeat(900)}`;
-    const rawText = JSON.stringify({
-      source_xml: GEOMETRY_XML.replace('id="F1"', `id="${oversizedId}"`),
-    });
-    const model = await buildEstimatorWorkbenchReadModel(env(rawText), auth("owner"), "JOB-A");
-    const facetId = model?.measurements.selected?.geometry.facets[0]?.id ?? "";
-    assert.equal(facetId.length, 240);
-    assert.equal(facetId.endsWith("…"), true);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench is office-only and the HTTP route is private before it starts a Frappe read", async () => {
-  const mock = installFrappeMock();
-  try {
-    await assert.rejects(
-      async () => await buildEstimatorWorkbenchReadModel(env(), auth("field"), "JOB-A"),
-      /office_scope_required/,
-    );
-    assert.equal(mock.requests.length, 0);
-
-    const request = new Request("https://app.example.com/api/v1/estimator/jobs/JOB-A");
-    const field = await handleAuthenticatedRoute(request, env(), auth("field"));
-    assert.equal(field.status, 403);
-    assert.equal(field.headers.get("cache-control"), "private, no-store");
-    assert.deepEqual(await field.json(), { error: "office_role_required" });
-    assert.equal(mock.requests.length, 0);
-
-    const office = await handleAuthenticatedRoute(request, env(), auth("owner"));
-    assert.equal(office.status, 200);
-    assert.equal(office.headers.get("cache-control"), "private, no-store");
-    assert.equal(
-      ((await office.json()) as { measurements: { selected: { geometry: { state: string } } } })
-        .measurements.selected.geometry.state,
-      "needs_review",
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
-test("estimator workbench projects a computed takeoff and prices it only when the tenant configures rates", async () => {
-  const dataset = structuredClone(rows);
-  const mock = installFrappeMock(dataset);
-  try {
-    // Without a price list: takeoff is computed from verified geometry, pricing stays off.
-    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
-    const takeoff = model?.measurements.selected?.computed_takeoff;
-    assert.equal(takeoff?.state, "computed");
-    assert.equal(takeoff?.authority, "non_operational_preview");
-    assert.equal(takeoff?.calculation_schema, "legacy_preview/v1");
-    assert.equal(takeoff?.policy_bound, false);
-    assert.equal(takeoff?.approval_eligible, false);
-    // 10x10 flat facet, 16in coverage: ceil(10/1.3333) = 8 seams of 10ft.
-    assert.equal(takeoff?.panel_count, 8);
-    assert.equal(takeoff?.panel_ft, 80);
-    assert.equal(takeoff?.roof_area_computed_sqft, 100);
-    assert.equal(takeoff?.needs_review, true); // L4 declared 12 vs computed 10
-    const profiles = Object.fromEntries((takeoff?.trims ?? []).map((t) => [t.profile, t]));
-    assert.equal(profiles.eave_drip?.total_ft, 30); // computed lengths, not declared
-    assert.equal(profiles.eave_drip?.sticks, 3);
-    assert.equal(profiles.ridge_cap?.sticks, 1);
-    assert.equal(model?.measurements.selected?.computed_estimate.state, "unconfigured");
-    assert.equal(model?.measurements.selected?.computed_estimate.mode, null);
-
-    // With a tenant price list: exact, source-derived money.
-    const priced = await buildEstimatorWorkbenchReadModel(
-      {
-        ...env(),
-        ESTIMATOR_PRICE_LIST_JSON: JSON.stringify({
-          currency: "CAD",
-          panel: { sku: "PNL-26G", unit: "lf", rate: 5 },
-          trims: {
-            eave_drip: { sku: "TRM-EAVE", rate: 20 },
-            ridge_cap: { sku: "TRM-RIDGE", rate: 30 },
+): Promise<Fixture> {
+  const db = new SqliteD1();
+  seedOperatingCore(db.raw);
+  seedAccountingEvidence(db.raw);
+  const measurementRaw = JSON.stringify({
+    job_number: JOB_NUMBER,
+    source_xml: GEOMETRY_XML,
+    private_provider_note: "never expose this source byte",
+    ...(options.includeExtensions === false
+      ? {}
+      : {
+          ironwrap_estimator: {
+            scope_clauses: [
+              {
+                scope_clause_id: "scope-clause:deck",
+                clause_type: "Risk",
+                title: "Deck condition",
+                clause_text:
+                  "Hidden deck conditions require an evidence-bound scope correction.",
+                version: "1",
+                status: "Approved",
+                source_ref: "measurement:scope-clause:1",
+                customer_visible: true,
+                approved_at: NOW.toISOString(),
+              },
+            ],
+            insurance_supplements: [
+              {
+                name: "insurance:estimator:1",
+                version: 1,
+                status: "Ready for Human Review",
+                invoice_required: true,
+                evidence: [
+                  {
+                    evidence_role: "Carrier Scope",
+                    source_ref: "r2:carrier-scope",
+                  },
+                  { evidence_role: "Code/Manufacturer", source_ref: "r2:code" },
+                  { evidence_role: "Photo", source_ref: "r2:photo" },
+                  { evidence_role: "Invoice", source_ref: "r2:invoice" },
+                ],
+              },
+            ],
           },
         }),
-      } as never,
-      auth("ops"),
-      "JOB-A",
-    );
-    const estimate = priced?.measurements.selected?.computed_estimate;
-    assert.equal(estimate?.state, "priced");
-    assert.equal(estimate?.authority, "non_operational_preview");
-    assert.equal(estimate?.calculation_schema, "legacy_preview/v1");
-    assert.equal(estimate?.policy_bound, false);
-    assert.equal(estimate?.approval_eligible, false);
-    assert.equal(estimate?.mode, "read_only_legacy");
-    assert.equal(estimate?.policy_snapshot_sha256, null);
-    assert.equal(estimate?.currency, "CAD");
-    // panels 80 lf x 5 = 400; eave 3 sticks x 20 = 60; ridge 1 x 30 = 30.
-    assert.equal(estimate?.subtotal, 490);
-    assert.equal(estimate?.total, 490);
-    assert.deepEqual(estimate?.unpriced_profiles, []);
-    assert.equal(estimate?.needs_review, true); // takeoff review state propagates
-
-    // The approved policy takes integer cents only and is evaluated at the
-    // exact same trusted instant stamped onto the read model.
-    const approvedConfig: PriceList = {
-      currency: "CAD",
-      panel: {
-        sku: "PNL-26G",
-        unit: "lf",
-        rateCents: 500,
-        sourceRef: "price-book:panel",
+  });
+  const measurementSha = sha256(measurementRaw);
+  const measurementRawKey = `raw/measurements/${measurementSha}.json`;
+  seedMeasurement(db.raw, measurementSha, measurementRawKey);
+  if (options.includeCommercial !== false) seedCommercial(db.raw);
+  const objects = new Map([[measurementRawKey, measurementRaw]]);
+  let facetRawKey = "";
+  if (options.includeFacet !== false) {
+    const facet = seedFacet(db.raw);
+    facetRawKey = facet.rawKey;
+    objects.set(facet.rawKey, facet.raw);
+  }
+  const env = {
+    DB: db as never,
+    RAW: {
+      get: async (key: string) => {
+        const source = objects.get(key);
+        return source === undefined
+          ? null
+          : {
+              size: new TextEncoder().encode(source).byteLength,
+              text: async () => source,
+            };
       },
-      trims: {
-        eave_drip: {
-          sku: "TRM-EAVE",
-          rateCents: 2_000,
-          sourceRef: "price-book:eave",
-        },
-        ridge_cap: {
-          sku: "TRM-RIDGE",
-          rateCents: 3_000,
-          sourceRef: "price-book:ridge",
-        },
+    },
+    APP_BFF_ENABLED: "true",
+    APP_TENANT_ID: TENANT,
+    APP_PUBLIC_ORIGIN: "https://app.example.invalid",
+    APP_ALLOWED_ORIGINS: "https://app.example.invalid",
+    ...(options.priceList === false
+      ? {}
+      : { ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(PRICE_LIST) }),
+  } as unknown as AppEnv;
+  if (options.importEvidence !== false) {
+    await importEstimatorEvidenceFromNativeSources(
+      env,
+      {
+        tenantId: TENANT,
+        roofJobId: JOB_ID,
+        measurementReceiptId: RECEIPT_ID,
+        facetEventId: options.includeFacet === false ? null : FACET_EVENT_ID,
+        commercialQuoteRevisionId:
+          options.includeCommercial === false ? null : QUOTE_REVISION_ID,
+        revisionNumber: 1,
+        importedByUserId: OWNER_ID,
+        idempotencyKey: "estimator-native-workbench-import-0001",
       },
-      fasteners: {
-        clips: { sku: "CLIP", rateCents: 0, sourceRef: "assembly:included" },
-        clipScrews: { sku: "CLIP-SCREW", rateCents: 0, sourceRef: "assembly:included" },
-        trimScrews: { sku: "TRIM-SCREW", rateCents: 0, sourceRef: "assembly:included" },
-      },
-      labor: { sku: "LABOR", ratePerSquareCents: 0, sourceRef: "owner:included" },
-      approvedPolicy: {
-        schemaVersion: "ironwrap.pricing-policy.v1",
-        tenantId: "ironwrap",
-        policyId: "retail-metal",
-        revision: 1,
-        effectiveAt: "2026-08-01T00:00:00.000Z",
-        expiresAt: "2026-08-31T23:59:59.999Z",
-        pricing: { method: "markup", rateBps: 1_000 },
-        freightCents: 0,
-        contingencyRateBps: 0,
-        minimumChargeCents: 0,
-        taxRateBps: 500,
-      },
-    };
-    const withoutPersistedAuthority = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
+      NOW,
+    );
+  }
+  return { db, env, objects, measurementRawKey, facetRawKey };
+}
+
+test("native Estimator workbench is fully populated without Frappe or HTTP", async () => {
+  const setup = await fixture();
+  const originalFetch = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("network_not_allowed");
+  };
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      setup.env,
+      auth("owner"),
+      JOB_ID,
+      NOW,
+    );
+    assert.ok(model);
+    assert.equal(model.job.id, JOB_ID);
+    assert.equal(model.measurements.reports.length, 1);
+    assert.equal(model.measurements.selected?.geometry.state, "recomputed");
+    assert.equal(
+      model.measurements.selected?.roof_graph?.state,
+      "needs_review",
     );
     assert.equal(
-      withoutPersistedAuthority?.measurements.selected?.computed_estimate.state,
-      "invalid_price_list",
-    );
-
-    const snapshot = await approvedPricingPolicySnapshot(
-      approvedConfig,
-      PRICING_AS_OF.toISOString(),
-    );
-    dataset["Price Book Rule"] = [{
-      name: "POLICY-ANCHOR-1",
-      price_rule_id: "policy-anchor-1",
-      rule_type: "Pricing Policy",
-      status: "Approved",
-      currency: "CAD",
-      source_ref: "owner-approved-policy:retail-metal:1",
-      rule_json: '{"operation":"bind_canonical_pricing_snapshot","schema_version":"ironwrap.price-policy-authority.v1"}',
-      effective_from: "2026-08-01",
-      effective_to: "2026-08-31",
-      approved_by: "owner@example.com",
-      approved_at: "2026-07-31 12:00:00",
-      pricing_policy_id: "retail-metal",
-      pricing_policy_revision: 1,
-      pricing_policy_snapshot_json: snapshot.canonicalSnapshot,
-      pricing_policy_snapshot_sha256: snapshot.snapshotSha256,
-      modified: MODIFIED,
-    }];
-    const approved = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
-    );
-    assert.equal(approved?.read_model_generated_at, PRICING_AS_OF.toISOString());
-    assert.equal(approved?.measurements.selected?.computed_estimate.state, "priced");
-    assert.equal(
-      approved?.measurements.selected?.computed_estimate.authority,
-      "non_operational_preview",
+      model.measurements.selected?.computed_takeoff.state,
+      "computed",
     );
     assert.equal(
-      approved?.measurements.selected?.computed_estimate.calculation_schema,
-      "legacy_preview/v1",
-    );
-    assert.equal(approved?.measurements.selected?.computed_estimate.policy_bound, false);
-    assert.equal(approved?.measurements.selected?.computed_estimate.approval_eligible, false);
-    assert.equal(approved?.measurements.selected?.computed_estimate.mode, "approved_policy");
-    assert.equal(approved?.measurements.selected?.computed_estimate.policy_id, "retail-metal");
-    assert.equal(approved?.measurements.selected?.computed_estimate.policy_revision, 1);
-    assert.equal(
-      approved?.measurements.selected?.computed_estimate.policy_snapshot_sha256,
-      snapshot.snapshotSha256,
-    );
-    assert.equal(approved?.measurements.selected?.computed_estimate.subtotal, 490);
-    assert.equal(approved?.measurements.selected?.computed_estimate.markup, 49);
-    assert.equal(approved?.measurements.selected?.computed_estimate.tax, 26.95);
-    assert.equal(approved?.measurements.selected?.computed_estimate.total, 565.95);
-    const authorityRead = mock.requests.find(
-      (request) => request.doctype === "Price Book Rule",
-    );
-    assert.deepEqual(authorityRead?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Price Book Rule"]);
-    assert.equal(authorityRead?.limit, 2);
-    assert.deepEqual(authorityRead?.filters, [
-      ["Price Book Rule", "status", "=", "Approved"],
-      ["Price Book Rule", "rule_type", "=", "Pricing Policy"],
-      ["Price Book Rule", "pricing_policy_id", "=", "retail-metal"],
-      ["Price Book Rule", "pricing_policy_revision", "=", 1],
-    ]);
-
-    const staleConfig = structuredClone(approvedConfig);
-    staleConfig.approvedPolicy.expiresAt = "2026-08-12T23:59:59.999Z";
-    const stale = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(staleConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
-    );
-    assert.equal(stale?.measurements.selected?.computed_estimate.state, "invalid_price_list");
-
-    dataset["Price Book Rule"] = [
-      dataset["Price Book Rule"][0],
-      { ...dataset["Price Book Rule"][0], name: "POLICY-ANCHOR-DUPLICATE" },
-    ];
-    const duplicate = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
-    );
-    assert.equal(duplicate?.measurements.selected?.computed_estimate.state, "invalid_price_list");
-    assert.equal(duplicate?.measurements.selected?.computed_estimate.mode, null);
-    assert.equal(duplicate?.partial_sources.includes("pricing_authority"), true);
-    dataset["Price Book Rule"] = [dataset["Price Book Rule"][0]];
-
-    const tamperedAnchor = dataset["Price Book Rule"][0];
-    tamperedAnchor.pricing_policy_snapshot_sha256 = "0".repeat(64);
-    const tampered = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
-    );
-    assert.equal(tampered?.measurements.selected?.computed_estimate.state, "invalid_price_list");
-    tamperedAnchor.pricing_policy_snapshot_sha256 = snapshot.snapshotSha256;
-
-    const crossTenantConfig = structuredClone(approvedConfig);
-    crossTenantConfig.approvedPolicy.tenantId = "another-tenant";
-    const authorityReadsBeforeCrossTenant = mock.requests.filter(
-      (request) => request.doctype === "Price Book Rule",
-    ).length;
-    const crossTenant = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(crossTenantConfig) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
-    );
-    assert.equal(crossTenant?.measurements.selected?.computed_estimate.state, "invalid_price_list");
-    assert.equal(
-      mock.requests.filter((request) => request.doctype === "Price Book Rule").length,
-      authorityReadsBeforeCrossTenant,
-    );
-
-    const invalidPolicy = {
-      ...approvedConfig,
-      approvedPolicy: { ...approvedConfig.approvedPolicy, hiddenFeeCents: 1 },
-    };
-    const invalidApproved = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(invalidPolicy) } as never,
-      auth("ops"),
-      "JOB-A",
-      PRICING_AS_OF,
+      model.measurements.selected?.computed_estimate.state,
+      "priced",
     );
     assert.equal(
-      invalidApproved?.measurements.selected?.computed_estimate.state,
-      "invalid_price_list",
+      model.measurements.selected?.computed_estimate.policy_id,
+      "retail-metal",
     );
-
-    // Broken tenant JSON is reported, never thrown.
-    const invalid = await buildEstimatorWorkbenchReadModel(
-      { ...env(), ESTIMATOR_PRICE_LIST_JSON: "{not json" } as never,
-      auth("ops"),
-      "JOB-A",
+    assert.ok((model.takeoffs.selected?.items.length ?? 0) >= 4);
+    assert.equal(model.visual_model?.provider, "Facet");
+    assert.equal(model.visual_model?.model_state, "approved");
+    assert.equal(model.visual_model?.measurement_link, "selected_measurement");
+    assert.equal(model.quote?.id, QUOTE_ID);
+    assert.equal(model.proposal?.quote_id, QUOTE_REVISION_ID);
+    assert.equal(
+      model.economics.metrics.invoiced_revenue_ex_tax.known_cents,
+      1_250_000,
     );
-    assert.equal(invalid?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+    assert.equal(model.economics.source_coverage.matched_payment_milestones, 1);
+    assert.equal(model.economics.source_coverage.posted_revenue_milestones, 1);
+    assert.equal(model.scope_clauses[0]?.id, "scope-clause:deck");
+    assert.equal(model.insurance_supplements.length, 1);
+    assert.ok(model.allowed_actions.includes("estimator.import"));
+    assert.equal(networkCalls, 0);
+    const serialized = JSON.stringify(model);
+    assert.doesNotMatch(
+      serialized,
+      /private_provider_note|raw\/measurements|source byte/,
+    );
+    assert.doesNotMatch(serialized, /frappe/i);
   } finally {
-    mock.restore();
+    globalThis.fetch = originalFetch;
   }
 });
+
+test("missing native authority remains visible and importable instead of falling back", async () => {
+  const setup = await fixture({ importEvidence: false });
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.deepEqual(model.measurements.reports, []);
+  assert.ok(model.stale_fields.includes("estimator_evidence.missing"));
+  assert.equal(model.proposal_readiness.state, "unavailable");
+  assert.ok(model.allowed_actions.includes("estimator.import"));
+});
+
+test("R2 drift withholds every derived Estimator fact", async () => {
+  const setup = await fixture();
+  setup.objects.set(
+    setup.measurementRawKey,
+    setup.objects.get(setup.measurementRawKey)!.replace("Metal", "Altered"),
+  );
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(model.measurements.selected, null);
+  assert.equal(model.takeoffs.selected, null);
+  assert.ok(
+    model.stale_fields.includes("estimator_evidence.measurement_source_drift"),
+  );
+  assert.equal(model.proposal_readiness.state, "unavailable");
+});
+
+test("competing Estimator heads fail closed and stay explicit", async () => {
+  const setup = await fixture();
+  const first = setup.db.raw
+    .prepare("SELECT * FROM estimator_evidence_revisions WHERE tenant_id = ?")
+    .get(TENANT) as Record<string, unknown>;
+  setup.db.raw
+    .prepare(
+      `INSERT INTO estimator_evidence_revisions
+       SELECT 'estimator:${"b".repeat(64)}', tenant_id, roof_job_id, operating_job_version,
+              2, estimator_revision_id, measurement_receipt_id, measurement_raw_key,
+              measurement_raw_sha256, facet_event_id, facet_raw_key, facet_raw_sha256,
+              facet_design_revision_id, facet_design_revision_sha256,
+              facet_frozen_evidence_sha256, commercial_quote_revision_id, payload_json,
+              payload_sha256, evidence_refs_json, evidence_digest, ?, ?,
+              'First correction branch', imported_by_user_id, ?
+         FROM estimator_evidence_revisions WHERE estimator_revision_id = ?`,
+    )
+    .run(
+      "c".repeat(64),
+      "d".repeat(64),
+      NOW.toISOString(),
+      first.estimator_revision_id,
+    );
+  setup.db.raw
+    .prepare(
+      `INSERT INTO estimator_evidence_revisions
+       SELECT 'estimator:${"e".repeat(64)}', tenant_id, roof_job_id, operating_job_version,
+              3, ?, measurement_receipt_id, measurement_raw_key,
+              measurement_raw_sha256, facet_event_id, facet_raw_key, facet_raw_sha256,
+              facet_design_revision_id, facet_design_revision_sha256,
+              facet_frozen_evidence_sha256, commercial_quote_revision_id, payload_json,
+              payload_sha256, evidence_refs_json, evidence_digest, ?, ?,
+              'Competing correction branch', imported_by_user_id, ?
+         FROM estimator_evidence_revisions WHERE estimator_revision_id = ?`,
+    )
+    .run(
+      first.estimator_revision_id,
+      "f".repeat(64),
+      "1".repeat(64),
+      new Date(NOW.getTime() + 1_000).toISOString(),
+      first.estimator_revision_id,
+    );
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(model.measurements.selected, null);
+  assert.ok(model.partial_sources.includes("estimator_evidence_revisions"));
+  assert.ok(
+    model.stale_fields.includes("estimator_evidence.authority_ambiguous"),
+  );
+});
+
+test("ambiguous native commercial heads block import and quote selection", async () => {
+  const setup = await fixture({ importEvidence: false });
+  seedCompetingCommercialQuote(setup.db.raw);
+  await assert.rejects(
+    importEstimatorEvidenceFromNativeSources(
+      setup.env,
+      {
+        tenantId: TENANT,
+        roofJobId: JOB_ID,
+        measurementReceiptId: RECEIPT_ID,
+        facetEventId: null,
+        commercialQuoteRevisionId: QUOTE_REVISION_ID,
+        revisionNumber: 1,
+        importedByUserId: OWNER_ID,
+        idempotencyKey: "estimator-ambiguous-commercial-0001",
+      },
+      NOW,
+    ),
+    /estimator_quote_head_mismatch/,
+  );
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(model.quote, null);
+  assert.equal(model.proposal, null);
+  assert.ok(
+    model.stale_fields.includes("commercial_quote.authority_ambiguous"),
+  );
+});
+
+test("commercial ambiguity introduced after import invalidates the workbench", async () => {
+  const setup = await fixture();
+  seedCompetingCommercialQuote(setup.db.raw);
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(model.measurements.selected, null);
+  assert.equal(model.takeoffs.selected, null);
+  assert.equal(model.quote, null);
+  assert.equal(model.proposal, null);
+  assert.ok(
+    model.stale_fields.includes("estimator_evidence.commercial_quote_drift"),
+  );
+  assert.ok(
+    model.stale_fields.includes("commercial_quote.authority_ambiguous"),
+  );
+});
+
+test("native ops role sees Estimator insurance without Frappe identity config", async () => {
+  const setup = await fixture();
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("ops"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(model.insurance_supplements.length, 1);
+  assert.equal(
+    model.insurance_supplements[0]?.status,
+    "Ready for Human Review",
+  );
+  assert.equal(model.allowed_actions.includes("estimator.import"), false);
+});
+
+test("Estimator GET and import routes are private, CSRF-bound, and replay-safe", async () => {
+  const setup = await fixture({ importEvidence: false });
+  const owner = auth("owner");
+  const get = await handleAuthenticatedRoute(
+    new Request(
+      `https://app.example.invalid/api/v1/estimator/jobs/${encodeURIComponent(JOB_ID)}`,
+    ),
+    setup.env,
+    owner,
+  );
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get("cache-control"), "private, no-store");
+
+  const body = JSON.stringify({
+    measurement_receipt_id: RECEIPT_ID,
+    facet_event_id: FACET_EVENT_ID,
+    commercial_quote_revision_id: QUOTE_REVISION_ID,
+    revision_number: 1,
+  });
+  const url = `https://app.example.invalid/api/v1/estimator/jobs/${encodeURIComponent(JOB_ID)}/evidence-imports`;
+  const withoutCsrf = await handleAuthenticatedRoute(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-import-key-0001",
+      },
+      body,
+    }),
+    setup.env,
+    owner,
+  );
+  assert.equal(withoutCsrf.status, 403);
+
+  const request = () =>
+    new Request(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "route-import-key-0001",
+        "x-csrf-token": owner.csrfToken,
+      },
+      body,
+    });
+  const created = await handleAuthenticatedRoute(request(), setup.env, owner);
+  assert.equal(created.status, 201);
+  assert.equal(
+    ((await created.json()) as { replayed: boolean }).replayed,
+    false,
+  );
+  const replay = await handleAuthenticatedRoute(request(), setup.env, owner);
+  assert.equal(replay.status, 200);
+  assert.equal(((await replay.json()) as { replayed: boolean }).replayed, true);
+
+  const forbidden = await handleAuthenticatedRoute(
+    request(),
+    setup.env,
+    auth("ops"),
+  );
+  assert.equal(forbidden.status, 403);
+});
+
+test("Estimator source and route remain tenant-isolated", async () => {
+  const setup = await fixture();
+  const wrongTenant = auth("owner", "iroof");
+  assert.equal(
+    await buildEstimatorWorkbenchReadModel(setup.env, wrongTenant, JOB_ID, NOW),
+    null,
+  );
+  const response = await handleAuthenticatedRoute(
+    new Request(
+      `https://app.example.invalid/api/v1/estimator/jobs/${encodeURIComponent(JOB_ID)}`,
+    ),
+    setup.env,
+    wrongTenant,
+  );
+  assert.equal(response.status, 404);
+});
+
+function auth(role: AppRole, tenantId = TENANT): AuthContext {
+  const owner = role === "owner";
+  return {
+    rawSessionToken: "s".repeat(43),
+    csrfToken: "estimator-native-csrf",
+    permissions: [
+      "session:read",
+      "jobs:read:any",
+      "estimator:read",
+      ...(owner ? ["facet:launch"] : []),
+    ],
+    session: {
+      session_hash: "a".repeat(64),
+      session_created_at: NOW.toISOString(),
+      session_expires_at: "2026-08-21T22:00:00.000Z",
+      revoked_at: null,
+      user_id: owner ? OWNER_ID : OPS_ID,
+      tenant_id: tenantId,
+      email_normalized: `${role}@example.invalid`,
+      display_name: role,
+      role,
+      frappe_user_id: null,
+      active: 1,
+      created_by: "seed",
+      created_at: NOW.toISOString(),
+      updated_at: NOW.toISOString(),
+    },
+  };
+}
+
+function seedOperatingCore(db: DatabaseSync): void {
+  const now = NOW.toISOString();
+  const envelopeId = "ow_estimator_0001";
+  const leadId = "lead:estimator:0001";
+  for (const [userId, role] of [
+    [OWNER_ID, "owner"],
+    [OPS_ID, "ops"],
+  ] as const) {
+    db.prepare(
+      `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, NULL, 1, 'seed', ?, ?)`,
+    ).run(userId, TENANT, `${role}@example.invalid`, role, role, now, now);
+  }
+  db.prepare(
+    `INSERT INTO envelopes
+     (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,
+      status, created_at, updated_at)
+     VALUES (?, 'website', 'Customer', 'customer@example.invalid', '{}', ?, ?,
+             'reconciled', ?, ?)`,
+  ).run(envelopeId, "raw/estimator/lead.json", now, now, now);
+  db.prepare(
+    `INSERT INTO operating_leads
+     (lead_id, tenant_id, source_envelope_id, source_raw_key, source, contact_name,
+      contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'website', 'Customer', 'customer@example.invalid',
+             'qualified', 1, ?, ?)`,
+  ).run(leadId, TENANT, envelopeId, "raw/estimator/lead.json", now, now);
+  db.prepare(
+    `INSERT INTO operating_customers
+     (customer_id, tenant_id, source_envelope_id, source_raw_key, display_name,
+      contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'Customer', 'customer@example.invalid', 'active', 1, ?, ?)`,
+  ).run(CUSTOMER_ID, TENANT, envelopeId, "raw/estimator/lead.json", now, now);
+  db.prepare(
+    `INSERT INTO operating_roof_jobs
+     (roof_job_id, tenant_id, lead_id, customer_id, property_id, source_envelope_id,
+      source_raw_key, brand, job_number, service_type, job_status, current_gate_state,
+      version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, 'ironwrap', ?, 'roof_replacement', 'qualified',
+             'qualification', 1, ?, ?)`,
+  ).run(
+    JOB_ID,
+    TENANT,
+    leadId,
+    CUSTOMER_ID,
+    envelopeId,
+    "raw/estimator/lead.json",
+    JOB_NUMBER,
+    now,
+    now,
+  );
+}
+
+function seedMeasurement(
+  db: DatabaseSync,
+  payloadHash: string,
+  rawKey: string,
+): void {
+  const now = NOW.toISOString();
+  db.prepare(
+    `INSERT INTO measurement_intake_receipts
+     (receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id,
+      provider, job_number, raw_key, content_type, status, lease_token, lease_expires_at,
+      attempts, created_at, updated_at, completed_at)
+     VALUES (?, ?, ?, 'payload_hash', ?, 'AppliCad', ?, ?, 'application/json',
+             'matched', NULL, NULL, 1, ?, ?, ?)`,
+  ).run(
+    RECEIPT_ID,
+    "e".repeat(64),
+    payloadHash,
+    MEASUREMENT_ID,
+    JOB_NUMBER,
+    rawKey,
+    now,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO measurement_deltas
+     (receipt_id, measurement_id, job_number, provider, source, check_name, metric,
+      ok, primary_value, independent_value, rel_diff, abs_diff, detail, created_at,
+      tenant_id, error_kind, signed_error)
+     VALUES (?, ?, ?, 'AppliCad', 'google_solar', 'solar_area', 'roof_area',
+             1, 100, 100, 0, NULL, 'within tolerance', ?, ?,
+             'relative_fraction', 0)`,
+  ).run(RECEIPT_ID, MEASUREMENT_ID, JOB_NUMBER, now, TENANT);
+}
+
+function seedAccountingEvidence(db: DatabaseSync): void {
+  const expected = "7".repeat(64);
+  const submittedAt = new Date(NOW.getTime() - 2_000).toISOString();
+  const decidedAt = new Date(NOW.getTime() - 1_000).toISOString();
+  const intent: Record<string, unknown> = {
+    intent_id: "acct-intent:estimator:invoice:0001",
+    tenant_id: TENANT,
+    kind: "deposit_invoice",
+    roof_job_id: JOB_ID,
+    basis_json: "{}",
+    basis_sha256: "1".repeat(64),
+    source_documents_json: "[]",
+    expected_sha256: expected,
+    tax_policy_snapshot_sha256: "2".repeat(64),
+    provider: "quickbooks",
+    realm_id: "123456789",
+    provider_entity_type: "Invoice",
+    provider_payload_json: "{}",
+    provider_payload_sha256: "3".repeat(64),
+    provider_request_id: "estimator-invoice-0001",
+    currency: "CAD",
+    subtotal: "12500.00",
+    tax_amount: "625.00",
+    total_amount: "13125.00",
+    settled_amount: "0.00",
+    authority_permit_ref: "permit:estimator:invoice",
+    authority_policy_ref: "policy:accounting:invoice.create",
+    authority_policy_version: "v1",
+    authority_max_amount: "20000.00",
+    effect_id: "effect:estimator:invoice:0001",
+    effect_idempotency_key: "effect-key:estimator:invoice:0001",
+    compensates_effect_id: null,
+    final_invoice_intent_id: null,
+    compensates_intent_id: null,
+    state: "reconciled",
+    version: 1,
+    blocker_code: null,
+    blocker_next_step: null,
+    reason_code: null,
+    error_code: null,
+    derived_by_actor_kind: "agent",
+    derived_by_user_id: null,
+    derived_at: NOW.toISOString(),
+    approved_by_user_id: OWNER_ID,
+    approved_at: NOW.toISOString(),
+    approval_idempotency_sha256: "4".repeat(64),
+    approval_fingerprint_sha256: "5".repeat(64),
+    rejected_by_user_id: null,
+    rejected_at: null,
+    rejection_idempotency_sha256: null,
+    rejection_fingerprint_sha256: null,
+    provider_entity_id: "2001",
+    observed_sha256: expected,
+    provider_submitted_at: submittedAt,
+    provider_reconciled_at: submittedAt,
+    created_at: NOW.toISOString(),
+    updated_at: NOW.toISOString(),
+  };
+  const columns = Object.keys(intent);
+  db.prepare(
+    `INSERT INTO accounting_intents (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...columns.map((column) => intent[column] as null));
+  const observationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  db.prepare(
+    `INSERT INTO accounting_observations
+     (observation_id, tenant_id, realm_id, entity_type, entity_id, intent_id,
+      facts_json, observed_sha256, total_amount_cents, balance_cents,
+      unapplied_amount_cents, read_at, effect_attempt_id, source, created_at)
+     VALUES (?, ?, '123456789', 'Invoice', '2001', ?, '{}', ?, 1312500, 0,
+             NULL, ?, NULL, 'dispatch_readback', ?)`,
+  ).run(
+    observationId,
+    TENANT,
+    intent.intent_id,
+    expected,
+    submittedAt,
+    submittedAt,
+  );
+  db.prepare(
+    `INSERT INTO accounting_reconciliations
+     (reconciliation_id, tenant_id, intent_id, observation_id, expected_sha256,
+      observed_sha256, verdict, reason_code, settled_amount,
+      resolved_by_user_id, decided_at)
+     VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', ?, ?, ?, ?, ?,
+             'reconciled', NULL, '0.00', ?, ?)`,
+  ).run(
+    TENANT,
+    intent.intent_id,
+    observationId,
+    expected,
+    expected,
+    OWNER_ID,
+    decidedAt,
+  );
+}
+
+function seedCommercial(db: DatabaseSync): void {
+  const terms = canonicalJson({
+    schema_version: "ironwrap.customer-terms.v1",
+    scope: "Standing seam roof replacement",
+  });
+  const evidence = "[]";
+  const evidenceDigest = sha256(evidence);
+  const quotePermit = "commercial-permit:quote:estimator:0001";
+  const proposalPermit = "commercial-permit:proposal:estimator:0001";
+  for (const permit of [
+    {
+      id: quotePermit,
+      action: "quote.revision.record",
+      type: "customer_quote",
+      aggregate: QUOTE_ID,
+      amount: 1_312_500,
+      suffix: "1",
+      commandFingerprint: "b".repeat(64),
+    },
+    {
+      id: proposalPermit,
+      action: "proposal.revision.record",
+      type: "proposal",
+      aggregate: "proposal-pack:estimator:0001",
+      amount: null,
+      suffix: "2",
+      commandFingerprint: "f".repeat(64),
+    },
+  ]) {
+    db.prepare(
+      `INSERT INTO commercial_authority_permits
+       (permit_id, tenant_id, policy_id, policy_version, policy_digest,
+        policy_snapshot_json, action, actor_type, actor_id, aggregate_type,
+        aggregate_id, aggregate_version, amount_cents, command_fingerprint,
+        facts_digest, evidence_refs_json, evidence_digest, idempotency_key_hash,
+        request_fingerprint, issued_at, expires_at)
+       VALUES (?, ?, 'estimator-test-policy', 'v1', ?, '{}', ?, 'owner', ?, ?, ?,
+               1, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
+    ).run(
+      permit.id,
+      TENANT,
+      permit.suffix.repeat(64),
+      permit.action,
+      OWNER_ID,
+      permit.type,
+      permit.aggregate,
+      permit.amount,
+      permit.commandFingerprint,
+      (Number(permit.suffix) + 4).toString().repeat(64),
+      evidenceDigest,
+      (Number(permit.suffix) + 6).toString().repeat(64),
+      (Number(permit.suffix) + 7).toString().repeat(64),
+      new Date(NOW.getTime() - 60_000).toISOString(),
+      new Date(NOW.getTime() + 60_000).toISOString(),
+    );
+  }
+  db.prepare(
+    `INSERT INTO commercial_quote_revisions
+     (quote_revision_id, tenant_id, customer_quote_id, revision_number,
+      roof_job_id, customer_id, status, currency, valid_until, subtotal_cents,
+      tax_cents, total_cents, terms_json, terms_hash, evidence_refs_json,
+      evidence_digest, policy_permit_id, authority_evidence_digest,
+      command_fingerprint, idempotency_key_hash, created_at)
+     VALUES (?, ?, ?, 1, ?, ?, 'approved', 'CAD', '2026-08-31', 1250000,
+             62500, 1312500, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    QUOTE_REVISION_ID,
+    TENANT,
+    QUOTE_ID,
+    JOB_ID,
+    CUSTOMER_ID,
+    terms,
+    sha256(terms),
+    evidence,
+    evidenceDigest,
+    quotePermit,
+    evidenceDigest,
+    "b".repeat(64),
+    "c".repeat(64),
+    NOW.toISOString(),
+  );
+  db.prepare(
+    `INSERT INTO commercial_proposal_revisions
+     (proposal_revision_id, tenant_id, proposal_pack_id, revision_number,
+      quote_revision_id, roof_job_id, customer_id, title, summary, terms_json,
+      terms_hash, content_ref, content_hash, evidence_refs_json, evidence_digest,
+      policy_permit_id, authority_evidence_digest, command_fingerprint,
+      idempotency_key_hash, created_at)
+     VALUES ('proposal-revision:estimator:0001', ?, 'proposal-pack:estimator:0001',
+             1, ?, ?, ?, 'Roof replacement', 'Evidence-bound proposal', ?, ?,
+             'r2/proposals/estimator-0001.json', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    TENANT,
+    QUOTE_REVISION_ID,
+    JOB_ID,
+    CUSTOMER_ID,
+    terms,
+    sha256(terms),
+    "d".repeat(64),
+    evidence,
+    evidenceDigest,
+    proposalPermit,
+    evidenceDigest,
+    "f".repeat(64),
+    "0".repeat(64),
+    NOW.toISOString(),
+  );
+}
+
+function seedCompetingCommercialQuote(db: DatabaseSync): void {
+  const permitId = "commercial-permit:quote:estimator:competing";
+  const quoteId = "customer-quote:estimator:competing";
+  const revisionId = "quote-revision:estimator:competing";
+  const commandFingerprint = "3".repeat(64);
+  db.prepare(
+    `INSERT INTO commercial_authority_permits
+     SELECT ?, tenant_id, policy_id, policy_version, policy_digest,
+            policy_snapshot_json, action, actor_type, actor_id, aggregate_type,
+            ?, aggregate_version, amount_cents, ?, facts_digest,
+            evidence_refs_json, evidence_digest, ?, ?, issued_at, expires_at
+       FROM commercial_authority_permits
+      WHERE permit_id = 'commercial-permit:quote:estimator:0001'`,
+  ).run(permitId, quoteId, commandFingerprint, "4".repeat(64), "5".repeat(64));
+  db.prepare(
+    `INSERT INTO commercial_quote_revisions
+     SELECT ?, tenant_id, ?, 1, roof_job_id, customer_id, NULL, status,
+            currency, valid_until, subtotal_cents, tax_cents, total_cents,
+            terms_json, terms_hash, evidence_refs_json, evidence_digest, NULL,
+            ?, NULL, authority_evidence_digest, ?, ?, created_at
+       FROM commercial_quote_revisions WHERE quote_revision_id = ?`,
+  ).run(
+    revisionId,
+    quoteId,
+    permitId,
+    commandFingerprint,
+    "6".repeat(64),
+    QUOTE_REVISION_ID,
+  );
+}
+
+function seedFacet(db: DatabaseSync): { rawKey: string; raw: string } {
+  const sourceTenant = "22222222-2222-4222-8222-222222222222";
+  const projectId = "11111111-1111-4111-8111-111111111111";
+  const producerLink = `ironwrap-identity-v1:${"1".repeat(64)}`;
+  const projectLink = `ironwrap-project-v1:${"2".repeat(64)}`;
+  const customerLink = `facet-customer-oidc-v1:${"3".repeat(64)}`;
+  const association = "4".repeat(64);
+  const design = {
+    brandId: "ironwrap",
+    catalogRevision: {
+      schema: "facet.catalog-selection-identities.v1",
+      sha256: "5".repeat(64),
+    },
+    facetOverrides: [],
+    layers: [
+      {
+        id: "roof-layer-1",
+        visible: true,
+        xmlSha256: "6".repeat(64),
+        xmlUtf8Bytes: 4096,
+      },
+    ],
+    roof: { colorId: "roof-charcoal", productId: "roof-standing-seam" },
+    schema: "facet.selection-evidence.v2",
+    trimAccents: [],
+    uniformFinish: true,
+    wall: { colorId: null, productId: null },
+  };
+  const frozenEvidence = {
+    approval: {
+      approved_at: NOW.toISOString(),
+      client_revision: { roofColorId: "roof-charcoal", wallColorId: null },
+    },
+    design,
+  };
+  const designSha = sha256(facetCanonicalJson(design));
+  const frozenSha = sha256(facetCanonicalJson(frozenEvidence));
+  const event: FacetV2CustomerDecisionEvent = {
+    approval: {
+      actor: {
+        customer_party_ref: "7".repeat(64),
+        external_identity_link_id: customerLink,
+        identity_assurance: "oidc",
+        oidc_issuer: "https://accounts.google.com",
+        oidc_subject_sha256: "8".repeat(64),
+      },
+      attestation_version: "facet-customer-approval-v1",
+      decision: "approved",
+      manifest_sha256: frozenSha,
+      previous_event_id: null,
+      reason_sha256: null,
+      receipt_id: "33333333-3333-4333-8333-333333333333",
+      receipt_sha256: "9".repeat(64),
+    },
+    brand_id: "ironwrap",
+    design_revision: { id: `facet-json-v1:${designSha}`, sha256: designSha },
+    destination: { tenant_id: TENANT },
+    event_id: FACET_EVENT_ID,
+    event_type: "facet.design.customer_approved.v2",
+    facet_project_id: projectId,
+    frozen_evidence: frozenEvidence,
+    occurred_at: NOW.toISOString(),
+    project_link: {
+      external_project_link_id: projectLink,
+      producer_identity_link_id: producerLink,
+    },
+    schema_version: 2,
+    source: {
+      environment: "production",
+      issuer: "facet",
+      product: "facet",
+      tenant_id: sourceTenant,
+    },
+  };
+  const raw = facetCanonicalJson(event);
+  const rawSha = sha256(raw);
+  const rawKey = `facet-design/v2/raw/${FACET_EVENT_ID}.json`;
+  db.prepare(
+    `INSERT INTO facet_v2_producer_identity_links
+     (producer_identity_link_id, destination_tenant_id, source_tenant_id, issuer,
+      source_product, source_environment, proof_sha256, created_from_project_id, created_at)
+     VALUES (?, ?, ?, 'facet', 'facet', 'production', ?, ?, ?)`,
+  ).run(
+    producerLink,
+    TENANT,
+    sourceTenant,
+    "a".repeat(64),
+    projectId,
+    NOW.toISOString(),
+  );
+  db.prepare(
+    `INSERT INTO facet_v2_project_links
+     (external_project_link_id, producer_identity_link_id, destination_tenant_id,
+      source_tenant_id, brand_id, facet_project_id, customer_party_ref,
+      external_customer_identity_link_id, roof_job_id, customer_quote_id,
+      project_claim_sha256, association_sha256, created_by_user_id, created_at)
+     VALUES (?, ?, ?, ?, 'ironwrap', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    projectLink,
+    producerLink,
+    TENANT,
+    sourceTenant,
+    projectId,
+    "7".repeat(64),
+    customerLink,
+    JOB_ID,
+    QUOTE_ID,
+    "b".repeat(64),
+    association,
+    OWNER_ID,
+    NOW.toISOString(),
+  );
+  db.prepare(
+    `INSERT INTO facet_v2_customer_decisions
+     (event_id, event_type, schema_version, event_body_sha256, issuer, source_product,
+      source_environment, source_tenant_id, destination_tenant_id, brand_id,
+      facet_project_id, external_project_link_id, producer_identity_link_id,
+      association_sha256, roof_job_id, customer_quote_id, customer_party_ref,
+      external_customer_identity_link_id, oidc_issuer, oidc_subject_sha256,
+      identity_assurance, attestation_version, decision_kind, previous_event_id,
+      reason_sha256, approval_receipt_id, approval_receipt_sha256, design_revision_id,
+      design_revision_sha256, frozen_evidence_sha256, raw_key, raw_sha256,
+      raw_content_length, occurred_at, received_at)
+     VALUES (?, 'facet.design.customer_approved.v2', 2, ?, 'facet', 'facet',
+             'production', ?, ?, 'ironwrap', ?, ?, ?, ?, ?, ?, ?, ?,
+             'https://accounts.google.com', ?, 'oidc', 'facet-customer-approval-v1',
+             'approved', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    FACET_EVENT_ID,
+    rawSha,
+    sourceTenant,
+    TENANT,
+    projectId,
+    projectLink,
+    producerLink,
+    association,
+    JOB_ID,
+    QUOTE_ID,
+    "7".repeat(64),
+    customerLink,
+    "8".repeat(64),
+    event.approval.receipt_id,
+    event.approval.receipt_sha256,
+    event.design_revision.id,
+    designSha,
+    frozenSha,
+    rawKey,
+    rawSha,
+    new TextEncoder().encode(raw).byteLength,
+    NOW.toISOString(),
+    NOW.toISOString(),
+  );
+  return { rawKey, raw };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}

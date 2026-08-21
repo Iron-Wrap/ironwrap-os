@@ -1,16 +1,28 @@
-import type { AppEnv, AppRole } from "./app-types.ts";
+import type {
+  AppEnv,
+  AppRole,
+  AuthContext,
+  WorkObjectScope,
+} from "./app-types.ts";
 import {
-  FIELD_WORK_PACKAGE_CURRENT_STATUSES,
-  listFieldWorkPackageAcknowledgements,
-  listFieldWorkPackageEvidence,
-  listFieldWorkPackageHoldReleases,
-  listFieldWorkPackagesForAssignment,
-  readFieldWorkPackageFrappeResource,
-  type FrappeRow,
-} from "./frappe-read.ts";
+  FieldActionError,
+  type FieldEvidenceAuthorization,
+  type FieldSubmission,
+} from "./field-actions.ts";
+import type { FrappeRow } from "./frappe-read.ts";
 import type { SafetyBlocker } from "./safety-lifecycle.ts";
+import {
+  nativeWorkPackageDocumentById,
+  nativeWorkPackageForAssignment,
+  type NativeWorkPackageRead,
+} from "./work-package-store.ts";
 
-const CURRENT_WORK_PACKAGE_STATUSES = FIELD_WORK_PACKAGE_CURRENT_STATUSES;
+const CURRENT_WORK_PACKAGE_STATUSES = [
+  "Released",
+  "Acknowledged",
+  "In Progress",
+  "Blocked",
+] as const;
 type EvidenceFreshness = "Current" | "Stale" | "Unknown";
 type EvidenceConflictState = "None" | "Detected" | "Resolved";
 type EvidenceVerification = "Pending" | "Verified" | "Rejected";
@@ -111,10 +123,10 @@ export interface FieldWorkPackage {
 /** Match the actor against the immutable authority captured by a typed assignment. */
 export function hasPhysicalAssignmentAuthority(
   assignment: FrappeRow | null,
-  actorUser: string | null,
+  actorUser: string | readonly string[] | null,
   actorRole: AppRole,
 ): boolean {
-  if (!assignment || !actorUser) return false;
+  if (!assignment || !hasActor(actorUser)) return false;
   const requiredRole =
     actorRole === "owner"
       ? "IronWrap Owner"
@@ -123,7 +135,7 @@ export function hasPhysicalAssignmentAuthority(
         : null;
   return (
     requiredRole !== null &&
-    sameUser(text(assignment.authority_user), actorUser) &&
+    sameActor(text(assignment.authority_user), actorUser) &&
     text(assignment.authority_role) === requiredRole
   );
 }
@@ -136,13 +148,13 @@ export function hasPhysicalAssignmentAuthority(
 export function hasWorkPackageCompletionAuthority(
   workPackage: FieldWorkPackage | null,
   assignment: FrappeRow | null,
-  actorUser: string | null,
+  actorUser: string | readonly string[] | null,
   actorRole: AppRole,
 ): boolean {
-  if (!workPackage || !actorUser) return false;
+  if (!workPackage || !hasActor(actorUser)) return false;
   if (
     (workPackage.assignedWorkers ?? []).some((worker) =>
-      sameUser(worker.workerUser, actorUser),
+      sameActor(worker.workerUser, actorUser),
     )
   ) {
     return false;
@@ -163,83 +175,347 @@ export async function fieldWorkPackageForAssignment(
   env: AppEnv,
   jobId: string,
   assignmentId: string,
+  tenantId: string,
 ): Promise<FieldWorkPackage | null> {
-  const matches = await listFieldWorkPackagesForAssignment(
+  return await nativeFieldWorkPackageForAssignment(
     env,
+    tenantId,
     jobId,
     assignmentId,
   );
-  if (matches.length !== 1) return null;
-  const name = text(matches[0]?.name);
-  if (!name) return null;
-  const document = await readFieldWorkPackageFrappeResource(env, name);
-  const documentRoofJob = text(document?.roof_job);
-  const documentWorkObjectId = text(document?.work_object_id);
+}
+
+/** Read the D1-owned Work Package without consulting the legacy ERP. */
+export async function nativeFieldWorkPackageForAssignment(
+  env: AppEnv,
+  tenantId: string,
+  jobId: string,
+  assignmentId: string,
+): Promise<FieldWorkPackage | null> {
+  const native = await nativeWorkPackageForAssignment(
+    env,
+    tenantId,
+    jobId,
+    assignmentId,
+  );
+  return native
+    ? await fieldWorkPackageFromNativeRead(
+        env,
+        tenantId,
+        jobId,
+        assignmentId,
+        native,
+      )
+    : null;
+}
+
+async function fieldWorkPackageFromNativeRead(
+  env: AppEnv,
+  tenantId: string,
+  jobId: string,
+  assignmentId: string,
+  native: NativeWorkPackageRead,
+): Promise<FieldWorkPackage | null> {
+  const document = native.document;
+  const roofJob = text(document.roof_job);
+  const workObjectId = text(document.work_object_id);
   if (
-    !document ||
     text(document.job_assignment) !== assignmentId ||
-    (documentRoofJob !== jobId && documentWorkObjectId !== jobId)
-  ) {
-    return null;
-  }
-  const workObjectType = text(document.work_object_type) ?? (documentRoofJob ? "Roof Job" : null);
-  const workObjectId = documentWorkObjectId ?? documentRoofJob;
-  const physicalContextType = text(document.physical_context_type) ?? (documentRoofJob ? "Roof Site" : null);
-  const physicalContextId = text(document.physical_context_id) ?? documentRoofJob;
-  if (
-    !workObjectType ||
-    workObjectId !== jobId ||
-    !physicalContextType ||
-    !physicalContextId
+    (roofJob !== jobId && workObjectId !== jobId)
   ) {
     return null;
   }
   const workPackage = fieldWorkPackage(document);
   if (!workPackage) return null;
-  const supersession = await workPackageSupersession(env, document);
+  const supersession = await workPackageSupersession(env, document, tenantId);
   if (text(document.supersedes) && !supersession) return null;
   const withSupersession = { ...workPackage, supersession };
-  const [releases, acknowledgements, evidence] = await Promise.all([
-    listFieldWorkPackageHoldReleases(
-      env,
-      withSupersession.name,
-      jobId,
-      assignmentId,
-      withSupersession.version,
-    ),
-    listFieldWorkPackageAcknowledgements(
-      env,
-      withSupersession.name,
-      jobId,
-      assignmentId,
-      withSupersession.version,
-    ),
-    listFieldWorkPackageEvidence(
-      env,
-      withSupersession.name,
-      jobId,
-      assignmentId,
-      withSupersession.version,
-    ),
-  ]);
-  const withReleases = withVerifiedHoldReleases(
-    withSupersession,
-    releases,
-    jobId,
-    assignmentId,
-  );
-  const withAcknowledgements = withVerifiedAcknowledgements(
-    withReleases,
-    acknowledgements,
-    jobId,
-    assignmentId,
-  );
   return withVerifiedEvidence(
-    withAcknowledgements,
-    evidence,
+    withVerifiedAcknowledgements(
+      withVerifiedHoldReleases(
+        withSupersession,
+        native.holdReleases,
+        jobId,
+        assignmentId,
+      ),
+      native.acknowledgements,
+      jobId,
+      assignmentId,
+    ),
+    native.evidence,
     jobId,
     assignmentId,
   );
+}
+
+/**
+ * Authorize a typed field capture against the current immutable Work Package
+ * packet before the field action claims D1 or writes an R2 object.
+ */
+export async function authorizeFieldEvidence(
+  env: AppEnv,
+  submission: FieldSubmission,
+  auth: AuthContext,
+): Promise<FieldEvidenceAuthorization> {
+  const configuredTenantId = env.APP_TENANT_ID?.trim() ?? "ironwrap";
+  if (!auth.session.tenant_id || configuredTenantId !== auth.session.tenant_id) {
+    throw fieldEvidenceAuthorizationError(
+      "tenant_mismatch",
+      "The Work Package tenant does not match the field session.",
+      403,
+    );
+  }
+  const workPackage = await fieldWorkPackageForAssignment(
+    env,
+    submission.jobId,
+    submission.assignmentId,
+    auth.session.tenant_id,
+  );
+  if (!workPackage) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_not_available",
+      "No current Work Package is available for this assignment.",
+    );
+  }
+  if (!workPackage.releaseAttemptId) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_release_attempt_missing",
+      "The current Work Package release attempt is unavailable.",
+    );
+  }
+  if (
+    !Number.isFinite(Date.parse(workPackage.expiresAt)) ||
+    Date.parse(workPackage.expiresAt) <= Date.now()
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_expired",
+      "An expired Work Package cannot receive field evidence.",
+    );
+  }
+  const scope = workPackageScope(workPackage);
+  if (submission.scope && !sameScope(submission.scope, scope)) {
+    throw fieldEvidenceAuthorizationError(
+      "work_object_scope_mismatch",
+      "The saved evidence scope does not match the current Work Package.",
+    );
+  }
+  if (
+    !auth.session.device_id ||
+    (submission.payload.evidence_device_id != null &&
+      submission.payload.evidence_device_id !== auth.session.device_id)
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "evidence_device_mismatch",
+      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+    );
+  }
+  const actorCandidates = [
+    auth.session.email_normalized,
+    auth.session.frappe_user_id,
+  ].filter((value): value is string => Boolean(value?.trim()));
+  if (
+    !workPackage.workerRosterKnown ||
+    !workPackage.assignedWorkers?.some((worker) =>
+      actorCandidates.some((candidate) => sameUser(worker.workerUser, candidate)),
+    )
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_actor_not_assigned",
+      "The field actor is not assigned to this Work Package.",
+      403,
+    );
+  }
+  const payload = submission.payload;
+  if (payload.work_package_id !== workPackage.id) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_not_available",
+      "The saved evidence targets a different Work Package.",
+    );
+  }
+  if (payload.work_package_version !== workPackage.version) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_version_conflict",
+      "The saved evidence targets a stale Work Package version.",
+    );
+  }
+  if (payload.work_package_release_attempt_id !== workPackage.releaseAttemptId) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_release_attempt_conflict",
+      "The saved evidence targets a stale Work Package release attempt.",
+    );
+  }
+  const slot = declaredEvidenceSlot(workPackage, payload.evidence_slot_id);
+  if (!slot) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_evidence_slot_not_found",
+      "The saved evidence slot is not declared by the current Work Package.",
+    );
+  }
+  if (payload.evidence_requirement !== slot.requirement) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_evidence_requirement_conflict",
+      "The saved evidence requirement does not match the frozen Work Package slot.",
+    );
+  }
+  const source = "field-companion";
+  if (payload.evidence_source !== source) {
+    throw fieldEvidenceAuthorizationError(
+      "evidence_source_mismatch",
+      "The saved evidence source is not authorized for this field capture.",
+    );
+  }
+  if (
+    payload.evidence_freshness != null &&
+    payload.evidence_freshness !== "Current"
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "evidence_freshness_mismatch",
+      "Field capture freshness must be derived as Current.",
+    );
+  }
+  if (
+    payload.evidence_conflict_state != null &&
+    payload.evidence_conflict_state !== "None"
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "evidence_conflict_state_mismatch",
+      "Field capture conflict state must be derived as None.",
+    );
+  }
+  const correction = authorizedEvidenceCorrection(
+    workPackage,
+    submission,
+    actorCandidates,
+    scope,
+  );
+  return {
+    workPackageId: workPackage.id,
+    workPackageVersion: workPackage.version,
+    releaseAttemptId: workPackage.releaseAttemptId,
+    scope,
+    slotId: slot.slotId,
+    requirement: slot.requirement,
+    source,
+    deviceId: auth.session.device_id,
+    freshness: "Current",
+    conflictState: "None",
+    correctionOf: correction.eventId,
+    itemCorrectionOf: correction.evidenceItem,
+  };
+}
+
+function workPackageScope(workPackage: FieldWorkPackage): {
+  workObjectType: string;
+  workObjectId: string;
+  physicalContextType: string;
+  physicalContextId: string;
+} {
+  if (
+    !workPackage.workObjectType ||
+    !workPackage.workObjectId ||
+    !workPackage.physicalContextType ||
+    !workPackage.physicalContextId
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "work_object_scope_unavailable",
+      "The current Work Package has no complete parent/context envelope.",
+    );
+  }
+  return {
+    workObjectType: workPackage.workObjectType,
+    workObjectId: workPackage.workObjectId,
+    physicalContextType: workPackage.physicalContextType,
+    physicalContextId: workPackage.physicalContextId,
+  };
+}
+
+function declaredEvidenceSlot(
+  workPackage: FieldWorkPackage,
+  slotId: string | null | undefined,
+): { slotId: string; requirement: string } | null {
+  if (!slotId) return null;
+  const match = /^(step|hold):([1-9][0-9]*)$/.exec(slotId);
+  if (!match) return null;
+  const sequence = Number(match[2]);
+  const rows = match[1] === "step" ? workPackage.steps : workPackage.holdPoints;
+  const row = rows.find((candidate) => candidate.sequence === sequence);
+  if (!row) return null;
+  return {
+    slotId,
+    requirement: row.requiredEvidence,
+  };
+}
+
+function authorizedEvidenceCorrection(
+  workPackage: FieldWorkPackage,
+  submission: FieldSubmission,
+  actorCandidates: string[],
+  scope: WorkObjectScope,
+): { eventId: string | null; evidenceItem: string | null } {
+  const eventId = submission.payload.evidence_correction_of;
+  const evidenceItem = submission.payload.evidence_item_correction_of;
+  if (!eventId && !evidenceItem) return { eventId: null, evidenceItem: null };
+  if (!eventId || !evidenceItem || !workPackage.evidenceLedgerAvailable) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_evidence_correction_not_found",
+      "The correction target is not available from the current Work Package evidence ledger.",
+    );
+  }
+  const target = (workPackage.evidence ?? []).find(
+    (candidate) =>
+      candidate.eventId === eventId && candidate.evidenceItem === evidenceItem,
+  );
+  if (
+    !target ||
+    target.slotId !== submission.payload.evidence_slot_id ||
+    target.releaseAttemptId !== workPackage.releaseAttemptId ||
+    target.disposition === "Superseded" ||
+    target.verification !== "Verified" ||
+    !actorCandidates.some((candidate) => sameUser(candidate, target.actorUser)) ||
+    !sameScope(scope, workPackageScope(workPackage))
+  ) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_evidence_correction_mismatch",
+      "The correction must target the same current Work Package slot and actor lineage.",
+    );
+  }
+  if ((workPackage.evidence ?? []).some((candidate) => candidate.correctionOf === target.eventId)) {
+    throw fieldEvidenceAuthorizationError(
+      "work_package_evidence_correction_conflict",
+      "One evidence event can have only one immutable replacement.",
+    );
+  }
+  return { eventId, evidenceItem };
+}
+
+function sameScope(
+  left: {
+    workObjectType: string;
+    workObjectId: string;
+    physicalContextType: string;
+    physicalContextId: string;
+  },
+  right: {
+    workObjectType: string;
+    workObjectId: string;
+    physicalContextType: string;
+    physicalContextId: string;
+  },
+): boolean {
+  return (
+    left.workObjectType === right.workObjectType &&
+    left.workObjectId === right.workObjectId &&
+    left.physicalContextType === right.physicalContextType &&
+    left.physicalContextId === right.physicalContextId
+  );
+}
+
+function fieldEvidenceAuthorizationError(
+  code: string,
+  message: string,
+  status = 409,
+): FieldActionError {
+  return new FieldActionError(code, status, message);
 }
 
 function rowMatchesWorkScope(
@@ -261,9 +537,10 @@ function rowMatchesWorkScope(
 
 export function fieldWorkPackageProjection(
   workPackage: FieldWorkPackage | null,
-  actorUser: string | null,
+  actorUser: string | readonly string[] | null,
   options: {
     completionAuthority?: boolean;
+    completionActorUser?: string | readonly string[] | null;
     /**
      * Current safety blockers for this package's scope. Any blocker removes
      * acknowledge, start, and complete. Stopping work is never removed: no
@@ -349,13 +626,13 @@ export function fieldWorkPackageProjection(
   if (!workPackage) return { work_package: null, allowedActions: [] };
   const currentUserAcknowledgement = (workPackage.acknowledgements ?? []).find(
     (item) =>
-      sameUser(item.actorUser, actorUser) &&
+      sameActor(item.actorUser, actorUser) &&
       !!workPackage.releaseAttemptId &&
       item.releaseAttemptId === workPackage.releaseAttemptId,
   );
   const currentUserAcknowledged =
     Boolean(currentUserAcknowledgement) ||
-    (sameUser(workPackage.acknowledgedBy, actorUser) &&
+    (sameActor(workPackage.acknowledgedBy, actorUser) &&
       !workPackage.releaseAttemptId);
   const workers = workPackage.assignedWorkers ?? [];
   const acknowledgements = workPackage.acknowledgements ?? [];
@@ -410,8 +687,10 @@ export function fieldWorkPackageProjection(
     });
   const completionReady =
     options.completionAuthority === true &&
-    !!actorUser &&
-    !workers.some((worker) => sameUser(worker.workerUser, actorUser)) &&
+    hasActor(options.completionActorUser ?? actorUser) &&
+    !workers.some((worker) =>
+      sameActor(worker.workerUser, options.completionActorUser ?? actorUser),
+    ) &&
     workPackage.status === "In Progress" &&
     workerLedgerKnown &&
     workerLedgerAvailable &&
@@ -442,19 +721,19 @@ export function fieldWorkPackageProjection(
     workerLedgerAvailable &&
     !!workPackage.releaseAttemptId &&
     workers.some(
-      (worker) => worker.required && sameUser(worker.workerUser, actorUser),
+      (worker) => worker.required && sameActor(worker.workerUser, actorUser),
     )
       ? ["work_package.acknowledge"]
       : []),
     // Starting work is intentionally not an outbox capability. The browser
-    // must make this request while online, and the Frappe command repeats the
+    // must make this request while online, and the D1 command repeats the
     // current-release and exact-assignment checks before its state transition.
     ...(workPackage.status === "Acknowledged" &&
     workerLedgerKnown &&
     workerLedgerAvailable &&
     !!workPackage.releaseAttemptId &&
     workers.some(
-      (worker) => worker.required && sameUser(worker.workerUser, actorUser),
+      (worker) => worker.required && sameActor(worker.workerUser, actorUser),
     ) &&
     requiredWorkersAcknowledged &&
     preStartHoldsReleased
@@ -462,7 +741,8 @@ export function fieldWorkPackageProjection(
       : []),
     // Stopping work is never gated by safety state, capability, or readiness.
     // A worker who needs to stop must always be able to.
-    ...(CURRENT_WORK_PACKAGE_STATUSES.includes(workPackage.status)
+    ...(workPackage.status !== "Blocked" &&
+    CURRENT_WORK_PACKAGE_STATUSES.includes(workPackage.status)
       ? ["work_package.stop_work"]
       : []),
     ...(completionReady ? ["work_package.complete"] : []),
@@ -545,6 +825,22 @@ export function fieldWorkPackageProjection(
     },
     allowedActions,
   };
+}
+
+function hasActor(actorUser: string | readonly string[] | null): boolean {
+  return typeof actorUser === "string"
+    ? actorUser.trim().length > 0
+    : Boolean(actorUser?.length);
+}
+
+function sameActor(
+  value: unknown,
+  actorUser: string | readonly string[] | null,
+): boolean {
+  const candidate = text(value);
+  return typeof actorUser === "string"
+    ? sameUser(candidate, actorUser)
+    : Boolean(actorUser?.some((identity) => sameUser(candidate, identity)));
 }
 
 function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
@@ -673,12 +969,17 @@ function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
 async function workPackageSupersession(
   env: AppEnv,
   document: FrappeRow,
+  tenantId: string,
 ): Promise<FieldWorkPackage["supersession"]> {
   const priorReference = text(document.supersedes);
   if (!priorReference) return null;
   const reason = text(document.correction_reason);
   if (!reason) return null;
-  const prior = await readFieldWorkPackageFrappeResource(env, priorReference);
+  const prior = await nativeWorkPackageDocumentById(
+    env,
+    tenantId,
+    priorReference,
+  );
   if (
     !prior ||
     (text(prior.name) !== priorReference &&
@@ -873,7 +1174,7 @@ function withVerifiedAcknowledgements(
 }
 
 /** Validate typed evidence events while preserving every immutable correction link. */
-function withVerifiedEvidence(
+export function withVerifiedEvidence(
   workPackage: FieldWorkPackage,
   rows: FrappeRow[],
   jobId: string,

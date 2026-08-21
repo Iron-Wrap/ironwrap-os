@@ -1,56 +1,245 @@
 {
-  "actions": [],
-  "allow_rename": 0,
-  "autoname": "field:asset_defect_id",
-  "creation": "2026-08-18 00:00:00.000000",
-  "custom": 0,
-  "doctype": "DocType",
-  "engine": "InnoDB",
-  "field_order": ["asset_defect_id", "fleet_asset", "asset_inspection", "status", "severity", "out_of_service", "detected_at", "reported_by", "device_action_id", "raw_key", "description", "evidence_item", "containment", "maintenance_order", "repaired_by", "repaired_at", "repair_evidence", "return_to_service_inspection", "closed_by", "closed_at", "cancelled_reason", "notes"],
-  "fields": [
-    {"fieldname": "asset_defect_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Asset Defect ID", "reqd": 1, "unique": 1},
-    {"fieldname": "fleet_asset", "fieldtype": "Link", "in_list_view": 1, "in_standard_filter": 1, "label": "Fleet Asset", "options": "Fleet Asset", "reqd": 1},
-    {"fieldname": "asset_inspection", "fieldtype": "Link", "label": "Source Inspection", "options": "Asset Inspection"},
-    {"default": "Open", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Open\nContained\nScheduled\nRepaired\nClosed\nCancelled", "reqd": 1},
-    {"fieldname": "severity", "fieldtype": "Select", "in_list_view": 1, "label": "Severity", "options": "Minor\nMajor\nOut of Service", "reqd": 1},
-    {"default": "0", "fieldname": "out_of_service", "fieldtype": "Check", "label": "Out of Service"},
-    {"fieldname": "detected_at", "fieldtype": "Datetime", "label": "Detected At"},
-    {"fieldname": "reported_by", "fieldtype": "Link", "label": "Reported By", "options": "User"},
-    {"fieldname": "device_action_id", "fieldtype": "Data", "label": "Device Action ID", "unique": 1},
-    {"fieldname": "raw_key", "fieldtype": "Data", "label": "Raw Capture Manifest Key", "read_only": 1},
-    {"fieldname": "description", "fieldtype": "Small Text", "label": "Description"},
-    {"fieldname": "evidence_item", "fieldtype": "Link", "label": "Evidence", "options": "Evidence Item"},
-    {"fieldname": "containment", "fieldtype": "Small Text", "label": "Containment"},
-    {"fieldname": "maintenance_order", "fieldtype": "Link", "label": "Maintenance Order", "options": "Maintenance Order"},
-    {"fieldname": "repaired_by", "fieldtype": "Link", "label": "Repaired By", "options": "User"},
-    {"fieldname": "repaired_at", "fieldtype": "Datetime", "label": "Repaired At"},
-    {"fieldname": "repair_evidence", "fieldtype": "Link", "label": "Repair Evidence", "options": "Evidence Item"},
-    {"fieldname": "return_to_service_inspection", "fieldtype": "Link", "label": "Return To Service Inspection", "options": "Asset Inspection"},
-    {"fieldname": "closed_by", "fieldtype": "Link", "label": "Closed By", "options": "User"},
-    {"fieldname": "closed_at", "fieldtype": "Datetime", "label": "Closed At"},
-    {"fieldname": "cancelled_reason", "fieldtype": "Small Text", "label": "Cancelled Reason"},
-    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
-  ],
-  "index_web_pages_for_search": 0,
-  "istable": 0,
-  "links": [],
-  "modified": "2026-08-18 00:00:00.000000",
-  "modified_by": "Administrator",
-  "module": "IronWrap Roofing",
-  "name": "Asset Defect",
-  "naming_rule": "By fieldname",
-  "owner": "Administrator",
-  "permissions": [
-    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production", "write": 1},
-    {"create": 1, "delete": 0, "if_owner": 1, "read": 1, "role": "IronWrap Field", "write": 1},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"},
-    {"create": 1, "delete": 0, "read": 1, "role": "IronWrap Fleet Capture Issuer"}
-  ],
-  "sort_field": "modified",
-  "sort_order": "DESC",
-  "states": [],
-  "track_changes": 1
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:asset_defect_id",
+ "creation": "2026-08-18 00:00:00.000000",
+ "custom": 0,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "asset_defect_id",
+  "fleet_asset",
+  "asset_inspection",
+  "status",
+  "severity",
+  "out_of_service",
+  "detected_at",
+  "reported_by",
+  "device_action_id",
+  "raw_key",
+  "description",
+  "evidence_item",
+  "containment",
+  "maintenance_order",
+  "repaired_by",
+  "repaired_at",
+  "repair_evidence",
+  "return_to_service_inspection",
+  "closed_by",
+  "closed_at",
+  "cancelled_reason",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "asset_defect_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Asset Defect ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "fleet_asset",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Fleet Asset",
+   "options": "Fleet Asset",
+   "reqd": 1
+  },
+  {
+   "fieldname": "asset_inspection",
+   "fieldtype": "Link",
+   "label": "Source Inspection",
+   "options": "Asset Inspection"
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nContained\nScheduled\nRepaired\nClosed\nCancelled",
+   "reqd": 1
+  },
+  {
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Severity",
+   "options": "Minor\nMajor\nOut of Service",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "out_of_service",
+   "fieldtype": "Check",
+   "label": "Out of Service"
+  },
+  {
+   "fieldname": "detected_at",
+   "fieldtype": "Datetime",
+   "label": "Detected At"
+  },
+  {
+   "fieldname": "reported_by",
+   "fieldtype": "Link",
+   "label": "Reported By",
+   "options": "User"
+  },
+  {
+   "fieldname": "device_action_id",
+   "fieldtype": "Data",
+   "label": "Device Action ID",
+   "unique": 1
+  },
+  {
+   "fieldname": "raw_key",
+   "fieldtype": "Data",
+   "label": "Raw Capture Manifest Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "evidence_item",
+   "fieldtype": "Link",
+   "label": "Evidence",
+   "options": "Evidence Item"
+  },
+  {
+   "fieldname": "containment",
+   "fieldtype": "Small Text",
+   "label": "Containment"
+  },
+  {
+   "fieldname": "maintenance_order",
+   "fieldtype": "Link",
+   "label": "Maintenance Order",
+   "options": "Maintenance Order"
+  },
+  {
+   "fieldname": "repaired_by",
+   "fieldtype": "Link",
+   "label": "Repaired By",
+   "options": "User"
+  },
+  {
+   "fieldname": "repaired_at",
+   "fieldtype": "Datetime",
+   "label": "Repaired At"
+  },
+  {
+   "fieldname": "repair_evidence",
+   "fieldtype": "Link",
+   "label": "Repair Evidence",
+   "options": "Evidence Item"
+  },
+  {
+   "fieldname": "return_to_service_inspection",
+   "fieldtype": "Link",
+   "label": "Return To Service Inspection",
+   "options": "Asset Inspection"
+  },
+  {
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "label": "Closed By",
+   "options": "User"
+  },
+  {
+   "fieldname": "closed_at",
+   "fieldtype": "Datetime",
+   "label": "Closed At"
+  },
+  {
+   "fieldname": "cancelled_reason",
+   "fieldtype": "Small Text",
+   "label": "Cancelled Reason"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-08-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "IronWrap Roofing",
+ "name": "Asset Defect",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Owner",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Production",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "if_owner": 1,
+   "read": 1,
+   "role": "IronWrap Field",
+   "write": 1
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Closeout"
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Support"
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "IronWrap Fleet Capture Issuer"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
 }

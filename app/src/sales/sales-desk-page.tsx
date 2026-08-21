@@ -32,6 +32,11 @@ const attentionCopy: Record<
   SalesLead["attention"][number],
   { label: string; tone: string; icon: LucideIcon }
 > = {
+  source_partial: {
+    label: "Source partial",
+    tone: "bg-warning-soft text-warning",
+    icon: CircleAlert,
+  },
   triage_unresolved: {
     label: "Lead check needed",
     tone: "bg-danger-soft text-danger",
@@ -108,9 +113,8 @@ function SalesDeskScreen({
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
   const canReviewApprovals = model.allowed_actions.includes("approval.read");
-  const canPrepareTriage = model.allowed_actions.includes("approval.prepare");
+  const canPrepareTriage = model.allowed_actions.includes("commercial.lead_triage.record");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
-  const proposalSourcePartial = model.partial_sources.includes("proposal_evidence_packs");
   const attentionCount = model.leads.filter((lead) => lead.attention.length > 0).length;
 
   return (
@@ -178,7 +182,6 @@ function SalesDeskScreen({
             currency={currency}
             canOpenWorkbench={canOpenWorkbench}
             canPrepareTriage={canPrepareTriage}
-            proposalSourcePartial={proposalSourcePartial}
           />
         </main>
       </div>
@@ -287,7 +290,6 @@ function LeadQueue({
   currency,
   canOpenWorkbench,
   canPrepareTriage,
-  proposalSourcePartial,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
@@ -295,7 +297,6 @@ function LeadQueue({
   currency: string;
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
-  proposalSourcePartial: boolean;
 }) {
   if (leads.length === 0) {
     return (
@@ -333,7 +334,6 @@ function LeadQueue({
               defaultCurrency={currency}
               canOpenWorkbench={canOpenWorkbench}
               canPrepareTriage={canPrepareTriage}
-              proposalSourcePartial={proposalSourcePartial}
             />
           </li>
         ))}
@@ -348,14 +348,12 @@ function LeadRow({
   defaultCurrency,
   canOpenWorkbench,
   canPrepareTriage,
-  proposalSourcePartial,
 }: {
   lead: SalesLead;
   locale: string;
   defaultCurrency: string;
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
-  proposalSourcePartial: boolean;
 }) {
   const receivedAt = formatDate(lead.received_at, locale);
   const contact = [lead.contact.phone, lead.contact.email].filter((value): value is string =>
@@ -397,6 +395,19 @@ function LeadRow({
           </p>
         ) : null}
 
+        {lead.partial_fields.length > 0 ? (
+          <div
+            className="flex gap-2 border border-warning/40 bg-warning-soft/55 p-3 text-sm leading-6 text-warning"
+            role="status"
+          >
+            <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p>
+              The bounded read may have omitted {lead.partial_fields.map(humanize).join(", ")}.
+              Blank values are unknown, not proof that no record exists.
+            </p>
+          </div>
+        ) : null}
+
         <div className="grid border-y border-border lg:grid-cols-3">
           <ReviewCell label="Estimate">
             <EstimateSummary estimate={lead.estimate} locale={locale} currency={defaultCurrency} />
@@ -405,7 +416,10 @@ function LeadRow({
             <QuoteSummary
               quote={lead.quote}
               proposal={lead.proposal}
-              proposalSourcePartial={proposalSourcePartial}
+              proposalSourcePartial={
+                lead.partial_fields.includes("proposal") ||
+                lead.partial_fields.includes("proposal_publication")
+              }
               locale={locale}
               defaultCurrency={defaultCurrency}
             />

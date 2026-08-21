@@ -93,6 +93,7 @@ function job(
     brand: "IronWrap Exteriors",
     service_type: "Roofing",
     status: "In Production",
+    version: 1,
     assignment:
       lane === "needs_assignment"
         ? null
@@ -100,6 +101,10 @@ function job(
             id: `assignment:${id}`,
             type: "Production",
             status: lane === "blocked" ? "Blocked" : "Assigned",
+            assignment_version: 1,
+            roof_job_version: 1,
+            crew_id: "crew:install",
+            crew_version: 1,
             scheduled_start: lane === "scheduled" ? "2026-07-17T15:00:00.000Z" : null,
             scheduled_end: null,
           },
@@ -150,7 +155,7 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
       job("JOB-D", "IW-1004", "ready_for_review"),
       job("JOB-E", "IW-1005", "needs_verification"),
     ],
-    crews: [{ id: "crew:install", name: "Install team" }],
+    crews: [{ id: "crew:install", name: "Install team", version: 1 }],
     ...overrides,
   };
 }

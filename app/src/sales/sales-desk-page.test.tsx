@@ -87,6 +87,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
         triage: {
           status: "Untriaged",
           summary: "Confirm the inspection window before a final scope.",
+          version: 1,
         },
         job: {
           id: "JOB-A",
@@ -148,6 +149,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
             },
           ],
         },
+        partial_fields: [],
         attention: ["triage_unresolved", "estimate_needs_review", "quote_needs_review"],
       },
       {
@@ -158,12 +160,13 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
         transport_status: "reconciled",
         intent_queue: null,
         contact: { display_name: "Morgan Homeowner", phone: null, email: null },
-        triage: { status: "Triaged", summary: null },
+        triage: { status: "Triaged", summary: null, version: 2 },
         job: null,
         estimate: null,
         quote: null,
         proposal: null,
         consent: { context: "no_linked_record", records: [] },
+        partial_fields: [],
         attention: [],
       },
     ],
@@ -258,8 +261,15 @@ describe("SalesDeskPage", () => {
     const firstLead = model.leads[0]!;
     vi.mocked(loadSales).mockResolvedValue({
       ...model,
-      partial_sources: ["proposal_evidence_packs"],
-      leads: [{ ...firstLead, proposal: null }],
+      partial_sources: ["commercial_proposal_revisions"],
+      leads: [
+        {
+          ...firstLead,
+          proposal: null,
+          partial_fields: ["proposal", "proposal_publication", "proposal_acceptance"],
+          attention: [...firstLead.attention, "source_partial"],
+        },
+      ],
     });
     renderSales();
 
@@ -272,7 +282,19 @@ describe("SalesDeskPage", () => {
     const model = salesModel();
     vi.mocked(loadSales).mockResolvedValue({
       ...model,
-      partial_sources: ["proposal_evidence_packs"],
+      partial_sources: ["commercial_proposal_publication_events"],
+      leads: [
+        {
+          ...model.leads[0]!,
+          proposal: {
+            ...model.leads[0]!.proposal!,
+            has_published_pack: null,
+            published_status: null,
+          },
+          partial_fields: ["proposal_publication"],
+          attention: [...model.leads[0]!.attention, "source_partial"],
+        },
+      ],
     });
     renderSales();
 
@@ -322,7 +344,7 @@ describe("SalesDeskPage", () => {
 
   it("offers triage preparation only for an explicitly untriaged lead when the BFF grants it", async () => {
     const model = salesModel({
-      allowed_actions: ["sales.read", "approval.read", "approval.prepare"],
+      allowed_actions: ["sales.read", "approval.read", "commercial.lead_triage.record"],
     });
     vi.mocked(loadSales).mockResolvedValue(model);
     renderSales();
@@ -336,11 +358,11 @@ describe("SalesDeskPage", () => {
 
   it("does not turn an Unknown triage record into a preparation action", async () => {
     const model = salesModel({
-      allowed_actions: ["sales.read", "approval.read", "approval.prepare"],
+      allowed_actions: ["sales.read", "approval.read", "commercial.lead_triage.record"],
       leads: [
         {
           ...salesModel().leads[0]!,
-          triage: { status: "Unknown", summary: null },
+          triage: { status: "Unknown", summary: null, version: 1 },
           attention: ["triage_unresolved"],
         },
       ],

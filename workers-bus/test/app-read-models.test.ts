@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  activeAssignmentForJob,
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
@@ -13,7 +14,6 @@ import {
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import {
   FRAPPE_READ_FIELDS,
-  OFFICE_PRODUCTION_READ_FIELDS,
   OFFICE_SALES_READ_FIELDS,
 } from "../src/frappe-read.ts";
 import { permissionsForRole } from "../src/app-types.ts";
@@ -55,6 +55,294 @@ const assignments = [
     modified: MODIFIED,
   },
 ];
+
+function nativeAssignment(
+  id: string,
+  roofJobId: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    assignment_id: id,
+    tenant_id: "ironwrap",
+    roof_job_id: roofJobId,
+    assignment_version: 1,
+    roof_job_version: 1,
+    crew_id: "CREW-1",
+    crew_version: 3,
+    assigned_users_json: JSON.stringify(["crew@example.com"]),
+    scheduled_start: "2026-07-18T08:00:00.000Z",
+    scheduled_end: null,
+    supersedes_assignment_id: null,
+    correction_reason: null,
+    actor_user_id: "appu_ops",
+    command_fingerprint: "a".repeat(64),
+    idempotency_key_hash: "b".repeat(64),
+    created_at: MODIFIED,
+    ...overrides,
+  };
+}
+
+function nativeTypedAssignment(
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    assignment_id: "ASSIGN-SHOP-1",
+    tenant_id: "ironwrap",
+    work_object_type: "Shop Order",
+    work_object_id: "SHOP-001",
+    physical_context_type: "Shop Floor",
+    physical_context_id: "SHOP-FLOOR-1",
+    assignment_version: 1,
+    assigned_users_json: JSON.stringify(["appu_field"]),
+    scheduled_start: "2026-07-10T16:00:00.000Z",
+    scheduled_end: null,
+    authority_user_id: "appu_owner",
+    authority_role: "owner",
+    supersedes_assignment_id: null,
+    correction_reason: null,
+    actor_user_id: "appu_production",
+    command_fingerprint: "c".repeat(64),
+    idempotency_key_hash: "d".repeat(64),
+    created_at: MODIFIED,
+    ...overrides,
+  };
+}
+
+function nativeGate(
+  roofJobId: string,
+  gate: string,
+  state = "ready",
+): Record<string, unknown> {
+  return {
+    gate_id: `gate_${roofJobId.toLowerCase()}_${gate.toLowerCase()}`,
+    roof_job_id: roofJobId,
+    gate,
+    state,
+    blocker_reason:
+      state === "blocked" ? "Delivery not confirmed" : "No active blocker",
+    owner_user: "production@example.com",
+    assigned_at: "2026-07-10T09:00:00.000Z",
+    due_at: "2026-07-11T12:00:00.000Z",
+    updated_at: MODIFIED,
+  };
+}
+
+function nativeOwnerQuote(
+  id: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    quote_revision_id: id,
+    tenant_id: "ironwrap",
+    customer_quote_id: `customer-${id}`,
+    revision_number: 1,
+    roof_job_id: "JOB-A",
+    customer_id: "CUSTOMER-A",
+    supersedes_quote_revision_id: null,
+    status: "approved",
+    currency: "CAD",
+    valid_until: "2026-08-31",
+    subtotal_cents: 100_000,
+    tax_cents: 5_000,
+    total_cents: 105_000,
+    terms_json: "{}",
+    terms_hash: "1".repeat(64),
+    evidence_refs_json: "[]",
+    evidence_digest: "2".repeat(64),
+    correction_reason: null,
+    policy_permit_id: "permit-owner-now",
+    quote_revision_approval_id: "approval-owner-now",
+    authority_evidence_digest: "3".repeat(64),
+    command_fingerprint: "4".repeat(64),
+    idempotency_key_hash: "5".repeat(64),
+    created_at: MODIFIED,
+    ...overrides,
+  };
+}
+
+function nativeAccountingIntent(
+  id: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    intent_id: id,
+    roof_job_id: "JOB-A",
+    kind: "payment",
+    state: "reconciled",
+    currency: "CAD",
+    subtotal: "0.00",
+    total_amount: "250.00",
+    expected_sha256: "a".repeat(64),
+    provider_entity_type: "Payment",
+    provider_entity_id: "123",
+    blocker_code: null,
+    blocker_next_step: null,
+    reason_code: null,
+    error_code: null,
+    provider_submitted_at: "2026-07-10T10:00:00.000Z",
+    provider_reconciled_at: "2026-07-10T10:01:00.000Z",
+    updated_at: "2026-07-10T10:01:00.000Z",
+    ...overrides,
+  };
+}
+
+function nativeAccountingReconciliation(
+  id: string,
+  intentId: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    reconciliation_id: id,
+    intent_id: intentId,
+    expected_sha256: "a".repeat(64),
+    observed_sha256: "a".repeat(64),
+    verdict: "reconciled",
+    reason_code: null,
+    decided_at: "2026-07-10T10:00:30.000Z",
+    ...overrides,
+  };
+}
+
+function nativeWorkPackageRow(
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    work_package_id: "work_package_a",
+    tenant_id: "ironwrap",
+    version: 1,
+    job_id: "JOB-A",
+    assignment_id: "ASSIGN-A",
+    work_object_type: "Roof Job",
+    work_object_id: "JOB-A",
+    physical_context_type: "Roof Site",
+    physical_context_id: "JOB-A",
+    assignment_authority_user: "owner@example.com",
+    assignment_authority_role: "IronWrap Owner",
+    status: "Released",
+    title: "South roof replacement",
+    objective: "Install the released metal system.",
+    boundaries: "South roof only.",
+    prerequisites: "Verify tie-off and material staging.",
+    expected_result: "Released roof section complete.",
+    stop_conditions: "Stop for unsafe weather or missing controls.",
+    make_safe_procedure: "Secure the work area and notify the supervisor.",
+    definition_json: JSON.stringify({
+      assigned_workers: [
+        {
+          sequence: 1,
+          worker_user: "crew@example.com",
+          worker_role: "Installer",
+          required: true,
+        },
+      ],
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Verify the roof zone.",
+          required_evidence: "Zone photo",
+          acceptance_criteria: "Zone matches package.",
+        },
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Deck condition",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Deck photo",
+          acceptance_criteria: "Supervisor release.",
+        },
+      ],
+    }),
+    issued_at: "2026-07-10T07:00:00.000Z",
+    expires_at: "2026-07-11T07:00:00.000Z",
+    released_at: "2026-07-10T07:05:00.000Z",
+    release_attempt_id: "attempt-a",
+    supersedes_id: null,
+    correction_reason: null,
+    acknowledged_at: null,
+    completed_at: null,
+    created_at: MODIFIED,
+    updated_at: MODIFIED,
+    ...overrides,
+  };
+}
+
+function nativeWorkPackageEvent(
+  eventKind: string,
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    event_id: `wpe_${eventKind}`,
+    tenant_id: "ironwrap",
+    work_package_id: "work_package_a",
+    work_package_version: 1,
+    job_id: "JOB-A",
+    assignment_id: "ASSIGN-A",
+    work_object_type: "Roof Job",
+    work_object_id: "JOB-A",
+    physical_context_type: "Roof Site",
+    physical_context_id: "JOB-A",
+    release_attempt_id: "attempt-a",
+    event_kind: eventKind,
+    actor_user_id:
+      eventKind === "hold_released"
+        ? "production@example.com"
+        : "crew@example.com",
+    actor_role:
+      eventKind === "hold_released" ? "IronWrap Production" : "Installer",
+    device_action_id: `device-${eventKind}`,
+    occurred_at: "2026-07-10T08:00:00.000Z",
+    manifest_key: `work-packages/${eventKind}.json`,
+    payload_json: "{}",
+    created_at: MODIFIED,
+    ...overrides,
+  };
+}
+
+function nativeFieldEvidenceRows(
+  count: number,
+  overrides: Partial<Record<string, unknown>> = {},
+): Array<Record<string, unknown>> {
+  const baseTime = Date.parse("2026-07-10T09:00:00.000Z");
+  return Array.from({ length: count }, (_, index) => {
+    const capturedAt = new Date(baseTime + index * 1_000).toISOString();
+    return {
+      device_action_id: `device-action-${index}`,
+      tenant_id: "ironwrap",
+      job_id: "JOB-A",
+      assignment_id: "ASSIGN-A",
+      status: "verified",
+      manifest_key: `field-actions/device-action-${index}.json`,
+      r2_stored_at: capturedAt,
+      user_id: "appu_field",
+      actor_user: "crew@example.com",
+      actor_role: "Installer",
+      created_at: capturedAt,
+      work_package_id: "work_package_a",
+      work_package_version: 1,
+      evidence_slot_id: "step:1",
+      evidence_requirement: "Zone photo",
+      evidence_source: "worker-camera",
+      evidence_device_id: "paired-device-1",
+      evidence_freshness: "Current",
+      evidence_conflict_state: "None",
+      evidence_verification: "Verified",
+      evidence_disposition: "Open",
+      evidence_correction_of: null,
+      evidence_item_correction_of: null,
+      work_package_release_attempt_id: "attempt-a",
+      correction_reason: null,
+      work_object_type: "Roof Job",
+      work_object_id: "JOB-A",
+      physical_context_type: "Roof Site",
+      physical_context_id: "JOB-A",
+      capture_completed_at: capturedAt,
+      evidence_id: `evi_${String(index).padStart(32, "0")}`,
+      ...overrides,
+    };
+  });
+}
 
 const proofRows = Array.from({ length: 1_051 }, (_, index) => ({
   name: `EVID-${String(index).padStart(4, "0")}`,
@@ -119,7 +407,129 @@ function auth(role: AppRole, frappeUserId: string | null): AuthContext {
   };
 }
 
-function env(): AppEnv {
+type NativeOperationsSource =
+  | "jobs"
+  | "customers"
+  | "properties"
+  | "gates"
+  | "assignments"
+  | "typedAssignments"
+  | "crews"
+  | "materialExceptions"
+  | "effectExceptions"
+  | "leads"
+  | "quotes"
+  | "accountingIntents"
+  | "accountingReconciliations"
+  | "accountingExceptions"
+  | "workPackages"
+  | "workPackageEvents"
+  | "fieldEvidence";
+
+function env(
+  nativeOverrides: Partial<
+    Record<NativeOperationsSource, Array<Record<string, unknown>>>
+  > = {},
+): AppEnv {
+  const nativeRows: Record<
+    NativeOperationsSource,
+    Array<Record<string, unknown>>
+  > = {
+    jobs: jobs.map((row) => ({
+      roof_job_id: row.name,
+      customer_id: row.customer,
+      property_id: row.roofing_property,
+      brand: row.brand,
+      job_number: row.job_number,
+      service_type: row.service_type,
+      job_status: "in_progress",
+      current_gate_state: "in_progress",
+      version: 1,
+      updated_at: row.modified,
+    })),
+    customers: ["A", "B", "C"].map((suffix, index) => ({
+      customer_id: `CUSTOMER-${suffix}`,
+      display_name: `Customer ${index + 1}`,
+      contact_phone: `+1403555000${index}`,
+      updated_at: MODIFIED,
+    })),
+    properties: ["A", "B", "C"].map((suffix) => ({
+      property_id: `PROP-${suffix}`,
+      address_line1: `${suffix} Native Avenue`,
+      city: "Calgary",
+      province: "AB",
+      postal_code: "T2P 1J9",
+      country: "Canada",
+      updated_at: MODIFIED,
+    })),
+    gates: [
+      {
+        gate_id: "gate_job_a_materials",
+        roof_job_id: "JOB-A",
+        gate: "Materials",
+        state: "blocked",
+        blocker_reason: "Delivery not confirmed",
+        owner_user: "office-owner@example.com",
+        assigned_at: "2026-07-10T09:00:00.000Z",
+        due_at: "2026-07-11T12:00:00.000Z",
+        updated_at: MODIFIED,
+      },
+    ],
+    assignments: assignments.map((row, index) => ({
+      assignment_id: row.name,
+      tenant_id: "ironwrap",
+      roof_job_id: row.roof_job,
+      assignment_version: 1,
+      roof_job_version: 1,
+      crew_id: row.crew_profile ?? `CREW-DIRECT-${index + 1}`,
+      crew_version: 1,
+      assigned_users_json: JSON.stringify(["crew@example.com"]),
+      scheduled_start: row.scheduled_start,
+      scheduled_end: row.scheduled_end,
+      supersedes_assignment_id: null,
+      correction_reason: null,
+      actor_user_id: "appu_ops",
+      command_fingerprint: "a".repeat(64),
+      idempotency_key_hash: "b".repeat(64),
+      created_at: row.modified,
+    })),
+    typedAssignments: [],
+    crews: [
+      {
+        crew_id: "CREW-1",
+        display_name: "Northside Metal",
+        version: 3,
+        updated_at: MODIFIED,
+      },
+    ],
+    materialExceptions: [],
+    effectExceptions: [],
+    leads: [
+      {
+        lead_id: "LEAD-A",
+        tenant_id: "ironwrap",
+        source_envelope_id: "lead_a",
+        source_raw_key: "raw/lead-a.json",
+        source: "website",
+        contact_name: "Pat Prospect",
+        contact_phone: "+14035559999",
+        contact_email: "pat@example.com",
+        job_ref: "JOB-A",
+        lifecycle_status: "untriaged",
+        version: 1,
+        created_at: "2026-07-10T10:00:00.000Z",
+        updated_at: MODIFIED,
+      },
+    ],
+    quotes: [],
+    accountingIntents: [],
+    accountingReconciliations: [],
+    accountingExceptions: [],
+    workPackages: [nativeWorkPackageRow()],
+    workPackageEvents: [],
+    fieldEvidence: [],
+    ...nativeOverrides,
+  };
   return {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "read-key",
@@ -130,7 +540,290 @@ function env(): AppEnv {
         return {
           bind(...ids: unknown[]) {
             return {
+              ...(sql.includes("FROM work_packages") &&
+              sql.includes("work_package_id = ?") &&
+              !sql.includes("SELECT version")
+                ? {
+                    first: async () =>
+                      nativeRows.workPackages.find(
+                        (row) =>
+                          row.tenant_id === ids[0] &&
+                          row.work_package_id === ids[1] &&
+                          row.version === ids[2],
+                      ) ?? null,
+                  }
+                : {}),
               all: async () => {
+                if (
+                  sql.includes("FROM operating_roof_jobs") &&
+                  sql.includes("job_status IN ('qualified', 'in_progress')")
+                ) {
+                  return { results: nativeRows.jobs };
+                }
+                if (sql.includes("FROM operating_roof_jobs")) {
+                  return {
+                    results: nativeRows.jobs.filter(
+                      (row) => row.roof_job_id === ids[1],
+                    ),
+                  };
+                }
+                if (sql.includes("FROM operating_customers")) {
+                  return {
+                    results: nativeRows.customers.filter(
+                      (row) => row.customer_id === ids[1],
+                    ),
+                  };
+                }
+                if (
+                  sql.includes("FROM operating_properties") &&
+                  sql.includes("property_id IN")
+                ) {
+                  return { results: nativeRows.properties };
+                }
+                if (sql.includes("FROM operating_properties")) {
+                  return {
+                    results: nativeRows.properties.filter(
+                      (row) => row.property_id === ids[1],
+                    ),
+                  };
+                }
+                if (sql.includes("FROM operating_production_gates")) {
+                  const jobIds = new Set(
+                    ids.filter(
+                      (value): value is string =>
+                        typeof value === "string" &&
+                        nativeRows.jobs.some(
+                          (row) => row.roof_job_id === value,
+                        ),
+                    ),
+                  );
+                  const gates = nativeRows.gates.filter((row) =>
+                    jobIds.has(String(row.roof_job_id)),
+                  );
+                  return {
+                    results: sql.includes("AND state = ?")
+                      ? gates.filter((row) => row.state === "blocked")
+                      : gates,
+                  };
+                }
+                if (sql.includes("FROM operating_job_assignments current")) {
+                  const hasRoofJobFilter = sql.includes(
+                    "current.roof_job_id = ?",
+                  );
+                  const actorIds = ids
+                    .slice(hasRoofJobFilter ? 2 : 1)
+                    .filter(
+                      (value): value is string => typeof value === "string",
+                    )
+                    .map((value) => value.toLowerCase());
+                  const jobRows = hasRoofJobFilter
+                    ? nativeRows.assignments.filter(
+                        (row) => row.roof_job_id === ids[1],
+                      )
+                    : nativeRows.assignments;
+                  return {
+                    results: sql.includes("json_each")
+                      ? jobRows.filter((row) =>
+                          JSON.parse(String(row.assigned_users_json)).some(
+                            (user: string) =>
+                              actorIds.includes(user.toLowerCase()),
+                          ),
+                        )
+                      : jobRows,
+                  };
+                }
+                if (
+                  sql.includes("FROM operating_work_object_assignments current")
+                ) {
+                  const hasScope = sql.includes("current.work_object_type = ?");
+                  const scopeRows = hasScope
+                    ? nativeRows.typedAssignments.filter(
+                        (row) =>
+                          row.work_object_type === ids[1] &&
+                          row.work_object_id === ids[2] &&
+                          row.physical_context_type === ids[3] &&
+                          row.physical_context_id === ids[4],
+                      )
+                    : nativeRows.typedAssignments;
+                  const actorIds = ids
+                    .slice(hasScope ? 5 : 1)
+                    .filter(
+                      (value): value is string => typeof value === "string",
+                    )
+                    .map((value) => value.toLowerCase());
+                  return {
+                    results: sql.includes("json_each")
+                      ? scopeRows.filter((row) =>
+                          JSON.parse(String(row.assigned_users_json)).some(
+                            (user: string) =>
+                              actorIds.includes(user.toLowerCase()),
+                          ),
+                        )
+                      : scopeRows,
+                  };
+                }
+                if (sql.includes("FROM fleet_crews")) {
+                  return { results: nativeRows.crews };
+                }
+                if (sql.includes("FROM inventory_exceptions")) {
+                  return { results: nativeRows.materialExceptions };
+                }
+                if (sql.includes("FROM external_effect_exceptions")) {
+                  return { results: nativeRows.effectExceptions };
+                }
+                if (sql.includes("FROM operating_leads")) {
+                  return { results: nativeRows.leads };
+                }
+                if (sql.includes("FROM commercial_quote_revisions")) {
+                  return { results: nativeRows.quotes };
+                }
+                if (sql.includes("FROM accounting_reconciliations")) {
+                  return { results: nativeRows.accountingReconciliations };
+                }
+                if (sql.includes("FROM accounting_exceptions")) {
+                  return { results: nativeRows.accountingExceptions };
+                }
+                if (sql.includes("FROM accounting_intents")) {
+                  return { results: nativeRows.accountingIntents };
+                }
+                if (
+                  sql.includes("FROM work_packages AS package") &&
+                  sql.includes("LEFT JOIN work_package_events AS stopped")
+                ) {
+                  const selectedJobs = new Set(
+                    ids
+                      .slice(1, -1)
+                      .filter(
+                        (value): value is string => typeof value === "string",
+                      ),
+                  );
+                  return {
+                    results: nativeRows.workPackages
+                      .filter(
+                        (row) =>
+                          row.tenant_id === ids[0] &&
+                          row.status === "Blocked" &&
+                          selectedJobs.has(String(row.job_id)),
+                      )
+                      .map((row) => {
+                        const stopped = nativeRows.workPackageEvents
+                          .filter(
+                            (event) =>
+                              event.tenant_id === row.tenant_id &&
+                              event.work_package_id === row.work_package_id &&
+                              event.work_package_version === row.version &&
+                              event.event_kind === "stop_work",
+                          )
+                          .sort(
+                            (left, right) =>
+                              String(right.occurred_at).localeCompare(
+                                String(left.occurred_at),
+                              ) ||
+                              String(right.event_id).localeCompare(
+                                String(left.event_id),
+                              ),
+                          )[0];
+                        const payload = stopped
+                          ? (JSON.parse(String(stopped.payload_json)) as Record<
+                              string,
+                              unknown
+                            >)
+                          : {};
+                        return {
+                          work_package_id: row.work_package_id,
+                          version: row.version,
+                          job_id: row.job_id,
+                          stop_event_id: stopped?.event_id ?? null,
+                          blocker_reason: payload.blocker_reason ?? null,
+                          occurred_at: stopped?.occurred_at ?? null,
+                          manifest_key: stopped?.manifest_key ?? null,
+                          updated_at: row.updated_at,
+                        };
+                      }),
+                  };
+                }
+                if (sql.includes("FROM work_packages")) {
+                  if (
+                    sql.includes("SELECT version") &&
+                    sql.includes("work_package_id = ?")
+                  ) {
+                    return {
+                      results: nativeRows.workPackages
+                        .filter(
+                          (row) =>
+                            row.tenant_id === ids[0] &&
+                            row.work_package_id === ids[1],
+                        )
+                        .sort(
+                          (left, right) =>
+                            Number(right.version) - Number(left.version),
+                        )
+                        .slice(0, 2)
+                        .map((row) => ({ version: row.version })),
+                    };
+                  }
+                  return {
+                    results: sql.includes("work_package_id = ?")
+                      ? nativeRows.workPackages.filter(
+                          (row) =>
+                            row.tenant_id === ids[0] &&
+                            row.work_package_id === ids[1] &&
+                            row.version === ids[2],
+                        )
+                      : nativeRows.workPackages
+                          .filter(
+                            (row) =>
+                              row.tenant_id === ids[0] &&
+                              row.job_id === ids[1] &&
+                              row.assignment_id === ids[2] &&
+                              [
+                                "Released",
+                                "Acknowledged",
+                                "In Progress",
+                              ].includes(String(row.status)),
+                          )
+                          .sort(
+                            (left, right) =>
+                              Number(right.version) - Number(left.version),
+                          )
+                          .slice(0, 2),
+                  };
+                }
+                if (sql.includes("FROM work_package_events")) {
+                  return {
+                    results: nativeRows.workPackageEvents.filter(
+                      (row) =>
+                        row.tenant_id === ids[0] &&
+                        row.work_package_id === ids[1] &&
+                        row.work_package_version === ids[2],
+                    ),
+                  };
+                }
+                if (sql.includes("FROM field_actions a")) {
+                  return {
+                    results: nativeRows.fieldEvidence.filter(
+                      (row) =>
+                        (row.tenant_id === undefined ||
+                          row.tenant_id === ids[0]) &&
+                        (row.job_id === undefined || row.job_id === ids[1]) &&
+                        (row.assignment_id === undefined ||
+                          row.assignment_id === ids[2]) &&
+                        row.work_package_id === ids[3] &&
+                        row.work_package_version === ids[4] &&
+                        row.work_package_release_attempt_id === ids[5] &&
+                        row.work_object_type === ids[6] &&
+                        row.work_object_id === ids[7] &&
+                        row.physical_context_type === ids[8] &&
+                        row.physical_context_id === ids[9] &&
+                        (row.status === undefined ||
+                          row.status === "verified") &&
+                        (row.manifest_key === undefined ||
+                          Boolean(row.manifest_key)) &&
+                        (row.r2_stored_at === undefined ||
+                          Boolean(row.r2_stored_at)),
+                    ),
+                  };
+                }
                 if (sql.includes("FROM envelopes")) {
                   return {
                     results: ids
@@ -176,32 +869,212 @@ function env(): AppEnv {
   } as never;
 }
 
-function envWithLeadTriageBroker(): AppEnv {
-  return {
-    ...env(),
-    APP_ALLOW_INSECURE_LOCAL: "true",
-    APP_APPROVAL_BROKER_URL: "http://127.0.0.1:8788",
-    APP_APPROVAL_BROKER_KEY_ID: "sales-triage-test-key",
-    APPROVAL_BROKER_SHARED_SECRET: "sales-triage-shared-secret-for-test-0001",
-    APP_APPROVAL_APPROVER_ID: "owner@example.com",
-    APP_APPROVAL_MAX_SESSION_AGE_SECONDS: "900",
-    APP_APPROVAL_BROKER_TIMEOUT_MS: "5000",
-    APP_APPROVAL_EXECUTION_LEASE_SECONDS: "45",
-  } as AppEnv;
+function envWithNativeJobPacket(
+  overrides: {
+    operatingJobs?: Array<Record<string, unknown>>;
+    operatingCustomers?: Array<Record<string, unknown>>;
+    operatingProperties?: Array<Record<string, unknown>>;
+    fieldEvidence?: Array<Record<string, unknown>>;
+  } = {},
+): AppEnv {
+  return env({
+    ...(overrides.operatingJobs ? { jobs: overrides.operatingJobs } : {}),
+    ...(overrides.operatingCustomers
+      ? { customers: overrides.operatingCustomers }
+      : {}),
+    ...(overrides.operatingProperties
+      ? { properties: overrides.operatingProperties }
+      : {}),
+    ...(overrides.fieldEvidence
+      ? { fieldEvidence: overrides.fieldEvidence }
+      : {}),
+  });
 }
 
-function envWithProductionScheduleBroker(): AppEnv {
+type NativeSalesSource =
+  | "leads"
+  | "jobs"
+  | "estimates"
+  | "consents"
+  | "triageDecisions"
+  | "quotes"
+  | "proposals"
+  | "publications"
+  | "acceptances";
+
+function nativeSalesEnv(
+  overrides: Partial<
+    Record<NativeSalesSource, Array<Record<string, unknown>>>
+  > = {},
+): AppEnv {
+  const rows: Record<NativeSalesSource, Array<Record<string, unknown>>> = {
+    leads: [
+      {
+        lead_id: "LEAD-A",
+        tenant_id: "ironwrap",
+        source_envelope_id: "lead_a",
+        source_raw_key: "raw/lead-a.json",
+        source: "website",
+        contact_name: "Pat Prospect",
+        contact_phone: "+14035559999",
+        contact_email: "pat@example.com",
+        job_ref: "JOB-A",
+        lifecycle_status: "untriaged",
+        version: 1,
+        created_at: "2026-07-10T10:00:00.000Z",
+        updated_at: MODIFIED,
+      },
+    ],
+    jobs: [
+      {
+        roof_job_id: "JOB-A",
+        tenant_id: "ironwrap",
+        lead_id: "LEAD-A",
+        customer_id: "CUSTOMER-A",
+        job_number: "IW-1001",
+        service_type: "Roofing",
+        job_status: "in_progress",
+        version: 1,
+        created_at: "2026-07-10T10:00:00.000Z",
+        updated_at: MODIFIED,
+      },
+    ],
+    estimates: [
+      {
+        estimate_session_id: "estimate_a",
+        tenant_id: "ironwrap",
+        lead_id: "LEAD-A",
+        roof_job_id: "JOB-A",
+        service_type: "Roofing",
+        status: "needs_review",
+        range_low_cents: 1_240_000,
+        range_high_cents: 1_590_000,
+        estimate_total_cents: null,
+        confidence: "Preliminary",
+        review_required: 1,
+        assumptions:
+          "Visible slope and access assumptions require verification.",
+        exclusions: "Not a final quote or contract.",
+        version: 1,
+        created_at: "2026-07-10T10:00:00.000Z",
+        updated_at: MODIFIED,
+      },
+    ],
+    consents: [
+      {
+        consent_id: "consent_a",
+        tenant_id: "ironwrap",
+        lead_id: "LEAD-A",
+        customer_id: "CUSTOMER-A",
+        roof_job_id: "JOB-A",
+        channel: "email",
+        purpose: "estimate_follow_up",
+        status: "granted",
+        jurisdiction: "AB",
+        consent_basis: "express",
+        recorded_at: MODIFIED,
+        created_at: MODIFIED,
+      },
+    ],
+    triageDecisions: [],
+    quotes: [
+      {
+        quote_revision_id: "QUOTE-A",
+        tenant_id: "ironwrap",
+        customer_quote_id: "quote_a",
+        revision_number: 2,
+        roof_job_id: "JOB-A",
+        customer_id: "CUSTOMER-A",
+        status: "needs_review",
+        currency: "CAD",
+        valid_until: "2026-07-20",
+        total_cents: 1_475_000,
+        created_at: MODIFIED,
+      },
+    ],
+    proposals: [
+      {
+        proposal_revision_id: "PROPOSAL-A",
+        tenant_id: "ironwrap",
+        proposal_pack_id: "pack_a",
+        revision_number: 1,
+        quote_revision_id: "QUOTE-A",
+        roof_job_id: "JOB-A",
+        customer_id: "CUSTOMER-A",
+        created_at: MODIFIED,
+      },
+    ],
+    publications: [],
+    acceptances: [],
+    ...overrides,
+  };
+  const byTable = (sql: string): Array<Record<string, unknown>> => {
+    if (sql.includes("FROM operating_leads")) return rows.leads;
+    if (sql.includes("FROM operating_roof_jobs")) return rows.jobs;
+    if (sql.includes("FROM operating_instant_estimates")) return rows.estimates;
+    if (sql.includes("FROM operating_consents")) return rows.consents;
+    if (sql.includes("FROM commercial_lead_triage_decisions"))
+      return rows.triageDecisions;
+    if (sql.includes("FROM commercial_quote_revisions")) return rows.quotes;
+    if (sql.includes("FROM commercial_proposal_revisions"))
+      return rows.proposals;
+    if (sql.includes("FROM commercial_proposal_publication_events"))
+      return rows.publications;
+    if (sql.includes("FROM commercial_acceptance_bindings"))
+      return rows.acceptances;
+    return [];
+  };
   return {
     ...env(),
-    APP_ALLOW_INSECURE_LOCAL: "true",
-    APP_PRODUCTION_SCHEDULE_BROKER_URL: "http://127.0.0.1:8790",
-    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-test-key",
-    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET:
-      "production-schedule-shared-secret-for-test-0001",
-    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
-    APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS: "900",
-    APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS: "5000",
-    APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS: "45",
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind(...ids: unknown[]) {
+            return {
+              all: async () => {
+                if (sql.includes("FROM envelopes")) {
+                  return {
+                    results:
+                      ids[0] === "lead_a"
+                        ? [
+                            {
+                              envelope_id: "lead_a",
+                              received_at: "2026-07-10T10:00:00.000Z",
+                              bus_status: "pushed",
+                            },
+                          ]
+                        : [],
+                  };
+                }
+                if (sql.includes("FROM lead_ack_receipts"))
+                  return { results: [] };
+                return { results: byTable(sql) };
+              },
+            };
+          },
+        };
+      },
+    },
+  } as never;
+}
+
+function envWithCommercialPolicy(): AppEnv {
+  return {
+    ...nativeSalesEnv(),
+    COMMERCIAL_AUTHORITY_POLICY_JSON: JSON.stringify({
+      schema_version: "ironwrap.commercial-authority-policy.v1",
+      policy_id: "commercial-sales-autonomy",
+      policy_version: "v1",
+      tenant_id: "ironwrap",
+      status: "active",
+      valid_from: "2026-08-01T00:00:00.000Z",
+      valid_until: "2026-09-01T00:00:00.000Z",
+      max_fact_age_seconds: 3600,
+      max_permit_lifetime_seconds: 900,
+      allowed_actions: ["lead.triage.record"],
+      allowed_actor_types: ["owner", "agent", "worker"],
+      max_quote_total_cents: 1_000_000_000,
+    }),
   } as AppEnv;
 }
 
@@ -690,50 +1563,101 @@ test("field Today uses direct and active crew membership assignments, never gene
   }
 });
 
-test("typed Shop Order packet is served through the universal BFF route without a Roof Job", async () => {
-  const shopAssignment = {
-    name: "ASSIGN-SHOP-1",
-    assignment_id: "assignment_shop_1",
-    roof_job: null,
-    assignment_type: "Shop",
-    status: "Assigned",
-    assigned_user: "crew@example.com",
-    crew_profile: null,
-    work_object_type: "Shop Order",
-    work_object_id: "SHOP-001",
-    physical_context_type: "Shop Floor",
-    physical_context_id: "SHOP-FLOOR-1",
-    scheduled_start: "2026-07-10T16:00:00.000Z",
-    scheduled_end: null,
-    blocker_reason: null,
-    modified: MODIFIED,
+test("job assignment authority is native, tenant-scoped, and actor-scoped", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("Frappe must not be consulted for assignment authority");
   };
-  const shopPackage = {
-    ...rowsFor("Work Package")[0]!,
-    name: "WORK-PACKAGE-SHOP-1",
+  try {
+    const fieldAssignment = await activeAssignmentForJob(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.equal(fieldAssignment?.name, "ASSIGN-A");
+    assert.equal(fieldAssignment?.source_system, "ironwrap-d1");
+    assert.equal(
+      await activeAssignmentForJob(
+        env(),
+        auth("field", "unassigned@example.com"),
+        "JOB-A",
+      ),
+      null,
+    );
+    assert.equal(
+      (
+        await activeAssignmentForJob(
+          env(),
+          auth("ops", "ops@example.com"),
+          "JOB-A",
+        )
+      )?.name,
+      "ASSIGN-A",
+    );
+    assert.equal(
+      await activeAssignmentForJob(
+        { ...env(), APP_TENANT_ID: "another-tenant" },
+        auth("ops", "ops@example.com"),
+        "JOB-A",
+      ),
+      null,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("typed Shop Order packet is served through the universal BFF route without a Roof Job", async () => {
+  const shopPackage = nativeWorkPackageRow({
     work_package_id: "work_package_shop_1",
-    roof_job: null,
-    job_assignment: "ASSIGN-SHOP-1",
+    job_id: "SHOP-001",
+    assignment_id: "ASSIGN-SHOP-1",
     work_object_type: "Shop Order",
     work_object_id: "SHOP-001",
     physical_context_type: "Shop Floor",
     physical_context_id: "SHOP-FLOOR-1",
     release_attempt_id: "shop-release-attempt-1",
-    assigned_workers: [
-      { sequence: 1, worker_user: "crew@example.com", worker_role: "Installer", required: 1 },
-    ],
-  };
-  const mock = installFrappeMock({
-    "Job Assignment": [...assignments, shopAssignment],
-    "Work Package": [shopPackage],
-    "Work Package Event": [],
+    assignment_authority_user: "appu_owner",
+    assignment_authority_role: "IronWrap Owner",
+    definition_json: JSON.stringify({
+      assigned_workers: [
+        {
+          sequence: 1,
+          worker_user: "appu_field",
+          worker_role: "Installer",
+          required: true,
+        },
+      ],
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Verify the shop order zone.",
+          required_evidence: "Zone photo",
+          acceptance_criteria: "Zone matches package.",
+        },
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Anchor condition",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Anchor photo",
+          acceptance_criteria: "Supervisor release.",
+        },
+      ],
+    }),
   });
+  const mock = installFrappeMock({});
   try {
     const response = await handleAuthenticatedRoute(
       new Request(
         "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
       ),
-      env(),
+      env({
+        typedAssignments: [nativeTypedAssignment()],
+        workPackages: [shopPackage],
+      }),
       auth("field", "crew@example.com"),
     );
     assert.equal(response.status, 200);
@@ -745,7 +1669,11 @@ test("typed Shop Order packet is served through the universal BFF route without 
       permissions: string[];
       work_object: Record<string, string>;
       assignment: { id: string };
-      work_package: { id: string; work_object_type: string; physical_context_type: string };
+      work_package: {
+        id: string;
+        work_object_type: string;
+        physical_context_type: string;
+      };
       allowed_actions: string[];
     };
     assert.equal(body.version, 1);
@@ -764,7 +1692,15 @@ test("typed Shop Order packet is served through the universal BFF route without 
     assert.equal(body.work_package.work_object_type, "Shop Order");
     assert.equal(body.work_package.physical_context_type, "Shop Floor");
     assert.equal(body.allowed_actions.includes("field.checkin.create"), true);
-    assert.equal(body.allowed_actions.includes("work_package.acknowledge"), true);
+    assert.equal(
+      body.allowed_actions.includes("work_package.acknowledge"),
+      true,
+    );
+    assert.equal(
+      mock.requests.some((request) => request.resource === "Job Assignment"),
+      false,
+      "typed assignment authority must not consult Frappe",
+    );
   } finally {
     mock.restore();
   }
@@ -777,143 +1713,145 @@ test("typed completion capability requires the immutable assignment authority an
     physicalContextType: "Shop Floor",
     physicalContextId: "SHOP-FLOOR-1",
   } as const;
-  const shopAssignment = {
-    name: "ASSIGN-SHOP-1",
-    assignment_id: "assignment_shop_1",
-    roof_job: null,
-    assignment_type: "Shop",
-    status: "In Progress",
-    assigned_user: "crew@example.com",
-    crew_profile: null,
-    authority_user: "authority@example.com",
-    authority_role: "IronWrap Owner",
-    assigned_by: "dispatcher@example.com",
-    work_object_type: scope.workObjectType,
-    work_object_id: scope.workObjectId,
-    physical_context_type: scope.physicalContextType,
-    physical_context_id: scope.physicalContextId,
-    scheduled_start: "2026-07-10T16:00:00.000Z",
-    scheduled_end: null,
-    blocker_reason: null,
-    modified: MODIFIED,
-  };
-  const shopPackage = {
-    ...rowsFor("Work Package")[0]!,
-    name: "WORK-PACKAGE-SHOP-1",
+  const shopPackage = nativeWorkPackageRow({
     work_package_id: "work_package_shop_1",
-    roof_job: null,
-    job_assignment: shopAssignment.name,
+    job_id: "SHOP-001",
+    assignment_id: "ASSIGN-SHOP-1",
     status: "In Progress",
     work_object_type: scope.workObjectType,
     work_object_id: scope.workObjectId,
     physical_context_type: scope.physicalContextType,
     physical_context_id: scope.physicalContextId,
     release_attempt_id: "shop-release-attempt-1",
-    assigned_workers: [
-      {
-        sequence: 1,
-        worker_user: "crew@example.com",
-        worker_role: "Installer",
-        required: 1,
-      },
-    ],
-  };
-  const commonEvent = {
-    work_package: shopPackage.name,
-    roof_job: null,
-    job_assignment: shopAssignment.name,
+    assignment_authority_user: "appu_owner",
+    assignment_authority_role: "IronWrap Owner",
+    definition_json: JSON.stringify({
+      assigned_workers: [
+        {
+          sequence: 1,
+          worker_user: "appu_field",
+          worker_role: "Installer",
+          required: true,
+        },
+      ],
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Verify the shop order zone.",
+          required_evidence: "Zone photo",
+          acceptance_criteria: "Zone matches package.",
+        },
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Anchor condition",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Deck photo",
+          acceptance_criteria: "Supervisor release.",
+        },
+      ],
+    }),
+  });
+  const eventScope = {
+    work_package_id: shopPackage.work_package_id,
+    work_package_version: shopPackage.version,
+    job_id: "SHOP-001",
+    assignment_id: "ASSIGN-SHOP-1",
     work_object_type: scope.workObjectType,
     work_object_id: scope.workObjectId,
     physical_context_type: scope.physicalContextType,
     physical_context_id: scope.physicalContextId,
-    work_package_version: 1,
     release_attempt_id: shopPackage.release_attempt_id,
-    modified: MODIFIED,
   };
-  const acknowledgement = {
-    ...commonEvent,
-    name: "WORK-PACKAGE-ACK-SHOP-1",
-    event_type: "Acknowledged",
-    actor_user: "crew@example.com",
+  const acknowledgement = nativeWorkPackageEvent("acknowledged", {
+    ...eventScope,
+    event_id: "wpe_acknowledged_shop_1",
+    actor_user_id: "appu_field",
     actor_role: "Installer",
     device_action_id: "shop-ack-device-1",
     occurred_at: "2026-07-10T07:10:00.000Z",
-  };
-  const holdRelease = {
-    ...commonEvent,
-    name: "WORK-PACKAGE-HOLD-SHOP-1",
-    event_type: "Hold Point Released",
-    hold_point_sequence: 1,
-    evidence_item: "SHOP-HOLD-RELEASE-EVIDENCE-1",
-    actor_user: "authority@example.com",
+  });
+  const holdRelease = nativeWorkPackageEvent("hold_released", {
+    ...eventScope,
+    event_id: "wpe_hold_released_shop_1",
+    actor_user_id: "appu_owner",
     actor_role: "IronWrap Owner",
     device_action_id: "shop-hold-device-1",
     occurred_at: "2026-07-10T07:20:00.000Z",
-  };
-  const capture = (sequence: number, slot: string, requirement: string) => ({
-    ...commonEvent,
-    name: `WORK-PACKAGE-EVIDENCE-SHOP-${sequence}`,
-    event_type: "Evidence Captured",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: `shop-evidence-device-${sequence}`,
-    occurred_at: `2026-07-10T07:3${sequence}:00.000Z`,
-    evidence_item: `SHOP-EVIDENCE-ITEM-${sequence}`,
-    evidence_slot_id: slot,
-    evidence_requirement: requirement,
-    evidence_source: "worker-camera",
-    evidence_device_id: `paired-device-${sequence}`,
-    evidence_captured_at: `2026-07-10T07:2${sequence}:00.000Z`,
-    evidence_freshness: "Current",
-    evidence_conflict_state: "None",
-    evidence_correction_of: null,
-    evidence_item_correction_of: null,
-    evidence_verification: "Verified",
-    evidence_disposition: "Open",
-    correction_reason: null,
+    payload_json: JSON.stringify({
+      hold_point_sequence: 1,
+      evidence_item: "evi_00000000000000000000000000000003",
+    }),
   });
-  const review = (captured: ReturnType<typeof capture>) => ({
-    ...commonEvent,
-    name: `${captured.name}-REVIEW`,
-    event_type: "Evidence Reviewed",
-    actor_user: "authority@example.com",
-    actor_role: "IronWrap Owner",
-    device_action_id: `${captured.device_action_id}-review`,
-    occurred_at: captured.occurred_at.replace(":00.000Z", ":30.000Z"),
-    evidence_review_of: captured.name,
-    evidence_item: captured.evidence_item,
-    evidence_slot_id: captured.evidence_slot_id,
-    evidence_disposition: "Accepted",
-    correction_reason: null,
+  const fieldEvidence = nativeFieldEvidenceRows(2, {
+    tenant_id: "ironwrap",
+    job_id: "SHOP-001",
+    assignment_id: "ASSIGN-SHOP-1",
+    actor_user: "appu_field",
+    work_package_id: shopPackage.work_package_id,
+    work_package_version: shopPackage.version,
+    work_package_release_attempt_id: shopPackage.release_attempt_id,
+    work_object_type: scope.workObjectType,
+    work_object_id: scope.workObjectId,
+    physical_context_type: scope.physicalContextType,
+    physical_context_id: scope.physicalContextId,
   });
-  const stepEvidence = capture(1, "step:1", "Zone photo");
-  const holdEvidence = capture(2, "hold:1", "Deck photo");
-  const source = {
-    "Job Assignment": [shopAssignment],
-    "Work Package": [shopPackage],
-    "Work Package Event": [
+  Object.assign(fieldEvidence[0]!, {
+    evidence_id: "evi_00000000000000000000000000000001",
+    evidence_slot_id: "step:1",
+    evidence_requirement: "Zone photo",
+  });
+  Object.assign(fieldEvidence[1]!, {
+    evidence_id: "evi_00000000000000000000000000000002",
+    evidence_slot_id: "hold:1",
+    evidence_requirement: "Deck photo",
+  });
+  const review = (evidence: Record<string, unknown>, index: number) =>
+    nativeWorkPackageEvent("evidence_reviewed", {
+      ...eventScope,
+      event_id: `wpe_review_shop_${index}`,
+      actor_user_id: "appu_owner",
+      actor_role: "IronWrap Owner",
+      device_action_id: `shop-evidence-review-${index}`,
+      occurred_at: `2026-07-10T07:3${index}:30.000Z`,
+      payload_json: JSON.stringify({
+        target_event_id: `wpe_${String(evidence.evidence_id).slice(4)}`,
+        evidence_item: evidence.evidence_id,
+        evidence_slot_id: evidence.evidence_slot_id,
+        disposition: "Accepted",
+        correction_reason: null,
+      }),
+    });
+  const nativeSource = {
+    workPackages: [shopPackage],
+    workPackageEvents: [
       acknowledgement,
       holdRelease,
-      stepEvidence,
-      review(stepEvidence),
-      holdEvidence,
-      review(holdEvidence),
+      review(fieldEvidence[0]!, 1),
+      review(fieldEvidence[1]!, 2),
     ],
+    fieldEvidence,
   };
-  const mock = installFrappeMock(source);
+  const mock = installFrappeMock({});
   try {
     const authority = await buildUniversalWorkPackageReadModel(
-      env(),
+      env({ ...nativeSource, typedAssignments: [nativeTypedAssignment()] }),
       auth("owner", "authority@example.com"),
       scope,
     );
     assert.equal(
-      (authority?.allowed_actions as string[]).includes("work_package.complete"),
+      (authority?.allowed_actions as string[]).includes(
+        "work_package.complete",
+      ),
       true,
     );
+    const dispatcher = auth("owner", "dispatcher@example.com");
+    dispatcher.session.user_id = "appu_dispatcher";
     const assigningAuthority = await buildUniversalWorkPackageReadModel(
-      env(),
-      auth("owner", "dispatcher@example.com"),
+      env({ ...nativeSource, typedAssignments: [nativeTypedAssignment()] }),
+      dispatcher,
       scope,
     );
     assert.equal(
@@ -924,13 +1862,17 @@ test("typed completion capability requires the immutable assignment authority an
       "assigned_by is provenance, not typed completion authority",
     );
     for (const role of ["owner", "ops", "production"] as const) {
+      const unrelatedActor = auth(role, `${role}@example.com`);
+      unrelatedActor.session.user_id = `appu_unrelated_${role}`;
       const unrelated = await buildUniversalWorkPackageReadModel(
-        env(),
-        auth(role, `${role}@example.com`),
+        env({ ...nativeSource, typedAssignments: [nativeTypedAssignment()] }),
+        unrelatedActor,
         scope,
       );
       assert.equal(
-        (unrelated?.allowed_actions as string[]).includes("work_package.complete"),
+        (unrelated?.allowed_actions as string[]).includes(
+          "work_package.complete",
+        ),
         false,
         `${role} must not inherit typed completion from role alone`,
       );
@@ -939,15 +1881,15 @@ test("typed completion capability requires the immutable assignment authority an
     mock.restore();
   }
 
-  const wrongDeclaredRole = installFrappeMock({
-    ...source,
-    "Job Assignment": [
-      { ...shopAssignment, authority_role: "IronWrap Production" },
-    ],
-  });
+  const wrongDeclaredRole = installFrappeMock({});
   try {
     const model = await buildUniversalWorkPackageReadModel(
-      env(),
+      env({
+        ...nativeSource,
+        typedAssignments: [
+          nativeTypedAssignment({ authority_role: "production" }),
+        ],
+      }),
       auth("owner", "authority@example.com"),
       scope,
     );
@@ -960,16 +1902,18 @@ test("typed completion capability requires the immutable assignment authority an
     wrongDeclaredRole.restore();
   }
 
-  const workerAuthority = installFrappeMock({
-    ...source,
-    "Job Assignment": [
-      { ...shopAssignment, authority_user: "crew@example.com" },
-    ],
-  });
+  const workerAuthority = installFrappeMock({});
   try {
+    const worker = auth("owner", "crew@example.com");
+    worker.session.user_id = "appu_field";
     const model = await buildUniversalWorkPackageReadModel(
-      env(),
-      auth("owner", "crew@example.com"),
+      env({
+        ...nativeSource,
+        typedAssignments: [
+          nativeTypedAssignment({ authority_user_id: "appu_field" }),
+        ],
+      }),
+      worker,
       scope,
     );
     assert.equal(
@@ -982,7 +1926,7 @@ test("typed completion capability requires the immutable assignment authority an
   }
 });
 
-test("field bootstrap keeps an upstream failure private", async () => {
+test("field bootstrap reads native Today even when Frappe is unavailable", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
     throw new Error("frappe unavailable");
@@ -993,9 +1937,15 @@ test("field bootstrap keeps an upstream failure private", async () => {
       env(),
       auth("field", "crew@example.com"),
     );
-    assert.equal(response.status, 502);
+    assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
-    assert.deepEqual(await response.json(), { error: "upstream_unavailable" });
+    const body = (await response.json()) as {
+      today: { jobs: Array<{ id: string }> };
+    };
+    assert.deepEqual(
+      body.today.jobs.map(({ id }) => id),
+      ["JOB-A", "JOB-B"],
+    );
   } finally {
     globalThis.fetch = original;
   }
@@ -1061,10 +2011,75 @@ test("field is denied an unassigned job while office reads it and Today does not
 });
 
 test("owner Now is an office-only, exception-first roofing read model", async () => {
-  const mock = installFrappeMock();
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const reviewIntentId = "acct-intent-owner-review";
+  const appEnv = env({
+    workPackages: [nativeWorkPackageRow({ status: "Blocked" })],
+    workPackageEvents: [
+      nativeWorkPackageEvent("stop_work", {
+        event_id: "checkin_blocked",
+        occurred_at: "2026-07-10T10:05:00.000Z",
+        manifest_key: "work-packages/checkin-blocked.json",
+        payload_json: JSON.stringify({
+          blocker_reason: "Wind exceeds the site plan limit.",
+        }),
+      }),
+    ],
+    effectExceptions: [
+      {
+        exception_id: "incident_failed",
+        effect_id: "effect_failed",
+        reason_code: "provider_readback_mismatch",
+        action: "measurement.pdf.ocr",
+        provider: "document-ai",
+        aggregate_type: "roof_job",
+        aggregate_id: "JOB-A",
+        created_at: "2026-07-10T10:06:00.000Z",
+        updated_at: "2026-07-10T10:07:00.000Z",
+      },
+    ],
+    accountingIntents: [
+      nativeAccountingIntent(reviewIntentId, {
+        state: "pending_review",
+        provider_entity_type: null,
+        provider_entity_id: null,
+        provider_submitted_at: null,
+        provider_reconciled_at: null,
+        reason_code: "owner_review_required",
+      }),
+    ],
+    accountingExceptions: [
+      {
+        exception_id: "accounting-exception-owner-review",
+        subject_ref: `accounting_intent:${reviewIntentId}`,
+        intent_id: reviewIntentId,
+        reason_code: "expected_observed_mismatch",
+        status: "open",
+        roof_job_id: "JOB-A",
+        opened_at: "2026-07-10T10:08:00.000Z",
+        updated_at: "2026-07-10T10:09:00.000Z",
+      },
+    ],
+    materialExceptions: [
+      {
+        exception_id: "material-shortage-a",
+        aggregate_id: "JOB-A",
+        exception_type: "shortage",
+        status: "open",
+        reason_code: "coil_shortage",
+        created_at: "2026-07-10T10:10:00.000Z",
+        updated_at: "2026-07-10T10:11:00.000Z",
+      },
+    ],
+  });
   try {
     const model = await buildOwnerNowReadModel(
-      env(),
+      appEnv,
       auth("owner", "owner@example.com"),
     );
     assert.deepEqual(model.summary, {
@@ -1103,11 +2118,11 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       id: "checkin_blocked",
       kind: "field_blocker",
       severity: null,
-      title: "Weather work-stop reported",
+      title: "Field work stopped",
       why: "Wind exceeds the site plan limit.",
       next_action: null,
       job_id: "JOB-A",
-      occurred_at: "2026-07-10 10:05:00",
+      occurred_at: "2026-07-10T10:05:00.000Z",
       due_at: null,
       received_at: null,
       bus_status: null,
@@ -1115,15 +2130,15 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       mctb: null,
     });
     assert.deepEqual(model.exceptions[1], {
-      id: "gate_a",
+      id: "gate_job_a_materials",
       kind: "blocked_gate",
       severity: null,
       title: "Materials gate blocked",
       why: "Delivery not confirmed",
       next_action: null,
       job_id: "JOB-A",
-      occurred_at: null,
-      due_at: "2026-07-11 12:00:00",
+      occurred_at: "2026-07-10T09:00:00.000Z",
+      due_at: "2026-07-11T12:00:00.000Z",
       received_at: null,
       bus_status: null,
       triage_status: null,
@@ -1141,111 +2156,60 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       "finance_exception.read",
       "material_exception.read",
     ]);
-    const blockerRequest = mock.requests.find(
-      (request) => request.doctype === "Field Check-in",
+    assert.equal(
+      networkCalls,
+      0,
+      "Owner Now must not call Frappe or the network",
     );
-    assert.deepEqual(blockerRequest?.filters, [
-      ["Field Check-in", "blocker_flag", "=", 1],
-      ["Field Check-in", "status", "in", ["Received", "Needs Review"]],
-      ["Field Check-in", "sync_state", "=", "Verified"],
-    ]);
     await assert.rejects(
       async () =>
         await buildOwnerNowReadModel(env(), auth("field", "crew@example.com")),
       /owner_scope_required/,
     );
   } finally {
-    mock.restore();
+    globalThis.fetch = original;
   }
 });
 
-test("owner Now projects per-job economics without combining tenant or tax-inclusive facts", async () => {
-  const mock = installFrappeMock({
-    "Customer Quote": [
-      {
-        name: "QUOTE-A",
-        roof_job: "JOB-A",
-        quote_version: 1,
-        status: "Accepted",
-        subtotal: "1000.00",
-        tax_amount: "50.00",
-        quote_total: "1050.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Supplier Quote": [
-      {
-        name: "SQ-A",
-        roof_job: "JOB-A",
-        status: "Approved",
-        quote_total: "400.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Supplier Order": [
-      {
-        name: "SO-A",
-        roof_job: "JOB-A",
-        source_quote: "SQ-A",
-        status: "Ordered",
-        modified: MODIFIED,
-      },
-    ],
-    "Material Lot": [
-      {
-        name: "LOT-A",
-        roof_job: "JOB-A",
-        status: "Available",
-        modified: MODIFIED,
-      },
-    ],
-    "Payment Milestone": [
-      {
-        name: "PAY-A",
-        roof_job: "JOB-A",
-        milestone_type: "Payment",
-        status: "Matched",
-        total_amount: "250.00",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-    "Job Cost Event": [
-      {
-        name: "COST-A",
-        tenant: "ironwrap",
-        roof_job: "JOB-A",
-        event_kind: "cost",
-        category: "Material",
-        quantity: 1,
-        unit: "lot",
-        amount_cents: 35_000,
-        amount_basis: "Net of Recoverable Tax",
-        currency: "CAD",
-        source_doctype: "Material Lot",
-        source_name: "LOT-A",
-        source_digest: "a".repeat(64),
-        source_evidence: "EVID-A",
-        accounting_state: "Operational",
-        modified: MODIFIED,
-      },
-      {
-        name: "COST-OTHER-TENANT",
-        tenant: "other",
-        roof_job: "JOB-A",
-        event_kind: "cost",
-        amount_cents: 99_999,
-        amount_basis: "Net of Recoverable Tax",
-        currency: "CAD",
-        modified: MODIFIED,
-      },
-    ],
-  });
+test("owner Now projects only native, exactly reconciled money and marks unsupported costs unavailable", async () => {
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const intentId = "acct-intent-payment-a";
+  const refundIntentId = "acct-intent-refund-a";
   try {
     const model = await buildOwnerNowReadModel(
-      env(),
+      env({
+        quotes: [nativeOwnerQuote("QUOTE-A")],
+        accountingIntents: [
+          nativeAccountingIntent(intentId),
+          nativeAccountingIntent(refundIntentId, {
+            kind: "refund",
+            subtotal: "0.00",
+            total_amount: "-50.00",
+            expected_sha256: "b".repeat(64),
+            provider_entity_type: "RefundReceipt",
+            provider_entity_id: "124",
+          }),
+        ],
+        accountingReconciliations: [
+          nativeAccountingReconciliation(
+            "11111111-1111-4111-8111-111111111111",
+            intentId,
+          ),
+          nativeAccountingReconciliation(
+            "44444444-4444-4444-8444-444444444444",
+            refundIntentId,
+            {
+              expected_sha256: "b".repeat(64),
+              observed_sha256: "b".repeat(64),
+            },
+          ),
+        ],
+      }),
       auth("owner", "owner@example.com"),
     );
     const job = model.economics.find(
@@ -1253,112 +2217,255 @@ test("owner Now projects per-job economics without combining tenant or tax-inclu
     );
     assert.ok(job);
     assert.equal(job.metrics.forecast_revenue.known_cents, 100_000);
-    assert.equal(job.metrics.committed_cost.known_cents, 40_000);
-    assert.equal(job.metrics.accrued_actual_cost.known_cents, 35_000);
-    assert.equal(job.metrics.cash_collected.known_cents, 25_000);
+    assert.equal(job.metrics.cash_collected.known_cents, 20_000);
+    assert.equal(job.metrics.forecast_cost.known_cents, null);
+    assert.equal(job.metrics.committed_cost.known_cents, null);
+    assert.equal(job.metrics.accrued_actual_cost.known_cents, null);
+    assert.equal(job.metrics.posted_actual_cost.known_cents, null);
     assert.equal(job.metrics.actual_profit.amount_cents, null);
-    const costRequest = mock.requests.find(
-      (request) => request.doctype === "Job Cost Event",
+    assert.equal(job.source_coverage.matched_payment_milestones, 2);
+    assert.ok(
+      job.reconciliation_gaps.includes("supplier_order.native_unavailable"),
     );
-    assert.deepEqual(costRequest?.filters, [
-      ["Job Cost Event", "tenant", "=", "ironwrap"],
-      ["Job Cost Event", "roof_job", "in", ["JOB-A", "JOB-B", "JOB-C"]],
-    ]);
+    assert.ok(
+      model.stale_fields.includes(
+        "economics.job_cost_event.tax_basis.native_unavailable",
+      ),
+    );
+    assert.equal(
+      networkCalls,
+      0,
+      "Owner Now must not call Frappe or the network",
+    );
   } finally {
-    mock.restore();
+    globalThis.fetch = original;
   }
 });
 
-test("production runway is an office-only, bounded read that never treats a gate summary as dispatch authority", async () => {
+test("owner Now excludes reconciled money with an invalid provider or sign binding", async () => {
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const wrongProviderId = "acct-intent-wrong-provider";
+  const wrongSignId = "acct-intent-wrong-sign";
+  try {
+    const model = await buildOwnerNowReadModel(
+      env({
+        quotes: [nativeOwnerQuote("QUOTE-A")],
+        accountingIntents: [
+          nativeAccountingIntent(wrongProviderId, {
+            provider_entity_type: "Invoice",
+          }),
+          nativeAccountingIntent(wrongSignId, {
+            kind: "refund",
+            total_amount: "50.00",
+            expected_sha256: "c".repeat(64),
+            provider_entity_type: "RefundReceipt",
+            provider_entity_id: "125",
+          }),
+        ],
+        accountingReconciliations: [
+          nativeAccountingReconciliation(
+            "55555555-5555-4555-8555-555555555555",
+            wrongProviderId,
+          ),
+          nativeAccountingReconciliation(
+            "66666666-6666-4666-8666-666666666666",
+            wrongSignId,
+            {
+              expected_sha256: "c".repeat(64),
+              observed_sha256: "c".repeat(64),
+            },
+          ),
+        ],
+      }),
+      auth("owner", "owner@example.com"),
+    );
+    const job = model.economics.find(
+      (projection) => projection.job_id === "JOB-A",
+    );
+    assert.ok(job);
+    assert.equal(job.metrics.cash_collected.known_cents, 0);
+    assert.equal(job.metrics.cash_collected.complete, false);
+    assert.equal(job.source_coverage.matched_payment_milestones, 0);
+    assert.ok(
+      job.reconciliation_gaps.includes(
+        `payment_milestone.not_matched:${wrongProviderId}`,
+      ),
+    );
+    assert.ok(
+      job.reconciliation_gaps.includes(
+        `payment_milestone.not_matched:${wrongSignId}`,
+      ),
+    );
+    assert.equal(model.summary.finance_exceptions, 2);
+    assert.equal(
+      networkCalls,
+      0,
+      "Owner Now must not call Frappe or the network",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("owner Now withholds ambiguous native quote and reconciliation heads", async () => {
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const intentId = "acct-intent-payment-ambiguous";
+  try {
+    const model = await buildOwnerNowReadModel(
+      env({
+        quotes: [
+          nativeOwnerQuote("QUOTE-A-ROOT"),
+          nativeOwnerQuote("QUOTE-A-OTHER", {
+            customer_quote_id: "customer-quote-other",
+            subtotal_cents: 120_000,
+            total_cents: 126_000,
+          }),
+        ],
+        accountingIntents: [nativeAccountingIntent(intentId)],
+        accountingReconciliations: [
+          nativeAccountingReconciliation(
+            "22222222-2222-4222-8222-222222222222",
+            intentId,
+          ),
+          nativeAccountingReconciliation(
+            "33333333-3333-4333-8333-333333333333",
+            intentId,
+          ),
+        ],
+      }),
+      auth("owner", "owner@example.com"),
+    );
+    const job = model.economics.find(
+      (projection) => projection.job_id === "JOB-A",
+    );
+    assert.ok(job);
+    assert.equal(job.metrics.forecast_revenue.known_cents, null);
+    assert.equal(job.metrics.cash_collected.known_cents, null);
+    assert.ok(
+      job.reconciliation_gaps.includes("customer_quote.selection_ambiguous"),
+    );
+    assert.ok(
+      job.reconciliation_gaps.includes(
+        `accounting_reconciliation.selection_ambiguous:${intentId}`,
+      ),
+    );
+    assert.equal(model.summary.finance_exceptions, 1);
+    assert.equal(
+      networkCalls,
+      0,
+      "Owner Now must not call Frappe or the network",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("owner Now reports bounded native sources as lower bounds", async () => {
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const partialLeads = Array.from({ length: 51 }, (_, index) => ({
+    lead_id: `LEAD-PARTIAL-${index + 1}`,
+    tenant_id: "ironwrap",
+    source_envelope_id: `lead_partial_${index + 1}`,
+    source_raw_key: `raw/lead-partial-${index + 1}.json`,
+    source: "website",
+    contact_name: `Partial Lead ${index + 1}`,
+    contact_phone: null,
+    contact_email: null,
+    job_ref: index === 0 ? "JOB-A" : null,
+    lifecycle_status: "untriaged",
+    version: 1,
+    created_at: `2026-07-10T10:${String(index).padStart(2, "0")}:00.000Z`,
+    updated_at: MODIFIED,
+  }));
+  const partialQuotes = Array.from({ length: 51 }, (_, index) => {
+    const revision = 51 - index;
+    return nativeOwnerQuote(`QUOTE-PARTIAL-${revision}`, {
+      customer_quote_id: "customer-quote-partial",
+      revision_number: revision,
+      supersedes_quote_revision_id:
+        revision > 1 ? `QUOTE-PARTIAL-${revision - 1}` : null,
+    });
+  });
+  try {
+    const model = await buildOwnerNowReadModel(
+      env({ leads: partialLeads, quotes: partialQuotes }),
+      auth("owner", "owner@example.com"),
+    );
+    assert.equal(model.summary.untriaged_leads, 50);
+    assert.ok(model.partial_sources.includes("untriaged_leads"));
+    assert.ok(model.partial_sources.includes("economics.customer_quotes"));
+    const job = model.economics.find(
+      (projection) => projection.job_id === "JOB-A",
+    );
+    assert.ok(job);
+    assert.equal(job.metrics.forecast_revenue.known_cents, null);
+    assert.ok(
+      job.reconciliation_gaps.includes(
+        "economics.customer_quotes.source_window_partial",
+      ),
+    );
+    assert.equal(
+      networkCalls,
+      0,
+      "Owner Now must not call Frappe or the network",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("production runway reads native authority and never treats its schedule hint as write authority", async () => {
   const readyGates = ["JOB-B", "JOB-C"].flatMap((roofJob) =>
     ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map(
-      (gate) => ({
-        name: `GATE-${roofJob}-${gate}`,
-        gate_id: `gate_${roofJob.toLowerCase()}_${gate.toLowerCase()}`,
-        roof_job: roofJob,
-        gate,
-        state: "Ready",
-        owner_user: "office-owner@example.com",
-        assigned_at: MODIFIED,
-        due_at: null,
-        blocker_reason: null,
-        modified: MODIFIED,
-      }),
+      (gate) => nativeGate(roofJob, gate),
     ),
   );
-  const mock = installFrappeMock({
-    "Job Assignment": [
-      assignments[0]!,
-      { ...assignments[1]!, scheduled_start: null, scheduled_end: null },
+  const mock = installFrappeMock();
+  const appEnv = env({
+    assignments: [nativeAssignment("ASSIGN-C", "JOB-C")],
+    gates: [nativeGate("JOB-A", "Materials", "blocked"), ...readyGates],
+    materialExceptions: [
       {
-        name: "ASSIGN-C",
-        assignment_id: "assignment_c",
-        roof_job: "JOB-C",
-        assignment_type: "Production",
-        status: "Assigned",
-        assigned_user: null,
-        crew_profile: "CREW-1",
-        scheduled_start: null,
-        scheduled_end: null,
-        blocker_reason: null,
-        modified: MODIFIED,
-      },
-    ],
-    "Production Gate State": [
-      {
-        name: "GATE-A",
-        gate_id: "gate_a",
-        roof_job: "JOB-A",
-        gate: "Materials",
-        state: "Blocked",
-        owner_user: "office-owner@example.com",
-        due_at: "2026-07-11 12:00:00",
-        blocker_reason: "Delivery not confirmed",
-        modified: MODIFIED,
-      },
-      ...readyGates,
-      {
-        name: "GATE-C-COMPLETION",
-        gate_id: "gate_job_c_completion",
-        roof_job: "JOB-C",
-        gate: "Completion",
-        state: "Blocked",
-        owner_user: "office-owner@example.com",
-        due_at: null,
-        blocker_reason: "Awaiting closeout",
-        modified: MODIFIED,
-      },
-    ],
-    "Supplier Order": [
-      {
-        name: "ORDER-A",
-        supplier_order_id: "order_a",
-        roof_job: "JOB-A",
-        status: "Ordered",
-        requested_delivery_date: "2026-07-12",
-        delivery_notes: "Deliver to rear",
-        order_summary_json: "financial",
-        modified: MODIFIED,
+        exception_id: "exception:job-a:shortage",
+        aggregate_id: "JOB-A",
+        exception_type: "shortage",
+        status: "open",
+        updated_at: MODIFIED,
       },
     ],
   });
   try {
     const model = await buildProductionRunwayReadModel(
-      env(),
+      appEnv,
       auth("ops", "ops@example.com"),
     );
     assert.deepEqual(model.summary, {
       active_jobs: 3,
       blocked: 1,
-      scheduled: 0,
-      needs_assignment: 1,
+      scheduled: 1,
+      needs_assignment: 0,
       ready_for_review: 1,
       needs_verification: 0,
     });
     assert.equal(model.jobs.find((job) => job.id === "JOB-A")?.lane, "blocked");
     assert.equal(
       model.jobs.find((job) => job.id === "JOB-B")?.lane,
-      "needs_assignment",
+      "ready_for_review",
     );
     assert.equal(
       model.jobs.find((job) => job.id === "JOB-B")?.assignment,
@@ -1366,7 +2473,7 @@ test("production runway is an office-only, bounded read that never treats a gate
     );
     assert.equal(
       model.jobs.find((job) => job.id === "JOB-C")?.lane,
-      "ready_for_review",
+      "scheduled",
     );
     assert.equal(
       model.jobs.find((job) => job.id === "JOB-C")?.gate_coverage,
@@ -1393,11 +2500,32 @@ test("production runway is an office-only, bounded read that never treats a gate
         { name: "Crew", state: "Ready" },
       ],
     );
-    assert.deepEqual(model.allowed_actions, ["job.read", "production.read"]);
+    assert.deepEqual(model.crews, [
+      { id: "CREW-1", name: "Northside Metal", version: 3 },
+    ]);
+    assert.deepEqual(model.jobs.find((job) => job.id === "JOB-C")?.assignment, {
+      id: "ASSIGN-C",
+      type: "Production",
+      status: "Assigned",
+      assignment_version: 1,
+      roof_job_version: 1,
+      crew_id: "CREW-1",
+      crew_version: 3,
+      scheduled_start: "2026-07-18T08:00:00.000Z",
+      scheduled_end: null,
+    });
+    assert.ok(
+      model.allowed_actions.includes("operating_job_assignment.create"),
+    );
+    assert.equal(
+      model.jobs.find((job) => job.id === "JOB-B")
+        ?.scheduling_preparation_allowed,
+      true,
+    );
     assert.equal(
       model.jobs
         .find((job) => job.id === "JOB-C")
-        ?.next_action.includes("does not dispatch"),
+        ?.next_action.includes("Confirm the schedule"),
       true,
     );
     const serialized = JSON.stringify(model);
@@ -1409,60 +2537,17 @@ test("production runway is an office-only, bounded read that never treats a gate
     ]) {
       assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
     }
-    const jobRequest = mock.requests.find(
-      (request) => request.doctype === "Roof Job",
-    );
-    assert.deepEqual(
-      jobRequest?.fields,
-      OFFICE_PRODUCTION_READ_FIELDS["Roof Job"],
-    );
-    const assignmentRequest = mock.requests.find(
-      (request) => request.doctype === "Job Assignment",
-    );
-    assert.deepEqual(
-      assignmentRequest?.fields,
-      OFFICE_PRODUCTION_READ_FIELDS["Job Assignment"],
-    );
-    assert.deepEqual(assignmentRequest?.filters, [
-      [
-        "Job Assignment",
-        "status",
-        "in",
-        ["Assigned", "Accepted", "In Progress", "Blocked"],
-      ],
-      ["Job Assignment", "assignment_type", "=", "Production"],
-    ]);
-    const gateRequest = mock.requests.find(
-      (request) => request.doctype === "Production Gate State",
-    );
-    assert.deepEqual(
-      gateRequest?.fields,
-      OFFICE_PRODUCTION_READ_FIELDS["Production Gate State"],
-    );
-    assert.deepEqual(gateRequest?.filters, [
-      ["Production Gate State", "roof_job", "in", ["JOB-C", "JOB-B", "JOB-A"]],
-    ]);
-    const materialRequest = mock.requests.find(
-      (request) => request.doctype === "Supplier Order",
-    );
-    assert.deepEqual(
-      materialRequest?.fields,
-      OFFICE_PRODUCTION_READ_FIELDS["Supplier Order"],
-    );
-    assert.deepEqual(materialRequest?.filters, [
-      ["Supplier Order", "roof_job", "in", ["JOB-C", "JOB-B", "JOB-A"]],
-      ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
-    ]);
+    assert.equal(mock.requests.length, 0);
     const productionRole = await buildProductionRunwayReadModel(
-      env(),
+      appEnv,
       auth("production", "production@example.com"),
     );
     assert.equal(productionRole.summary.active_jobs, 3);
     assert.equal(
       productionRole.allowed_actions.includes(
-        "production_schedule_approval.prepare",
+        "operating_job_assignment.create",
       ),
-      false,
+      true,
     );
     await assert.rejects(
       async () =>
@@ -1477,75 +2562,6 @@ test("production runway is an office-only, bounded read that never treats a gate
   }
 });
 
-test("production runway grants schedule preparation only to the configured owner with active bounded crews", async () => {
-  const readyGates = ["JOB-B", "JOB-C"].flatMap((roofJob) =>
-    ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map(
-      (gate) => ({
-        name: `GATE-${roofJob}-${gate}`,
-        roof_job: roofJob,
-        gate,
-        state: "Ready",
-        modified: MODIFIED,
-      }),
-    ),
-  );
-  const mock = installFrappeMock({
-    "Job Assignment": [
-      {
-        name: "ASSIGN-C",
-        roof_job: "JOB-C",
-        assignment_type: "Production",
-        status: "Assigned",
-        scheduled_start: "2026-07-18T08:00:00.000Z",
-        scheduled_end: null,
-        modified: MODIFIED,
-      },
-    ],
-    "Production Gate State": readyGates,
-    "Supplier Order": [],
-  });
-  try {
-    const ownerModel = await buildProductionRunwayReadModel(
-      envWithProductionScheduleBroker(),
-      auth("owner", "owner@example.com"),
-    );
-    assert.deepEqual(ownerModel.crews, [
-      { id: "CREW-1", name: "Northside Metal" },
-    ]);
-    assert.ok(
-      ownerModel.allowed_actions.includes(
-        "production_schedule_approval.prepare",
-      ),
-    );
-    assert.equal(
-      ownerModel.jobs.find((job) => job.id === "JOB-B")
-        ?.scheduling_preparation_allowed,
-      true,
-    );
-    assert.equal(
-      ownerModel.jobs.find((job) => job.id === "JOB-C")
-        ?.scheduling_preparation_allowed,
-      true,
-    );
-    assert.equal(
-      JSON.stringify(ownerModel).includes("private@example.com"),
-      false,
-    );
-
-    const opsModel = await buildProductionRunwayReadModel(
-      envWithProductionScheduleBroker(),
-      auth("ops", "ops@example.com"),
-    );
-    assert.deepEqual(opsModel.crews, []);
-    assert.equal(
-      opsModel.allowed_actions.includes("production_schedule_approval.prepare"),
-      false,
-    );
-  } finally {
-    mock.restore();
-  }
-});
-
 test("production runway does not collapse duplicate scheduling gates into a schedule-ready job", async () => {
   const readyGates = [
     "Deposit",
@@ -1554,77 +2570,42 @@ test("production runway does not collapse duplicate scheduling gates into a sche
     "Access",
     "Weather",
     "Crew",
-  ].map((gate) => ({
-    name: `GATE-C-${gate}`,
-    roof_job: "JOB-C",
-    gate,
-    state: "Ready",
-    modified: MODIFIED,
-  }));
-  const mock = installFrappeMock({
-    "Job Assignment": [
-      {
-        name: "ASSIGN-C",
-        roof_job: "JOB-C",
-        assignment_type: "Production",
-        status: "Assigned",
-        scheduled_start: null,
-        scheduled_end: null,
-        modified: MODIFIED,
-      },
-    ],
-    "Production Gate State": [
-      ...readyGates,
-      {
-        name: "GATE-C-MATERIALS-OLD",
-        roof_job: "JOB-C",
-        gate: "Materials",
-        state: "Blocked",
-        modified: "2026-07-10T10:00:00.000Z",
-      },
-    ],
-  });
-  try {
-    const model = await buildProductionRunwayReadModel(
-      env(),
-      auth("ops", "ops@example.com"),
-    );
-    const job = model.jobs.find((row) => row.id === "JOB-C");
-    assert.equal(job?.gate_coverage, "incomplete");
-    assert.equal(job?.lane, "needs_verification");
-  } finally {
-    mock.restore();
-  }
+  ].map((gate) => nativeGate("JOB-C", gate));
+  const model = await buildProductionRunwayReadModel(
+    env({
+      assignments: [],
+      gates: [
+        ...readyGates,
+        {
+          ...nativeGate("JOB-C", "Materials", "blocked"),
+          gate_id: "gate_job_c_materials_old",
+          gate: "Materials",
+          state: "blocked",
+          updated_at: "2026-07-10T10:00:00.000Z",
+        },
+      ],
+    }),
+    auth("ops", "ops@example.com"),
+  );
+  const job = model.jobs.find((row) => row.id === "JOB-C");
+  assert.equal(job?.gate_coverage, "incomplete");
+  assert.equal(job?.lane, "needs_verification");
 });
 
 test("production runway with a truncated assignment source does not claim an unreturned crew is missing", async () => {
-  const partialAssignments = Array.from({ length: 100 }, (_, index) => ({
-    name: `ASSIGN-PARTIAL-${index}`,
-    roof_job: `OTHER-${index}`,
-    assignment_type: "Production",
-    status: "Assigned",
-    scheduled_start: null,
-    scheduled_end: null,
-    modified: MODIFIED,
-  }));
-  const mock = installFrappeMock({ "Job Assignment": partialAssignments });
-  try {
-    const model = await buildProductionRunwayReadModel(
-      env(),
-      auth("ops", "ops@example.com"),
-    );
-    assert.ok(model.partial_sources.includes("active_assignments"));
-    assert.equal(
-      model.jobs.find((job) => job.id === "JOB-C")?.lane,
-      "needs_verification",
-    );
-    assert.equal(
-      model.jobs.find((job) => job.id === "JOB-C")?.assignment,
-      null,
-    );
-  } finally {
-    mock.restore();
-  }
+  const partialAssignments = Array.from({ length: 100 }, (_, index) =>
+    nativeAssignment(`ASSIGN-PARTIAL-${index}`, `OTHER-${index}`),
+  );
+  const model = await buildProductionRunwayReadModel(
+    env({ assignments: partialAssignments }),
+    auth("ops", "ops@example.com"),
+  );
+  assert.ok(model.partial_sources.includes("active_assignments"));
+  assert.equal(
+    model.jobs.find((job) => job.id === "JOB-C")?.lane,
+    "needs_verification",
+  );
+  assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.assignment, null);
 });
 
 test("production runway with a truncated material source never promotes a job to ready for review", async () => {
@@ -1635,66 +2616,38 @@ test("production runway with a truncated material source never promotes a job to
     "Access",
     "Weather",
     "Crew",
-  ].map((gate) => ({
-    name: `GATE-B-${gate}`,
-    roof_job: "JOB-B",
-    gate,
-    state: "Ready",
-    modified: MODIFIED,
+  ].map((gate) => nativeGate("JOB-B", gate));
+  const partialMaterials = Array.from({ length: 101 }, (_, index) => ({
+    exception_id: `exception:partial:${index}`,
+    aggregate_id: "JOB-C",
+    exception_type: "shortage",
+    status: "open",
+    updated_at: MODIFIED,
   }));
-  const partialMaterials = Array.from({ length: 100 }, (_, index) => ({
-    name: `ORDER-PARTIAL-${index}`,
-    roof_job: "JOB-C",
-    status: "Shortage",
-    requested_delivery_date: null,
-    modified: MODIFIED,
-  }));
-  const mock = installFrappeMock({
-    "Job Assignment": [
-      assignments[0]!,
-      {
-        ...assignments[1]!,
-        assignment_type: "Production",
-        scheduled_start: null,
-        scheduled_end: null,
-      },
-    ],
-    "Production Gate State": [
-      {
-        name: "GATE-A",
-        roof_job: "JOB-A",
-        gate: "Materials",
-        state: "Blocked",
-        modified: MODIFIED,
-      },
-      ...readyGates,
-    ],
-    "Supplier Order": partialMaterials,
-  });
-  try {
-    const model = await buildProductionRunwayReadModel(
-      env(),
-      auth("ops", "ops@example.com"),
-    );
-    assert.ok(model.partial_sources.includes("material_exceptions"));
-    assert.equal(
-      model.jobs.find((job) => job.id === "JOB-B")?.gate_coverage,
-      "complete",
-    );
-    assert.equal(
-      model.jobs.find((job) => job.id === "JOB-B")?.lane,
-      "needs_verification",
-    );
-  } finally {
-    mock.restore();
-  }
+  const model = await buildProductionRunwayReadModel(
+    env({
+      assignments: [],
+      gates: [nativeGate("JOB-A", "Materials", "blocked"), ...readyGates],
+      materialExceptions: partialMaterials,
+    }),
+    auth("ops", "ops@example.com"),
+  );
+  assert.ok(model.partial_sources.includes("material_exceptions"));
+  assert.equal(
+    model.jobs.find((job) => job.id === "JOB-B")?.gate_coverage,
+    "complete",
+  );
+  assert.equal(
+    model.jobs.find((job) => job.id === "JOB-B")?.lane,
+    "needs_verification",
+  );
 });
 
 test("Sales Desk receives a bounded office contract without widening Owner Now or leaking raw records", async () => {
   const mock = installFrappeMock();
   try {
     const model = await buildSalesReadModel(
-      env(),
+      nativeSalesEnv(),
       auth("ops", "ops@example.com"),
     );
     assert.deepEqual(model.summary, {
@@ -1712,8 +2665,8 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
       envelope_id: "lead_a",
       source: "website",
       received_at: "2026-07-10T10:00:00.000Z",
-      transport_status: "received",
-      intent_queue: "Estimator",
+      transport_status: null,
+      intent_queue: null,
       contact: {
         display_name: "Pat Prospect",
         phone: "+14035559999",
@@ -1721,15 +2674,15 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
       },
       triage: {
         status: "Untriaged",
-        summary:
-          "Hail repair inquiry, confirm site details before a final scope.",
+        summary: null,
+        version: 1,
       },
       job: {
         id: "JOB-A",
         job_number: "IW-1001",
-        status: "In Production",
+        status: "In Progress",
         service_type: "Roofing",
-        workflow_profile: "Residential Retail",
+        workflow_profile: null,
       },
       estimate: {
         id: "estimate_a",
@@ -1753,11 +2706,11 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
         quote_total: 14_750,
         currency: "CAD",
         valid_until: "2026-07-20",
-        payment_status: "Not Due",
+        payment_status: null,
         prepared_at: MODIFIED,
         approved_at: null,
         accepted_at: null,
-        scope_summary: "Replace affected roof system.",
+        scope_summary: null,
       },
       proposal: {
         id: "pack_a",
@@ -1774,17 +2727,18 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
           {
             id: "consent_a",
             channel: "Email",
-            purpose: "Estimate Follow-up",
+            purpose: "Estimate Follow Up",
             status: "Granted",
             jurisdiction: "AB",
             basis: "Express",
             captured_at: MODIFIED,
-            effective_from: MODIFIED,
+            effective_from: null,
             expires_at: null,
             revoked_at: null,
           },
         ],
       },
+      partial_fields: [],
       attention: [
         "triage_unresolved",
         "estimate_needs_review",
@@ -1803,53 +2757,14 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
     ])
       assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
 
-    const officeLeadRequest = mock.requests.find(
-      (request) =>
-        request.doctype === "Lead Envelope" &&
-        request.fields.includes("contact_phone"),
-    );
-    assert.ok(officeLeadRequest);
-    assert.deepEqual(
-      officeLeadRequest?.fields,
-      OFFICE_SALES_READ_FIELDS["Lead Envelope"],
-    );
-    assert.equal(officeLeadRequest?.fields.includes("payload_json"), false);
-    const legacyJobReferenceRequest = mock.requests.find(
-      (request) =>
-        request.doctype === "Roof Job" &&
-        request.filters.some(
-          (filter) =>
-            Array.isArray(filter) && filter[1] === "name" && filter[2] === "in",
-        ),
-    );
-    assert.deepEqual(legacyJobReferenceRequest?.filters, [
-      ["Roof Job", "name", "in", ["JOB-A"]],
-    ]);
-    const proposalRequest = mock.requests.find(
-      (request) => request.doctype === "Proposal Evidence Pack",
-    );
-    assert.deepEqual(
-      proposalRequest?.fields,
-      OFFICE_SALES_READ_FIELDS["Proposal Evidence Pack"],
-    );
-    assert.deepEqual(proposalRequest?.filters, [
-      ["Proposal Evidence Pack", "quotation", "in", ["QUOTE-A"]],
-    ]);
+    assert.equal(mock.requests.length, 0, "Sales must not call Frappe");
 
     const ownerModel = await buildOwnerNowReadModel(
       env(),
       auth("owner", "owner@example.com"),
     );
     assert.equal(ownerModel.summary.untriaged_leads, 1);
-    const ownerLeadRequest = mock.requests.find(
-      (request) =>
-        request.doctype === "Lead Envelope" &&
-        request.fields.includes("contact_phone") === false,
-    );
-    assert.deepEqual(
-      ownerLeadRequest?.fields,
-      FRAPPE_READ_FIELDS["Lead Envelope"],
-    );
+    assert.equal(mock.requests.length, 0, "Owner Now must not call Frappe");
 
     await assert.rejects(
       async () =>
@@ -1861,96 +2776,67 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
   }
 });
 
-test("Sales Desk removes superseded consent from the current bounded projection", async () => {
-  const shared = {
-    customer: "CUSTOMER-A",
-    lead_envelope: "LEAD-A",
-    roof_job: "JOB-A",
-    channel: "Email",
-    purpose: "Estimate Follow-up",
-    jurisdiction: "AB",
-    consent_basis: "Express",
-    captured_at: MODIFIED,
-    effective_from: MODIFIED,
-    expires_at: null,
-    modified: MODIFIED,
-  };
-  const mock = installFrappeMock({
-    "Communication Consent": [
-      {
-        ...shared,
-        name: "consent_original",
-        consent_id: "consent_original",
-        status: "Granted",
-        revoked_at: null,
-        supersedes: null,
-      },
-      {
-        ...shared,
-        name: "consent_revocation",
-        consent_id: "consent_revocation",
-        status: "Revoked",
-        revoked_at: MODIFIED,
-        supersedes: "consent_original",
-      },
-    ],
-  });
+test("Sales Desk reads the native consent ledger without consulting Frappe", async () => {
+  const mock = installFrappeMock();
   try {
     const model = await buildSalesReadModel(
-      env(),
+      nativeSalesEnv(),
       auth("ops", "ops@example.com"),
     );
     assert.deepEqual(
       model.leads[0]?.consent.records.map(({ id, status }) => ({ id, status })),
-      [{ id: "consent_revocation", status: "Revoked" }],
+      [{ id: "consent_a", status: "Granted" }],
     );
-    assert.equal(
-      mock.requests
-        .filter(({ doctype }) => doctype === "Communication Consent")
-        .every(({ fields }) => fields.includes("supersedes")),
-      true,
-    );
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
-test("Sales grants the bounded triage-prepare action only for a configured broker and Frappe identity", async () => {
+test("Sales grants native triage only for current commercial policy and office authority", async () => {
   const mock = installFrappeMock();
   try {
     const ready = await buildSalesReadModel(
-      envWithLeadTriageBroker(),
+      envWithCommercialPolicy(),
       auth("ops", "ops@example.com"),
     );
-    assert.equal(ready.allowed_actions.includes("approval.prepare"), true);
+    assert.equal(
+      ready.allowed_actions.includes("commercial.lead_triage.record"),
+      true,
+    );
     assert.equal(ready.leads[0]?.triage.status, "Untriaged");
     assert.equal(ready.leads[0]?.attention.includes("triage_unresolved"), true);
 
     const noFrappeIdentity = await buildSalesReadModel(
-      envWithLeadTriageBroker(),
+      envWithCommercialPolicy(),
       auth("ops", null),
     );
     assert.equal(
-      noFrappeIdentity.allowed_actions.includes("approval.prepare"),
-      false,
+      noFrappeIdentity.allowed_actions.includes(
+        "commercial.lead_triage.record",
+      ),
+      true,
     );
 
     const noBroker = await buildSalesReadModel(
       env(),
       auth("ops", "ops@example.com"),
     );
-    assert.equal(noBroker.allowed_actions.includes("approval.prepare"), false);
+    assert.equal(
+      noBroker.allowed_actions.includes("commercial.lead_triage.record"),
+      false,
+    );
 
     const readOnly = auth("sales", "sales@example.com");
     readOnly.permissions = readOnly.permissions.filter(
       (permission) => permission !== "approvals:prepare",
     );
     const noPermission = await buildSalesReadModel(
-      envWithLeadTriageBroker(),
+      envWithCommercialPolicy(),
       readOnly,
     );
     assert.equal(
-      noPermission.allowed_actions.includes("approval.prepare"),
+      noPermission.allowed_actions.includes("commercial.lead_triage.record"),
       false,
     );
   } finally {
@@ -1958,7 +2844,7 @@ test("Sales grants the bounded triage-prepare action only for a configured broke
   }
 });
 
-test("Sales Desk projects proposal publication only from the selected quote version", async () => {
+test("Sales Desk ignores conflicting legacy proposal data once native authority exists", async () => {
   const mock = installFrappeMock({
     "Customer Quote": [
       {
@@ -2014,50 +2900,51 @@ test("Sales Desk projects proposal publication only from the selected quote vers
   });
   try {
     const model = await buildSalesReadModel(
-      env(),
+      nativeSalesEnv(),
       auth("ops", "ops@example.com"),
     );
     const lead = model.leads[0];
-    assert.equal(lead?.quote?.id, "quote_current");
+    assert.equal(lead?.quote?.id, "quote_a");
     assert.deepEqual(lead?.proposal, {
-      id: "pack_current_draft",
+      id: "pack_a",
       status: "Draft",
       prepared_at: MODIFIED,
       approved_at: null,
       signed_at: null,
-      has_published_pack: true,
-      published_status: "Approved",
+      has_published_pack: false,
+      published_status: null,
     });
+    assert.deepEqual(lead?.partial_fields, []);
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
 test("Sales Desk makes proposal publication inconclusive when its bounded source is partial", async () => {
-  const proposalRows = Array.from({ length: 100 }, (_, index) => ({
-    name: `PACK-${String(index).padStart(3, "0")}`,
-    pack_id: `pack_${index}`,
-    roof_job: "JOB-A",
-    quotation: "QUOTE-A",
-    status: index === 1 ? "Approved" : "Draft",
-    prepared_at: index === 0 ? MODIFIED : null,
-    approved_at: index === 1 ? "2026-07-10T10:59:59.000Z" : null,
-    signed_at: null,
-    modified: new Date(Date.parse(MODIFIED) - index * 1_000).toISOString(),
+  const publicationRows = Array.from({ length: 101 }, (_, index) => ({
+    publication_event_id: `commercial-publication:${String(index).padStart(3, "0")}`,
+    tenant_id: "ironwrap",
+    proposal_revision_id: index === 100 ? "PROPOSAL-A" : `PROPOSAL-${index}`,
+    proposal_pack_id: index === 100 ? "pack_a" : `pack_${index}`,
+    publication_version: 1,
+    previous_state: "draft",
+    state: "published",
+    occurred_at: new Date(Date.parse(MODIFIED) - index * 1_000).toISOString(),
   }));
-  const mock = installFrappeMock({ "Proposal Evidence Pack": proposalRows });
+  const mock = installFrappeMock();
   try {
     const model = await buildSalesReadModel(
-      env(),
+      nativeSalesEnv({ publications: publicationRows }),
       auth("ops", "ops@example.com"),
     );
     const lead = model.leads[0];
     assert.equal(
-      model.partial_sources.includes("proposal_evidence_packs"),
+      model.partial_sources.includes("commercial_proposal_publication_events"),
       true,
     );
     assert.deepEqual(lead?.proposal, {
-      id: "pack_0",
+      id: "pack_a",
       status: "Draft",
       prepared_at: MODIFIED,
       approved_at: null,
@@ -2065,6 +2952,144 @@ test("Sales Desk makes proposal publication inconclusive when its bounded source
       has_published_pack: null,
       published_status: null,
     });
+    assert.deepEqual(lead?.partial_fields, ["proposal_publication"]);
+    assert.equal(lead?.attention.includes("source_partial"), true);
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales Desk marks a quote and its dependent records unknown when the bounded quote window omits it", async () => {
+  const quoteRows = Array.from({ length: 101 }, (_, index) => ({
+    quote_revision_id: index === 100 ? "QUOTE-A" : `QUOTE-${index}`,
+    tenant_id: "ironwrap",
+    customer_quote_id: index === 100 ? "quote_a" : `quote_${index}`,
+    revision_number: 1,
+    roof_job_id: index === 100 ? "JOB-A" : `OTHER-${index}`,
+    customer_id: index === 100 ? "CUSTOMER-A" : `CUSTOMER-${index}`,
+    status: "approved",
+    currency: "CAD",
+    valid_until: "2026-07-20",
+    total_cents: 1_475_000,
+    created_at: new Date(Date.parse(MODIFIED) - index * 1_000).toISOString(),
+  }));
+  const mock = installFrappeMock();
+  try {
+    const model = await buildSalesReadModel(
+      nativeSalesEnv({ quotes: quoteRows }),
+      auth("ops", "ops@example.com"),
+    );
+    const lead = model.leads[0];
+    assert.equal(
+      model.partial_sources.includes("commercial_quote_revisions"),
+      true,
+    );
+    assert.equal(lead?.quote, null);
+    assert.deepEqual(lead?.partial_fields, [
+      "quote",
+      "proposal",
+      "proposal_publication",
+      "quote_acceptance",
+      "proposal_acceptance",
+    ]);
+    assert.equal(lead?.attention.includes("source_partial"), true);
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales Desk carries row-level uncertainty for every bounded native child join", async () => {
+  const cases: Array<{
+    source: NativeSalesSource;
+    table: string;
+    rows: Array<Record<string, unknown>>;
+    expected: string[];
+  }> = [
+    {
+      source: "jobs",
+      table: "operating_roof_jobs",
+      rows: Array.from({ length: 101 }, (_, index) => ({
+        roof_job_id: index === 100 ? "JOB-A" : `JOB-${index}`,
+        lead_id: index === 100 ? "LEAD-A" : `OTHER-LEAD-${index}`,
+        updated_at: new Date(
+          Date.parse(MODIFIED) - index * 1_000,
+        ).toISOString(),
+      })),
+      expected: [
+        "job",
+        "quote",
+        "proposal",
+        "proposal_publication",
+        "quote_acceptance",
+        "proposal_acceptance",
+      ],
+    },
+    {
+      source: "estimates",
+      table: "operating_instant_estimates",
+      rows: Array.from({ length: 101 }, (_, index) => ({
+        estimate_session_id: `ESTIMATE-${index}`,
+        lead_id: index === 100 ? "LEAD-A" : `OTHER-LEAD-${index}`,
+        updated_at: new Date(
+          Date.parse(MODIFIED) - index * 1_000,
+        ).toISOString(),
+      })),
+      expected: ["estimate"],
+    },
+    {
+      source: "triageDecisions",
+      table: "commercial_lead_triage_decisions",
+      rows: Array.from({ length: 101 }, (_, index) => ({
+        triage_decision_id: `TRIAGE-${index}`,
+        lead_id: index === 100 ? "LEAD-A" : `OTHER-LEAD-${index}`,
+        decided_at: new Date(
+          Date.parse(MODIFIED) - index * 1_000,
+        ).toISOString(),
+      })),
+      expected: ["triage_decision"],
+    },
+    {
+      source: "proposals",
+      table: "commercial_proposal_revisions",
+      rows: Array.from({ length: 101 }, (_, index) => ({
+        proposal_revision_id: `PROPOSAL-${index}`,
+        proposal_pack_id: `PACK-${index}`,
+        quote_revision_id: index === 100 ? "QUOTE-A" : `OTHER-QUOTE-${index}`,
+        created_at: new Date(
+          Date.parse(MODIFIED) - index * 1_000,
+        ).toISOString(),
+      })),
+      expected: ["proposal", "proposal_publication", "proposal_acceptance"],
+    },
+    {
+      source: "acceptances",
+      table: "commercial_acceptance_bindings",
+      rows: Array.from({ length: 101 }, (_, index) => ({
+        acceptance_binding_id: `ACCEPTANCE-${index}`,
+        quote_revision_id: index === 100 ? "QUOTE-A" : `OTHER-QUOTE-${index}`,
+        proposal_revision_id:
+          index === 100 ? "PROPOSAL-A" : `OTHER-PROPOSAL-${index}`,
+        accepted_at: new Date(
+          Date.parse(MODIFIED) - index * 1_000,
+        ).toISOString(),
+      })),
+      expected: ["quote_acceptance", "proposal_acceptance"],
+    },
+  ];
+  const mock = installFrappeMock();
+  try {
+    for (const scenario of cases) {
+      const model = await buildSalesReadModel(
+        nativeSalesEnv({ [scenario.source]: scenario.rows }),
+        auth("ops", "ops@example.com"),
+      );
+      assert.equal(model.partial_sources.includes(scenario.table), true);
+      assert.deepEqual(model.leads[0]?.partial_fields, scenario.expected);
+      assert.equal(model.leads[0]?.attention.includes("source_partial"), true);
+    }
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
@@ -2120,12 +3145,21 @@ test("MCTB status distinguishes provider acceptance from delivery and never gues
 });
 
 test("owner Now HTTP route does not expose the office queue to field sessions", async () => {
-  const mock = installFrappeMock();
+  const original = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = async () => {
+    networkCalls += 1;
+    throw new Error("owner_now_network_forbidden");
+  };
+  const appEnv = env({
+    workPackages: [nativeWorkPackageRow({ status: "Blocked" })],
+    workPackageEvents: [nativeWorkPackageEvent("stop_work")],
+  });
   try {
     const request = new Request("https://app.example.com/api/v1/owner/now");
     const office = await handleAuthenticatedRoute(
       request,
-      env(),
+      appEnv,
       auth("ops", "ops@example.com"),
     );
     assert.equal(office.status, 200);
@@ -2136,17 +3170,16 @@ test("owner Now HTTP route does not expose the office queue to field sessions", 
       1,
     );
 
-    const callsBeforeDenied = mock.requests.length;
     const field = await handleAuthenticatedRoute(
       request,
-      env(),
+      appEnv,
       auth("field", "crew@example.com"),
     );
     assert.equal(field.status, 403);
     assert.deepEqual(await field.json(), { error: "forbidden" });
-    assert.equal(mock.requests.length, callsBeforeDenied);
+    assert.equal(networkCalls, 0);
   } finally {
-    mock.restore();
+    globalThis.fetch = original;
   }
 });
 
@@ -2218,10 +3251,21 @@ test("production runway HTTP route is private and starts no upstream read for fi
     assert.equal(productionJob.status, 200);
     const productionJobBody = (await productionJob.json()) as {
       allowed_actions: string[];
-      packet: { work_package: unknown };
+      packet: {
+        work_package: null | {
+          id: string;
+          status: string;
+        };
+      };
     };
-    assert.deepEqual(productionJobBody.allowed_actions, ["job.read"]);
-    assert.equal(productionJobBody.packet.work_package, null);
+    assert.deepEqual(productionJobBody.allowed_actions, [
+      "job.read",
+      "work_package.issue",
+      "work_package.hold.release",
+      "work_package.evidence.review",
+    ]);
+    assert.equal(productionJobBody.packet.work_package?.id, "work_package_a");
+    assert.equal(productionJobBody.packet.work_package?.status, "Released");
 
     for (const [path, error] of [
       ["/api/v1/today", "today_read_required"],
@@ -2260,7 +3304,7 @@ test("Sales Desk HTTP route is private and never starts office reads for field s
     const request = new Request("https://app.example.com/api/v1/sales");
     const office = await handleAuthenticatedRoute(
       request,
-      env(),
+      nativeSalesEnv(),
       auth("ops", "ops@example.com"),
     );
     assert.equal(office.status, 200);
@@ -2272,7 +3316,7 @@ test("Sales Desk HTTP route is private and never starts office reads for field s
 
     const salesRole = await handleAuthenticatedRoute(
       request,
-      env(),
+      nativeSalesEnv(),
       auth("sales", "sales@example.com"),
     );
     assert.equal(salesRole.status, 200);
@@ -2381,7 +3425,7 @@ test("field packet contains job-safe contact details and excludes email, financi
       work_object_id: "JOB-A",
       physical_context_type: "Roof Site",
       physical_context_id: "JOB-A",
-      release_attempt_id: null,
+      release_attempt_id: "attempt-a",
       supersession: null,
       acknowledgement: {
         current_user_acknowledged: false,
@@ -2419,7 +3463,7 @@ test("field packet contains job-safe contact details and excludes email, financi
     });
     assert.equal(
       model.allowed_actions.includes("work_package.acknowledge"),
-      false,
+      true,
     );
     assert.equal(model.allowed_actions.includes("work_package.start"), false);
     assert.equal(
@@ -2444,277 +3488,452 @@ test("field packet contains job-safe contact details and excludes email, financi
       "r2/private",
     ])
       assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
-test("field Work Package Start requires a complete, unique hold-release ledger", async () => {
+test("field packet prefers native contact, property, and typed work-package proof when present", async () => {
   const packageRow = {
     ...rowsFor("Work Package")[0]!,
-    status: "Acknowledged",
     release_attempt_id: "attempt-a",
-    acknowledged_by: "crew@example.com",
-    acknowledged_at: "2026-07-10T07:10:00.000Z",
-    hold_points: [
-      {
-        sequence: 1,
-        hold_point: "Deck condition",
-        release_authority: "Supervisor",
-        required_evidence: "Deck photo",
-        acceptance_criteria: "Supervisor release.",
-      },
-      {
-        sequence: 2,
-        hold_point: "Flashing inspection",
-        release_authority: "Supervisor",
-        required_evidence: "Flashing photo",
-        acceptance_criteria: "Supervisor release.",
-      },
-    ],
   };
-  const release = (sequence: number) => ({
-    name: `WORK-PACKAGE-EVENT-${sequence}`,
-    event_type: "Hold Point Released",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
-    release_attempt_id: "attempt-a",
-    hold_point_sequence: sequence,
-    evidence_item: `EVID-${sequence}`,
-    actor_user: "private-release@example.com",
-    device_action_id: "private-device-action",
-    payload_hash: "private-payload-hash",
-    occurred_at: "2026-07-10T08:00:00.000Z",
-    modified: MODIFIED,
-  });
-  const acknowledgement = {
-    name: "WORK-PACKAGE-ACK-1",
-    event_type: "Acknowledged",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
-    release_attempt_id: "attempt-a",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: "ack-device-1",
-    occurred_at: "2026-07-10T07:10:00.000Z",
-    modified: MODIFIED,
-  };
-
-  const partial = installFrappeMock({
+  const mock = installFrappeMock({
+    "Roofing Customer": [],
+    "Roofing Property": [],
     "Work Package": [packageRow],
-    "Work Package Event": [release(1)],
+    "Evidence Item": [],
   });
   try {
     const model = await buildJobReadModel(
-      env(),
+      envWithNativeJobPacket({
+        operatingJobs: [
+          {
+            roof_job_id: "JOB-A",
+            customer_id: "CUSTOMER-A",
+            property_id: "PROP-A",
+            brand: "ironwrap",
+            job_number: "IW-1001",
+            service_type: "Roofing",
+            job_status: "in_progress",
+            current_gate_state: "in_progress",
+            version: 1,
+            updated_at: MODIFIED,
+          },
+        ],
+        operatingCustomers: [
+          {
+            customer_id: "CUSTOMER-A",
+            display_name: "Native Customer",
+            contact_phone: "+14035551234",
+            updated_at: MODIFIED,
+          },
+        ],
+        operatingProperties: [
+          {
+            property_id: "PROP-A",
+            address_line1: "42 Native Ave",
+            city: "Calgary",
+            province: "AB",
+            postal_code: "T2T 2T2",
+            country: "Canada",
+            updated_at: MODIFIED,
+          },
+        ],
+        fieldEvidence: [
+          {
+            device_action_id: "device-action-1",
+            user_id: "appu_field",
+            actor_user: "crew@example.com",
+            actor_role: "Installer",
+            created_at: "2026-07-10T09:05:00.000Z",
+            work_package_id: "work_package_a",
+            work_package_version: 1,
+            evidence_slot_id: "step:1",
+            evidence_requirement: "Zone photo",
+            evidence_source: "worker-camera",
+            evidence_device_id: "paired-device-1",
+            evidence_freshness: "Current",
+            evidence_conflict_state: "None",
+            evidence_verification: "Verified",
+            evidence_disposition: "Open",
+            evidence_correction_of: null,
+            evidence_item_correction_of: null,
+            work_package_release_attempt_id: "attempt-a",
+            correction_reason: null,
+            work_object_type: "Roof Job",
+            work_object_id: "JOB-A",
+            physical_context_type: "Roof Site",
+            physical_context_id: "JOB-A",
+            capture_completed_at: "2026-07-10T09:05:00.000Z",
+            evidence_id: "evi_1234567890abcdef1234567890abcdef",
+          },
+        ],
+      }),
       auth("field", "crew@example.com"),
       "JOB-A",
     );
     assert.ok(model);
-    assert.deepEqual(
-      model.packet.work_package?.hold_points.map((hold) => hold.released),
-      [true, false],
+    assert.equal(model.packet.contact?.display_name, "Native Customer");
+    assert.equal(model.packet.contact?.phone, "+14035551234");
+    assert.equal(
+      model.job.address,
+      "42 Native Ave, Calgary AB T2T 2T2, Canada",
     );
-    assert.equal(model.allowed_actions.includes("work_package.start"), false);
-    const eventRequest = partial.requests.find(
-      (request) => request.doctype === "Work Package Event",
+    assert.equal(
+      model.proof_stream.some(
+        (item) => item.id === "evi_1234567890abcdef1234567890abcdef",
+      ),
+      true,
     );
-    assert.deepEqual(eventRequest?.fields, [
-      "event_type",
-      "work_package",
-      "roof_job",
-      "job_assignment",
-      "work_object_type",
-      "work_object_id",
-      "physical_context_type",
-      "physical_context_id",
-      "work_package_version",
-      "release_attempt_id",
-      "hold_point_sequence",
-      "evidence_item",
-    ]);
-    assert.deepEqual(eventRequest?.filters, [
-      ["Work Package Event", "work_package", "=", "WORK-PACKAGE-A"],
-      ["Work Package Event", "roof_job", "=", "JOB-A"],
-      ["Work Package Event", "job_assignment", "=", "ASSIGN-A"],
-      ["Work Package Event", "work_package_version", "=", 1],
-      ["Work Package Event", "event_type", "=", "Hold Point Released"],
-    ]);
-    const serialized = JSON.stringify(model);
-    for (const privateValue of [
-      "private-release@example.com",
-      "private-device-action",
-      "private-payload-hash",
-    ]) {
-      assert.equal(
-        serialized.includes(privateValue),
-        false,
-        `leaked ${privateValue}`,
-      );
-    }
+    assert.equal(
+      model.stale_fields.includes("packet.scope_clauses.native_unavailable"),
+      true,
+    );
+    assert.equal(mock.requests.length, 0);
   } finally {
-    partial.restore();
-  }
-
-  const duplicate = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": [release(1), release(1), release(2)],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew@example.com"),
-      "JOB-A",
-    );
-    assert.ok(model);
-    assert.deepEqual(
-      model.packet.work_package?.hold_points.map((hold) => hold.released),
-      [false, false],
-    );
-    assert.equal(model.allowed_actions.includes("work_package.start"), false);
-  } finally {
-    duplicate.restore();
-  }
-
-  const malformed = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": [release(1), { ...release(2), evidence_item: "" }],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew@example.com"),
-      "JOB-A",
-    );
-    assert.ok(model);
-    assert.deepEqual(
-      model.packet.work_package?.hold_points.map((hold) => hold.released),
-      [false, false],
-    );
-    assert.equal(model.allowed_actions.includes("work_package.start"), false);
-  } finally {
-    malformed.restore();
-  }
-
-  const complete = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": [release(1), release(2), acknowledgement],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew@example.com"),
-      "JOB-A",
-    );
-    assert.ok(model);
-    assert.deepEqual(
-      model.packet.work_package?.hold_points.map((hold) => hold.released),
-      [true, true],
-    );
-    assert.equal(model.allowed_actions.includes("work_package.start"), true);
-  } finally {
-    complete.restore();
+    mock.restore();
   }
 });
 
-test("field packet exposes exact Work Package supersession identity and changed step/hold summary", async () => {
-  const current = {
-    ...rowsFor("Work Package")[0]!,
+test("Job and Proof reads never fall back to Frappe when tenant configuration is absent or mismatched", async () => {
+  const mock = installFrappeMock({
+    "Roof Job": [job("JOB-A", "LEGACY-1001", "PROP-A", "CUSTOMER-A")],
+    "Work Package": [rowsFor("Work Package")[0]!],
+    "Evidence Item": [proofRows[0]!],
+  });
+  try {
+    for (const configuredTenant of [undefined, "another-tenant"] as const) {
+      const runtime = {
+        ...env(),
+        ...(configuredTenant ? { APP_TENANT_ID: configuredTenant } : {}),
+      } as AppEnv;
+      const jobModel = await buildJobReadModel(
+        runtime,
+        auth("field", "crew@example.com"),
+        "JOB-A",
+      );
+      const proofModel = await buildJobProofReadModel(
+        runtime,
+        auth("field", "crew@example.com"),
+        "JOB-A",
+        "0",
+      );
+      assert.equal(jobModel?.packet.work_package?.id, "work_package_a");
+      assert.deepEqual(proofModel?.items, []);
+    }
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Job and Proof reads fail closed when native Job truth is missing", async () => {
+  const mock = installFrappeMock({
+    "Roof Job": [job("JOB-A", "LEGACY-1001", "PROP-A", "CUSTOMER-A")],
+    "Work Package": [rowsFor("Work Package")[0]!],
+    "Evidence Item": [proofRows[0]!],
+  });
+  try {
+    const runtime = env({ jobs: [] });
+    assert.equal(
+      await buildJobReadModel(
+        runtime,
+        auth("field", "crew@example.com"),
+        "JOB-A",
+      ),
+      null,
+    );
+    assert.equal(
+      await buildJobProofReadModel(
+        runtime,
+        auth("field", "crew@example.com"),
+        "JOB-A",
+        "0",
+      ),
+      null,
+    );
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Job and Proof reads fail closed when native evidence schema is unavailable", async () => {
+  const base = env();
+  const nativeDb = base.DB;
+  const runtime = {
+    ...base,
+    DB: {
+      prepare(sql: string) {
+        if (!sql.includes("FROM field_actions a")) {
+          return nativeDb.prepare(sql);
+        }
+        return {
+          bind() {
+            return {
+              async all() {
+                throw new Error("no such column: a.work_object_type");
+              },
+            };
+          },
+        };
+      },
+    },
+  } as AppEnv;
+  const mock = installFrappeMock({
+    "Evidence Item": [proofRows[0]!],
+  });
+  try {
+    await assert.rejects(
+      () =>
+        buildJobReadModel(runtime, auth("field", "crew@example.com"), "JOB-A"),
+      /native_job_proof_unavailable/,
+    );
+    await assert.rejects(
+      () =>
+        buildJobProofReadModel(
+          runtime,
+          auth("field", "crew@example.com"),
+          "JOB-A",
+          "0",
+        ),
+      /native_job_proof_unavailable/,
+    );
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("field Work Package Start requires a complete, unique native hold-release ledger", async () => {
+  const baseDefinition = JSON.parse(
+    String(nativeWorkPackageRow().definition_json),
+  );
+  const packageRow = nativeWorkPackageRow({
+    status: "Acknowledged",
+    acknowledged_at: "2026-07-10T07:10:00.000Z",
+    definition_json: JSON.stringify({
+      ...baseDefinition,
+      hold_points: [
+        baseDefinition.hold_points[0],
+        {
+          sequence: 2,
+          hold_point: "Flashing inspection",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Flashing photo",
+          acceptance_criteria: "Supervisor release.",
+        },
+      ],
+    }),
+  });
+  const release = (sequence: number, suffix = String(sequence)) =>
+    nativeWorkPackageEvent("hold_released", {
+      event_id: `wpe_hold_${suffix}`,
+      device_action_id: `hold-device-${suffix}`,
+      payload_json: JSON.stringify({
+        hold_point_sequence: sequence,
+        evidence_item: `evi_hold_${suffix}`,
+      }),
+    });
+  const acknowledgement = nativeWorkPackageEvent("acknowledged", {
+    event_id: "wpe_acknowledged",
+    occurred_at: "2026-07-10T07:10:00.000Z",
+  });
+
+  const mock = installFrappeMock({
+    "Work Package": [rowsFor("Work Package")[0]!],
+    "Work Package Event": [
+      {
+        name: "legacy-release",
+        event_type: "Hold Point Released",
+      },
+    ],
+  });
+  try {
+    const partial = await buildJobReadModel(
+      env({
+        workPackages: [packageRow],
+        workPackageEvents: [release(1)],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(
+      partial?.packet.work_package?.hold_points.map((hold) => hold.released),
+      [true, false],
+    );
+    assert.equal(
+      partial?.allowed_actions.includes("work_package.start"),
+      false,
+    );
+
+    const duplicate = await buildJobReadModel(
+      env({
+        workPackages: [packageRow],
+        workPackageEvents: [release(1, "1-a"), release(1, "1-b"), release(2)],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(
+      duplicate?.packet.work_package?.hold_points.map((hold) => hold.released),
+      [false, false],
+    );
+    assert.equal(
+      duplicate?.allowed_actions.includes("work_package.start"),
+      false,
+    );
+
+    const malformed = await buildJobReadModel(
+      env({
+        workPackages: [packageRow],
+        workPackageEvents: [
+          release(1),
+          nativeWorkPackageEvent("hold_released", {
+            event_id: "wpe_hold_malformed",
+            device_action_id: "hold-device-malformed",
+            payload_json: JSON.stringify({
+              hold_point_sequence: 2,
+              evidence_item: "",
+            }),
+          }),
+        ],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(
+      malformed?.packet.work_package?.hold_points.map((hold) => hold.released),
+      [false, false],
+    );
+    assert.equal(
+      malformed?.allowed_actions.includes("work_package.start"),
+      false,
+    );
+
+    const complete = await buildJobReadModel(
+      env({
+        workPackages: [packageRow],
+        workPackageEvents: [release(1), release(2), acknowledgement],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(
+      complete?.packet.work_package?.hold_points.map((hold) => hold.released),
+      [true, true],
+    );
+    assert.equal(
+      complete?.allowed_actions.includes("work_package.start"),
+      true,
+    );
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("field packet exposes exact native Work Package supersession identity and changed step/hold summary", async () => {
+  const baseDefinition = JSON.parse(
+    String(nativeWorkPackageRow().definition_json),
+  );
+  const secondStep = {
+    sequence: 2,
+    instruction: "Stage the released material.",
+    required_evidence: "Material staging photo",
+    acceptance_criteria: "Material is protected and staged.",
+  };
+  const secondHold = {
+    sequence: 2,
+    hold_point: "Material staging",
+    release_phase: "Pre-start",
+    release_authority: "Supervisor",
+    required_evidence: "Material staging photo",
+    acceptance_criteria: "Supervisor releases material staging.",
+  };
+  const current = nativeWorkPackageRow({
+    version: 2,
     status: "Released",
     release_attempt_id: "attempt-b",
-    supersedes: "WORK-PACKAGE-OLD",
+    supersedes_id: "work_package_old",
     correction_reason:
       "Changed condition: the deck inspection hold now requires a revised anchor check.",
-    steps: [
-      {
-        sequence: 1,
-        instruction: "Verify the revised roof zone.",
-        required_evidence: "Revised zone photo",
-        acceptance_criteria: "Revised zone matches package.",
-      },
-      {
-        sequence: 2,
-        instruction: "Stage the released material.",
-        required_evidence: "Material staging photo",
-        acceptance_criteria: "Material is protected and staged.",
-      },
-    ],
-    hold_points: [
-      {
-        sequence: 1,
-        hold_point: "Revised deck condition",
-        release_authority: "Supervisor",
-        required_evidence: "Revised deck photo",
-        acceptance_criteria: "Supervisor releases revised deck condition.",
-      },
-      {
-        sequence: 2,
-        hold_point: "Material staging",
-        release_authority: "Supervisor",
-        required_evidence: "Material staging photo",
-        acceptance_criteria: "Supervisor releases material staging.",
-      },
-    ],
-  };
-  const prior = {
-    ...current,
-    name: "WORK-PACKAGE-OLD",
+    definition_json: JSON.stringify({
+      ...baseDefinition,
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Verify the revised roof zone.",
+          required_evidence: "Revised zone photo",
+          acceptance_criteria: "Revised zone matches package.",
+        },
+        secondStep,
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Revised deck condition",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Revised deck photo",
+          acceptance_criteria: "Supervisor releases revised deck condition.",
+        },
+        secondHold,
+      ],
+    }),
+  });
+  const prior = nativeWorkPackageRow({
     work_package_id: "work_package_old",
     status: "Superseded",
     release_attempt_id: "attempt-a",
-    supersedes: null,
-    correction_reason: null,
-    steps: [
-      {
-        sequence: 1,
-        instruction: "Verify the original roof zone.",
-        required_evidence: "Original zone photo",
-        acceptance_criteria: "Original zone matches package.",
-      },
-      current.steps[1]!,
-    ],
-    hold_points: [
-      {
-        sequence: 1,
-        hold_point: "Original deck condition",
-        release_authority: "Supervisor",
-        required_evidence: "Original deck photo",
-        acceptance_criteria: "Supervisor releases original deck condition.",
-      },
-      current.hold_points[1]!,
-    ],
-  };
-  const acknowledgement = {
-    name: "WORK-PACKAGE-ACK-CURRENT",
-    event_type: "Acknowledged",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
+    definition_json: JSON.stringify({
+      ...baseDefinition,
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Verify the original roof zone.",
+          required_evidence: "Original zone photo",
+          acceptance_criteria: "Original zone matches package.",
+        },
+        secondStep,
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Original deck condition",
+          release_phase: "Pre-start",
+          release_authority: "Supervisor",
+          required_evidence: "Original deck photo",
+          acceptance_criteria: "Supervisor releases original deck condition.",
+        },
+        secondHold,
+      ],
+    }),
+  });
+  const acknowledgement = nativeWorkPackageEvent("acknowledged", {
+    event_id: "wpe_ack_current",
+    work_package_version: 2,
     release_attempt_id: "attempt-b",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: "ack-current-attempt",
     occurred_at: "2026-07-10T07:20:00.000Z",
-    modified: MODIFIED,
-  };
+  });
   const mock = installFrappeMock({
-    "Work Package": [current, prior],
-    "Work Package Event": [acknowledgement],
+    "Work Package": [rowsFor("Work Package")[0]!],
   });
   try {
     const model = await buildJobReadModel(
-      env(),
+      env({
+        workPackages: [current, prior],
+        workPackageEvents: [acknowledgement],
+      }),
       auth("field", "crew@example.com"),
       "JOB-A",
     );
     assert.ok(model?.packet.work_package);
     assert.deepEqual(model.packet.work_package.supersession, {
-      prior_id: "WORK-PACKAGE-OLD",
+      prior_id: "work_package_old",
       reason:
         "Changed condition: the deck inspection hold now requires a revised anchor check.",
       changed_steps: [1],
@@ -2728,412 +3947,258 @@ test("field packet exposes exact Work Package supersession identity and changed 
       model.packet.work_package.acknowledgement.acknowledged_at,
       "2026-07-10T07:20:00.000Z",
     );
+
+    const unreadablePrior = await buildJobReadModel(
+      env({
+        workPackages: [current],
+        workPackageEvents: [acknowledgement],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.equal(unreadablePrior?.packet.work_package, null);
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
-
-  const unreadablePrior = installFrappeMock({
-    "Work Package": [current],
-    "Work Package Event": [acknowledgement],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew@example.com"),
-      "JOB-A",
-    );
-    assert.equal(model?.packet.work_package, null);
-  } finally {
-    unreadablePrior.restore();
-  }
 });
 
-test("field packet ignores acknowledgements from a prior release attempt", async () => {
-  const packageRow = {
-    ...rowsFor("Work Package")[0]!,
+test("field packet ignores native acknowledgements from a prior release attempt", async () => {
+  const packageRow = nativeWorkPackageRow({
     status: "Released",
     release_attempt_id: "attempt-b",
-    acknowledged_by: "crew@example.com",
-    acknowledged_at: "2026-07-10T07:10:00.000Z",
-  };
-  const staleAcknowledgement = {
-    name: "WORK-PACKAGE-ACK-STALE",
-    event_type: "Acknowledged",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
+  });
+  const staleAcknowledgement = nativeWorkPackageEvent("acknowledged", {
+    event_id: "wpe_ack_stale",
     release_attempt_id: "attempt-a",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: "ack-stale-attempt",
     occurred_at: "2026-07-10T07:10:00.000Z",
-    modified: MODIFIED,
-  };
+  });
   const mock = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": [staleAcknowledgement],
+    "Work Package Event": [
+      {
+        name: "legacy-ack",
+        event_type: "Acknowledged",
+        release_attempt_id: "attempt-b",
+      },
+    ],
   });
   try {
     const model = await buildJobReadModel(
-      env(),
+      env({
+        workPackages: [packageRow],
+        workPackageEvents: [staleAcknowledgement],
+      }),
       auth("field", "crew@example.com"),
       "JOB-A",
     );
-    assert.ok(model?.packet.work_package);
     assert.equal(
-      model.packet.work_package.acknowledgement.current_user_acknowledged,
+      model?.packet.work_package?.acknowledgement.current_user_acknowledged,
       false,
     );
     assert.equal(
-      model.packet.work_package.acknowledgement.acknowledged_at,
+      model?.packet.work_package?.acknowledgement.acknowledged_at,
       null,
     );
     assert.equal(
-      model.packet.work_package.acknowledgement.workers[0]?.acknowledged,
-      false,
-    );
-    assert.equal(
-      model.allowed_actions.includes("work_package.acknowledge"),
+      model?.allowed_actions.includes("work_package.acknowledge"),
       true,
     );
-    assert.equal(model.allowed_actions.includes("work_package.start"), false);
+    assert.equal(model?.allowed_actions.includes("work_package.start"), false);
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
-test("field packet rejects an event-to-Evidence Item cross-pair and clears the evidence ledger", async () => {
-  const packageRow = {
-    ...rowsFor("Work Package")[0]!,
-    release_attempt_id: "attempt-a",
-  };
-  const prior = {
-    name: "EVIDENCE-EVENT-1",
-    event_type: "Evidence Captured",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
-    release_attempt_id: "attempt-a",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: "evidence-device-1",
-    occurred_at: "2026-07-10T08:00:00.000Z",
-    evidence_item: "EVIDENCE-ITEM-1",
-    evidence_slot_id: "step:1",
-    evidence_requirement: "Zone photo",
-    evidence_source: "worker-camera",
-    evidence_device_id: "paired-device-1",
-    evidence_captured_at: "2026-07-10T07:59:00.000Z",
-    evidence_freshness: "Current",
-    evidence_conflict_state: "None",
-    evidence_correction_of: null,
-    evidence_item_correction_of: null,
-    evidence_verification: "Verified",
-    evidence_disposition: "Open",
-    correction_reason: null,
-    modified: MODIFIED,
-  };
-  const crossed = {
-    ...prior,
-    name: "EVIDENCE-EVENT-2",
-    device_action_id: "evidence-device-2",
-    occurred_at: "2026-07-10T08:05:00.000Z",
-    evidence_item: "EVIDENCE-ITEM-2",
-    evidence_correction_of: "EVIDENCE-EVENT-1",
-    evidence_item_correction_of: "EVIDENCE-ITEM-2",
-  };
+test("field packet binds verified D1/R2 evidence to the exact native release and scope", async () => {
+  const validEvidence = nativeFieldEvidenceRows(1);
+  const staleAttempt = nativeFieldEvidenceRows(1, {
+    evidence_id: "evi_ffffffffffffffffffffffffffffffff",
+    device_action_id: "device-action-stale-attempt",
+    work_package_release_attempt_id: "attempt-old",
+  });
+  const wrongScope = nativeFieldEvidenceRows(1, {
+    evidence_id: "evi_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    device_action_id: "device-action-wrong-scope",
+    physical_context_id: "OTHER-SITE",
+  });
   const mock = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": [prior, crossed],
+    "Evidence Item": proofRows.slice(0, 2),
   });
   try {
     const model = await buildJobReadModel(
-      env(),
+      env({
+        fieldEvidence: [...validEvidence, ...staleAttempt, ...wrongScope],
+      }),
       auth("field", "crew@example.com"),
       "JOB-A",
     );
-    assert.ok(model);
-    assert.deepEqual(model.packet.work_package?.evidence_slots, []);
-    assert.equal(
-      model.allowed_actions.includes("work_package.acknowledge"),
-      true,
+    assert.deepEqual(
+      model?.proof_stream.map((item) => item.id),
+      ["evi_00000000000000000000000000000000"],
     );
+    assert.deepEqual(
+      model?.packet.work_package?.evidence_slots.map(
+        (item) => item.evidence_item,
+      ),
+      ["evi_00000000000000000000000000000000"],
+    );
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
-test("field packet binds crew roles and rejects forged typed lifecycle or review authority", async () => {
-  const packageRow = {
-    ...rowsFor("Work Package")[0]!,
+test("field packet binds native crew roles, acknowledgements, and D1/R2 evidence", async () => {
+  const baseDefinition = JSON.parse(
+    String(nativeWorkPackageRow().definition_json),
+  );
+  const packageRow = nativeWorkPackageRow({
     status: "Acknowledged",
-    release_attempt_id: "attempt-a",
-    assigned_workers: [
-      {
-        sequence: 1,
-        worker_user: "crew-a@example.com",
-        worker_role: "Installer",
-        required: 1,
-      },
-      {
-        sequence: 2,
-        worker_user: "crew-b@example.com",
-        worker_role: "Spotter",
-        required: 1,
-      },
-    ],
-  };
-  const assignment = {
-    ...assignments[0]!,
-    assigned_user: null,
-    crew_profile: "CREW-1",
-  };
-  const crewMembers = [
-    {
-      name: "CREW-MEMBER-A",
-      parent: "CREW-1",
-      parenttype: "Crew Profile",
-      parentfield: "members",
-      crew_user: "crew-a@example.com",
-      crew_role: "Installer",
-      active: 1,
-    },
-    {
-      name: "CREW-MEMBER-B",
-      parent: "CREW-1",
-      parenttype: "Crew Profile",
-      parentfield: "members",
-      crew_user: "crew-b@example.com",
-      crew_role: "Spotter",
-      active: 1,
-    },
-  ];
+    acknowledged_at: "2026-07-10T07:11:00.000Z",
+    definition_json: JSON.stringify({
+      ...baseDefinition,
+      assigned_workers: [
+        {
+          sequence: 1,
+          worker_user: "crew-a@example.com",
+          worker_role: "Installer",
+          required: true,
+        },
+        {
+          sequence: 2,
+          worker_user: "crew-b@example.com",
+          worker_role: "Spotter",
+          required: true,
+        },
+      ],
+    }),
+  });
   const acknowledgements = [
-    {
-      name: "ACK-CREW-A",
-      event_type: "Acknowledged",
-      work_package: "WORK-PACKAGE-A",
-      roof_job: "JOB-A",
-      job_assignment: "ASSIGN-A",
-      work_package_version: 1,
-      release_attempt_id: "attempt-a",
-      actor_user: "crew-a@example.com",
+    nativeWorkPackageEvent("acknowledged", {
+      event_id: "wpe_ack_crew_a",
+      actor_user_id: "crew-a@example.com",
       actor_role: "Installer",
       device_action_id: "ack-crew-a",
       occurred_at: "2026-07-10T07:10:00.000Z",
-    },
-    {
-      name: "ACK-CREW-B",
-      event_type: "Acknowledged",
-      work_package: "WORK-PACKAGE-A",
-      roof_job: "JOB-A",
-      job_assignment: "ASSIGN-A",
-      work_package_version: 1,
-      release_attempt_id: "attempt-a",
-      actor_user: "crew-b@example.com",
+    }),
+    nativeWorkPackageEvent("acknowledged", {
+      event_id: "wpe_ack_crew_b",
+      actor_user_id: "crew-b@example.com",
       actor_role: "Spotter",
       device_action_id: "ack-crew-b",
       occurred_at: "2026-07-10T07:11:00.000Z",
-    },
+    }),
   ];
-  const evidence = {
-    name: "EVIDENCE-EVENT-1",
-    event_type: "Evidence Captured",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
-    release_attempt_id: "attempt-a",
-    actor_user: "crew-a@example.com",
-    actor_role: "Installer",
-    device_action_id: "evidence-device-1",
-    occurred_at: "2026-07-10T08:00:00.000Z",
-    evidence_item: "EVIDENCE-ITEM-1",
-    evidence_slot_id: "step:1",
-    evidence_requirement: "Zone photo",
-    evidence_source: "worker-camera",
-    evidence_device_id: "paired-device-1",
-    evidence_captured_at: "2026-07-10T07:59:00.000Z",
-    evidence_freshness: "Current",
-    evidence_conflict_state: "None",
-    evidence_correction_of: null,
-    evidence_item_correction_of: null,
-    evidence_verification: "Verified",
-    evidence_disposition: "Open",
-    correction_reason: null,
-  };
-  const source = {
-    "Job Assignment": [assignment],
-    "Crew Profile": [{ name: "CREW-1", status: "Active" }],
-    "Crew Member": crewMembers,
-    "Work Package": [packageRow],
-    "Work Package Event": [...acknowledgements, evidence],
-  };
-  const mock = installFrappeMock(source);
+  const mock = installFrappeMock({
+    "Work Package": [rowsFor("Work Package")[0]!],
+  });
   try {
     const model = await buildJobReadModel(
-      env(),
+      env({
+        assignments: [
+          nativeAssignment("ASSIGN-A", "JOB-A", {
+            assigned_users_json: JSON.stringify([
+              "crew-a@example.com",
+              "crew-b@example.com",
+            ]),
+          }),
+        ],
+        workPackages: [packageRow],
+        workPackageEvents: acknowledgements,
+        fieldEvidence: nativeFieldEvidenceRows(1, {
+          user_id: "appu_crew_a",
+          actor_user: "crew-a@example.com",
+        }),
+      }),
       auth("field", "crew-a@example.com"),
       "JOB-A",
     );
-    assert.ok(model?.packet.work_package);
     assert.equal(
-      model.packet.work_package.acknowledgement.current_user_acknowledged,
+      model?.packet.work_package?.acknowledgement.current_user_acknowledged,
       true,
     );
-    assert.equal(model.allowed_actions.includes("work_package.acknowledge"), false);
-    assert.equal(model.packet.work_package.evidence_slots.length, 1);
+    assert.equal(
+      model?.allowed_actions.includes("work_package.acknowledge"),
+      false,
+    );
+    assert.deepEqual(
+      model?.packet.work_package?.acknowledgement.workers.map((worker) => ({
+        user: worker.worker_user,
+        role: worker.worker_role,
+        acknowledged: worker.acknowledged,
+      })),
+      [
+        {
+          user: "crew-a@example.com",
+          role: "Installer",
+          acknowledged: true,
+        },
+        {
+          user: "crew-b@example.com",
+          role: "Spotter",
+          acknowledged: true,
+        },
+      ],
+    );
+    assert.deepEqual(
+      model?.packet.work_package?.evidence_slots.map((item) => ({
+        id: item.evidence_item,
+        actor_user: item.actor_user,
+      })),
+      [
+        {
+          id: "evi_00000000000000000000000000000000",
+          actor_user: "crew-a@example.com",
+        },
+      ],
+    );
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
-
-  const forgedCapture = installFrappeMock({
-    ...source,
-    "Work Package Event": [
-      ...acknowledgements,
-      { ...evidence, evidence_verification: "Pending" },
-    ],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew-a@example.com"),
-      "JOB-A",
-    );
-    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
-  } finally {
-    forgedCapture.restore();
-  }
-
-  const forgedReview = installFrappeMock({
-    ...source,
-    "Work Package Event": [
-      ...acknowledgements,
-      evidence,
-      {
-        ...evidence,
-        name: "EVIDENCE-REVIEW-1",
-        event_type: "Evidence Reviewed",
-        actor_user: "crew-a@example.com",
-        actor_role: "Installer",
-        device_action_id: "review-device-1",
-        occurred_at: "2026-07-10T08:05:00.000Z",
-        evidence_review_of: "EVIDENCE-EVENT-1",
-        evidence_disposition: "Accepted",
-        evidence_verification: null,
-      },
-    ],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew-a@example.com"),
-      "JOB-A",
-    );
-    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
-  } finally {
-    forgedReview.restore();
-  }
-
-  const sameActorReview = installFrappeMock({
-    ...source,
-    "Work Package Event": [
-      ...acknowledgements,
-      evidence,
-      {
-        ...evidence,
-        name: "EVIDENCE-REVIEW-SAME-ACTOR",
-        event_type: "Evidence Reviewed",
-        actor_user: "crew-a@example.com",
-        actor_role: "IronWrap Production",
-        device_action_id: "review-device-same-actor",
-        occurred_at: "2026-07-10T08:06:00.000Z",
-        evidence_review_of: "EVIDENCE-EVENT-1",
-        evidence_disposition: "Accepted",
-        evidence_verification: null,
-      },
-    ],
-  });
-  try {
-    const model = await buildJobReadModel(
-      env(),
-      auth("field", "crew-a@example.com"),
-      "JOB-A",
-    );
-    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
-  } finally {
-    sameActorReview.restore();
-  }
 });
 
-test("field packet fails closed when typed evidence exceeds the bounded ledger page", async () => {
-  const packageRow = {
-    ...rowsFor("Work Package")[0]!,
-    release_attempt_id: "attempt-a",
-  };
-  const evidence = Array.from({ length: 101 }, (_, index) => ({
-    name: `EVIDENCE-EVENT-${String(index).padStart(3, "0")}`,
-    event_type: "Evidence Captured",
-    work_package: "WORK-PACKAGE-A",
-    roof_job: "JOB-A",
-    job_assignment: "ASSIGN-A",
-    work_package_version: 1,
-    release_attempt_id: "attempt-a",
-    actor_user: "crew@example.com",
-    actor_role: "Installer",
-    device_action_id: `evidence-device-${index}`,
-    occurred_at: `2026-07-10T08:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
-    evidence_item: `EVIDENCE-ITEM-${index}`,
-    evidence_slot_id: "step:1",
-    evidence_requirement: "Zone photo",
-    evidence_source: "worker-camera",
-    evidence_device_id: "paired-device-1",
-    evidence_captured_at: "2026-07-10T07:59:00.000Z",
-    evidence_freshness: "Current",
-    evidence_conflict_state: "None",
-    evidence_correction_of: null,
-    evidence_item_correction_of: null,
-    evidence_verification: "Verified",
-    evidence_disposition: "Open",
-    correction_reason: null,
-    modified: MODIFIED,
-  }));
+test("field packet bounds native proof output and exposes the continuation cursor", async () => {
   const mock = installFrappeMock({
-    "Work Package": [packageRow],
-    "Work Package Event": evidence,
+    "Evidence Item": proofRows,
   });
   try {
     const model = await buildJobReadModel(
-      env(),
+      env({ fieldEvidence: nativeFieldEvidenceRows(101) }),
       auth("field", "crew@example.com"),
       "JOB-A",
     );
-    assert.ok(model);
-    assert.deepEqual(model.packet.work_package?.evidence_slots, []);
-    const evidenceRequests = mock.requests.filter(
-      (request) =>
-        request.doctype === "Work Package Event" &&
-        request.fields.includes("evidence_correction_of"),
+    assert.equal(model?.proof_stream.length, 100);
+    assert.equal(
+      model?.proof_stream[0]?.id,
+      "evi_00000000000000000000000000000100",
     );
-    assert.deepEqual(
-      evidenceRequests.map((request) => request.offset),
-      [0, 100],
+    assert.equal(
+      model?.proof_stream.at(-1)?.id,
+      "evi_00000000000000000000000000000001",
     );
+    assert.deepEqual(model?.proof_page, {
+      next_cursor: "100",
+      page_size: 100,
+    });
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }
 });
 
-test("proof pages deterministically traverse 1,051 immutable items in bounded pages", async () => {
-  const mock = installFrappeMock();
+test("proof pages deterministically traverse 1,051 immutable native items in bounded pages", async () => {
+  const runtime = env({ fieldEvidence: nativeFieldEvidenceRows(1_051) });
+  const mock = installFrappeMock({
+    "Evidence Item": proofRows,
+  });
   try {
     const seen: string[] = [];
     let cursor: string | null = "0";
     while (cursor !== null) {
       const page = await buildJobProofReadModel(
-        env(),
+        runtime,
         auth("field", "crew@example.com"),
         "JOB-A",
         cursor,
@@ -3145,19 +4210,42 @@ test("proof pages deterministically traverse 1,051 immutable items in bounded pa
     }
     assert.equal(seen.length, 1_051);
     assert.equal(new Set(seen).size, 1_051);
-    assert.equal(seen[0], "evidence_1050");
-    assert.equal(seen.at(-1), "evidence_0000");
-    const evidenceRequests = mock.requests.filter(
-      (request) => request.doctype === "Evidence Item",
+    assert.equal(seen[0], "evi_00000000000000000000000000001050");
+    assert.equal(seen.at(-1), "evi_00000000000000000000000000000000");
+    assert.equal(mock.requests.length, 0);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("assigned proof pages return only native typed evidence", async () => {
+  const fieldEvidence = nativeFieldEvidenceRows(101);
+  const mock = installFrappeMock({
+    "Evidence Item": proofRows,
+  });
+  try {
+    const first = await buildJobProofReadModel(
+      envWithNativeJobPacket({ fieldEvidence }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+      "0",
     );
-    assert.equal(
-      evidenceRequests.every((request) => request.limit === 100),
-      true,
+    assert.ok(first);
+    assert.equal(first.items.length, 100);
+    assert.equal(first.next_cursor, "100");
+    assert.equal(first.items[0]?.id, "evi_00000000000000000000000000000100");
+
+    const second = await buildJobProofReadModel(
+      envWithNativeJobPacket({ fieldEvidence }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+      first.next_cursor,
     );
-    assert.deepEqual(
-      evidenceRequests.map((request) => request.offset),
-      [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
-    );
+    assert.ok(second);
+    assert.equal(second.items.length, 1);
+    assert.equal(second.items[0]?.id, "evi_00000000000000000000000000000000");
+    assert.equal(second.next_cursor, null);
+    assert.equal(mock.requests.length, 0);
   } finally {
     mock.restore();
   }

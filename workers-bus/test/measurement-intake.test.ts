@@ -7,6 +7,7 @@ import worker from "../src/index.ts";
 import {
   claimMeasurementIntakeReceipt,
   markMeasurementIntakeRetryable,
+  recordNativeMeasurementRevision,
   type MeasurementIntakeIdentity,
 } from "../src/measurement-intake-store.ts";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../src/measurements.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
-import { withErpReadback } from "./effect-runtime-fixture.ts";
 import { makeZip } from "./zip-helper.ts";
 
 class SqliteD1 {
@@ -33,6 +33,8 @@ class SqliteD1 {
       "0037_measurement_calibration.sql",
       "0039_measurement_ocr_evidence.sql",
       "0042_external_effect_runtime.sql",
+      "0090_operating_core.sql",
+      "0103_native_measurement_authority.sql",
     ]) {
       this.raw.exec(
         readFileSync(
@@ -40,6 +42,18 @@ class SqliteD1 {
           "utf8",
         ),
       );
+    }
+    for (const jobNumber of [
+      "26-0001",
+      "26-0002",
+      "26-0004",
+      "26-0005",
+      "26-0007",
+      "26-0008",
+      "26-0009",
+      "26-queue-1",
+    ]) {
+      seedNativeRoofJob(this.raw, { tenantId: "ironwrap", jobNumber });
     }
   }
 
@@ -62,10 +76,82 @@ class SqliteD1 {
   }
 
   consumeRunFailure(sql: string): boolean {
-    if (!this.failRunPattern || !sql.includes(this.failRunPattern)) return false;
+    if (!this.failRunPattern || !sql.includes(this.failRunPattern))
+      return false;
     this.failRunPattern = null;
     return true;
   }
+}
+
+function seedNativeRoofJob(
+  db: DatabaseSync,
+  input: { tenantId: string; jobNumber: string; suffix?: string },
+): string {
+  const suffix = `${input.jobNumber}-${input.suffix ?? "primary"}`.replace(
+    /[^A-Za-z0-9.-]/g,
+    "-",
+  );
+  const envelopeId = `ow.seed.${input.tenantId}.${suffix}`;
+  const leadId = `lead.${input.tenantId}.${suffix}`;
+  const customerId = `customer.${input.tenantId}.${suffix}`;
+  const roofJobId = `roof.${input.tenantId}.${suffix}`;
+  const now = "2026-07-16T10:00:00.000Z";
+  db.prepare(
+    `INSERT INTO envelopes (
+       envelope_id, source, contact_name, contact_email, job_ref, payload_json,
+       ts, status, created_at, updated_at
+     ) VALUES (?, 'manual', 'Measurement fixture', ?, ?, '{}', ?, 'reconciled', ?, ?)`,
+  ).run(
+    envelopeId,
+    `${suffix.toLowerCase()}@example.com`,
+    input.jobNumber,
+    now,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO operating_leads (
+       lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
+       job_ref, lifecycle_status, created_at, updated_at
+     ) VALUES (?, ?, ?, 'manual', 'Measurement fixture', ?, ?, 'converted', ?, ?)`,
+  ).run(
+    leadId,
+    input.tenantId,
+    envelopeId,
+    `${suffix.toLowerCase()}@example.com`,
+    input.jobNumber,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO operating_customers (
+       customer_id, tenant_id, source_envelope_id, display_name, contact_email,
+       lifecycle_status, created_at, updated_at
+     ) VALUES (?, ?, ?, 'Measurement fixture', ?, 'active', ?, ?)`,
+  ).run(
+    customerId,
+    input.tenantId,
+    envelopeId,
+    `${suffix.toLowerCase()}@example.com`,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO operating_roof_jobs (
+       roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
+       job_number, service_type, job_status, current_gate_state, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'measurement', 'in_progress', 'in_progress', ?, ?)`,
+  ).run(
+    roofJobId,
+    input.tenantId,
+    leadId,
+    customerId,
+    envelopeId,
+    input.jobNumber,
+    now,
+    now,
+  );
+  return roofJobId;
 }
 
 class SqliteStatement {
@@ -80,7 +166,8 @@ class SqliteStatement {
   }
 
   async first<T>(): Promise<T | null> {
-    return (this.db.raw.prepare(this.sql).get(...this.args) ?? null) as T | null;
+    return (this.db.raw.prepare(this.sql).get(...this.args) ??
+      null) as T | null;
   }
 
   async all<T>(): Promise<{ results: T[] }> {
@@ -88,7 +175,8 @@ class SqliteStatement {
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {
-    if (this.db.consumeRunFailure(this.sql)) throw new Error("simulated_d1_run_failure");
+    if (this.db.consumeRunFailure(this.sql))
+      throw new Error("simulated_d1_run_failure");
     const result = this.db.raw.prepare(this.sql).run(...this.args);
     return { success: true, meta: { changes: Number(result.changes ?? 0) } };
   }
@@ -101,9 +189,13 @@ function testEnv(
 ) {
   const rawObjects = new Map<
     string,
-    { value: string; kind: "text" } | { value: ArrayBuffer | Uint8Array; kind: "binary" }
+    | { value: string; kind: "text" }
+    | { value: ArrayBuffer | Uint8Array; kind: "binary" }
   >();
-  const queueMessages: Array<{ measurement_receipt_id: string; lease_token: string }> = [];
+  const queueMessages: Array<{
+    measurement_receipt_id: string;
+    lease_token: string;
+  }> = [];
   const env = {
     queueMessages,
     INGEST_TOKEN: "intake-token",
@@ -130,7 +222,11 @@ function testEnv(
           key,
           typeof body === "string"
             ? { value: body, kind: "text" }
-            : { value: body instanceof ArrayBuffer ? new Uint8Array(body) : body, kind: "binary" },
+            : {
+                value:
+                  body instanceof ArrayBuffer ? new Uint8Array(body) : body,
+                kind: "binary",
+              },
         );
       },
       get: async (key: string) => {
@@ -139,12 +235,14 @@ function testEnv(
         if (stored.kind === "text") {
           return {
             text: async () => stored.value,
-            arrayBuffer: async () => new TextEncoder().encode(stored.value).buffer,
+            arrayBuffer: async () =>
+              new TextEncoder().encode(stored.value).buffer,
           };
         }
-        const bytes = stored.value instanceof Uint8Array
-          ? stored.value
-          : new Uint8Array(stored.value);
+        const bytes =
+          stored.value instanceof Uint8Array
+            ? stored.value
+            : new Uint8Array(stored.value);
         return {
           text: async () => new TextDecoder().decode(bytes),
           arrayBuffer: async () => bytes.buffer,
@@ -163,7 +261,11 @@ async function flushMeasurementQueue(
   while (queueMessages.length > 0) {
     const message = queueMessages.shift();
     if (!message) break;
-    await handleMeasurementQueueMessage(env as never, message.measurement_receipt_id, message.lease_token);
+    await handleMeasurementQueueMessage(
+      env as never,
+      message.measurement_receipt_id,
+      message.lease_token,
+    );
   }
 }
 
@@ -174,9 +276,12 @@ const json = (body: unknown) =>
   });
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
   return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
+    byte.toString(16).padStart(2, "0"),
   ).join("");
 }
 
@@ -355,20 +460,16 @@ test("measurement intake: owner PWA exceptions are role-scoped and strictly reda
   const db = new SqliteD1();
   const rawWrites: Array<{ key: string; body: string }> = [];
   const { env, queueMessages } = testEnv(db, rawWrites);
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url === "https://reports.example.com/26-0004.pdf") {
-        return new Response(Buffer.from("%PDF-1.7 fake measurement pdf"), {
-          status: 200,
-          headers: { "content-type": "application/pdf" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    },
-  );
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "https://reports.example.com/26-0004.pdf") {
+      return new Response(Buffer.from("%PDF-1.7 fake measurement pdf"), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
 
   await worker.fetch(
     intakeRequest({ report_id: "roofruler-report-owner", squares: 24 }),
@@ -550,20 +651,16 @@ test("measurement intake: a report waits in the retryable queue until Drive is c
   const db = new SqliteD1();
   const rawWrites: Array<{ key: string; body: string }> = [];
   const { env, queueMessages } = testEnv(db, rawWrites);
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url === "https://reports.example.com/26-0004.pdf") {
-        return new Response(Buffer.from("%PDF-1.7 fake measurement pdf"), {
-          status: 200,
-          headers: { "content-type": "application/pdf" },
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    },
-  );
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "https://reports.example.com/26-0004.pdf") {
+      return new Response(Buffer.from("%PDF-1.7 fake measurement pdf"), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
 
   const submitted = await worker.fetch(
     intakeRequest(
@@ -572,7 +669,7 @@ test("measurement intake: a report waits in the retryable queue until Drive is c
         report_url: "https://reports.example.com/26-0004.pdf",
         squares: 24,
       },
-    "measurement-drive-pending-0001",
+      "measurement-drive-pending-0001",
     ),
     env as never,
     ctx as never,
@@ -605,25 +702,12 @@ test("measurement intake: an unresolved supplied job is queued rather than treat
     ERPNEXT_API_KEY: "erp-key",
     ERPNEXT_API_SECRET: "erp-secret",
   });
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(
-    globalThis,
-    "fetch",
-    withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      fetches.push({ url, init: init ?? {} });
-      if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
-      if (url.includes("/api/resource/Measurement%20Report?"))
-        return json({ data: [] });
-      if (url.endsWith("/api/resource/Measurement%20Report"))
-        return json({ data: { name: "MR-UNRESOLVED" } });
-      if (url.includes("/api/resource/Evidence%20Item?"))
-        return json({ data: [] });
-      if (url.endsWith("/api/resource/Evidence%20Item"))
-        return json({ data: { name: "EV-UNRESOLVED" } });
-      throw new Error(`unexpected fetch ${url}`);
-    }),
-  );
+  const fetches: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    fetches.push(url);
+    throw new Error(`unexpected fetch ${url}`);
+  });
 
   const submitted = await worker.fetch(
     intakeRequest(
@@ -661,33 +745,73 @@ test("measurement intake: an unresolved supplied job is queued rather than treat
   const listedBody = (await listed.json()) as {
     measurements: Array<Record<string, unknown>>;
   };
-  const report = JSON.parse(
-    String(
-      fetches.find((item) =>
-        item.url.endsWith("/api/resource/Measurement%20Report"),
-      )?.init.body,
-    ),
-  );
+  const native = db.raw
+    .prepare(
+      `SELECT association_status, association_error, roof_job_id, projection_json
+       FROM native_measurement_revisions WHERE measurement_id = ?`,
+    )
+    .get(submittedBody.measurement_id) as {
+    association_status: string;
+    association_error: string;
+    roof_job_id: string | null;
+    projection_json: string;
+  };
+  const receipt = db.raw
+    .prepare(
+      `SELECT frappe_measurement_id, frappe_evidence_id, frappe_error,
+            native_measurement_revision_id, native_projection_sha256
+       FROM measurement_intake_receipts WHERE measurement_id = ?`,
+    )
+    .get(submittedBody.measurement_id) as Record<string, unknown>;
+  const projection = JSON.parse(native.projection_json) as {
+    provider: string;
+    association: { status: string; error: string; roof_job_id: string | null };
+    evidence: {
+      geometry_authority: {
+        kind: string;
+        roof_graph: {
+          schema_version: string;
+          revision: string;
+          source: { raw_sha256: string; provider: string };
+          points: unknown[];
+          edges: unknown[];
+          facets: unknown[];
+        };
+      };
+      ocr_is_geometry_authority: boolean;
+    };
+  };
+  const roofGraph = projection.evidence.geometry_authority.roof_graph;
 
   assert.equal(submittedBody.status, "processing");
-  assert.equal(report.review_status, "Needs Review");
-  assert.equal(report.provider, "AppliCad");
-  const roofGraph = JSON.parse(report.roof_graph_json) as {
-    schema_version: string;
-    revision: string;
-    source: { raw_sha256: string; provider: string };
-    points: unknown[];
-    edges: unknown[];
-    facets: unknown[];
-  };
+  assert.deepEqual(fetches, []);
+  assert.equal(native.association_status, "unmatched");
+  assert.equal(native.association_error, "roof_job_not_found");
+  assert.equal(native.roof_job_id, null);
+  assert.equal(projection.provider, "AppliCad");
+  assert.deepEqual(projection.association, {
+    status: "unmatched",
+    job_number: "26-0006",
+    roof_job_id: null,
+    operating_job_version: null,
+    error: "roof_job_not_found",
+  });
+  assert.equal(projection.evidence.geometry_authority.kind, "deterministic");
+  assert.equal(projection.evidence.ocr_is_geometry_authority, false);
   assert.equal(roofGraph.schema_version, "roof_graph/v1");
-  assert.equal(report.roof_graph_revision, roofGraph.revision);
   assert.equal(roofGraph.source.raw_sha256, roofGraph.revision);
-  assert.equal(roofGraph.source.provider, report.provider);
+  assert.equal(roofGraph.source.provider, projection.provider);
   assert.equal(roofGraph.points.length, 4);
   assert.equal(roofGraph.edges.length, 4);
   assert.equal(roofGraph.facets.length, 1);
-  assert.equal("roof_job" in report, false);
+  assert.equal(receipt.frappe_measurement_id, null);
+  assert.equal(receipt.frappe_evidence_id, null);
+  assert.equal(receipt.frappe_error, null);
+  assert.match(
+    String(receipt.native_measurement_revision_id),
+    /^mrev_[0-9a-f]{64}$/,
+  );
+  assert.match(String(receipt.native_projection_sha256), /^[0-9a-f]{64}$/);
   assert.equal(
     listedBody.measurements[0].measurement_id,
     submittedBody.measurement_id,
@@ -696,11 +820,443 @@ test("measurement intake: an unresolved supplied job is queued rather than treat
   assert.equal(listedBody.measurements[0].last_error, "roof_job_not_found");
 });
 
+test("measurement native authority: matched intake makes zero Frappe calls", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+  });
+  const fetches: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    fetches.push(String(input));
+    throw new Error(`unexpected fetch ${String(input)}`);
+  });
+
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0001", squares: 24, ridge_ft: 100 },
+      "measurement-native-no-frappe-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+
+  const receipt = db.raw
+    .prepare(
+      `SELECT status, tenant_id, native_roof_job_id, native_measurement_revision_id,
+            frappe_measurement_id, frappe_evidence_id, frappe_error
+       FROM measurement_intake_receipts
+      WHERE idempotency_key_hash IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as Record<string, unknown>;
+  assert.deepEqual(fetches, []);
+  assert.equal(receipt.status, "matched");
+  assert.equal(receipt.tenant_id, "ironwrap");
+  assert.equal(receipt.native_roof_job_id, "roof.ironwrap.26-0001-primary");
+  assert.match(
+    String(receipt.native_measurement_revision_id),
+    /^mrev_[0-9a-f]{64}$/,
+  );
+  assert.equal(receipt.frappe_measurement_id, null);
+  assert.equal(receipt.frappe_evidence_id, null);
+  assert.equal(receipt.frappe_error, null);
+});
+
+test("measurement native authority: cross-tenant and ambiguous jobs fail closed", async (t) => {
+  const db = new SqliteD1();
+  seedNativeRoofJob(db.raw, {
+    tenantId: "other-tenant",
+    jobNumber: "26-cross-tenant",
+  });
+  seedNativeRoofJob(db.raw, {
+    tenantId: "ironwrap",
+    jobNumber: "26-ambiguous",
+    suffix: "one",
+  });
+  seedNativeRoofJob(db.raw, {
+    tenantId: "ironwrap",
+    jobNumber: "26-ambiguous",
+    suffix: "two",
+  });
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+  });
+  const fetches: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    fetches.push(String(input));
+    throw new Error(`unexpected fetch ${String(input)}`);
+  });
+
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-cross-tenant", squares: 20 },
+      "measurement-cross-tenant-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-ambiguous", squares: 21 },
+      "measurement-ambiguous-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+
+  const rows = db.raw
+    .prepare(
+      `SELECT job_number, association_status, association_error, roof_job_id
+       FROM native_measurement_revisions
+      WHERE job_number IN ('26-cross-tenant', '26-ambiguous')
+      ORDER BY job_number`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  assert.deepEqual(fetches, []);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map((row) => ({
+      job_number: row.job_number,
+      association_status: row.association_status,
+      association_error: row.association_error,
+      roof_job_id: row.roof_job_id,
+    })),
+    [
+      {
+        job_number: "26-ambiguous",
+        association_status: "unmatched",
+        association_error: "roof_job_ambiguous",
+        roof_job_id: null,
+      },
+      {
+        job_number: "26-cross-tenant",
+        association_status: "unmatched",
+        association_error: "roof_job_tenant_mismatch",
+        roof_job_id: null,
+      },
+    ],
+  );
+});
+
+test("measurement native authority: tenant drift and raw hash mismatch create no revision", async () => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages, rawObjects } = testEnv(db, rawWrites);
+
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0001", squares: 20 },
+      "measurement-tenant-drift-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  const driftMessage = queueMessages.shift();
+  assert.ok(driftMessage);
+  db.raw
+    .prepare(
+      "UPDATE measurement_intake_receipts SET tenant_id = 'other-tenant' WHERE receipt_id = ?",
+    )
+    .run(driftMessage.measurement_receipt_id);
+  await handleMeasurementQueueMessage(
+    env as never,
+    driftMessage.measurement_receipt_id,
+    driftMessage.lease_token,
+  );
+
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0002", squares: 22 },
+      "measurement-raw-drift-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  const hashMessage = queueMessages.shift();
+  assert.ok(hashMessage);
+  const hashReceipt = db.raw
+    .prepare(
+      "SELECT raw_key FROM measurement_intake_receipts WHERE receipt_id = ?",
+    )
+    .get(hashMessage.measurement_receipt_id) as { raw_key: string };
+  rawObjects.set(hashReceipt.raw_key, { value: "{}", kind: "text" });
+  await handleMeasurementQueueMessage(
+    env as never,
+    hashMessage.measurement_receipt_id,
+    hashMessage.lease_token,
+  );
+
+  const failures = db.raw
+    .prepare(
+      `SELECT receipt_id, last_error FROM measurement_intake_receipts
+      WHERE receipt_id IN (?, ?) ORDER BY receipt_id`,
+    )
+    .all(
+      driftMessage.measurement_receipt_id,
+      hashMessage.measurement_receipt_id,
+    ) as Array<{ receipt_id: string; last_error: string }>;
+  assert.deepEqual(failures.map((row) => row.last_error).sort(), [
+    "measurement_receipt_tenant_mismatch",
+    "raw_payload_hash_mismatch",
+  ]);
+  const revisions = db.raw
+    .prepare(
+      "SELECT COUNT(*) AS count FROM native_measurement_revisions WHERE receipt_id IN (?, ?)",
+    )
+    .get(
+      driftMessage.measurement_receipt_id,
+      hashMessage.measurement_receipt_id,
+    ) as { count: number };
+  assert.equal(Number(revisions.count), 0);
+});
+
+test("measurement native authority: lost completion response reuses one immutable revision", async () => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites);
+  const body = { job_number: "26-0001", squares: 24 };
+
+  await worker.fetch(
+    intakeRequest(body, "measurement-lost-completion-0001"),
+    env as never,
+    ctx as never,
+  );
+  db.failNextRunMatching("SET status = ?, lease_token = NULL");
+  await flushMeasurementQueue(env, queueMessages);
+  const interrupted = db.raw
+    .prepare(
+      `SELECT status, native_measurement_revision_id
+       FROM measurement_intake_receipts
+      WHERE idempotency_key_hash IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as { status: string; native_measurement_revision_id: string | null };
+  assert.equal(interrupted.status, "retryable_error");
+  assert.equal(interrupted.native_measurement_revision_id, null);
+  assert.equal(
+    Number(
+      (
+        db.raw
+          .prepare("SELECT COUNT(*) AS count FROM native_measurement_revisions")
+          .get() as { count: number }
+      ).count,
+    ),
+    1,
+  );
+
+  const retried = await worker.fetch(
+    intakeRequest(body, "measurement-lost-completion-0001"),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(retried.status, 202);
+  await flushMeasurementQueue(env, queueMessages);
+  const completed = db.raw
+    .prepare(
+      `SELECT status, native_measurement_revision_id, native_projection_sha256
+       FROM measurement_intake_receipts
+      WHERE idempotency_key_hash IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as Record<string, unknown>;
+  assert.equal(completed.status, "matched");
+  assert.match(
+    String(completed.native_measurement_revision_id),
+    /^mrev_[0-9a-f]{64}$/,
+  );
+  assert.match(String(completed.native_projection_sha256), /^[0-9a-f]{64}$/);
+  assert.equal(
+    Number(
+      (
+        db.raw
+          .prepare("SELECT COUNT(*) AS count FROM native_measurement_revisions")
+          .get() as { count: number }
+      ).count,
+    ),
+    1,
+  );
+});
+
+test("measurement native authority: stale corrections cannot fork lineage", async () => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites);
+
+  await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0001", squares: 20 },
+      "measurement-correction-base-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const base = db.raw
+    .prepare(
+      `SELECT measurement_id, measurement_revision_id
+       FROM native_measurement_revisions WHERE revision_number = 1`,
+    )
+    .get() as { measurement_id: string; measurement_revision_id: string };
+
+  await worker.fetch(
+    intakeRequest(
+      {
+        job_number: "26-0001",
+        squares: 21,
+        supersedes_measurement_id: base.measurement_id,
+        correction_reason: "Verified report revision",
+      },
+      "measurement-correction-first-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const successor = db.raw
+    .prepare(
+      `SELECT revision_number, supersedes_measurement_revision_id, correction_reason
+       FROM native_measurement_revisions WHERE revision_number = 2`,
+    )
+    .get() as Record<string, unknown>;
+  assert.equal(Number(successor.revision_number), 2);
+  assert.equal(
+    successor.supersedes_measurement_revision_id,
+    base.measurement_revision_id,
+  );
+  assert.equal(successor.correction_reason, "Verified report revision");
+
+  await worker.fetch(
+    intakeRequest(
+      {
+        job_number: "26-0001",
+        squares: 22,
+        supersedes_measurement_id: base.measurement_id,
+        correction_reason: "Competing stale revision",
+      },
+      "measurement-correction-stale-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const stale = db.raw
+    .prepare(
+      `SELECT status, last_error FROM measurement_intake_receipts
+      WHERE last_error = 'measurement_correction_stale'`,
+    )
+    .get() as { status: string; last_error: string };
+  assert.equal(stale.status, "retryable_error");
+  assert.equal(stale.last_error, "measurement_correction_stale");
+  assert.equal(
+    Number(
+      (
+        db.raw
+          .prepare("SELECT COUNT(*) AS count FROM native_measurement_revisions")
+          .get() as { count: number }
+      ).count,
+    ),
+    2,
+  );
+});
+
+test("measurement native store: changed replay command is rejected", async () => {
+  const db = new SqliteD1();
+  const hash = "f".repeat(64);
+  const payloadHash = "1".repeat(64);
+  const claim = await claimMeasurementIntakeReceipt(
+    { DB: db as never } as Env,
+    {
+      tenantId: "ironwrap",
+      receiptId: `measurement_${hash}`,
+      idempotencyKeyHash: hash,
+      payloadHash,
+      keyStrategy: "payload_hash",
+      measurementId: `measurement:${hash}`,
+      provider: "RoofRuler",
+      jobNumber: "26-0001",
+      rawKey: `raw/measurements/${payloadHash}.json`,
+      contentType: "application/json",
+      now: "2026-07-16T10:00:00.000Z",
+      leaseToken: "lease-replay-collision",
+      leaseExpiresAt: "2026-07-16T10:02:00.000Z",
+    },
+  );
+  if (claim.kind !== "claimed") throw new Error("receipt not claimed");
+  const job = db.raw
+    .prepare(
+      `SELECT tenant_id, roof_job_id, job_number, version
+       FROM operating_roof_jobs WHERE tenant_id = 'ironwrap' AND job_number = '26-0001'`,
+    )
+    .get() as {
+    tenant_id: string;
+    roof_job_id: string;
+    job_number: string;
+    version: number;
+  };
+  const command = {
+    receipt: claim.receipt,
+    tenantId: "ironwrap",
+    job,
+    associationError: null,
+    receiptStatus: "matched" as const,
+    completionReason: null,
+    reviewReasons: [],
+    supersedesMeasurementId: null,
+    correctionReason: null,
+    evidence: { raw: { key: claim.receipt.raw_key, sha256: payloadHash } },
+    now: "2026-07-16T10:00:30.000Z",
+  };
+  await recordNativeMeasurementRevision({ DB: db as never } as Env, command);
+  await assert.rejects(
+    recordNativeMeasurementRevision({ DB: db as never } as Env, {
+      ...command,
+      evidence: { ...command.evidence, changed: true },
+    }),
+    /native_measurement_replay_collision/,
+  );
+});
+
+test("measurement intake: raw R2 failure precedes D1 receipt creation", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env } = testEnv(db, rawWrites);
+  t.mock.method(env.RAW, "put", async () => {
+    throw new Error("simulated_raw_write_failure");
+  });
+
+  const response = await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0001", squares: 24 },
+      "measurement-raw-ordering-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(response.status, 500);
+  const receipts = db.raw
+    .prepare("SELECT COUNT(*) AS count FROM measurement_intake_receipts")
+    .get() as { count: number };
+  const revisions = db.raw
+    .prepare("SELECT COUNT(*) AS count FROM native_measurement_revisions")
+    .get() as { count: number };
+  assert.equal(Number(receipts.count), 0);
+  assert.equal(Number(revisions.count), 0);
+});
+
 test("measurement receipt leases permit only one active processor and reclaim a recorded retry", async () => {
   const db = new SqliteD1();
   const hash = "a".repeat(64);
   const payloadHash = "b".repeat(64);
   const identity: MeasurementIntakeIdentity = {
+    tenantId: "ironwrap",
     receiptId: `measurement_${hash}`,
     idempotencyKeyHash: hash,
     payloadHash,
@@ -759,6 +1315,7 @@ test("measurement receipt retry sweep replays a durable source without a new inb
   const hash = "c".repeat(64);
   const payloadHash = "d".repeat(64);
   const identity: MeasurementIntakeIdentity = {
+    tenantId: "ironwrap",
     receiptId: `measurement_${hash}`,
     idempotencyKeyHash: hash,
     payloadHash,
@@ -829,6 +1386,7 @@ test("measurement receipt retry sweep takes over an expired processing lease", a
   ).join("");
   const hash = "e".repeat(64);
   const identity: MeasurementIntakeIdentity = {
+    tenantId: "ironwrap",
     receiptId: `measurement_${hash}`,
     idempotencyKeyHash: hash,
     payloadHash,
@@ -876,61 +1434,92 @@ test("measurement queue retries an undurable failure and records one DLQ inciden
   assert.equal(submitted.status, 202);
   const message = queueMessages.shift();
   assert.ok(message);
-  const rawKey = (db.raw.prepare(
-    "SELECT raw_key FROM measurement_intake_receipts LIMIT 1",
-  ).get() as { raw_key: string }).raw_key;
+  const rawKey = (
+    db.raw
+      .prepare("SELECT raw_key FROM measurement_intake_receipts LIMIT 1")
+      .get() as { raw_key: string }
+  ).raw_key;
   rawObjects.delete(rawKey);
   db.failNextRunMatching("SET status = 'retryable_error'");
 
   let mainAcked = 0;
   let mainRetried = 0;
-  await worker.queue({
-    queue: "ironwrap-measurements",
-    messages: [{
-      body: message,
-      ack: () => { mainAcked += 1; },
-      retry: () => { mainRetried += 1; },
-    }],
-  } as never, env as never, {} as never);
+  await worker.queue(
+    {
+      queue: "ironwrap-measurements",
+      messages: [
+        {
+          body: message,
+          ack: () => {
+            mainAcked += 1;
+          },
+          retry: () => {
+            mainRetried += 1;
+          },
+        },
+      ],
+    } as never,
+    env as never,
+    {} as never,
+  );
   assert.equal(mainAcked, 0);
   assert.equal(mainRetried, 1);
   assert.equal(
-    (db.raw.prepare(
-      "SELECT status FROM measurement_intake_receipts LIMIT 1",
-    ).get() as { status: string }).status,
+    (
+      db.raw
+        .prepare("SELECT status FROM measurement_intake_receipts LIMIT 1")
+        .get() as { status: string }
+    ).status,
     "processing",
   );
 
   let dlqAcked = 0;
   let dlqRetried = 0;
   const deliverDlq = async () => {
-    await worker.queue({
-      queue: "ironwrap-measurements-dlq",
-      messages: [{
-        body: message,
-        ack: () => { dlqAcked += 1; },
-        retry: () => { dlqRetried += 1; },
-      }],
-    } as never, env as never, {} as never);
+    await worker.queue(
+      {
+        queue: "ironwrap-measurements-dlq",
+        messages: [
+          {
+            body: message,
+            ack: () => {
+              dlqAcked += 1;
+            },
+            retry: () => {
+              dlqRetried += 1;
+            },
+          },
+        ],
+      } as never,
+      env as never,
+      {} as never,
+    );
   };
   await deliverDlq();
   await deliverDlq();
 
   assert.equal(dlqAcked, 2);
   assert.equal(dlqRetried, 0);
-  const receipt = db.raw.prepare(
-    "SELECT status, last_error FROM measurement_intake_receipts LIMIT 1",
-  ).get() as { status: string; last_error: string | null };
+  const receipt = db.raw
+    .prepare(
+      "SELECT status, last_error FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as { status: string; last_error: string | null };
   assert.equal(receipt.status, "retryable_error");
   assert.equal(receipt.last_error, "measurement_queue_exhausted");
-  const incidents = db.raw.prepare(
-    "SELECT stage, error, recovered FROM dead_letter",
-  ).all() as Array<{ stage: string; error: string; recovered: number }>;
-  assert.deepEqual(incidents.map((incident) => ({ ...incident })), [{
-    stage: "measurement_processing",
-    error: "measurement_queue_exhausted",
-    recovered: 0,
-  }]);
+  const incidents = db.raw
+    .prepare("SELECT stage, error, recovered FROM dead_letter")
+    .all() as Array<{ stage: string; error: string; recovered: number }>;
+  assert.deepEqual(
+    incidents.map((incident) => ({ ...incident })),
+    [
+      {
+        stage: "measurement_processing",
+        error: "measurement_queue_exhausted",
+        recovered: 0,
+      },
+    ],
+  );
 });
 
 test("measurement report does not claim R2 evidence when the object write fails", async (t) => {
@@ -961,10 +1550,12 @@ test("measurement report does not claim R2 evidence when the object write fails"
   };
 
   await flushMeasurementQueue(env, queueMessages);
-  const receipt = db.raw.prepare(
-    `SELECT status, report_raw_key, report_sha256, report_content_type
+  const receipt = db.raw
+    .prepare(
+      `SELECT status, report_raw_key, report_sha256, report_content_type
      FROM measurement_intake_receipts LIMIT 1`,
-  ).get() as {
+    )
+    .get() as {
     status: string;
     report_raw_key: string | null;
     report_sha256: string | null;
@@ -975,7 +1566,9 @@ test("measurement report does not claim R2 evidence when the object write fails"
   assert.equal(receipt.report_sha256, null);
   assert.equal(receipt.report_content_type, null);
   assert.equal(
-    [...rawObjects.keys()].some((key) => key.startsWith("raw/measurement-reports/")),
+    [...rawObjects.keys()].some((key) =>
+      key.startsWith("raw/measurement-reports/"),
+    ),
     false,
   );
 });
@@ -998,9 +1591,16 @@ test("measurement helpers: zip report bytes and payload coordinates parse", asyn
   const geometry = await geometryFromReportBytes(new Uint8Array(zip));
   assert.equal(geometry?.measurements.roof_area, 100);
   assert.equal(geometry?.needsReview, false);
-  assert.equal(await geometryFromReportBytes(new TextEncoder().encode("%PDF-1.7")), null);
+  assert.equal(
+    await geometryFromReportBytes(new TextEncoder().encode("%PDF-1.7")),
+    null,
+  );
 
-  const sub = parseMeasurementSubmission({ job_number: "26-1", lat: 51.05, lng: -114.07 });
+  const sub = parseMeasurementSubmission({
+    job_number: "26-1",
+    lat: 51.05,
+    lng: -114.07,
+  });
   assert.deepEqual(sub.coords, { lat: 51.05, lng: -114.07 });
   assert.equal(parseMeasurementSubmission({ lat: 200, lng: 10 }).coords, null);
   assert.equal(parseMeasurementSubmission({ lat: 0, lng: 0 }).coords, null);
@@ -1036,7 +1636,10 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
           messages?: Array<{ content?: Array<Record<string, unknown>> }>;
           tool_choice?: { name?: string };
         };
-        assert.equal(body.tool_choice?.name, "extract_measurement_report_fields");
+        assert.equal(
+          body.tool_choice?.name,
+          "extract_measurement_report_fields",
+        );
         const document = body.messages?.[0]?.content?.[0] as {
           type?: string;
           source?: { type?: string; media_type?: string; data?: string };
@@ -1093,9 +1696,11 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
     status: string;
     measurement_id: string;
   };
-  const receipt = db.raw.prepare(
-    "SELECT receipt_id, job_number, status, last_error, report_raw_key, report_sha256, report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256, ocr_job_number_candidate, ocr_review_required FROM measurement_intake_receipts LIMIT 1",
-  ).get() as {
+  const receipt = db.raw
+    .prepare(
+      "SELECT receipt_id, job_number, status, last_error, report_raw_key, report_sha256, report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256, ocr_job_number_candidate, ocr_review_required FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as {
     receipt_id: string;
     job_number: string | null;
     status: string;
@@ -1135,9 +1740,11 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
     status: string;
     review_reason: string;
   };
-  const postQueueReceipt = db.raw.prepare(
-    "SELECT report_sha256, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256, ocr_review_required FROM measurement_intake_receipts LIMIT 1",
-  ).get() as {
+  const postQueueReceipt = db.raw
+    .prepare(
+      "SELECT report_sha256, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256, ocr_review_required FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as {
     report_sha256: string;
     ocr_status: string;
     ocr_model: string | null;
@@ -1146,7 +1753,9 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
     ocr_review_required: number;
   };
   const ocrEvidence = await env.RAW.get(postQueueReceipt.ocr_result_key!);
-  const ocrPayload = JSON.parse(new TextDecoder().decode(await ocrEvidence!.arrayBuffer())) as {
+  const ocrPayload = JSON.parse(
+    new TextDecoder().decode(await ocrEvidence!.arrayBuffer()),
+  ) as {
     schemaVersion: string;
     sourceRefs: Record<string, string>;
     confidences: Record<string, unknown>;
@@ -1178,7 +1787,9 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
     env as never,
     appAuth("ops"),
   );
-  const ownerBody = (await owner.json()) as { measurements: Array<Record<string, unknown>> };
+  const ownerBody = (await owner.json()) as {
+    measurements: Array<Record<string, unknown>>;
+  };
   assert.equal(owner.status, 200);
   assert.equal(owner.headers.get("cache-control"), "private, no-store");
   const ownerOcrReview = ownerBody.measurements.find(
@@ -1190,15 +1801,20 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
     "https://reports.example.com/ocr-only.pdf",
     "https://api.anthropic.com/v1/messages",
   ]);
-  const ocrStoredReceipt = db.raw.prepare(
-    "SELECT report_content_type, report_raw_key, report_sha256 FROM measurement_intake_receipts WHERE receipt_id = ?",
-  ).get(receipt.receipt_id) as {
+  const ocrStoredReceipt = db.raw
+    .prepare(
+      "SELECT report_content_type, report_raw_key, report_sha256 FROM measurement_intake_receipts WHERE receipt_id = ?",
+    )
+    .get(receipt.receipt_id) as {
     report_content_type: string | null;
     report_raw_key: string | null;
     report_sha256: string | null;
   };
   assert.equal(ocrStoredReceipt.report_content_type, "application/pdf");
-  assert.match(ocrStoredReceipt.report_raw_key ?? "", /^raw\/measurement-reports\/[0-9a-f]{64}\.bin$/);
+  assert.match(
+    ocrStoredReceipt.report_raw_key ?? "",
+    /^raw\/measurement-reports\/[0-9a-f]{64}\.bin$/,
+  );
   assert.match(ocrStoredReceipt.report_sha256 ?? "", /^[0-9a-f]{64}$/);
   assert.equal(typeof body.measurement_id, "string");
 });
@@ -1212,40 +1828,40 @@ test("measurement OCR reuses staged evidence after its D1 result commit fails", 
   });
   let anthropicCalls = 0;
   let reportFetches = 0;
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url === "https://reports.example.com/ocr-crash.pdf") {
-        reportFetches += 1;
-        return new Response(Buffer.from("%PDF-1.7 crash window"), {
-          headers: { "content-type": "application/pdf" },
-        });
-      }
-      if (url === "https://api.anthropic.com/v1/messages") {
-        anthropicCalls += 1;
-        return json({
-          content: [{
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "https://reports.example.com/ocr-crash.pdf") {
+      reportFetches += 1;
+      return new Response(Buffer.from("%PDF-1.7 crash window"), {
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    if (url === "https://api.anthropic.com/v1/messages") {
+      anthropicCalls += 1;
+      return json({
+        content: [
+          {
             type: "tool_use",
             name: "extract_measurement_report_fields",
             input: {
               job_number: null,
-              measurements: [{
-                metric: "squares",
-                value: 18.5,
-                page: 1,
-                region: "Summary",
-                label: "Squares",
-                confidence: "high",
-              }],
+              measurements: [
+                {
+                  metric: "squares",
+                  value: 18.5,
+                  page: 1,
+                  region: "Summary",
+                  label: "Squares",
+                  confidence: "high",
+                },
+              ],
             },
-          }],
-        });
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    },
-  );
+          },
+        ],
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
   const submitted = await worker.fetch(
     intakeRequest(
       { report_url: "https://reports.example.com/ocr-crash.pdf" },
@@ -1257,15 +1873,18 @@ test("measurement OCR reuses staged evidence after its D1 result commit fails", 
   assert.equal(submitted.status, 202);
   db.failNextRunMatching("SET ocr_status = 'completed'");
   await flushMeasurementQueue(env, queueMessages);
-  const failed = db.raw.prepare(
-    "SELECT status, ocr_status, last_error FROM measurement_intake_receipts LIMIT 1",
-  ).get() as { status: string; ocr_status: string; last_error: string | null };
+  const failed = db.raw
+    .prepare(
+      "SELECT status, ocr_status, last_error FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as { status: string; ocr_status: string; last_error: string | null };
   assert.equal(failed.status, "retryable_error");
   assert.equal(failed.ocr_status, "failed");
   assert.equal(failed.last_error, "measurement_processing_failed");
   assert.equal(anthropicCalls, 1);
   assert.equal(
-    rawWrites.filter(({ key }) => key.startsWith("raw/measurement-ocr/")).length,
+    rawWrites.filter(({ key }) => key.startsWith("raw/measurement-ocr/"))
+      .length,
     1,
   );
 
@@ -1273,9 +1892,11 @@ test("measurement OCR reuses staged evidence after its D1 result commit fails", 
     env as never,
     new Date(Date.now() + 5 * 60_000),
   );
-  const recovered = db.raw.prepare(
-    "SELECT status, ocr_status, attempts, last_error FROM measurement_intake_receipts LIMIT 1",
-  ).get() as {
+  const recovered = db.raw
+    .prepare(
+      "SELECT status, ocr_status, attempts, last_error FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as {
     status: string;
     ocr_status: string;
     attempts: number;
@@ -1302,7 +1923,9 @@ test("measurement OCR blocks oversized PDFs before model spend and retry", async
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input);
     if (url === "https://reports.example.com/ocr-large.pdf") {
-      return new Response(pdf, { headers: { "content-type": "application/pdf" } });
+      return new Response(pdf, {
+        headers: { "content-type": "application/pdf" },
+      });
     }
     if (url === "https://api.anthropic.com/v1/messages") {
       anthropicCalls += 1;
@@ -1318,9 +1941,11 @@ test("measurement OCR blocks oversized PDFs before model spend and retry", async
     ctx as never,
   );
   await flushMeasurementQueue(env, queueMessages);
-  const beforeRetry = db.raw.prepare(
-    "SELECT status, last_error, attempts FROM measurement_intake_receipts LIMIT 1",
-  ).get() as { status: string; last_error: string | null; attempts: number };
+  const beforeRetry = db.raw
+    .prepare(
+      "SELECT status, last_error, attempts FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as { status: string; last_error: string | null; attempts: number };
   assert.equal(beforeRetry.status, "retryable_error");
   assert.equal(beforeRetry.last_error, "measurement_ocr_pdf_too_large");
   assert.equal(anthropicCalls, 0);
@@ -1329,20 +1954,25 @@ test("measurement OCR blocks oversized PDFs before model spend and retry", async
     env as never,
     new Date(Date.now() + 24 * 60 * 60_000),
   );
-  const afterRetry = db.raw.prepare(
-    "SELECT attempts FROM measurement_intake_receipts LIMIT 1",
-  ).get() as { attempts: number };
+  const afterRetry = db.raw
+    .prepare("SELECT attempts FROM measurement_intake_receipts LIMIT 1")
+    .get() as { attempts: number };
   assert.equal(Number(afterRetry.attempts), Number(beforeRetry.attempts));
   assert.equal(anthropicCalls, 0);
   const owner = await handleAuthenticatedRoute(
-    new Request("https://app.example.com/api/v1/owner/measurement-intake-exceptions?limit=5"),
+    new Request(
+      "https://app.example.com/api/v1/owner/measurement-intake-exceptions?limit=5",
+    ),
     env as never,
     appAuth("owner"),
   );
-  const ownerBody = await owner.json() as {
+  const ownerBody = (await owner.json()) as {
     measurements: Array<{ recovery_disposition: string }>;
   };
-  assert.equal(ownerBody.measurements[0]?.recovery_disposition, "recovery_blocked");
+  assert.equal(
+    ownerBody.measurements[0]?.recovery_disposition,
+    "recovery_blocked",
+  );
 });
 
 test("measurement intake: frontier OCR keeps a discovered job number provisional", async (t) => {
@@ -1412,7 +2042,9 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
           ],
         });
       }
-      throw new Error(`unexpected fetch ${url}: ${String(init?.method ?? "GET")}`);
+      throw new Error(
+        `unexpected fetch ${url}: ${String(init?.method ?? "GET")}`,
+      );
     },
   );
 
@@ -1442,9 +2074,11 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
     review_reason: string;
     measurement_id: string;
   };
-  const receipt = db.raw.prepare(
-    "SELECT receipt_id, job_number, status, last_error, report_sha256, ocr_status, ocr_job_number_candidate, ocr_job_number_source_ref, ocr_result_key, ocr_result_sha256 FROM measurement_intake_receipts LIMIT 1",
-  ).get() as {
+  const receipt = db.raw
+    .prepare(
+      "SELECT receipt_id, job_number, status, last_error, report_sha256, ocr_status, ocr_job_number_candidate, ocr_job_number_source_ref, ocr_result_key, ocr_result_sha256 FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as {
     receipt_id: string;
     job_number: string | null;
     status: string;
@@ -1457,7 +2091,9 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
     ocr_result_sha256: string | null;
   };
   const ocrEvidence = await env.RAW.get(receipt.ocr_result_key!);
-  const ocrPayload = JSON.parse(new TextDecoder().decode(await ocrEvidence!.arrayBuffer())) as {
+  const ocrPayload = JSON.parse(
+    new TextDecoder().decode(await ocrEvidence!.arrayBuffer()),
+  ) as {
     checks: Array<{ code: string; ok: boolean }>;
     sourceRefs: Record<string, string>;
     confidences: Record<string, string>;
@@ -1476,23 +2112,43 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
   assert.equal(receipt.last_error, "ocr_review_required");
   assert.equal(receipt.ocr_status, "completed");
   assert.equal(receipt.ocr_job_number_candidate, "26-0099");
-  assert.equal(receipt.ocr_job_number_source_ref, "page:1; region:Cover; label:Job label");
-  assert.equal(ocrPayload.sourceRefs.squares, "page:2; region:Roof; label:Roof squares");
+  assert.equal(
+    receipt.ocr_job_number_source_ref,
+    "page:1; region:Cover; label:Job label",
+  );
+  assert.equal(
+    ocrPayload.sourceRefs.squares,
+    "page:2; region:Roof; label:Roof squares",
+  );
   assert.equal(ocrPayload.confidences.squares, "low");
-  assert.equal(ocrPayload.checks.some((check) => check.code === "low_confidence:squares"), true);
-  assert.equal(ocrPayload.checks.some((check) => check.code === "duplicate_conflict:ridge_ft"), true);
+  assert.equal(
+    ocrPayload.checks.some((check) => check.code === "low_confidence:squares"),
+    true,
+  );
+  assert.equal(
+    ocrPayload.checks.some(
+      (check) => check.code === "duplicate_conflict:ridge_ft",
+    ),
+    true,
+  );
   assert.equal(ocrPayload.jobNumberCandidate.value, "26-0099");
   assert.equal(anthropicCalls, 1);
-  assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
+  assert.equal(
+    fetches.filter((url) => url === "https://api.anthropic.com/v1/messages")
+      .length,
+    1,
+  );
 
   await handleMeasurementQueueMessage(
     env as never,
     receipt.receipt_id,
     "stale-token",
   );
-  const noOp = db.raw.prepare(
-    "SELECT ocr_result_key, ocr_job_number_candidate FROM measurement_intake_receipts LIMIT 1",
-  ).get() as {
+  const noOp = db.raw
+    .prepare(
+      "SELECT ocr_result_key, ocr_job_number_candidate FROM measurement_intake_receipts LIMIT 1",
+    )
+    .get() as {
     ocr_result_key: string;
     ocr_job_number_candidate: string | null;
   };
@@ -1694,35 +2350,28 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
     ERPNEXT_API_SECRET: "erp-secret",
     GOOGLE_MAPS_API_KEY: "solar-key",
   });
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  const fetches: string[] = [];
   const today = new Date();
-  t.mock.method(
-    globalThis,
-    "fetch",
-    withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      fetches.push({ url, init: init ?? {} });
-      if (url.startsWith("https://solar.googleapis.com/")) {
-        // Calgary address: wildly divergent roof. Edmonton address: agreeing roof.
-        const divergent = url.includes("location.latitude=51.");
-        return json({
-          imageryDate: {
-            year: today.getUTCFullYear(),
-            month: today.getUTCMonth() + 1,
-            day: today.getUTCDate(),
-          },
-          imageryQuality: "MEDIUM",
-          solarPotential: { wholeRoofStats: { areaMeters2: divergent ? 5 : 9.2903 } },
-        });
-      }
-      if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0007" }] });
-      if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
-      if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-SOLAR" } });
-      if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-      if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-SOLAR" } });
-      throw new Error(`unexpected fetch ${url}`);
-    }),
-  );
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    fetches.push(url);
+    if (url.startsWith("https://solar.googleapis.com/")) {
+      // Calgary address: wildly divergent roof. Edmonton address: agreeing roof.
+      const divergent = url.includes("location.latitude=51.");
+      return json({
+        imageryDate: {
+          year: today.getUTCFullYear(),
+          month: today.getUTCMonth() + 1,
+          day: today.getUTCDate(),
+        },
+        imageryQuality: "MEDIUM",
+        solarPotential: {
+          wholeRoofStats: { areaMeters2: divergent ? 5 : 9.2903 },
+        },
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
 
   const divergent = await worker.fetch(
     intakeRequest(
@@ -1744,19 +2393,53 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
     ctx as never,
   );
   assert.equal(divergentReplay.status, 200);
-  const divergentReport = JSON.parse(String(
-    fetches.find((item) => item.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
-  ));
-  assert.equal(divergentReport.review_status, "Needs Review");
-  const divergentGraph = JSON.parse(divergentReport.roof_graph_json) as {
+  assert.equal(fetches.length, 1);
+  assert.equal(fetches[0]?.startsWith("https://solar.googleapis.com/"), true);
+  const divergentProjection = JSON.parse(
+    String(
+      db.raw
+        .prepare(
+          "SELECT projection_json FROM native_measurement_revisions WHERE job_number = '26-0007'",
+        )
+        .get()?.projection_json,
+    ),
+  ) as {
+    evidence: {
+      geometry_authority: {
+        roof_graph: {
+          needs_review: boolean;
+          checks: Array<{ check: string; ok: boolean; detail: string }>;
+        };
+      };
+    };
+  };
+  const divergentGraph =
+    divergentProjection.evidence.geometry_authority.roof_graph;
+  const divergentReceipt = db.raw
+    .prepare(
+      "SELECT frappe_measurement_id, frappe_evidence_id FROM measurement_intake_receipts WHERE job_number = '26-0007'",
+    )
+    .get() as {
+    frappe_measurement_id: string | null;
+    frappe_evidence_id: string | null;
+  };
+  assert.equal(divergentReceipt.frappe_measurement_id, null);
+  assert.equal(divergentReceipt.frappe_evidence_id, null);
+  const typedDivergentGraph = divergentGraph as {
     needs_review: boolean;
     checks: Array<{ check: string; ok: boolean; detail: string }>;
   };
-  assert.equal(divergentGraph.needs_review, true);
-  const areaCheck = divergentGraph.checks.find((c) => c.check === "cross_source_roof_area");
+  assert.equal(typedDivergentGraph.needs_review, true);
+  const areaCheck = typedDivergentGraph.checks.find(
+    (c) => c.check === "cross_source_roof_area",
+  );
   assert.equal(areaCheck?.ok, false);
   assert.match(areaCheck?.detail ?? "", /%/);
-  assert.ok(divergentGraph.checks.some((c) => c.check === "cross_source_imagery" && c.ok));
+  assert.ok(
+    typedDivergentGraph.checks.some(
+      (c) => c.check === "cross_source_imagery" && c.ok,
+    ),
+  );
 
   fetches.length = 0;
   const agreeing = await worker.fetch(
@@ -1779,28 +2462,74 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
     ctx as never,
   );
   assert.equal(agreeingReplay.status, 200);
-  const agreeingReport = JSON.parse(String(
-    fetches.find((item) => item.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
-  ));
-  // review_status stays "Needs Review" here for a PRE-EXISTING reason: no filed
-  // source document (no report_url in the payload). The cross-check verdict lives
-  // in the roof graph, which must be clean when the sources agree.
-  assert.equal(agreeingReport.review_status, "Needs Review");
-  const agreeingGraph = JSON.parse(agreeingReport.roof_graph_json) as {
+  assert.equal(fetches.length, 1);
+  assert.equal(fetches[0]?.startsWith("https://solar.googleapis.com/"), true);
+  const agreeingProjection = JSON.parse(
+    String(
+      db.raw
+        .prepare(
+          "SELECT projection_json FROM native_measurement_revisions WHERE job_number = '26-0008'",
+        )
+        .get()?.projection_json,
+    ),
+  ) as {
+    evidence: {
+      geometry_authority: {
+        roof_graph: {
+          needs_review: boolean;
+          checks: Array<{ check: string; ok: boolean }>;
+        };
+      };
+    };
+  };
+  const agreeingGraph = agreeingProjection.evidence.geometry_authority
+    .roof_graph as {
     needs_review: boolean;
     checks: Array<{ check: string; ok: boolean }>;
   };
   assert.equal(agreeingGraph.needs_review, false);
-  assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_roof_area")?.ok, true);
-  assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_confidence_availability")?.ok, true);
-  assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_segment_correspondence")?.ok, true);
-  assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_azimuth_availability")?.ok, true);
+  assert.equal(
+    agreeingGraph.checks.find((c) => c.check === "cross_source_roof_area")?.ok,
+    true,
+  );
+  assert.equal(
+    agreeingGraph.checks.find(
+      (c) => c.check === "cross_source_confidence_availability",
+    )?.ok,
+    true,
+  );
+  assert.equal(
+    agreeingGraph.checks.find(
+      (c) => c.check === "cross_source_segment_correspondence",
+    )?.ok,
+    true,
+  );
+  assert.equal(
+    agreeingGraph.checks.find(
+      (c) => c.check === "cross_source_azimuth_availability",
+    )?.ok,
+    true,
+  );
 
   // Every comparison landed in the calibration ledger with structured numbers.
   const ledger = db.raw
-    .prepare("SELECT tenant_id, check_name, metric, ok, primary_value, independent_value, rel_diff, signed_error, error_kind FROM measurement_deltas ORDER BY id")
-    .all() as Array<{ tenant_id: string; check_name: string; metric: string; ok: number; primary_value: number | null; independent_value: number | null; rel_diff: number | null; signed_error: number | null; error_kind: string }>;
-  const areaRows = ledger.filter((r) => r.check_name === "cross_source_roof_area");
+    .prepare(
+      "SELECT tenant_id, check_name, metric, ok, primary_value, independent_value, rel_diff, signed_error, error_kind FROM measurement_deltas ORDER BY id",
+    )
+    .all() as Array<{
+    tenant_id: string;
+    check_name: string;
+    metric: string;
+    ok: number;
+    primary_value: number | null;
+    independent_value: number | null;
+    rel_diff: number | null;
+    signed_error: number | null;
+    error_kind: string;
+  }>;
+  const areaRows = ledger.filter(
+    (r) => r.check_name === "cross_source_roof_area",
+  );
   assert.equal(areaRows.length, 2); // divergent + agreeing submissions
   assert.equal(areaRows[0].ok, 0);
   assert.equal(areaRows[0].primary_value, 100);
@@ -1810,7 +2539,11 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
   assert.equal(areaRows[0].error_kind, "relative_fraction");
   assert.equal(areaRows[1].ok, 1);
   assert.ok((areaRows[1].rel_diff ?? 1) < 0.001);
-  assert.ok(ledger.some((r) => r.check_name === "cross_source_imagery" && r.metric === ""));
+  assert.ok(
+    ledger.some(
+      (r) => r.check_name === "cross_source_imagery" && r.metric === "",
+    ),
+  );
 
   // The admin surface exposes rows + measured-accuracy aggregates.
   const adminRes = await worker.fetch(
@@ -1823,11 +2556,22 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
   assert.equal(adminRes.status, 200);
   const adminBody = (await adminRes.json()) as {
     deltas: Array<{ check_name: string }>;
-    aggregates: Array<{ source: string; metric: string; total: number; ok_count: number; status: string }>;
-    calibration: { minimum_sample_size: number; automatic_tolerance_promotion: boolean };
+    aggregates: Array<{
+      source: string;
+      metric: string;
+      total: number;
+      ok_count: number;
+      status: string;
+    }>;
+    calibration: {
+      minimum_sample_size: number;
+      automatic_tolerance_promotion: boolean;
+    };
   };
   assert.ok(adminBody.deltas.length >= 4);
-  const areaAgg = adminBody.aggregates.find((a) => a.source === "google_solar" && a.metric === "roof_area")!;
+  const areaAgg = adminBody.aggregates.find(
+    (a) => a.source === "google_solar" && a.metric === "roof_area",
+  )!;
   assert.equal(areaAgg.total, 2);
   assert.equal(Number(areaAgg.ok_count), 1);
   assert.equal(areaAgg.status, "insufficient_data");
@@ -1835,9 +2579,12 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
   assert.equal(adminBody.calibration.automatic_tolerance_promotion, false);
 
   const invalidAsOf = await worker.fetch(
-    new Request("https://bus.example/admin/measurements/deltas?as_of=2026-08-13", {
-      headers: { authorization: "Bearer admin-token" },
-    }),
+    new Request(
+      "https://bus.example/admin/measurements/deltas?as_of=2026-08-13",
+      {
+        headers: { authorization: "Bearer admin-token" },
+      },
+    ),
     env as never,
     ctx as never,
   );
@@ -1855,27 +2602,13 @@ test("measurement intake: Solar outage never fails intake", async (t) => {
     ERPNEXT_API_SECRET: "erp-secret",
     GOOGLE_MAPS_API_KEY: "solar-key",
   });
-  let persistedGraph: { checks: Array<{ check: string; ok: boolean }> } | null = null;
-  t.mock.method(
-    globalThis,
-    "fetch",
-    withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("https://solar.googleapis.com/")) {
-        return new Response("upstream broken", { status: 500 });
-      }
-      if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0009" }] });
-      if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
-      if (url.endsWith("/api/resource/Measurement%20Report")) {
-        const report = JSON.parse(String(init?.body ?? "{}")) as { roof_graph_json: string };
-        persistedGraph = JSON.parse(report.roof_graph_json) as { checks: Array<{ check: string; ok: boolean }> };
-        return json({ data: { name: "MR-OUTAGE" } });
-      }
-      if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-      if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-OUTAGE" } });
-      throw new Error(`unexpected fetch ${url}`);
-    }),
-  );
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.startsWith("https://solar.googleapis.com/")) {
+      return new Response("upstream broken", { status: 500 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
   const submitted = await worker.fetch(
     intakeRequest(
       { job_number: "26-0009", lat: 51.1, lng: -114.1, xml: SQUARE_XML },
@@ -1896,7 +2629,30 @@ test("measurement intake: Solar outage never fails intake", async (t) => {
     ctx as never,
   );
   const body = (await replay.json()) as { status: string };
+  const projection = JSON.parse(
+    String(
+      db.raw
+        .prepare(
+          "SELECT projection_json FROM native_measurement_revisions WHERE job_number = '26-0009'",
+        )
+        .get()?.projection_json,
+    ),
+  ) as {
+    evidence: {
+      geometry_authority: {
+        roof_graph: {
+          checks: Array<{ check: string; ok: boolean }>;
+        };
+      };
+    };
+  };
+  const persistedGraph = projection.evidence.geometry_authority.roof_graph;
   assert.equal(replay.status, 200);
   assert.equal(body.status, "matched");
-  assert.equal(persistedGraph?.checks.some((check) => check.check === "cross_source_availability" && check.ok), true);
+  assert.equal(
+    persistedGraph.checks.some(
+      (check) => check.check === "cross_source_availability" && check.ok,
+    ),
+    true,
+  );
 });

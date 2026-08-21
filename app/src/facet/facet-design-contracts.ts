@@ -7,17 +7,23 @@ const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const projectionSchema = z
   .object({
     outcome: z.enum([
-      "projected_blank_draft",
-      "reconciled",
-      "rejected_frappe",
+      "projected_native_design",
+      "reconciled_native_design",
+      "rejected",
       "uncertain",
       "held_withdrawn",
       "held_superseded",
     ]),
-    evidence_id: identifier.nullable(),
-    reconciliation_id: identifier.nullable(),
-    draft_customer_quote_id: identifier.nullable(),
-    draft_quote_version: z.number().int().positive().nullable(),
+    projection_id: identifier.nullable(),
+    projection_sha256: sha256.nullable(),
+    source_quote_revision_id: identifier.nullable(),
+    source_quote_version: z.number().int().positive().nullable(),
+    source_proposal_revision_id: identifier.nullable(),
+    source_publication_event_id: identifier.nullable(),
+    source_acceptance_binding_id: identifier.nullable(),
+    launch_intent_sha256: sha256.nullable(),
+    design_sequence: z.number().int().positive().max(100).nullable(),
+    design_state: z.enum(["active", "withdrawn", "superseded"]).nullable(),
     error_code: boundedText(1, 180).nullable(),
     attempted_at: boundedText(1, 80),
   })
@@ -72,7 +78,7 @@ export const facetDesignEvidenceSchema = z
   .superRefine((evidence, context) => {
     const isLifecycleHold =
       evidence.decision_kind === "withdrawn" || evidence.decision_kind === "superseded";
-    if (isLifecycleHold !== (evidence.projection_state === "held")) {
+    if (evidence.projection_state === "held" && !isLifecycleHold) {
       context.addIssue({
         code: "custom",
         path: ["projection_state"],
@@ -89,19 +95,47 @@ export const facetDesignEvidenceSchema = z
     if (
       evidence.projection_state === "projected" &&
       (!evidence.projection ||
-        !["projected_blank_draft", "reconciled"].includes(evidence.projection.outcome) ||
-        !evidence.projection.evidence_id ||
-        !evidence.projection.reconciliation_id ||
-        !evidence.projection.draft_customer_quote_id ||
-        !evidence.projection.draft_quote_version)
+        !["projected_native_design", "reconciled_native_design"].includes(
+          evidence.projection.outcome,
+        ) ||
+        !hasCompleteNativeProjection(evidence.projection) ||
+        evidence.projection.design_state !== "active")
     ) {
       context.addIssue({
         code: "custom",
         path: ["projection"],
-        message: "Projected Facet evidence requires a complete blank Draft receipt.",
+        message: "Projected Facet evidence requires complete native design authority.",
+      });
+    }
+    if (
+      evidence.projection_state === "held" &&
+      (!evidence.projection ||
+        !hasCompleteNativeProjection(evidence.projection) ||
+        evidence.projection.design_state !== evidence.decision_kind ||
+        evidence.projection.outcome !== `held_${evidence.decision_kind}`)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["projection"],
+        message: "Held Facet evidence requires the matching native terminal state.",
       });
     }
   });
+
+function hasCompleteNativeProjection(projection: z.infer<typeof projectionSchema>): boolean {
+  return Boolean(
+    projection.projection_id &&
+    projection.projection_sha256 &&
+    projection.source_quote_revision_id &&
+    projection.source_quote_version &&
+    projection.source_proposal_revision_id &&
+    projection.source_publication_event_id &&
+    projection.source_acceptance_binding_id &&
+    projection.launch_intent_sha256 &&
+    projection.design_sequence &&
+    projection.design_state,
+  );
+}
 
 export const facetDesignEvidenceResponseSchema = z
   .object({

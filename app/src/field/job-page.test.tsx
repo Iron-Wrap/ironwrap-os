@@ -138,6 +138,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
     assignment: {
       id: "ASSIGN-1",
       assignment_id: "assignment-1",
+      modified: "2026-07-10T14:55:00.000Z",
       type: "Production",
       status: "Assigned",
       crew_profile: null,
@@ -729,6 +730,90 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Current job needed" })).toBeVisible();
     expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
+  });
+
+  it("lets office authority supersede an exact assignment-bound Work Package", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockResolvedValue(undefined);
+    renderJob(
+      workPackageModel({
+        permissions: ["jobs:read:any", "production:read"],
+        allowed_actions: ["job.read", "work_package.issue"],
+      }),
+      ownerSession,
+    );
+
+    await user.type(
+      await screen.findByLabelText("What changed?"),
+      "Deck damage changed the scope.",
+    );
+    await user.click(screen.getByRole("button", { name: "Issue Work Package v4" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
+    const options = vi.mocked(apiCommand).mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      path: "/api/v1/jobs/JOB-1/work-package",
+      csrfToken: "csrf",
+      body: {
+        assignment_id: "ASSIGN-1",
+        assignment_modified: "2026-07-10T14:55:00.000Z",
+        version: 4,
+        title: "North slope replacement",
+        correction_reason: "Deck damage changed the scope.",
+        steps: [
+          {
+            instruction: "Inspect anchors before roof access.",
+            required_evidence: "Anchor inspection photo.",
+            acceptance_criteria: "Anchor and harness connection are visible.",
+          },
+        ],
+        hold_points: [
+          {
+            hold_point: "Deck condition review",
+            release_phase: "Pre-start",
+            release_authority: "Production manager",
+            required_evidence: "Deck condition photo.",
+            acceptance_criteria: "Production manager independently releases the hold.",
+          },
+        ],
+      },
+    });
+    expect(options?.deviceActionId).toEqual(expect.any(String));
+    expect(options?.idempotencyKey).toBe(options?.deviceActionId);
+  });
+
+  it("shows first-issue authoring only when an office packet grants it", async () => {
+    renderJob(
+      jobModel({
+        permissions: ["jobs:read:any", "production:read"],
+        allowed_actions: ["job.read", "work_package.issue"],
+      }),
+      ownerSession,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Issue Work Package" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "No work plan is ready" })).toBeVisible();
+  });
+
+  it("lets production open typed work authoring without receiving field capture", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    renderWorkObject(
+      {
+        ...workObjectModel(),
+        allowed_actions: ["work_package.issue"],
+      },
+      productionSession,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Issue corrected Work Package v4" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
   });
 
   it("labels cached data as an offline packet and suppresses older-proof loading", async () => {

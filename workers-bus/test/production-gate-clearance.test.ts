@@ -63,6 +63,67 @@ class SqliteD1 {
     );
   }
 
+  seedNativeRunway(jobId = JOB_ID, gateState = "blocked"): void {
+    const now = "2026-08-20T10:00:00.000Z";
+    this.raw
+      .prepare(
+        `INSERT INTO envelopes
+         (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,
+          status, created_at, updated_at)
+         VALUES (?, 'manual', 'Gate Customer', 'gate@example.invalid', '{}',
+                 'raw/gate/0001.json', ?, 'reconciled', ?, ?)`,
+      )
+      .run("ow_gate_clearance_0001", now, now, now);
+    this.raw
+      .prepare(
+        `INSERT INTO operating_leads
+         (lead_id, tenant_id, source_envelope_id, source, contact_name, contact_email,
+          lifecycle_status, version, created_at, updated_at)
+         VALUES ('lead:gate:0001', ?, 'ow_gate_clearance_0001', 'manual',
+                 'Gate Customer', 'gate@example.invalid', 'qualified', 1, ?, ?)`,
+      )
+      .run(TENANT, now, now);
+    this.raw
+      .prepare(
+        `INSERT INTO operating_customers
+         (customer_id, tenant_id, source_envelope_id, display_name, contact_email,
+          lifecycle_status, version, created_at, updated_at)
+         VALUES ('customer:gate:0001', ?, 'ow_gate_clearance_0001',
+                 'Gate Customer', 'gate@example.invalid', 'active', 1, ?, ?)`,
+      )
+      .run(TENANT, now, now);
+    this.raw
+      .prepare(
+        `INSERT INTO operating_roof_jobs
+         (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
+          brand, job_number, service_type, job_status, current_gate_state,
+          version, created_at, updated_at)
+         VALUES (?, ?, 'lead:gate:0001', 'customer:gate:0001',
+                 'ow_gate_clearance_0001', 'ironwrap', 'IW-122-1', 'Roofing',
+                 'qualified', 'blocked', 1, ?, ?)`,
+      )
+      .run(jobId, TENANT, now, now);
+    const insertGate = this.raw.prepare(
+      `INSERT INTO operating_production_gates
+       (gate_id, tenant_id, roof_job_id, source_envelope_id, gate, state,
+        owner_user, assigned_at, due_at, blocker_reason, version, created_at, updated_at)
+       VALUES (?, ?, ?, 'ow_gate_clearance_0001', ?, ?, 'owner@example.com',
+               ?, '2026-08-21T12:00:00.000Z', 'No active blocker', 1, ?, ?)`,
+    );
+    for (const gate of ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]) {
+      insertGate.run(
+        `gate:elec122:${gate.toLowerCase()}`,
+        TENANT,
+        jobId,
+        gate,
+        gateState,
+        now,
+        now,
+        now,
+      );
+    }
+  }
+
   /** Seed one money-lane row in the state an authenticated read-back would have left. */
   seedDepositIntent(overrides: Partial<AccountingIntentRecord> = {}): void {
     const row: Record<string, unknown> = {
@@ -200,6 +261,10 @@ function setup(options: {
   frappeBody?: string;
 } = {}): Harness {
   const db = new SqliteD1();
+  if (options.jobs !== false) {
+    const nativeState = (options.gateState ?? "Blocked").toLowerCase();
+    db.seedNativeRunway(JOB_ID, nativeState === "ready" ? "ready" : "blocked");
+  }
   const raw = new MemoryR2();
   const frappeCalls: FrappeCall[] = [];
   const original = globalThis.fetch;

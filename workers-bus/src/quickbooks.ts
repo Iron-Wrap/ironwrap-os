@@ -6,10 +6,10 @@
 
 import { newEnvelopeId } from "./core.ts";
 import {
-  assertQuickBooksProjectionReady,
-  pushQuickBooksEventToErpNext,
-  type ErpNextQuickBooksEventResult,
-} from "./erpnext.ts";
+  nativeQuickBooksWebhookProjectionPort,
+  type QuickBooksWebhookProjectionPort,
+  type QuickBooksWebhookProjectionResult,
+} from "./quickbooks-native-webhook.ts";
 import * as store from "./store.ts";
 
 export interface QbEntityEvent { realmId: string; type: string; id: string; operation: string }
@@ -56,7 +56,12 @@ export async function verifyIntuitSignature(token: string, body: string, signatu
 }
 
 /** POST /webhook/quickbooks handler. No bearer — authenticity is the Intuit signature. */
-export async function handleQuickbooksWebhook(env: Env, rawText: string, signature: string | null): Promise<Response> {
+export async function handleQuickbooksWebhook(
+  env: Env,
+  rawText: string,
+  signature: string | null,
+  projectionPort: QuickBooksWebhookProjectionPort = nativeQuickBooksWebhookProjectionPort(env),
+): Promise<Response> {
   if (!env.QB_WEBHOOK_TOKEN) return jsonResp({ error: "quickbooks_not_configured" }, 503);
   const expectedRealmId = configuredQuickBooksRealm(env);
   if (!expectedRealmId) return jsonResp({ error: "quickbooks_realm_not_configured" }, 503);
@@ -65,7 +70,7 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   }
   const payloadHash = await sha256Hex(rawText);
   const existing = await store.getQuickBooksWebhookReceipt(env, payloadHash);
-  if (existing) return await replayResponse(env, existing);
+  if (existing) return await replayResponse(env, existing, projectionPort);
 
   let parsed: unknown = {};
   try { parsed = JSON.parse(rawText); } catch { /* signed raw is retained after dependency preflight */ }
@@ -76,7 +81,7 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   // bounded issuer/configuration deployment is repaired.
   if (events.some((event) => event.realmId === expectedRealmId)) {
     try {
-      await assertQuickBooksProjectionReady(env);
+      await projectionPort.assertReady(expectedRealmId);
     } catch {
       return jsonResp({ error: "quickbooks_projection_not_ready" }, 503);
     }
@@ -109,7 +114,7 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       const raced = await store.getQuickBooksWebhookReceipt(env, payloadHash);
-      if (raced) return await replayResponse(env, raced);
+      if (raced) return await replayResponse(env, raced, projectionPort);
     }
     throw err;
   }
@@ -126,16 +131,20 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
       });
     }
   }
-  return await projectReceipt(env, receipt, false);
+  return await projectReceipt(env, receipt, false, projectionPort);
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-async function replayResponse(env: Env, receipt: store.QuickBooksWebhookReceipt): Promise<Response> {
+async function replayResponse(
+  env: Env,
+  receipt: store.QuickBooksWebhookReceipt,
+  projectionPort: QuickBooksWebhookProjectionPort,
+): Promise<Response> {
   await store.recordQuickBooksWebhookReplay(env, receipt.payload_hash);
-  return await projectReceipt(env, receipt, true);
+  return await projectReceipt(env, receipt, true, projectionPort);
 }
 
 function configuredQuickBooksRealm(env: Env): string | null {
@@ -151,15 +160,14 @@ const QUICKBOOKS_SCHEDULED_PROJECTION_LIMIT = 25;
 
 type ProjectionTrigger = "webhook" | "scheduled";
 type ProjectionOutcome =
-  | { state: "projected"; erp: ErpNextQuickBooksEventResult }
+  | { state: "projected"; native: QuickBooksWebhookProjectionResult }
   | { state: "rejected" }
   | { state: "pending"; escalated: boolean }
   | { state: "not_claimed" };
 
 interface ProjectionBatch {
-  paymentMilestoneIds: string[];
-  reconciliationIds: string[];
-  unresolvedReconciliationIds: string[];
+  accountingIntentIds: string[];
+  unresolvedProviderIdentityIds: string[];
   rejectedCount: number;
   pendingCount: number;
   escalatedCount: number;
@@ -167,17 +175,18 @@ interface ProjectionBatch {
 
 /**
  * Project only due pending rows. A signed receipt remains pending after a
- * transient ERP failure, so a webhook replay (or cron) resumes exactly the
+ * transient native observation failure, so a webhook replay (or cron) resumes exactly the
  * missing work rather than terminally acknowledging the whole payload.
  */
 async function projectReceipt(
   env: Env,
   receipt: store.QuickBooksWebhookReceipt,
   replay: boolean,
+  projectionPort: QuickBooksWebhookProjectionPort,
 ): Promise<Response> {
   const now = new Date().toISOString();
   const pending = await store.listReadyQuickBooksProjectionOutbox(env, receipt.payload_hash, now);
-  const projected = await projectOutboxItems(env, receipt, pending, "webhook");
+  const projected = await projectOutboxItems(env, receipt, pending, "webhook", projectionPort);
   const pendingCount = await store.countPendingQuickBooksProjectionOutbox(env, receipt.payload_hash);
   await store.recordAudit(env, {
     automation: "quickbooks",
@@ -203,11 +212,10 @@ async function projectReceipt(
     envelope_id: receipt.envelope_id,
     events: receipt.events_count,
     provider_truth_reconciled: false,
-    erpnext_payment_milestone_ids: projected.paymentMilestoneIds,
-    erpnext_reconciliation_ids: projected.reconciliationIds,
-    unresolved_reconciliation_ids: projected.unresolvedReconciliationIds,
+    native_accounting_intent_ids: projected.accountingIntentIds,
+    unresolved_provider_identity_ids: projected.unresolvedProviderIdentityIds,
     rejected_projection_count: projected.rejectedCount,
-    erpnext_error: null,
+    native_accounting_error: null,
   });
 }
 
@@ -218,6 +226,7 @@ async function projectReceipt(
  */
 export async function recoverDueQuickBooksProjections(
   env: Env,
+  projectionPort: QuickBooksWebhookProjectionPort = nativeQuickBooksWebhookProjectionPort(env),
 ): Promise<{ due: number; projected: number; rejected: number; pending: number; escalated: number }> {
   const due = await store.listDueQuickBooksProjectionOutbox(
     env,
@@ -231,7 +240,7 @@ export async function recoverDueQuickBooksProjections(
   for (const event of due) {
     const receipt = await store.getQuickBooksWebhookReceipt(env, event.payload_hash);
     if (!receipt) continue; // D1 foreign key prevents this; never infer a replacement receipt.
-    const result = await projectOutboxItem(env, receipt, event, "scheduled");
+    const result = await projectOutboxItem(env, receipt, event, "scheduled", projectionPort);
     if (result.state === "projected") projected += 1;
     if (result.state === "rejected") rejected += 1;
     if (result.state === "pending") {
@@ -247,21 +256,21 @@ async function projectOutboxItems(
   receipt: store.QuickBooksWebhookReceipt,
   events: store.QuickBooksProjectionOutbox[],
   trigger: ProjectionTrigger,
+  projectionPort: QuickBooksWebhookProjectionPort,
 ): Promise<ProjectionBatch> {
   const batch: ProjectionBatch = {
-    paymentMilestoneIds: [],
-    reconciliationIds: [],
-    unresolvedReconciliationIds: [],
+    accountingIntentIds: [],
+    unresolvedProviderIdentityIds: [],
     rejectedCount: 0,
     pendingCount: 0,
     escalatedCount: 0,
   };
   for (const event of events) {
-    const result = await projectOutboxItem(env, receipt, event, trigger);
+    const result = await projectOutboxItem(env, receipt, event, trigger, projectionPort);
     if (result.state === "projected") {
-      if (result.erp.paymentMilestoneName) batch.paymentMilestoneIds.push(result.erp.paymentMilestoneName);
-      batch.reconciliationIds.push(result.erp.reconciliationName);
-      if (result.erp.unresolved) batch.unresolvedReconciliationIds.push(result.erp.reconciliationName);
+      batch.accountingIntentIds.push(...result.native.intentIds);
+      if (result.native.unresolved)
+        batch.unresolvedProviderIdentityIds.push(`${event.entity_type}:${event.entity_id}`);
     } else if (result.state === "rejected") {
       batch.rejectedCount += 1;
     } else if (result.state === "pending") {
@@ -277,6 +286,7 @@ async function projectOutboxItem(
   receipt: store.QuickBooksWebhookReceipt,
   event: store.QuickBooksProjectionOutbox,
   trigger: ProjectionTrigger,
+  projectionPort: QuickBooksWebhookProjectionPort,
 ): Promise<ProjectionOutcome> {
   const leaseToken = crypto.randomUUID();
   const claimAt = new Date().toISOString();
@@ -285,28 +295,25 @@ async function projectOutboxItem(
   if (!claimed) return { state: "not_claimed" };
 
   try {
-    const erp = await pushQuickBooksEventToErpNext(env, {
+    const native = await projectionPort.project({
       realmId: event.realm_id,
       type: event.entity_type,
       id: event.entity_id,
       operation: event.operation,
-      rawKey: receipt.raw_key,
-      // Preserve first receipt time across redeliveries; it is source evidence.
-      eventTs: receipt.first_seen_at,
-      payloadHash: receipt.payload_hash,
-      eventIndex: event.event_index,
     });
     const projectedAt = new Date().toISOString();
     if (!await store.markQuickBooksProjectionProjected(env, event, leaseToken, projectedAt)) {
       throw new Error("quickbooks_projection_lease_lost");
     }
     await store.recordAudit(env, {
-      automation: "erpnext_quickbooks",
+      automation: "quickbooks_accounting",
       trigger,
       envelope_id: receipt.envelope_id,
       source_ids: `${event.entity_type}:${event.entity_id}`,
-      target_ids: `integration_reconciliation:${erp.reconciliationName}`,
-      action: erp.reused ? "reuse_pending_reconciliation" : "create_pending_reconciliation",
+      target_ids: native.intentIds.length > 0
+        ? native.intentIds.map((id) => `accounting_intent:${id}`).join(",")
+        : `provider_identity:${event.entity_type}:${event.entity_id}`,
+      action: native.unresolved ? "provider_identity_unresolved" : "authenticated_reobservation",
       result: "ok",
     });
     await store.recordAudit(env, {
@@ -314,19 +321,17 @@ async function projectOutboxItem(
       trigger,
       envelope_id: receipt.envelope_id,
       source_ids: `${event.entity_type}:${event.entity_id}`,
-      target_ids: `integration_reconciliation:${erp.reconciliationName}`,
+      target_ids: native.intentIds.map((id) => `accounting_intent:${id}`).join(",") || undefined,
       action: `qb_${event.operation}`.toLowerCase(),
       result: "ok",
     });
-    return { state: "projected", erp };
+    return { state: "projected", native };
   } catch (err) {
     // Never store upstream body text. Only the bounded issuer's explicit
     // immutable conflict may be terminally rejected; an unknown ledger outcome
     // stays pending but requires reconciliation before another provider write.
     const stableBusinessConflict = isStableQuickBooksBusinessConflict(err);
-    const projectionError = String(err).includes("effect_unknown_requires_reconciliation")
-      ? "effect_unknown_requires_reconciliation"
-      : "erpnext_quickbooks_projection_failed";
+    const projectionError = errorCode(err, "quickbooks_native_projection_failed");
     let terminalRejected = false;
     const attempts = event.attempt_count + 1;
     const escalated = !stableBusinessConflict && attempts >= QUICKBOOKS_PROJECTION_ESCALATION_ATTEMPTS && !event.escalated_at;
@@ -336,7 +341,7 @@ async function projectOutboxItem(
           env,
           event,
           leaseToken,
-          "erpnext_quickbooks_projection_rejected",
+          "quickbooks_native_projection_rejected",
           new Date().toISOString(),
         );
       }
@@ -357,25 +362,25 @@ async function projectOutboxItem(
       // remains retryable and is never a terminal acknowledgement.
     }
     await store.recordAudit(env, {
-      automation: "erpnext_quickbooks",
+      automation: "quickbooks_accounting",
       trigger,
       envelope_id: receipt.envelope_id,
       source_ids: `${event.entity_type}:${event.entity_id}`,
       action: terminalRejected ? "projection_rejected" : "sync",
       result: "error",
       error: terminalRejected
-        ? "erpnext_quickbooks_projection_rejected"
+        ? "quickbooks_native_projection_rejected"
         : projectionError,
     });
     if (escalated && !terminalRejected) {
       await store.recordAudit(env, {
-        automation: "erpnext_quickbooks",
+        automation: "quickbooks_accounting",
         trigger,
         envelope_id: receipt.envelope_id,
         source_ids: `${event.entity_type}:${event.entity_id}`,
         action: "projection_escalated",
         result: "error",
-        error: "erpnext_quickbooks_projection_retry_escalated",
+        error: "quickbooks_native_projection_retry_escalated",
       });
     }
     return terminalRejected
@@ -393,9 +398,14 @@ function quickBooksProjectionRetryAt(now: string, attempts: number): string {
   return new Date(Date.parse(now) + seconds * 1_000).toISOString();
 }
 
-/** The issuer documents this one code/status as a non-retryable immutable conflict. */
+/** The native ledger documents this one code as a non-retryable immutable conflict. */
 function isStableQuickBooksBusinessConflict(err: unknown): boolean {
-  return /\berpnext_http_409:\s*[\s\S]*\bquickbooks_reconciliation_identity_conflict\b/.test(String(err));
+  return errorCode(err, "") === "quickbooks_native_provider_identity_conflict";
+}
+
+function errorCode(error: unknown, fallback: string): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.length <= 80 ? code : fallback;
 }
 
 async function sha256Hex(text: string): Promise<string> {

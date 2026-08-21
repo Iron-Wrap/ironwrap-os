@@ -30,6 +30,7 @@ class SqliteD1 {
     this.raw.exec("PRAGMA foreign_keys = ON");
     this.raw.exec(readFileSync(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8"));
     this.raw.exec(readFileSync(new URL("../migrations/0045_authority_record_actions.sql", import.meta.url), "utf8"));
+    this.raw.exec(readFileSync(new URL("../migrations/0091_authority_readback_subject_scope.sql", import.meta.url), "utf8"));
     const insert = this.raw.prepare(
       `INSERT INTO app_users
          (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
@@ -204,6 +205,16 @@ function readbackInput(overrides: Record<string, unknown> = {}) {
     tenantId: TENANT,
     authorityRecordId: RECORD,
     authorityVersion: 1,
+    subjectType: "Person",
+    subjectRole: "Worker",
+    personUser: "worker@example.invalid",
+    organization: null,
+    authorityKind: "Worker Competency",
+    authorityScope: "field installation",
+    scopeType: "Field",
+    scopeRef: "field:job-1",
+    roofJob: "job-1",
+    scopeJson: "{}",
     issuerName: "Alberta issuer",
     issuerJurisdiction: "AB-CA",
     issuerReference: "https://issuer.example.invalid/record/1",

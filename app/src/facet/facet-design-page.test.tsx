@@ -81,13 +81,19 @@ const projected = {
   external_project_link_id: `ironwrap-project-v1:${"c".repeat(64)}`,
   association_sha256: "d".repeat(64),
   projection_state: "projected",
-  status_code: "blank_draft_projected",
+  status_code: "native_design_projected",
   projection: {
-    outcome: "projected_blank_draft",
-    evidence_id: "facet-design:evidence-1",
-    reconciliation_id: "facet-design-projection:receipt-1",
-    draft_customer_quote_id: "facet-quote-revision:draft-1",
-    draft_quote_version: 3,
+    outcome: "projected_native_design",
+    projection_id: "facet-native-design-v2:projection-1",
+    projection_sha256: "e".repeat(64),
+    source_quote_revision_id: "quote-revision:accepted-1",
+    source_quote_version: 2,
+    source_proposal_revision_id: "proposal-revision:accepted-1",
+    source_publication_event_id: "publication-event:accepted-1",
+    source_acceptance_binding_id: "acceptance-binding:accepted-1",
+    launch_intent_sha256: "f".repeat(64),
+    design_sequence: 1,
+    design_state: "active",
     error_code: null,
     attempted_at: "2026-08-13T10:02:00.000Z",
   },
@@ -124,20 +130,18 @@ describe("FacetDesignPage", () => {
     vi.mocked(loadFacetDesignEvidence).mockResolvedValue(model());
   });
 
-  it("shows signed OIDC evidence and the exact reconciled blank Draft receipt", async () => {
+  it("shows signed OIDC evidence and the exact native design authority", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByRole("heading", { name: "Customer designs" })).toBeVisible();
-    expect(screen.getByText("Quote draft ready")).toBeVisible();
-    expect(screen.getByText("facet-quote-revision:draft-1")).toBeVisible();
-    expect(screen.getByText("Customer and job matched")).toBeVisible();
-    expect(screen.getByText("facet-project-1")).not.toBeVisible();
-
-    await user.click(screen.getByText("System details"));
-
-    expect(screen.getByText("facet-project-1")).toBeVisible();
-    expect(screen.getByText("Quote draft version")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Customer design evidence" })).toBeVisible();
+    expect(screen.getByText("Native design ready")).toBeVisible();
+    expect(screen.getByText("quote-revision:accepted-1")).toBeVisible();
+    expect(screen.getByText("Version 2")).toBeVisible();
+    expect(screen.getByText("1 · active")).toBeVisible();
+    await user.click(screen.getByText("Immutable evidence anchors"));
+    expect(screen.getByText("facet-native-design-v2:projection-1")).toBeVisible();
+    expect(screen.getByText("Google OIDC · exact project link")).toBeVisible();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /connect|prepare/i })).not.toBeInTheDocument();
@@ -151,9 +155,8 @@ describe("FacetDesignPage", () => {
             ...projected,
             event_id: "facet-awaiting",
             facet_project_id: "facet-project-awaiting",
-            decision_kind: "corrected",
             projection_state: "awaiting_projection",
-            status_code: "awaiting_blank_draft_projection",
+            status_code: "awaiting_native_design_projection",
             projection: null,
           },
           {
@@ -166,10 +169,16 @@ describe("FacetDesignPage", () => {
             status_code: "customer_withdrew_design",
             projection: {
               outcome: "held_withdrawn",
-              evidence_id: null,
-              reconciliation_id: null,
-              draft_customer_quote_id: null,
-              draft_quote_version: null,
+              projection_id: "facet-native-design-v2:projection-withdrawn",
+              projection_sha256: "1".repeat(64),
+              source_quote_revision_id: "quote-revision:accepted-1",
+              source_quote_version: 2,
+              source_proposal_revision_id: "proposal-revision:accepted-1",
+              source_publication_event_id: "publication-event:accepted-1",
+              source_acceptance_binding_id: "acceptance-binding:accepted-1",
+              launch_intent_sha256: "2".repeat(64),
+              design_sequence: 2,
+              design_state: "withdrawn",
               error_code: null,
               attempted_at: "2026-08-13T10:03:00.000Z",
             },
@@ -204,22 +213,23 @@ describe("FacetDesignPage", () => {
 
     renderPage();
 
-    expect((await screen.findAllByText("Waiting to start")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Customer changed this in Facet")).toBeVisible();
-    expect(screen.getByText("Customer removed it")).toBeVisible();
-    expect(screen.getAllByText("Needs help").length).toBeGreaterThan(0);
-    expect(screen.getByText(/stopped before making a quote draft/i)).toBeVisible();
-    expect(screen.getByText("Waiting for the right job")).toBeVisible();
-    expect(screen.getByText("Design could not be linked")).toBeVisible();
-    expect(screen.getAllByRole("link", { name: "Open sales" })).toHaveLength(2);
+    expect((await screen.findAllByText("Awaiting projection")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Lifecycle hold")).toBeVisible();
+    expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/failed closed before claiming native design authority/i),
+    ).toBeVisible();
+    expect(screen.getByText("Waiting for the exact project link")).toBeVisible();
+    expect(screen.getByText("Signed delivery rejected")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "Open the governed sales path" })).toHaveLength(2);
   });
 
   it("refreshes the complete evidence read model without a mutation route", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText("Quote draft ready");
+    await screen.findByText("Native design ready");
 
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Refresh evidence" }));
 
     await waitFor(() => expect(loadFacetDesignEvidence).toHaveBeenCalledTimes(2));
   });
@@ -228,8 +238,8 @@ describe("FacetDesignPage", () => {
     vi.mocked(loadFacetDesignEvidence).mockResolvedValueOnce(model([]));
     renderPage();
 
-    expect(await screen.findByText("No Facet design choices yet")).toBeVisible();
-    expect(screen.getByText(/customer choice will show/i)).toBeVisible();
+    expect(await screen.findByText("No signed Facet decisions yet")).toBeVisible();
+    expect(screen.getByText(/signed producer delivery is accepted/i)).toBeVisible();
   });
 
   it("fails closed for field roles without loading office evidence", () => {

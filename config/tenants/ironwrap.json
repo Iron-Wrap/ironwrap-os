@@ -159,7 +159,7 @@
       "closeout_agent",
       "support_admin_agent"
     ],
-    "approval_policy": "dry_run_then_human_approval",
+    "approval_policy": "versioned_policy_permit",
     "write_guard_envs": ["ERPNEXT_WRITE_ENABLED", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE", "IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE", "IRONWRAP_HERMES_SITE_BASE_URL"]
   },
   "market_defense": {

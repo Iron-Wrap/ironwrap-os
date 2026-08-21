@@ -56,9 +56,7 @@ export async function listActiveFieldUsers(
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
   const now = nowIso();
   const candidateId = `appu_${crypto.randomUUID()}`;
-  const storageRole = input.role === "owner" || input.role === "field"
-    ? input.role
-    : "ops";
+  const storageRole = input.role === "owner" ? "owner" : "ops";
   await env.DB.prepare(
     `INSERT INTO app_users
        (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active,

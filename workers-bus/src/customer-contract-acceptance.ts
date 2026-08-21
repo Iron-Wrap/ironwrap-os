@@ -8,37 +8,25 @@ import {
   validateAppOrigin,
 } from "./app-auth.ts";
 import {
-  customerPortalConfigured,
-  customerPortalEnabled,
-} from "./customer-portal.ts";
-import {
   customerAcceptanceBackendConfigured,
   customerAcceptanceBackendEnabled,
-  customerAcceptanceFrappeApiKey,
-  customerAcceptanceFrappeApiSecret,
-  customerAcceptanceHmacKey,
 } from "./customer-acceptance-config.ts";
 import {
   findActiveCustomerPortalLink,
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
 import { r2ObjectStore } from "./field-actions.ts";
-import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
 import { sendGmail } from "./google.ts";
-import { assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
-const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1_024;
 const CHALLENGE_TTL_MS = 15 * 60 * 1_000;
-const FRAPPE_ATTEMPT_LEASE_MS = 90 * 1_000;
+const NATIVE_COMMIT_LEASE_MS = 90 * 1_000;
 const ACCEPTANCE_RECEIPT_CONTENT_TYPE = "application/json";
 
-const PREPARE_METHOD = "ironwrap_roofing.customer_contract_acceptance_api.prepare_customer_portal_contract_acceptance";
-const COMMIT_METHOD = "ironwrap_roofing.customer_contract_acceptance_api.record_customer_portal_contract_acceptance";
-
 type ChallengeState = "pending_delivery" | "sent" | "consumed" | "invalidated";
-type IntentState = "receipt_pending" | "receipt_stored" | "accepted" | "uncertain" | "rejected";
+type IntentState =
+  "receipt_pending" | "receipt_stored" | "accepted" | "uncertain" | "rejected";
 
 interface PreparedContract {
   email: string;
@@ -51,6 +39,29 @@ interface PreparedContract {
   proposalPackId: string;
   termsHash: string;
   termsJson: string;
+}
+
+interface NativeContract extends PreparedContract {
+  quoteRevisionId: string;
+  proposalRevisionId: string;
+  publicationEventId: string;
+}
+
+interface NativeContractRow {
+  email: string;
+  display_name: string;
+  roof_job_id: string;
+  customer_id: string;
+  quote_revision_id: string;
+  quote_id: string;
+  quote_version: number;
+  proposal_revision_id: string;
+  proposal_pack_id: string;
+  quote_terms_json: string;
+  proposal_terms_json: string;
+  quote_terms_hash: string;
+  proposal_terms_hash: string;
+  publication_event_id: string;
 }
 
 interface AcceptanceChallenge {
@@ -114,21 +125,13 @@ type ClaimIntentResult =
   | { kind: "challenge_missing" }
   | { kind: "challenge_used" };
 
-class FrappeAcceptanceHttpError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(`customer_acceptance_frappe_http_${status}`);
-    this.status = status;
-  }
-}
-
-class FrappeAcceptanceTransportError extends Error {
+class AcceptanceLedgerError extends Error {
   readonly code: string;
 
   constructor(code: string) {
     super(code);
     this.code = code;
+    this.name = "AcceptanceLedgerError";
   }
 }
 
@@ -136,7 +139,8 @@ export async function handleCustomerPortalAcceptanceChallenge(
   req: Request,
   env: AppEnv,
 ): Promise<Response> {
-  if (req.method !== "POST" || !customerAcceptanceEnabled(env)) return portalNotFound();
+  if (req.method !== "POST" || !customerAcceptanceEnabled(env))
+    return portalNotFound();
   if (!customerAcceptanceConfigured(env)) return portalUnavailable();
   if (!trustedPortalOrigin(req, env)) return portalNotFound();
 
@@ -162,17 +166,20 @@ export async function handleCustomerPortalAcceptanceChallenge(
   const challengeId = `acceptance_challenge_${crypto.randomUUID()}`;
   let prepared: PreparedContract;
   try {
-    prepared = await prepareContract(env, {
-      tenant_id: tenantId,
-      portal_link_id: link.link_id,
-      roof_job_id: link.roof_job_id,
-      customer_id: link.customer_id,
-      challenge_id: challengeId,
-    });
-  } catch (error) {
-    return error instanceof FrappeAcceptanceHttpError && error.status < 500
-      ? portalNotFound()
-      : portalUnavailable();
+    const contract = await prepareContract(
+      env,
+      {
+        tenant_id: tenantId,
+        roof_job_id: link.roof_job_id,
+        customer_id: link.customer_id,
+      },
+      now.toISOString(),
+      now.toISOString().slice(0, 10),
+    );
+    if (!contract) return portalUnavailable();
+    prepared = contract;
+  } catch {
+    return portalUnavailable();
   }
 
   const expiresAt = new Date(now.getTime() + CHALLENGE_TTL_MS).toISOString();
@@ -189,7 +196,12 @@ export async function handleCustomerPortalAcceptanceChallenge(
       createdAt: now.toISOString(),
       expiresAt,
     });
-    const delivery = await sendChallengeEmail(env, prepared, rawChallengeToken, expiresAt);
+    const delivery = await sendChallengeEmail(
+      env,
+      prepared,
+      rawChallengeToken,
+      expiresAt,
+    );
     const sent = await markChallengeSent(
       env,
       challengeId,
@@ -198,7 +210,11 @@ export async function handleCustomerPortalAcceptanceChallenge(
     );
     if (!sent) throw new Error("acceptance_challenge_delivery_ledger_failed");
   } catch {
-    await invalidateAcceptanceChallenge(env, challengeId, new Date().toISOString()).catch(() => {});
+    await invalidateAcceptanceChallenge(
+      env,
+      challengeId,
+      new Date().toISOString(),
+    ).catch(() => {});
     return acceptanceJson({ error: "acceptance_challenge_unavailable" }, 502);
   }
   return acceptanceJson({ status: "challenge_sent", expires_at: expiresAt });
@@ -208,11 +224,16 @@ export async function handleCustomerPortalAcceptanceConfirm(
   req: Request,
   env: AppEnv,
 ): Promise<Response> {
-  if (req.method !== "POST" || !customerAcceptanceEnabled(env)) return portalNotFound();
+  if (req.method !== "POST" || !customerAcceptanceEnabled(env))
+    return portalNotFound();
   if (!customerAcceptanceConfigured(env)) return portalUnavailable();
   if (!trustedPortalOrigin(req, env)) return portalNotFound();
 
-  const request = await parseExactJson(req, ["token", "signer_name", "accepted"]);
+  const request = await parseExactJson(req, [
+    "token",
+    "signer_name",
+    "accepted",
+  ]);
   if (!request || !validToken(request.token)) return portalNotFound();
   if (request.accepted !== true || !validSignerName(request.signer_name)) {
     return acceptanceJson({ error: "invalid_acceptance_attestation" }, 400);
@@ -221,8 +242,8 @@ export async function handleCustomerPortalAcceptanceConfirm(
   if (!validIdempotencyKey(idempotencyKey)) {
     return acceptanceJson({ error: "idempotency_key_required" }, 400);
   }
-  const signerIp = requestIp(req);
-  if (!signerIp) return acceptanceJson({ error: "signer_ip_required" }, 400);
+  if (!requestIp(req))
+    return acceptanceJson({ error: "signer_ip_required" }, 400);
 
   const tenantId = configuredTenantId(env);
   if (!tenantId) return portalUnavailable();
@@ -235,7 +256,11 @@ export async function handleCustomerPortalAcceptanceConfirm(
       acceptanceId: `acceptance_${crypto.randomUUID()}`,
       idempotencyKeyHash: await sha256Hex(idempotencyKey),
       requestFingerprint: await sha256Hex(
-        canonicalJson({ accepted: true, signer_name: request.signer_name, token: request.token }),
+        canonicalJson({
+          accepted: true,
+          signer_name: request.signer_name,
+          token: request.token,
+        }),
       ),
       tokenHash: await sha256Hex(request.token),
       signerName: request.signer_name,
@@ -245,17 +270,19 @@ export async function handleCustomerPortalAcceptanceConfirm(
   } catch {
     return portalUnavailable();
   }
-  if (claim.kind === "conflict") return acceptanceJson({ error: "acceptance_idempotency_conflict" }, 409);
-  if (claim.kind === "challenge_used") return acceptanceJson({ error: "acceptance_challenge_used" }, 409);
+  if (claim.kind === "conflict")
+    return acceptanceJson({ error: "acceptance_idempotency_conflict" }, 409);
+  if (claim.kind === "challenge_used")
+    return acceptanceJson({ error: "acceptance_challenge_used" }, 409);
   if (claim.kind === "challenge_missing") return portalNotFound();
 
-  return await settleAcceptanceIntent(env, claim.intent, requestContext, signerIp);
+  return await settleAcceptanceIntent(env, claim.intent, requestContext);
 }
 
 /**
- * The frequent scheduled sweep only closes a Frappe attempt whose result can no longer be known.
- * It never replays a customer acceptance write. It also invalidates expired email challenges;
- * immutable acceptance receipts and events are intentionally retained.
+ * `frappe_attempted_at`, its lease, and the `frappe_commit_attempted` event are retained schema
+ * names. They now mark the bounded native D1 commit and never imply a Frappe/network operation.
+ * The sweep only closes a legacy/incomplete lease; immutable receipts and events are retained.
  */
 export async function reconcileCustomerContractAcceptanceAttempts(
   env: AppEnv,
@@ -266,28 +293,33 @@ export async function reconcileCustomerContractAcceptanceAttempts(
     `${acceptanceIntentSelect}
      WHERE state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL
        AND frappe_attempt_lease_expires_at <= ?`,
-  ).bind(nowValue).all<AcceptanceIntent>();
-  await Promise.all((expired.results ?? []).map((intent) =>
-    finalizeAcceptanceIntent(env, intent, {
-      state: "uncertain",
-      response: { status: "uncertain", acceptance_id: intent.acceptance_id },
-      responseStatus: 202,
-      errorCode: "frappe_attempt_lease_expired",
-      now: nowValue,
-    }),
-  ));
+  )
+    .bind(nowValue)
+    .all<AcceptanceIntent>();
+  await Promise.all(
+    (expired.results ?? []).map((intent) =>
+      finalizeAcceptanceIntent(env, intent, {
+        state: "uncertain",
+        response: { status: "uncertain", acceptance_id: intent.acceptance_id },
+        responseStatus: 202,
+        errorCode: "native_commit_lease_expired",
+        now: nowValue,
+      }),
+    ),
+  );
   await env.DB.prepare(
     `UPDATE customer_portal_acceptance_challenges
      SET state = 'invalidated', invalidated_at = ?
      WHERE state IN ('pending_delivery', 'sent') AND expires_at <= ?`,
-  ).bind(nowValue, nowValue).run();
+  )
+    .bind(nowValue, nowValue)
+    .run();
 }
 
 async function settleAcceptanceIntent(
   env: AppEnv,
   initial: AcceptanceIntent,
   requestContext: AuthRequestContext,
-  signerIp: string,
 ): Promise<Response> {
   let intent = initial;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -295,9 +327,17 @@ async function settleAcceptanceIntent(
     if (terminal) return terminal;
     if (intent.state === "receipt_pending") {
       if (intent.signer_ip_hash !== requestContext.ip_hash) {
-        return acceptanceJson({ error: "acceptance_request_context_mismatch" }, 409);
+        return acceptanceJson(
+          { error: "acceptance_request_context_mismatch" },
+          409,
+        );
       }
-      const receipt = await receiptFor(intent);
+      let receipt: Awaited<ReturnType<typeof receiptFor>>;
+      try {
+        receipt = await receiptFor(intent);
+      } catch {
+        return portalUnavailable();
+      }
       try {
         await r2ObjectStore(env.RAW).ensure(
           intent.receipt_key,
@@ -308,8 +348,13 @@ async function settleAcceptanceIntent(
       } catch {
         return acceptanceJson({ error: "acceptance_receipt_unavailable" }, 503);
       }
-      const stored = await markReceiptStored(env, intent, receipt, new Date().toISOString());
-      intent = await getAcceptanceIntent(env, intent.acceptance_id) ?? intent;
+      const stored = await markReceiptStored(
+        env,
+        intent,
+        receipt,
+        new Date().toISOString(),
+      );
+      intent = (await getAcceptanceIntent(env, intent.acceptance_id)) ?? intent;
       if (stored || intent.state !== "receipt_pending") continue;
       return acceptanceJson({ error: "acceptance_receipt_unavailable" }, 503);
     }
@@ -321,7 +366,10 @@ async function settleAcceptanceIntent(
         intent.frappe_attempt_lease_expires_at &&
         intent.frappe_attempt_lease_expires_at > now.toISOString()
       ) {
-        const response = acceptanceJson({ error: "acceptance_in_progress" }, 503);
+        const response = acceptanceJson(
+          { error: "acceptance_in_progress" },
+          503,
+        );
         response.headers.set("retry-after", "3");
         return response;
       }
@@ -329,70 +377,103 @@ async function settleAcceptanceIntent(
         state: "uncertain",
         response: { status: "uncertain", acceptance_id: intent.acceptance_id },
         responseStatus: 202,
-        errorCode: "frappe_attempt_lease_expired",
+        errorCode: "native_commit_lease_expired",
         now: now.toISOString(),
       });
-      return uncertain ? acceptanceJson({ status: "uncertain", acceptance_id: intent.acceptance_id }, 202)
+      return uncertain
+        ? acceptanceJson(
+            { status: "uncertain", acceptance_id: intent.acceptance_id },
+            202,
+          )
         : portalUnavailable();
     }
     if (intent.signer_ip_hash !== requestContext.ip_hash) {
-      return acceptanceJson({ error: "acceptance_request_context_mismatch" }, 409);
+      return acceptanceJson(
+        { error: "acceptance_request_context_mismatch" },
+        409,
+      );
     }
-    const attemptAt = now.toISOString();
-    const attemptClaimed = await markFrappeAttempted(
-      env,
-      intent.acceptance_id,
-      attemptAt,
-      new Date(now.getTime() + FRAPPE_ATTEMPT_LEASE_MS).toISOString(),
-    );
-    if (!attemptClaimed) {
-      intent = await getAcceptanceIntent(env, intent.acceptance_id) ?? intent;
-      continue;
-    }
+    let challenge: AcceptanceChallenge | null;
+    let contract: NativeContract | null;
     try {
-      await commitContractAcceptance(env, intent, signerIp);
-      const accepted = { status: "accepted" as const, acceptance_id: intent.acceptance_id };
-      const finalized = await finalizeAcceptanceIntent(env, intent, {
-        state: "accepted",
-        response: accepted,
-        responseStatus: 200,
-        errorCode: null,
-        now: new Date().toISOString(),
-      });
-      return finalized ? acceptanceJson(accepted) : portalUnavailable();
-    } catch (error) {
-      if (error instanceof FrappeAcceptanceHttpError && error.status < 500) {
-        const responseStatus = error.status === 400 ? 400 : 409;
-        const rejected = { error: "acceptance_rejected" };
-        const finalized = await finalizeAcceptanceIntent(env, intent, {
-          state: "rejected",
-          response: rejected,
-          responseStatus,
-          errorCode: `frappe_http_${error.status}`,
-          now: new Date().toISOString(),
-        });
-        return finalized ? acceptanceJson(rejected, responseStatus) : portalUnavailable();
-      }
-      const uncertain = { status: "uncertain" as const, acceptance_id: intent.acceptance_id };
-      const finalized = await finalizeAcceptanceIntent(env, intent, {
-        state: "uncertain",
-        response: uncertain,
-        responseStatus: 202,
-        errorCode: errorCode(error),
-        now: new Date().toISOString(),
-      });
-      return finalized ? acceptanceJson(uncertain, 202) : portalUnavailable();
+      challenge = await getAcceptanceChallenge(env, intent.challenge_id);
+      contract = challenge
+        ? await prepareContract(
+            env,
+            {
+              tenant_id: intent.tenant_id,
+              roof_job_id: intent.roof_job_id,
+              customer_id: intent.customer_id,
+            },
+            challenge.created_at,
+            now.toISOString().slice(0, 10),
+          )
+        : null;
+    } catch {
+      return portalUnavailable();
     }
+    if (!challenge || !contract || !sameContract(intent, contract)) {
+      return await rejectNativeAcceptance(
+        env,
+        intent,
+        "native_contract_changed",
+        now,
+      );
+    }
+    return await commitNativeAcceptance(
+      env,
+      intent,
+      contract,
+      challenge.created_at,
+      now,
+    );
   }
   return acceptanceJson({ error: "acceptance_in_progress" }, 503);
 }
 
 function customerAcceptanceConfigured(env: AppEnv): boolean {
-  return customerPortalConfigured(env) && customerAcceptanceBackendConfigured(env);
+  const runtime = env as unknown as Record<string, unknown>;
+  const db = runtime.DB as { prepare?: unknown; batch?: unknown } | undefined;
+  const raw = runtime.RAW as { head?: unknown; put?: unknown } | undefined;
+  return (
+    customerAcceptanceBackendConfigured(env) &&
+    !!configuredTenantId(env) &&
+    !!appPublicOrigin(env) &&
+    (env.APP_AUTH_PEPPER?.trim().length ?? 0) >= 32 &&
+    typeof db?.prepare === "function" &&
+    typeof db.batch === "function" &&
+    typeof raw?.head === "function" &&
+    typeof raw.put === "function"
+  );
 }
 
 function customerAcceptanceEnabled(env: AppEnv): boolean {
-  return customerPortalEnabled(env) && customerAcceptanceBackendEnabled(env);
+  return (
+    String(env.APP_CUSTOMER_PORTAL_ENABLED) === "true" &&
+    customerAcceptanceBackendEnabled(env)
+  );
+}
+
+/** The portal CTA and challenge issuance share this exact native authority predicate. */
+export async function customerContractAcceptanceAvailable(
+  env: AppEnv,
+  claim: { tenant_id: string; roof_job_id: string; customer_id: string },
+  now = new Date(),
+): Promise<boolean> {
+  if (!customerAcceptanceEnabled(env) || !customerAcceptanceConfigured(env)) {
+    return false;
+  }
+  const snapshotAt = now.toISOString();
+  try {
+    return !!(await prepareContract(
+      env,
+      claim,
+      snapshotAt,
+      snapshotAt.slice(0, 10),
+    ));
+  } catch {
+    return false;
+  }
 }
 
 function trustedPortalOrigin(req: Request, env: AppEnv): boolean {
@@ -403,279 +484,423 @@ function trustedPortalOrigin(req: Request, env: AppEnv): boolean {
 
 async function prepareContract(
   env: AppEnv,
-  claim: Record<string, string>,
-): Promise<PreparedContract> {
-  const response = await frappeCustomerAcceptanceCall(env, PREPARE_METHOD, claim);
-  const message = responseMessage(response);
-  const email = validEmail(message.email) ? message.email.trim() : null;
-  const emailHash = typeof message.email_hash === "string" && /^[0-9a-f]{64}$/.test(message.email_hash)
-    ? message.email_hash
-    : null;
-  const displayName = boundedText(message.display_name, 1, 160);
-  const roofJobId = boundedText(message.roof_job_id, 3, 140);
-  const customerId = boundedText(message.customer_id, 3, 140);
-  const quoteId = boundedText(message.quote_id, 3, 140);
-  const quoteVersion = boundedInteger(message.quote_version, 1, 1_000_000);
-  const proposalPackId = boundedText(message.proposal_pack_id, 3, 140);
-  const termsHash = typeof message.terms_hash === "string" && /^[0-9a-f]{64}$/.test(message.terms_hash)
-    ? message.terms_hash
-    : null;
+  claim: { tenant_id: string; roof_job_id: string; customer_id: string },
+  snapshotAt: string,
+  validOn: string,
+): Promise<NativeContract | null> {
   if (
-    !email || !emailHash || !displayName || roofJobId !== claim.roof_job_id ||
-    customerId !== claim.customer_id || !quoteId || !quoteVersion || !proposalPackId ||
-    !termsHash || !isRecord(message.terms) ||
-    await sha256Hex(email.toLowerCase()) !== emailHash
-  ) {
-    throw new FrappeAcceptanceTransportError("frappe_prepare_invalid_shape");
+    !Number.isFinite(Date.parse(snapshotAt)) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(validOn)
+  )
+    return null;
+  const rows = await env.DB.prepare(
+    `SELECT customer.contact_email AS email, customer.display_name,
+            job.roof_job_id, customer.customer_id,
+            quote.quote_revision_id, quote.customer_quote_id AS quote_id,
+            quote.revision_number AS quote_version,
+            proposal.proposal_revision_id, proposal.proposal_pack_id,
+            quote.terms_json AS quote_terms_json,
+            proposal.terms_json AS proposal_terms_json,
+            quote.terms_hash AS quote_terms_hash,
+            proposal.terms_hash AS proposal_terms_hash,
+            publication.publication_event_id
+       FROM operating_customers customer
+       JOIN operating_roof_jobs job
+         ON job.tenant_id = customer.tenant_id AND job.customer_id = customer.customer_id
+       JOIN commercial_quote_revisions quote
+         ON quote.tenant_id = customer.tenant_id AND quote.roof_job_id = job.roof_job_id
+        AND quote.customer_id = customer.customer_id
+       JOIN commercial_proposal_revisions proposal
+         ON proposal.tenant_id = quote.tenant_id
+        AND proposal.quote_revision_id = quote.quote_revision_id
+        AND proposal.roof_job_id = quote.roof_job_id
+        AND proposal.customer_id = quote.customer_id
+       JOIN commercial_proposal_publication_events publication
+         ON publication.tenant_id = proposal.tenant_id
+        AND publication.proposal_pack_id = proposal.proposal_pack_id
+        AND publication.proposal_revision_id = proposal.proposal_revision_id
+      WHERE customer.tenant_id = ? AND customer.customer_id = ? AND job.roof_job_id = ?
+        AND customer.lifecycle_status != 'archived' AND job.job_status != 'cancelled'
+        AND quote.status = 'approved' AND quote.valid_until >= ?
+        AND quote.terms_hash = proposal.terms_hash
+        AND quote.revision_number = (
+          SELECT MAX(current.revision_number) FROM commercial_quote_revisions current
+           WHERE current.tenant_id = quote.tenant_id
+             AND current.customer_quote_id = quote.customer_quote_id
+        )
+        AND proposal.revision_number = (
+          SELECT MAX(current.revision_number) FROM commercial_proposal_revisions current
+           WHERE current.tenant_id = proposal.tenant_id
+             AND current.proposal_pack_id = proposal.proposal_pack_id
+        )
+        AND publication.publication_version = (
+          SELECT MAX(current.publication_version)
+            FROM commercial_proposal_publication_events current
+           WHERE current.tenant_id = publication.tenant_id
+             AND current.proposal_pack_id = publication.proposal_pack_id
+        )
+        AND publication.state = 'published'
+        AND quote.created_at <= ? AND proposal.created_at <= ? AND publication.occurred_at <= ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions changed
+           WHERE changed.tenant_id = customer.tenant_id
+             AND changed.roof_job_id = job.roof_job_id
+             AND changed.customer_id = customer.customer_id
+             AND changed.created_at > ?
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions changed
+           WHERE changed.tenant_id = customer.tenant_id
+             AND changed.roof_job_id = job.roof_job_id
+             AND changed.customer_id = customer.customer_id
+             AND changed.created_at > ?
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM commercial_proposal_publication_events changed
+            JOIN commercial_proposal_revisions changed_proposal
+              ON changed_proposal.tenant_id = changed.tenant_id
+             AND changed_proposal.proposal_revision_id = changed.proposal_revision_id
+           WHERE changed.tenant_id = customer.tenant_id
+             AND changed_proposal.roof_job_id = job.roof_job_id
+             AND changed_proposal.customer_id = customer.customer_id
+             AND changed.occurred_at > ?
+        )
+      ORDER BY quote.customer_quote_id, proposal.proposal_pack_id
+      LIMIT 2`,
+  )
+    .bind(
+      claim.tenant_id,
+      claim.customer_id,
+      claim.roof_job_id,
+      validOn,
+      snapshotAt,
+      snapshotAt,
+      snapshotAt,
+      snapshotAt,
+      snapshotAt,
+      snapshotAt,
+    )
+    .all<NativeContractRow>();
+  if ((rows.results ?? []).length !== 1) return null;
+  const row = rows.results![0]!;
+  const email = validEmail(row.email) ? row.email : null;
+  const displayName = boundedText(row.display_name, 1, 160);
+  const roofJobId = boundedText(row.roof_job_id, 3, 140);
+  const customerId = boundedText(row.customer_id, 3, 140);
+  const quoteRevisionId = boundedText(row.quote_revision_id, 12, 160);
+  const quoteId = boundedText(row.quote_id, 3, 140);
+  const quoteVersion = boundedInteger(row.quote_version, 1, 1_000_000);
+  const proposalRevisionId = boundedText(row.proposal_revision_id, 12, 160);
+  const proposalPackId = boundedText(row.proposal_pack_id, 3, 140);
+  const publicationEventId = boundedText(row.publication_event_id, 20, 120);
+  const termsHash =
+    /^[0-9a-f]{64}$/.test(row.quote_terms_hash) &&
+    row.quote_terms_hash === row.proposal_terms_hash
+      ? row.quote_terms_hash
+      : null;
+  let quoteTerms: unknown;
+  let proposalTerms: unknown;
+  try {
+    quoteTerms = JSON.parse(row.quote_terms_json) as unknown;
+    proposalTerms = JSON.parse(row.proposal_terms_json) as unknown;
+  } catch {
+    return null;
   }
-  const termsJson = canonicalJson(message.terms);
-  if (termsJson.length > 48_000 || await sha256Hex(termsJson) !== termsHash) {
-    throw new FrappeAcceptanceTransportError("frappe_prepare_terms_mismatch");
-  }
+  const termsJson = isRecord(quoteTerms) ? canonicalJson(quoteTerms) : "";
+  if (
+    !email ||
+    !displayName ||
+    roofJobId !== claim.roof_job_id ||
+    customerId !== claim.customer_id ||
+    !quoteRevisionId ||
+    !quoteId ||
+    !quoteVersion ||
+    !proposalRevisionId ||
+    !proposalPackId ||
+    !publicationEventId ||
+    !termsHash ||
+    !isRecord(proposalTerms) ||
+    canonicalJson(proposalTerms) !== termsJson ||
+    termsJson.length > 48_000 ||
+    (await sha256Hex(termsJson)) !== termsHash
+  )
+    return null;
   return {
     email,
-    emailHash,
+    emailHash: await sha256Hex(email.toLowerCase()),
     displayName,
     roofJobId,
     customerId,
+    quoteRevisionId,
     quoteId,
     quoteVersion,
+    proposalRevisionId,
     proposalPackId,
+    publicationEventId,
     termsHash,
     termsJson,
   };
 }
 
-async function commitContractAcceptance(
+function sameContract(
+  intent: AcceptanceIntent,
+  contract: NativeContract,
+): boolean {
+  return (
+    intent.roof_job_id === contract.roofJobId &&
+    intent.customer_id === contract.customerId &&
+    intent.email_hash === contract.emailHash &&
+    intent.quote_id === contract.quoteId &&
+    Number(intent.quote_version) === contract.quoteVersion &&
+    intent.proposal_pack_id === contract.proposalPackId &&
+    intent.terms_hash === contract.termsHash &&
+    intent.terms_json === contract.termsJson
+  );
+}
+
+async function commitNativeAcceptance(
   env: AppEnv,
   intent: AcceptanceIntent,
-  signerIp: string,
-): Promise<void> {
+  contract: NativeContract,
+  challengeCreatedAt: string,
+  now: Date,
+): Promise<Response> {
   const receipt = await receiptFor(intent);
-  if (intent.receipt_hash !== receipt.hash || intent.receipt_content_length !== receipt.length) {
-    throw new FrappeAcceptanceTransportError("acceptance_receipt_ledger_mismatch");
+  if (
+    intent.receipt_hash !== receipt.hash ||
+    intent.receipt_content_length !== receipt.length
+  ) {
+    return portalUnavailable();
   }
-  const response = await frappeCustomerAcceptanceCall(env, COMMIT_METHOD, {
+  const attemptedAt = now.toISOString();
+  const leaseExpiresAt = new Date(
+    now.getTime() + NATIVE_COMMIT_LEASE_MS,
+  ).toISOString();
+  const accepted = {
+    status: "accepted" as const,
     acceptance_id: intent.acceptance_id,
-    challenge_id: intent.challenge_id,
-    portal_link_id: intent.portal_link_id,
-    tenant_id: intent.tenant_id,
-    roof_job_id: intent.roof_job_id,
-    customer_id: intent.customer_id,
-    email_hash: intent.email_hash,
-    quote_id: intent.quote_id,
-    quote_version: intent.quote_version,
-    proposal_pack_id: intent.proposal_pack_id,
-    terms_hash: intent.terms_hash,
-    signer_name: intent.signer_name,
-    accepted_at: intent.accepted_at,
-    receipt_key: intent.receipt_key,
-    receipt_hash: receipt.hash,
-    receipt_content_type: ACCEPTANCE_RECEIPT_CONTENT_TYPE,
-    receipt_content_length: receipt.length,
-    receipt_captured_at: intent.accepted_at,
-    signer_ip: signerIp,
-  });
-  if (boundedText(responseMessage(response).acceptance_id, 16, 100) !== intent.acceptance_id) {
-    throw new FrappeAcceptanceTransportError("frappe_commit_invalid_shape");
-  }
-}
-
-async function frappeCustomerAcceptanceCall(
-  env: AppEnv,
-  method: string,
-  claim: Record<string, unknown>,
-  bypassRuntime = false,
-): Promise<unknown> {
-  const secret = customerAcceptanceHmacKey(env);
-  const frappeApiKey = customerAcceptanceFrappeApiKey(env);
-  const frappeApiSecret = customerAcceptanceFrappeApiSecret(env);
-  if (!secret || !frappeApiKey || !frappeApiSecret) {
-    throw new FrappeAcceptanceTransportError("frappe_acceptance_not_configured");
-  }
-  if (!bypassRuntime && method === COMMIT_METHOD) {
-    assertEffectLedgerReady(env);
-    const tenantId = String(claim.tenant_id ?? env.APP_TENANT_ID ?? "ironwrap");
-    const acceptanceIdValue = boundedText(claim.acceptance_id, 16, 100);
-    if (!acceptanceIdValue) {
-      throw new FrappeAcceptanceTransportError("frappe_commit_acceptance_id_invalid");
-    }
-    const acceptanceId = acceptanceIdValue;
-    const request = { method, claim };
-    const requestHash = await sha256Hex(canonicalJson(request));
-    const idempotencyKey = `customer-contract:${acceptanceId}:${requestHash}`;
-    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
-    const result = await runExternalEffect(env, {
-      tenantId,
-      actor: { type: "customer", id: String(claim.customer_id ?? acceptanceId) },
-      taskId: `customer-contract:${acceptanceId}`,
-      authority: {
-        permitRef: `customer-portal:${acceptanceId}`,
-        policyRef: "customer.contract.acceptance",
-        policyVersion: "v1",
-        tenantId,
-        actorType: "customer",
-        actorId: String(claim.customer_id ?? acceptanceId),
-        expiresAt: deadlineAt,
-        allowedActions: ["customer.contract.accept"],
-        maxAttempts: 1,
-      },
-      aggregate: { type: "customer_contract_acceptance", id: acceptanceId, version: 0 },
-      intentId: acceptanceId,
-      action: "customer.contract.accept",
-      request,
-      requestHash,
-      provider: "frappe",
-      idempotencyKey,
-      deadlineAt,
-      expectedReadback: { acceptance_id: acceptanceId },
-      retryLimit: 0,
-      compensationPlan: {},
-      correlationId: acceptanceId,
-    }, {
-      async dispatch() {
-        try {
-          const value = await frappeCustomerAcceptanceCall(env, method, claim, true);
-          return {
-            outcome: "accepted" as const,
-            value,
-            providerExternalId: acceptanceId,
-            providerResponse: value,
-          };
-        } catch (error) {
-          if (error instanceof FrappeAcceptanceHttpError) {
-            return {
-              outcome: error.status < 500 ? "rejected" as const : "unknown" as const,
-              detailCode: `frappe_http_${error.status}`,
-            };
-          }
-          if (error instanceof FrappeAcceptanceTransportError) {
-            return { outcome: "unknown" as const, detailCode: error.code };
-          }
-          throw error;
-        }
-      },
-      async readback() {
-        return await frappeCustomerAcceptanceReadback(env, acceptanceId);
-      },
-      async replay({ effect }) {
-        const providerExternalId = effect.provider_external_id;
-        if (!providerExternalId || providerExternalId !== acceptanceId) {
-          throw new Error("frappe_acceptance_replay_id_missing");
-        }
-        const readback = await frappeCustomerAcceptanceReadback(env, acceptanceId);
-        if (readback.status !== "match") {
-          throw new Error(readback.detailCode ?? "frappe_acceptance_replay_readback_failed");
-        }
-        return { message: { acceptance_id: acceptanceId } };
-      },
-    });
-    if (result.effect.state === "unknown") {
-      throw new FrappeAcceptanceTransportError(result.effect.result_code ?? "frappe_commit_outcome_unknown");
-    }
-    const rejectedStatus = /^frappe_http_(\d{3})$/.exec(result.effect.result_code ?? "");
-    if (result.effect.state === "failed" && rejectedStatus && Number(rejectedStatus[1]) < 500) {
-      throw new FrappeAcceptanceHttpError(Number(rejectedStatus[1]));
-    }
-    if (result.effect.state !== "succeeded" || result.value === undefined) {
-      throw new FrappeAcceptanceTransportError(result.effect.result_code ?? "frappe_commit_not_succeeded");
-    }
-    return result.value;
-  }
-  const claimJson = canonicalJson(claim);
-  const path = `/api/method/${method}`;
-  const timestamp = String(Math.floor(Date.now() / 1_000));
-  const nonce = randomToken();
-  const signature = await hmacBase64Url(
-    secret,
-    `POST\n${path}\n${timestamp}\n${nonce}\n${await sha256Hex(claimJson)}`,
-  );
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS),
-  );
+  };
+  const rejected = { error: "acceptance_rejected" };
+  const bindingId = `commercial-acceptance:${await sha256Hex(
+    `${intent.tenant_id}:${await sha256Hex(intent.acceptance_id)}`,
+  )}`;
   try {
-    const response = await fetch(`${frappeBaseUrl(env)}${path}`, {
-      method: "POST",
-      redirect: "manual",
-      signal: controller.signal,
-      headers: {
-        accept: "application/json",
-        authorization: `token ${frappeApiKey}:${frappeApiSecret}`,
-        "content-type": "application/json",
-        "user-agent": "ironwrap-customer-acceptance/1.0",
-        "x-ironwrap-acceptance-timestamp": timestamp,
-        "x-ironwrap-acceptance-nonce": nonce,
-        "x-ironwrap-acceptance-signature": signature,
-      },
-      body: JSON.stringify({ customer_claim_json: claimJson }),
-    });
-    if (!response.ok) throw new FrappeAcceptanceHttpError(response.status);
-    const declared = Number(response.headers.get("content-length") ?? "0");
-    if (Number.isFinite(declared) && declared > MAX_FRAPPE_RESPONSE_BYTES) {
-      throw new FrappeAcceptanceTransportError("frappe_response_too_large");
-    }
-    const raw = await response.text();
-    if (raw.length > MAX_FRAPPE_RESPONSE_BYTES) {
-      throw new FrappeAcceptanceTransportError("frappe_response_too_large");
-    }
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw new FrappeAcceptanceTransportError("frappe_response_invalid_json");
-    }
-  } catch (error) {
-    if (error instanceof FrappeAcceptanceHttpError || error instanceof FrappeAcceptanceTransportError) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new FrappeAcceptanceTransportError("frappe_request_timeout");
-    }
-    throw new FrappeAcceptanceTransportError("frappe_request_network_error");
-  } finally {
-    clearTimeout(timer);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE customer_portal_acceptance_intents
+         SET frappe_attempted_at = ?, frappe_attempt_lease_expires_at = ?, updated_at = ?
+         WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NULL`,
+      ).bind(attemptedAt, leaseExpiresAt, attemptedAt, intent.acceptance_id),
+      env.DB.prepare(
+        `UPDATE customer_portal_acceptance_intents
+         SET state = 'accepted', frappe_attempt_lease_expires_at = NULL, result_json = ?,
+             response_status = 200, error_code = NULL, completed_at = ?, updated_at = ?
+         WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at = ?
+           AND EXISTS (
+             SELECT 1
+               FROM operating_customers customer
+               JOIN operating_roof_jobs job
+                 ON job.tenant_id = customer.tenant_id AND job.customer_id = customer.customer_id
+               JOIN commercial_quote_revisions quote
+                 ON quote.tenant_id = customer.tenant_id AND quote.roof_job_id = job.roof_job_id
+                AND quote.customer_id = customer.customer_id
+               JOIN commercial_proposal_revisions proposal
+                 ON proposal.tenant_id = quote.tenant_id
+                AND proposal.quote_revision_id = quote.quote_revision_id
+               JOIN commercial_proposal_publication_events publication
+                 ON publication.tenant_id = proposal.tenant_id
+                AND publication.proposal_revision_id = proposal.proposal_revision_id
+              WHERE customer.tenant_id = ? AND customer.customer_id = ? AND job.roof_job_id = ?
+                AND lower(trim(customer.contact_email)) = ?
+                AND customer.lifecycle_status != 'archived' AND job.job_status != 'cancelled'
+                AND quote.quote_revision_id = ? AND quote.customer_quote_id = ?
+                AND quote.revision_number = ? AND quote.status = 'approved' AND quote.valid_until >= ?
+                AND proposal.proposal_revision_id = ? AND proposal.proposal_pack_id = ?
+                AND publication.publication_event_id = ? AND publication.state = 'published'
+                AND quote.terms_hash = ? AND proposal.terms_hash = ?
+                AND quote.revision_number = (
+                  SELECT MAX(current.revision_number) FROM commercial_quote_revisions current
+                   WHERE current.tenant_id = quote.tenant_id
+                     AND current.customer_quote_id = quote.customer_quote_id
+                )
+                AND proposal.revision_number = (
+                  SELECT MAX(current.revision_number) FROM commercial_proposal_revisions current
+                   WHERE current.tenant_id = proposal.tenant_id
+                     AND current.proposal_pack_id = proposal.proposal_pack_id
+                )
+                AND publication.publication_version = (
+                  SELECT MAX(current.publication_version)
+                    FROM commercial_proposal_publication_events current
+                   WHERE current.tenant_id = publication.tenant_id
+                     AND current.proposal_pack_id = publication.proposal_pack_id
+                )
+                AND quote.created_at <= ? AND proposal.created_at <= ?
+                AND publication.occurred_at <= ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM commercial_quote_revisions changed
+                   WHERE changed.tenant_id = customer.tenant_id
+                     AND changed.roof_job_id = job.roof_job_id
+                     AND changed.customer_id = customer.customer_id
+                     AND changed.created_at > ?
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM commercial_proposal_revisions changed
+                   WHERE changed.tenant_id = customer.tenant_id
+                     AND changed.roof_job_id = job.roof_job_id
+                     AND changed.customer_id = customer.customer_id
+                     AND changed.created_at > ?
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM commercial_proposal_publication_events changed
+                    JOIN commercial_proposal_revisions changed_proposal
+                      ON changed_proposal.tenant_id = changed.tenant_id
+                     AND changed_proposal.proposal_revision_id = changed.proposal_revision_id
+                   WHERE changed.tenant_id = customer.tenant_id
+                     AND changed_proposal.roof_job_id = job.roof_job_id
+                     AND changed_proposal.customer_id = customer.customer_id
+                     AND changed.occurred_at > ?
+                )
+           )`,
+      ).bind(
+        canonicalJson(accepted),
+        attemptedAt,
+        attemptedAt,
+        intent.acceptance_id,
+        attemptedAt,
+        intent.tenant_id,
+        intent.customer_id,
+        intent.roof_job_id,
+        contract.email.toLowerCase(),
+        contract.quoteRevisionId,
+        contract.quoteId,
+        contract.quoteVersion,
+        now.toISOString().slice(0, 10),
+        contract.proposalRevisionId,
+        contract.proposalPackId,
+        contract.publicationEventId,
+        contract.termsHash,
+        contract.termsHash,
+        challengeCreatedAt,
+        challengeCreatedAt,
+        challengeCreatedAt,
+        challengeCreatedAt,
+        challengeCreatedAt,
+        challengeCreatedAt,
+      ),
+      env.DB.prepare(
+        `INSERT INTO commercial_acceptance_bindings (
+           acceptance_binding_id, acceptance_id, tenant_id, quote_revision_id,
+           proposal_revision_id, roof_job_id, customer_id, terms_hash, receipt_hash,
+           accepted_at, bound_at
+         )
+         SELECT ?, acceptance_id, tenant_id, ?, ?, roof_job_id, customer_id, terms_hash,
+                receipt_hash, accepted_at, ?
+           FROM customer_portal_acceptance_intents
+          WHERE acceptance_id = ? AND state = 'accepted'
+            AND NOT EXISTS (
+              SELECT 1 FROM commercial_acceptance_bindings binding
+               WHERE binding.acceptance_id = customer_portal_acceptance_intents.acceptance_id
+            )`,
+      ).bind(
+        bindingId,
+        contract.quoteRevisionId,
+        contract.proposalRevisionId,
+        attemptedAt,
+        intent.acceptance_id,
+      ),
+      env.DB.prepare(
+        `UPDATE customer_portal_acceptance_intents
+         SET state = 'rejected', frappe_attempt_lease_expires_at = NULL, result_json = ?,
+             response_status = 409, error_code = 'native_contract_changed', completed_at = ?,
+             updated_at = ?
+         WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at = ?`,
+      ).bind(
+        canonicalJson(rejected),
+        attemptedAt,
+        attemptedAt,
+        intent.acceptance_id,
+        attemptedAt,
+      ),
+    ]);
+  } catch {
+    // D1 may commit and lose the response; the immutable intent + binding are the readback.
   }
+  return await nativeTerminalResponse(env, intent.acceptance_id, contract);
 }
 
-async function frappeCustomerAcceptanceReadback(
+async function rejectNativeAcceptance(
+  env: AppEnv,
+  intent: AcceptanceIntent,
+  code: string,
+  now: Date,
+): Promise<Response> {
+  const attemptedAt = now.toISOString();
+  const rejected = { error: "acceptance_rejected" };
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE customer_portal_acceptance_intents
+         SET frappe_attempted_at = ?, frappe_attempt_lease_expires_at = ?, updated_at = ?
+         WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NULL`,
+      ).bind(
+        attemptedAt,
+        new Date(now.getTime() + NATIVE_COMMIT_LEASE_MS).toISOString(),
+        attemptedAt,
+        intent.acceptance_id,
+      ),
+      env.DB.prepare(
+        `UPDATE customer_portal_acceptance_intents
+         SET state = 'rejected', frappe_attempt_lease_expires_at = NULL, result_json = ?,
+             response_status = 409, error_code = ?, completed_at = ?, updated_at = ?
+         WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at = ?`,
+      ).bind(
+        canonicalJson(rejected),
+        code,
+        attemptedAt,
+        attemptedAt,
+        intent.acceptance_id,
+        attemptedAt,
+      ),
+    ]);
+  } catch {
+    // A concurrent replay may already have committed the terminal state.
+  }
+  const current = await getAcceptanceIntent(env, intent.acceptance_id);
+  return current
+    ? (storedTerminalResponse(current) ?? portalUnavailable())
+    : portalUnavailable();
+}
+
+async function nativeTerminalResponse(
   env: AppEnv,
   acceptanceId: string,
-): Promise<{
-  status: "match" | "conflict" | "unavailable" | "not_found";
-  providerExternalId?: string;
-  observed?: unknown;
-  detailCode?: string;
-}> {
-  try {
-    const response = await fetch(
-      `${frappeBaseUrl(env)}/api/resource/Contract%20Acceptance/${encodeURIComponent(acceptanceId)}`,
-      {
-        method: "GET",
-        redirect: "manual",
-        headers: {
-          accept: "application/json",
-          authorization: `token ${customerAcceptanceFrappeApiKey(env)}:${customerAcceptanceFrappeApiSecret(env)}`,
-        },
-      },
-    );
-    if (response.status === 404) return { status: "not_found", detailCode: "frappe_acceptance_readback_not_found" };
-    if (!response.ok) return { status: "unavailable", detailCode: `frappe_acceptance_readback_${response.status}` };
-    const value = await response.json() as { data?: Record<string, unknown> };
-    const observed = value.data ?? {};
-    const providerId = typeof observed.acceptance_id === "string" ? observed.acceptance_id : null;
-    if (providerId !== acceptanceId) {
-      return {
-        status: "conflict",
-        providerExternalId: providerId ?? acceptanceId,
-        observed,
-        detailCode: "frappe_acceptance_readback_conflict",
-      };
-    }
-    return { status: "match", providerExternalId: acceptanceId, observed };
-  } catch {
-    return { status: "unavailable", detailCode: "frappe_acceptance_readback_unavailable" };
-  }
+  contract: NativeContract,
+): Promise<Response> {
+  const current = await getAcceptanceIntent(env, acceptanceId);
+  if (!current) return portalUnavailable();
+  if (current.state !== "accepted")
+    return storedTerminalResponse(current) ?? portalUnavailable();
+  const binding = await env.DB.prepare(
+    `SELECT quote_revision_id, proposal_revision_id, receipt_hash
+       FROM commercial_acceptance_bindings
+      WHERE tenant_id = ? AND acceptance_id = ? LIMIT 1`,
+  )
+    .bind(current.tenant_id, acceptanceId)
+    .first<{
+      quote_revision_id: string;
+      proposal_revision_id: string;
+      receipt_hash: string;
+    }>();
+  if (
+    !binding ||
+    binding.quote_revision_id !== contract.quoteRevisionId ||
+    binding.proposal_revision_id !== contract.proposalRevisionId ||
+    binding.receipt_hash !== current.receipt_hash
+  )
+    return portalUnavailable();
+  return storedTerminalResponse(current) ?? portalUnavailable();
 }
 
 async function sendChallengeEmail(
@@ -688,12 +913,18 @@ async function sendChallengeEmail(
   if (!origin) throw new Error("acceptance_email_origin_unavailable");
   const href = `${origin}/contract-accept#token=${encodeURIComponent(rawToken)}`;
   const greeting = escapeHtml(prepared.displayName);
-  const expiry = escapeHtml(new Date(expiresAt).toLocaleString("en-CA", { timeZone: "America/Edmonton" }));
+  const expiry = escapeHtml(
+    new Date(expiresAt).toLocaleString("en-CA", {
+      timeZone: "America/Edmonton",
+    }),
+  );
   // Same local-only escape hatch the magic-link rail uses (app-auth.devOutboxCapture):
   // APP_ALLOW_INSECURE_LOCAL is "false" in every deployed environment, so a deployed
   // Worker always falls through to Gmail. Without this the acceptance half of the
   // customer portal could not be driven end to end on a local stack at all.
-  if (await devOutboxCapture(env, "contract_acceptance", prepared.email, href)) {
+  if (
+    await devOutboxCapture(env, "contract_acceptance", prepared.email, href)
+  ) {
     return { providerMessageId: `dev-outbox:${crypto.randomUUID()}` };
   }
   return await sendGmail(
@@ -761,7 +992,9 @@ async function markChallengeSent(
     `UPDATE customer_portal_acceptance_challenges
      SET state = 'sent', sent_at = ?, provider_message_id = ?
      WHERE challenge_id = ? AND state = 'pending_delivery'`,
-  ).bind(sentAt, providerMessageId, challengeId).run();
+  )
+    .bind(sentAt, providerMessageId, challengeId)
+    .run();
   return d1Changes(result) === 1;
 }
 
@@ -774,7 +1007,9 @@ async function invalidateAcceptanceChallenge(
     `UPDATE customer_portal_acceptance_challenges
      SET state = 'invalidated', invalidated_at = ?
      WHERE challenge_id = ? AND state IN ('pending_delivery', 'sent')`,
-  ).bind(now, challengeId).run();
+  )
+    .bind(now, challengeId)
+    .run();
 }
 
 async function claimAcceptanceIntent(
@@ -810,28 +1045,37 @@ async function claimAcceptanceIntent(
            AND link.revoked_at IS NULL AND link.expires_at > ?
        )
      ON CONFLICT DO NOTHING`,
-  ).bind(
-    input.acceptanceId,
+  )
+    .bind(
+      input.acceptanceId,
+      input.idempotencyKeyHash,
+      input.requestFingerprint,
+      input.signerName,
+      input.signerIpHash,
+      input.now,
+      receiptKey,
+      input.now,
+      input.now,
+      input.tokenHash,
+      input.now,
+      input.now,
+    )
+    .run();
+  const existing = await getAcceptanceIntentByIdempotency(
+    env,
     input.idempotencyKeyHash,
-    input.requestFingerprint,
-    input.signerName,
-    input.signerIpHash,
-    input.now,
-    receiptKey,
-    input.now,
-    input.now,
-    input.tokenHash,
-    input.now,
-    input.now,
-  ).run();
-  const existing = await getAcceptanceIntentByIdempotency(env, input.idempotencyKeyHash);
+  );
   if (existing) {
-    if (existing.request_fingerprint !== input.requestFingerprint) return { kind: "conflict" };
+    if (existing.request_fingerprint !== input.requestFingerprint)
+      return { kind: "conflict" };
     return d1Changes(inserted) > 0
       ? { kind: "claimed", intent: existing }
       : { kind: "existing", intent: existing };
   }
-  const challenge = await getAcceptanceChallengeByTokenHash(env, input.tokenHash);
+  const challenge = await getAcceptanceChallengeByTokenHash(
+    env,
+    input.tokenHash,
+  );
   return challenge?.state === "consumed"
     ? { kind: "challenge_used" }
     : { kind: "challenge_missing" };
@@ -847,21 +1091,9 @@ async function markReceiptStored(
     `UPDATE customer_portal_acceptance_intents
      SET receipt_hash = ?, receipt_content_length = ?, state = 'receipt_stored', updated_at = ?
      WHERE acceptance_id = ? AND state = 'receipt_pending'`,
-  ).bind(receipt.hash, receipt.length, now, intent.acceptance_id).run();
-  return d1Changes(result) > 0;
-}
-
-async function markFrappeAttempted(
-  env: AppEnv,
-  acceptanceId: string,
-  attemptedAt: string,
-  leaseExpiresAt: string,
-): Promise<boolean> {
-  const result = await env.DB.prepare(
-    `UPDATE customer_portal_acceptance_intents
-     SET frappe_attempted_at = ?, frappe_attempt_lease_expires_at = ?, updated_at = ?
-     WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NULL`,
-  ).bind(attemptedAt, leaseExpiresAt, attemptedAt, acceptanceId).run();
+  )
+    .bind(receipt.hash, receipt.length, now, intent.acceptance_id)
+    .run();
   return d1Changes(result) > 0;
 }
 
@@ -881,15 +1113,17 @@ async function finalizeAcceptanceIntent(
      SET state = ?, frappe_attempt_lease_expires_at = NULL, result_json = ?, response_status = ?,
          error_code = ?, completed_at = ?, updated_at = ?
      WHERE acceptance_id = ? AND state = 'receipt_stored' AND frappe_attempted_at IS NOT NULL`,
-  ).bind(
-    input.state,
-    canonicalJson(input.response),
-    input.responseStatus,
-    input.errorCode,
-    input.now,
-    input.now,
-    intent.acceptance_id,
-  ).run();
+  )
+    .bind(
+      input.state,
+      canonicalJson(input.response),
+      input.responseStatus,
+      input.errorCode,
+      input.now,
+      input.now,
+      intent.acceptance_id,
+    )
+    .run();
   return d1Changes(result) > 0;
 }
 
@@ -897,7 +1131,9 @@ async function getAcceptanceIntent(
   env: AppEnv,
   acceptanceId: string,
 ): Promise<AcceptanceIntent | null> {
-  return await env.DB.prepare(`${acceptanceIntentSelect} WHERE acceptance_id = ? LIMIT 1`)
+  return await env.DB.prepare(
+    `${acceptanceIntentSelect} WHERE acceptance_id = ? LIMIT 1`,
+  )
     .bind(acceptanceId)
     .first<AcceptanceIntent>();
 }
@@ -906,7 +1142,9 @@ async function getAcceptanceIntentByIdempotency(
   env: AppEnv,
   idempotencyKeyHash: string,
 ): Promise<AcceptanceIntent | null> {
-  return await env.DB.prepare(`${acceptanceIntentSelect} WHERE idempotency_key_hash = ? LIMIT 1`)
+  return await env.DB.prepare(
+    `${acceptanceIntentSelect} WHERE idempotency_key_hash = ? LIMIT 1`,
+  )
     .bind(idempotencyKeyHash)
     .first<AcceptanceIntent>();
 }
@@ -920,7 +1158,23 @@ async function getAcceptanceChallengeByTokenHash(
             quote_id, quote_version, proposal_pack_id, terms_hash, terms_json,
             state, created_at, expires_at, sent_at, provider_message_id, consumed_at, invalidated_at
      FROM customer_portal_acceptance_challenges WHERE token_hash = ? LIMIT 1`,
-  ).bind(tokenHash).first<AcceptanceChallenge>();
+  )
+    .bind(tokenHash)
+    .first<AcceptanceChallenge>();
+}
+
+async function getAcceptanceChallenge(
+  env: AppEnv,
+  challengeId: string,
+): Promise<AcceptanceChallenge | null> {
+  return await env.DB.prepare(
+    `SELECT challenge_id, token_hash, tenant_id, portal_link_id, roof_job_id, customer_id, email_hash,
+            quote_id, quote_version, proposal_pack_id, terms_hash, terms_json,
+            state, created_at, expires_at, sent_at, provider_message_id, consumed_at, invalidated_at
+       FROM customer_portal_acceptance_challenges WHERE challenge_id = ? LIMIT 1`,
+  )
+    .bind(challengeId)
+    .first<AcceptanceChallenge>();
 }
 
 const acceptanceIntentSelect = `SELECT acceptance_id, idempotency_key_hash, request_fingerprint,
@@ -930,15 +1184,20 @@ const acceptanceIntentSelect = `SELECT acceptance_id, idempotency_key_hash, requ
   frappe_attempt_lease_expires_at, result_json, response_status, error_code, created_at, updated_at,
   completed_at FROM customer_portal_acceptance_intents`;
 
-async function receiptFor(intent: AcceptanceIntent): Promise<{ body: string; hash: string; length: number }> {
+async function receiptFor(
+  intent: AcceptanceIntent,
+): Promise<{ body: string; hash: string; length: number }> {
   let terms: unknown;
   try {
     terms = JSON.parse(intent.terms_json) as unknown;
   } catch {
-    throw new FrappeAcceptanceTransportError("acceptance_terms_ledger_invalid");
+    throw new AcceptanceLedgerError("acceptance_terms_ledger_invalid");
   }
-  if (!isRecord(terms) || await sha256Hex(canonicalJson(terms)) !== intent.terms_hash) {
-    throw new FrappeAcceptanceTransportError("acceptance_terms_ledger_mismatch");
+  if (
+    !isRecord(terms) ||
+    (await sha256Hex(canonicalJson(terms))) !== intent.terms_hash
+  ) {
+    throw new AcceptanceLedgerError("acceptance_terms_ledger_mismatch");
   }
   const body = canonicalJson({
     version: 1,
@@ -968,40 +1227,47 @@ async function receiptFor(intent: AcceptanceIntent): Promise<{ body: string; has
 }
 
 function storedTerminalResponse(intent: AcceptanceIntent): Response | null {
-  if (!(["accepted", "uncertain", "rejected"] as string[]).includes(intent.state)) return null;
-  if (!intent.result_json || !intent.response_status) return portalUnavailable();
+  if (
+    !(["accepted", "uncertain", "rejected"] as string[]).includes(intent.state)
+  )
+    return null;
+  if (!intent.result_json || !intent.response_status)
+    return portalUnavailable();
   try {
     const body = JSON.parse(intent.result_json) as unknown;
     if (!isRecord(body)) return portalUnavailable();
     if (
-      intent.state === "accepted" && body.status === "accepted" &&
+      intent.state === "accepted" &&
+      body.status === "accepted" &&
       body.acceptance_id === intent.acceptance_id
-    ) return acceptanceJson(body, 200);
+    )
+      return acceptanceJson(body, 200);
     if (
-      intent.state === "uncertain" && body.status === "uncertain" &&
+      intent.state === "uncertain" &&
+      body.status === "uncertain" &&
       body.acceptance_id === intent.acceptance_id
-    ) return acceptanceJson(body, 202);
+    )
+      return acceptanceJson(body, 202);
     if (intent.state === "rejected" && body.error === "acceptance_rejected") {
       return acceptanceJson(body, intent.response_status);
     }
   } catch {
-    // A corrupt ledger must not become a retryable Frappe write.
+    // A corrupt ledger must not become a retryable native commit.
   }
   return portalUnavailable();
-}
-
-function responseMessage(value: unknown): Record<string, unknown> {
-  const root = isRecord(value) ? value : null;
-  const message = root && isRecord(root.message) ? root.message : null;
-  if (!message) throw new FrappeAcceptanceTransportError("frappe_response_invalid_shape");
-  return message;
 }
 
 async function parseExactJson(
   req: Request,
   keys: readonly string[],
 ): Promise<Record<string, unknown> | null> {
-  if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null;
+  if (
+    !req.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .startsWith("application/json")
+  )
+    return null;
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return null;
   let raw: string;
@@ -1020,28 +1286,16 @@ async function parseExactJson(
   }
 }
 
-async function hmacBase64Url(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)),
-  );
-  let binary = "";
-  for (const byte of signature) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isRecord(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
   }
-  if (typeof value === "number" && !Number.isFinite(value)) throw new Error("non_finite_json_number");
+  if (typeof value === "number" && !Number.isFinite(value))
+    throw new Error("non_finite_json_number");
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw new Error("unsupported_json_value");
   return encoded;
@@ -1056,37 +1310,52 @@ function validIdempotencyKey(value: string): boolean {
 }
 
 function validSignerName(value: unknown): value is string {
-  return typeof value === "string" && value === value.trim() &&
-    value.length >= 1 && value.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
+  return (
+    typeof value === "string" &&
+    value === value.trim() &&
+    value.length >= 1 &&
+    value.length <= 160 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
 }
 
 function validEmail(value: unknown): value is string {
-  return typeof value === "string" && value === value.trim() && value.length <= 320 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  return (
+    typeof value === "string" &&
+    value === value.trim() &&
+    value.length <= 320 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  );
 }
 
 function boundedText(value: unknown, min: number, max: number): string | null {
-  return typeof value === "string" && value === value.trim() &&
-    value.length >= min && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
+  return typeof value === "string" &&
+    value === value.trim() &&
+    value.length >= min &&
+    value.length <= max &&
+    !/[\u0000-\u001f\u007f]/.test(value)
     ? value
     : null;
 }
 
-function boundedInteger(value: unknown, min: number, max: number): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max
+function boundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+): number | null {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= min &&
+    value <= max
     ? value
     : null;
 }
 
 function requestIp(req: Request): string | null {
   const value = (req.headers.get("cf-connecting-ip") ?? "").trim();
-  return value && value.length <= 64 && /^[0-9A-Fa-f:.]+$/.test(value) ? value : null;
-}
-
-function errorCode(error: unknown): string {
-  if (error instanceof FrappeAcceptanceTransportError) return error.code;
-  if (error instanceof FrappeAcceptanceHttpError) return `frappe_http_${error.status}`;
-  return "frappe_request_unknown";
+  return value && value.length <= 64 && /^[0-9A-Fa-f:.]+$/.test(value)
+    ? value
+    : null;
 }
 
 function d1Changes(result: { meta?: { changes?: number } }): number {
@@ -1097,15 +1366,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function sameKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+function sameKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
   const actual = Object.keys(value).sort();
-  return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
+  return (
+    actual.length === keys.length &&
+    actual.every((key, index) => key === [...keys].sort()[index])
+  );
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]!
-  ));
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        character
+      ]!,
+  );
 }
 
 function portalNotFound(): Response {

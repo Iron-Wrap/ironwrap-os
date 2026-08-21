@@ -69,13 +69,17 @@ export function parsePythonNumericFieldtypes(source) {
 
 export function parseWorkerBlankRules(source) {
   const block = /const BLANK_QUOTE_READBACK_FIELDS[\s\S]*?= \[([\s\S]*?)\n\] as const;/m.exec(source);
-  assert.ok(block, "facet-design-projection.ts no longer declares BLANK_QUOTE_READBACK_FIELDS");
+  if (!block) return null;
   const entry = /\{ field: "([^"]+)", schemaDefault: (null|"[^"]*"), numeric: (true|false) \},/g;
   return [...block[1].matchAll(entry)].map((match) => ({
     field: match[1],
     schemaDefault: match[2] === "null" ? null : JSON.parse(match[2]),
     numeric: match[3] === "true",
   }));
+}
+
+export function workerUsesNativeFacetProjection(source) {
+  return source.includes("export async function reconcileFacetDesignNativeProjections");
 }
 
 export function validateFacetBlankQuoteContract({ doctype, frappeSource, workerSource }) {
@@ -89,10 +93,17 @@ export function validateFacetBlankQuoteContract({ doctype, frappeSource, workerS
 
   const expected = schemaBlankRules(doctype, blankFields);
   const actual = parseWorkerBlankRules(workerSource);
-  assert.deepEqual(
-    actual, expected,
-    "the Worker's blank-quote readback table has drifted from Customer Quote / BLANK_QUOTE_FIELDS",
-  );
+  if (actual === null) {
+    assert.ok(
+      workerUsesNativeFacetProjection(workerSource),
+      "facet-design-projection.ts no longer declares BLANK_QUOTE_READBACK_FIELDS and is not the native projection: restore the Frappe readback table or the native export",
+    );
+  } else {
+    assert.deepEqual(
+      actual, expected,
+      "the Worker's blank-quote readback table has drifted from Customer Quote / BLANK_QUOTE_FIELDS",
+    );
+  }
 
   // A rule that claims neither mechanism can never soften anything, so if the
   // whole table is inert the readback has silently gone back to literal-empty.
@@ -101,7 +112,11 @@ export function validateFacetBlankQuoteContract({ doctype, frappeSource, workerS
     shaped.length > 0,
     "no blank quote field defaults or stores 0 - the schema no longer matches the defect this guards",
   );
-  return { fields: expected.length, shaped: shaped.length };
+  return {
+    fields: expected.length,
+    shaped: shaped.length,
+    worker: actual === null ? "native" : "frappe-readback",
+  };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

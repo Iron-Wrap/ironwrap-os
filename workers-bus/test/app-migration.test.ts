@@ -84,10 +84,8 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
   assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "true");
   // The customer portal and its contract-acceptance half are on wherever the office control
-  // plane exists. customerAcceptanceBackendConfigured still requires the dedicated acceptance
-  // HMAC key, the scoped Frappe acceptance identity and a mail sender before the rail answers,
-  // so an unprovisioned environment reports contract_acceptance_available false and returns
-  // 503 rather than showing a customer a half-wired acceptance button.
+  // plane exists. customerAcceptanceBackendConfigured now depends only on the native D1/R2
+  // authority path plus mail delivery; retired Frappe/HMAC acceptance secrets are irrelevant.
   for (const [name, environment] of [
     ["production", config],
     ["local", config.env.local],
@@ -1623,8 +1621,14 @@ test("0043 keeps Facet v2 identity, intake, decisions, receipts, and projection 
     assert.match(sql, new RegExp(`BEFORE UPDATE ON ${table}\\b`));
     assert.match(sql, new RegExp(`BEFORE DELETE ON ${table}\\b`));
   }
-  assert.match(sql, /event_type TEXT NOT NULL CHECK \(event_type = 'facet\.design\.customer_approved\.v2'\)/);
-  assert.match(sql, /identity_assurance TEXT NOT NULL CHECK \(identity_assurance = 'oidc'\)/);
+  assert.match(
+    sql,
+    /event_type TEXT NOT NULL CHECK \(event_type = 'facet\.design\.customer_approved\.v2'\)/,
+  );
+  assert.match(
+    sql,
+    /identity_assurance TEXT NOT NULL CHECK \(identity_assurance = 'oidc'\)/,
+  );
   assert.match(sql, /UNIQUE \(destination_tenant_id\)/);
   assert.doesNotMatch(
     sql.match(
@@ -1633,25 +1637,41 @@ test("0043 keeps Facet v2 identity, intake, decisions, receipts, and projection 
     /brand_id/,
   );
   assert.match(sql, /UNIQUE \(destination_tenant_id, facet_project_id\)/);
-  assert.match(sql, /facet_v2_project_launches[\s\S]*DEFERRABLE INITIALLY DEFERRED/);
+  assert.match(
+    sql,
+    /facet_v2_project_launches[\s\S]*DEFERRABLE INITIALLY DEFERRED/,
+  );
   assert.match(sql, /nonce_sha256 TEXT NOT NULL UNIQUE/);
-  assert.match(sql, /signature_algorithm TEXT NOT NULL CHECK \(signature_algorithm = 'HMAC-SHA256'\)/);
+  assert.match(
+    sql,
+    /signature_algorithm TEXT NOT NULL CHECK \(signature_algorithm = 'HMAC-SHA256'\)/,
+  );
   assert.match(sql, /'projected_blank_draft'/);
-  assert.doesNotMatch(sql, /bearer_capability_only|facet\.design\.approved\.v1/);
+  assert.doesNotMatch(
+    sql,
+    /bearer_capability_only|facet\.design\.approved\.v1/,
+  );
   assert.doesNotMatch(sql, /DROP TABLE|REPLACE INTO|ON DELETE CASCADE/i);
 });
 
 test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a real Facet identity lands", async () => {
-  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("../wrangler.jsonc", import.meta.url),
+    "utf8",
+  );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
 
-  // The chain (launch -> signed ingest -> Frappe projection) is switched on in every
-  // environment, but a flag alone can never open it: facetV2ConsumerConfig, launchConfig
-  // and projectionSettings each return null without their key material, which is what keeps
+  // The chain (launch -> signed ingest -> native design projection) is switched on in every
+  // environment, but a flag alone can never open it: facetV2ConsumerConfig and launchConfig
+  // return null without their key material, which keeps
   // an enabled-but-unprovisioned deployment answering 503 instead of accepting traffic.
   for (const environment of [config, config.env.local, config.env.staging]) {
     assert.equal(environment.vars.FACET_V2_INGEST_ENABLED, "true");
-    assert.equal(environment.vars.FACET_V2_FRAPPE_PROJECTION_ENABLED, "true");
+    assert.equal(environment.vars.FACET_V2_NATIVE_PROJECTION_ENABLED, "true");
+    assert.equal(
+      "FACET_V2_FRAPPE_PROJECTION_ENABLED" in environment.vars,
+      false,
+    );
     assert.equal(environment.vars.APP_FACET_LAUNCH_ENABLED, "true");
     // Delivery-verification and launch-capability keys are secrets. They must never
     // appear in committed configuration, enabled or not.
@@ -1677,11 +1697,20 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
   const routes = JSON.parse(local.FACET_V2_ROUTES_JSON);
   assert.equal(routes.length, 1);
   assert.equal(routes[0].destination_tenant_id, local.APP_TENANT_ID);
-  assert.equal(routes[0].source_tenant_id, local.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
-  assert.match(routes[0].destination_url, /^https:\/\/[^/]+\/ingest\/facet-design$/);
+  assert.equal(
+    routes[0].source_tenant_id,
+    local.APP_FACET_LAUNCH_SOURCE_TENANT_ID,
+  );
+  assert.match(
+    routes[0].destination_url,
+    /^https:\/\/[^/]+\/ingest\/facet-design$/,
+  );
   assert.match(local.APP_FACET_LAUNCH_BASE_URL, /^https:\/\//);
   // A local route may only point at a reserved development namespace, never at a real host.
-  for (const url of [routes[0].destination_url, local.APP_FACET_LAUNCH_BASE_URL]) {
+  for (const url of [
+    routes[0].destination_url,
+    local.APP_FACET_LAUNCH_BASE_URL,
+  ]) {
     assert.match(new URL(url).hostname, /\.test$/);
   }
 });
@@ -1732,7 +1761,10 @@ test("0031 makes QuickBooks projection recovery leased, due-scheduled, and non-t
 });
 
 test("0042 keeps external effects durable, append-only, and reconciliation-gated", async () => {
-  const sql = await readFile(new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url), "utf8");
+  const sql = await readFile(
+    new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url),
+    "utf8",
+  );
   assert.match(sql, /CREATE TABLE external_effects\b/);
   assert.match(sql, /CREATE TABLE external_effect_attempts\b/);
   assert.match(sql, /CREATE TABLE external_effect_events\b/);
@@ -1741,7 +1773,10 @@ test("0042 keeps external effects durable, append-only, and reconciliation-gated
   assert.match(sql, /external_effect_attempt_binding_guard/);
   assert.match(sql, /external_effect_events_append_only_update/);
   assert.match(sql, /external_effect_exceptions_append_only_delete/);
-  assert.match(sql, /OLD\.state = 'unknown' AND NEW\.state IN \('succeeded', 'reconciled', 'manual_exception'\)/);
+  assert.match(
+    sql,
+    /OLD\.state = 'unknown' AND NEW\.state IN \('succeeded', 'reconciled', 'manual_exception'\)/,
+  );
   assert.match(sql, /OLD\.state = 'succeeded' AND NEW\.state = 'compensating'/);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
@@ -1824,11 +1859,20 @@ test("0067 keeps inventory movement conserving, append-only, and separation-of-d
   assert.match(sql, /inventory_count_counter_separation_required/);
   assert.match(sql, /inventory_lot_quarantine_release_approval_required/);
   assert.match(sql, /CHECK \(approved_by_user_id != requested_by_user_id\)/);
-  assert.match(sql, /CHECK \(value_bearing = 0 OR finance_reviewed_by_user_id IS NOT NULL\)/);
+  assert.match(
+    sql,
+    /CHECK \(value_bearing = 0 OR finance_reviewed_by_user_id IS NOT NULL\)/,
+  );
 
   // No negative or phantom stock is representable.
-  assert.match(sql, /quantity_scaled INTEGER NOT NULL CHECK \(quantity_scaled >= 0\)/);
-  assert.match(sql, /CHECK \(reserved_scaled \+ quarantined_scaled <= quantity_scaled\)/);
+  assert.match(
+    sql,
+    /quantity_scaled INTEGER NOT NULL CHECK \(quantity_scaled >= 0\)/,
+  );
+  assert.match(
+    sql,
+    /CHECK \(reserved_scaled \+ quarantined_scaled <= quantity_scaled\)/,
+  );
 
   // Provider facts must arrive through the 0042 effect runtime, never from a webhook.
   assert.match(sql, /inventory_invoice_line_authenticated_readback_required/);
@@ -1943,22 +1987,126 @@ test("0047 keeps safety records additive, right-preserving, and separation-enfor
 });
 
 test("0046 keeps offline fleet captures bounded, idempotent, and independently recoverable", async () => {
-  const sql = await readFile(new URL("../migrations/0046_fleet_asset_actions.sql", import.meta.url), "utf8");
+  const sql = await readFile(
+    new URL("../migrations/0046_fleet_asset_actions.sql", import.meta.url),
+    "utf8",
+  );
   assert.match(sql, /CREATE TABLE IF NOT EXISTS fleet_asset_actions\b/);
   assert.match(sql, /device_action_id TEXT PRIMARY KEY/);
   assert.match(
     sql,
     /action_kind IN \('pre_trip_inspection', 'post_trip_inspection', 'defect_report'\)/,
   );
-  assert.match(sql, /status IN \('processing', 'r2_stored', 'verified', 'retryable_error'\)/);
-  assert.match(sql, /payload_hash TEXT NOT NULL CHECK \(\s*length\(payload_hash\) = 64/);
+  assert.match(
+    sql,
+    /status IN \('processing', 'r2_stored', 'verified', 'retryable_error'\)/,
+  );
+  assert.match(
+    sql,
+    /payload_hash TEXT NOT NULL CHECK \(\s*length\(payload_hash\) = 64/,
+  );
   assert.match(sql, /idx_fleet_asset_actions_asset_created/);
   assert.match(sql, /idx_fleet_asset_actions_recovery/);
   assert.match(sql, /REFERENCES app_users\(user_id\) ON DELETE RESTRICT/);
   // A verified receipt must always carry its response and verification time,
   // so a replay can never be answered from a half-written row.
-  assert.match(sql, /status = 'verified' AND response_json IS NOT NULL AND verified_at IS NOT NULL/);
+  assert.match(
+    sql,
+    /status = 'verified' AND response_json IS NOT NULL AND verified_at IS NOT NULL/,
+  );
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0095 makes fleet identity, custody, capture, and safety native to D1", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0095_native_fleet_authority.sql", import.meta.url),
+    "utf8",
+  );
+  for (const table of [
+    "fleet_assets",
+    "fleet_crews",
+    "fleet_crew_members",
+    "fleet_driver_authorities",
+    "fleet_cargo_loads",
+    "fleet_asset_events",
+    "fleet_inspections",
+    "fleet_defects",
+    "fleet_defect_events",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  assert.match(sql, /fleet_inspections_authorize_insert/);
+  assert.match(sql, /fleet_defects_authorize_insert/);
+  assert.match(sql, /COALESCE\(user\.access_role, user\.role\) = 'field'/);
+  assert.match(sql, /action\.status = 'r2_stored'/);
+  assert.match(sql, /fleet_assets_version_guard/);
+  assert.match(sql, /OLD\.status = 'Retired' AND NEW\.status != 'Retired'/);
+  assert.match(sql, /fleet_asset_return_to_service_required/);
+  assert.match(sql, /fleet_cargo_loads_authority_insert_guard/);
+  assert.match(sql, /fleet_cargo_loads_authority_update_guard/);
+  assert.match(sql, /fleet_crews crew/);
+  assert.match(sql, /fleet_defect_source_inspection_binding_invalid/);
+  assert.match(
+    sql,
+    /FOREIGN KEY \(source_inspection_id, tenant_id, fleet_asset_id\)/,
+  );
+  assert.match(sql, /fleet_inspections_append_only_update/);
+  assert.match(sql, /fleet_defect_events_append_only_delete/);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0102 preserves legacy corrective source refs and enforces anchored idempotency", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`
+      CREATE TABLE native_final_invoice_provider_bindings (
+        provider_binding_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        roof_job_id TEXT NOT NULL,
+        source_ref TEXT NOT NULL
+      );
+      INSERT INTO native_final_invoice_provider_bindings VALUES
+        ('legacy-binding-0001', 'ironwrap', 'job-0001', 'quickbooks-provider-readback:connection-1'),
+        ('legacy-binding-0002', 'ironwrap', 'job-0001', 'quickbooks-provider-readback:connection-1');
+    `);
+    db.exec(
+      await readFile(
+        new URL(
+          "../migrations/0102_native_final_invoice_provider_binding_authority.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM native_final_invoice_provider_bindings",
+          )
+          .get() as { count: number }
+      ).count,
+      2,
+    );
+    const insertAnchored = db.prepare(
+      `INSERT INTO native_final_invoice_provider_bindings
+         (provider_binding_id, tenant_id, roof_job_id, source_ref,
+          commercial_terms_hash, commercial_head_sha256)
+       VALUES (?, 'ironwrap', 'job-0001', 'quickbooks-provider-readback:new-key', ?, ?)`,
+    );
+    insertAnchored.run("anchored-binding-0001", "a".repeat(64), "b".repeat(64));
+    assert.throws(
+      () =>
+        insertAnchored.run(
+          "anchored-binding-0002",
+          "c".repeat(64),
+          "d".repeat(64),
+        ),
+      /UNIQUE constraint failed/,
+    );
+  } finally {
+    db.close();
+  }
 });
 
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
@@ -1984,37 +2132,23 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // challenge without Gmail, exactly as it already completes magic-link sign-in. 0068 is the
     // fourth approval vertical: the owner-facing Draft -> Approved Proposal Evidence Pack
     // publication ledger, kept isolated from 0016/0017/0020 exactly as those are from each
-    // other; it took 0068 because #60 claimed 0067 while this branch was open. 0069 is the
-    // provisional customer material-decision ledger, numbered above `main`'s 0068 and above the
-    // 0067 still held by open head #60. #54 kept
+    // other; it took 0068 because #60 claimed 0067 while this branch was open. #54 kept
     // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
     // expected and not a missing migration. 0067 is the IRO-45 inventory ledger: it was
     // numbered 0046 while that number was still free on its own head, and was renumbered
-    // above every shipped migration once `main` landed 0046 elsewhere. 0079 keeps the reason
-    // a production schedule was refused (ELEC-132 defect B); it skipped to 0079 because open
-    // heads #92-#97 hold every number from 0069 to 0078, so 0070..0078 were never free. 0080 is
-    // the per-envelope replay_requests index the ELEC-52 dead-letter sweep reads its attempt cap
-    // and backoff clock from: 0079 is `main`'s highest and #92-#97 stop at 0078, so 0080 was the
-    // first number free of both. 0081 is data-only — it defines no table, index or trigger, so it
-    // moves no schema-inventory count; it closes the dead-letter rows the two terminal skip paths
-    // stranded open before ELEC-137 fixed them forward, which is what keeps a stale row from a
-    // resolved outage out of the episode boundary the sweep's attempt cap is now scoped to. It
-    // took 0081 because `main` had just landed 0080 and open heads #92-#97 still stop at 0078.
-    // 0082 binds envelopes.tenant_id so a synthetic lead is readable only under the Worker
-    // tenant that ingested it (IRO-189 D1-native proof). Additive column only — inventory
-    // counts stay at 146 / 209 / 343. It took 0082 because `main` already ships 0079–0081
-    // and IRO-195 stack PRs #92–#97 still own 0070–0078. 0090 extracts #122's operating-core
-    // graph without renaming shipped 0069 or reusing 0070–0078: nine tables, nine idx_*
-    // indexes, and eighteen guards. Inventory becomes 155 / 218 / 361 (idx_* count) and
-    // backup/restore 155 / 224 / 361. 0091 adds nullable authority-readback subject/scope
-    // columns for inventory command binding; it defines no table, index, or trigger, so
-    // those counts stay put.
-    assert.equal(migrations.length, 67);
+    // above every shipped migration once `main` landed 0046 elsewhere. 0069, 0079, 0080,
+    // 0081, and 0082 keep the exact filenames already applied on `main` (portal decisions,
+    // schedule-refusal reason, replay envelope index, dead-letter backfill, envelope tenant).
+    // Unique native-cutover slices start at 0090 so a database that already applied those
+    // shipped files never remigrates them: 0090 operating core, 0091 authority subject/scope,
+    // 0092 field-evidence columns, 0093 commercial authority, 0094–0097 work-package
+    // authority/integrity/roles, 0098–0099 assignment authority, 0100–0102 final-invoice
+    // derivation and provider bindings, 0103–0104 measurement and photo evidence, 0105 Facet
+    // native design projection. The 0070–0078 and 0083–0089 gaps are abandoned collision
+    // numbers, not missing files.
+    assert.equal(migrations.length, 81);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(
-      migrations.at(-1),
-      "0091_authority_readback_subject_scope.sql",
-    );
+    assert.equal(migrations.at(-1), "0105_facet_native_design_projection.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2067,18 +2201,122 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (including the partial unique index that permits only one live intent per pack), and nine
     // triggers - binding immutability, the state and reconciliation fences, the three event
     // appenders, and the three append-only guards. 0067 adds the IRO-45 inventory-control
-    // ledger on top of both. 0069 adds the customer material-decision vertical: its intent
-    // and event tables, three indexes, and eight triggers - intent immutability, the
-    // state-transition fence, the three event appenders, and the three append-only guards.
-    // 0079 adds no table or index - one nullable column on the shipped schedule-approval
-    // ledger - and two triggers that keep the refusal reason bounded and confined to the
-    // one state where it means anything. 0080 adds no table and no trigger: one index on the
-    // shipped replay_requests ledger, so the ELEC-52 dead-letter sweep can read a single
-    // envelope's attempt count and backoff clock without scanning the whole ledger per tick.
-    // 0090 adds the operating-core fact tables (lead/customer/property/job/gates/estimate/
-    // consent/events/audit), nine tenant indexes, and eighteen identity/version/append-only
-    // guards. idx_* count moves 209 → 218; backup inventory counts every index (215 → 224).
-    assert.deepEqual({ ...counts }, { tables: 155, indexes: 218, triggers: 361 });
+    // ledger on top of both. 0069 adds the operating-core fact tables, nine indexes, and eighteen
+    // immutability/version/append-only triggers, including the operating-consent update/delete guards.
+    // 0072 adds seven commercial tables, eleven indexes, and thirty-one authority, sequence, and
+    // append-only guards. 0074's authority repair adds two fleet scope/lineage guards. 0075 adds
+    // one Work Package supersession table, two indexes, and eight forward-only definition,
+    // projection, event-identity, and supersession guards. 0076 replaces one of those guards
+    // without changing the inventory count so contextual crew roles remain exact. 0077 adds the
+    // operating assignment table, three indexes, and three append-only/validation triggers. 0078
+    // adds the work-object assignment table, two indexes, and three append-only/validation triggers.
+    // 0079 adds three native final-invoice derivation truth tables, five indexes, and ten
+    // append-only/version-chain/insert-replace guards. 0083 adds the unique idempotency-source
+    // index and the commercial-anchor insertion guard without inventing values for legacy rows.
+    // 0081 adds one Estimator evidence table, three indexes, and two append-only triggers.
+    // 0082 adds two Facet native projection tables, four query/idempotency indexes, and eight
+    // commercial-chain, outcome, no-replace, and append-only guards. 0084 adds one native
+    // measurement revision table, three query/lineage indexes, and seven evidence/lineage guards.
+    // 0085 adds two native photo-evidence tables, three query/idempotency indexes, and eight
+    // job-anchor, parent, no-replace, and append-only guards.
+    assert.deepEqual(
+      { ...counts },
+      { tables: 186, indexes: 276, triggers: 469 },
+    );
+    const fieldUser = "appu_fleet_field_0001";
+    const unrelatedFieldUser = "appu_fleet_field_0002";
+    const now = "2026-08-20T12:00:00.000Z";
+    const insertFieldUser = db.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+          active, created_by, created_at, updated_at, access_role)
+       VALUES (?, 'ironwrap', ?, ?, 'field', ?, 1, 'owner@example.com', ?, ?, 'field')`,
+    );
+    insertFieldUser.run(
+      fieldUser,
+      "fleet-field-1@example.com",
+      "Fleet Field One",
+      "fleet-field-1@example.com",
+      now,
+      now,
+    );
+    insertFieldUser.run(
+      unrelatedFieldUser,
+      "fleet-field-2@example.com",
+      "Fleet Field Two",
+      "fleet-field-2@example.com",
+      now,
+      now,
+    );
+    db.prepare(
+      `INSERT INTO fleet_assets
+         (fleet_asset_id, tenant_id, display_name, asset_kind, status, meter_kind,
+          custody_holder_type, custody_user_id, version, last_command_id,
+          last_actor_user_id, created_at, updated_at)
+       VALUES ('fleet_truck_0001', 'ironwrap', 'Truck 1', 'Vehicle', 'Active',
+               'Odometer km', 'User', ?, 1, 'fleet_asset_create_0001', ?, ?, ?)`,
+    ).run(fieldUser, fieldUser, now, now);
+
+    const payloadHash = "a".repeat(64);
+    const manifestKey = "fleet/ironwrap/fleet_action_0001/manifest.json";
+    db.prepare(
+      `INSERT INTO fleet_asset_actions
+         (device_action_id, tenant_id, user_id, fleet_asset_id, action_kind,
+          payload_hash, status, manifest_key, created_at, updated_at)
+       VALUES ('fleet_action_0001', 'ironwrap', ?, 'fleet_truck_0001',
+               'pre_trip_inspection', ?, 'r2_stored', ?, ?, ?)`,
+    ).run(fieldUser, payloadHash, manifestKey, now, now);
+    db.prepare(
+      `INSERT INTO fleet_inspections
+         (inspection_id, device_action_id, tenant_id, fleet_asset_id, user_id,
+          inspection_type, performed_at, meter_reading_milli, items_json, result,
+          defect_count, out_of_service, next_inspection_due, manifest_key,
+          payload_hash, created_at)
+       VALUES ('fleet_inspection_0001', 'fleet_action_0001', 'ironwrap',
+               'fleet_truck_0001', ?, 'Pre-Trip', ?, 125000,
+               '[{"key":"brakes","result":"pass"}]', 'Pass', 0, 0,
+               '2026-08-21', ?, ?, ?)`,
+    ).run(fieldUser, now, manifestKey, payloadHash, now);
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT status, version, current_meter_milli, last_inspection_id
+               FROM fleet_assets WHERE fleet_asset_id = 'fleet_truck_0001'`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      {
+        status: "Active",
+        version: 2,
+        current_meter_milli: 125000,
+        last_inspection_id: "fleet_inspection_0001",
+      },
+    );
+
+    db.prepare(
+      `INSERT INTO fleet_asset_actions
+         (device_action_id, tenant_id, user_id, fleet_asset_id, action_kind,
+          payload_hash, status, manifest_key, created_at, updated_at)
+       VALUES ('fleet_action_0002', 'ironwrap', ?, 'fleet_truck_0001',
+               'pre_trip_inspection', ?, 'r2_stored',
+               'fleet/ironwrap/fleet_action_0002/manifest.json', ?, ?)`,
+    ).run(unrelatedFieldUser, payloadHash, now, now);
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `INSERT INTO fleet_inspections
+               (inspection_id, device_action_id, tenant_id, fleet_asset_id, user_id,
+                inspection_type, performed_at, items_json, result, defect_count,
+                out_of_service, manifest_key, payload_hash, created_at)
+             VALUES ('fleet_inspection_0002', 'fleet_action_0002', 'ironwrap',
+                     'fleet_truck_0001', ?, 'Pre-Trip', ?, '[]', 'Pass', 0, 0,
+                     'fleet/ironwrap/fleet_action_0002/manifest.json', ?, ?)`,
+          )
+          .run(unrelatedFieldUser, now, payloadHash, now),
+      /fleet_asset_not_found/,
+    );
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it
@@ -2121,6 +2359,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       "evidence_item_correction_of",
       "work_package_release_attempt_id",
       "correction_reason",
+      "work_object_type",
+      "work_object_id",
+      "physical_context_type",
+      "physical_context_id",
+      "capture_started_at",
+      "capture_completed_at",
     ]) {
       assert.equal(
         fieldActionColumns.some((column) => column.name === name),
@@ -2559,7 +2803,10 @@ test("0032 keeps Facet projection outcomes append-only, anchored, and commercial
 });
 
 test("0056 keeps the service lifecycle versioned, human-authored, append-only, and provider-free", async () => {
-  const sql = await readFile(new URL("../migrations/0056_service_case_lifecycle.sql", import.meta.url), "utf8");
+  const sql = await readFile(
+    new URL("../migrations/0056_service_case_lifecycle.sql", import.meta.url),
+    "utf8",
+  );
   const schema = sql.replace(/^--.*$/gm, "");
   for (const table of [
     "service_cases",
@@ -2569,25 +2816,52 @@ test("0056 keeps the service lifecycle versioned, human-authored, append-only, a
     "service_case_remedies",
     "service_cost_recovery_claims",
     "service_cost_recovery_events",
-  ]) assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  ])
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
 
   // The complaint binds the whole subject: customer, property, job, asset, warranty, and the
   // consent that authorizes contacting the customer at all.
   for (const field of [
-    "customer_id", "property_key", "roof_job_id", "asset_ref", "warranty_packet_id",
-    "origin_work_package_ref", "consent_ref", "intake_evidence_digest", "response_due_at",
-  ]) assert.match(sql, new RegExp(`${field}\\s+TEXT`));
+    "customer_id",
+    "property_key",
+    "roof_job_id",
+    "asset_ref",
+    "warranty_packet_id",
+    "origin_work_package_ref",
+    "consent_ref",
+    "intake_evidence_digest",
+    "response_due_at",
+  ])
+    assert.match(sql, new RegExp(`${field}\\s+TEXT`));
 
   // No model-only final authority: the triage authority column admits exactly one value.
-  assert.match(sql, /authority_kind TEXT NOT NULL CHECK \(authority_kind = 'human'\)/);
+  assert.match(
+    sql,
+    /authority_kind TEXT NOT NULL CHECK \(authority_kind = 'human'\)/,
+  );
   assert.match(sql, /decided_by_user_id TEXT NOT NULL/);
-  assert.match(sql, /advisory_source TEXT NOT NULL CHECK \(advisory_source IN \('model', 'rule', 'none'\)\)/);
-  assert.match(sql, /final_category != 'unknown' OR responsibility = 'undetermined'/);
+  assert.match(
+    sql,
+    /advisory_source TEXT NOT NULL CHECK \(advisory_source IN \('model', 'rule', 'none'\)\)/,
+  );
+  assert.match(
+    sql,
+    /final_category != 'unknown' OR responsibility = 'undetermined'/,
+  );
 
   // Every case step is one version step by a named actor, and history is never rewritten.
-  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_version_step_required'\)\s+WHERE/);
-  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_transition_not_allowed'\)\s+WHERE/);
-  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_reopen_must_preserve_history'\)\s+WHERE/);
+  assert.match(
+    sql,
+    /SELECT RAISE\(ABORT, 'service_case_version_step_required'\)\s+WHERE/,
+  );
+  assert.match(
+    sql,
+    /SELECT RAISE\(ABORT, 'service_case_transition_not_allowed'\)\s+WHERE/,
+  );
+  assert.match(
+    sql,
+    /SELECT RAISE\(ABORT, 'service_case_reopen_must_preserve_history'\)\s+WHERE/,
+  );
   for (const guard of [
     "service_cases_append_only",
     "service_case_events_append_only",
@@ -2595,20 +2869,30 @@ test("0056 keeps the service lifecycle versioned, human-authored, append-only, a
     "service_case_triage_immutable",
     "service_case_diagnoses_immutable",
     "service_cost_recovery_events_immutable",
-  ]) assert.match(sql, new RegExp(`RAISE\\(ABORT, '${guard}'\\)`));
+  ])
+    assert.match(sql, new RegExp(`RAISE\\(ABORT, '${guard}'\\)`));
 
   // Remedy work is only ever issued as a governed Work Package, and only off an actionable triage.
   assert.match(sql, /work_package_ref TEXT NOT NULL/);
   assert.match(sql, /service_case_diagnosis_requires_actionable_triage/);
 
   // Cost recovery carries the canonical one-attempt effect shape.
-  assert.match(sql, /state IN \('pending', 'leased', 'succeeded', 'failed', 'uncertain', 'reconciled'\)/);
-  assert.match(sql, /attempt_count INTEGER NOT NULL DEFAULT 0 CHECK \(attempt_count BETWEEN 0 AND 1\)/);
+  assert.match(
+    sql,
+    /state IN \('pending', 'leased', 'succeeded', 'failed', 'uncertain', 'reconciled'\)/,
+  );
+  assert.match(
+    sql,
+    /attempt_count INTEGER NOT NULL DEFAULT 0 CHECK \(attempt_count BETWEEN 0 AND 1\)/,
+  );
   assert.match(sql, /service_cost_recovery_invalid_uncertain_transition/);
   assert.match(sql, /service_cost_recovery_responsibility_required/);
 
   // The spine stores bounded codes, references, and digests: never customer content or secrets.
-  assert.doesNotMatch(schema, /contact_email|phone_number|address_line|photo|transcript|recording|payload_json|access_token/i);
+  assert.doesNotMatch(
+    schema,
+    /contact_email|phone_number|address_line|photo|transcript|recording|payload_json|access_token/i,
+  );
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
@@ -2643,10 +2927,7 @@ test("0057 widens the work-package receipt kinds forward without editing the shi
     sql,
     /INSERT INTO field_work_package_actions[\s\S]*FROM _mig0057_field_work_package_actions_staging;/,
   );
-  assert.match(
-    sql,
-    /DROP TABLE _mig0057_field_work_package_actions_staging;/,
-  );
+  assert.match(sql, /DROP TABLE _mig0057_field_work_package_actions_staging;/);
   assert.match(sql, /idx_field_work_package_actions_job_created/);
   assert.match(sql, /idx_field_work_package_actions_recovery/);
   assert.match(sql, /REFERENCES app_users\(user_id\) ON DELETE RESTRICT/);
@@ -2755,7 +3036,10 @@ test("a database that already applied the shipped 0028 reaches complete_work thr
             "SELECT device_action_id, action_kind FROM field_work_package_actions ORDER BY device_action_id",
           )
           .all() as Array<{ device_action_id: string; action_kind: string }>
-      ).map(({ device_action_id, action_kind }) => `${device_action_id}:${action_kind}`),
+      ).map(
+        ({ device_action_id, action_kind }) =>
+          `${device_action_id}:${action_kind}`,
+      ),
       [
         "dact_shipped_0001:acknowledge",
         "dact_shipped_0002:start_work",
@@ -2780,8 +3064,8 @@ test("a database that already applied the shipped 0028 reaches complete_work thr
       /CHECK constraint failed/,
     );
 
-    // The rebuild keeps both named indexes, which the D1 backup and restore
-    // inventories in deploy/ require by name.
+    // The rebuild keeps the shipped indexes and later native-authority bindings,
+    // which the D1 backup and restore inventories in deploy/ require by name.
     assert.deepEqual(
       (
         db
@@ -2793,7 +3077,9 @@ test("a database that already applied the shipped 0028 reaches complete_work thr
           .all() as Array<{ name: string }>
       ).map(({ name }) => name),
       [
+        "idx_field_work_package_actions_event",
         "idx_field_work_package_actions_job_created",
+        "idx_field_work_package_actions_package",
         "idx_field_work_package_actions_recovery",
       ],
     );

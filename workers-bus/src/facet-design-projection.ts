@@ -1,130 +1,21 @@
-import { randomToken, sha256Hex } from "./app-auth.ts";
+import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
-import {
-  assertEffectLedgerReady,
-  adapterAuthority,
-  runExternalEffect,
-} from "./effect-runtime.ts";
 import { canonicalJson } from "./facet-design-v2-protocol.ts";
-import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
+import {
+  facetLaunchIntentSha256,
+  resolveFacetLaunchTarget,
+  type FacetLaunchTarget,
+} from "./facet-launch.ts";
 
-const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1024;
 const PROJECTION_BATCH_SIZE = 25;
-const PROJECTION_METHOD =
-  "ironwrap_roofing.facet_design_projection_api.record_facet_design_proposal_evidence";
-const PROJECTION_PATH = `/api/method/${PROJECTION_METHOD}`;
-const RECEIPT_SCHEMA = "ironwrap.facet-design-projection-receipt.v2";
-const RECEIPT_SIGNATURE_CONTEXT = "ironwrap.facet-design-projection.receipt.v2";
-const RESPONSE_KEYS = [
-  "draft_customer_quote_id",
-  "draft_quote_version",
-  "event_id",
-  "evidence_id",
-  "idempotent_replay",
-  "receipt",
-  "receipt_sha256",
-  "receipt_signature",
-  "receipt_signature_algorithm",
-  "reconciliation_id",
-] as const;
-const RECEIPT_KEYS = [
-  "actor_identity_assurance",
-  "approval_receipt_sha256",
-  "association_sha256",
-  "blank_commercial_revision",
-  "claim_sha256",
-  "customer_safe",
-  "decision_kind",
-  "design_revision_id",
-  "design_revision_sha256",
-  "destination_tenant_id",
-  "draft_customer_quote_id",
-  "draft_quote_status",
-  "draft_quote_version",
-  "event_id",
-  "event_type",
-  "evidence_id",
-  "facet_project_id",
-  "frozen_evidence_sha256",
-  "idempotent_replay",
-  "occurred_at",
-  "raw_content_length",
-  "raw_key",
-  "raw_sha256",
-  "received_at",
-  "reconciliation_id",
-  "roof_job_id",
-  "schema",
-  "schema_version",
-  "source_customer_quote_id",
-] as const;
-/**
- * A projected Draft is *commercially* blank, not literally empty.
- *
- * Frappe hands back two kinds of value for a field the bounded projection
- * command wrote as NULL, and neither is commercial data:
- *
- *  - a DocType `default` that `insert()` applies before `validate` runs
- *    (`currency` -> "CAD", `payment_status` -> "Not Due");
- *  - `0`, because Currency/Float/Int columns are stored NOT NULL DEFAULT 0.
- *
- * Reading either as "the Draft contains commercial data" is what made this
- * readback report a conflict against every real Frappe site while the local
- * fixtures - which return literal nulls - stayed green. Anything else in these
- * fields is still a conflict, including a value that merely differs from the
- * default, so a hand-edited `currency` or any populated total still fails.
- *
- * `tools/validate-facet-blank-quote-contract.mjs` proves this table against
- * `customer_quote.json` and the Frappe app's own BLANK_QUOTE_FIELDS in CI, so
- * it cannot drift into a second, staler description of the same schema.
- */
-const BLANK_QUOTE_READBACK_FIELDS: ReadonlyArray<{
-  readonly field: string;
-  readonly schemaDefault: string | null;
-  readonly numeric: boolean;
-}> = [
-  { field: "price_book_version", schemaDefault: null, numeric: false },
-  { field: "pricing_effective_at", schemaDefault: null, numeric: false },
-  { field: "price_rule_snapshot_json", schemaDefault: null, numeric: false },
-  { field: "subtotal", schemaDefault: null, numeric: true },
-  { field: "tax_amount", schemaDefault: null, numeric: true },
-  { field: "tax_code", schemaDefault: null, numeric: false },
-  { field: "tax_rate", schemaDefault: null, numeric: true },
-  { field: "tax_policy_snapshot_json", schemaDefault: null, numeric: false },
-  { field: "quote_total", schemaDefault: null, numeric: true },
-  { field: "currency", schemaDefault: "CAD", numeric: false },
-  { field: "deposit_amount", schemaDefault: null, numeric: true },
-  { field: "amount_due", schemaDefault: null, numeric: true },
-  { field: "amount_paid", schemaDefault: null, numeric: true },
-  { field: "balance_due", schemaDefault: null, numeric: true },
-  { field: "payment_status", schemaDefault: "Not Due", numeric: false },
-  { field: "payment_due_date", schemaDefault: null, numeric: false },
-  { field: "payment_truth_source", schemaDefault: null, numeric: false },
-  { field: "payment_truth_at", schemaDefault: null, numeric: false },
-  { field: "qb_item_ref", schemaDefault: null, numeric: false },
-  { field: "qb_tax_code_ref", schemaDefault: null, numeric: false },
-  { field: "qb_terms_ref", schemaDefault: null, numeric: false },
-  { field: "qb_terms_due_days", schemaDefault: null, numeric: true },
-  { field: "valid_until", schemaDefault: null, numeric: false },
-  { field: "approved_by", schemaDefault: null, numeric: false },
-  { field: "approved_at", schemaDefault: null, numeric: false },
-  { field: "acceptance_evidence", schemaDefault: null, numeric: false },
-  { field: "contract_acceptance", schemaDefault: null, numeric: false },
-  { field: "accepted_at", schemaDefault: null, numeric: false },
-  { field: "scope_summary", schemaDefault: null, numeric: false },
-  { field: "assumptions", schemaDefault: null, numeric: false },
-  { field: "exclusions", schemaDefault: null, numeric: false },
-  { field: "quote_summary_json", schemaDefault: null, numeric: false },
-  { field: "notes", schemaDefault: null, numeric: false },
-] as const;
+const MAX_DECISION_CHAIN_LENGTH = 100;
 
 type DecisionKind = "approved" | "corrected" | "superseded" | "withdrawn";
 type ProjectionOutcome =
-  | "projected_blank_draft"
-  | "projected_terminal_hold"
-  | "reconciled"
-  | "rejected_frappe"
+  | "projected_native_design"
+  | "reconciled_native_design"
   | "uncertain"
+  | "rejected"
   | "held_withdrawn"
   | "held_superseded";
 
@@ -132,6 +23,7 @@ interface StoredFacetV2Decision {
   event_id: string;
   event_type: "facet.design.customer_approved.v2";
   schema_version: 2;
+  event_body_sha256: string;
   issuer: string;
   source_product: "facet";
   source_environment: string;
@@ -177,73 +69,156 @@ interface StoredFacetV2Decision {
   linked_source_product: string | null;
   linked_source_environment: string | null;
   revoked_link_count: number;
+  prior_uncertain_count: number;
 }
 
-interface ProjectionSettings {
-  hmacKey: string;
-  frappeApiKey: string;
-  frappeApiSecret: string;
-}
+type DecisionChainRow = Pick<
+  StoredFacetV2Decision,
+  | "event_id"
+  | "event_type"
+  | "schema_version"
+  | "event_body_sha256"
+  | "issuer"
+  | "source_product"
+  | "source_environment"
+  | "source_tenant_id"
+  | "destination_tenant_id"
+  | "brand_id"
+  | "facet_project_id"
+  | "external_project_link_id"
+  | "producer_identity_link_id"
+  | "association_sha256"
+  | "roof_job_id"
+  | "customer_quote_id"
+  | "customer_party_ref"
+  | "external_customer_identity_link_id"
+  | "oidc_issuer"
+  | "oidc_subject_sha256"
+  | "identity_assurance"
+  | "decision_kind"
+  | "previous_event_id"
+  | "reason_sha256"
+  | "approval_receipt_id"
+  | "approval_receipt_sha256"
+  | "design_revision_id"
+  | "design_revision_sha256"
+  | "frozen_evidence_sha256"
+  | "raw_key"
+  | "raw_sha256"
+  | "raw_content_length"
+  | "occurred_at"
+  | "received_at"
+>;
 
-interface FacetV2ProjectionClaim {
-  approval_receipt_id: string;
-  approval_receipt_sha256: string;
-  association_sha256: string;
+interface StoredFacetLaunch {
+  facet_project_id: string;
+  external_project_link_id: string;
+  destination_tenant_id: string;
+  source_tenant_id: string;
   brand_id: string;
-  customer_party_ref: string;
+  roof_job_id: string;
   customer_quote_id: string;
+  quote_version: number;
+  quote_approved_at: string;
+  customer_party_ref: string;
+  external_customer_identity_link_id: string;
+  issued_by_user_id: string;
+  launch_intent_sha256: string;
+}
+
+interface ResolvedNativeLaunch {
+  target: FacetLaunchTarget;
+  launchIntentSha256: string;
+}
+
+interface NativeDesignProjection {
+  outcome: Extract<
+    ProjectionOutcome,
+    | "projected_native_design"
+    | "reconciled_native_design"
+    | "held_withdrawn"
+    | "held_superseded"
+  >;
+  projectionId: string;
+  projectionSha256: string;
+  destinationTenantId: string;
+  sourceTenantId: string;
+  brandId: string;
+  facetProjectId: string;
+  externalProjectLinkId: string;
+  producerIdentityLinkId: string;
+  externalCustomerIdentityLinkId: string;
+  roofJobId: string;
+  customerId: string;
+  customerQuoteId: string;
+  sourceQuoteRevisionId: string;
+  sourceQuoteVersion: number;
+  sourceQuoteApprovedAt: string;
+  sourceProposalRevisionId: string;
+  sourceProposalPackId: string;
+  sourcePublicationEventId: string;
+  sourceAcceptanceBindingId: string;
+  sourceAcceptanceId: string;
+  sourceAcceptanceAcceptedAt: string;
+  sourceAcceptanceReceiptHash: string;
+  launchIntentSha256: string;
+  decisionKind: DecisionKind;
+  designSequence: number;
+  designState: "active" | "withdrawn" | "superseded";
+  previousEventId: string | null;
+  designRevisionId: string;
+  designRevisionSha256: string;
+  frozenEvidenceSha256: string;
+  rawSha256: string;
+}
+
+interface StoredNativeDesignProjection {
+  projection_id: string;
+  event_id: string;
+  destination_tenant_id: string;
+  source_tenant_id: string;
+  brand_id: string;
+  facet_project_id: string;
+  external_project_link_id: string;
+  producer_identity_link_id: string;
+  external_customer_identity_link_id: string;
+  roof_job_id: string;
+  customer_id: string;
+  customer_quote_id: string;
+  source_quote_revision_id: string;
+  source_quote_version: number;
+  source_quote_approved_at: string;
+  source_proposal_revision_id: string;
+  source_proposal_pack_id: string;
+  source_publication_event_id: string;
+  source_acceptance_binding_id: string;
+  source_acceptance_id: string;
+  source_acceptance_accepted_at: string;
+  source_acceptance_receipt_hash: string;
+  launch_intent_sha256: string;
   decision_kind: DecisionKind;
+  design_sequence: number;
+  design_state: "active" | "withdrawn" | "superseded";
+  previous_event_id: string | null;
   design_revision_id: string;
   design_revision_sha256: string;
-  destination_tenant_id: string;
-  event_id: string;
-  event_type: "facet.design.customer_approved.v2";
-  external_customer_identity_link_id: string;
-  external_project_link_id: string;
-  facet_project_id: string;
   frozen_evidence_sha256: string;
-  identity_assurance: "oidc";
-  occurred_at: string;
-  oidc_issuer: string;
-  oidc_subject_sha256: string;
-  previous_event_id: string | null;
-  producer_identity_link_id: string;
-  raw_content_length: number;
-  raw_key: string;
   raw_sha256: string;
-  reason_sha256: string | null;
-  received_at: string;
-  roof_job_id: string;
-  schema_version: 2;
-  source_environment: string;
-  source_issuer: string;
-  source_tenant_id: string;
+  projection_sha256: string;
+  projected_at: string;
 }
 
-interface ProjectionResult {
-  evidenceId: string;
-  reconciliationId: string;
-  draftCustomerQuoteId: string;
-  draftQuoteVersion: number;
-  idempotentReplay: boolean;
+interface StoredProjectionAttempt {
+  attempt_id: string;
+  event_id: string;
+  outcome: ProjectionOutcome;
+  projection_id: string | null;
+  projection_sha256: string | null;
+  error_code: string | null;
+  attempted_at: string;
 }
 
-interface FrappeResourceRead {
-  status: "ok" | "conflict" | "unavailable" | "not_found";
-  data?: Record<string, unknown>;
-  detailCode?: string;
-}
-
-class FrappeProjectionHttpError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(`facet_design_projection_frappe_http_${status}`);
-    this.status = status;
-  }
-}
-
-class FrappeProjectionTransportError extends Error {
+class NativeProjectionError extends Error {
   readonly code: string;
 
   constructor(code: string) {
@@ -252,59 +227,120 @@ class FrappeProjectionTransportError extends Error {
   }
 }
 
-/** Project only an immutable, associated, OIDC-assured v2 decision chain head. */
-export async function reconcileFacetDesignFrappeProjections(
-  env: Env,
+/**
+ * Materialize the current signed-v2 Facet decision head as native design authority.
+ *
+ * No legacy ERP configuration, secret, effect, or network call is consulted by
+ * this implementation.
+ */
+export async function reconcileFacetDesignNativeProjections(
+  env: AppEnv,
   now = new Date(),
 ): Promise<void> {
-  if (String(env.FACET_V2_FRAPPE_PROJECTION_ENABLED) !== "true") return;
-  const settings = projectionSettings(env);
-  if (!settings) throw new Error("facet_v2_projection_not_configured");
+  if (String(env.FACET_V2_NATIVE_PROJECTION_ENABLED) !== "true") return;
   for (const event of await listProjectionCandidates(env)) {
-    await reconcileOneProjection(env, settings, event, now);
+    await reconcileOneProjection(env, event, now);
   }
 }
 
 async function reconcileOneProjection(
-  env: Env,
-  settings: ProjectionSettings,
+  env: AppEnv,
   event: StoredFacetV2Decision,
   now: Date,
 ): Promise<void> {
-  if (!(await exactAuthorityStillMatches(event))) {
+  if (!(await exactAssociationStillMatches(event))) {
     await appendOutcome(env, event, {
-      outcome: "rejected_frappe",
+      outcome: "rejected",
       errorCode: "facet_v2_authority_drift",
       now,
     });
     return;
   }
+
+  let launch: ResolvedNativeLaunch | null;
   try {
-    const projected = await projectToFrappe(env, settings, event);
+    launch = await exactNativeLaunchTarget(env, event);
+  } catch {
     await appendOutcome(env, event, {
-      outcome: projected.idempotentReplay
-        ? "reconciled"
-        : event.decision_kind === "approved" ||
-            event.decision_kind === "corrected"
-          ? "projected_blank_draft"
-          : "projected_terminal_hold",
-      evidenceId: projected.evidenceId,
-      reconciliationId: projected.reconciliationId,
-      draftCustomerQuoteId: projected.draftCustomerQuoteId,
-      draftQuoteVersion: projected.draftQuoteVersion,
+      outcome: "uncertain",
+      errorCode: "facet_v2_native_authority_read_uncertain",
       now,
     });
-  } catch (error) {
+    return;
+  }
+  if (!launch) {
     await appendOutcome(env, event, {
-      outcome: projectionFailureOutcome(error),
-      errorCode: errorCode(error),
+      outcome: "rejected",
+      errorCode: "facet_v2_native_commercial_authority_drift",
+      now,
+    });
+    return;
+  }
+
+  try {
+    const projection = await buildNativeProjection(env, event, launch);
+    await appendProjection(env, event, projection, now);
+  } catch (error) {
+    const deterministicErrorCode = await deterministicProjectionDrift(
+      env,
+      event,
+      error,
+    );
+    await appendOutcome(env, event, {
+      outcome: deterministicErrorCode ? "rejected" : "uncertain",
+      errorCode:
+        deterministicErrorCode ?? "facet_v2_native_projection_uncertain",
       now,
     });
   }
 }
 
+async function deterministicProjectionDrift(
+  env: AppEnv,
+  event: StoredFacetV2Decision,
+  error: unknown,
+): Promise<string | null> {
+  if (error instanceof NativeProjectionError) return error.code;
+  try {
+    const child = await env.DB.prepare(
+      `SELECT event_id
+         FROM facet_v2_customer_decisions
+        WHERE previous_event_id = ?
+        LIMIT 1`,
+    )
+      .bind(event.event_id)
+      .first<{ event_id: string }>();
+    if (child) return "facet_v2_native_decision_not_current";
+
+    const revocation = await env.DB.prepare(
+      `SELECT revocation_id
+         FROM facet_v2_link_revocations
+        WHERE destination_tenant_id = ?
+          AND ((link_kind = 'project' AND link_id = ?)
+            OR (link_kind = 'producer_identity' AND link_id = ?)
+            OR (link_kind = 'customer_identity' AND link_id = ?))
+        LIMIT 1`,
+    )
+      .bind(
+        event.destination_tenant_id,
+        event.external_project_link_id,
+        event.producer_identity_link_id,
+        event.external_customer_identity_link_id,
+      )
+      .first<{ revocation_id: string }>();
+    if (revocation) return "facet_v2_authority_drift";
+
+    if (!(await exactNativeLaunchTarget(env, event))) {
+      return "facet_v2_native_commercial_authority_drift";
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 async function listProjectionCandidates(
-  env: Env,
+  env: AppEnv,
 ): Promise<StoredFacetV2Decision[]> {
   const result = await env.DB.prepare(
     `SELECT decision.*,
@@ -323,10 +359,16 @@ async function listProjectionCandidates(
             identity.source_product AS linked_source_product,
             identity.source_environment AS linked_source_environment,
             (SELECT COUNT(*) FROM facet_v2_link_revocations AS revoked
-              WHERE (revoked.link_kind = 'project' AND revoked.link_id = decision.external_project_link_id)
-                 OR (revoked.link_kind = 'producer_identity' AND revoked.link_id = decision.producer_identity_link_id)
+              WHERE (revoked.link_kind = 'project'
+                     AND revoked.link_id = decision.external_project_link_id)
+                 OR (revoked.link_kind = 'producer_identity'
+                     AND revoked.link_id = decision.producer_identity_link_id)
                  OR (revoked.link_kind = 'customer_identity'
-                     AND revoked.link_id = decision.external_customer_identity_link_id)) AS revoked_link_count
+                     AND revoked.link_id = decision.external_customer_identity_link_id))
+              AS revoked_link_count,
+            (SELECT COUNT(*) FROM facet_v2_native_projection_attempts AS prior
+              WHERE prior.event_id = decision.event_id
+                AND prior.outcome = 'uncertain') AS prior_uncertain_count
        FROM facet_v2_customer_decisions AS decision
        LEFT JOIN facet_v2_project_links AS project
          ON project.external_project_link_id = decision.external_project_link_id
@@ -337,11 +379,12 @@ async function listProjectionCandidates(
          WHERE child.previous_event_id = decision.event_id
        )
        AND NOT EXISTS (
-         SELECT 1 FROM facet_v2_projection_attempts AS attempt
+         SELECT 1 FROM facet_v2_native_projection_attempts AS attempt
          WHERE attempt.event_id = decision.event_id
-           AND attempt.outcome IN ('projected_blank_draft', 'projected_terminal_hold',
-                                   'reconciled', 'rejected_frappe',
-                                   'held_withdrawn', 'held_superseded')
+           AND attempt.outcome IN ('projected_native_design',
+                                   'reconciled_native_design', 'rejected',
+                                   'held_withdrawn',
+                                   'held_superseded')
        )
        ORDER BY decision.occurred_at ASC, decision.event_id ASC
        LIMIT ?`,
@@ -351,9 +394,10 @@ async function listProjectionCandidates(
   return result.results ?? [];
 }
 
-async function exactAuthorityStillMatches(
+async function exactAssociationStillMatches(
   event: StoredFacetV2Decision,
 ): Promise<boolean> {
+  if (!validStoredDecision(event)) return false;
   const expectedAssociation = await sha256Hex(
     canonicalJson({
       brand_id: event.brand_id,
@@ -371,7 +415,6 @@ async function exactAuthorityStillMatches(
   );
   return (
     Number(event.revoked_link_count) === 0 &&
-    event.identity_assurance === "oidc" &&
     event.linked_external_project_link_id === event.external_project_link_id &&
     event.linked_producer_identity_link_id ===
       event.producer_identity_link_id &&
@@ -392,840 +435,573 @@ async function exactAuthorityStillMatches(
   );
 }
 
+async function exactNativeLaunchTarget(
+  env: AppEnv,
+  event: StoredFacetV2Decision,
+): Promise<ResolvedNativeLaunch | null> {
+  const launch = await env.DB.prepare(
+    `SELECT facet_project_id, external_project_link_id, destination_tenant_id,
+            source_tenant_id, brand_id, roof_job_id, customer_quote_id,
+            quote_version, quote_approved_at, customer_party_ref,
+            external_customer_identity_link_id, issued_by_user_id,
+            launch_intent_sha256
+       FROM facet_v2_project_launches
+      WHERE destination_tenant_id = ? AND facet_project_id = ?
+      LIMIT 1`,
+  )
+    .bind(event.destination_tenant_id, event.facet_project_id)
+    .first<StoredFacetLaunch>();
+  if (!launch) return null;
+
+  const resolved = await resolveFacetLaunchTarget(
+    env,
+    event.destination_tenant_id,
+    event.roof_job_id,
+  );
+  if (!resolved.ok) return null;
+  const target = resolved.value;
+  const intent = await facetLaunchIntentSha256({
+    target,
+    destinationTenantId: event.destination_tenant_id,
+    sourceTenantId: event.source_tenant_id,
+    issuedByUserId: launch.issued_by_user_id,
+  });
+  return launch.facet_project_id === event.facet_project_id &&
+    launch.external_project_link_id === event.external_project_link_id &&
+    launch.destination_tenant_id === event.destination_tenant_id &&
+    launch.source_tenant_id === event.source_tenant_id &&
+    launch.brand_id === event.brand_id &&
+    launch.brand_id === target.brandId &&
+    launch.roof_job_id === event.roof_job_id &&
+    launch.roof_job_id === target.roofJobId &&
+    launch.customer_quote_id === event.customer_quote_id &&
+    launch.customer_quote_id === target.customerQuoteId &&
+    Number(launch.quote_version) === target.quoteVersion &&
+    launch.quote_approved_at === target.quoteApprovedAt &&
+    launch.customer_party_ref === event.customer_party_ref &&
+    launch.customer_party_ref === target.customerPartyRef &&
+    launch.external_customer_identity_link_id ===
+      event.external_customer_identity_link_id &&
+    launch.external_customer_identity_link_id ===
+      target.externalCustomerIdentityLinkId &&
+    launch.launch_intent_sha256 === intent
+    ? { target, launchIntentSha256: intent }
+    : null;
+}
+
+async function buildNativeProjection(
+  env: AppEnv,
+  event: StoredFacetV2Decision,
+  launch: ResolvedNativeLaunch,
+): Promise<NativeDesignProjection> {
+  const chain = await loadDecisionChain(env, event);
+  if (!chain)
+    throw new NativeProjectionError("facet_v2_native_decision_chain_invalid");
+  const eventHash = await sha256Hex(event.event_id);
+  const designState =
+    event.decision_kind === "withdrawn"
+      ? "withdrawn"
+      : event.decision_kind === "superseded"
+        ? "superseded"
+        : "active";
+  const projection = {
+    projectionId: `facet-native-design-v2:${eventHash}`,
+    destinationTenantId: event.destination_tenant_id,
+    sourceTenantId: event.source_tenant_id,
+    brandId: event.brand_id,
+    facetProjectId: event.facet_project_id,
+    externalProjectLinkId: event.external_project_link_id,
+    producerIdentityLinkId: event.producer_identity_link_id,
+    externalCustomerIdentityLinkId: event.external_customer_identity_link_id,
+    roofJobId: event.roof_job_id,
+    customerId: launch.target.customerId,
+    customerQuoteId: event.customer_quote_id,
+    sourceQuoteRevisionId: launch.target.quoteRevisionId,
+    sourceQuoteVersion: launch.target.quoteVersion,
+    sourceQuoteApprovedAt: launch.target.quoteApprovedAt,
+    sourceProposalRevisionId: launch.target.proposalRevisionId,
+    sourceProposalPackId: launch.target.proposalPackId,
+    sourcePublicationEventId: launch.target.publicationEventId,
+    sourceAcceptanceBindingId: launch.target.acceptanceBindingId,
+    sourceAcceptanceId: launch.target.acceptanceId,
+    sourceAcceptanceAcceptedAt: launch.target.acceptedAt,
+    sourceAcceptanceReceiptHash: launch.target.acceptanceReceiptHash,
+    launchIntentSha256: launch.launchIntentSha256,
+    decisionKind: event.decision_kind,
+    designSequence: chain.length,
+    designState,
+    previousEventId: event.previous_event_id,
+    designRevisionId: event.design_revision_id,
+    designRevisionSha256: event.design_revision_sha256,
+    frozenEvidenceSha256: event.frozen_evidence_sha256,
+    rawSha256: event.raw_sha256,
+  } as const;
+  const projectionSha256 = await sha256Hex(
+    canonicalJson({
+      schema_version: "ironwrap.facet-native-design-projection.v1",
+      ...projection,
+    }),
+  );
+  return {
+    ...projection,
+    projectionSha256,
+    outcome:
+      designState === "withdrawn"
+        ? "held_withdrawn"
+        : designState === "superseded"
+          ? "held_superseded"
+          : Number(event.prior_uncertain_count) > 0
+            ? "reconciled_native_design"
+            : "projected_native_design",
+  };
+}
+
+async function loadDecisionChain(
+  env: AppEnv,
+  head: StoredFacetV2Decision,
+): Promise<DecisionChainRow[] | null> {
+  const chain: DecisionChainRow[] = [head];
+  const seen = new Set([head.event_id]);
+  let previousEventId = head.previous_event_id;
+  while (previousEventId) {
+    if (seen.has(previousEventId) || chain.length >= MAX_DECISION_CHAIN_LENGTH)
+      return null;
+    const previous = await env.DB.prepare(
+      `SELECT event_id, event_type, schema_version, event_body_sha256, issuer,
+              source_product, source_environment, source_tenant_id,
+              destination_tenant_id, brand_id, facet_project_id,
+              external_project_link_id, producer_identity_link_id,
+              association_sha256, roof_job_id, customer_quote_id,
+              customer_party_ref, external_customer_identity_link_id,
+              oidc_issuer, oidc_subject_sha256, identity_assurance,
+              decision_kind, previous_event_id, reason_sha256,
+              approval_receipt_id, approval_receipt_sha256,
+              design_revision_id, design_revision_sha256,
+              frozen_evidence_sha256, raw_key, raw_sha256,
+              raw_content_length, occurred_at, received_at
+         FROM facet_v2_customer_decisions
+        WHERE event_id = ? AND destination_tenant_id = ?
+          AND facet_project_id = ?
+        LIMIT 1`,
+    )
+      .bind(previousEventId, head.destination_tenant_id, head.facet_project_id)
+      .first<DecisionChainRow>();
+    if (!previous) return null;
+    chain.push(previous);
+    seen.add(previous.event_id);
+    previousEventId = previous.previous_event_id;
+  }
+  chain.reverse();
+  if (
+    chain[0]?.decision_kind !== "approved" ||
+    chain[0].previous_event_id !== null
+  )
+    return null;
+  for (let index = 0; index < chain.length; index += 1) {
+    const current = chain[index]!;
+    const previous = index === 0 ? null : chain[index - 1]!;
+    if (
+      !validStoredDecision(current) ||
+      !sameDecisionAuthority(current, head) ||
+      (previous !== null &&
+        (current.previous_event_id !== previous.event_id ||
+          Date.parse(current.occurred_at) < Date.parse(previous.occurred_at)))
+    )
+      return null;
+    if (!previous) continue;
+    const previousWasActive =
+      previous.decision_kind === "approved" ||
+      previous.decision_kind === "corrected";
+    if (!previousWasActive || current.decision_kind === "approved") return null;
+    if (
+      (current.decision_kind === "withdrawn" ||
+        current.decision_kind === "superseded") &&
+      index !== chain.length - 1
+    )
+      return null;
+  }
+  return chain.at(-1)?.event_id === head.event_id ? chain : null;
+}
+
+function validStoredDecision(event: DecisionChainRow): boolean {
+  return (
+    event.event_type === "facet.design.customer_approved.v2" &&
+    Number(event.schema_version) === 2 &&
+    event.source_product === "facet" &&
+    event.identity_assurance === "oidc" &&
+    validSha256(event.event_body_sha256) &&
+    event.event_body_sha256 === event.raw_sha256 &&
+    validSha256(event.association_sha256) &&
+    validSha256(event.customer_party_ref) &&
+    validSha256(event.oidc_subject_sha256) &&
+    validSha256(event.approval_receipt_sha256) &&
+    validSha256(event.design_revision_sha256) &&
+    event.design_revision_id ===
+      `facet-json-v1:${event.design_revision_sha256}` &&
+    validSha256(event.frozen_evidence_sha256) &&
+    event.raw_key === `facet-design/v2/raw/${event.raw_sha256}.json` &&
+    Number.isSafeInteger(Number(event.raw_content_length)) &&
+    Number(event.raw_content_length) >= 2 &&
+    Number.isFinite(Date.parse(event.occurred_at)) &&
+    Number.isFinite(Date.parse(event.received_at)) &&
+    Date.parse(event.received_at) >= Date.parse(event.occurred_at) &&
+    (event.decision_kind === "approved"
+      ? event.previous_event_id === null && event.reason_sha256 === null
+      : event.previous_event_id !== null && validSha256(event.reason_sha256))
+  );
+}
+
+function sameDecisionAuthority(
+  left: DecisionChainRow,
+  right: DecisionChainRow,
+): boolean {
+  return (
+    left.issuer === right.issuer &&
+    left.source_product === right.source_product &&
+    left.source_environment === right.source_environment &&
+    left.source_tenant_id === right.source_tenant_id &&
+    left.destination_tenant_id === right.destination_tenant_id &&
+    left.brand_id === right.brand_id &&
+    left.facet_project_id === right.facet_project_id &&
+    left.external_project_link_id === right.external_project_link_id &&
+    left.producer_identity_link_id === right.producer_identity_link_id &&
+    left.association_sha256 === right.association_sha256 &&
+    left.roof_job_id === right.roof_job_id &&
+    left.customer_quote_id === right.customer_quote_id &&
+    left.customer_party_ref === right.customer_party_ref &&
+    left.external_customer_identity_link_id ===
+      right.external_customer_identity_link_id &&
+    left.oidc_issuer === right.oidc_issuer &&
+    left.oidc_subject_sha256 === right.oidc_subject_sha256 &&
+    left.identity_assurance === right.identity_assurance
+  );
+}
+
 async function appendOutcome(
-  env: Env,
+  env: AppEnv,
   event: StoredFacetV2Decision,
   input: {
-    outcome: ProjectionOutcome;
-    evidenceId?: string;
-    reconciliationId?: string;
-    draftCustomerQuoteId?: string;
-    draftQuoteVersion?: number;
-    errorCode?: string;
+    outcome: Extract<ProjectionOutcome, "rejected" | "uncertain">;
+    errorCode: string;
     now: Date;
   },
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO facet_v2_projection_attempts
-     (attempt_id, event_id, outcome, evidence_id, reconciliation_id,
-      draft_customer_quote_id, draft_quote_version, error_code, attempted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      `facet-v2-projection:${crypto.randomUUID()}`,
-      event.event_id,
-      input.outcome,
-      input.evidenceId ?? null,
-      input.reconciliationId ?? null,
-      input.draftCustomerQuoteId ?? null,
-      input.draftQuoteVersion ?? null,
-      input.errorCode ?? null,
-      input.now.toISOString(),
-    )
-    .run();
-}
-
-async function projectToFrappe(
-  env: Env,
-  settings: ProjectionSettings,
-  event: StoredFacetV2Decision,
-): Promise<ProjectionResult> {
-  const claim: FacetV2ProjectionClaim = {
-    approval_receipt_id: event.approval_receipt_id,
-    approval_receipt_sha256: event.approval_receipt_sha256,
-    association_sha256: event.association_sha256,
-    brand_id: event.brand_id,
-    customer_party_ref: event.customer_party_ref,
-    customer_quote_id: event.customer_quote_id,
-    decision_kind: event.decision_kind,
-    design_revision_id: event.design_revision_id,
-    design_revision_sha256: event.design_revision_sha256,
-    destination_tenant_id: event.destination_tenant_id,
+  if (await finalizedProjectionAttempt(env, event.event_id)) return;
+  const attemptId = await projectionAttemptId(
+    event.event_id,
+    input.outcome,
+    input.errorCode,
+  );
+  const expected = {
+    attempt_id: attemptId,
     event_id: event.event_id,
-    event_type: event.event_type,
-    external_customer_identity_link_id:
-      event.external_customer_identity_link_id,
-    external_project_link_id: event.external_project_link_id,
-    facet_project_id: event.facet_project_id,
-    frozen_evidence_sha256: event.frozen_evidence_sha256,
-    identity_assurance: event.identity_assurance,
-    occurred_at: event.occurred_at,
-    oidc_issuer: event.oidc_issuer,
-    oidc_subject_sha256: event.oidc_subject_sha256,
-    previous_event_id: event.previous_event_id,
-    producer_identity_link_id: event.producer_identity_link_id,
-    raw_content_length: Number(event.raw_content_length),
-    raw_key: event.raw_key,
-    raw_sha256: event.raw_sha256,
-    reason_sha256: event.reason_sha256,
-    received_at: event.received_at,
-    roof_job_id: event.roof_job_id,
-    schema_version: event.schema_version,
-    source_environment: event.source_environment,
-    source_issuer: event.issuer,
-    source_tenant_id: event.source_tenant_id,
-  };
-  const claimJson = canonicalJson(claim);
-  const eventHash = await sha256Hex(claim.event_id);
-  const draftCustomerQuoteId = await projectionTargetQuoteId(claim);
-  const request = { claimJson };
-  const requestHash = await sha256Hex(canonicalJson(request));
-  const appEnv = env as AppEnv;
-  assertEffectLedgerReady(appEnv);
-  const idempotencyKey = `facet-v2-projection:${eventHash}`;
-  const deadlineAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  const result = await runExternalEffect(
-    appEnv,
-    {
-      tenantId: claim.destination_tenant_id,
-      actor: { type: "agent", id: "facet-v2-projection" },
-      taskId: `facet-v2-projection:${claim.event_id}`,
-      authority: adapterAuthority({
-        tenantId: claim.destination_tenant_id,
-        provider: "frappe",
-        action: "facet.design.v2.projection",
-        actorId: "facet-v2-projection",
-        deadlineAt,
-        retryLimit: 1,
-      }),
-      aggregate: {
-        type: "facet_v2_customer_decision",
-        id: claim.event_id,
-        version: 2,
-      },
-      intentId: idempotencyKey,
-      action: "facet.design.v2.projection",
-      request,
-      requestHash,
-      provider: "frappe",
-      idempotencyKey,
-      deadlineAt,
-      expectedReadback: {
-        local_name: draftCustomerQuoteId,
-        reconciliation_id: `facet-design-projection:${eventHash}`,
-      },
-      retryLimit: 1,
-      compensationPlan: {},
-      correlationId: idempotencyKey,
-    },
-    {
-      async dispatch() {
-        try {
-          const value = await projectToFrappeDirect(
-            env,
-            settings,
-            claim,
-            claimJson,
-          );
-          return {
-            outcome: "accepted" as const,
-            value,
-            providerExternalId: value.reconciliationId,
-            providerResponse: value,
-          };
-        } catch (error) {
-          if (
-            error instanceof FrappeProjectionHttpError &&
-            error.status === 409
-          ) {
-            return {
-              outcome: "rejected" as const,
-              detailCode: "frappe_http_409",
-            };
-          }
-          if (!(error instanceof FrappeProjectionTransportError)) throw error;
-          // The reconciliation id is deterministic. A response can be lost
-          // after Frappe commits, so prove the complete immutable trio before
-          // settling the effect. Never issue a second POST at this boundary.
-          const providerExternalId = `facet-design-projection:${eventHash}`;
-          const readback = await facetProjectionReadback(
-            env,
-            settings,
-            providerExternalId,
-            claim,
-          );
-          if (readback.status === "match") {
-            const value = projectionResultFromMatchedReadback(
-              readback.observed,
-            );
-            return {
-              outcome: "accepted" as const,
-              value,
-              providerExternalId,
-              readback,
-              detailCode:
-                "frappe_projection_response_recovered_by_exact_readback",
-            };
-          }
-          return {
-            outcome: "unknown" as const,
-            providerExternalId,
-            readback,
-            detailCode: error.code,
-          };
-        }
-      },
-      async readback({ providerExternalId }) {
-        return await facetProjectionReadback(
-          env,
-          settings,
-          providerExternalId,
-          claim,
-        );
-      },
-      async replay({ effect }) {
-        return await replayProjectionResult(
-          env,
-          settings,
-          claim,
-          effect.provider_external_id,
-        );
-      },
-    },
-  );
-  if (result.effect.state !== "succeeded" || result.value === undefined) {
-    if (result.effect.result_code === "frappe_http_409") {
-      throw new FrappeProjectionHttpError(409);
-    }
-    throw new FrappeProjectionTransportError(
-      result.effect.result_code ?? "frappe_projection_effect_not_succeeded",
-    );
-  }
-  return result.value;
-}
-
-async function projectToFrappeDirect(
-  env: Env,
-  settings: ProjectionSettings,
-  claim: FacetV2ProjectionClaim,
-  claimJson: string,
-): Promise<ProjectionResult> {
-  const timestamp = String(Math.floor(Date.now() / 1_000));
-  const nonce = randomToken();
-  const signature = await hmacBase64Url(
-    settings.hmacKey,
-    `POST\n${PROJECTION_PATH}\n${timestamp}\n${nonce}\n${await sha256Hex(claimJson)}`,
-  );
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    frappeRequestTimeout((env as AppEnv).APP_FRAPPE_REQUEST_TIMEOUT_MS),
-  );
+    outcome: input.outcome,
+    projection_id: null,
+    projection_sha256: null,
+    error_code: input.errorCode,
+    attempted_at: input.now.toISOString(),
+  } satisfies StoredProjectionAttempt;
   try {
-    const response = await fetch(
-      `${frappeBaseUrl(env as AppEnv)}${PROJECTION_PATH}`,
-      {
-        method: "POST",
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          authorization: `token ${settings.frappeApiKey}:${settings.frappeApiSecret}`,
-          "content-type": "application/json",
-          "user-agent": "ironwrap-facet-v2-projection/2.0",
-          "x-ironwrap-facet-projection-timestamp": timestamp,
-          "x-ironwrap-facet-projection-nonce": nonce,
-          "x-ironwrap-facet-projection-signature": signature,
-        },
-        body: JSON.stringify({ facet_claim_json: claimJson }),
-      },
-    );
-    if (!response.ok) throw new FrappeProjectionHttpError(response.status);
-    const declared = Number(response.headers.get("content-length") ?? "0");
-    if (Number.isFinite(declared) && declared > MAX_FRAPPE_RESPONSE_BYTES)
-      throw new FrappeProjectionTransportError(
-        "frappe_projection_response_too_large",
-      );
-    const raw = await response.text();
-    if (raw.length > MAX_FRAPPE_RESPONSE_BYTES)
-      throw new FrappeProjectionTransportError(
-        "frappe_projection_response_too_large",
-      );
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(raw) as unknown;
-    } catch {
-      throw new FrappeProjectionTransportError(
-        "frappe_projection_response_invalid_json",
-      );
-    }
-    return await validatedProjectionResponse(
-      decoded,
-      claim,
-      claimJson,
-      settings.hmacKey,
-    );
-  } catch (error) {
-    if (
-      error instanceof FrappeProjectionHttpError ||
-      error instanceof FrappeProjectionTransportError
+    await env.DB.prepare(
+      `INSERT INTO facet_v2_native_projection_attempts
+       (attempt_id, event_id, outcome, projection_id, projection_sha256,
+        error_code, attempted_at)
+       VALUES (?, ?, ?, NULL, NULL, ?, ?)`,
     )
-      throw error;
-    if (error instanceof Error && error.name === "AbortError")
-      throw new FrappeProjectionTransportError(
-        "frappe_projection_request_timeout",
-      );
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_request_network_error",
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function facetProjectionReadback(
-  env: Env,
-  settings: ProjectionSettings,
-  providerExternalId: string | null,
-  claim: FacetV2ProjectionClaim,
-): Promise<{
-  status: "match" | "conflict" | "unavailable" | "not_found";
-  providerExternalId?: string;
-  observed?: unknown;
-  detailCode?: string;
-}> {
-  if (!providerExternalId) {
-    return {
-      status: "unavailable",
-      detailCode: "facet_projection_readback_id_missing",
-    };
-  }
-  const eventHash = await sha256Hex(claim.event_id);
-  const expectedReconciliationId = `facet-design-projection:${eventHash}`;
-  const expectedEvidenceId = `facet-design:${eventHash}`;
-  const expectedDraftCustomerQuoteId = await projectionTargetQuoteId(claim);
-  if (providerExternalId !== expectedReconciliationId) {
-    return {
-      status: "conflict",
-      detailCode: "facet_projection_readback_identity_mismatch",
-    };
-  }
-  const [reconciliationResult, evidenceResult, draftResult] = await Promise.all(
-    [
-      readFrappeResource(
-        env,
-        settings,
-        "Integration Reconciliation",
-        providerExternalId,
-      ),
-      readFrappeResource(env, settings, "Evidence Item", expectedEvidenceId),
-      readFrappeResource(
-        env,
-        settings,
-        "Customer Quote",
-        expectedDraftCustomerQuoteId,
-      ),
-    ],
-  );
-  const results = [reconciliationResult, evidenceResult, draftResult];
-  const unavailable = results.find((result) => result.status === "unavailable");
-  if (unavailable)
-    return { status: "unavailable", detailCode: unavailable.detailCode };
-  const missing = results.find((result) => result.status === "not_found");
-  if (missing) return { status: "not_found", detailCode: missing.detailCode };
-  if (results.some((result) => result.status !== "ok")) {
-    return {
-      status: "conflict",
-      detailCode: "facet_projection_readback_invalid_shape",
-    };
-  }
-  if (
-    reconciliationResult.status !== "ok" ||
-    evidenceResult.status !== "ok" ||
-    draftResult.status !== "ok"
-  )
-    return {
-      status: "conflict",
-      detailCode: "facet_projection_readback_invalid_shape",
-    };
-  const reconciliation = reconciliationResult.data!;
-  const evidence = evidenceResult.data!;
-  const draft = draftResult.data!;
-  const activeDecision =
-    claim.decision_kind === "approved" || claim.decision_kind === "corrected";
-  const previousDraftCustomerQuoteId = claim.previous_event_id
-    ? `facet-quote-revision:${await sha256Hex(claim.previous_event_id)}`
-    : null;
-  const expectedDiff = {
-    association_sha256: claim.association_sha256,
-    blank_commercial_revision: activeDecision,
-    customer_party_ref: claim.customer_party_ref,
-    customer_safe: false,
-    decision_kind: claim.decision_kind,
-    destination_tenant_id: claim.destination_tenant_id,
-    draft_customer_quote_id: expectedDraftCustomerQuoteId,
-    event_id: claim.event_id,
-    external_customer_identity_link_id:
-      claim.external_customer_identity_link_id,
-    external_project_link_id: claim.external_project_link_id,
-    facet_project_id: claim.facet_project_id,
-    identity_assurance: "oidc",
-    oidc_issuer: claim.oidc_issuer,
-    oidc_subject_sha256: claim.oidc_subject_sha256,
-    previous_draft_customer_quote_id: previousDraftCustomerQuoteId,
-    previous_event_id: claim.previous_event_id,
-    producer_identity_link_id: claim.producer_identity_link_id,
-    schema: "ironwrap.facet-design-projection.v2",
-    source_tenant_id: claim.source_tenant_id,
-    state: activeDecision
-      ? "pending_estimator_rebuild"
-      : claim.decision_kind === "withdrawn"
-        ? "customer_withdrew_design"
-        : "customer_superseded_design",
-  };
-  const diff = parseCanonicalRecord(reconciliation.diff_json);
-  const roofJob =
-    typeof draft.roof_job === "string" && draft.roof_job
-      ? draft.roof_job
-      : null;
-  const expectedLocalPayloadHash = roofJob
-    ? await sha256Hex(
-        canonicalJson({
-          association_sha256: claim.association_sha256,
-          draft_customer_quote_id: expectedDraftCustomerQuoteId,
-          event_id: claim.event_id,
-          roof_job: roofJob,
-          source_customer_quote_id: claim.customer_quote_id,
-        }),
+      .bind(
+        expected.attempt_id,
+        expected.event_id,
+        expected.outcome,
+        expected.error_code,
+        expected.attempted_at,
       )
-    : null;
-  const observedReconciliationId =
-    typeof reconciliation.reconciliation_id === "string"
-      ? reconciliation.reconciliation_id
-      : reconciliation.name;
-  const expectedSupersedes = claim.previous_event_id
-    ? `facet-design-projection:${await sha256Hex(claim.previous_event_id)}`
-    : null;
-  const expectedCorrectionReason = claim.reason_sha256
-    ? `Facet ${claim.decision_kind} reason SHA-256: ${claim.reason_sha256}`
-    : null;
-  const draftIsExact =
-    draft.customer_quote_id === expectedDraftCustomerQuoteId &&
-    draft.status === (activeDecision ? "Draft" : "Rejected") &&
-    positiveInteger(draft.quote_version) &&
-    roofJob !== null &&
-    typeof draft.customer === "string" &&
-    !!draft.customer &&
-    (!activeDecision ||
-      (draft.correction_reason ===
-        `Facet customer decision ${claim.event_id} requires estimator rebuild from current evidence.` &&
-        typeof draft.supersedes === "string" &&
-        !!draft.supersedes &&
-        BLANK_QUOTE_READBACK_FIELDS.every((rule) =>
-          blankQuoteReadbackValue(rule, draft[rule.field]),
-        )));
-  const evidenceIsExact =
-    evidence.evidence_id === expectedEvidenceId &&
-    evidence.device_action_id === `facet-v2-projection:${eventHash}` &&
-    evidence.roof_job === roofJob &&
-    evidence.evidence_type === "Other" &&
-    evidence.proof_slot === "Estimate" &&
-    evidence.source_system === "ironwrap-facet-design" &&
-    evidence.r2_key === claim.raw_key &&
-    evidence.content_checksum === claim.raw_sha256 &&
-    evidence.checksum_algorithm === "SHA-256" &&
-    evidence.content_type === "application/json" &&
-    Number(evidence.content_length) === claim.raw_content_length &&
-    evidence.sync_state === "Verified" &&
-    evidence.verification_source ===
-      "ironwrap-worker-r2-facet-design-projection" &&
-    (evidence.customer_safe === 0 ||
-      evidence.customer_safe === false ||
-      evidence.customer_safe === "0");
-  const reconciliationIsExact =
-    observedReconciliationId === expectedReconciliationId &&
-    reconciliation.roof_job === roofJob &&
-    reconciliation.system_name === "Facet" &&
-    reconciliation.entity_type === "Design Revision" &&
-    reconciliation.external_entity_id === `facet-event:${eventHash}` &&
-    reconciliation.local_doctype === "Customer Quote" &&
-    reconciliation.local_name === expectedDraftCustomerQuoteId &&
-    reconciliation.direction === "Inbound" &&
-    reconciliation.status === (activeDecision ? "Pending" : "Superseded") &&
-    reconciliation.raw_key === claim.raw_key &&
-    reconciliation.source_version === claim.design_revision_id &&
-    reconciliation.source_payload_hash === claim.frozen_evidence_sha256 &&
-    reconciliation.local_payload_hash === expectedLocalPayloadHash &&
-    blankEquivalent(reconciliation.supersedes, expectedSupersedes) &&
-    blankEquivalent(
-      reconciliation.correction_reason,
-      expectedCorrectionReason,
-    ) &&
-    diff !== null &&
-    canonicalJson(diff) === canonicalJson(expectedDiff);
-  if (!draftIsExact || !evidenceIsExact || !reconciliationIsExact) {
-    return {
-      status: "conflict",
-      providerExternalId,
-      observed: { draft, evidence, reconciliation },
-      detailCode: "facet_projection_readback_conflict",
-    };
-  }
-  return {
-    status: "match",
-    providerExternalId,
-    observed: {
-      draft_customer_quote_id: expectedDraftCustomerQuoteId,
-      draft_quote_version: draft.quote_version,
-      evidence_id: expectedEvidenceId,
-      local_name: expectedDraftCustomerQuoteId,
-      reconciliation_id: expectedReconciliationId,
-    },
-  };
-}
-
-async function replayProjectionResult(
-  env: Env,
-  settings: ProjectionSettings,
-  claim: FacetV2ProjectionClaim,
-  providerExternalId: string | null,
-): Promise<ProjectionResult> {
-  const eventHash = await sha256Hex(claim.event_id);
-  const evidenceId = `facet-design:${eventHash}`;
-  const reconciliationId = `facet-design-projection:${eventHash}`;
-  const draftCustomerQuoteId = await projectionTargetQuoteId(claim);
-  if (providerExternalId !== reconciliationId) {
-    throw new FrappeProjectionTransportError(
-      "facet_projection_effect_identity_mismatch",
-    );
-  }
-  const readback = await facetProjectionReadback(
-    env,
-    settings,
-    providerExternalId,
-    claim,
-  );
-  if (readback.status !== "match") {
-    throw new FrappeProjectionTransportError(
-      readback.detailCode ?? "facet_projection_effect_readback_unavailable",
-    );
-  }
-  const observed = isRecord(readback.observed) ? readback.observed : {};
-  const draftQuoteVersion = observed.draft_quote_version;
-  if (!positiveInteger(draftQuoteVersion))
-    throw new FrappeProjectionTransportError(
-      "facet_projection_draft_readback_conflict",
-    );
-  return {
-    evidenceId,
-    reconciliationId,
-    draftCustomerQuoteId,
-    draftQuoteVersion,
-    idempotentReplay: true,
-  };
-}
-
-function projectionResultFromMatchedReadback(
-  observed: unknown,
-): ProjectionResult {
-  const value = isRecord(observed) ? observed : {};
-  if (
-    typeof value.evidence_id !== "string" ||
-    typeof value.reconciliation_id !== "string" ||
-    typeof value.draft_customer_quote_id !== "string" ||
-    !positiveInteger(value.draft_quote_version)
-  )
-    throw new FrappeProjectionTransportError(
-      "facet_projection_readback_result_invalid",
-    );
-  return {
-    evidenceId: value.evidence_id,
-    reconciliationId: value.reconciliation_id,
-    draftCustomerQuoteId: value.draft_customer_quote_id,
-    draftQuoteVersion: value.draft_quote_version,
-    idempotentReplay: true,
-  };
-}
-
-async function readFrappeResource(
-  env: Env,
-  settings: ProjectionSettings,
-  doctype: string,
-  name: string,
-): Promise<FrappeResourceRead> {
-  try {
-    const response = await fetch(
-      `${frappeBaseUrl(env as AppEnv)}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`,
-      {
-        method: "GET",
-        redirect: "manual",
-        headers: {
-          accept: "application/json",
-          authorization: `token ${settings.frappeApiKey}:${settings.frappeApiSecret}`,
-        },
-      },
-    );
-    if (response.status === 404) {
-      return {
-        status: "not_found",
-        detailCode: `facet_projection_${doctype.toLowerCase().replaceAll(" ", "_")}_not_found`,
-      };
-    }
-    if (!response.ok) {
-      return {
-        status: "unavailable",
-        detailCode: `facet_projection_readback_${response.status}`,
-      };
-    }
-    const raw = await response.text();
-    if (raw.length > MAX_FRAPPE_RESPONSE_BYTES) {
-      return {
-        status: "conflict",
-        detailCode: "facet_projection_readback_too_large",
-      };
-    }
-    const payload = JSON.parse(raw) as unknown;
-    if (!isRecord(payload) || !isRecord(payload.data)) {
-      return {
-        status: "conflict",
-        detailCode: "facet_projection_readback_invalid_shape",
-      };
-    }
-    return { status: "ok", data: payload.data };
+      .run();
   } catch {
-    return {
-      status: "unavailable",
-      detailCode: "facet_projection_readback_unavailable",
-    };
+    // An exact deterministic rejection may have won a concurrent insert.
+  }
+  const stored = await projectionAttempt(env, attemptId);
+  if (!stored || !sameProjectionAttempt(stored, expected)) {
+    throw new Error("facet_v2_native_projection_write_conflict");
   }
 }
 
-async function projectionTargetQuoteId(
-  claim: FacetV2ProjectionClaim,
+async function appendProjection(
+  env: AppEnv,
+  event: StoredFacetV2Decision,
+  projection: NativeDesignProjection,
+  now: Date,
+): Promise<void> {
+  const expectedProjection = storedProjection(event, projection, now);
+  const attemptId = await projectionAttemptId(
+    event.event_id,
+    projection.outcome,
+  );
+  const expectedAttempt = {
+    attempt_id: attemptId,
+    event_id: event.event_id,
+    outcome: projection.outcome,
+    projection_id: projection.projectionId,
+    projection_sha256: projection.projectionSha256,
+    error_code: null,
+    attempted_at: now.toISOString(),
+  } satisfies StoredProjectionAttempt;
+  let writeError: unknown;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO facet_v2_native_design_projections
+         (projection_id, event_id, destination_tenant_id, source_tenant_id,
+          brand_id, facet_project_id, external_project_link_id,
+          producer_identity_link_id, external_customer_identity_link_id,
+          roof_job_id, customer_id, customer_quote_id,
+          source_quote_revision_id, source_quote_version,
+          source_quote_approved_at, source_proposal_revision_id,
+          source_proposal_pack_id, source_publication_event_id,
+          source_acceptance_binding_id, source_acceptance_id,
+          source_acceptance_accepted_at, source_acceptance_receipt_hash,
+          launch_intent_sha256, decision_kind, design_sequence, design_state,
+          previous_event_id, design_revision_id, design_revision_sha256,
+          frozen_evidence_sha256, raw_sha256, projection_sha256, projected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        expectedProjection.projection_id,
+        expectedProjection.event_id,
+        expectedProjection.destination_tenant_id,
+        expectedProjection.source_tenant_id,
+        expectedProjection.brand_id,
+        expectedProjection.facet_project_id,
+        expectedProjection.external_project_link_id,
+        expectedProjection.producer_identity_link_id,
+        expectedProjection.external_customer_identity_link_id,
+        expectedProjection.roof_job_id,
+        expectedProjection.customer_id,
+        expectedProjection.customer_quote_id,
+        expectedProjection.source_quote_revision_id,
+        expectedProjection.source_quote_version,
+        expectedProjection.source_quote_approved_at,
+        expectedProjection.source_proposal_revision_id,
+        expectedProjection.source_proposal_pack_id,
+        expectedProjection.source_publication_event_id,
+        expectedProjection.source_acceptance_binding_id,
+        expectedProjection.source_acceptance_id,
+        expectedProjection.source_acceptance_accepted_at,
+        expectedProjection.source_acceptance_receipt_hash,
+        expectedProjection.launch_intent_sha256,
+        expectedProjection.decision_kind,
+        expectedProjection.design_sequence,
+        expectedProjection.design_state,
+        expectedProjection.previous_event_id,
+        expectedProjection.design_revision_id,
+        expectedProjection.design_revision_sha256,
+        expectedProjection.frozen_evidence_sha256,
+        expectedProjection.raw_sha256,
+        expectedProjection.projection_sha256,
+        expectedProjection.projected_at,
+      ),
+      env.DB.prepare(
+        `INSERT INTO facet_v2_native_projection_attempts
+         (attempt_id, event_id, outcome, projection_id, projection_sha256,
+          error_code, attempted_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+      ).bind(
+        expectedAttempt.attempt_id,
+        expectedAttempt.event_id,
+        expectedAttempt.outcome,
+        expectedAttempt.projection_id,
+        expectedAttempt.projection_sha256,
+        expectedAttempt.attempted_at,
+      ),
+    ]);
+  } catch (error) {
+    writeError = error;
+  }
+  const [persistedProjection, persistedAttempt] = await Promise.all([
+    nativeDesignProjection(env, projection.projectionId),
+    projectionAttempt(env, attemptId),
+  ]);
+  if (!persistedProjection || !persistedAttempt) {
+    if (writeError) throw writeError;
+    throw new Error("facet_v2_native_projection_write_incomplete");
+  }
+  if (
+    !sameNativeDesignProjection(persistedProjection, expectedProjection) ||
+    !sameProjectionAttempt(persistedAttempt, expectedAttempt)
+  ) {
+    throw new NativeProjectionError(
+      "facet_v2_native_projection_write_conflict",
+    );
+  }
+}
+
+function storedProjection(
+  event: StoredFacetV2Decision,
+  projection: NativeDesignProjection,
+  now: Date,
+): StoredNativeDesignProjection {
+  return {
+    projection_id: projection.projectionId,
+    event_id: event.event_id,
+    destination_tenant_id: projection.destinationTenantId,
+    source_tenant_id: projection.sourceTenantId,
+    brand_id: projection.brandId,
+    facet_project_id: projection.facetProjectId,
+    external_project_link_id: projection.externalProjectLinkId,
+    producer_identity_link_id: projection.producerIdentityLinkId,
+    external_customer_identity_link_id:
+      projection.externalCustomerIdentityLinkId,
+    roof_job_id: projection.roofJobId,
+    customer_id: projection.customerId,
+    customer_quote_id: projection.customerQuoteId,
+    source_quote_revision_id: projection.sourceQuoteRevisionId,
+    source_quote_version: projection.sourceQuoteVersion,
+    source_quote_approved_at: projection.sourceQuoteApprovedAt,
+    source_proposal_revision_id: projection.sourceProposalRevisionId,
+    source_proposal_pack_id: projection.sourceProposalPackId,
+    source_publication_event_id: projection.sourcePublicationEventId,
+    source_acceptance_binding_id: projection.sourceAcceptanceBindingId,
+    source_acceptance_id: projection.sourceAcceptanceId,
+    source_acceptance_accepted_at: projection.sourceAcceptanceAcceptedAt,
+    source_acceptance_receipt_hash: projection.sourceAcceptanceReceiptHash,
+    launch_intent_sha256: projection.launchIntentSha256,
+    decision_kind: projection.decisionKind,
+    design_sequence: projection.designSequence,
+    design_state: projection.designState,
+    previous_event_id: projection.previousEventId,
+    design_revision_id: projection.designRevisionId,
+    design_revision_sha256: projection.designRevisionSha256,
+    frozen_evidence_sha256: projection.frozenEvidenceSha256,
+    raw_sha256: projection.rawSha256,
+    projection_sha256: projection.projectionSha256,
+    projected_at: now.toISOString(),
+  };
+}
+
+async function nativeDesignProjection(
+  env: AppEnv,
+  projectionId: string,
+): Promise<StoredNativeDesignProjection | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM facet_v2_native_design_projections
+      WHERE projection_id = ? LIMIT 1`,
+  )
+    .bind(projectionId)
+    .first<StoredNativeDesignProjection>();
+}
+
+async function projectionAttempt(
+  env: AppEnv,
+  attemptId: string,
+): Promise<StoredProjectionAttempt | null> {
+  return await env.DB.prepare(
+    `SELECT attempt_id, event_id, outcome, projection_id, projection_sha256,
+            error_code, attempted_at
+       FROM facet_v2_native_projection_attempts
+      WHERE attempt_id = ? LIMIT 1`,
+  )
+    .bind(attemptId)
+    .first<StoredProjectionAttempt>();
+}
+
+async function finalizedProjectionAttempt(
+  env: AppEnv,
+  eventId: string,
+): Promise<StoredProjectionAttempt | null> {
+  return await env.DB.prepare(
+    `SELECT attempt_id, event_id, outcome, projection_id, projection_sha256,
+            error_code, attempted_at
+       FROM facet_v2_native_projection_attempts
+      WHERE event_id = ? AND outcome <> 'uncertain'
+      LIMIT 1`,
+  )
+    .bind(eventId)
+    .first<StoredProjectionAttempt>();
+}
+
+async function projectionAttemptId(
+  eventId: string,
+  outcome: ProjectionOutcome,
+  errorCode?: string,
 ): Promise<string> {
-  const eventId =
-    claim.decision_kind === "approved" || claim.decision_kind === "corrected"
-      ? claim.event_id
-      : claim.previous_event_id;
-  if (!eventId)
-    throw new FrappeProjectionTransportError(
-      "facet_projection_predecessor_missing",
-    );
-  return `facet-quote-revision:${await sha256Hex(eventId)}`;
+  const eventHash = await sha256Hex(eventId);
+  if (outcome === "uncertain") {
+    if (!errorCode)
+      throw new Error("facet_v2_native_uncertainty_code_required");
+    return `facet-native-projection-v2:${eventHash}:uncertain:${await sha256Hex(errorCode)}`;
+  }
+  if (outcome === "rejected")
+    return `facet-native-projection-v2:${eventHash}:rejected`;
+  return `facet-native-projection-v2:${eventHash}:success`;
 }
 
-function blankFrappeValue(value: unknown): boolean {
-  // Frappe's REST readback omits a field whose stored value is NULL rather than
-  // returning it as null, so an absent key is the *most* common shape of blank
-  // on a real site and the least visible one in a fixture that spells every
-  // field out. Reading `undefined` as "populated" made the readback unsatisfiable
-  // against any real Frappe response (ELEC-91).
-  return value === null || value === undefined || value === "";
-}
-
-function blankQuoteReadbackValue(
-  rule: { schemaDefault: string | null; numeric: boolean },
-  value: unknown,
+function sameProjectionAttempt(
+  stored: StoredProjectionAttempt,
+  expected: StoredProjectionAttempt,
 ): boolean {
-  if (blankFrappeValue(value)) return true;
-  if (rule.schemaDefault !== null && String(value) === rule.schemaDefault) return true;
-  return rule.numeric && Number(value) === 0;
-}
-
-function blankEquivalent(value: unknown, expected: string | null): boolean {
-  return expected === null ? blankFrappeValue(value) : value === expected;
-}
-
-function parseCanonicalRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "string") return null;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isRecord(parsed) && canonicalJson(parsed) === value ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-async function validatedProjectionResponse(
-  response: unknown,
-  claim: FacetV2ProjectionClaim,
-  claimJson: string,
-  hmacKey: string,
-): Promise<ProjectionResult> {
-  if (
-    !isRecord(response) ||
-    !isRecord(response.message) ||
-    !sameKeys(response.message, RESPONSE_KEYS)
-  )
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_response_invalid_shape",
-    );
-  const message = response.message;
-  if (
-    typeof message.idempotent_replay !== "boolean" ||
-    message.receipt_signature_algorithm !== "HMAC-SHA256" ||
-    !validSha256(message.receipt_sha256) ||
-    !validSignature(message.receipt_signature) ||
-    !isRecord(message.receipt) ||
-    !sameKeys(message.receipt, RECEIPT_KEYS)
-  )
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_response_invalid_receipt",
-    );
-  const eventHash = await sha256Hex(claim.event_id);
-  const evidenceId = `facet-design:${eventHash}`;
-  const reconciliationId = `facet-design-projection:${eventHash}`;
-  const draftCustomerQuoteId = await projectionTargetQuoteId(claim);
-  if (
-    message.event_id !== claim.event_id ||
-    message.evidence_id !== evidenceId ||
-    message.reconciliation_id !== reconciliationId ||
-    message.draft_customer_quote_id !== draftCustomerQuoteId ||
-    !positiveInteger(message.draft_quote_version)
-  )
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_response_anchor_mismatch",
-    );
-  const receipt = message.receipt;
-  const activeDecision =
-    claim.decision_kind === "approved" || claim.decision_kind === "corrected";
-  const receiptSha256 = await sha256Hex(canonicalJson(receipt));
-  const expectedSignature = await hmacBase64Url(
-    hmacKey,
-    `${RECEIPT_SIGNATURE_CONTEXT}\n${receiptSha256}`,
+  const successOutcomes: ProjectionOutcome[] = [
+    "projected_native_design",
+    "reconciled_native_design",
+  ];
+  const outcomeMatches =
+    stored.outcome === expected.outcome ||
+    (successOutcomes.includes(stored.outcome) &&
+      successOutcomes.includes(expected.outcome));
+  return (
+    stored.attempt_id === expected.attempt_id &&
+    stored.event_id === expected.event_id &&
+    outcomeMatches &&
+    stored.projection_id === expected.projection_id &&
+    stored.projection_sha256 === expected.projection_sha256 &&
+    stored.error_code === expected.error_code
   );
-  if (
-    !constantTimeEqual(message.receipt_sha256, receiptSha256) ||
-    !constantTimeEqual(message.receipt_signature, expectedSignature)
-  )
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_response_signature_mismatch",
-    );
-  if (
-    receipt.schema !== RECEIPT_SCHEMA ||
-    receipt.claim_sha256 !== (await sha256Hex(claimJson)) ||
-    receipt.event_id !== claim.event_id ||
-    receipt.event_type !== claim.event_type ||
-    receipt.schema_version !== 2 ||
-    receipt.decision_kind !== claim.decision_kind ||
-    receipt.approval_receipt_sha256 !== claim.approval_receipt_sha256 ||
-    receipt.actor_identity_assurance !== "oidc" ||
-    receipt.destination_tenant_id !== claim.destination_tenant_id ||
-    receipt.facet_project_id !== claim.facet_project_id ||
-    receipt.association_sha256 !== claim.association_sha256 ||
-    receipt.design_revision_id !== claim.design_revision_id ||
-    receipt.design_revision_sha256 !== claim.design_revision_sha256 ||
-    receipt.frozen_evidence_sha256 !== claim.frozen_evidence_sha256 ||
-    receipt.raw_key !== claim.raw_key ||
-    receipt.raw_sha256 !== claim.raw_sha256 ||
-    receipt.raw_content_length !== claim.raw_content_length ||
-    receipt.occurred_at !== claim.occurred_at ||
-    receipt.received_at !== claim.received_at ||
-    receipt.roof_job_id !== claim.roof_job_id ||
-    receipt.source_customer_quote_id !== claim.customer_quote_id ||
-    receipt.draft_customer_quote_id !== draftCustomerQuoteId ||
-    receipt.draft_quote_version !== message.draft_quote_version ||
-    receipt.draft_quote_status !== (activeDecision ? "Draft" : "Rejected") ||
-    receipt.blank_commercial_revision !== activeDecision ||
-    receipt.customer_safe !== false ||
-    receipt.evidence_id !== evidenceId ||
-    receipt.reconciliation_id !== reconciliationId ||
-    receipt.idempotent_replay !== message.idempotent_replay
-  )
-    throw new FrappeProjectionTransportError(
-      "frappe_projection_response_receipt_mismatch",
-    );
-  return {
-    evidenceId,
-    reconciliationId,
-    draftCustomerQuoteId,
-    draftQuoteVersion: message.draft_quote_version,
-    idempotentReplay: message.idempotent_replay,
-  };
 }
 
-function projectionSettings(env: Env): ProjectionSettings | null {
-  const hmacKey = env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY?.trim() ?? "";
-  const frappeApiKey =
-    env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY?.trim() ?? "";
-  const frappeApiSecret =
-    env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET?.trim() ?? "";
-  if (hmacKey.length < 32 || !frappeApiKey || !frappeApiSecret) return null;
-  try {
-    frappeBaseUrl(env as AppEnv);
-  } catch {
-    return null;
-  }
-  return { hmacKey, frappeApiKey, frappeApiSecret };
-}
-
-function projectionFailureOutcome(
-  error: unknown,
-): "rejected_frappe" | "uncertain" {
-  return error instanceof FrappeProjectionHttpError && error.status === 409
-    ? "rejected_frappe"
-    : "uncertain";
-}
-
-function errorCode(error: unknown): string {
-  if (error instanceof FrappeProjectionHttpError)
-    return `frappe_http_${error.status}`;
-  if (error instanceof FrappeProjectionTransportError) return error.code;
-  return "facet_v2_projection_unknown_error";
-}
-
-async function hmacBase64Url(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+function sameNativeDesignProjection(
+  stored: StoredNativeDesignProjection,
+  expected: StoredNativeDesignProjection,
+): boolean {
+  return (
+    stored.projection_id === expected.projection_id &&
+    stored.event_id === expected.event_id &&
+    stored.destination_tenant_id === expected.destination_tenant_id &&
+    stored.source_tenant_id === expected.source_tenant_id &&
+    stored.brand_id === expected.brand_id &&
+    stored.facet_project_id === expected.facet_project_id &&
+    stored.external_project_link_id === expected.external_project_link_id &&
+    stored.producer_identity_link_id === expected.producer_identity_link_id &&
+    stored.external_customer_identity_link_id ===
+      expected.external_customer_identity_link_id &&
+    stored.roof_job_id === expected.roof_job_id &&
+    stored.customer_id === expected.customer_id &&
+    stored.customer_quote_id === expected.customer_quote_id &&
+    stored.source_quote_revision_id === expected.source_quote_revision_id &&
+    Number(stored.source_quote_version) === expected.source_quote_version &&
+    stored.source_quote_approved_at === expected.source_quote_approved_at &&
+    stored.source_proposal_revision_id ===
+      expected.source_proposal_revision_id &&
+    stored.source_proposal_pack_id === expected.source_proposal_pack_id &&
+    stored.source_publication_event_id ===
+      expected.source_publication_event_id &&
+    stored.source_acceptance_binding_id ===
+      expected.source_acceptance_binding_id &&
+    stored.source_acceptance_id === expected.source_acceptance_id &&
+    stored.source_acceptance_accepted_at ===
+      expected.source_acceptance_accepted_at &&
+    stored.source_acceptance_receipt_hash ===
+      expected.source_acceptance_receipt_hash &&
+    stored.launch_intent_sha256 === expected.launch_intent_sha256 &&
+    stored.decision_kind === expected.decision_kind &&
+    Number(stored.design_sequence) === expected.design_sequence &&
+    stored.design_state === expected.design_state &&
+    stored.previous_event_id === expected.previous_event_id &&
+    stored.design_revision_id === expected.design_revision_id &&
+    stored.design_revision_sha256 === expected.design_revision_sha256 &&
+    stored.frozen_evidence_sha256 === expected.frozen_evidence_sha256 &&
+    stored.raw_sha256 === expected.raw_sha256 &&
+    stored.projection_sha256 === expected.projection_sha256
   );
-  const signed = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(value),
-  );
-  return base64Url(new Uint8Array(signed));
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/u, "");
-}
-
-function constantTimeEqual(left: unknown, right: unknown): boolean {
-  if (
-    typeof left !== "string" ||
-    typeof right !== "string" ||
-    left.length !== right.length
-  )
-    return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1)
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return difference === 0;
-}
-
-function positiveInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
 function validSha256(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-}
-
-function validSignature(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function sameKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = [...expected].sort();
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
 }

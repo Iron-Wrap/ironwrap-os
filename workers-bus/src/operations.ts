@@ -69,8 +69,11 @@ export type ReplayApprovalValidation =
 
 export interface ReadinessReport {
   ok: boolean;
-  /** Owned intake spine only; the deliberate Newo launch gate is excluded. */
+  /** Compatibility alias for owned_core_ok. */
   core_ok: boolean;
+  owned_core_ok: boolean;
+  office_operating_plane_ok: boolean;
+  projection_rails_ok: boolean;
   status: "ready" | "not_ready";
   checks: {
     d1: boolean;
@@ -102,6 +105,33 @@ export interface ReadinessReport {
   };
   newo: NewoReadinessDetail;
 }
+
+type ReadinessCheckName = keyof ReadinessReport["checks"];
+
+const OWNED_CORE_CHECKS = [
+  "d1",
+  "schema",
+  "raw_store_binding",
+  "queue_binding",
+  "auth_configuration",
+  "notification_configuration",
+] as const satisfies readonly ReadinessCheckName[];
+
+const OFFICE_OPERATING_PLANE_CHECKS = [
+  ...OWNED_CORE_CHECKS,
+  "jobnimbus_configuration",
+  "app_bff_configuration",
+  "customer_portal_configuration",
+  "production_schedule_configuration",
+  "public_estimate_configuration",
+  "measurement_ocr_configuration",
+] as const satisfies readonly ReadinessCheckName[];
+
+const PROJECTION_RAIL_CHECKS = [
+  ...OWNED_CORE_CHECKS,
+  "frappe_configuration",
+  "newo_frappe_readiness",
+] as const satisfies readonly ReadinessCheckName[];
 
 export interface NewoReadinessDetail {
   required: boolean;
@@ -293,21 +323,20 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   return { ...verdicts, status: verdicts.ok ? "ready" : "not_ready", checks, newo };
 }
 
-/**
- * Core = the owned intake spine (D1, R2, queue, auth, notification, Frappe/BFF
- * configuration). Newo checks stay in the FULL verdict because voice is a
- * deliberate launch gate, but they must not be able to hide a core regression:
- * a red that is red by design trains everyone to ignore red.
- */
+/** Full readiness stays strict while named planes expose the actual failure boundary. */
 export function readinessVerdicts(
   checks: ReadinessReport["checks"],
-): { ok: boolean; core_ok: boolean } {
+): Pick<ReadinessReport,
+  "ok" | "core_ok" | "owned_core_ok" | "office_operating_plane_ok" | "projection_rails_ok"> {
   const entries = Object.entries(checks);
+  const allReady = (names: readonly ReadinessCheckName[]) => names.every((name) => checks[name]);
+  const ownedCoreOk = allReady(OWNED_CORE_CHECKS);
   return {
     ok: entries.every(([, value]) => value),
-    core_ok: entries
-      .filter(([name]) => !name.startsWith("newo_"))
-      .every(([, value]) => value),
+    core_ok: ownedCoreOk,
+    owned_core_ok: ownedCoreOk,
+    office_operating_plane_ok: allReady(OFFICE_OPERATING_PLANE_CHECKS),
+    projection_rails_ok: allReady(PROJECTION_RAIL_CHECKS),
   };
 }
 
@@ -344,9 +373,7 @@ export async function runOwnerWatchdog(
   now = new Date(),
 ): Promise<{ alerted: boolean; findings: string[] }> {
   const readiness = await getReadiness(env);
-  const failedCoreChecks = Object.entries(readiness.checks)
-    .filter(([name, value]) => !value && !name.startsWith("newo_"))
-    .map(([name]) => name);
+  const failedCoreChecks = OWNED_CORE_CHECKS.filter((name) => !readiness.checks[name]);
   let exceptionCount = 0;
   try {
     exceptionCount = (await listMeasurementIntakeExceptions(env, 50)).length;

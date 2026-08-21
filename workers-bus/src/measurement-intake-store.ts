@@ -1,8 +1,20 @@
+import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+
 export type MeasurementIntakeStatus =
   "processing" | "matched" | "unmatched" | "retryable_error";
 
 export const MAX_MEASUREMENT_INTAKE_ATTEMPTS = 12;
 export const MAX_MEASUREMENT_OCR_ATTEMPTS = 3;
+
+const MEASUREMENT_RECEIPT_COLUMNS = `
+  receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
+  job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
+  drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
+  attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
+  report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
+  ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
+  ocr_completed_at, tenant_id, native_roof_job_id, native_measurement_revision_id,
+  native_projection_sha256`;
 
 export interface MeasurementIntakeReceipt {
   receipt_id: string;
@@ -43,6 +55,10 @@ export interface MeasurementIntakeReceipt {
   ocr_review_required: 0 | 1;
   ocr_error: string | null;
   ocr_completed_at: string | null;
+  tenant_id: string | null;
+  native_roof_job_id: string | null;
+  native_measurement_revision_id: string | null;
+  native_projection_sha256: string | null;
 }
 
 /**
@@ -59,9 +75,10 @@ export interface MeasurementIntakeAdminException {
   status: "unmatched" | "retryable_error";
   drive_report_url: string | null;
   drive_folder_url: string | null;
-  frappe_measurement_id: string | null;
-  frappe_evidence_id: string | null;
-  frappe_error: string | null;
+  native_tenant_id: string | null;
+  native_roof_job_id: string | null;
+  native_measurement_revision_id: string | null;
+  native_projection_sha256: string | null;
   last_error: string | null;
   attempts: number;
   created_at: string;
@@ -70,8 +87,8 @@ export interface MeasurementIntakeAdminException {
 }
 
 /**
- * Smaller owner/ops PWA projection. Browser sessions never need an R2 pointer, Frappe ids, or
- * provider error detail; only a bounded recovery disposition and optional Drive links are useful
+ * Smaller owner/ops PWA projection. Browser sessions never need an R2 pointer, native revision
+ * internals, or provider error detail; only a bounded recovery disposition and optional Drive links are useful
  * for a human to decide whether a report needs a job match, can wait for retry, or needs recovery.
  */
 export interface MeasurementIntakeOwnerException {
@@ -87,7 +104,6 @@ export interface MeasurementIntakeOwnerException {
     | "drive_not_configured"
     | "report_fetch_failed"
     | "raw_source_missing"
-    | "frappe_sync_failed"
     | "retry_pending";
   drive_report_url: string | null;
   drive_folder_url: string | null;
@@ -102,6 +118,7 @@ export interface MeasurementIntakeOwnerException {
 }
 
 export interface MeasurementIntakeIdentity {
+  tenantId: string;
   receiptId: string;
   idempotencyKeyHash: string;
   payloadHash: string;
@@ -111,6 +128,65 @@ export interface MeasurementIntakeIdentity {
   jobNumber: string | null;
   rawKey: string;
   contentType: string;
+}
+
+export interface NativeMeasurementJobAnchor {
+  tenant_id: string;
+  roof_job_id: string;
+  job_number: string;
+  version: number;
+}
+
+export type NativeMeasurementJobResolution =
+  | { state: "matched"; job: NativeMeasurementJobAnchor; error: null }
+  | {
+      state: "unmatched";
+      job: null;
+      error:
+        | "no_job_number"
+        | "roof_job_not_found"
+        | "roof_job_tenant_mismatch"
+        | "roof_job_ambiguous";
+    };
+
+export interface NativeMeasurementRevisionRecord {
+  measurement_revision_id: string;
+  tenant_id: string;
+  receipt_id: string;
+  measurement_id: string;
+  provider: string;
+  job_number: string | null;
+  roof_job_id: string | null;
+  operating_job_version: number | null;
+  association_status: "matched" | "unmatched";
+  association_error: string | null;
+  receipt_status: "matched" | "unmatched";
+  completion_reason: string | null;
+  review_required: 0 | 1;
+  root_measurement_id: string;
+  revision_number: number;
+  supersedes_measurement_revision_id: string | null;
+  correction_reason: string | null;
+  measurement_raw_key: string;
+  measurement_raw_sha256: string;
+  report_raw_key: string | null;
+  report_sha256: string | null;
+  ocr_result_key: string | null;
+  ocr_result_sha256: string | null;
+  projection_json: string;
+  projection_sha256: string;
+  command_fingerprint: string;
+  created_at: string;
+}
+
+export class NativeMeasurementStoreError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "NativeMeasurementStoreError";
+    this.code = code;
+  }
 }
 
 export function projectMeasurementIntakeAdminException(
@@ -126,9 +202,10 @@ export function projectMeasurementIntakeAdminException(
     status,
     drive_report_url: receipt.drive_report_url,
     drive_folder_url: receipt.drive_folder_url,
-    frappe_measurement_id: receipt.frappe_measurement_id,
-    frappe_evidence_id: receipt.frappe_evidence_id,
-    frappe_error: receipt.frappe_error,
+    native_tenant_id: receipt.tenant_id,
+    native_roof_job_id: receipt.native_roof_job_id,
+    native_measurement_revision_id: receipt.native_measurement_revision_id,
+    native_projection_sha256: receipt.native_projection_sha256,
     last_error: receipt.last_error,
     attempts: receipt.attempts,
     created_at: receipt.created_at,
@@ -180,14 +257,15 @@ export async function claimMeasurementIntakeReceipt(
 ): Promise<MeasurementIntakeClaim> {
   const inserted = await env.DB.prepare(
     `INSERT INTO measurement_intake_receipts
-       (receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
+       (receipt_id, tenant_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
         job_number, raw_key, content_type, status, lease_token, lease_expires_at, attempts, created_at,
         updated_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, 1, ?, ?, NULL)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, 1, ?, ?, NULL)
      ON CONFLICT(idempotency_key_hash) DO NOTHING`,
   )
     .bind(
       input.receiptId,
+      input.tenantId,
       input.idempotencyKeyHash,
       input.payloadHash,
       input.keyStrategy,
@@ -216,7 +294,10 @@ export async function claimMeasurementIntakeReceipt(
     input.idempotencyKeyHash,
   );
   if (!existing) throw new Error("measurement_receipt_lookup_failed");
-  if (existing.payload_hash !== input.payloadHash)
+  if (
+    existing.payload_hash !== input.payloadHash ||
+    existing.tenant_id !== input.tenantId
+  )
     return { kind: "conflict", receipt: existing };
   if (isCompleted(existing)) return { kind: "completed", receipt: existing };
   if (leaseActive(existing, input.now))
@@ -226,7 +307,7 @@ export async function claimMeasurementIntakeReceipt(
     `UPDATE measurement_intake_receipts
      SET status = 'processing', lease_token = ?, lease_expires_at = ?, attempts = attempts + 1,
          last_error = NULL, updated_at = ?
-     WHERE idempotency_key_hash = ? AND payload_hash = ?
+     WHERE idempotency_key_hash = ? AND payload_hash = ? AND tenant_id = ?
        AND status IN ('processing', 'retryable_error')
        AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
   )
@@ -236,6 +317,7 @@ export async function claimMeasurementIntakeReceipt(
       input.now,
       input.idempotencyKeyHash,
       input.payloadHash,
+      input.tenantId,
       input.now,
     )
     .run();
@@ -253,7 +335,10 @@ export async function claimMeasurementIntakeReceipt(
     input.idempotencyKeyHash,
   );
   if (!current) throw new Error("measurement_receipt_race_missing");
-  if (current.payload_hash !== input.payloadHash)
+  if (
+    current.payload_hash !== input.payloadHash ||
+    current.tenant_id !== input.tenantId
+  )
     return { kind: "conflict", receipt: current };
   return isCompleted(current)
     ? { kind: "completed", receipt: current }
@@ -265,13 +350,7 @@ export async function getMeasurementIntakeReceipt(
   idempotencyKeyHash: string,
 ): Promise<MeasurementIntakeReceipt | null> {
   return await env.DB.prepare(
-    `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
-            job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
-            drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
-            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
-            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
-            ocr_completed_at
+    `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
      WHERE idempotency_key_hash = ?
      LIMIT 1`,
@@ -285,6 +364,286 @@ export async function getMeasurementIntakeReceiptById(
   receiptId: string,
 ): Promise<MeasurementIntakeReceipt | null> {
   return await getMeasurementReceiptById(env, receiptId);
+}
+
+export async function resolveNativeMeasurementJob(
+  env: Env,
+  tenantId: string,
+  jobNumber: string | null,
+): Promise<NativeMeasurementJobResolution> {
+  if (!jobNumber)
+    return { state: "unmatched", job: null, error: "no_job_number" };
+  const rows = await env.DB.prepare(
+    `SELECT tenant_id, roof_job_id, job_number, version
+       FROM operating_roof_jobs
+      WHERE tenant_id = ? AND job_number = ?
+      ORDER BY roof_job_id ASC
+      LIMIT 2`,
+  )
+    .bind(tenantId, jobNumber)
+    .all<NativeMeasurementJobAnchor>();
+  const matches = rows.results ?? [];
+  if (matches.length === 1) {
+    return { state: "matched", job: matches[0]!, error: null };
+  }
+  if (matches.length > 1) {
+    return { state: "unmatched", job: null, error: "roof_job_ambiguous" };
+  }
+  const foreignTenant = await env.DB.prepare(
+    `SELECT tenant_id FROM operating_roof_jobs
+      WHERE tenant_id != ? AND job_number = ? LIMIT 1`,
+  )
+    .bind(tenantId, jobNumber)
+    .first<{ tenant_id: string }>();
+  return {
+    state: "unmatched",
+    job: null,
+    error: foreignTenant ? "roof_job_tenant_mismatch" : "roof_job_not_found",
+  };
+}
+
+export async function getNativeMeasurementRevisionByReceipt(
+  env: Env,
+  receiptId: string,
+): Promise<NativeMeasurementRevisionRecord | null> {
+  const row = await nativeMeasurementRevisionByReceipt(env, receiptId);
+  if (!row) return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(row.projection_json) as Record<string, unknown>;
+  } catch {
+    throw new NativeMeasurementStoreError(
+      "native_measurement_projection_invalid",
+    );
+  }
+  if (
+    canonicalJson(parsed) !== row.projection_json ||
+    (await sha256Hex(row.projection_json)) !== row.projection_sha256 ||
+    parsed.schema_version !== "ironwrap.native-measurement.v1" ||
+    parsed.tenant_id !== row.tenant_id ||
+    parsed.receipt_id !== row.receipt_id ||
+    parsed.measurement_id !== row.measurement_id
+  ) {
+    throw new NativeMeasurementStoreError(
+      "native_measurement_projection_drift",
+    );
+  }
+  return row;
+}
+
+export async function recordNativeMeasurementRevision(
+  env: Env,
+  input: {
+    receipt: MeasurementIntakeReceipt;
+    tenantId: string;
+    job: NativeMeasurementJobAnchor | null;
+    associationError: NativeMeasurementJobResolution["error"];
+    receiptStatus: "matched" | "unmatched";
+    completionReason: string | null;
+    reviewReasons: string[];
+    supersedesMeasurementId: string | null;
+    correctionReason: string | null;
+    evidence: Readonly<Record<string, unknown>>;
+    now: string;
+  },
+): Promise<{
+  kind: "created" | "replayed";
+  revision: NativeMeasurementRevisionRecord;
+}> {
+  const correctionReason = input.correctionReason?.trim() || null;
+  if (Boolean(input.supersedesMeasurementId) !== Boolean(correctionReason)) {
+    throw new NativeMeasurementStoreError("measurement_correction_incomplete");
+  }
+  const commandFingerprint = await sha256Hex(
+    canonicalJson({
+      tenant_id: input.tenantId,
+      receipt_id: input.receipt.receipt_id,
+      measurement_id: input.receipt.measurement_id,
+      provider: input.receipt.provider,
+      job_number: input.receipt.job_number,
+      roof_job_id: input.job?.roof_job_id ?? null,
+      operating_job_version: input.job?.version ?? null,
+      association_error: input.associationError,
+      receipt_status: input.receiptStatus,
+      completion_reason: input.completionReason,
+      review_reasons: input.reviewReasons,
+      supersedes_measurement_id: input.supersedesMeasurementId,
+      correction_reason: correctionReason,
+      evidence: input.evidence,
+    }),
+  );
+  const replay = await nativeMeasurementRevisionByReceipt(
+    env,
+    input.receipt.receipt_id,
+  );
+  if (replay) {
+    if (replay.command_fingerprint !== commandFingerprint) {
+      throw new NativeMeasurementStoreError(
+        "native_measurement_replay_collision",
+      );
+    }
+    return {
+      kind: "replayed",
+      revision: await requireValidRevision(env, replay),
+    };
+  }
+
+  let rootMeasurementId = input.receipt.measurement_id;
+  let revisionNumber = 1;
+  let supersedesRevisionId: string | null = null;
+  if (input.supersedesMeasurementId) {
+    const predecessor = await nativeMeasurementRevisionByMeasurementId(
+      env,
+      input.tenantId,
+      input.supersedesMeasurementId,
+    );
+    if (!predecessor) {
+      throw new NativeMeasurementStoreError(
+        "measurement_correction_predecessor_missing",
+      );
+    }
+    const successor = await nativeMeasurementSuccessor(
+      env,
+      input.tenantId,
+      predecessor.measurement_revision_id,
+    );
+    if (successor) {
+      throw new NativeMeasurementStoreError("measurement_correction_stale");
+    }
+    if (
+      predecessor.roof_job_id &&
+      predecessor.roof_job_id !== input.job?.roof_job_id
+    ) {
+      throw new NativeMeasurementStoreError(
+        "measurement_correction_job_mismatch",
+      );
+    }
+    rootMeasurementId = predecessor.root_measurement_id;
+    revisionNumber = Number(predecessor.revision_number) + 1;
+    supersedesRevisionId = predecessor.measurement_revision_id;
+  }
+
+  const projection = {
+    schema_version: "ironwrap.native-measurement.v1",
+    tenant_id: input.tenantId,
+    receipt_id: input.receipt.receipt_id,
+    measurement_id: input.receipt.measurement_id,
+    provider: input.receipt.provider,
+    association: {
+      status: input.job ? "matched" : "unmatched",
+      job_number: input.receipt.job_number,
+      roof_job_id: input.job?.roof_job_id ?? null,
+      operating_job_version: input.job?.version ?? null,
+      error: input.associationError,
+    },
+    lineage: {
+      root_measurement_id: rootMeasurementId,
+      revision_number: revisionNumber,
+      supersedes_measurement_revision_id: supersedesRevisionId,
+      correction_reason: correctionReason,
+    },
+    receipt_status: input.receiptStatus,
+    completion_reason: input.completionReason,
+    review: {
+      required: input.reviewReasons.length > 0,
+      reasons: input.reviewReasons,
+    },
+    evidence: input.evidence,
+  };
+  const projectionJson = canonicalJson(projection);
+  const projectionSha256 = await sha256Hex(projectionJson);
+  const revisionId = `mrev_${await sha256Hex(
+    canonicalJson({
+      tenant_id: input.tenantId,
+      receipt_id: input.receipt.receipt_id,
+    }),
+  )}`;
+  const statement = env.DB.prepare(
+    `INSERT INTO native_measurement_revisions (
+       measurement_revision_id, tenant_id, receipt_id, measurement_id, provider, job_number,
+       roof_job_id, operating_job_version, association_status, association_error, receipt_status,
+       completion_reason, review_required, root_measurement_id, revision_number,
+       supersedes_measurement_revision_id, correction_reason, measurement_raw_key,
+       measurement_raw_sha256, report_raw_key, report_sha256, ocr_result_key, ocr_result_sha256,
+       projection_json, projection_sha256, command_fingerprint, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    revisionId,
+    input.tenantId,
+    input.receipt.receipt_id,
+    input.receipt.measurement_id,
+    input.receipt.provider,
+    input.receipt.job_number,
+    input.job?.roof_job_id ?? null,
+    input.job?.version ?? null,
+    input.job ? "matched" : "unmatched",
+    input.associationError,
+    input.receiptStatus,
+    input.completionReason,
+    input.reviewReasons.length > 0 ? 1 : 0,
+    rootMeasurementId,
+    revisionNumber,
+    supersedesRevisionId,
+    correctionReason,
+    input.receipt.raw_key,
+    input.receipt.payload_hash,
+    input.receipt.report_raw_key,
+    input.receipt.report_sha256,
+    input.receipt.ocr_result_key,
+    input.receipt.ocr_result_sha256,
+    projectionJson,
+    projectionSha256,
+    commandFingerprint,
+    input.now,
+  );
+  try {
+    await statement.run();
+  } catch (error) {
+    const concurrent = await nativeMeasurementRevisionByReceipt(
+      env,
+      input.receipt.receipt_id,
+    );
+    if (concurrent) {
+      if (concurrent.command_fingerprint !== commandFingerprint) {
+        throw new NativeMeasurementStoreError(
+          "native_measurement_replay_collision",
+        );
+      }
+      return {
+        kind: "replayed",
+        revision: await requireValidRevision(env, concurrent),
+      };
+    }
+    if (
+      supersedesRevisionId &&
+      (await nativeMeasurementSuccessor(
+        env,
+        input.tenantId,
+        supersedesRevisionId,
+      ))
+    ) {
+      throw new NativeMeasurementStoreError("measurement_correction_stale");
+    }
+    const detail = String(error);
+    if (detail.includes("native_measurement_receipt_evidence_mismatch")) {
+      throw new NativeMeasurementStoreError(
+        "native_measurement_receipt_evidence_mismatch",
+      );
+    }
+    if (detail.includes("native_measurement_job_anchor_mismatch")) {
+      throw new NativeMeasurementStoreError(
+        "native_measurement_job_anchor_mismatch",
+      );
+    }
+    throw new NativeMeasurementStoreError("native_measurement_write_failed");
+  }
+  const revision = await getNativeMeasurementRevisionByReceipt(
+    env,
+    input.receipt.receipt_id,
+  );
+  if (!revision)
+    throw new NativeMeasurementStoreError("native_measurement_write_missing");
+  return { kind: "created", revision };
 }
 
 export async function recordMeasurementDriveFiling(
@@ -401,7 +760,13 @@ export async function recordMeasurementOcrResult(
 
 export async function recordMeasurementOcrFailure(
   env: Env,
-  input: { receiptId: string; leaseToken: string; model: string; error: string; now: string },
+  input: {
+    receiptId: string;
+    leaseToken: string;
+    model: string;
+    error: string;
+    now: string;
+  },
 ): Promise<void> {
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
@@ -426,10 +791,11 @@ export async function completeMeasurementIntakeReceipt(
   input: {
     receiptId: string;
     leaseToken: string;
+    tenantId: string;
     status: "matched" | "unmatched";
-    frappeMeasurementId: string | null;
-    frappeEvidenceId: string | null;
-    frappeError: string | null;
+    nativeRoofJobId: string | null;
+    nativeMeasurementRevisionId: string;
+    nativeProjectionSha256: string;
     lastError: string | null;
     now: string;
   },
@@ -437,19 +803,21 @@ export async function completeMeasurementIntakeReceipt(
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET status = ?, lease_token = NULL, lease_expires_at = NULL,
-         frappe_measurement_id = ?, frappe_evidence_id = ?, frappe_error = ?, last_error = ?,
+         native_roof_job_id = ?, native_measurement_revision_id = ?,
+         native_projection_sha256 = ?, last_error = ?,
          updated_at = ?, completed_at = ?
-     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
+     WHERE receipt_id = ? AND tenant_id = ? AND status = 'processing' AND lease_token = ?`,
   )
     .bind(
       input.status,
-      input.frappeMeasurementId,
-      input.frappeEvidenceId,
-      input.frappeError,
+      input.nativeRoofJobId,
+      input.nativeMeasurementRevisionId,
+      input.nativeProjectionSha256,
       input.lastError,
       input.now,
       input.now,
       input.receiptId,
+      input.tenantId,
       input.leaseToken,
     )
     .run();
@@ -466,18 +834,16 @@ export async function markMeasurementIntakeRetryable(
     receiptId: string;
     leaseToken: string;
     error: string;
-    frappeError?: string | null;
     now: string;
   },
 ): Promise<void> {
   const result = await env.DB.prepare(
     `UPDATE measurement_intake_receipts
      SET status = 'retryable_error', lease_token = NULL, lease_expires_at = NULL,
-         frappe_error = COALESCE(?, frappe_error), last_error = ?, updated_at = ?
+         last_error = ?, updated_at = ?
      WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
   )
     .bind(
-      input.frappeError?.slice(0, 500) ?? null,
       input.error.slice(0, 500),
       input.now,
       input.receiptId,
@@ -493,13 +859,7 @@ export async function listMeasurementIntakeExceptions(
   limit: number,
 ): Promise<MeasurementIntakeReceipt[]> {
   const rows = await env.DB.prepare(
-    `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
-            job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
-            drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
-            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
-            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
-            ocr_completed_at
+    `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
      WHERE status IN ('unmatched', 'retryable_error')
      ORDER BY updated_at DESC, receipt_id DESC
@@ -517,13 +877,7 @@ export async function listRetryableMeasurementIntakeReceipts(
   limit: number,
 ): Promise<MeasurementIntakeReceipt[]> {
   const rows = await env.DB.prepare(
-    `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
-            job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
-            drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
-            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
-            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
-            ocr_completed_at
+    `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
      WHERE (status = 'retryable_error' AND attempts < CASE
               WHEN last_error GLOB 'measurement_ocr_*' THEN ? ELSE ? END)
@@ -551,7 +905,8 @@ export async function pruneMeasurementIntakeReceipts(
   await Promise.all([
     env.DB.prepare(
       `DELETE FROM measurement_intake_receipts
-       WHERE status = 'matched' AND completed_at <= ?`,
+       WHERE status = 'matched' AND completed_at <= ?
+         AND native_measurement_revision_id IS NULL`,
     )
       .bind(completedCutoff)
       .run(),
@@ -588,8 +943,6 @@ function ownerExceptionReason(
   if (lastError?.startsWith("measurement_ocr_")) return "ocr_failed";
   if (lastError === "drive_not_configured") return "drive_not_configured";
   if (lastError === "raw_source_missing") return "raw_source_missing";
-  if (lastError === "frappe_measurement_sync_failed")
-    return "frappe_sync_failed";
   if (/^report_fetch_status_[45]\d\d$/.test(lastError ?? ""))
     return "report_fetch_failed";
   return "retry_pending";
@@ -602,7 +955,8 @@ function ownerExceptionRecoveryDisposition(
 ): MeasurementIntakeOwnerException["recovery_disposition"] {
   if (status === "unmatched") return "manual_review";
   if (measurementRetryNeedsHumanRecovery(lastError)) return "recovery_blocked";
-  if (attempts >= measurementRetryAttemptLimit(lastError)) return "retry_exhausted";
+  if (attempts >= measurementRetryAttemptLimit(lastError))
+    return "retry_exhausted";
   return "retry_scheduled";
 }
 
@@ -612,7 +966,9 @@ export function measurementRetryAttemptLimit(lastError: string | null): number {
     : MAX_MEASUREMENT_INTAKE_ATTEMPTS;
 }
 
-export function measurementRetryNeedsHumanRecovery(lastError: string | null): boolean {
+export function measurementRetryNeedsHumanRecovery(
+  lastError: string | null,
+): boolean {
   if (!lastError) return false;
   if (/^report_fetch_status_4\d\d$/.test(lastError)) return true;
   if (/^measurement_ocr_http_4\d\d$/.test(lastError)) return true;
@@ -641,6 +997,19 @@ export function measurementRetryNeedsHumanRecovery(lastError: string | null): bo
     "measurement_ocr_evidence_invalid",
     "measurement_ocr_evidence_model_mismatch",
     "measurement_ocr_report_hash_mismatch",
+    "measurement_receipt_tenant_missing",
+    "measurement_receipt_tenant_mismatch",
+    "measurement_correction_incomplete",
+    "measurement_correction_predecessor_missing",
+    "measurement_correction_stale",
+    "measurement_correction_job_mismatch",
+    "native_measurement_receipt_evidence_mismatch",
+    "native_measurement_job_anchor_mismatch",
+    "native_measurement_projection_invalid",
+    "native_measurement_projection_drift",
+    "native_measurement_replay_collision",
+    "native_measurement_write_failed",
+    "native_measurement_write_missing",
   ]).has(lastError);
 }
 
@@ -678,19 +1047,78 @@ async function getMeasurementReceiptById(
   receiptId: string,
 ): Promise<MeasurementIntakeReceipt | null> {
   return await env.DB.prepare(
-    `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
-            job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
-            drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
-            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
-            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
-            ocr_completed_at
+    `SELECT ${MEASUREMENT_RECEIPT_COLUMNS}
      FROM measurement_intake_receipts
      WHERE receipt_id = ?
      LIMIT 1`,
   )
     .bind(receiptId)
     .first<MeasurementIntakeReceipt>();
+}
+
+async function nativeMeasurementRevisionByReceipt(
+  env: Env,
+  receiptId: string,
+): Promise<NativeMeasurementRevisionRecord | null> {
+  return await env.DB.prepare(
+    `SELECT measurement_revision_id, tenant_id, receipt_id, measurement_id, provider,
+            job_number, roof_job_id, operating_job_version, association_status,
+            association_error, receipt_status, completion_reason, review_required,
+            root_measurement_id, revision_number, supersedes_measurement_revision_id,
+            correction_reason, measurement_raw_key, measurement_raw_sha256, report_raw_key,
+            report_sha256, ocr_result_key, ocr_result_sha256, projection_json,
+            projection_sha256, command_fingerprint, created_at
+       FROM native_measurement_revisions WHERE receipt_id = ? LIMIT 1`,
+  )
+    .bind(receiptId)
+    .first<NativeMeasurementRevisionRecord>();
+}
+
+async function nativeMeasurementRevisionByMeasurementId(
+  env: Env,
+  tenantId: string,
+  measurementId: string,
+): Promise<NativeMeasurementRevisionRecord | null> {
+  return await env.DB.prepare(
+    `SELECT measurement_revision_id, tenant_id, receipt_id, measurement_id, provider,
+            job_number, roof_job_id, operating_job_version, association_status,
+            association_error, receipt_status, completion_reason, review_required,
+            root_measurement_id, revision_number, supersedes_measurement_revision_id,
+            correction_reason, measurement_raw_key, measurement_raw_sha256, report_raw_key,
+            report_sha256, ocr_result_key, ocr_result_sha256, projection_json,
+            projection_sha256, command_fingerprint, created_at
+       FROM native_measurement_revisions
+      WHERE tenant_id = ? AND measurement_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, measurementId)
+    .first<NativeMeasurementRevisionRecord>();
+}
+
+async function nativeMeasurementSuccessor(
+  env: Env,
+  tenantId: string,
+  revisionId: string,
+): Promise<{ measurement_revision_id: string } | null> {
+  return await env.DB.prepare(
+    `SELECT measurement_revision_id FROM native_measurement_revisions
+      WHERE tenant_id = ? AND supersedes_measurement_revision_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, revisionId)
+    .first<{ measurement_revision_id: string }>();
+}
+
+async function requireValidRevision(
+  env: Env,
+  revision: NativeMeasurementRevisionRecord,
+): Promise<NativeMeasurementRevisionRecord> {
+  const verified = await getNativeMeasurementRevisionByReceipt(
+    env,
+    revision.receipt_id,
+  );
+  if (!verified) {
+    throw new NativeMeasurementStoreError("native_measurement_write_missing");
+  }
+  return verified;
 }
 
 function d1Changes(result: { meta?: { changes?: number } }): number {

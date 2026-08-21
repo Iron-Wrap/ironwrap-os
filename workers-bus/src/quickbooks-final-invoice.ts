@@ -1,12 +1,31 @@
 import { sha256Hex } from "./app-auth.ts";
-import { assertEffectLedgerReady, EffectRuntimeError, runExternalEffect } from "./effect-runtime.ts";
+import { assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson as canonicalEffectJson } from "./newo-hash.ts";
+import { normalizeEmail, normalizePhone } from "./core.ts";
+import { currentTaxPolicySnapshot } from "./accounting-tax-snapshots.ts";
 import {
   QuickBooksAuthError,
   type QuickBooksAuthPort,
   type QuickBooksRealmBinding,
 } from "./quickbooks-auth-port.ts";
 import type { AppEnv, AppRole } from "./app-types.ts";
+import type { MoneyEffectOutcome } from "./accounting-effect-port.ts";
+import {
+  approveNativeFinalInvoice,
+  assertNativeFinalInvoiceBinding,
+  checkNativeFinalInvoiceFreshness,
+  listNativeFinalInvoiceCandidates,
+  NativeFinalInvoiceError,
+  nativeFinalInvoiceResolution,
+  reconcileNativeFinalInvoiceReadback,
+  recordNativeFinalInvoiceSubmission,
+  rejectNativeFinalInvoice,
+} from "./quickbooks-native-final-invoice.ts";
+import {
+  readAcceptedCommercialPaymentTerms,
+  recordNativeFinalInvoiceProviderBinding,
+  type NativeFinalInvoiceProviderBindingRecord,
+} from "./native-final-invoice-producer.ts";
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting" as const;
 export const QUICKBOOKS_AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2" as const;
@@ -55,6 +74,11 @@ export const QUICKBOOKS_BLOCKER_CODES = [
   "provider_response_uncertain",
   "provider_readback_drift",
   "provider_invoice_missing",
+  "native_final_invoice_basis_missing",
+  "native_final_invoice_basis_invalid",
+  "native_final_invoice_binding_pending",
+  "native_final_invoice_reconciliation_pending",
+  // Stored-row compatibility only. New executable paths never emit the retired Frappe values.
   "frappe_bind_pending",
   "frappe_resolver_pending",
 ] as const;
@@ -62,6 +86,10 @@ export type QuickBooksBlockerCode = (typeof QUICKBOOKS_BLOCKER_CODES)[number];
 
 export const QUICKBOOKS_NEXT_STEPS = [
   "connect_quickbooks",
+  "complete_native_invoice_basis",
+  "fix_native_mapping",
+  "reconcile_native_invoice",
+  // Stored-row compatibility only. New executable paths never emit the retired Frappe values.
   "fix_frappe_mapping",
   "resolve_commercial_policy",
   "refresh_candidate",
@@ -80,8 +108,6 @@ type QuickBooksEnv = AppEnv & {
   QB_TOKEN_ENCRYPTION_KEY?: string;
   QB_TOKEN_ENCRYPTION_KEY_VERSION?: string;
   QB_EXPECTED_REALM_ID?: string;
-  QB_FINAL_INVOICE_FRAPPE_API_KEY?: string;
-  QB_FINAL_INVOICE_FRAPPE_API_SECRET?: string;
   QB_API_TIMEOUT_MS?: string;
   /**
    * Loopback Intuit double for the local stack. Honoured *only* when
@@ -128,7 +154,7 @@ interface ConnectionRow {
 }
 
 export interface QuickBooksCitation {
-  source: "Frappe" | "R2";
+  source: "IronWrap" | "Frappe" | "R2";
   doctype?: string;
   name?: string;
   key?: string;
@@ -150,7 +176,7 @@ export interface QuickBooksCandidate {
     subtotal: string;
     tax_amount: string;
     total_amount: string;
-    already_invoiced: "0.00";
+    already_invoiced: string;
     final_balance: string;
     tax_code: string;
     tax_rate: string;
@@ -334,7 +360,7 @@ export interface QuickBooksFinalInvoiceEnvelope {
     citations: Array<{
       id: string;
       label: "completion_packet" | "accepted_quote" | "accepted_change" | "commercial_policy";
-      source: "Frappe" | "R2";
+      source: "IronWrap" | "Frappe" | "R2";
       source_ref: string;
       sha256: string;
     }>;
@@ -359,9 +385,6 @@ interface Config {
   encryptionKey: Uint8Array;
   encryptionKeyVersion: string;
   expectedRealmId: string | null;
-  frappeBaseUrl: string;
-  frappeApiKey: string;
-  frappeApiSecret: string;
   timeoutMs: number;
   /** Loopback Intuit double, or null for the real Intuit host. Local development only. */
   apiBaseOverride: string | null;
@@ -415,7 +438,7 @@ export function quickBooksAuthPort(
   env: AppEnv,
   fetcher: typeof fetch = fetch,
 ): QuickBooksAuthPort | null {
-  const config = configuration(env, false);
+  const config = configuration(env);
   if (!config) return null;
   return {
     async activeRealm(tenantId: string): Promise<QuickBooksRealmBinding> {
@@ -438,6 +461,339 @@ export function quickBooksAuthPort(
 }
 
 /**
+ * Turn an owner-nominated QuickBooks mapping into durable evidence only after exact provider reads.
+ * The browser chooses candidate IDs; the connected realm, native customer, tax policy and Intuit
+ * responses decide whether those IDs may become authority.
+ */
+export async function recordVerifiedQuickBooksFinalInvoiceMapping(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    roofJobId: string;
+    qboCustomerId: string;
+    qboItemId: string;
+    qboTaxCodeId: string;
+    qboTermsId: string;
+    jurisdiction: string;
+    taxCode: string;
+    paymentTermsDays: number;
+    actorUserId: string;
+    idempotencyKey: string;
+    correctionReason?: string | null;
+    fetcher?: typeof fetch;
+    now?: Date;
+  },
+): Promise<QuickBooksResult<NativeFinalInvoiceProviderBindingRecord>> {
+  if (
+    !SAFE_ID.test(input.actorUserId) ||
+    !/^[A-Za-z0-9._:-]{16,160}$/.test(input.idempotencyKey)
+  ) return rejected("invalid_quickbooks_mapping_request", 400);
+  const config = configuration(env);
+  const auth = quickBooksAuthPort(env, input.fetcher);
+  if (!config || !auth) return rejected("quickbooks_oauth_not_configured", 503);
+  const job = await env.DB.prepare(
+    `SELECT job.roof_job_id, job.version AS job_version, job.customer_id,
+            customer.version AS customer_version, customer.lifecycle_status,
+            customer.contact_email, customer.contact_phone
+       FROM operating_roof_jobs job
+       JOIN operating_customers customer
+         ON customer.tenant_id = job.tenant_id AND customer.customer_id = job.customer_id
+      WHERE job.tenant_id = ? AND job.roof_job_id = ?
+      LIMIT 1`,
+  )
+    .bind(input.tenantId, input.roofJobId)
+    .first<{
+      roof_job_id: string;
+      job_version: number;
+      customer_id: string;
+      customer_version: number;
+      lifecycle_status: string;
+      contact_email: string | null;
+      contact_phone: string | null;
+    }>();
+  if (!job) return rejected("quickbooks_mapping_job_not_found", 404);
+  if (job.lifecycle_status === "archived")
+    return rejected("quickbooks_mapping_customer_inactive", 409);
+
+  const commercialTerms = await readAcceptedCommercialPaymentTerms(env, {
+    tenantId: input.tenantId,
+    roofJobId: input.roofJobId,
+    customerId: job.customer_id,
+  });
+  if (!commercialTerms.ok)
+    return rejected("quickbooks_mapping_commercial_terms_unavailable", 409);
+  if (commercialTerms.paymentTermsDays !== input.paymentTermsDays)
+    return rejected("quickbooks_mapping_commercial_terms_mismatch", 409);
+
+  const now = input.now ?? new Date();
+  const taxPolicy = await currentTaxPolicySnapshot(env, {
+    tenantId: input.tenantId,
+    jurisdiction: input.jurisdiction,
+    taxCode: input.taxCode,
+    onDate: now.toISOString().slice(0, 10),
+  });
+  if (!taxPolicy || taxPolicy.provider_tax_code_id !== input.qboTaxCodeId)
+    return rejected("quickbooks_mapping_tax_policy_mismatch", 409);
+
+  let realm: QuickBooksRealmBinding;
+  try {
+    realm = await auth.activeRealm(input.tenantId);
+  } catch {
+    return rejected("quickbooks_connection_required", 503);
+  }
+  const fetcher = input.fetcher ?? fetch;
+  const reads = await Promise.all([
+    readQuickBooksMappingEntity(realm, "Customer", input.qboCustomerId, fetcher, config.timeoutMs),
+    readQuickBooksMappingEntity(realm, "Item", input.qboItemId, fetcher, config.timeoutMs),
+    readQuickBooksMappingEntity(realm, "TaxCode", input.qboTaxCodeId, fetcher, config.timeoutMs),
+    readQuickBooksMappingEntity(realm, "Term", input.qboTermsId, fetcher, config.timeoutMs),
+  ]);
+  const failedRead = reads.find((read) => !read.ok);
+  if (failedRead && !failedRead.ok) return rejected(failedRead.code, failedRead.status);
+  const [customerRead, itemRead, taxCodeRead, termRead] = reads as [
+    QuickBooksMappingReadSuccess,
+    QuickBooksMappingReadSuccess,
+    QuickBooksMappingReadSuccess,
+    QuickBooksMappingReadSuccess,
+  ];
+
+  const customerIdentitySha256 = await matchedCustomerIdentitySha256(input.tenantId, job, customerRead.entity);
+  const customer = mappingEntityVersion(customerRead.entity, input.qboCustomerId);
+  const item = mappingEntityVersion(itemRead.entity, input.qboItemId);
+  const taxCode = mappingEntityVersion(taxCodeRead.entity, input.qboTaxCodeId, false);
+  const terms = mappingEntityVersion(termRead.entity, input.qboTermsId);
+  const itemType = text(itemRead.entity.Type, 1, 32);
+  const incomeAccountId = refValue(itemRead.entity.IncomeAccountRef);
+  const providerTaxName = text(taxCodeRead.entity.Name, 1, 32);
+  const dueDays = integer(termRead.entity.DueDays, 0, 365);
+  const taxRateIds = salesTaxRateIds(taxCodeRead.entity);
+  if (
+    !customerIdentitySha256 || !customer || !item || !taxCode || !terms ||
+    !itemType || itemType === "Category" || !incomeAccountId ||
+    providerTaxName !== input.taxCode || dueDays !== input.paymentTermsDays ||
+    taxRateIds.length === 0
+  ) return rejected("quickbooks_mapping_provider_fact_mismatch", 409);
+
+  const accountAndTaxReads = await Promise.all([
+    readQuickBooksMappingEntity(realm, "Account", incomeAccountId, fetcher, config.timeoutMs),
+    ...taxRateIds.map((id) =>
+      readQuickBooksMappingEntity(realm, "TaxRate", id, fetcher, config.timeoutMs)
+    ),
+  ]);
+  const failedAccountOrTaxRead = accountAndTaxReads.find((read) => !read.ok);
+  if (failedAccountOrTaxRead && !failedAccountOrTaxRead.ok)
+    return rejected(failedAccountOrTaxRead.code, failedAccountOrTaxRead.status);
+  const [incomeAccountRead, ...taxRateReads] = accountAndTaxReads as QuickBooksMappingReadSuccess[];
+  const incomeAccount = mappingEntityVersion(incomeAccountRead!.entity, incomeAccountId);
+  const incomeAccountType = text(incomeAccountRead!.entity.AccountType, 1, 32);
+  const incomeAccountClassification = text(incomeAccountRead!.entity.Classification, 1, 32);
+  if (
+    !incomeAccount ||
+    !["Income", "Other Income"].includes(incomeAccountType ?? "") ||
+    incomeAccountClassification !== "Revenue"
+  ) return rejected("quickbooks_mapping_provider_fact_mismatch", 409);
+  const taxRates = (taxRateReads as QuickBooksMappingReadSuccess[]).map((read, index) => {
+    const version = mappingEntityVersion(read.entity, taxRateIds[index]!, false);
+    const rateTenThousandths = decimalTenThousandths(read.entity.RateValue);
+    return version && rateTenThousandths !== null
+      ? { ...version, rate_ten_thousandths: rateTenThousandths }
+      : null;
+  });
+  const expectedRate = decimalTenThousandths(taxPolicy.rate_percent);
+  if (
+    taxRates.some((rate) => rate === null) || expectedRate === null ||
+    taxRates.reduce((sum, rate) => sum + rate!.rate_ten_thousandths, 0) !== expectedRate
+  ) return rejected("quickbooks_mapping_tax_rate_mismatch", 409);
+
+  const idempotencyKeySha256 = await scopedHash(input.tenantId, input.idempotencyKey);
+  const sourceSha256 = await sha256Hex(canonicalJson({
+    schema_version: 1,
+    tenant_id: input.tenantId,
+    actor_user_id: input.actorUserId,
+    idempotency_key_sha256: idempotencyKeySha256,
+    connection: { id: realm.connectionId, realm_id: realm.realmId },
+    job: {
+      id: job.roof_job_id,
+      version: Number(job.job_version),
+      customer_id: job.customer_id,
+      customer_version: Number(job.customer_version),
+      customer_identity_sha256: customerIdentitySha256,
+    },
+    provider: {
+      customer,
+      item: {
+        ...item,
+        type: itemType,
+        income_account: {
+          ...incomeAccount,
+          account_type: incomeAccountType,
+          classification: incomeAccountClassification,
+        },
+      },
+      tax_code: { ...taxCode, name: providerTaxName, sales_tax_rate_ids: taxRateIds },
+      tax_rates: taxRates,
+      terms: { ...terms, due_days: dueDays },
+    },
+    tax_policy: {
+      id: taxPolicy.snapshot_id,
+      version: taxPolicy.version,
+      sha256: taxPolicy.snapshot_sha256,
+      jurisdiction: taxPolicy.jurisdiction,
+      tax_code: taxPolicy.tax_code,
+      provider_tax_code_id: taxPolicy.provider_tax_code_id,
+      rate_percent: taxPolicy.rate_percent,
+    },
+    accepted_commercial_terms: {
+      terms_hash: commercialTerms.termsHash,
+      payment_terms_days: commercialTerms.paymentTermsDays,
+      commercial_head_sha256: commercialTerms.commercialHeadSha256,
+    },
+  }));
+  try {
+    return {
+      kind: "updated",
+      value: await recordNativeFinalInvoiceProviderBinding(env, {
+        tenantId: input.tenantId,
+        realmId: realm.realmId,
+        roofJobId: input.roofJobId,
+        qboCustomerId: input.qboCustomerId,
+        qboItemId: input.qboItemId,
+        qboTaxCodeId: input.qboTaxCodeId,
+        qboTermsId: input.qboTermsId,
+        jurisdiction: input.jurisdiction,
+        taxCode: input.taxCode,
+        paymentTermsDays: input.paymentTermsDays,
+        sourceRef: `quickbooks-provider-readback:${idempotencyKeySha256}`,
+        sourceSha256,
+        commercialTermsHash: commercialTerms.termsHash,
+        commercialHeadSha256: commercialTerms.commercialHeadSha256,
+        correctionReason: input.correctionReason,
+      }, now),
+    };
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "quickbooks_store_unavailable";
+    if (code === "native_final_invoice_provider_binding_correction_required" ||
+        code === "native_final_invoice_provider_binding_ambiguous" ||
+        code === "native_final_invoice_provider_binding_idempotency_ambiguous" ||
+        code === "native_final_invoice_provider_binding_idempotency_conflict")
+      return rejected(code, 409);
+    if (code === "native_final_invoice_provider_binding_invalid")
+      return rejected("invalid_quickbooks_mapping_request", 400);
+    if (/FOREIGN KEY constraint failed/u.test(code))
+      return rejected("quickbooks_mapping_job_not_found", 404);
+    return rejected("quickbooks_store_unavailable", 502);
+  }
+}
+
+/** First-invoice and deposit product path: verified QuickBooks reads become native provenance. */
+export const recordNativeInitialProviderMapping =
+  recordVerifiedQuickBooksFinalInvoiceMapping;
+
+type QuickBooksMappingEntity = "Account" | "Customer" | "Item" | "TaxCode" | "TaxRate" | "Term";
+type QuickBooksMappingReadSuccess = { ok: true; entity: Record<string, unknown> };
+type QuickBooksMappingRead = QuickBooksMappingReadSuccess | {
+  ok: false;
+  code: string;
+  status: 409 | 502;
+};
+
+async function readQuickBooksMappingEntity(
+  realm: QuickBooksRealmBinding,
+  entityName: QuickBooksMappingEntity,
+  entityId: string,
+  fetcher: typeof fetch,
+  timeoutMs: number,
+): Promise<QuickBooksMappingRead> {
+  const path = entityName.toLowerCase();
+  const url = `${realm.apiBase.replace(/\/+$/u, "")}/v3/company/${encodeURIComponent(realm.realmId)}`
+    + `/${path}/${encodeURIComponent(entityId)}?minorversion=${encodeURIComponent(realm.minorVersion)}`;
+  let response: Response;
+  try {
+    response = await timedFetch(fetcher, url, {
+      method: "GET",
+      headers: { accept: "application/json", authorization: `Bearer ${realm.accessToken}` },
+    }, timeoutMs);
+  } catch {
+    return { ok: false, code: "quickbooks_mapping_provider_unavailable", status: 502 };
+  }
+  if (response.status === 404)
+    return { ok: false, code: "quickbooks_mapping_provider_entity_not_found", status: 409 };
+  if (!response.ok)
+    return { ok: false, code: "quickbooks_mapping_provider_unavailable", status: 502 };
+  try {
+    const body = record(await boundedJson(response));
+    const entity = record(body?.[entityName]);
+    return entity
+      ? { ok: true, entity }
+      : { ok: false, code: "quickbooks_mapping_provider_unreadable", status: 502 };
+  } catch {
+    return { ok: false, code: "quickbooks_mapping_provider_unreadable", status: 502 };
+  }
+}
+
+function mappingEntityVersion(
+  entity: Record<string, unknown>,
+  expectedId: string,
+  activeRequired = true,
+): { id: string; active: true | null; sync_token: string; last_updated_at: string } | null {
+  const id = string(entity.Id);
+  const syncToken = text(entity.SyncToken, 1, 64);
+  const lastUpdatedAt = text(record(entity.MetaData)?.LastUpdatedTime, 20, 40);
+  const active = entity.Active === true ? true : entity.Active === undefined ? null : false;
+  if (
+    id !== expectedId || (activeRequired ? active !== true : active === false) ||
+    !syncToken || !lastUpdatedAt
+  ) return null;
+  return {
+    id,
+    active: active === true ? true : null,
+    sync_token: syncToken,
+    last_updated_at: lastUpdatedAt,
+  };
+}
+
+async function matchedCustomerIdentitySha256(
+  tenantId: string,
+  job: { customer_id: string; contact_email: string | null; contact_phone: string | null },
+  providerCustomer: Record<string, unknown>,
+): Promise<string | null> {
+  const localEmail = normalizeEmail(job.contact_email);
+  const providerEmail = normalizeEmail(record(providerCustomer.PrimaryEmailAddr)?.Address);
+  const localPhone = normalizePhone(job.contact_phone);
+  const providerPhones = ["PrimaryPhone", "Mobile", "AlternatePhone"]
+    .map((key) => normalizePhone(record(providerCustomer[key])?.FreeFormNumber))
+    .filter((value): value is string => value !== null);
+  const matched = localEmail && providerEmail === localEmail
+    ? `email:${localEmail}`
+    : localPhone && providerPhones.includes(localPhone)
+      ? `phone:${localPhone}`
+      : null;
+  return matched ? await sha256Hex(`${tenantId}\n${job.customer_id}\n${matched}`) : null;
+}
+
+function salesTaxRateIds(taxCode: Record<string, unknown>): string[] {
+  const details = record(taxCode.SalesTaxRateList)?.TaxRateDetail;
+  if (!Array.isArray(details) || details.length > 10) return [];
+  const ids = details.map((detail) => refValue(record(detail)?.TaxRateRef));
+  if (ids.some((id) => id === null)) return [];
+  const unique = [...new Set(ids as string[])];
+  return unique.length === ids.length ? unique.sort() : [];
+}
+
+function decimalTenThousandths(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const match = /^(0|[1-9][0-9]{0,2})(?:\.([0-9]{1,4}))?$/u.exec(String(value));
+  if (!match) return null;
+  const result = Number(match[1]) * 10_000 + Number((match[2] ?? "").padEnd(4, "0"));
+  return Number.isSafeInteger(result) && result <= 1_000_000 ? result : null;
+}
+
+function integer(value: unknown, min: number, max: number): number | null {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= min && number <= max ? number : null;
+}
+
+/**
  * The Intuit origin this Worker would call, or null when QuickBooks is unconfigured.
  *
  * Exported so the loopback-double gate is directly testable rather than only observable through a
@@ -445,7 +801,7 @@ export function quickBooksAuthPort(
  * matter what `QB_API_BASE_LOCAL_OVERRIDE` says.
  */
 export function quickBooksProviderApiBase(env: AppEnv): string | null {
-  const config = configuration(env, false);
+  const config = configuration(env);
   return config ? providerBase(config) : null;
 }
 
@@ -480,7 +836,7 @@ export async function requestQuickBooksConnect(
   expires_at: string;
 }>> {
   if (!quickBooksOAuthEnabled(env)) return rejected("quickbooks_oauth_disabled", 503);
-  const config = configuration(env, false);
+  const config = configuration(env);
   if (!config) return rejected("quickbooks_oauth_not_configured", 503);
   if (input.tenantId !== config.tenantId || input.returnPath !== QUICKBOOKS_RETURN_PATH)
     return rejected("invalid_quickbooks_connect_request", 400);
@@ -555,7 +911,7 @@ export async function handleQuickBooksOAuthCallback(
   fetcher: typeof fetch = fetch,
   now = new Date(),
 ): Promise<Response> {
-  const config = quickBooksOAuthEnabled(env) ? configuration(env, false) : null;
+  const config = quickBooksOAuthEnabled(env) ? configuration(env) : null;
   const fallbackOrigin = configuredPublicOrigin(env);
   if (!config || !fallbackOrigin) return fixedOAuthRedirect(fallbackOrigin, "error");
   const url = new URL(req.url);
@@ -768,29 +1124,20 @@ export async function discoverQuickBooksFinalInvoiceCandidates(
   input: { roofJobId?: string; limit?: number; fetcher?: typeof fetch; now?: Date } = {},
 ): Promise<{ discovered: number; replayed: number; blocked: number }> {
   if (!quickBooksFinalInvoiceEnabled(env)) return { discovered: 0, replayed: 0, blocked: 0 };
-  const config = configuration(env, true);
+  const config = configuration(env);
   if (!config) throw new Error("quickbooks_final_invoice_not_configured");
   if (input.roofJobId !== undefined && !SAFE_ID.test(input.roofJobId))
     throw new Error("quickbooks_candidate_request_invalid");
   const connection = await activeConnection(env, config.tenantId);
   if (!connection) return { discovered: 0, replayed: 0, blocked: 0 };
   const limit = boundedLimit(input.limit ?? 50, 100);
-  const response = await frappeCall(config, "list_candidates", {
-    request_json: JSON.stringify({
-      ...(input.roofJobId ? { roof_job_id: input.roofJobId } : {}),
-      limit,
-      realm_id: connection.realm_id,
-    }),
-  }, input.fetcher ?? fetch);
-  const listing = candidateListing(response);
-  if (!listing) throw new Error("quickbooks_candidates_invalid_response");
-  const candidates = listing.candidates.slice(0, limit).map(validateCandidate);
-  if (candidates.some((candidate) => !candidate) ||
-      candidates.some((candidate) => candidate!.qbo.realm_id !== connection.realm_id)) {
-    // A malformed or cross-realm item makes the whole successful response unusable. Do not
-    // partially persist it or resolve durable holds from a listing that was not fully trusted.
-    throw new Error("quickbooks_candidate_invalid");
-  }
+  const listing = await listNativeFinalInvoiceCandidates(env, {
+    tenantId: config.tenantId,
+    realmId: connection.realm_id,
+    ...(input.roofJobId ? { roofJobId: input.roofJobId } : {}),
+    limit,
+  });
+  const candidates = listing.candidates;
   let discovered = 0;
   let replayed = 0;
   let blocked = listing.blockers.length;
@@ -829,7 +1176,7 @@ export async function discoverQuickBooksFinalInvoiceCandidates(
     codes.add(blocker.code);
     seenByJob.set(blocker.roof_job_id, codes);
   }
-  for (const candidate of candidates as QuickBooksCandidate[]) {
+  for (const candidate of candidates) {
     if (!seenByJob.has(candidate.roof_job_id)) seenByJob.set(candidate.roof_job_id, new Set());
     const outcome = await persistCandidate(env, config, candidate, now);
     if (outcome === "created") discovered += 1;
@@ -888,10 +1235,10 @@ export async function approveQuickBooksFinalInvoice(
   const connection = await activeConnection(env, input.tenantId);
   if (!connection || connection.realm_id !== row.realm_id)
     return rejected("quickbooks_connection_required", 409);
-  const config = configuration(env, true);
+  const config = configuration(env);
   if (!config) return rejected("quickbooks_final_invoice_not_configured", 503);
-  const freshness = await checkCandidateFreshness(
-    config, row, connection.realm_id, input.fetcher ?? fetch,
+  const freshness = await checkNativeFinalInvoiceFreshness(
+    env, nativeBinding(row),
   ).catch(() => "unavailable" as const);
   const nowDate = input.now ?? new Date();
   if (freshness === "unavailable")
@@ -904,6 +1251,26 @@ export async function approveQuickBooksFinalInvoice(
   if (!recheckedConnection || recheckedConnection.connection_id !== connection.connection_id ||
       recheckedConnection.realm_id !== row.realm_id)
     return rejected("quickbooks_connection_required", 409);
+  try {
+    await approveNativeFinalInvoice(env, {
+      ...nativeBinding(row),
+      actorUserId: input.actorUserId,
+      idempotencyKey: input.idempotencyKey,
+      now: nowDate,
+    });
+  } catch (error) {
+    if (error instanceof NativeFinalInvoiceError) {
+      if (error.code === "native_final_invoice_basis_changed") {
+        await blockChangedCandidate(env, row, nowDate);
+        return rejected("quickbooks_candidate_changed", 409);
+      }
+      const conflict = error.code.includes("version") ||
+        error.code.includes("separation_of_duty") ||
+        error.code.includes("not_submission_pending");
+      return rejected(error.code, conflict ? 409 : 503);
+    }
+    return rejected("native_final_invoice_approval_failed", 503);
+  }
   const now = nowDate.toISOString();
   try {
     const updated = await env.DB.prepare(
@@ -952,13 +1319,51 @@ export async function rejectQuickBooksFinalInvoice(
   const row = await getQuickBooksFinalInvoice(env, input.tenantId, input.intentId);
   if (!row) return rejected("quickbooks_final_invoice_not_found", 404);
   if (row.rejection_idempotency_sha256 === keyHash) {
-    return row.rejection_fingerprint_sha256 === fingerprint
-      ? { kind: "replayed", value: row }
-      : rejected("quickbooks_idempotency_conflict", 409);
+    if (row.rejection_fingerprint_sha256 !== fingerprint)
+      return rejected("quickbooks_idempotency_conflict", 409);
+    try {
+      await rejectNativeFinalInvoice(env, {
+        ...nativeBinding(row),
+        actorUserId: input.actorUserId,
+        idempotencyKey: input.idempotencyKey,
+        reasonCode: input.reasonCode,
+        now: input.now ?? new Date(),
+      });
+    } catch (error) {
+      return rejected(
+        error instanceof NativeFinalInvoiceError
+          ? error.code
+          : "native_final_invoice_rejection_failed",
+        503,
+      );
+    }
+    return { kind: "replayed", value: row };
   }
   if (row.version !== input.expectedVersion) return rejected("quickbooks_final_invoice_version_conflict", 409);
   if (row.state !== "pending_review") return rejected("quickbooks_final_invoice_not_reviewable", 409);
-  const now = (input.now ?? new Date()).toISOString();
+  const nowDate = input.now ?? new Date();
+  try {
+    await rejectNativeFinalInvoice(env, {
+      ...nativeBinding(row),
+      actorUserId: input.actorUserId,
+      idempotencyKey: input.idempotencyKey,
+      reasonCode: input.reasonCode,
+      now: nowDate,
+    });
+  } catch (error) {
+    if (error instanceof NativeFinalInvoiceError) {
+      if (error.code === "native_final_invoice_basis_changed") {
+        await blockChangedCandidate(env, row, nowDate);
+        return rejected("quickbooks_candidate_changed", 409);
+      }
+      const conflict = error.code.includes("version") ||
+        error.code.includes("not_rejected") ||
+        error.code.includes("rejection_conflict");
+      return rejected(error.code, conflict ? 409 : 503);
+    }
+    return rejected("native_final_invoice_rejection_failed", 503);
+  }
+  const now = nowDate.toISOString();
   try {
     const updated = await env.DB.prepare(
       `UPDATE quickbooks_final_invoice_intents
@@ -1292,7 +1697,7 @@ async function persistCandidate(
     ? "realm_mismatch"
     : connection ? null : "oauth_connection_required";
   const blockerNextStep: QuickBooksNextStep | null = realmMismatch
-    ? "fix_frappe_mapping"
+    ? "fix_native_mapping"
     : connection ? null : "connect_quickbooks";
   const payload = providerPayload(candidate);
   const payloadJson = canonicalJson(payload);
@@ -1360,7 +1765,7 @@ async function processEffect(
   now: Date,
 ): Promise<boolean> {
   let row = await getQuickBooksFinalInvoice(env, effect.tenant_id, effect.intent_id);
-  const config = configuration(env, true);
+  const config = configuration(env);
   if (!row || !config) {
     const claimed = await claimEffect(env, effect, now);
     if (!claimed) return false;
@@ -1380,7 +1785,7 @@ async function processEffect(
     }
     let freshness: "exact" | "changed" | "unavailable";
     try {
-      freshness = await checkCandidateFreshness(config, row, connection.realm_id, fetcher);
+      freshness = await checkNativeFinalInvoiceFreshness(env, nativeBinding(row));
     } catch {
       freshness = "unavailable";
     }
@@ -1408,8 +1813,8 @@ async function processEffect(
   }
   if (effect.operation === "submit") await submitInvoice(env, config, row, effect, fetcher, now);
   else if (effect.operation === "readback") await readbackInvoice(env, config, row, effect, fetcher, now);
-  else if (effect.operation === "bind") await bindInvoice(env, config, row, effect, fetcher, now);
-  else await resolveInvoice(env, config, row, effect, fetcher, now);
+  else if (effect.operation === "bind") await bindInvoice(env, row, effect, now);
+  else await resolveInvoice(env, row, effect, now);
   return true;
 }
 
@@ -1431,7 +1836,7 @@ async function deferUnclaimedEffect(
   const nextAttemptAt = new Date(now.getTime() + SAFE_RETRY_DELAY_MS).toISOString();
   const result = await env.DB.prepare(
     `UPDATE quickbooks_final_invoice_outbox
-        SET next_attempt_at = ?, response_class = 'frappe_rejected', detail_code = ?, updated_at = ?
+        SET next_attempt_at = ?, response_class = 'network_unknown', detail_code = ?, updated_at = ?
       WHERE effect_id = ? AND state = 'pending' AND attempt_count = ?`,
   ).bind(nextAttemptAt, detailCode, now.toISOString(), effect.effect_id, effect.attempt_count).run();
   if (changes(result) !== 1) throw new Error("quickbooks_effect_defer_conflict");
@@ -1527,7 +1932,7 @@ async function submitInvoice(
     }
     const observationHash = await sha256Hex(invoice.hashSource);
   await completeSubmitEffect(env, row, effect, invoice.Id, observationHash,
-    universal.responseStatus ?? 200, universal.tid, now);
+    universal.responseStatus ?? 200, universal.tid, universal.moneyOutcome, now);
 }
 
 interface QuickBooksSubmitValue {
@@ -1544,6 +1949,7 @@ interface QuickBooksUniversalSubmitResult {
   detailCode: string | null;
   tid: string | null;
   value?: QuickBooksSubmitValue;
+  moneyOutcome: MoneyEffectOutcome<QuickBooksSubmitValue>;
 }
 
 async function submitInvoiceThroughRuntime(
@@ -1688,13 +2094,25 @@ async function submitInvoiceThroughRuntime(
     },
   }, now);
   const value = result.value as QuickBooksSubmitValue | undefined;
+  const moneyOutcome: MoneyEffectOutcome<QuickBooksSubmitValue> = {
+    effectId: result.effect.effect_id,
+    state: result.effect.state,
+    attemptId: result.attempt?.attempt_id ?? null,
+    attemptState: result.attempt?.state ?? null,
+    providerExternalId: result.effect.provider_external_id,
+    requestHash: result.effect.request_hash,
+    providerResponseHash: result.effect.provider_response_hash,
+    readbackHash: result.effect.readback_hash,
+    resultCode: result.effect.result_code,
+    value,
+  };
   if (result.effect.state === "succeeded") {
-    return { state: "succeeded", responseClass: "accepted", responseStatus: value?.responseStatus ?? 200, detailCode: null, tid: value?.tid ?? null, value };
+    return { state: "succeeded", responseClass: "accepted", responseStatus: value?.responseStatus ?? 200, detailCode: null, tid: value?.tid ?? null, value, moneyOutcome };
   }
   if (result.effect.state === "failed") {
-    return { state: "failed", responseClass: "http_rejected", responseStatus: value?.responseStatus ?? null, detailCode: result.effect.result_code, tid: value?.tid ?? null, value };
+    return { state: "failed", responseClass: "http_rejected", responseStatus: value?.responseStatus ?? null, detailCode: result.effect.result_code, tid: value?.tid ?? null, value, moneyOutcome };
   }
-  return { state: "unknown", responseClass: "network_unknown", responseStatus: value?.responseStatus ?? null, detailCode: result.effect.result_code, tid: value?.tid ?? null, value };
+  return { state: "unknown", responseClass: "network_unknown", responseStatus: value?.responseStatus ?? null, detailCode: result.effect.result_code, tid: value?.tid ?? null, value, moneyOutcome };
 }
 
 async function retryOrFinishSubmit(
@@ -1721,8 +2139,14 @@ async function completeSubmitEffect(
   observationHash: string,
   responseStatus: number,
   tid: string | null,
+  moneyOutcome: MoneyEffectOutcome<QuickBooksSubmitValue>,
   now: Date,
 ): Promise<void> {
+  await recordNativeFinalInvoiceSubmission(env, {
+    ...nativeBinding(row),
+    outcome: moneyOutcome,
+    now,
+  });
   const bind = await systemEffectValues(row, "bind", `bind:${providerInvoiceId}`, now);
   let results: unknown[] = [];
   try { results = await env.DB.batch([
@@ -1766,10 +2190,8 @@ async function completeSubmitEffect(
 
 async function bindInvoice(
   env: AppEnv,
-  config: Config,
   row: FinalInvoiceRow,
   effect: OutboxRow,
-  fetcher: typeof fetch,
   now: Date,
 ): Promise<void> {
   if (!row.provider_invoice_id || !row.provider_submitted_at) {
@@ -1777,29 +2199,23 @@ async function bindInvoice(
     return;
   }
   try {
-    const response = await frappeMutationCall(env, config, "bind_provider_invoice", {
-      binding_json: JSON.stringify(bindingPayload(row)),
-    }, fetcher, now);
-    const message = unwrapMessage(response);
-    if (!validBindResponse(message, row)) throw new Error("quickbooks_bind_invalid_response");
+    const native = await assertNativeFinalInvoiceBinding(env, nativeBinding(row));
+    if (native.effect_id === null || native.provider_entity_id !== row.provider_invoice_id ||
+        !["submitted", "partially_settled", "reconciled", "mismatch", "reconciliation_required"]
+          .includes(native.state))
+      throw new NativeFinalInvoiceError("native_final_invoice_provider_binding_failed");
     await completeEffectWithSuccessor(
-      env, row, effect, "frappe_accepted", 200, now,
+      env, row, effect, "accepted", 200, now,
       "readback", `readback:${row.provider_invoice_id}`,
     );
   } catch (error) {
-    if (error instanceof EffectRuntimeError && error.code === "effect_unknown_requires_reconciliation") {
-      await finishEffect(env, effect, "unknown", "network_error", null, "quickbooks_frappe_bind_unknown", now);
-      await transitionIntent(env, row, "reconciliation_required", "quickbooks_frappe_bind_unknown", now,
-        "frappe_bind_pending", "retry_frappe_projection");
-      return;
-    }
-    const retrying = await retrySafeEffect(env, effect, "frappe_rejected", null,
-      "quickbooks_frappe_bind_pending", now);
-    await transitionIntent(env, row, "reconciliation_required", "quickbooks_frappe_bind_pending", now,
-      "frappe_bind_pending", "retry_frappe_projection");
+    const detail = error instanceof NativeFinalInvoiceError
+      ? error.code : "native_final_invoice_binding_failed";
+    const retrying = await retrySafeEffect(env, effect, "invalid_response", null, detail, now);
+    await transitionIntent(env, row, "reconciliation_required", detail, now,
+      "native_final_invoice_binding_pending", "reconcile_native_invoice");
     if (!retrying)
-      await finishEffect(env, effect, "failed", "frappe_rejected", null,
-        "quickbooks_frappe_bind_pending", now);
+      await finishEffect(env, effect, "failed", "invalid_response", null, detail, now);
   }
 }
 
@@ -1876,6 +2292,28 @@ async function readbackInvoice(
       "provider_readback_drift", "reconcile_provider_invoice");
     return;
   }
+  const providerInvoice = record(body)?.Invoice;
+  try {
+    await reconcileNativeFinalInvoiceReadback(env, {
+      ...nativeBinding(row),
+      providerInvoiceId: row.provider_invoice_id,
+      providerInvoice,
+      effectAttemptId: null,
+      now,
+    });
+  } catch (error) {
+    const detail = error instanceof NativeFinalInvoiceError
+      ? error.code : "native_final_invoice_reconciliation_failed";
+    const retrying = await retrySafeEffect(
+      env, effect, "invalid_response", response.status, detail, now, tid,
+    );
+    await transitionIntent(env, row, "reconciliation_required", detail, now,
+      "native_final_invoice_reconciliation_pending", "reconcile_native_invoice");
+    if (!retrying)
+      await finishEffect(env, effect, "failed", "invalid_response", response.status,
+        detail, now, tid);
+    return;
+  }
   const factsJson = canonicalJson(normalized.resolve);
   const factsHash = await sha256Hex(factsJson);
   const readbackHash = await sha256Hex(normalized.invoiceHashSource);
@@ -1887,10 +2325,8 @@ async function readbackInvoice(
 
 async function resolveInvoice(
   env: AppEnv,
-  config: Config,
   row: FinalInvoiceRow,
   effect: OutboxRow,
-  fetcher: typeof fetch,
   now: Date,
 ): Promise<void> {
   const observation = await env.DB.prepare(
@@ -1907,19 +2343,17 @@ async function resolveInvoice(
       "quickbooks_resolve_observation_missing", now);
     await transitionIntent(env, row, "reconciliation_required",
       "quickbooks_resolve_observation_missing", now,
-      "frappe_resolver_pending", "retry_frappe_projection");
+      "native_final_invoice_reconciliation_pending", "reconcile_native_invoice");
     return;
   }
-  await resolvePersistedObservation(env, config, row, effect, observation, fetcher, now);
+  await resolvePersistedObservation(env, row, effect, observation, now);
 }
 
 async function resolvePersistedObservation(
   env: AppEnv,
-  config: Config,
   row: FinalInvoiceRow,
   effect: OutboxRow,
   observation: ReadbackObservationRow,
-  fetcher: typeof fetch,
   now: Date,
 ): Promise<void> {
   const facts = record(JSON.parse(observation.facts_json) as unknown);
@@ -1930,56 +2364,26 @@ async function resolvePersistedObservation(
       "quickbooks_resolve_observation_invalid", now);
     return;
   }
-  const readback = {
-    ...bindingPayload(row),
-    provider_readback_sha256: observation.provider_readback_sha256,
-    provider_facts_sha256: observation.provider_facts_sha256,
-    provider_read_at: observation.checked_at,
-    ...facts,
-  };
-  let message: unknown;
-  try {
-    message = unwrapMessage(await frappeMutationCall(env, config, "resolve_provider_invoice_readback", {
-      readback_json: JSON.stringify(readback),
-    }, fetcher, now));
-  } catch (error) {
-    if (error instanceof EffectRuntimeError && error.code === "effect_unknown_requires_reconciliation") {
-      await finishEffect(env, effect, "unknown", "network_error", null, "quickbooks_resolver_unknown", now);
-      await transitionIntent(env, row, "reconciliation_required", "quickbooks_resolver_unknown", now,
-        "frappe_resolver_pending", "retry_frappe_projection");
-      return;
-    }
-    const retrying = await retrySafeEffect(env, effect, "frappe_rejected", null,
-      "quickbooks_resolver_pending", now);
-    await transitionIntent(env, row, "reconciliation_required", "quickbooks_resolver_pending", now,
-      "frappe_resolver_pending", "retry_frappe_projection");
-    if (!retrying)
-      await finishEffect(env, effect, "failed", "frappe_rejected", null,
-        "quickbooks_resolver_pending", now);
-    return;
-  }
-  if (!validResolverResponse(message)) {
-    const retrying = await retrySafeEffect(env, effect, "invalid_response", 200,
-      "quickbooks_resolver_invalid_response", now);
-    await transitionIntent(env, row, "reconciliation_required",
-      "quickbooks_resolver_invalid_response", now,
-      "frappe_resolver_pending", "retry_frappe_projection");
-    if (!retrying)
-      await finishEffect(env, effect, "failed", "invalid_response", 200,
-        "quickbooks_resolver_invalid_response", now);
-    return;
-  }
-  if (message.outcome !== "Matched") {
-    const detail = message.outcome === "Mismatch"
-      ? "quickbooks_resolver_mismatch" : "quickbooks_resolver_pending";
-    const retrying = message.outcome === "Pending" &&
-      await retrySafeEffect(env, effect, "frappe_rejected", 200, detail, now);
+  const resolution = row.provider_invoice_id
+    ? await nativeFinalInvoiceResolution(env, {
+      tenantId: row.tenant_id,
+      intentId: row.intent_id,
+      providerInvoiceId: row.provider_invoice_id,
+    })
+    : "mismatch";
+  if (resolution !== "matched") {
+    const pending = resolution === "pending";
+    const detail = pending
+      ? "native_final_invoice_reconciliation_pending"
+      : "native_final_invoice_reconciliation_mismatch";
+    const retrying = pending &&
+      await retrySafeEffect(env, effect, "invalid_response", 200, detail, now);
     await transitionIntent(env, row, "reconciliation_required",
       detail, now,
-      message.outcome === "Mismatch" ? "provider_readback_drift" : "frappe_resolver_pending",
-      message.outcome === "Mismatch" ? "reconcile_provider_invoice" : "retry_frappe_projection");
+      pending ? "native_final_invoice_reconciliation_pending" : "provider_readback_drift",
+      pending ? "reconcile_native_invoice" : "reconcile_provider_invoice");
     if (!retrying)
-      await finishEffect(env, effect, "failed", "frappe_rejected", 200, detail, now);
+      await finishEffect(env, effect, "failed", "invalid_response", 200, detail, now);
     return;
   }
   await completeResolveEffect(env, row, effect, now);
@@ -2003,7 +2407,7 @@ async function completeResolveEffect(
       row.provider_invoice_id, row.version),
     env.DB.prepare(
       `UPDATE quickbooks_final_invoice_outbox
-          SET state = 'succeeded', response_class = 'frappe_accepted', response_status = 200,
+          SET state = 'succeeded', response_class = 'exact_match', response_status = 200,
               detail_code = NULL, updated_at = ?
         WHERE effect_id = ? AND state = 'attempting' AND attempt_count = ?`,
     ).bind(now.toISOString(), effect.effect_id, effect.attempt_count + 1),
@@ -2012,7 +2416,7 @@ async function completeResolveEffect(
          effect_id, tenant_id, intent_id, operation, attempt_number, phase,
          request_fingerprint_sha256, provider_request_id, provider_payload_sha256,
          response_class, response_status, occurred_at
-       ) VALUES (?, ?, ?, 'resolve', ?, 'finished', ?, ?, ?, 'frappe_accepted', 200, ?)`,
+       ) VALUES (?, ?, ?, 'resolve', ?, 'finished', ?, ?, ?, 'exact_match', 200, ?)`,
     ).bind(effect.effect_id, effect.tenant_id, effect.intent_id, effect.attempt_count + 1,
       effect.request_fingerprint_sha256, effect.provider_request_id,
       effect.provider_payload_sha256, now.toISOString()),
@@ -2170,7 +2574,7 @@ async function completeEffectWithSuccessor(
   env: AppEnv,
   row: FinalInvoiceRow,
   effect: OutboxRow,
-  responseClass: "frappe_accepted",
+  responseClass: "accepted",
   responseStatus: number,
   now: Date,
   successorOperation: OutboxRow["operation"],
@@ -2283,24 +2687,16 @@ async function enqueueSystemEffect(
     throw new Error("quickbooks_effect_idempotency_conflict");
 }
 
-function bindingPayload(row: FinalInvoiceRow): Record<string, unknown> {
+function nativeBinding(row: FinalInvoiceRow) {
   return {
-    intent_id: row.intent_id,
-    basis_sha256: row.basis_sha256,
-    completion_packet_id: row.completion_packet_id,
-    completion_version: String(row.completion_version),
-    completion_sha256: row.completion_sha256,
-    customer_quote_id: row.customer_quote_id,
-    quote_version: row.quote_version,
-    quote_sha256: row.quote_sha256,
-    changes_sha256: row.changes_sha256,
-    roof_job_id: row.roof_job_id,
-    shop_order_id: row.shop_order_id,
-    realm_id: row.realm_id,
-    provider_invoice_id: row.provider_invoice_id,
-    provider_request_sha256: row.provider_payload_sha256,
-    provider_create_response_sha256: row.provider_invoice_sha256,
-    provider_created_at: row.provider_submitted_at,
+    tenantId: row.tenant_id,
+    intentId: row.intent_id,
+    roofJobId: row.roof_job_id,
+    realmId: row.realm_id,
+    basisSha256: row.basis_sha256,
+    providerPayloadSha256: row.provider_payload_sha256,
+    providerRequestId: row.provider_request_id,
+    candidateFingerprintSha256: row.candidate_fingerprint_sha256,
   };
 }
 
@@ -2690,7 +3086,7 @@ async function decryptBundle(config: Config, row: ConnectionRow): Promise<TokenB
   return { access, refresh };
 }
 
-function configuration(env: AppEnv, requireFrappe: boolean): Config | null {
+function configuration(env: AppEnv): Config | null {
   const q = env as QuickBooksEnv;
   const tenantId = text(q.APP_TENANT_ID, 2, 64);
   const publicOrigin = configuredPublicOrigin(env);
@@ -2702,19 +3098,14 @@ function configuration(env: AppEnv, requireFrappe: boolean): Config | null {
   const encryptionKey = decodeKey(q.QB_TOKEN_ENCRYPTION_KEY);
   const encryptionKeyVersion = text(q.QB_TOKEN_ENCRYPTION_KEY_VERSION, 1, 32);
   const expectedRealmId = q.QB_EXPECTED_REALM_ID?.trim() || null;
-  const frappeBaseUrl = httpsBase(q.ERPNEXT_BASE_URL);
-  const frappeApiKey = secretText(q.QB_FINAL_INVOICE_FRAPPE_API_KEY, 1, 256);
-  const frappeApiSecret = secretText(q.QB_FINAL_INVOICE_FRAPPE_API_SECRET, 1, 512);
   if (!tenantId || !publicOrigin || !environment || !Number.isInteger(minorVersion) || minorVersion < 75 ||
       minorVersion > 999 || !clientId || !clientSecret || !encryptionKey || !encryptionKeyVersion ||
-      (expectedRealmId !== null && !QBO_ID.test(expectedRealmId)) ||
-      (requireFrappe && (!frappeBaseUrl || !frappeApiKey || !frappeApiSecret))) return null;
+      (expectedRealmId !== null && !QBO_ID.test(expectedRealmId))) return null;
   const timeoutMs = boundedNumber(q.QB_API_TIMEOUT_MS, 10_000, 1_000, 20_000);
   return {
     tenantId, publicOrigin, redirectUri: `${publicOrigin}${QUICKBOOKS_CALLBACK_PATH}`,
     environment, minorVersion, clientId, clientSecret, encryptionKey,
-    encryptionKeyVersion, expectedRealmId, frappeBaseUrl: frappeBaseUrl ?? "",
-    frappeApiKey: frappeApiKey ?? "", frappeApiSecret: frappeApiSecret ?? "", timeoutMs,
+    encryptionKeyVersion, expectedRealmId, timeoutMs,
     apiBaseOverride: loopbackApiBase(q),
   };
 }
@@ -2744,11 +3135,11 @@ function loopbackApiBase(env: QuickBooksEnv): string | null {
 }
 
 function oauthConfigurationReady(env: AppEnv): boolean {
-  return quickBooksOAuthEnabled(env) && configuration(env, false) !== null;
+  return quickBooksOAuthEnabled(env) && configuration(env) !== null;
 }
 
 function invoiceConfigurationReady(env: AppEnv): boolean {
-  return quickBooksFinalInvoiceEnabled(env) && configuration(env, true) !== null;
+  return quickBooksFinalInvoiceEnabled(env) && configuration(env) !== null;
 }
 
 function configuredPublicOrigin(env: AppEnv): string | null {
@@ -2763,377 +3154,14 @@ function configuredPublicOrigin(env: AppEnv): string | null {
   } catch { return null; }
 }
 
-async function frappeMutationCall(
-  env: AppEnv,
-  config: Config,
-  method: string,
-  body: Record<string, unknown>,
-  fetcher: typeof fetch,
-  now: Date,
-): Promise<unknown> {
-  assertEffectLedgerReady(env);
-  const tenantId = env.APP_TENANT_ID ?? "ironwrap";
-  const request = { method, body };
-  const requestHash = await sha256Hex(canonicalEffectJson(request));
-  const idempotencyKey = `quickbooks:frappe:${method}:${requestHash}`;
-  const deadlineAt = new Date(now.getTime() + 5 * 60_000).toISOString();
-  const expectedReadback = {
-    material_sha256: await sha256Hex(canonicalEffectJson(quickBooksProjectionExpected(body))),
-  };
-  const result = await runExternalEffect(env, {
-    tenantId,
-    actor: { type: "agent", id: "quickbooks-frappe-adapter" },
-    taskId: `quickbooks:frappe:${method}`,
-    authority: {
-      permitRef: `quickbooks:projection:${method}`,
-      policyRef: `quickbooks.frappe.${method}`,
-      policyVersion: "v1",
-      tenantId,
-      actorType: "agent",
-      actorId: "quickbooks-frappe-adapter",
-      expiresAt: deadlineAt,
-      allowedActions: [`quickbooks.frappe.${method}`],
-      maxAttempts: 1,
-    },
-    aggregate: { type: "quickbooks_frappe_projection", id: requestHash.slice(0, 32), version: 0 },
-    intentId: idempotencyKey,
-    action: `quickbooks.frappe.${method}`,
-    request,
-    requestHash,
-    provider: "frappe",
-    idempotencyKey,
-    deadlineAt,
-    expectedReadback,
-    retryLimit: 0,
-    compensationPlan: {},
-    correlationId: idempotencyKey,
-  }, {
-    async dispatch() {
-      const value = await frappeCall(config, method, body, fetcher);
-      const message = record(unwrapMessage(value));
-      const providerExternalId = typeof message?.reconciliation_id === "string"
-        ? message.reconciliation_id
-        : typeof message?.payment_milestone_id === "string"
-          ? message.payment_milestone_id
-          : null;
-      return { outcome: "accepted" as const, value, providerExternalId, providerResponse: value };
-    },
-    async readback({ providerExternalId }) {
-      return await frappeProjectionReadback(config, method, body, providerExternalId, fetcher);
-    },
-    async replay({ effect }) {
-      const readback = await frappeProjectionReadback(config, method, body, effect.provider_external_id, fetcher);
-      if (readback.status !== "match" || !readback.observed || typeof readback.observed !== "object") {
-        throw new Error(readback.detailCode ?? "quickbooks_frappe_replay_failed");
-      }
-      const observed = readback.observed as Record<string, unknown>;
-      const expected = quickBooksProjectionExpected(body);
-      const reconciliationId = effect.provider_external_id;
-      const paymentMilestoneId = typeof observed.payment_milestone_id === "string"
-        ? observed.payment_milestone_id
-        : null;
-      if (!reconciliationId || !paymentMilestoneId) throw new Error("quickbooks_frappe_replay_shape_invalid");
-      if (method === "bind_provider_invoice") {
-        return {
-          message: {
-            ok: true,
-            idempotent_replay: true,
-            roof_job_id: expected.roof_job_id,
-            shop_order_id: expected.shop_order_id,
-            provider_invoice_id: expected.provider_invoice_id,
-            payment_milestone_id: paymentMilestoneId,
-            reconciliation_id: reconciliationId,
-            basis_sha256: expected.basis_sha256,
-          },
-        };
-      }
-      const outcome = typeof observed.outcome === "string" ? observed.outcome : null;
-      if (!outcome || !["Matched", "Mismatch", "Pending"].includes(outcome)) {
-        throw new Error("quickbooks_frappe_replay_outcome_invalid");
-      }
-      const reasonCode = typeof observed.reason_code === "string" ? observed.reason_code : null;
-      return {
-        message: {
-          ok: true,
-          idempotent_replay: true,
-          outcome,
-          payment_milestone_id: paymentMilestoneId,
-          reconciliation_id: reconciliationId,
-          reason_code: reasonCode,
-          owner: outcome === "Matched" ? null : "IronWrap Finance",
-          next_step: outcome === "Matched" ? null : "reconcile_provider_invoice",
-        },
-      };
-    },
-  }, now);
-  if (result.effect.state === "succeeded" && result.value !== undefined) return result.value;
-  if (result.effect.state === "unknown") throw new EffectRuntimeError("effect_unknown_requires_reconciliation");
-  throw new Error(result.effect.result_code ?? "quickbooks_frappe_projection_failed");
-}
-
-async function frappeProjectionReadback(
-  config: Config,
-  method: string,
-  body: Record<string, unknown>,
-  providerExternalId: string | null,
-  fetcher: typeof fetch,
-): Promise<{ status: "match" | "conflict" | "unavailable" | "not_found"; providerExternalId?: string; observed?: unknown; detailCode?: string }> {
-  if (!providerExternalId) return { status: "unavailable", detailCode: "quickbooks_frappe_readback_id_missing" };
-  try {
-    const response = await timedFetch(fetcher,
-      `${config.frappeBaseUrl}/api/resource/Integration%20Reconciliation/${encodeURIComponent(providerExternalId)}`,
-      { method: "GET", redirect: "manual", headers: {
-        Accept: "application/json", Authorization: `token ${config.frappeApiKey}:${config.frappeApiSecret}`,
-      } }, config.timeoutMs);
-    if (response.status === 404) return { status: "not_found", detailCode: "quickbooks_frappe_readback_not_found" };
-    if (!response.ok) return { status: "unavailable", detailCode: `quickbooks_frappe_readback_${response.status}` };
-    const payload = record(record(await boundedJson(response))?.data);
-    if (!payload) return { status: "conflict", observed: {}, detailCode: "quickbooks_frappe_readback_invalid" };
-    const paymentMilestoneId = typeof payload.local_name === "string" ? payload.local_name : null;
-    if (!paymentMilestoneId) {
-      return {
-        status: "conflict",
-        providerExternalId,
-        observed: {},
-        detailCode: "quickbooks_frappe_readback_milestone_missing",
-      };
-    }
-    const milestoneResponse = await timedFetch(fetcher,
-      `${config.frappeBaseUrl}/api/resource/Payment%20Milestone/${encodeURIComponent(paymentMilestoneId)}`,
-      { method: "GET", redirect: "manual", headers: {
-        Accept: "application/json", Authorization: `token ${config.frappeApiKey}:${config.frappeApiSecret}`,
-      } }, config.timeoutMs);
-    if (!milestoneResponse.ok) {
-      return { status: "unavailable", detailCode: `quickbooks_frappe_milestone_readback_${milestoneResponse.status}` };
-    }
-    const milestone = record(record(await boundedJson(milestoneResponse))?.data);
-    if (!milestone) {
-      return {
-        status: "conflict",
-        providerExternalId,
-        observed: {},
-        detailCode: "quickbooks_frappe_milestone_readback_invalid",
-      };
-    }
-    const expected = quickBooksProjectionExpected(body);
-    const providerMaterial = quickBooksProjectionObserved(payload, milestone);
-    const material = Object.fromEntries(Object.keys(expected).map((field) => [field, providerMaterial[field]]));
-    const materialSha256 = await sha256Hex(canonicalEffectJson(material));
-    const expectedSha256 = await sha256Hex(canonicalEffectJson(expected));
-    if (payload.name !== providerExternalId || materialSha256 !== expectedSha256) {
-      return { status: "conflict", providerExternalId, observed: payload, detailCode: "quickbooks_frappe_readback_conflict" };
-    }
-    const outcome = payload.status;
-    let reasonCode: string | null = null;
-    if (typeof payload.diff_json === "string") {
-      try {
-        const diff = record(JSON.parse(payload.diff_json));
-        reasonCode =
-          typeof diff?.reason_code === "string" ? diff.reason_code : null;
-      } catch {
-        /* malformed diff remains a conflict below */
-      }
-    }
-    if (
-      method === "resolve_provider_invoice_readback" &&
-      (!["Matched", "Mismatch", "Pending"].includes(String(outcome)) ||
-        (outcome !== "Matched" && !reasonCode))
-    ) {
-      return {
-        status: "conflict",
-        providerExternalId,
-        observed: payload,
-        detailCode: "quickbooks_frappe_readback_outcome_invalid",
-      };
-    }
-    return {
-      status: "match",
-      providerExternalId,
-      observed: {
-        material_sha256: materialSha256,
-        payment_milestone_id: paymentMilestoneId,
-        ...(method === "resolve_provider_invoice_readback"
-          ? { outcome, reason_code: reasonCode }
-          : {}),
-      },
-    };
-  } catch {
-    return { status: "unavailable", detailCode: "quickbooks_frappe_readback_unavailable" };
-  }
-}
-
-function quickBooksProjectionExpected(body: Record<string, unknown>): Record<string, unknown> {
-  const encoded = typeof body.binding_json === "string" ? body.binding_json : body.readback_json;
-  let request: Record<string, unknown> = {};
-  try {
-    request = typeof encoded === "string" ? record(JSON.parse(encoded)) ?? {} : {};
-  } catch {
-    return {};
-  }
-  const fields = [
-    "intent_id", "basis_sha256", "completion_packet_id", "completion_version", "completion_sha256",
-    "customer_quote_id", "quote_version", "quote_sha256", "changes_sha256", "roof_job_id",
-    "shop_order_id", "realm_id", "provider_invoice_id", "provider_request_sha256",
-    "provider_create_response_sha256", "provider_created_at", "provider_readback_sha256",
-    "provider_facts_sha256", "provider_read_at",
-  ];
-  return Object.fromEntries(fields.filter((field) => Object.hasOwn(request, field)).map((field) => [field, request[field]]));
-}
-
-function quickBooksProjectionObserved(
-  reconciliation: Record<string, unknown>,
-  milestone: Record<string, unknown>,
-): Record<string, unknown> {
-  let basis: Record<string, unknown> = {};
-  try {
-    basis = typeof milestone.billing_basis_json === "string"
-      ? record(JSON.parse(milestone.billing_basis_json)) ?? {}
-      : {};
-  } catch {
-    /* invalid basis cannot match the expected material hash */
-  }
-  return {
-    intent_id: reconciliation.invoice_intent_id,
-    basis_sha256: reconciliation.billing_basis_sha256,
-    completion_packet_id: basis.completion_packet_id,
-    completion_version: basis.completion_version,
-    completion_sha256: basis.completion_sha256,
-    customer_quote_id: basis.customer_quote_id,
-    quote_version: basis.quote_version,
-    quote_sha256: basis.quote_sha256,
-    changes_sha256: basis.changes_sha256,
-    roof_job_id: reconciliation.roof_job,
-    shop_order_id: milestone.shop_order ?? null,
-    realm_id: reconciliation.realm_id,
-    provider_invoice_id: reconciliation.external_entity_id,
-    provider_request_sha256: reconciliation.provider_request_sha256,
-    provider_create_response_sha256: reconciliation.provider_create_response_sha256,
-    provider_created_at: reconciliation.provider_created_at,
-    ...(reconciliation.provider_readback_sha256 ? { provider_readback_sha256: reconciliation.provider_readback_sha256 } : {}),
-    ...(reconciliation.provider_facts_sha256 ? { provider_facts_sha256: reconciliation.provider_facts_sha256 } : {}),
-    ...(reconciliation.provider_read_at ? { provider_read_at: reconciliation.provider_read_at } : {}),
-  };
-}
-
-async function frappeCall(config: Config, method: string, body: Record<string, unknown>, fetcher: typeof fetch): Promise<unknown> {
-  if (!["list_candidates", "bind_provider_invoice", "resolve_provider_invoice_readback"].includes(method))
-    throw new Error("quickbooks_frappe_method_invalid");
-  const response = await timedFetch(fetcher,
-    `${config.frappeBaseUrl}/api/method/ironwrap_roofing.quickbooks_final_invoice_api.${method}`,
-    { method: "POST", redirect: "manual", headers: {
-      Accept: "application/json", Authorization: `token ${config.frappeApiKey}:${config.frappeApiSecret}`,
-      "Content-Type": "application/json",
-    }, body: JSON.stringify(body) }, config.timeoutMs);
-  if (!response.ok) throw new Error("quickbooks_frappe_rejected");
-  return await boundedJson(response);
-}
-
-function candidateListing(value: unknown): { candidates: unknown[]; blockers: QuickBooksCandidateBlocker[] } | null {
-  const inner = record(unwrapMessage(value));
-  if (!inner || !onlyKeys(inner, ["candidates", "blockers"]) ||
-      !Array.isArray(inner.candidates) || !Array.isArray(inner.blockers) ||
-      inner.candidates.length > 100 || inner.blockers.length > 100) return null;
-  const blockers = inner.blockers.filter(validBlocker) as QuickBooksCandidateBlocker[];
-  if (blockers.length !== inner.blockers.length) return null;
-  return { candidates: inner.candidates, blockers };
-}
-
-async function checkCandidateFreshness(
-  config: Config,
-  row: FinalInvoiceRow,
-  realmId: string,
-  fetcher: typeof fetch,
-): Promise<"exact" | "changed"> {
-  const response = await frappeCall(config, "list_candidates", {
-    request_json: JSON.stringify({ roof_job_id: row.roof_job_id, limit: 1, realm_id: realmId }),
-  }, fetcher);
-  const listing = candidateListing(response);
-  if (!listing || listing.blockers.length !== 0 || listing.candidates.length !== 1) return "changed";
-  const candidate = validateCandidate(listing.candidates[0]);
-  if (!candidate || candidate.qbo.realm_id !== realmId || candidate.basis.intent_id !== row.intent_id)
-    return "changed";
-  return await sha256Hex(canonicalJson(candidate)) === row.candidate_fingerprint_sha256
-    ? "exact" : "changed";
-}
-
-function validateCandidate(value: unknown): QuickBooksCandidate | null {
-  const candidate = record(value);
-  if (!candidate || !exactKeys(candidate, ["roof_job_id", "shop_order_id", "qbo", "commercial", "basis"])) return null;
-  const qbo = record(candidate.qbo); const commercial = record(candidate.commercial); const basis = record(candidate.basis);
-  if (!qbo || !commercial || !basis ||
-      !exactKeys(qbo, ["realm_id", "customer_id", "item_id", "tax_code_id", "terms_id"]) ||
-      !exactKeys(commercial, ["currency", "subtotal", "tax_amount", "total_amount", "already_invoiced", "final_balance", "tax_code", "tax_rate", "invoice_date", "due_date", "lines"]) ||
-      !exactKeys(basis, ["intent_id", "basis_sha256", "completion_packet_id", "completion_version", "completion_sha256", "customer_quote_id", "quote_version", "quote_sha256", "changes_sha256", "evidence"])) return null;
-  if (!SAFE_ID.test(string(candidate.roof_job_id)) ||
-      !(candidate.shop_order_id === null || SAFE_ID.test(string(candidate.shop_order_id))) ||
-      !QBO_ID.test(string(qbo.realm_id)) || !QBO_ID.test(string(qbo.customer_id)) ||
-      !QBO_ID.test(string(qbo.item_id)) || !QBO_ID.test(string(qbo.tax_code_id)) ||
-      !QBO_ID.test(string(qbo.terms_id)) || commercial.currency !== "CAD" ||
-      !MONEY.test(string(commercial.subtotal)) || !MONEY.test(string(commercial.tax_amount)) ||
-      !MONEY.test(string(commercial.total_amount)) || commercial.already_invoiced !== "0.00" ||
-      !MONEY.test(string(commercial.final_balance)) || !SAFE_ID.test(string(commercial.tax_code)) ||
-      !TAX_RATE.test(string(commercial.tax_rate)) ||
-      !isoDate(string(commercial.invoice_date)) ||
-      !isoDate(string(commercial.due_date)) ||
-      string(commercial.due_date) < string(commercial.invoice_date) ||
-      !Array.isArray(commercial.lines) || commercial.lines.length < 1 || commercial.lines.length > 50 ||
-      !INTENT_ID.test(string(basis.intent_id)) || !SHA256.test(string(basis.basis_sha256)) ||
-      !SAFE_ID.test(string(basis.completion_packet_id)) || !/^[1-9][0-9]{0,9}$/.test(string(basis.completion_version)) ||
-      !SHA256.test(string(basis.completion_sha256)) || !SAFE_ID.test(string(basis.customer_quote_id)) ||
-      !positiveInt(basis.quote_version) || !SHA256.test(string(basis.quote_sha256)) ||
-      !SHA256.test(string(basis.changes_sha256)) || !Array.isArray(basis.evidence) ||
-      basis.evidence.length < 2 || basis.evidence.length > 50 || basis.evidence.some((item) => !validCitation(item))) return null;
-  let lineCents = 0;
-  for (const raw of commercial.lines) {
-    const line = record(raw);
-    if (!line || !exactKeys(line, ["source_type", "source_id", "source_version", "description_code", "amount"]) ||
-        !["Customer Quote", "Change Order"].includes(string(line.source_type)) ||
-        !SAFE_ID.test(string(line.source_id)) || !positiveInt(line.source_version) ||
-        !["RESIDENTIAL_ACCEPTED_QUOTE", "RESIDENTIAL_ACCEPTED_CHANGE"].includes(string(line.description_code)) ||
-        !MONEY.test(string(line.amount))) return null;
-    lineCents += cents(string(line.amount));
-  }
-  const subtotal = cents(string(commercial.subtotal));
-  const tax = cents(string(commercial.tax_amount));
-  const total = cents(string(commercial.total_amount));
-  if (lineCents !== subtotal || subtotal + tax !== total ||
-      cents(string(commercial.final_balance)) !== total) return null;
-  return value as QuickBooksCandidate;
-}
-
-function validBlocker(value: unknown): value is QuickBooksCandidateBlocker {
-  const v = record(value);
-  return !!v && exactKeys(v, ["roof_job_id", "code", "message", "citations"]) &&
-    SAFE_ID.test(string(v.roof_job_id)) && SAFE_ID.test(string(v.code)) &&
-    typeof v.message === "string" && v.message.length >= 1 && v.message.length <= 500 &&
-    Array.isArray(v.citations) && v.citations.length <= 50 && v.citations.every(validCitation);
-}
-
 function validCitation(value: unknown): value is QuickBooksCitation {
   const citation = record(value);
   if (!citation || !SHA256.test(string(citation.sha256))) return false;
-  if (citation.source === "Frappe") return exactKeys(citation, ["source", "doctype", "name", "sha256"]) &&
+  if (citation.source === "IronWrap" || citation.source === "Frappe")
+    return exactKeys(citation, ["source", "doctype", "name", "sha256"]) &&
     /^[A-Za-z][A-Za-z0-9 ]{0,79}$/.test(string(citation.doctype)) && SAFE_ID.test(string(citation.name));
   return citation.source === "R2" && exactKeys(citation, ["source", "key", "sha256"]) &&
     validR2Key(citation.key);
-}
-
-function validBindResponse(value: unknown, row: FinalInvoiceRow): boolean {
-  const v = record(value);
-  return !!v && exactKeys(v, ["ok", "idempotent_replay", "roof_job_id", "shop_order_id", "provider_invoice_id", "payment_milestone_id", "reconciliation_id", "basis_sha256"]) &&
-    v.ok === true && typeof v.idempotent_replay === "boolean" && v.roof_job_id === row.roof_job_id &&
-    v.shop_order_id === row.shop_order_id && v.provider_invoice_id === row.provider_invoice_id &&
-    v.basis_sha256 === row.basis_sha256 && SAFE_ID.test(string(v.payment_milestone_id)) &&
-    SAFE_ID.test(string(v.reconciliation_id));
-}
-
-function validResolverResponse(value: unknown): value is Record<string, unknown> & { outcome: "Matched" | "Mismatch" | "Pending" } {
-  const v = record(value);
-  return !!v && exactKeys(v, ["ok", "idempotent_replay", "outcome", "payment_milestone_id", "reconciliation_id", "reason_code", "owner", "next_step"]) &&
-    v.ok === true && typeof v.idempotent_replay === "boolean" &&
-    ["Matched", "Mismatch", "Pending"].includes(string(v.outcome)) &&
-    SAFE_ID.test(string(v.payment_milestone_id)) && SAFE_ID.test(string(v.reconciliation_id)) &&
-    nullableSafe(v.reason_code) && nullableSafe(v.owner) && nullableSafe(v.next_step);
 }
 
 function createInvoiceIdentity(
@@ -3201,11 +3229,6 @@ async function boundedJson(response: Response): Promise<unknown> {
   return JSON.parse(text) as unknown;
 }
 
-function unwrapMessage(value: unknown): unknown {
-  const object = record(value);
-  return object && Object.hasOwn(object, "message") ? object.message : value;
-}
-
 function parseLines(value: string): QuickBooksCandidate["commercial"]["lines"] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -3222,10 +3245,11 @@ function parseEvidence(value: string): QuickBooksCitation[] {
 
 function projectCitations(values: QuickBooksCitation[]): QuickBooksFinalInvoiceEnvelope["intent"]["citations"] {
   return values.map((citation) => {
-    const reference = citation.source === "Frappe"
-      ? `Frappe:${citation.doctype}:${citation.name}`
+    const recordCitation = citation.source === "IronWrap" || citation.source === "Frappe";
+    const reference = recordCitation
+      ? `${citation.source}:${citation.doctype}:${citation.name}`
       : `R2:${citation.key}`;
-    const kind = citation.source === "Frappe" ? citation.doctype ?? "" : citation.key ?? "";
+    const kind = recordCitation ? citation.doctype ?? "" : citation.key ?? "";
     const label = /completion/i.test(kind) ? "completion_packet" :
       /change/i.test(kind) ? "accepted_change" :
       /quote/i.test(kind) ? "accepted_quote" : "commercial_policy";
@@ -3284,14 +3308,9 @@ function secretText(value: unknown, min: number, max: number): string | null {
   return typeof value === "string" && value.length >= min && value.length <= max && !/[\r\n]/.test(value)
     ? value : null;
 }
-function onlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
-  return Object.keys(value).every((key) => keys.includes(key));
-}
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
-function nullableSafe(value: unknown): boolean { return value === null || SAFE_ID.test(string(value)); }
-function positiveInt(value: unknown): boolean { return Number.isSafeInteger(value) && Number(value) > 0; }
 function cents(value: string): number { const [whole, fraction] = value.split("."); return Number(whole) * 100 + Number(fraction); }
 function qboMoney(value: unknown): string | null {
   if (typeof value !== "number" && typeof value !== "string") return null;
@@ -3332,10 +3351,6 @@ function safeTid(value: string | null): string | null { return value && /^[A-Za-
 function validR2Key(value: unknown): boolean {
   return typeof value === "string" && value.length >= 1 && value.length <= 300 &&
     /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value) && !value.includes("..");
-}
-function httpsBase(value: unknown): string | null {
-  try { const url = new URL(string(value)); return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash ? url.toString().replace(/\/+$/, "") : null; }
-  catch { return null; }
 }
 function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
   const number = Number(value); return Number.isFinite(number) && number >= min && number <= max ? number : fallback;

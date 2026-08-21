@@ -1,20 +1,16 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, ClipboardCheck, RefreshCw, ShieldCheck } from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, ClipboardCheck, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
-import { Card } from "../components/ui/card";
-import { Notice } from "../components/ui/notice";
 import { ErrorState } from "../components/ui/state-panel";
-import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
-import { newLeadTriageApprovalPrepareKey, prepareLeadTriageApproval } from "../owner/approval-api";
-import { loadSales } from "./sales-api";
+import { loadSales, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
 import type { SalesLead } from "./sales-contracts";
 
 export function LeadTriagePreparePage() {
@@ -36,8 +32,14 @@ function LeadTriagePrepareContent() {
     retry: false,
     refetchOnMount: "always",
   });
-  const prepareKey = useRef<string | undefined>(undefined);
+  const decisionKey = useRef<string | undefined>(undefined);
+  const [lifecycleStatus, setLifecycleStatus] = useState<"triaged" | "qualified" | "disqualified">(
+    "triaged",
+  );
+  const [priority, setPriority] = useState<"low" | "normal" | "high" | "urgent">("normal");
+  const [category, setCategory] = useState("");
   const [triageSummary, setTriageSummary] = useState("");
+  const [nextAction, setNextAction] = useState("");
   const [actionError, setActionError] = useState<string>();
   const [restartRequired, setRestartRequired] = useState(false);
 
@@ -46,19 +48,34 @@ function LeadTriagePrepareContent() {
     mutationFn: async () => {
       const lead = query.data?.leads.find((candidate) => candidate.id === leadId);
       if (!lead) throw new Error("lead_source_unavailable");
-      prepareKey.current ??= newLeadTriageApprovalPrepareKey();
-      return await prepareLeadTriageApproval(
+      decisionKey.current ??= newCommercialLeadTriageKey();
+      return await recordCommercialLeadTriage(
         session,
-        { leadEnvelopeId: lead.id, triageSummary: triageSummary.trim() },
-        prepareKey.current,
+        {
+          leadId: lead.id,
+          expectedLeadVersion: lead.triage.version,
+          lifecycleStatus,
+          priority,
+          category: category.trim(),
+          summary: triageSummary.trim(),
+          nextAction: nextAction.trim(),
+        },
+        decisionKey.current,
       );
     },
     onSuccess: async () => {
-      await navigate({ to: "/approvals" });
+      await navigate({ to: "/sales" });
     },
     onError: (error) => {
       setActionError(messageFor(error));
-      if (error instanceof ApiError && error.code === "idempotency_conflict") {
+      if (
+        error instanceof ApiError &&
+        [
+          "commercial_triage_version_conflict",
+          "commercial_permit_idempotency_conflict",
+          "commercial_triage_idempotency_conflict",
+        ].includes(error.code)
+      ) {
         setRestartRequired(true);
       }
     },
@@ -67,8 +84,8 @@ function LeadTriagePrepareContent() {
   if (!leadId) {
     return (
       <ErrorState
-        title="This lead-check link is not complete"
-        message="No lead was found in this link. Go back to Sales and choose a lead."
+        title="This triage link is incomplete"
+        message="No Lead Envelope was provided. Return to Sales and choose a source-backed lead."
       />
     );
   }
@@ -76,8 +93,8 @@ function LeadTriagePrepareContent() {
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Sales could not load"
-        message="No lead check was started. Go online, then open this lead again."
+        title="Sales context unavailable"
+        message="No triage decision was recorded. Reconnect and reopen the current Sales record before continuing."
         onRetry={() => void query.refetch()}
       />
     );
@@ -89,12 +106,12 @@ function LeadTriagePrepareContent() {
     !lead ||
     lead.triage.status !== "Untriaged" ||
     !lead.attention.includes("triage_unresolved") ||
-    !query.data.allowed_actions.includes("approval.prepare")
+    !query.data.allowed_actions.includes("commercial.lead_triage.record")
   ) {
     return (
       <ErrorState
-        title="A lead check is not ready"
-        message="IronWrap did not allow a lead check for this lead. Go back to Sales and check it."
+        title="Triage recording is not available"
+        message="IronWrap OS did not grant the native commercial action for this exact lead and policy version. Return to Sales and inspect the current recorded state."
         action={
           <Button asChild variant="outline">
             <Link to="/sales">Back to Sales</Link>
@@ -104,91 +121,92 @@ function LeadTriagePrepareContent() {
     );
   }
 
-  const canPrepare = !offline && query.isSuccess && !query.isFetching && !restartRequired;
+  const canRecord = !offline && query.isSuccess && !query.isFetching && !restartRequired;
   const trimmedSummary = triageSummary.trim();
+  const trimmedCategory = category.trim();
+  const trimmedNextAction = nextAction.trim();
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canPrepare || mutation.isPending || trimmedSummary.length < 1) return;
+    if (
+      !canRecord ||
+      mutation.isPending ||
+      trimmedCategory.length < 2 ||
+      trimmedSummary.length < 1 ||
+      trimmedNextAction.length < 1
+    )
+      return;
     setActionError(undefined);
     mutation.mutate();
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-6">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+    <section className="mx-auto max-w-5xl space-y-6 pb-4">
+      <header className="border-b border-border pb-5 sm:pb-6">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0">
             <Button asChild variant="ghost" size="compact" className="-ml-2">
               <Link to="/sales">
                 <ArrowLeft aria-hidden="true" />
                 Back to Sales
               </Link>
             </Button>
-            <div className="mt-5 flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <ClipboardCheck className="size-6 text-accent" aria-hidden="true" />
+            <div className="mt-4 flex min-w-0 items-start gap-3">
+              <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
+                <ClipboardCheck className="size-5 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Lead check
+                  Commercial authority
                 </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Ask for a lead check
+                  Record native triage
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Write a short note for a person to review. This does not call the homeowner, move
-                  the lead, or change a quote.
+                  Record the bounded internal sales decision in IronWrap OS. Policy, current lead
+                  version, source evidence, and idempotency are verified before the write.
                 </p>
               </div>
             </div>
           </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">A person still says yes</h2>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              A reviewer must approve this before the lead is marked as checked.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="compact"
-              className="mt-4"
-              busy={query.isFetching}
-              disabled={query.isFetching}
-              onClick={() => void query.refetch()}
-            >
-              <RefreshCw aria-hidden="true" />
-              Load again
-            </Button>
-          </div>
-        </header>
-      </Card>
+          <Button
+            type="button"
+            variant="outline"
+            size="compact"
+            busy={query.isFetching}
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            Refresh context
+          </Button>
+        </div>
+      </header>
 
       {offline ? (
-        <Notice tone="warning" title="Go online to send this request">
-          Lead checks are not saved while you are offline. Open this lead again when you are online.
+        <Notice tone="warning" title="Reconnect to record this decision">
+          Commercial decisions are never queued offline. Reopen this lead after a current connection
+          is available.
         </Notice>
       ) : null}
       {query.isError ? (
-        <Notice tone="warning" title="Showing the last saved sales list">
-          Load this lead again before you send a check.
+        <Notice tone="warning" title="Showing the last recorded Sales read.">
+          Refresh this lead before preparing a review while the connection warning remains.
         </Notice>
       ) : null}
       {query.isFetching ? (
-        <Notice tone="warning" title="Checking this lead">
-          Sending stays locked until IronWrap confirms this lead still needs a check.
+        <Notice tone="warning" title="Checking current Sales context">
+          Recording stays locked until IronWrap OS confirms that this exact native lead version is
+          still eligible under the active commercial policy.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="The lead check was not sent">
+        <Notice tone="danger" title="Triage was not recorded">
           {restartRequired ? (
             <>
               <p>{actionError}</p>
               <Button asChild variant="outline" size="compact" className="mt-3">
-                <Link to="/sales">Open in Sales</Link>
+                <Link to="/sales">Reopen in Sales</Link>
               </Button>
             </>
           ) : (
@@ -201,81 +219,139 @@ function LeadTriagePrepareContent() {
       <LocalTriageFence />
       <LeadContext lead={lead} locale={session.tenant.locale} timeZone={session.tenant.time_zone} />
 
-      <form
-        className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
-        onSubmit={submit}
-      >
+      <form className="border border-border bg-surface" onSubmit={submit}>
         <div className="border-b border-border px-5 py-5 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">What should the reviewer know?</h2>
+          <h2 className="text-lg font-bold tracking-[-0.02em]">Record the commercial decision</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            Write the facts needed to mark this lead as checked. Keep contact choices, price
-            promises, and outgoing messages out of this note.
+            Classify the lead and leave the next internal action. This does not contact the
+            customer, publish a proposal, or alter payment or accounting state.
           </p>
         </div>
-        <div className="p-5 sm:p-6">
-          <label htmlFor="triage-summary" className="text-sm font-bold text-foreground">
-            Lead-check note
+        <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+          <label className="text-sm font-bold text-foreground">
+            Outcome
+            <select
+              value={lifecycleStatus}
+              onChange={(event) =>
+                setLifecycleStatus(event.target.value as "triaged" | "qualified" | "disqualified")
+              }
+              disabled={!canRecord || mutation.isPending}
+              className="mt-2 w-full rounded-lg border bg-surface-raised px-3 py-3 text-base"
+            >
+              <option value="triaged">Triaged</option>
+              <option value="qualified">Qualified</option>
+              <option value="disqualified">Disqualified</option>
+            </select>
           </label>
-          <Textarea
-            id="triage-summary"
-            value={triageSummary}
-            onChange={(event) => setTriageSummary(event.target.value.slice(0, 2_000))}
-            disabled={!canPrepare || mutation.isPending}
-            maxLength={2_000}
-            rows={5}
-            required
-            placeholder="For example: Hail report received. Check the address, access, and preferred visit time before any follow-up."
-            className="mt-3"
-          />
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-            <span>Only this note is sent with the lead.</span>
-            <span>{triageSummary.length}/2000</span>
+          <label className="text-sm font-bold text-foreground">
+            Priority
+            <select
+              value={priority}
+              onChange={(event) =>
+                setPriority(event.target.value as "low" | "normal" | "high" | "urgent")
+              }
+              disabled={!canRecord || mutation.isPending}
+              className="mt-2 w-full rounded-lg border bg-surface-raised px-3 py-3 text-base"
+            >
+              <option value="low">Low</option>
+              <option value="normal">Normal</option>
+              <option value="high">High</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </label>
+          <label className="text-sm font-bold text-foreground sm:col-span-2">
+            Category
+            <input
+              value={category}
+              onChange={(event) => setCategory(event.target.value.slice(0, 80))}
+              disabled={!canRecord || mutation.isPending}
+              minLength={2}
+              maxLength={80}
+              required
+              placeholder="For example: storm damage"
+              className="mt-2 w-full rounded-lg border bg-surface-raised px-4 py-3 text-base"
+            />
+          </label>
+          <div className="sm:col-span-2">
+            <label htmlFor="triage-summary" className="text-sm font-bold text-foreground">
+              Internal triage summary
+            </label>
+            <textarea
+              id="triage-summary"
+              value={triageSummary}
+              onChange={(event) => setTriageSummary(event.target.value.slice(0, 2_000))}
+              disabled={!canRecord || mutation.isPending}
+              maxLength={2_000}
+              rows={5}
+              required
+              placeholder="For example: Hail report received. Verify the property address, access, and preferred inspection window before any customer follow-up."
+              className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+              <span>
+                Source evidence is derived and hashed by the server, never supplied by the browser.
+              </span>
+              <span>{triageSummary.length}/2000</span>
+            </div>
           </div>
+          <label className="text-sm font-bold text-foreground sm:col-span-2">
+            Next internal action
+            <input
+              value={nextAction}
+              onChange={(event) => setNextAction(event.target.value.slice(0, 500))}
+              disabled={!canRecord || mutation.isPending}
+              maxLength={500}
+              required
+              placeholder="For example: verify access and book inspection"
+              className="mt-2 w-full rounded-lg border bg-surface-raised px-4 py-3 text-base"
+            />
+          </label>
         </div>
         <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="max-w-xl text-sm leading-6 text-muted">
-            A reviewer sees what would change before anything is saved. This page does not mark the
-            lead as checked.
+            The server issues a short-lived permit for this exact lead version, records one
+            append-only decision, and rejects stale or replay-drifted requests.
           </p>
           <Button
             type="submit"
             variant="accent"
             className="shrink-0"
             busy={mutation.isPending}
-            disabled={!canPrepare || mutation.isPending || trimmedSummary.length < 1}
+            disabled={
+              !canRecord ||
+              mutation.isPending ||
+              trimmedCategory.length < 2 ||
+              trimmedSummary.length < 1 ||
+              trimmedNextAction.length < 1
+            }
           >
             <ClipboardCheck aria-hidden="true" />
-            Send for a check
+            Record triage
           </Button>
         </div>
       </form>
-
-      <LeadSystemDetails lead={lead} />
     </section>
   );
 }
 
 function TriageDecisionRail({ lead }: { lead: SalesLead }) {
   return (
-    <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
-      aria-labelledby="triage-decision-path"
-    >
+    <section aria-labelledby="triage-decision-path">
       <h2
         id="triage-decision-path"
-        className="px-5 py-5 text-sm font-extrabold uppercase tracking-[0.14em] text-muted sm:px-6"
+        className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
       >
-        How this works
+        Controlled path
       </h2>
-      <ol className="grid border-t border-border sm:grid-cols-3">
-        <RailStep label="This lead" detail={lead.contact.display_name ?? "Saved lead"} />
+      <ol className="mt-3 grid border border-border sm:grid-cols-3">
+        <RailStep label="Native lead" detail={`${lead.id} · v${lead.triage.version}`} />
         <RailStep
-          label="Person review"
-          detail="Needed"
+          label="Policy permit"
+          detail="Short-lived"
           tone="bg-warning-soft text-foreground"
           bordered
         />
-        <RailStep label="Saved result" detail="Written after a yes" bordered />
+        <RailStep label="Decision ledger" detail="Append-only" bordered />
       </ol>
     </section>
   );
@@ -302,7 +378,7 @@ function RailStep({
       <p className="text-sm font-bold text-muted">{label}</p>
       <p
         className={cn(
-          "mt-2 break-words text-sm font-bold leading-5",
+          "mt-2 break-all text-sm font-bold leading-5",
           tone ? "inline-flex rounded-full px-2.5 py-1.5 text-xs" : "text-foreground",
           tone,
         )}
@@ -316,18 +392,18 @@ function RailStep({
 function LocalTriageFence() {
   return (
     <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-muted/65 px-5 py-5 sm:px-6"
+      className="border border-border bg-surface-muted/65 px-5 py-5 sm:px-6"
       aria-labelledby="triage-fence-heading"
     >
       <div className="flex items-start gap-3">
         <ShieldCheck className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div>
           <h2 id="triage-fence-heading" className="font-bold tracking-[-0.015em]">
-            Lead check only
+            Local triage only
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            No customer message is sent. The lead stays where it is. This cannot make a quote,
-            change prices, take payment, or change money records.
+            No customer message is sent. Lead transport remains unchanged. This cannot issue a
+            quote, modify commercial terms, collect payment, or change accounting.
           </p>
         </div>
       </div>
@@ -347,78 +423,88 @@ function LeadContext({
   const receivedAt = formatDate(lead.received_at, locale, timeZone);
   return (
     <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
-      aria-label="Lead check context"
+      className="grid border-y border-border sm:grid-cols-2"
+      aria-label="Lead triage context"
     >
-      <div className="grid sm:grid-cols-2">
-        <div className="min-w-0 px-5 py-5 sm:px-6">
-          <p className="text-sm font-bold text-muted">Lead</p>
-          <p className="mt-2 break-words font-bold text-foreground">
-            {lead.contact.display_name ?? "Name not found"}
+      <div className="min-w-0 px-4 py-5 sm:px-5">
+        <p className="text-sm font-bold text-muted">Lead</p>
+        <p className="mt-2 break-words font-bold text-foreground">
+          {lead.contact.display_name ?? "Name unavailable"}
+        </p>
+        <p className="mt-1 break-all text-sm text-muted">{lead.id}</p>
+      </div>
+      <div className="border-t border-border px-4 py-5 sm:border-t-0 sm:border-l sm:px-5">
+        <p className="text-sm font-bold text-muted">Received context</p>
+        <p className="mt-2 text-sm font-bold text-foreground">
+          {humanize(lead.source) ?? "Source unavailable"}
+        </p>
+        <p className="mt-1 text-sm text-muted">
+          {[receivedAt, lead.intent_queue].filter(Boolean).join(" · ") || "Time unavailable"}
+        </p>
+      </div>
+      <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
+        <p className="text-sm font-bold text-muted">Current triage state</p>
+        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-extrabold uppercase tracking-[0.08em] text-foreground">
+          {humanize(lead.triage.status) ?? "Status unavailable"}
+        </p>
+        {lead.triage.summary ? (
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">{lead.triage.summary}</p>
+        ) : (
+          <p className="mt-1 text-sm leading-6 text-muted">
+            No local triage summary is recorded yet.
           </p>
-        </div>
-        <div className="border-t border-border px-5 py-5 sm:border-t-0 sm:border-l sm:px-6">
-          <p className="text-sm font-bold text-muted">How it arrived</p>
-          <p className="mt-2 text-sm font-bold text-foreground">
-            {humanize(lead.source) ?? "Source not found"}
-          </p>
-          <p className="mt-1 text-sm text-muted">{receivedAt ?? "Time not found"}</p>
-        </div>
-        <div className="border-t border-border px-5 py-5 sm:col-span-2 sm:px-6">
-          <p className="text-sm font-bold text-muted">Lead check now</p>
-          <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-extrabold uppercase tracking-[0.08em] text-foreground">
-            Not checked
-          </p>
-          {lead.triage.summary ? (
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">{lead.triage.summary}</p>
-          ) : (
-            <p className="mt-1 text-sm leading-6 text-muted">No lead-check note is saved yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Notice({
+  tone,
+  title,
+  children,
+}: {
+  tone: "warning" | "danger";
+  title: string;
+  children: ReactNode;
+}) {
+  const Icon = tone === "danger" ? TriangleAlert : RefreshCw;
+  return (
+    <section
+      className={cn(
+        "border px-5 py-4 text-sm leading-6",
+        tone === "danger" ? "border-danger/40 bg-danger-soft" : "border-warning/40 bg-warning-soft",
+      )}
+      role={tone === "danger" ? "alert" : "status"}
+    >
+      <div className="flex items-start gap-3">
+        <Icon
+          className={cn(
+            "mt-0.5 size-5 shrink-0",
+            tone === "danger" ? "text-danger" : "text-warning",
           )}
+          aria-hidden="true"
+        />
+        <div>
+          <p className="font-bold">{title}</p>
+          <div className="mt-1 text-muted">{children}</div>
         </div>
       </div>
     </section>
   );
 }
 
-function LeadSystemDetails({ lead }: { lead: SalesLead }) {
-  return (
-    <details className="group rounded-lg border border-border bg-surface-raised">
-      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold sm:min-h-14 sm:px-5 [&::-webkit-details-marker]:hidden">
-        <span>System details</span>
-        <ChevronRight
-          className="size-4 text-muted transition-transform group-open:rotate-90"
-          aria-hidden="true"
-        />
-      </summary>
-      <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2 sm:px-5">
-        <MetadataLine label="Lead ID" value={lead.id} />
-        <MetadataLine label="Saved record" value={lead.envelope_id} />
-        {lead.intent_queue ? <MetadataLine label="Sales path" value={lead.intent_queue} /> : null}
-      </dl>
-    </details>
-  );
-}
-
-function MetadataLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="font-semibold text-foreground">{label}</dt>
-      <dd className="mt-0.5 break-all">{value}</dd>
-    </div>
-  );
-}
-
 function LeadTriagePrepareSkeleton() {
   return (
     <section
-      className="mx-auto max-w-6xl space-y-6"
+      className="mx-auto max-w-5xl space-y-6"
       aria-busy="true"
-      aria-label="Loading this lead"
+      aria-label="Loading lead triage context"
     >
-      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
-      <div className="grid min-h-28 rounded-lg border border-border bg-surface-muted/55 sm:grid-cols-3" />
-      <div className="min-h-28 rounded-lg border border-border bg-surface-muted/55" />
-      <div className="min-h-72 rounded-lg border border-border bg-surface-muted/55" />
+      <div className="h-28 border-b border-border bg-surface-muted/70" />
+      <div className="grid min-h-28 border border-border bg-surface-muted/55 sm:grid-cols-3" />
+      <div className="min-h-28 border border-border bg-surface-muted/55" />
+      <div className="min-h-72 border border-border bg-surface-muted/55" />
     </section>
   );
 }
@@ -444,18 +530,18 @@ function formatDate(value: string | null, locale: string, timeZone: string): str
 
 function messageFor(error: unknown): string {
   if (!(error instanceof ApiError)) {
-    return "We could not send this lead check. Load the lead again before you try.";
+    return "The native triage decision was not confirmed. Refresh the lead before trying again.";
   }
   switch (error.code) {
-    case "approval_broker_not_configured":
-      return "The lead-check service is not set up. Nothing was changed.";
-    case "approval_broker_unavailable":
-      return "The lead-check service could not be reached. Nothing was changed.";
-    case "idempotency_conflict":
-      return "This same ask was already sent with different details. Go back to Sales and open the lead again.";
-    case "approval_store_unavailable":
-      return "We could not save this ask. Nothing was changed.";
+    case "commercial_policy_missing":
+    case "commercial_policy_invalid":
+    case "commercial_policy_inactive":
+      return "The native commercial policy is unavailable. No triage change was made.";
+    case "commercial_triage_version_conflict":
+    case "commercial_permit_idempotency_conflict":
+    case "commercial_triage_idempotency_conflict":
+      return "This lead changed or this submission key is bound to different facts. Return to Sales and reopen the current lead.";
     default:
-      return "We could not send this lead check. Load the lead again before you try.";
+      return "The native triage decision was not confirmed. Refresh the lead before trying again.";
   }
 }

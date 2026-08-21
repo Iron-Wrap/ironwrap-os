@@ -210,6 +210,52 @@ Standing rules (carried from `AUTHORITY-AND-EVIDENCE-CONTRACT.md`):
 - Segregation of duty: the actor proposing a Tier-2 replan (agent) is never the actor approving it (owner) — already true structurally, since Tier 2 always routes through the existing broker's single-approver gate.
 - `AUTONOMOUS-OPERATING-SYSTEM.md`'s explicit boundary — "cannot schedule through a hard gate" — is enforced by §5.1 rule 3: `safetyReleaseGate()` is called at activation regardless of tier, and its result can never be bypassed by policy envelope alone.
 
+#### 6.1 The Job Assignment authority declaration (**Implemented**, ELEC-124 ruling / ELEC-125)
+
+`domain_policy._require_canonical_authorities` (`domain_policy.py:1983-2062`) has always required a
+Production Job Assignment with a crew to declare, in `authority_requirements_json`, exactly which
+IRO-43 Authority Records must resolve as current before the assignment is admitted — and it stops
+being optional the moment any White-Label Tenant is Active (`_locked_authority_records`,
+`document_validation.py:2370-2414`). Nothing produced that field, so every fully-gate-cleared `Won`
+job was still refused with `[missing_authority_requirements]`. It is now compiled, deterministically,
+by the schedule broker:
+
+- **Producer** — `compileCrewAuthorityRequirements`
+  (`mcp/erpnext-roofing-mcp/src/production-schedule-approval-broker.mjs`). One row per **active**
+  Crew Member: `{subject_type: "Person", subject_role: "Worker", subject_ref: <crew_user>,
+  authority_kind: "Worker Competency", scope_type: "Roof Job", scope_ref: <roofJobId>}`.
+- **Scope is the job, not the assignment.** A competency record is a fact about a worker on a job, so
+  one record covers every assignment *and* work package on it — the same shape Work Package's own
+  call site (`domain_policy.py:2597`) needs. Assignment scope would force re-issuing the identical
+  competency per assignment.
+- **Roster source** — `get_crew_authority_roster`, a read tool exposing three Crew Member columns
+  (`crew_user`, `crew_role`, `active`) and nothing else. `get_crew_profile` deliberately still drops
+  the whole `members` child table.
+- **Nothing new is enforced.** The compiler states an existing expectation ("every worker on a
+  Production crew needs current competency", today checked only as the crew-level `competency_status`
+  summary) in the individually-versioned form IRO-43 introduced. No Frappe change, no migration.
+- **Roster drift refuses.** The compiled list travels inside the approved write args, and those args
+  are recompiled from a **fresh** roster read at execution and compared byte-for-byte against what
+  the approver signed. A member added or deactivated between approval and execution fails the write
+  closed with `broker_production_schedule_execution_args_mismatch` — the approval contract's existing
+  integrity guard, not a second mechanism.
+- **Still out of scope, unchanged from the ruling:** WCB Clearance, Trade Licence, Permit and
+  Inspection are *not* compiled here. `_require_current_compliance_authority`
+  (`domain_policy.py:1891-1980`) already resolves them independently off Job Compliance Records, and
+  Crew Profile carries no link a jurisdiction-scoped requirement could name a `subject_ref` from
+  (`docs/CAPABILITY-MATRIX.md` still lists complete jurisdiction rules as an open target gap).
+
+**What a real `202` still needs at runtime.** Compiling the declaration is necessary, not sufficient:
+`require_authority_gate` (`authority_policy.py:733-`) resolves every compiled row against the locked,
+tenant-scoped Authority Record snapshot, so the site must carry, for **each active crew member**, a
+`Worker Competency` Authority Record that is current-version, `Verified`, effective, unexpired, and
+scoped to the same Roof Job — plus one Active White-Label Tenant. With none seeded, the refusal moves
+from `missing_authority_requirements` to the gate's own unresolved-authority code. The working
+example of the intended record shape is IRO-43's own fixture,
+`test_canonical_authorities_bind_schedule_and_work_package_consumers`
+(`frappe-apps/ironwrap_roofing/tests/test_domain_policy.py:5496-5545`); a real-stack traverse to `202`
+seeds from that shape.
+
 ---
 
 ### 7. Schema

@@ -246,9 +246,13 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 164, "Frappe MCP inventory must stay at the reviewed 164-tool contract");
-assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 83,
-  "Frappe MCP must expose 83 read tools");
+// 164 -> 165, 83 -> 84 reads: `get_crew_authority_roster` (ELEC-125), the bounded
+// roster read the schedule broker's authority compiler needs. It exists as its own
+// tool rather than as a widening of `get_crew_profile` because the compiler needs
+// three Crew Member columns and no agent needs the rest of that child table.
+assert.equal(frappeTools.size, 165, "Frappe MCP inventory must stay at the reviewed 165-tool contract");
+assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 84,
+  "Frappe MCP must expose 84 read tools");
 assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 41,
   "Frappe MCP must expose 41 dry-run tools");
 assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 40,
@@ -261,7 +265,7 @@ assert.equal([...newoTools].filter((tool) => dryRuns.has(tool)).length, 1,
   "Newo MCP must expose one exact-argument dry-run tool");
 assert.equal([...newoTools].filter((tool) => requests.has(tool)).length, 2,
   "Newo MCP must expose separate approval and receipt-consuming execution tools");
-assert.equal(inventory.size, 192, "three-server Hermes inventory must stay at 192 tools");
+assert.equal(inventory.size, 193, "three-server Hermes inventory must stay at 193 tools");
 
 const desktopSource = readFileSync(join(root, desktopServer.source), "utf8");
 const desktopTools = new Set(

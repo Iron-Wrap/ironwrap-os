@@ -1422,7 +1422,7 @@ function SafetyAndAccess({
               ))}
             </dl>
           ) : (
-            <p className="mt-5 border-l-4 border-warning pl-3 text-sm font-semibold leading-6 text-warning">
+            <p className="mt-5 rounded-md border border-warning pl-3 text-sm font-semibold leading-6 text-warning">
               The safety plan is missing. Do not start work.
             </p>
           )}
@@ -2159,7 +2159,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   </Select>
                 </div>
               </details>
-              <p className="border-l-4 border-info pl-3 text-sm font-semibold leading-6 text-info">
+              <p className="rounded-md border border-info pl-3 text-sm font-semibold leading-6 text-info">
                 Your files stay in this form until you save them. Keep this page open.
               </p>
             </div>

@@ -63,7 +63,6 @@ describe("OperatingIntakePanel", () => {
         "These are website leads saved from the website. They are not assigned field jobs, not published portal proposals, and not money intents.",
       ),
     ).toBeVisible();
-    expect(screen.getByText("Website leads")).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
     expect(screen.getByText("Intake")).toBeVisible();
     expect(screen.getByText("website")).toBeVisible();

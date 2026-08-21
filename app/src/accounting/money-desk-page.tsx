@@ -63,10 +63,7 @@ function MoneyDeskContent() {
               <Banknote className="size-5 text-accent" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                Accounting
-              </p>
-              <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                 Money desk
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">

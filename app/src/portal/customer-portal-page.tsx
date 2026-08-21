@@ -76,9 +76,7 @@ export function CustomerPortalView({
           <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-surface-muted text-foreground">
             <ShieldCheck className="size-6" aria-hidden="true" />
           </div>
-          <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-            {model.brand} project page
-          </p>
+          <p className="text-sm font-bold text-muted">{model.brand}</p>
           <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">
             {model.job.job_number ?? "Your project"}
           </h1>

@@ -188,6 +188,11 @@
       ]
     },
     {
+      "path": "docs/ui-uplift-plan-2026-08-22.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "frappe-apps/ironwrap_roofing/README.md",
       "class": "component",
       "authority": [

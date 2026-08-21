@@ -1,0 +1,185 @@
+{
+  "_template": "Source of config/tenants/<tenant>.json. Rendered by tools/generate-tenant-config.mjs; every {{TOKEN}} is replaced from the answers file. A string that is EXACTLY one token takes the answer's own type (array, number, boolean), so {{SERVICE_AREAS}} renders as a list. Values that are not tokenised are the invariants tools/validate-tenant-config.mjs enforces for every tenant; changing one here changes it for every future clone. This key is stripped from the rendered output.",
+  "tenant": {
+    "id": "{{TENANT_ID}}",
+    "display_name": "{{TENANT_DISPLAY_NAME}}",
+    "status": "{{TENANT_STATUS}}"
+  },
+  "runtime": {
+    "app_tenant_name": "{{APP_TENANT_NAME}}"
+  },
+  "brand": {
+    "name": "{{BRAND_NAME}}",
+    "brands": [
+      {
+        "key": "{{BRAND_KEY}}",
+        "display_name": "{{BRAND_DISPLAY_NAME}}",
+        "sender_mailbox": "{{SENDER_MAILBOX}}",
+        "sender_aliases": "{{SENDER_ALIASES}}",
+        "sender_domain": "{{SENDER_DOMAIN}}"
+      }
+    ],
+    "review_links": {
+      "{{BRAND_KEY}}": "PLACEHOLDER: Google Business Profile review link ({{BRAND_DISPLAY_NAME}})"
+    }
+  },
+  "geography": {
+    "service_areas": "{{SERVICE_AREAS}}",
+    "province": "{{PROVINCE}}",
+    "country": "{{COUNTRY}}",
+    "compliance": {
+      "casl_consent_required": true,
+      "quiet_hours": {
+        "start_hour": 9,
+        "end_hour": 20,
+        "timezone": "{{TIMEZONE}}"
+      },
+      "consent_ledger": {
+        "basis_required": true,
+        "source_timestamp_required": true,
+        "scope_required": true,
+        "expiry_or_relevant_event_required": true,
+        "revocation_and_suppression_required": true
+      },
+      "prepaid_contracting": {
+        "licence_gate_required": true,
+        "licence_id_env": "{{PREPAID_LICENCE_ID_ENV}}",
+        "contract_template_gate_required": true,
+        "record_retention_years": 3
+      },
+      "fall_protection": {
+        "site_plan_policy_required": true,
+        "offline_plan_required": true,
+        "worker_acknowledgement_required": true
+      },
+      "privacy_law": "{{PRIVACY_LAW}}"
+    }
+  },
+  "locale": {
+    "language_tag": "{{LANGUAGE_TAG}}",
+    "currency": "{{CURRENCY}}",
+    "timezone": "{{TIMEZONE}}",
+    "tax": {
+      "country_code": "{{COUNTRY_CODE}}",
+      "province_code": "{{PROVINCE}}",
+      "gst_rate_bps": "{{GST_RATE_BPS}}",
+      "provincial_sales_tax_rate_bps": "{{PST_RATE_BPS}}",
+      "source": "{{TAX_SOURCE}}"
+    }
+  },
+  "services": "{{SERVICES}}",
+  "materials": {
+    "suppliers": [
+      { "key": "primary_metal", "name": "{{PRIMARY_METAL_SUPPLIER}}", "role": "metal_panels_trim" }
+    ],
+    "profiles": "PLACEHOLDER: panel profile catalog",
+    "gauges": "PLACEHOLDER: metal gauge catalog",
+    "colors": "PLACEHOLDER: color catalog per supplier line"
+  },
+  "estimates": {
+    "instant_estimate": {
+      "online_price": false,
+      "measurement_required": true,
+      "review_required": true,
+      "disclaimer": "This request does not produce an online price. Measurement evidence and estimator review are required before pricing."
+    }
+  },
+  "proposal": {
+    "renderer": "erpnext_print_format",
+    "options_model": "good_better_best",
+    "payment_milestones": [
+      { "milestone": "deposit", "percent": 30 },
+      { "milestone": "materials_delivered", "percent": 40 },
+      { "milestone": "completion", "percent": 30 }
+    ]
+  },
+  "production": {
+    "gates": ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"],
+    "photo_requirements": {
+      "before": 4,
+      "progress": 6,
+      "completion": 8
+    },
+    "proof_scale": {
+      "capture_items_per_job": 400,
+      "viewer_items_per_job": 1051,
+      "server_verification_required": true
+    },
+    "assigned_packet": {
+      "offline_required": true,
+      "includes": ["scope", "measurements", "materials", "change_orders", "safety_plan", "proof_checklist"]
+    }
+  },
+  "communications": {
+    "channels": ["email", "phone"],
+    "templates": "PLACEHOLDER: {{TENANT_ID}} template pack",
+    "consent_policy": "express_or_ebr",
+    "quiet_hours_ref": "geography.compliance.quiet_hours"
+  },
+  "integrations": {
+    "jobnimbus": {
+      "role": "temporary_bridge",
+      "enabled_env": "JOBNIMBUS_ENABLED",
+      "api_key_env": "JOBNIMBUS_API_KEY"
+    },
+    "quickbooks": {
+      "role": "accounting_truth",
+      "webhook_verifier_env": "QB_WEBHOOK_TOKEN",
+      "expected_realm_id_env": "QB_EXPECTED_REALM_ID",
+      "reconciliation_issuer_user_env": "QB_RECONCILIATION_ISSUER_USER"
+    },
+    "google_drive": {
+      "service_account_env": "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "shared_drive_id_vars": ["SHARED_DRIVE_ID_JOBS", "SHARED_DRIVE_ID_RESTRICTED", "SHARED_DRIVE_ID_ARCHIVE"]
+    },
+    "measurement_vendors": ["RoofRuler", "AppliCad"],
+    "erpnext": {
+      "enabled_env": "ERPNEXT_ENABLED",
+      "base_url_env": "ERPNEXT_BASE_URL",
+      "api_key_env": "ERPNEXT_API_KEY",
+      "api_secret_env": "ERPNEXT_API_SECRET"
+    }
+  },
+  "agents": {
+    "enabled_roles": [
+      "owner_operator",
+      "lead_concierge",
+      "estimator_assistant",
+      "production_controller",
+      "field_companion",
+      "finance_reconciler",
+      "closeout_agent",
+      "support_admin_agent"
+    ],
+    "approval_policy": "dry_run_then_human_approval",
+    "write_guard_envs": [
+      "ERPNEXT_WRITE_ENABLED",
+      "HERMES_DRY_RUN_SIGNING_KEY",
+      "HERMES_APPROVAL_PUBLIC_KEY_FILE",
+      "IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE",
+      "IRONWRAP_HERMES_SITE_BASE_URL"
+    ]
+  },
+  "market_defense": {
+    "competitor_set": [
+      "JobNimbus",
+      "Roofr",
+      "AccuLynx",
+      "CompanyCam",
+      "GoHighLevel",
+      "Eagleview",
+      "Hover",
+      "SumoQuote",
+      "ServiceTitan"
+    ],
+    "watch_cadence_days": 30,
+    "escalation_owner": "owner"
+  },
+  "data_ownership": {
+    "canonical_job_identity_required": true,
+    "full_export_required": true,
+    "checksum_manifest_required": true,
+    "restore_drill_required": true,
+    "export_includes": ["raw_payloads", "business_records", "photos", "contracts", "communications", "audit_history"]
+  }
+}

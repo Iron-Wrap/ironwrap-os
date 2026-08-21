@@ -1,0 +1,15 @@
+{
+  "_comment": "Answers for deploy/clone-tenant.sh / tools/generate-tenant-config.mjs. This exact file produced config/tenants/northline-metal.json, the second tenant the isolation model was proven against. Copy it, change every value, and keep TENANT_ID, SENDER_DOMAIN and SENDER_MAILBOX unique across config/tenants/. Anything not listed here takes the template's invariant or the province default; a province other than AB must also state TIMEZONE, GST_RATE_BPS, PST_RATE_BPS, PRIVACY_LAW and PREPAID_LICENCE_ID_ENV.",
+  "TENANT_ID": "northline-metal",
+  "TENANT_DISPLAY_NAME": "Northline Metal Roofing (synthetic clone-proof tenant)",
+  "TENANT_STATUS": "demo",
+  "APP_TENANT_NAME": "Northline Metal OS",
+  "BRAND_NAME": "Northline Metal",
+  "BRAND_KEY": "northline",
+  "BRAND_DISPLAY_NAME": "Northline Metal Roofing",
+  "SENDER_DOMAIN": "northline-metal.example",
+  "SENDER_MAILBOX": "hello@northline-metal.example",
+  "SENDER_ALIASES": ["quotes@northline-metal.example"],
+  "SERVICE_AREAS": ["Red Deer", "Lacombe", "Sylvan Lake"],
+  "PRIMARY_METAL_SUPPLIER": "PLACEHOLDER: Northline metal supplier"
+}

@@ -284,7 +284,7 @@ if (!acceptanceCreds?.api_key || !acceptanceCreds?.api_secret) {
 try {
   run("docker", [
     "compose", "-f", composeFile, "exec", "-T", "frappe",
-    "bench", "--site", "ironwrap.localhost", "set-config",
+    "bench", "--site", "ironwrap.localhost", "set-config", "--",
     "ironwrap_customer_acceptance_hmac_key", acceptanceHmacKey,
   ]);
 } catch {
@@ -308,7 +308,7 @@ if (!decisionCreds?.api_key || !decisionCreds?.api_secret) {
 try {
   run("docker", [
     "compose", "-f", composeFile, "exec", "-T", "frappe",
-    "bench", "--site", "ironwrap.localhost", "set-config",
+    "bench", "--site", "ironwrap.localhost", "set-config", "--",
     "ironwrap_customer_decision_hmac_key", decisionHmacKey,
   ]);
 } catch {
@@ -332,7 +332,7 @@ if (!facetProjectionCreds?.api_key || !facetProjectionCreds?.api_secret) {
 try {
   run("docker", [
     "compose", "-f", composeFile, "exec", "-T", "frappe",
-    "bench", "--site", "ironwrap.localhost", "set-config",
+    "bench", "--site", "ironwrap.localhost", "set-config", "--",
     "ironwrap_facet_design_projection_hmac_key",
     facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY,
   ]);

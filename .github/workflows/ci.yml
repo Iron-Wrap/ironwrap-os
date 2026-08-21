@@ -64,6 +64,10 @@ jobs:
         run: node --test tools/validate-lead-triage-shadow-authority.test.mjs
       - name: Test tenant runtime preflight
         run: node --test tools/validate-tenant-runtime.test.mjs
+      - name: Test tenant config generation from the clone template
+        run: node --test tools/generate-tenant-config.test.mjs
+      - name: Test tenant Worker config derivation (no source-tenant references survive)
+        run: node --test tools/generate-tenant-worker-config.test.mjs
       - name: Test local .dev.vars composition (port overrides + example scaffold)
         run: node --test deploy/local/dev-vars.test.mjs
       - name: Validate IronWrap runtime tenant identity

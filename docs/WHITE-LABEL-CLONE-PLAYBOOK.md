@@ -25,9 +25,54 @@ the cloneable shape is proven with isolation, export, restore, and negative cros
 Why isolation first: the risk register lists "Tenant leakage" as a product-killing risk.
 Site/profile/namespace isolation is the control.
 
+## The Automated Path
+
+Everything below that a laptop can prove is now a script. `deploy/clone-tenant.sh` renders the
+tenant config, provisions the tenant's own Frappe site on the local compose stack, derives the
+tenant's Worker config and secrets, applies the migration chain to the tenant's local D1, and
+runs the validators. `deploy/tenant-leakage-checks.sh` then runs the eight checks below against
+the two tenants standing side by side.
+
+```bash
+cp deploy/templates/tenant-answers.example.json my-tenant.json   # then edit every value
+deploy/clone-tenant.sh --tenant <tenant> --answers my-tenant.json \
+  --worker-port 7200 --broker-port-base 9200
+
+# start the tenant Worker with the command the script prints, then:
+deploy/tenant-leakage-checks.sh --tenant-a ironwrap --tenant-b <tenant>
+```
+
+What it produces, and where the manual steps below still apply:
+
+| Step | Automated | Still manual |
+| --- | --- | --- |
+| 1 tenant config | `tools/generate-tenant-config.mjs` renders `config/tenants/<tenant>.json` from `deploy/templates/tenant-config.template.json` and refuses a tenant id or sender domain another tenant already owns | the answers themselves (brand, service areas, supplier, review links) |
+| 2 Cloudflare namespace | `tools/generate-tenant-worker-config.mjs` derives `workers-bus/wrangler.<tenant>.jsonc` from the shipped config, re-points every binding onto `<tenant>-*` resources, and fails if any var still names the source tenant | creating the real account resources, pasting the D1 `database_id`, and `wrangler secret put` (step 2 below) |
+| 3 Frappe site | one `bench new-site` on the local compose stack, with all thirteen identities on the tenant's own `@<tenant>.local` domain and every site-config pin applied | a production Frappe host, and the tenant's own blessed workflow-profile and locale-policy values |
+| 4 Drive | nothing: the tenant Worker ships with no Shared Drive id at all | all of step 4 |
+| 5 QuickBooks | nothing: `QB_EXPECTED_REALM_ID` ships empty | all of step 5 |
+| 6 Hermes / MCP | nothing | all of step 6 |
+
+The script provisions **no infrastructure**. It calls no Cloudflare, Google or Intuit API; the
+owner steps are printed as a `HAND-OFF` list at the end of the run and are exactly the rows above.
+
+Two facts about the local stack that the script depends on, and that a hand-run should know:
+
+- **One bench, one site per tenant.** The tenant site is `<tenant>.localhost` on the same
+  compose stack and the same host port; Frappe v15 resolves the site from the Host header, and
+  every `*.localhost` name resolves to loopback without touching `/etc/hosts`. Separate
+  databases, separate users, separate API keys. Only the default site owns the bare `localhost`
+  alias, so a clone can never move the first tenant's Worker onto the second tenant's Frappe.
+- **`IRONWRAP_LOCAL_IDENTITY_DOMAIN`** selects the domain a site's non-interactive identities
+  live on (default `ironwrap.local`). A clone uses `<tenant>.local`, which is what keeps the
+  tenant's `ERPNEXT_INTEGRATION_USER` and `QB_RECONCILIATION_ISSUER_USER` from naming another
+  tenant's identity.
+
 ## Clone Steps
 
-Assume the new tenant id is `<tenant>` (example already in repo: `demo-exteriors`).
+These are the authority for what a clone IS, and the fallback for anything the script cannot
+reach. Assume the new tenant id is `<tenant>` (examples already in repo: `demo-exteriors`,
+hand-written; `northline-metal`, rendered by the automated path above).
 
 ### 1. Tenant config
 
@@ -228,7 +273,17 @@ formats on the tenant's ERPNext site, review links in `config/tenants/<tenant>.j
 
 ## Tenant-Leakage Checks
 
-Run all of these before calling the clone done:
+Run all of these before calling the clone done. On the local stack they are one command:
+
+```bash
+deploy/tenant-leakage-checks.sh --tenant-a ironwrap --tenant-b <tenant>
+```
+
+It ingests a uniquely marked lead into tenant B and then looks for that marker everywhere in
+tenant A, and reports each check as `PASS`, `FAIL`, or `HAND-OFF`. `HAND-OFF` means the check
+needs a live provider account this stack deliberately does not have (Google Drive, outbound
+mail): the runner asserts the locally provable control, names the owner action, and never
+counts it as a pass. Any `FAIL` exits non-zero.
 
 1. `node tools/validate-tenant-config.mjs` passes (id uniqueness + sender-domain isolation), and
    `tools/validate-tenant-runtime.mjs` passes against the intended tenant runtime values.

@@ -49,21 +49,23 @@ The phone is a **real, dialable NANP-shaped number** in the 587 (Alberta) area c
 
 ## 4. Ordered wire calls
 
+Frappe is **not** on this wire. The tool never calls `FRAPPE_BASE_URL` and does not use a
+launch-proof Frappe reader (IRO-189 / IRO-195).
+
 | # | Call | Auth |
 |---|---|---|
-| 0 | `GET {FRAPPE_BASE_URL}/api/method/ironwrap_roofing.launch_proof_api.lookup_synthetic_correlation?correlation_id=…` | Frappe reader |
 | 1 | `GET {BUS}/health` | none |
 | 2 | `GET {BUS}/ready` | admin |
 | 3 | `POST {BUS}/ingest/website` | ingest |
-| 4 | `POST {BUS}/ingest/estimate` (`Idempotency-Key: lp-<execution-id>`) | ingest |
-| 5 | `POST {BUS}/ingest/estimate` — replay, same key | ingest |
-| 6 | `GET {BUS}/admin/envelopes?limit=10` | admin |
-| 7 | `POST {BUS}/admin/reconcile` | admin |
-| 8 | `GET {BUS}/admin/status?audit_limit=20` | admin |
-| 9 | repeat of #0, polled up to `attempts` times | Frappe reader |
+| 4 | `POST {BUS}/ingest/website` — same contact (replay) | ingest |
+| 5 | `POST {BUS}/ingest/estimate` (`Idempotency-Key: lp-<execution-id>`) | ingest |
+| 6 | `POST {BUS}/ingest/estimate` — replay, same key | ingest |
+| 7 | `GET {BUS}/admin/envelopes?limit=10` | admin |
+| 8 | `POST {BUS}/admin/reconcile` | admin |
+| 9 | `GET {BUS}/admin/status?audit_limit=20` | admin |
 
-Step 0 is a **preflight** that must return `observation: "pending"`; it proves the reader works and
-the correlation is unused. Steps 1 and 2 are asserted inline, so a red `/ready` stops the run
+After step 4 the tool also `GET`s `{BUS}/admin/envelope/:canonical_envelope_id` (admin) to
+read back the D1 row. Steps 1 and 2 are asserted inline, so a red `/ready` stops the run
 before step 3 — no synthetic record is written.
 
 ## 5. Side effects, by step
@@ -73,8 +75,8 @@ before step 3 — no synthetic record is written.
 | Effect | Store | Detail |
 |---|---|---|
 | Raw body object | **R2 `RAW`** | key `raw/<YYYY-MM-DD>/ow_<uuid>.json`. Written **first**, before anything else. |
-| Dedup claim | **D1 `dedup_claims`** | key `p:+1587555NNNN`. Insert or window-expiry update. |
-| Envelope row | **D1 `envelopes`** | status `pending_jn_push`, `intent_queue` = `residential_sales` (the fixture's `metal roofing` matches the residential route). |
+| Dedup claim | **D1 `dedup_claims`** | tenant-scoped key `t:<tenant_id>:p:+1587555NNNN`. Insert or window-expiry update. |
+| Envelope row | **D1 `envelopes`** | `tenant_id` bound; status `pending_jn_push`, `intent_queue` = `residential_sales` (the fixture's `metal roofing` matches the residential route). Response `canonical_envelope_id` equals `envelope_id`. |
 | Audit row | **D1 `audit_log`** | `automation=ingest`, `action=received`. |
 | Prospect ack email | **Gmail** | `sendInstantAck` → `sendGmail` as `FROM_EMAIL` to `launch-proof+…@example.invalid`. A **real outbound message to an undeliverable address** — it will hard-bounce against the sending domain. |
 | Owner alert email | **Gmail** | to `OWNER_ALERT_EMAIL` (production value `info@ironwrapexteriors.com`) — a **real message to a real human inbox**, subject `New lead (website) — residential_sales`. |
@@ -84,6 +86,12 @@ before step 3 — no synthetic record is written.
 Both emails are attempted whenever `GOOGLE_SERVICE_ACCOUNT_JSON` **and** `FROM_EMAIL` are set. They
 run under `ctx.waitUntil` and their failure does not fail the proof — so a run can succeed while
 having sent mail, and can send mail while otherwise failing.
+
+### Step 4 — `POST /ingest/website` replay
+
+Returns the original `envelope_id` / `canonical_envelope_id` with `duplicate: true`. It does
+**not** insert a second `envelopes` row. Raw is still archived to R2; an `audit_log` `dedup`
+row is written against the original identity. No second queue message, no second instant-ack.
 
 ### Queue consumer, triggered asynchronously by step 3
 
@@ -104,40 +112,40 @@ asserted by launch-proof and **not** captured in the evidence artifact.
 JobNimbus `api1` has **no DELETE**; cleanup is a soft archive via `PUT {is_archived:true}`. A
 synthetic contact and job created here are permanent CRM records for practical purposes.
 
-### Steps 4 and 5 — `POST /ingest/estimate` ×2
+### Steps 5 and 6 — `POST /ingest/estimate` ×2
 
 | Effect | Store | Detail |
 |---|---|---|
 | Raw body object ×1 | **R2 `RAW`** | `raw/estimates/<YYYY-MM-DD>/ow_<uuid>.json` (first call only; the replay short-circuits). |
 | Envelope row ×1 | **D1 `envelopes`** | `estimate_submission_key = estimate:project:lp-<execution-id>`. |
 | Audit rows ×2 | **D1 `audit_log`** | `received`, then `idempotent_replay`. |
-| Frappe `Lead Envelope` + `Instant Estimate Session` (`estimate_session_id = estimate:LP-<execution-id>`) | **Frappe** | only when `ERPNEXT_ENABLED=true`; this record is what step 9 looks for. |
+| Frappe `Lead Envelope` + `Instant Estimate Session` (`estimate_session_id = estimate:LP-<execution-id>`) | **Frappe** | only when `ERPNEXT_ENABLED=true`. Not a launch-proof wire step or gate. |
 | `envelopes.erpnext_*`; `audit_log` `erpnext_estimate` | D1 | |
 
 No queue message, no email, no JobNimbus, no Drive on this path.
 
-### Step 7 — `POST /admin/reconcile`
+### Step 8 — `POST /admin/reconcile`
 
 | Effect | Store | Detail |
 |---|---|---|
 | Heartbeat upsert | **D1 `heartbeat`** | `INSERT … ON CONFLICT(day) DO UPDATE` — **overwrites today's row**, including `ran_at`. |
 | Daily digest email | **Gmail** | to `OWNER_ALERT_EMAIL` **and** `BACKUP_ALERT_EMAIL` (production `info@` and `sales@ironwrapexteriors.com`). The digest text asserts of itself that its arrival *is* the heartbeat, so an out-of-band copy is misleading to the recipient. |
 
-Steps 1, 2, 6, 8 and 0/9 are read-only. Step 9's Frappe endpoint is `@frappe.whitelist()` read-only,
-`GET`-only, and returns only `{correlation_id, observation}` — no customer, contact, job, or
-document data.
+Steps 1, 2, 7, and 9 are Worker read-only. There is no Frappe lookup step.
 
 ### Totals for one production `--execute`
 
 - **up to 4 real emails**: prospect ack (bounces), owner alert, digest to owner, digest to backup;
 - **1 live JobNimbus contact + 1 live JobNimbus job**, plus lookup reads;
 - **1 Google Drive job folder with 6 subfolders** on the jobs shared drive;
-- **2 R2 objects**;
+- **3 R2 objects** (website, website replay raw, estimate);
 - **1 queue message** (plus DLQ traffic on failure);
-- **D1 writes** across `envelopes` (2 rows), `dedup_claims`, `audit_log` (≥5 rows),
+- **D1 writes** across `envelopes` (2 rows: one website lead, one estimate; website replay
+  does not add a row), `dedup_claims`, `audit_log` (≥5 rows),
   `lead_ack_receipts`, `heartbeat` (day row overwritten);
-- **Frappe records**: `Lead Envelope` ×2, `Roofing Property`, `Roof Job`, production gates,
-  `Instant Estimate Session` — when the Frappe rail is on.
+- **Frappe records** are not launch-proof wire effects. If `ERPNEXT_ENABLED=true`, the queue
+  consumer may still write `Lead Envelope` / property / job / session rows — that rail is
+  IRO-195, not this proof's gate.
 
 ## 6. Success criteria
 

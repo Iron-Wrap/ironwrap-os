@@ -104,7 +104,7 @@ function healthyFetch({
       }
       return json(
         {
-          envelope_id: "ow-duplicate-row",
+          envelope_id: LEAD_ENVELOPE,
           canonical_envelope_id: LEAD_ENVELOPE,
           tenant_id: "ironwrap",
           duplicate: true,

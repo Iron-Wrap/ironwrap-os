@@ -746,6 +746,30 @@ async function handleIngest(
   }
 
   const intentText = `${raw["service"] ?? ""} ${raw["service_intent"] ?? ""} ${raw["message"] ?? ""}`;
+  const intentQueue = classifyIntent(intentText);
+
+  // Replay of a claimed contact returns the original identity. A second D1 lead
+  // row (even status=duplicate) would mint a second operating record.
+  if (dupOf) {
+    await store.recordAudit(env, {
+      automation: "ingest",
+      trigger: source,
+      envelope_id: dupOf,
+      source_ids: provider ? `provider:${provider}` : undefined,
+      action: "dedup",
+      result: "ok",
+      recovery_owner: env.OWNER_ALERT_EMAIL,
+    });
+    return json({
+      envelope_id: dupOf,
+      canonical_envelope_id: dupOf,
+      tenant_id: tenantId,
+      status: "duplicate",
+      duplicate: true,
+      queue: intentQueue,
+    });
+  }
+
   const rec: EnvelopeRecord = {
     envelope_id: envelopeId,
     source,
@@ -756,14 +780,14 @@ async function handleIngest(
     payload_json: JSON.stringify(envelope.payload),
     raw_key: rawKey,
     ts: now,
-    status: dupOf ? "duplicate" : valid.ok ? "pending_jn_push" : "received",
+    status: valid.ok ? "pending_jn_push" : "received",
     dedup_key: key,
-    dup_of: dupOf,
+    dup_of: null,
     attempts: 0,
     last_error: valid.ok ? null : (valid.reason ?? null),
     jn_contact_id: null,
     jn_job_id: null,
-    intent_queue: classifyIntent(intentText),
+    intent_queue: intentQueue,
     tenant_id: tenantId,
     created_at: now,
     updated_at: now,
@@ -776,30 +800,28 @@ async function handleIngest(
     trigger: source,
     envelope_id: envelopeId,
     source_ids: provider ? `provider:${provider}` : undefined,
-    action: dupOf ? "dedup" : "received",
+    action: "received",
     result: "ok",
     error: rec.last_error,
     recovery_owner: env.OWNER_ALERT_EMAIL,
   });
 
   // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
-  if (!dupOf) {
-    ctx.waitUntil(
-      sendInstantAck(env, rec).catch((e) =>
-        log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
-      ),
-    );
-  }
+  ctx.waitUntil(
+    sendInstantAck(env, rec).catch((e) =>
+      log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
+    ),
+  );
 
-  // 6) Enqueue the JobNimbus push (skip pure duplicates and unroutable-no-contact rows).
-  if (!dupOf && valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });
+  // 6) Enqueue the JobNimbus push (skip unroutable-no-contact rows).
+  if (valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });
 
   return json({
     envelope_id: envelopeId,
-    canonical_envelope_id: dupOf ?? envelopeId,
+    canonical_envelope_id: envelopeId,
     tenant_id: tenantId,
     status: rec.status,
-    duplicate: !!dupOf,
+    duplicate: false,
     queue: rec.intent_queue,
   });
 }

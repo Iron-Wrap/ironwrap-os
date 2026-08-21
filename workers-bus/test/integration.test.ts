@@ -69,9 +69,10 @@ function fakeEnv() {
                   }
                 }
                 if (sql.includes("UPDATE envelopes SET erpnext_lead_envelope_id")) {
-                  const id = String(args[6]);
+                  const id = String(sql.includes("tenant_id") ? args[args.length - 2] : args[6]);
+                  const tenantId = sql.includes("tenant_id") ? String(args[args.length - 1]) : null;
                   const row = envelopesById.get(id);
-                  if (row) {
+                  if (row && (!tenantId || String(row.tenant_id) === tenantId)) {
                     row.erpnext_lead_envelope_id = args[0];
                     row.erpnext_roofing_property_id = args[1];
                     row.erpnext_roof_job_id = args[2];
@@ -82,9 +83,10 @@ function fakeEnv() {
                   }
                 }
                 if (sql.includes("UPDATE envelopes SET attempts = attempts + 1, erpnext_error")) {
-                  const id = String(args[2]);
+                  const id = String(sql.includes("tenant_id") ? args[args.length - 2] : args[2]);
+                  const tenantId = sql.includes("tenant_id") ? String(args[args.length - 1]) : null;
                   const row = envelopesById.get(id);
-                  if (row) {
+                  if (row && (!tenantId || String(row.tenant_id) === tenantId)) {
                     row.attempts = Number(row.attempts ?? 0) + 1;
                     row.erpnext_error = args[0];
                     row.updated_at = args[1];
@@ -197,16 +199,16 @@ test("POST /ingest/website: repeated contact claims duplicate and skips second J
   assert.equal(firstBody.duplicate, false);
   assert.equal(secondBody.duplicate, true);
   assert.equal(secondBody.status, "duplicate");
+  assert.equal(secondBody.envelope_id, firstBody.envelope_id);
   assert.equal(queue.length, 1);
   assert.equal(queue[0].envelope_id, firstBody.envelope_id);
   assert.equal(r2.length, 2);
   assert.equal(db.filter((c) => c.sql.includes("INSERT INTO dedup_claims")).length, 1);
-  const duplicateInsert = db
-    .filter((c) => c.sql.includes("INSERT INTO envelopes"))
-    .find((c) => c.args.includes(secondBody.envelope_id));
-  assert.ok(duplicateInsert);
-  assert.ok(duplicateInsert.args.includes("duplicate"));
-  assert.ok(duplicateInsert.args.includes(firstBody.envelope_id));
+  assert.equal(
+    db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length,
+    1,
+    "replay must not mint a second D1 lead row",
+  );
 });
 
 test("POST /ingest/estimate: configurator payload lands in owned store and ERPNext without JN/GHL queue", async (t) => {

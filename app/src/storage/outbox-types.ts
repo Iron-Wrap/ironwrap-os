@@ -25,11 +25,11 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export const outboxStateLabels: Record<OutboxState, string> = {
-  saved_locally: "Saved locally",
-  queued: "Queued",
-  uploading: "Uploading",
-  verified: "Verified",
-  needs_attention: "Needs attention",
+  saved_locally: "Saved here",
+  queued: "Waiting",
+  uploading: "Sending",
+  verified: "Sent",
+  needs_attention: "Needs a check",
 };
 
 export interface OutboxAttachment {

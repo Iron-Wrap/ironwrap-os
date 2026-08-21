@@ -327,7 +327,7 @@ function TodayRoute() {
 function JobRoute() {
   return (
     <RoleGuard surface="job">
-      <Suspense fallback={<FieldRouteSkeleton label="Loading field packet" />}>
+      <Suspense fallback={<FieldRouteSkeleton label="Loading this job" />}>
         <JobPage />
       </Suspense>
     </RoleGuard>
@@ -337,7 +337,7 @@ function JobRoute() {
 function WorkObjectRoute() {
   return (
     <RoleGuard surface="field">
-      <Suspense fallback={<FieldRouteSkeleton label="Loading typed field packet" />}>
+      <Suspense fallback={<FieldRouteSkeleton label="Loading this work" />}>
         <WorkObjectPage />
       </Suspense>
     </RoleGuard>
@@ -347,7 +347,7 @@ function WorkObjectRoute() {
 function CheckInRoute() {
   return (
     <RoleGuard surface="field">
-      <Suspense fallback={<FieldRouteSkeleton label="Loading field check-in" />}>
+      <Suspense fallback={<FieldRouteSkeleton label="Loading check-in" />}>
         <CheckInPage />
       </Suspense>
     </RoleGuard>
@@ -411,7 +411,7 @@ function OwnerRouteSkeleton() {
     <section
       className="mx-auto max-w-6xl space-y-6"
       aria-busy="true"
-      aria-label="Loading current decision queue"
+      aria-label="Loading your work"
     >
       <div className="h-20 border-b border-border bg-surface-muted/70" />
       <div className="grid border-y border-border sm:grid-cols-3">

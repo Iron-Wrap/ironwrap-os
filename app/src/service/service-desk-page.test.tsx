@@ -70,12 +70,12 @@ function renderDesk() {
 }
 
 async function fillIntake(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByLabelText("Customer"), "CUST-0001");
-  await user.type(screen.getByLabelText("Property"), "PROP-0001");
-  await user.type(screen.getByLabelText("Roof job"), "JOB-0001");
-  await user.type(screen.getByLabelText("Symptom code"), "interior_water_stain");
-  await user.type(screen.getByLabelText("Communication consent"), "CONSENT-0001");
-  await user.type(screen.getByLabelText("Intake evidence digest"), DIGEST_A);
+  await user.type(screen.getByLabelText("Customer ID"), "CUST-0001");
+  await user.type(screen.getByLabelText("Property ID"), "PROP-0001");
+  await user.type(screen.getByLabelText("Job ID"), "JOB-0001");
+  await user.type(screen.getByLabelText("Problem code"), "interior_water_stain");
+  await user.type(screen.getByLabelText("Contact rule ID"), "CONSENT-0001");
+  await user.type(screen.getByLabelText("Proof code"), DIGEST_A);
 }
 
 describe("callback desk", () => {
@@ -100,10 +100,10 @@ describe("callback desk", () => {
 
     renderDesk();
 
-    expect(await screen.findByText("interior_water_stain")).toBeInTheDocument();
-    expect(screen.getByText("active_leak_occupied_room")).toBeInTheDocument();
-    expect(screen.getByText(/Emergency · Triaged/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /active_leak_occupied_room/ })).toHaveAttribute(
+    expect(await screen.findByText("interior water stain")).toBeInTheDocument();
+    expect(screen.getByText("active leak occupied room")).toBeInTheDocument();
+    expect(screen.getByText(/Emergency · Checked/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /active leak occupied room/ })).toHaveAttribute(
       "href",
       "/service/svc_case_0002",
     );
@@ -122,9 +122,9 @@ describe("callback desk", () => {
     const user = userEvent.setup();
 
     renderDesk();
-    await screen.findByRole("heading", { name: "Callback desk" });
+    await screen.findByRole("heading", { name: "Service calls" });
     await fillIntake(user);
-    await user.click(screen.getByRole("button", { name: /Open callback/ }));
+    await user.click(screen.getByRole("button", { name: /Save call/ }));
 
     await waitFor(() => expect(openServiceCase).toHaveBeenCalledTimes(1));
     expect(vi.mocked(openServiceCase).mock.calls[0]?.[1]).toMatchObject({
@@ -133,7 +133,7 @@ describe("callback desk", () => {
       symptomCode: "interior_water_stain",
       responseSlaMinutes: 1440,
     });
-    expect(await screen.findByText("Callback opened")).toBeInTheDocument();
+    expect(await screen.findByText("Callback saved")).toBeInTheDocument();
   });
 
   it("says plainly when a second report was kept as a linked duplicate", async () => {
@@ -156,13 +156,11 @@ describe("callback desk", () => {
     const user = userEvent.setup();
 
     renderDesk();
-    await screen.findByRole("heading", { name: "Callback desk" });
+    await screen.findByRole("heading", { name: "Service calls" });
     await fillIntake(user);
-    await user.click(screen.getByRole("button", { name: /Open callback/ }));
+    await user.click(screen.getByRole("button", { name: /Save call/ }));
 
-    expect(
-      await screen.findByText("Recorded as a duplicate of the live callback"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("This call is already open")).toBeInTheDocument();
   });
 
   it("will not let an emergency callback be filed behind a routine response window", async () => {
@@ -170,12 +168,12 @@ describe("callback desk", () => {
     const user = userEvent.setup();
 
     renderDesk();
-    await screen.findByRole("heading", { name: "Callback desk" });
+    await screen.findByRole("heading", { name: "Service calls" });
     await fillIntake(user);
-    await user.selectOptions(screen.getByLabelText("Severity"), "emergency");
+    await user.selectOptions(screen.getByLabelText("Need level"), "emergency");
 
     expect(await screen.findByText("An emergency cannot wait that long")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Open callback/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Save call/ })).toBeDisabled();
     expect(openServiceCase).not.toHaveBeenCalled();
   });
 });

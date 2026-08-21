@@ -3,7 +3,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
-import { ApiError } from "../lib/api";
 import { pairDevice } from "./device-pairing";
 import { clearPendingPairingToken } from "./pairing-fragment";
 import { sessionQueryKey } from "./session-query";
@@ -15,7 +14,6 @@ export function DevicePairingConsume({ token }: { token?: string }) {
   const [state, setState] = useState<"idle" | "pending" | "error" | "complete">(
     token ? "pending" : "idle",
   );
-  const [error, setError] = useState<unknown>();
 
   useEffect(() => {
     if (!token || started.current) return;
@@ -26,8 +24,7 @@ export function DevicePairingConsume({ token }: { token?: string }) {
       setState("complete");
       await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
       await navigate({ to: "/today", replace: true });
-    })().catch((caught: unknown) => {
-      setError(caught);
+    })().catch(() => {
       setState("error");
     });
   }, [navigate, queryClient, token]);
@@ -35,21 +32,17 @@ export function DevicePairingConsume({ token }: { token?: string }) {
   if (!token) {
     return (
       <ErrorState
-        title="This device pairing link is incomplete"
-        message="Ask the office to issue a fresh pairing code. No account changes were made."
+        title="This QR code is not complete"
+        message="Ask the office for a new code. We did not change this phone."
       />
     );
   }
-  if (state === "pending") return <LoadingState label="Pairing this device securely…" />;
+  if (state === "pending") return <LoadingState label="Pairing this phone…" />;
   if (state === "error") {
     return (
       <ErrorState
-        title="This device could not be paired"
-        message={
-          error instanceof ApiError
-            ? error.message
-            : "The code may be expired or already used. Ask the office to issue a new one."
-        }
+        title="We could not pair this phone"
+        message="The code may be old or already used. Ask the office for a new one."
       />
     );
   }

@@ -154,16 +154,18 @@ describe("LeadTriagePreparePage", () => {
     const user = userEvent.setup();
     const { container } = renderPage();
 
-    await screen.findByRole("heading", { name: "Prepare local triage" });
-    expect(screen.getAllByText("LEAD-A").length).toBeGreaterThan(0);
+    await screen.findByRole("heading", { name: "Ask for a lead check" });
+    expect(screen.getByText("LEAD-A")).not.toBeVisible();
     expect(container.textContent).not.toMatch(
       /\+14035559999|pat@example\.com|15000|Never show this/i,
     );
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("LEAD-A")).toBeVisible();
     await user.type(
-      screen.getByLabelText("Internal triage summary"),
+      screen.getByLabelText("Lead-check note"),
       "Hail report received. Verify address, access, and inspection window before follow-up.",
     );
-    await user.click(screen.getByRole("button", { name: "Prepare triage review" }));
+    await user.click(screen.getByRole("button", { name: "Send for a check" }));
 
     await waitFor(() => {
       expect(prepareLeadTriageApproval).toHaveBeenCalledWith(
@@ -183,8 +185,8 @@ describe("LeadTriagePreparePage", () => {
     vi.mocked(loadSales).mockResolvedValue(salesModel({ allowed_actions: ["sales.read"] }));
     renderPage();
 
-    expect(await screen.findByText("Triage preparation is not available")).toBeVisible();
-    expect(screen.queryByLabelText("Internal triage summary")).not.toBeInTheDocument();
+    expect(await screen.findByText("A lead check is not ready")).toBeVisible();
+    expect(screen.queryByLabelText("Lead-check note")).not.toBeInTheDocument();
   });
 
   it("does not turn an Unknown record into a local triage request", async () => {
@@ -201,16 +203,16 @@ describe("LeadTriagePreparePage", () => {
     });
     renderPage();
 
-    expect(await screen.findByText("Triage preparation is not available")).toBeVisible();
+    expect(await screen.findByText("A lead check is not ready")).toBeVisible();
   });
 
   it("keeps local triage preparation online-only and out of the field outbox", async () => {
     const offline = { ...ownerSession, csrf_token: "offline-session-no-csrf" };
     renderPage(offline);
 
-    await screen.findByRole("heading", { name: "Prepare local triage" });
-    expect(screen.getByText(/never queued offline/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Prepare triage review" })).toBeDisabled();
+    await screen.findByRole("heading", { name: "Ask for a lead check" });
+    expect(screen.getByText(/not saved while you are offline/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send for a check" })).toBeDisabled();
     expect(prepareLeadTriageApproval).not.toHaveBeenCalled();
   });
 
@@ -219,26 +221,23 @@ describe("LeadTriagePreparePage", () => {
     let resolveRefresh: ((value: SalesResponse) => void) | undefined;
     renderPage();
 
-    await screen.findByRole("heading", { name: "Prepare local triage" });
-    await user.type(
-      screen.getByLabelText("Internal triage summary"),
-      "Confirm current roofing context.",
-    );
+    await screen.findByRole("heading", { name: "Ask for a lead check" });
+    await user.type(screen.getByLabelText("Lead-check note"), "Confirm current roofing context.");
     vi.mocked(loadSales).mockImplementationOnce(
       () =>
         new Promise<SalesResponse>((resolve) => {
           resolveRefresh = resolve;
         }),
     );
-    await user.click(screen.getByRole("button", { name: "Refresh context" }));
+    await user.click(screen.getByRole("button", { name: "Load again" }));
 
-    expect(await screen.findByText("Checking current Sales context")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Prepare triage review" })).toBeDisabled();
+    expect(await screen.findByText("Checking this lead")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send for a check" })).toBeDisabled();
     expect(prepareLeadTriageApproval).not.toHaveBeenCalled();
 
     resolveRefresh?.(salesModel());
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Prepare triage review" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Send for a check" })).toBeEnabled();
     });
   });
 
@@ -253,14 +252,14 @@ describe("LeadTriagePreparePage", () => {
     );
     renderPage();
 
-    await screen.findByRole("heading", { name: "Prepare local triage" });
-    await user.type(screen.getByLabelText("Internal triage summary"), "Confirm roofing context.");
-    await user.click(screen.getByRole("button", { name: "Prepare triage review" }));
+    await screen.findByRole("heading", { name: "Ask for a lead check" });
+    await user.type(screen.getByLabelText("Lead-check note"), "Confirm roofing context.");
+    await user.click(screen.getByRole("button", { name: "Send for a check" }));
 
-    expect(await screen.findByRole("link", { name: "Reopen in Sales" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Open in Sales" })).toHaveAttribute(
       "href",
       "/sales",
     );
-    expect(screen.getByRole("button", { name: "Prepare triage review" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send for a check" })).toBeDisabled();
   });
 });

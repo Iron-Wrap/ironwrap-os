@@ -192,7 +192,7 @@ describe("TodayPage", () => {
       }),
     );
 
-    const link = await screen.findByRole("link", { name: "Open typed work packet" });
+    const link = await screen.findByRole("link", { name: "Open work plan" });
     expect(link).toHaveAttribute(
       "href",
       "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
@@ -206,15 +206,15 @@ describe("TodayPage", () => {
   it("turns assigned work into a truthful run sheet with a distinct blocked-work action", async () => {
     renderToday();
 
-    expect(await screen.findByRole("heading", { name: "Run sheet" })).toBeVisible();
-    expect(screen.getByText("1 gate blocks work")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
+    expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
-    expect(screen.getByText(/\d+ of \d+ saved on this device\./i)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Review gate and packet" })).toHaveAttribute(
+    expect(screen.getByText(/\d+ of \d+ saved on this phone\./i)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Check what blocks work" })).toHaveAttribute(
       "href",
       "/jobs/JOB-BLOCKED",
     );
-    expect(screen.getByRole("link", { name: "Open job packet" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open job" })).toHaveAttribute(
       "href",
       "/jobs/JOB-NEXT",
     );
@@ -228,7 +228,7 @@ describe("TodayPage", () => {
     const bootstrapToday = todayModel();
     renderToday(todayModel(), bootstrapToday);
 
-    expect(await screen.findByRole("heading", { name: "Run sheet" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(loadToday).not.toHaveBeenCalled();
     expect(cacheToday).toHaveBeenCalledWith(fieldSession, bootstrapToday);
   });
@@ -243,10 +243,10 @@ describe("TodayPage", () => {
     );
     renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
 
-    expect(await screen.findByText("Checking saved packets")).toBeVisible();
-    expect(screen.queryByText("Packet not saved on this device")).not.toBeInTheDocument();
+    expect(await screen.findByText("Checking saved job plans")).toBeVisible();
+    expect(screen.queryByText("Job plan not saved")).not.toBeInTheDocument();
     resolvePacket?.(false);
-    expect(await screen.findByText("Saving packets for offline use")).toBeVisible();
+    expect(await screen.findByText("Saving job plans")).toBeVisible();
   });
 
   it("exposes a retry only after a failed online packet save", async () => {
@@ -257,16 +257,16 @@ describe("TodayPage", () => {
     });
     renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
 
-    expect(await screen.findByText("Packet not saved on this device")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Retry saving packet" })).toBeVisible();
+    expect(await screen.findByText("Job plan not saved")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save job plan again" })).toBeVisible();
   });
 
   it("labels cached data as an offline snapshot instead of live work", async () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     renderToday(todayModel({ stale_fields: ["offline.cached_packet"] }));
 
-    expect(await screen.findByText("Offline snapshot")).toBeVisible();
-    expect(screen.getByText(/Offline snapshot for .*Jul 10, 2026/i)).toBeVisible();
+    expect(await screen.findByText("Saved copy")).toBeVisible();
+    expect(screen.getByText(/This is a saved copy for .*Jul 10, 2026/i)).toBeVisible();
     expect(screen.queryByText("Current assignment read")).not.toBeInTheDocument();
     expect(prefetchAssignedPackets).not.toHaveBeenCalled();
   });
@@ -308,6 +308,6 @@ describe("TodayPage", () => {
       await screen.findByRole("heading", { name: "One saved item needs review" }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Field check-in · job JOB-BLOCKED" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Retry saved item" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 });

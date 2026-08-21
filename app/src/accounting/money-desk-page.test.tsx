@@ -48,7 +48,12 @@ describe("money desk", () => {
     vi.mocked(loadAccountingSummary).mockResolvedValue(summaryResponse());
     renderDesk();
 
-    for (const queue of ["Needs approval", "Awaiting QuickBooks", "Mismatched", "Exceptions"]) {
+    for (const queue of [
+      "Needs approval",
+      "Waiting for QuickBooks",
+      "Does not match",
+      "Money issues",
+    ]) {
       expect(await screen.findByRole("heading", { name: queue })).toBeInTheDocument();
     }
   });
@@ -77,7 +82,7 @@ describe("money desk", () => {
     const needsApproval = await screen.findByRole("region", { name: "Needs approval" });
     expect(within(needsApproval).getByText("Pending")).toBeInTheDocument();
 
-    const mismatched = screen.getByRole("region", { name: "Mismatched" });
+    const mismatched = screen.getByRole("region", { name: "Does not match" });
     const row = within(mismatched).getByRole("link", { name: /Deposit invoice/u });
     expect(within(row).getByText("Mismatched")).toBeInTheDocument();
   });
@@ -116,14 +121,15 @@ describe("money desk", () => {
     expect(row).toHaveAttribute("href", "/accounting/intents/acct-intent:job-0001:deposit_invoice");
   });
 
-  it("shows reconciliation health, including what has never been read back", async () => {
+  it("shows QuickBooks checks without exposing a raw money item id", async () => {
     vi.mocked(loadAccountingSummary).mockResolvedValue(summaryResponse());
     renderDesk();
 
-    const health = await screen.findByRole("region", { name: "Reconciliation health" });
-    expect(health).toHaveTextContent("Not re-read recently");
-    expect(health).toHaveTextContent("Never read back");
-    expect(health).toHaveTextContent("Oldest unfinished money movement");
+    const health = await screen.findByRole("region", { name: "QuickBooks checks" });
+    expect(health).toHaveTextContent("Not checked lately");
+    expect(health).toHaveTextContent("Never checked");
+    expect(health).toHaveTextContent("Oldest unfinished item");
+    expect(health).not.toHaveTextContent("acct-intent:");
   });
 
   it("says so plainly when there is nothing in a queue", async () => {
@@ -160,7 +166,7 @@ describe("money desk", () => {
     expect(await screen.findByText("Nothing is waiting on a decision.")).toBeInTheDocument();
     expect(screen.getByText("Everything we have sent matches QuickBooks.")).toBeInTheDocument();
     expect(
-      screen.getByText("Nothing is outstanding. Every money movement has reached a settled state."),
+      screen.getByText("Everything is done. No money item is waiting for a check."),
     ).toBeInTheDocument();
   });
 

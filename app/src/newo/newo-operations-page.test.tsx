@@ -76,34 +76,36 @@ describe("NewoOperationsPage", () => {
   it("renders readiness and every required exception category without mutation controls", async () => {
     renderPage();
 
-    await screen.findByRole("heading", { name: "Newo Operations" });
-    expect(screen.getByText("Attention")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Call exceptions" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Missing session reports" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Failed handoffs" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Pending appointment requests" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Downstream sync failures" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Delivery and control recovery" })).toBeVisible();
-    expect(screen.getByText("Queue dead letter")).toBeVisible();
-    expect(screen.getByText("Provider event")).toBeVisible();
-    expect(screen.getByText("Control action")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Recent sessions" })).toBeVisible();
-    expect(screen.getAllByText("session-1").length).toBeGreaterThan(0);
+    await screen.findByRole("heading", { name: "Reception" });
+    expect(screen.getByText("Check")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Calls to check" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Call reports missing" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Calls not passed on" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Booking requests" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Calls not saved" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "System fixes" })).toBeVisible();
+    expect(screen.getByText("Saved call list")).toBeVisible();
+    expect(screen.getByText("Call report", { exact: true })).toBeVisible();
+    expect(screen.getByText("System change")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Latest calls" })).toBeVisible();
+    for (const callId of screen.getAllByText(/Call ID session-1/)) {
+      expect(callId.closest("details")?.open).toBe(false);
+    }
 
-    const readiness = screen.getByRole("heading", { name: "Readiness" }).closest("section");
+    const readiness = screen.getByRole("heading", { name: "System checks" }).closest("div");
     expect(readiness).not.toBeNull();
-    expect(within(readiness!).getByText("Newo traffic")).toBeVisible();
+    expect(within(readiness!).getByText("Call center")).toBeVisible();
     expect(within(readiness!).getAllByLabelText("Not ready").length).toBeGreaterThan(0);
 
-    const launchState = screen.getByRole("heading", { name: "Launch state" }).closest("section");
+    const launchState = screen.getByRole("heading", { name: "Live settings" }).closest("div");
     expect(launchState).not.toBeNull();
-    expect(within(launchState!).getByText("Request Only")).toBeVisible();
-    expect(within(launchState!).getByText("Outbound")).toBeVisible();
-    expect(within(launchState!).getAllByText("Off").length).toBe(2);
-    expect(screen.getByText("Provider minutes unavailable")).toBeVisible();
+    expect(within(launchState!).getByText("Ask first")).toBeVisible();
+    expect(within(launchState!).getByText("Calls out")).toBeVisible();
+    expect(within(launchState!).getAllByText("Off").length).toBe(3);
+    expect(screen.getByText("Call time not found")).toBeVisible();
 
     expect(screen.queryByRole("button", { name: /send|book|approve|delete|execute/i })).toBeNull();
-    expect(screen.getByRole("button", { name: "Refresh Newo operations" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh Reception" })).toBeVisible();
   });
 
   it("fails closed for field-role sessions without issuing the operations read", () => {
@@ -119,9 +121,7 @@ describe("NewoOperationsPage", () => {
     vi.mocked(loadNewoOperations).mockRejectedValueOnce(new Error("unavailable"));
     renderPage();
 
-    expect(
-      await screen.findByRole("heading", { name: "Newo operations unavailable" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Reception could not load" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
   });
 });

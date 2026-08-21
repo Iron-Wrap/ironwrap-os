@@ -5,6 +5,8 @@ import { getDeviceSecret } from "../auth/device-credential";
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
+import { Textarea } from "../components/ui/textarea";
 import { apiRequest, isRetryableApiError } from "../lib/api";
 import { cacheFieldModel, getCachedFieldModel } from "./field-cache";
 import { queueOutboxAction, saveOutboxAction } from "../storage/outbox";
@@ -173,8 +175,8 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
             Safety
           </h2>
           <p className="mt-1 max-w-3xl leading-6 text-muted">
-            Report a hazard, make an area safe, condemn equipment, or call for rescue. These work
-            with no job open and no signal, and nothing here counts against you.
+            Report a danger, make an area safe, mark equipment unsafe, or call for rescue. You can
+            do this with no job open and no signal. Safety reports do not count against you.
           </p>
         </div>
       </div>
@@ -272,7 +274,7 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
           }
         >
           <Wrench aria-hidden="true" />
-          Condemn equipment
+          Mark equipment unsafe
         </Button>
       </div>
 
@@ -290,8 +292,9 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-sm font-semibold">
                 What happened
-                <select
-                  className="mt-1 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base"
+                <Select
+                  field
+                  className="mt-1"
                   value={draft.occurrenceKind}
                   onChange={(event) =>
                     setDraft({
@@ -305,12 +308,13 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
                       {safetyOccurrenceKindLabels[kind]}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label className="block text-sm font-semibold">
                 How serious
-                <select
-                  className="mt-1 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base"
+                <Select
+                  field
+                  className="mt-1"
                   value={draft.severity}
                   onChange={(event) =>
                     setDraft({ ...draft, severity: event.target.value as SafetySeverity })
@@ -321,7 +325,7 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
                       {safetySeverityLabels[severity]}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </div>
           ) : null}
@@ -354,9 +358,9 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
 
           <label htmlFor={detailId} className="block text-sm font-semibold">
             What you saw
-            <textarea
+            <Textarea
               id={detailId}
-              className="mt-1 min-h-32 w-full rounded-lg border bg-surface-raised p-4 text-base"
+              className="mt-1 min-h-32"
               maxLength={DETAIL_MAX_LENGTH}
               required
               value={detail}
@@ -411,5 +415,5 @@ function draftHeading(kind: SafetyActionKind): string {
       ? "Report a hazard or injury"
       : kind === "make_safe"
         ? "Record making it safe"
-        : "Condemn equipment";
+        : "Mark equipment unsafe";
 }

@@ -301,7 +301,7 @@ test("Now never treats unavailable or partial sources as clear", () => {
 
   assert.equal(model.ui.state, "limited");
   assert.equal(model.ui.primary_action?.kind, "refresh");
-  assert.match(model.ui.sync_label, /not treated as clear/i);
+  assert.match(model.ui.sync_label, /will not mark them as done/i);
   assert.deepEqual(
     model.sources.map(({ id, state }) => ({ id, state })),
     [
@@ -363,7 +363,10 @@ test("Now asks for a fresh read instead of ranking known work above an unavailab
   assert.equal(model.ui.state, "limited");
   assert.equal(model.ui.primary_action?.kind, "refresh");
   assert.equal(model.ui.primary_action?.href, null);
-  assert.match(model.ui.primary_action?.reason ?? "", /cannot safely rank/i);
+  assert.match(
+    model.ui.primary_action?.reason ?? "",
+    /cannot pick the next step/i,
+  );
   assert.equal(model.ui.sections[2]?.cards[0]?.action?.href, "/production");
 });
 
@@ -461,7 +464,7 @@ test("Now surfaces fail-closed signed Facet attention without exposing immutable
 
   assert.equal(model.ui.primary_action?.href, "/facet-designs");
   assert.equal(model.ui.sections[1]?.id, "facet");
-  assert.match(model.ui.sections[1]?.cards[0]?.detail ?? "", /blank Draft/i);
+  assert.match(model.ui.sections[1]?.cards[0]?.detail ?? "", /starts blank/i);
   assert.equal(JSON.stringify(model.ui).includes(designSha256), false);
   assert.equal(JSON.stringify(model.ui).includes(evidenceSha256), false);
 });
@@ -473,22 +476,25 @@ test("Now prioritizes fail-closed signed Facet intake recovery", () => {
       owner: { ok: true, model: owner() },
       facet: {
         ok: true,
-        model: facet([], [
-          {
-            event_id: "facet-unassociated-now-0001",
-            received_at: generatedAt,
-            state: "awaiting_association",
-            status_code: "awaiting_exact_project_identity_association",
-            recovery: "automatic_reconciliation",
-          },
-          {
-            event_id: "facet-rejected-now-0002",
-            received_at: generatedAt,
-            state: "rejected",
-            status_code: "decision_customer_identity_mismatch",
-            recovery: "governed_reissue_required",
-          },
-        ]),
+        model: facet(
+          [],
+          [
+            {
+              event_id: "facet-unassociated-now-0001",
+              received_at: generatedAt,
+              state: "awaiting_association",
+              status_code: "awaiting_exact_project_identity_association",
+              recovery: "automatic_reconciliation",
+            },
+            {
+              event_id: "facet-rejected-now-0002",
+              received_at: generatedAt,
+              state: "rejected",
+              status_code: "decision_customer_identity_mismatch",
+              recovery: "governed_reissue_required",
+            },
+          ],
+        ),
       },
       production: { ok: true, model: production() },
       sales: { ok: true, model: sales() },
@@ -497,9 +503,12 @@ test("Now prioritizes fail-closed signed Facet intake recovery", () => {
   );
 
   assert.equal(model.ui.primary_action?.href, "/facet-designs");
-  assert.equal(model.ui.sections[1]?.cards[0]?.title, "Waiting for the exact project link");
-  assert.equal(model.ui.sections[1]?.cards[1]?.title, "Signed delivery rejected");
-  assert.equal(model.ui.sections[1]?.cards[0]?.action?.label, "Review Facet recovery");
+  assert.equal(
+    model.ui.sections[1]?.cards[0]?.title,
+    "Waiting for the right project link",
+  );
+  assert.equal(model.ui.sections[1]?.cards[1]?.title, "Signed file stopped");
+  assert.equal(model.ui.sections[1]?.cards[0]?.action?.label, "Fix Facet link");
 });
 
 test("Now keeps signed Facet v2 operational evidence read-only even when legacy flags are true", async () => {
@@ -540,8 +549,12 @@ test("Now keeps signed Facet v2 operational evidence read-only even when legacy 
               throw new Error("source_unavailable");
             return { results: [] };
           },
-          first: async () => { throw new Error("source_unavailable"); },
-          run: async () => { throw new Error("source_unavailable"); },
+          first: async () => {
+            throw new Error("source_unavailable");
+          },
+          run: async () => {
+            throw new Error("source_unavailable");
+          },
         };
         return { ...statement, bind: () => statement };
       },
@@ -550,12 +563,20 @@ test("Now keeps signed Facet v2 operational evidence read-only even when legacy 
 
   const model = await buildNowReadModel(
     env,
-    auth(["facet:read", "facet:associate", "approvals:prepare", "estimator:read"]),
+    auth([
+      "facet:read",
+      "facet:associate",
+      "approvals:prepare",
+      "estimator:read",
+    ]),
     new Date(generatedAt),
   );
   assert.equal(model.allowed_actions.includes("facet_design.read"), true);
   assert.equal(model.allowed_actions.includes("facet_design.associate"), false);
-  assert.equal(model.allowed_actions.includes("facet_design.prepare_quote_revision"), false);
+  assert.equal(
+    model.allowed_actions.includes("facet_design.prepare_quote_revision"),
+    false,
+  );
 });
 test("owner Now surfaces publication drift as bounded manual reconciliation", () => {
   const model = projectNowReadModel(
@@ -618,10 +639,10 @@ test("owner Now surfaces publication drift as bounded manual reconciliation", ()
     "/marketing/postiz/11111111-1111-4111-8111-111111111111",
   );
   assert.equal(model.sources[2]?.id, "postiz");
-  assert.match(model.ui.primary_action?.reason ?? "", /reconcile manually/i);
+  assert.match(model.ui.primary_action?.reason ?? "", /check it by hand/i);
   assert.match(
     model.ui.primary_action?.reason ?? "",
-    /retraction is not automated/i,
+    /will not remove a public post on its own/i,
   );
   assert.equal(
     JSON.stringify(model.ui).includes("This full draft belongs only"),
@@ -673,7 +694,7 @@ test("owner Now makes the sole actionable QuickBooks invoice the main call to ac
     model.ui.primary_action?.href,
     "/accounting/quickbooks/final-invoices/qbo-final-invoice%3Ajob-0001",
   );
-  assert.match(model.ui.primary_action?.reason ?? "", /pending review/i);
+  assert.match(model.ui.primary_action?.reason ?? "", /before other work/i);
   assert.deepEqual(model.ui.primary_action?.citation_ids, [
     `qbo-final-invoice:${intentId}`,
   ]);

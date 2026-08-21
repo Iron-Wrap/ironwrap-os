@@ -39,7 +39,7 @@ describe("CustomerPortalView", () => {
   it("does not offer acceptance from a read-only capability without an approved quote", () => {
     render(<CustomerPortalView model={model} portalToken={"a".repeat(43)} />);
 
-    expect(screen.queryByRole("button", { name: /email me a confirmation link/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /send acceptance email/i })).toBeNull();
   });
 
   it("does not offer acceptance when the backend acceptance flow is disabled or not configured", () => {
@@ -72,7 +72,7 @@ describe("CustomerPortalView", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /email me a confirmation link/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /send acceptance email/i })).toBeNull();
   });
 
   it("offers acceptance when the proposal is approved and the backend flow is available", () => {
@@ -106,8 +106,6 @@ describe("CustomerPortalView", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("button", { name: /email me a confirmation link/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /send acceptance email/i })).toBeInTheDocument();
   });
 });

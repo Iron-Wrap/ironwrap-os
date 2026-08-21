@@ -4,6 +4,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 
 const DevicePairingSettings = lazy(async () => ({
@@ -28,15 +29,27 @@ function PlaceholderSurface({
   action?: ReactNode;
 }) {
   return (
-    <section className="space-y-8">
-      <header className="max-w-3xl">
-        <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-surface-muted text-foreground">
-          {icon}
-        </div>
-        <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">{eyebrow}</p>
-        <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">{title}</h1>
-        <p className="mt-3 max-w-2xl text-base leading-7 text-muted">{description}</p>
-      </header>
+    <section className="mx-auto max-w-7xl space-y-6 pb-4">
+      <Card className="overflow-hidden">
+        <header className="min-w-0 p-5 sm:p-7 lg:p-8">
+          <div className="flex min-w-0 items-start gap-4">
+            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+              {icon}
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                {eyebrow}
+              </p>
+              <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                {title}
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                {description}
+              </p>
+            </div>
+          </div>
+        </header>
+      </Card>
       <EmptyState title={emptyTitle} message={emptyMessage} action={action} />
     </section>
   );
@@ -45,12 +58,12 @@ function PlaceholderSurface({
 export function TodayPage() {
   return (
     <PlaceholderSurface
-      eyebrow="Field and operations"
+      eyebrow="Your work"
       title="Today"
-      description="Assigned work will be ordered by what is blocked and what must happen next—not by a generic calendar."
-      emptyTitle="No assigned work is available"
-      emptyMessage="When the live Today read model assigns a job to this role, it will appear here with its location, gate state, and one clear next action. This screen never invents sample jobs."
-      icon={<ClipboardCheck className="size-6" aria-hidden="true" />}
+      description="Work assigned to you shows here. Stopped jobs come first, then what to do next."
+      emptyTitle="No work assigned yet"
+      emptyMessage="When the office assigns a job to you, it will show here with the place and the next step. This screen never makes up jobs."
+      icon={<ClipboardCheck className="size-6 text-accent" aria-hidden="true" />}
     />
   );
 }
@@ -59,15 +72,15 @@ export function JobPage() {
   return (
     <RoleGuard surface="field">
       <PlaceholderSurface
-        eyebrow="Proof Stream"
+        eyebrow="Job"
         title="Job"
-        description="This surface will join scope, gates, evidence, and verified actions around one canonical job identity."
-        emptyTitle="Job proof is not loaded"
-        emptyMessage="The shell is ready, but no live job read model was returned for this route. Return to Today and open an assigned job once the BFF feed is connected."
-        icon={<Hammer className="size-6" aria-hidden="true" />}
+        description="This screen will show the plan, proof, and next step for one job."
+        emptyTitle="This job did not load"
+        emptyMessage="Nothing on this job changed. Go back to Today and open an assigned job."
+        icon={<Hammer className="size-6 text-accent" aria-hidden="true" />}
         action={
           <Button asChild variant="outline">
-            <Link to="/today">Return to Today</Link>
+            <Link to="/today">Back to Today</Link>
           </Button>
         }
       />
@@ -79,12 +92,12 @@ export function CheckInPage() {
   return (
     <RoleGuard surface="field">
       <PlaceholderSurface
-        eyebrow="Offline-first field proof"
+        eyebrow="Check-in"
         title="Check-in"
-        description="Photos and voice come before typing. Every submit will save on the device before it enters the verified sync queue."
-        emptyTitle="Choose an assigned job first"
-        emptyMessage="Open a job from Today to begin its check-in. The future stepper will show the exact proof slots and blockers required for that job."
-        icon={<ShieldCheck className="size-6" aria-hidden="true" />}
+        description="Photos and voice come before typing. Each save stays on this phone until it can send."
+        emptyTitle="Choose a job first"
+        emptyMessage="Open a job from Today to start check-in. The next screen will show the exact photos and notes this job needs."
+        icon={<ShieldCheck className="size-6 text-accent" aria-hidden="true" />}
         action={
           <Button asChild variant="accent">
             <Link to="/today">Open Today</Link>
@@ -97,7 +110,7 @@ export function CheckInPage() {
 
 export function SettingsPage() {
   return (
-    <Suspense fallback={<LoadingState label="Loading crew device controls…" />}>
+    <Suspense fallback={<LoadingState label="Loading device setup…" />}>
       <DevicePairingSettings />
     </Suspense>
   );
@@ -108,8 +121,8 @@ export function NotFoundPage() {
     <main className="grid min-h-dvh place-items-center p-4">
       <ErrorState
         title="That screen was not found"
-        message="The link may be old or incomplete. Return to Today to continue with assigned work."
-        onRetry={() => window.location.assign("/today")}
+        message="The link may be old or incomplete. Go back to your work list."
+        onRetry={() => window.location.assign("/now")}
       />
     </main>
   );

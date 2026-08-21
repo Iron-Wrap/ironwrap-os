@@ -192,21 +192,22 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(
-      screen.getByText(/does not send a message, issue a quote, or alter a customer record/i),
-    ).toBeVisible();
+    expect(screen.getByText(/Check each lead before you call or send anything/i)).toBeVisible();
     expect(screen.getByText("Pat Prospect")).toBeVisible();
-    expect(screen.getByText("Triage unresolved")).toBeVisible();
-    expect(screen.getByText("Non-binding")).toBeVisible();
-    expect(screen.getByText("Customer proposal")).toBeVisible();
-    expect(screen.getByText("Not published")).toBeVisible();
-    expect(screen.getByText(/cannot make quote terms customer-visible/i)).toBeVisible();
+    expect(screen.getByText("Lead check needed")).toBeVisible();
+    expect(screen.getByText("Not final")).toBeVisible();
+    expect(screen.getByText("Customer view")).toBeVisible();
+    expect(screen.getByText("Not shown to customer")).toBeVisible();
+    expect(screen.getByText(/cannot show quote terms to the customer/i)).toBeVisible();
     expect(screen.getByText("Email · Estimate Follow-up · Granted")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Review approvals" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open lead reviews" })).toHaveAttribute(
       "href",
       "/approvals",
     );
-    expect(screen.queryByRole("link", { name: /prepare triage review/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /start lead check/i })).not.toBeInTheDocument();
+    expect(screen.getByText("lead_a")).not.toBeVisible();
+    await userEvent.setup().click(screen.getByText("System details"));
+    expect(screen.getByText("lead_a")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /send|call|email|issue quote|collect payment/i }),
     ).not.toBeInTheDocument();
@@ -220,7 +221,7 @@ describe("SalesDeskPage", () => {
     await user.click(screen.getByRole("button", { name: /all leads/i }));
     expect(screen.getByText("Pat Prospect")).toBeVisible();
     expect(screen.getByText("Morgan Homeowner")).toBeVisible();
-    expect(screen.getByText("No linked communication record returned.")).toBeVisible();
+    expect(screen.getByText("No contact rule was found.")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /quotes/i }));
     expect(screen.getByText("Pat Prospect")).toBeVisible();
@@ -249,7 +250,7 @@ describe("SalesDeskPage", () => {
 
     await screen.findByRole("heading", { name: "Sales desk" });
     expect(screen.getByText("Approved", { exact: true })).toBeVisible();
-    expect(screen.queryByText("Non-binding", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText("Not final", { exact: true })).not.toBeInTheDocument();
   });
 
   it("does not invent a missing proposal state when its source hit the bounded read limit", async () => {
@@ -263,8 +264,8 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.getByText(/Do not infer customer publication/i)).toBeVisible();
-    expect(screen.queryByText(/No proposal evidence links to this quote/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Do not say the customer can see it/i)).toBeVisible();
+    expect(screen.queryByText(/No customer view was found/i)).not.toBeInTheDocument();
   });
 
   it("keeps a returned proposal publication-inconclusive when its bounded source is partial", async () => {
@@ -276,10 +277,10 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.getByText("Publication state inconclusive")).toBeVisible();
-    expect(screen.getByText(/Do not infer customer publication/i)).toBeVisible();
-    expect(screen.queryByText("Publication recorded")).not.toBeInTheDocument();
-    expect(screen.queryByText("Not published")).not.toBeInTheDocument();
+    expect(screen.getByText("Customer view is not known")).toBeVisible();
+    expect(screen.getByText(/Do not say the customer can see it/i)).toBeVisible();
+    expect(screen.queryByText("Customer view saved")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not shown to customer")).not.toBeInTheDocument();
   });
 
   it("keeps a recorded publication visible when a newer office draft exists", async () => {
@@ -301,8 +302,8 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.getByText("Publication recorded")).toBeVisible();
-    expect(screen.getByText(/latest returned office pack is Draft/i)).toBeVisible();
+    expect(screen.getByText("Customer view saved")).toBeVisible();
+    expect(screen.getByText(/newest office version is Draft/i)).toBeVisible();
   });
 
   it("opens the source workbench only when the BFF grants estimator review", async () => {
@@ -313,7 +314,7 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.getByRole("link", { name: /open measurement workbench/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /open roof work/i })).toHaveAttribute(
       "href",
       "/estimator/jobs/JOB-A",
     );
@@ -327,7 +328,7 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.getByRole("link", { name: /prepare triage review/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /start lead check/i })).toHaveAttribute(
       "href",
       "/sales/leads/LEAD-A/triage",
     );
@@ -348,7 +349,7 @@ describe("SalesDeskPage", () => {
     renderSales();
 
     await screen.findByRole("heading", { name: "Sales desk" });
-    expect(screen.queryByRole("link", { name: /prepare triage review/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /start lead check/i })).not.toBeInTheDocument();
   });
 
   it("keeps the sales payload out of field devices before it asks the BFF", async () => {

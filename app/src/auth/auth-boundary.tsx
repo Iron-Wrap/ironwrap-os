@@ -33,19 +33,17 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
     },
   });
 
-  if (sessionQuery.isPending) return <LoadingState label="Checking this device…" />;
+  if (sessionQuery.isPending) return <LoadingState label="Checking your sign-in…" />;
   if (sessionQuery.isError) {
     const offline = sessionQuery.error instanceof ApiError && sessionQuery.error.status === 0;
     return (
       <div className="grid min-h-dvh place-items-center p-4">
         <ErrorState
-          title={offline ? "This device is not ready offline" : "IronWrap OS is unavailable"}
+          title={offline ? "This device needs the internet" : "IronWrap OS is not ready"}
           message={
-            offline && sessionQuery.error instanceof ApiError
-              ? sessionQuery.error.message
-              : offline
-                ? "Reconnect once so IronWrap OS can verify this device."
-                : "This app is not available yet. Try again after it has been activated."
+            offline
+              ? "Go online once so we can check this device."
+              : "This app is not ready yet. Try again later."
           }
           onRetry={() => void sessionQuery.refetch()}
         />
@@ -58,13 +56,13 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       <main className="flex min-h-dvh items-center justify-center p-4 sm:p-8">
         {session.stale_fields.includes("field_device_repair_required") ? (
           <ErrorState
-            title="This field device needs a new pairing"
-            message="Its trusted device session is no longer active. Ask the office to issue a fresh QR code before using Field Companion again."
+            title="Pair this crew phone again"
+            message="This phone is no longer paired. Ask the office for a new QR code."
           />
         ) : fieldCompanionPath ? (
           <ErrorState
-            title="Pair this Field Companion device"
-            message="Field work opens only after the office issues a one-time QR code. Ask an owner or operations teammate to open Settings, then Crew devices, and scan a fresh code on this device."
+            title="Pair this crew phone"
+            message="Ask an owner or ops user to open Settings, then Crew devices. Scan the new QR code on this phone."
           />
         ) : unifiedEntry ? (
           <UnifiedEntryAuth />
@@ -122,14 +120,12 @@ function UnifiedEntryAuth() {
       <Card>
         <CardHeader>
           <CardTitle>Crew phone</CardTitle>
-          <CardDescription>
-            Field Companion uses a supervised QR pairing instead of an email sign-in.
-          </CardDescription>
+          <CardDescription>Crew phones use a QR code. You do not need email.</CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-sm leading-6 text-muted">
-            Ask an owner or operations teammate to open Settings, then Crew devices. Scan the
-            one-time QR code on this phone; assigned work will open automatically.
+            Ask an owner or ops user to open Settings, then Crew devices. Scan the QR code on this
+            phone. Your work will open.
           </p>
         </CardContent>
       </Card>

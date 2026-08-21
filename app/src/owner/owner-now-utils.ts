@@ -4,25 +4,25 @@ const laneDefinitions = [
   {
     id: "work_stopped",
     title: "Work stopped",
-    description: "Verified crew reports and blocked production gates.",
+    description: "Crew reports and job gates that stop work.",
     kinds: ["field_blocker", "blocked_gate"],
   },
   {
     id: "operating_exceptions",
-    title: "Operating exceptions",
-    description: "Automation, materials, and finance records that need review.",
+    title: "Needs a check",
+    description: "App, material, and money records to check.",
     kinds: ["automation_incident", "material_exception", "finance_exception"],
   },
   {
     id: "lead_attention",
-    title: "Lead attention",
-    description: "Lead triage state and acknowledgement evidence.",
+    title: "Lead checks",
+    description: "New leads and reply proof to check.",
     kinds: ["untriaged_lead", "lead_triage_unknown"],
   },
   {
     id: "other_exceptions",
-    title: "Other exceptions",
-    description: "Records that need review but are not yet classified in this board.",
+    title: "Other checks",
+    description: "Saved records that still need a check.",
     kinds: [],
   },
 ] as const;
@@ -130,30 +130,30 @@ export function humanizeSource(value: string): string {
 export function humanizeStaleField(value: string): string {
   switch (value) {
     case "exceptions.next_action":
-      return "Action guidance is unavailable in this read-only queue.";
+      return "The next step is missing from this list.";
     case "exceptions.due_at":
-      return "Some due timing is unavailable.";
+      return "Some due times are missing.";
     case "exceptions.partial_sources":
-      return "Some source totals are bounded.";
+      return "Some counts may be low.";
     default:
-      return `This read may be stale for ${humanizeSource(value)}.`;
+      return `${humanizeSource(value)} may be old.`;
   }
 }
 
 export function mctbEvidenceLabel(state: NonNullable<OwnerException["mctb"]>["state"]): string {
   switch (state) {
     case "provider_accepted_within_sla":
-      return "Provider accepted within 60s";
+      return "Reply was saved within 60 seconds";
     case "provider_accepted_late":
-      return "Provider accepted after 60s";
+      return "Reply was saved after 60 seconds";
     case "no_eligible_channel":
-      return "No eligible auto-ack channel";
+      return "No safe reply path was found";
     case "awaiting_proof":
-      return "Awaiting provider proof";
+      return "Waiting for reply proof";
     case "unproven_after_sla":
-      return "No provider proof after 60s";
+      return "No reply proof after 60 seconds";
     case "time_unavailable":
-      return "Intake time unavailable";
+      return "Lead time is not known";
   }
 }
 

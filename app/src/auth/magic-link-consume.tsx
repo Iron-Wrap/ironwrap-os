@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
-import { apiCommand, ApiError } from "../lib/api";
+import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { clearPendingMagicLinkToken } from "./magic-link-fragment";
 import { sessionQueryKey } from "./session-query";
@@ -15,7 +15,6 @@ export function MagicLinkConsume({ token }: { token?: string }) {
   const [state, setState] = useState<"idle" | "pending" | "error" | "complete">(
     token ? "pending" : "idle",
   );
-  const [error, setError] = useState<unknown>();
 
   useEffect(() => {
     if (!token || started.current) return;
@@ -28,8 +27,7 @@ export function MagicLinkConsume({ token }: { token?: string }) {
         await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
         await navigate({ to: "/today", replace: true });
       })
-      .catch((caught: unknown) => {
-        setError(caught);
+      .catch(() => {
         setState("error");
       });
   }, [navigate, queryClient, token]);
@@ -37,21 +35,17 @@ export function MagicLinkConsume({ token }: { token?: string }) {
   if (!token) {
     return (
       <ErrorState
-        title="This sign-in link is incomplete"
-        message="Request a fresh link from the sign-in screen. No account changes were made."
+        title="This sign-in link is not complete"
+        message="Ask for a new link. We did not change your account."
       />
     );
   }
-  if (state === "pending") return <LoadingState label="Verifying your sign-in link…" />;
+  if (state === "pending") return <LoadingState label="Checking your sign-in link…" />;
   if (state === "error") {
     return (
       <ErrorState
         title="This sign-in link did not work"
-        message={
-          error instanceof ApiError
-            ? error.message
-            : "The link may be expired or already used. Request a fresh one."
-        }
+        message="The link may be old or already used. Ask for a new one."
       />
     );
   }

@@ -98,13 +98,13 @@ export function TurnstileChallenge({
             if (cancelled) return;
             setState("failed");
             onTokenChange("");
-            onFailure("The security check did not complete. Reload the page and try again.");
+            onFailure("The security check did not finish. Reload the page and try again.");
           },
           "expired-callback": () => {
             if (cancelled) return;
             setState("ready");
             onTokenChange("");
-            onFailure("The security check expired. Please complete it again.");
+            onFailure("The security check ended. Please do it again.");
           },
         });
       })
@@ -112,7 +112,7 @@ export function TurnstileChallenge({
         if (cancelled) return;
         setState("failed");
         onTokenChange("");
-        onFailure("The security check could not load. Reload the page and try again.");
+        onFailure("The security check did not load. Reload the page and try again.");
       });
 
     return () => {
@@ -127,7 +127,7 @@ export function TurnstileChallenge({
     state === "verified"
       ? "Security check complete."
       : state === "failed"
-        ? "Security check unavailable."
+        ? "Security check not ready."
         : state === "loading"
           ? "Preparing security check…"
           : "Complete the security check to continue.";

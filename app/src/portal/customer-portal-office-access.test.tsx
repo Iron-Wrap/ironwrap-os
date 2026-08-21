@@ -92,16 +92,16 @@ describe("CustomerPortalOfficeAccess", () => {
 
     renderAccess();
 
-    await screen.findByText("No customer portal link has been issued for this project.");
-    fireEvent.change(screen.getByLabelText("Access expires at"), {
+    await screen.findByText("No customer link has been made for this job.");
+    fireEvent.change(screen.getByLabelText("Link ends"), {
       target: { value: datetimeLocal(new Date(now + 60 * 60 * 1_000 + 15_000)) },
     });
-    const issue = screen.getByRole("button", { name: "Issue customer link" });
+    const issue = screen.getByRole("button", { name: "Make customer link" });
     expect(issue).toBeEnabled();
     nowSpy.mockReturnValue(now + 90_000);
     fireEvent.click(issue);
 
-    expect(await screen.findByText("Choose a current customer-access expiry.")).toBeInTheDocument();
+    expect(await screen.findByText("Pick a new end time.")).toBeInTheDocument();
     expect(issueCustomerPortalLink).not.toHaveBeenCalled();
   });
 
@@ -114,9 +114,9 @@ describe("CustomerPortalOfficeAccess", () => {
 
     const { queryClient } = renderAccess();
 
-    expect(await screen.findByText("Current customer access")).toBeInTheDocument();
-    const expiry = screen.getByLabelText("Access expires at");
-    const issue = screen.getByRole("button", { name: "Replace active link" });
+    expect(await screen.findByText("Current customer link")).toBeInTheDocument();
+    const expiry = screen.getByLabelText("Link ends");
+    const issue = screen.getByRole("button", { name: "Replace link" });
     expect(issue).toBeDisabled();
     fireEvent.change(expiry, { target: { value: futureExpiryInput() } });
     expect(issue).toBeEnabled();
@@ -146,11 +146,11 @@ describe("CustomerPortalOfficeAccess", () => {
 
     renderAccess();
 
-    await screen.findByText("Current customer access");
-    fireEvent.click(screen.getByRole("button", { name: "Revoke access" }));
+    await screen.findByText("Current customer link");
+    fireEvent.click(screen.getByRole("button", { name: "Turn off access" }));
     expect(revokeCustomerPortalLink).not.toHaveBeenCalled();
-    expect(screen.getByText("Revoke this customer link?")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Revoke link" }));
+    expect(screen.getByText("Turn off this customer link?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn off link" }));
     await waitFor(() => {
       expect(revokeCustomerPortalLink).toHaveBeenCalledWith(ownerSession, activeLink.id);
     });
@@ -159,7 +159,7 @@ describe("CustomerPortalOfficeAccess", () => {
   it("never reads or changes access from an offline session", async () => {
     renderAccess({ ...ownerSession, csrf_token: "offline-session-no-csrf" });
 
-    expect(screen.getByText("Customer links are unavailable offline.")).toBeInTheDocument();
+    expect(screen.getByText("Customer links need the internet.")).toBeInTheDocument();
     expect(loadCustomerPortalLinks).not.toHaveBeenCalled();
     expect(issueCustomerPortalLink).not.toHaveBeenCalled();
   });
@@ -171,7 +171,7 @@ describe("CustomerPortalOfficeAccess", () => {
     };
     renderAccess(fieldSession);
 
-    expect(screen.queryByRole("heading", { name: "Customer access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Customer link" })).not.toBeInTheDocument();
     expect(loadCustomerPortalLinks).not.toHaveBeenCalled();
   });
 });

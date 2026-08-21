@@ -80,9 +80,7 @@ async function assertCheckPointTargets(page: Page): Promise<void> {
 
 async function seedPairedFieldDevice(page: Page, proof = "a".repeat(43)) {
   await page.goto("/today");
-  await expect(
-    page.getByRole("heading", { name: "Pair this Field Companion device" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pair this crew phone" })).toBeVisible();
   await page.evaluate(async (deviceProof) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("ironwrap-os");
@@ -125,7 +123,7 @@ test.describe("Vehicle rail mobile acceptance", () => {
 
   test("the field navigation reaches the vehicle rail on a phone", async ({ page }) => {
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today", exact: true })).toBeVisible();
 
     const nav = page.getByRole("navigation", { name: "Main navigation" }).last();
     const vehicle = nav.getByRole("link", { name: "Vehicle" });

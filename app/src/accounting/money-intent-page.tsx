@@ -7,9 +7,10 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
-import { Notice } from "../service/service-notice";
 import { MoneyBadge } from "./money-badge";
 import {
   approveAccountingIntent,
@@ -178,8 +179,8 @@ function MoneyIntentContent() {
       </header>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect before deciding anything">
-          Money decisions are never queued offline.
+        <Notice tone="warning" title="Reconnect before you decide">
+          IronWrap must reach the server before you can make a choice.
         </Notice>
       ) : null}
       {actionError ? (
@@ -195,8 +196,8 @@ function MoneyIntentContent() {
           {outcome.replayed
             ? "This exact decision was already recorded, so nothing happened a second time."
             : outcome.compensation_plan
-              ? `A reversal of ${amountLabel(outcome.compensation_plan.magnitudeAmount, intent.currency)} is authorized as ${remedyLabel(outcome.compensation_plan.remedy)}. Nothing has been sent to QuickBooks yet.`
-              : "The decision is recorded. QuickBooks is only ever changed by a confirmed side effect."}
+              ? `${remedyLabel(outcome.compensation_plan.remedy)} is approved for ${amountLabel(outcome.compensation_plan.magnitudeAmount, intent.currency)}. Nothing has been sent to QuickBooks yet.`
+              : "Your choice is saved. IronWrap will only change QuickBooks after it gets a clear answer."}
         </Notice>
       ) : null}
 
@@ -204,8 +205,8 @@ function MoneyIntentContent() {
         <div className="border-b border-border px-4 py-4 sm:px-6">
           <h2 className="text-lg font-bold tracking-[-0.02em]">What you can do</h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            Nothing here deletes anything. A reversal is a new entry in QuickBooks that undoes the
-            first one, and it needs your authorization.
+            Nothing here is deleted. A new QuickBooks entry can undo the first one after you approve
+            it.
           </p>
         </div>
         <div className="flex flex-col gap-3 px-4 py-4 sm:px-6">
@@ -225,9 +226,9 @@ function MoneyIntentContent() {
               <label className="text-sm font-bold" htmlFor="money-reject-reason">
                 Reason for not approving
               </label>
-              <select
+              <Select
                 id="money-reject-reason"
-                className="min-h-14 w-full rounded-md border border-border bg-surface px-3 text-base"
+                className="min-h-14 rounded-md bg-surface"
                 value={rejectReason}
                 disabled={busy}
                 onChange={(event) =>
@@ -239,7 +240,7 @@ function MoneyIntentContent() {
                     {reason.replace(/_/gu, " ")}
                   </option>
                 ))}
-              </select>
+              </Select>
               <Button
                 type="button"
                 variant="outline"
@@ -262,7 +263,7 @@ function MoneyIntentContent() {
               onClick={() => mutation.mutate({ kind: "reconcile" })}
             >
               <RefreshCw aria-hidden="true" />
-              Re-read QuickBooks
+              Check QuickBooks again
             </Button>
           ) : null}
           {canCompensate
@@ -289,20 +290,19 @@ function MoneyIntentContent() {
       </section>
 
       {liveException ? (
-        <section aria-label="Open exception" className="border border-danger/35 bg-danger-soft">
+        <section aria-label="Open money issue" className="border border-danger/35 bg-danger-soft">
           <div className="px-4 py-4 sm:px-6">
             <h2 className="text-lg font-bold tracking-[-0.02em]">
               {reasonLabel(liveException.reason_code)}
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Open for {ageLabel(liveException.age_seconds)}. QuickBooks supports the remedies
-              listed above; nothing else is offered because nothing else exists.
+              Open for {ageLabel(liveException.age_seconds)}. Use one of the safe choices above.
             </p>
             <Link
               to="/accounting/exceptions"
               className="mt-3 inline-flex min-h-12 items-center font-bold underline underline-offset-4"
             >
-              Open the exception queue
+              Open money issues
             </Link>
           </div>
         </section>
@@ -310,37 +310,33 @@ function MoneyIntentContent() {
 
       <ComparisonSection detail={detail} />
 
-      <section aria-label="Bound facts and evidence" className="border border-border bg-surface">
-        <div className="border-b border-border px-4 py-4 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">Bound facts and evidence</h2>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            What these figures were read from, and the fingerprints that prove nothing was edited
-            afterwards.
-          </p>
-        </div>
+      <details className="border border-border bg-surface">
+        <summary className="min-h-14 cursor-pointer px-4 py-4 text-lg font-bold tracking-[-0.02em] sm:px-6">
+          System details
+        </summary>
         <dl className="divide-y divide-border">
           <Row label="QuickBooks company">{detail.evidence.realm_id}</Row>
-          <Row label="QuickBooks entity">
+          <Row label="QuickBooks item">
             {detail.evidence.provider_entity_id
               ? `${detail.evidence.provider_entity_type} ${detail.evidence.provider_entity_id}`
               : "Not created yet"}
           </Row>
-          <Row label="Authority ceiling">
+          <Row label="Approval limit">
             {amountLabel(detail.evidence.authority_max_amount, intent.currency)}
           </Row>
-          <Row label="Bound figures fingerprint">
+          <Row label="Saved totals code">
             <code className="break-all text-xs">{detail.evidence.basis_sha256}</code>
           </Row>
-          <Row label="Expected fingerprint">
+          <Row label="Expected code">
             <code className="break-all text-xs">{detail.evidence.expected_sha256}</code>
           </Row>
           {detail.tax_bindings.map((binding) => (
             <Row key={binding.snapshot_id} label={`Tax rate (${binding.tax_code})`}>
-              {binding.jurisdiction} · bound {binding.bound_at}
+              {binding.jurisdiction} · saved {formatMoment(binding.bound_at)}
             </Row>
           ))}
         </dl>
-      </section>
+      </details>
 
       <section aria-label="What has happened" className="border border-border bg-surface">
         <div className="border-b border-border px-4 py-4 sm:px-6">
@@ -349,10 +345,10 @@ function MoneyIntentContent() {
         <ol className="divide-y divide-border">
           {detail.events.map((event) => (
             <li key={event.event_seq} className="px-4 py-3 text-sm leading-6 sm:px-6">
-              <span className="font-bold">{event.state_to}</span>
+              <span className="font-bold">{plainLabel(event.state_to)}</span>
               <span className="text-muted">
                 {" "}
-                · {event.event_type} · {event.occurred_at}
+                · {plainLabel(event.event_type)} · {formatMoment(event.occurred_at)}
               </span>
               {event.detail_code ? (
                 <span className="block text-muted">{reasonLabel(event.detail_code)}</span>
@@ -368,25 +364,22 @@ function MoneyIntentContent() {
 function ComparisonSection({ detail }: { detail: AccountingIntentDetailResponse }) {
   const comparison = detail.comparison;
   return (
-    <section
-      aria-label="Our figures against QuickBooks"
-      className="border border-border bg-surface"
-    >
+    <section aria-label="IronWrap and QuickBooks" className="border border-border bg-surface">
       <div className="border-b border-border px-4 py-4 sm:px-6">
-        <h2 className="text-lg font-bold tracking-[-0.02em]">Our figures against QuickBooks</h2>
+        <h2 className="text-lg font-bold tracking-[-0.02em]">IronWrap and QuickBooks</h2>
         <p className="mt-1 text-sm leading-6 text-muted">
           {comparison.awaiting_readback
-            ? "Nothing has been read back from QuickBooks yet, so there is nothing to compare."
+            ? "QuickBooks has not answered yet, so there is nothing to check."
             : comparison.hashes_agree
-              ? `QuickBooks agrees with everything we bound. Last read ${comparison.read_at}.`
-              : `QuickBooks differs from what we expected. Last read ${comparison.read_at}.`}
+              ? `The numbers match. Last checked ${formatMoment(comparison.read_at)}.`
+              : `The numbers do not match. Last checked ${formatMoment(comparison.read_at)}.`}
         </p>
       </div>
       <dl className="divide-y divide-border">
         {comparison.fields.map((field) => (
           <div key={field.field} className="px-4 py-3 sm:px-6">
             <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              {field.field.replace(/_/gu, " ")}
+              {fieldLabel(field.field)}
             </dt>
             <dd className="mt-1 grid gap-1 text-sm leading-6 sm:grid-cols-2">
               <span>
@@ -430,6 +423,30 @@ function renderValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+function plainLabel(value: string): string {
+  const words = value.replace(/_/gu, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function fieldLabel(field: string): string {
+  const labels: Record<string, string> = {
+    realm_id: "QuickBooks company",
+    provider_entity_type: "QuickBooks item type",
+    provider_entity_id: "QuickBooks item",
+    total_amount: "Total amount",
+    currency: "Currency",
+  };
+  return labels[field] ?? plainLabel(field);
+}
+
+function formatMoment(value: string | null): string {
+  if (!value) return "not yet";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 /**

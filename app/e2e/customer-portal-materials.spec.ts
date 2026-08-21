@@ -93,8 +93,8 @@ test.describe("Customer portal materials mobile acceptance", () => {
       await expect(page.getByRole("heading", { name })).toBeVisible();
     }
     // Cheapest first, by the DocType's own Good/Better/Best tier order.
-    await expect(page.getByText("Included in your current price")).toBeVisible();
-    await expect(page.getByText("+$2,400 vs. your current price")).toBeVisible();
+    await expect(page.getByText("In your current price")).toBeVisible();
+    await expect(page.getByText("Costs $2,400 more")).toBeVisible();
 
     await assertNoHorizontalScroll(page, "portal materials");
     await assertActionsAreReachable(page, "portal materials");
@@ -118,11 +118,11 @@ test.describe("Customer portal materials mobile acceptance", () => {
 
     await openPortal(page);
     const card = page.getByRole("region", { name: "Charcoal standing seam" });
-    await card.getByRole("button", { name: "Choose this option" }).click();
+    await card.getByRole("button", { name: "Pick this option" }).click();
 
-    await expect(page.getByRole("status")).toContainText("You chose Charcoal standing seam");
+    await expect(page.getByRole("status")).toContainText("You picked Charcoal standing seam");
     // A preference is not a purchase. The sentence has to say so.
-    await expect(page.getByRole("status")).toContainText("nothing is billed or ordered");
+    await expect(page.getByRole("status")).toContainText("does not order or bill anything");
     await expect(card.getByRole("button", { name: "Chosen" })).toBeDisabled();
 
     const decision = posts.find((post) => post.path === "/api/v1/customer-portal/decision");
@@ -142,9 +142,9 @@ test.describe("Customer portal materials mobile acceptance", () => {
     await openPortal(page);
     await page
       .getByRole("region", { name: "Matte black snap-lock" })
-      .getByRole("button", { name: "Choose this option" })
+      .getByRole("button", { name: "Pick this option" })
       .click();
-    await expect(page.getByRole("status")).toContainText("You chose Matte black snap-lock");
+    await expect(page.getByRole("status")).toContainText("You picked Matte black snap-lock");
 
     const recorded = await (await request.get("/__acceptance/customer-portal/decisions")).json();
     expect(recorded.decisions).toHaveLength(1);
@@ -163,11 +163,11 @@ test.describe("Customer portal materials mobile acceptance", () => {
 
     await page
       .getByRole("region", { name: "Charcoal standing seam" })
-      .getByRole("button", { name: "Choose this option" })
+      .getByRole("button", { name: "Pick this option" })
       .click();
 
     const alert = page.getByRole("alert");
-    await expect(alert).toContainText(/could not save that choice/i);
+    await expect(alert).toContainText(/could not save your choice/i);
     await expect(page.getByText("decision_rejected")).toHaveCount(0);
 
     await assertNoHorizontalScroll(page, "portal materials error");

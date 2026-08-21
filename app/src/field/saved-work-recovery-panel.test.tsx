@@ -97,9 +97,9 @@ describe("SavedWorkRecoveryPanel", () => {
     const heading = await screen.findByRole("heading", { name: "One saved item needs review" });
     expect(heading.closest("section")).toHaveAttribute("id", "saved-work");
     expect(screen.getByRole("heading", { name: "Field check-in · job JOB-1042" })).toBeVisible();
-    expect(screen.getByText("The active assignment changed in the office.")).toBeVisible();
-    expect(screen.getByText(/office copy changed \(assignment_changed\)/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Retry saved item" })).not.toBeInTheDocument();
+    expect(screen.getByText("The office copy changed after this item was saved.")).toBeVisible();
+    expect(screen.getByText(/office copy changed\. Keep this item saved/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect((await getOutboxAction("assignment-conflict"))?.state).toBe("needs_attention");
   });
 
@@ -115,8 +115,8 @@ describe("SavedWorkRecoveryPanel", () => {
     const user = userEvent.setup();
     render(<SavedWorkRecoveryPanel session={session} />);
 
-    await screen.findByRole("button", { name: "Retry saved item" });
-    await user.click(screen.getByRole("button", { name: "Retry saved item" }));
+    await screen.findByRole("button", { name: "Try again" });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(async () => {
       expect((await getOutboxAction("safe-retry"))?.state).toBe("queued");
@@ -160,7 +160,7 @@ describe("SavedWorkRecoveryPanel", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Stop Work report · package WP-1042-v3 · job JOB-1042",
+        name: "Stop Work report · plan WP-1042-v3 · job JOB-1042",
       }),
     ).toBeVisible();
   });

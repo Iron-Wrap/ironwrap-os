@@ -148,17 +148,13 @@ describe("CheckInPage", () => {
     expect(screen.getByText("roof-condition.jpg")).toBeVisible();
     expect(screen.getByText("roof-edge.jpg")).toBeVisible();
     expect(screen.getByText(/2 of 12 items/i)).toBeVisible();
-    expect(
-      screen.getByText(
-        /Selected media remains internal. It is only in this form until device save/i,
-      ),
-    ).toBeVisible();
+    expect(screen.getByText(/Your files stay in this form until you save them/i)).toBeVisible();
     expect(screen.queryByText(/photos saved for this action/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove roof-condition.jpg" }));
     expect(screen.queryByText("roof-condition.jpg")).not.toBeInTheDocument();
     expect(screen.getByText(/1 of 12 items/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Remove roof-edge.jpg" }));
-    expect(screen.getByText(/No media selected/i)).toBeVisible();
+    expect(screen.getByText(/No files added/i)).toBeVisible();
     expect(screen.getByRole("button", { name: "Continue to review" })).toHaveClass("min-h-16");
     photoInput.focus();
     expect(photoInput).toHaveFocus();
@@ -174,12 +170,12 @@ describe("CheckInPage", () => {
     renderCheckIn();
 
     await user.click(await screen.findByRole("button", { name: "Continue to review" }));
-    expect(screen.getByRole("heading", { name: "Record the condition" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Add job details" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Report a blocker" }));
     expect(screen.getByLabelText("Blocker type")).toBeVisible();
     expect(screen.getByLabelText("What must happen next?")).toBeVisible();
 
-    await user.click(screen.getByText("Add device location (optional)"));
+    await user.click(screen.getByText("Add this phone's location (optional)"));
     await user.click(screen.getByRole("button", { name: "Add device location" }));
     expect(screen.getByText("Location is not available on this device.")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -188,9 +184,7 @@ describe("CheckInPage", () => {
   it("requires the server capability as well as the active assignment", async () => {
     renderCheckIn(jobModel({ allowed_actions: [] }));
 
-    expect(
-      await screen.findByRole("heading", { name: "Field capture is not permitted" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "You cannot add a check-in" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Take photos/i })).not.toBeInTheDocument();
   });
 });

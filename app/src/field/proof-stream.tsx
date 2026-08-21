@@ -34,8 +34,8 @@ export function ProofStream({
   if (items.length === 0) {
     return (
       <EmptyState
-        title="No verified proof yet"
-        message="Captured field work will appear here only after the exact device action is verified in raw storage and Frappe."
+        title="No sent job proof yet"
+        message="Photos, notes, and check-ins show here after the server gets them."
       />
     );
   }
@@ -55,11 +55,11 @@ export function ProofStream({
   return (
     <div className="space-y-4">
       <div
-        className="relative overflow-y-auto rounded-xl border bg-surface"
+        className="relative overflow-y-auto rounded-lg border bg-surface"
         style={{ height: Math.min(VIEWPORT_HEIGHT, items.length * ROW_HEIGHT) }}
         onScroll={trackScroll}
         role="feed"
-        aria-label="Job proof stream"
+        aria-label="Job proof"
         aria-busy={loadingMore}
       >
         <div className="relative" style={{ height: items.length * ROW_HEIGHT }}>
@@ -79,10 +79,10 @@ export function ProofStream({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-                      {item.proof_slot ?? item.type ?? "Field proof"}
+                      {item.proof_slot ?? item.type ?? "Job proof"}
                     </p>
                     <p className="mt-1 line-clamp-2 font-bold">
-                      {item.summary ?? item.type ?? "Verified field record"}
+                      {item.summary ?? item.type ?? "Saved field note"}
                     </p>
                   </div>
                   <span
@@ -96,7 +96,7 @@ export function ProofStream({
                 <p className="mt-2 text-xs text-muted">
                   {formatTime(item.occurred_at, locale, timeZone)} ·{" "}
                   {item.source ?? "Source unavailable"} ·{" "}
-                  {item.customer_safe ? "Customer-safe" : "Internal"}
+                  {item.customer_safe ? "Safe to share" : "Team only"}
                 </p>
               </article>
             );
@@ -112,11 +112,11 @@ export function ProofStream({
           busy={loadingMore}
           onClick={onLoadMore}
         >
-          Load older proof
+          Show older proof
         </Button>
       ) : (
         <p className="text-center text-sm text-muted" role="status">
-          All loaded proof is shown.
+          All proof is shown.
         </p>
       )}
     </div>

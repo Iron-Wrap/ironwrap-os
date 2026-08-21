@@ -135,7 +135,7 @@ export function TodayPage() {
   const assignmentCount = today.jobs.length + today.work_objects.length;
 
   return (
-    <section className="mx-auto max-w-5xl space-y-7 pb-4">
+    <section className="mx-auto max-w-6xl space-y-5 pb-4">
       <TodayDispatchHeader
         date={today.date}
         jobCount={assignmentCount}
@@ -159,32 +159,34 @@ export function TodayPage() {
         <EmptyState
           title={
             session.user.role === "field"
-              ? "No job packets are assigned to this device today"
-              : "No active assignments were returned today"
+              ? "No jobs are on this phone today"
+              : "No work is assigned today"
           }
           message={
             session.user.role === "field"
-              ? "Do not travel based on this screen. Ask the office to confirm an active assignment before leaving."
-              : "This list reflects only assignments available to your current role."
+              ? "Do not leave for a site yet. Ask the office to check your work list."
+              : "This list shows only the work you can open."
           }
         />
       ) : (
         <section aria-labelledby="today-run-sheet-heading">
-          <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
+          <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
             <div>
-              <p className="text-sm font-semibold text-muted">Departure and site preparation</p>
+              <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+                Before you leave
+              </p>
               <h2
                 id="today-run-sheet-heading"
-                className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+                className="mt-1 text-2xl font-black tracking-[-0.035em]"
               >
-                Run sheet
+                Today's work
               </h2>
             </div>
             <p className="text-sm font-semibold text-muted">
               {assignmentCount} {assignmentCount === 1 ? "assignment" : "assignments"}
             </p>
           </header>
-          <ol className="divide-y divide-border">
+          <ol className="mt-4 space-y-3">
             {today.jobs.map((job) => (
               <TodayJobRow
                 key={job.id}
@@ -199,9 +201,7 @@ export function TodayPage() {
           </ol>
           {today.work_objects.length > 0 ? (
             <>
-              <h3 className="mt-8 border-b border-border pb-4 text-lg font-black">
-                Typed physical work
-              </h3>
+              <h3 className="mt-8 border-b border-border pb-4 text-lg font-black">Other work</h3>
               <ol className="divide-y divide-border">
                 {today.work_objects.map((workObject) => (
                   <TodayWorkObjectRow
@@ -233,35 +233,36 @@ function TodayDispatchHeader({
   dateOptions: FieldDateOptions;
 }) {
   return (
-    <header className="border-b border-border pb-5 sm:pb-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <header className="border-b border-border pb-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-muted">Field dispatch</p>
-          <h1 className="mt-1 text-4xl font-black tracking-[-0.045em] sm:text-5xl">Today</h1>
-          <p className="mt-2 text-base leading-6 text-muted sm:text-lg">
+          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Your work</p>
+          <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] sm:text-4xl">Today</h1>
+          <p className="mt-1.5 text-sm leading-6 text-muted sm:text-base">
             {formatFieldDay(date, dateOptions)} · {jobCount} {jobCount === 1 ? "site" : "sites"}
           </p>
         </div>
-        <div
-          className={
-            offline
-              ? "flex min-h-12 items-center gap-2 border border-warning/35 bg-warning-soft px-3 text-sm font-bold text-warning"
-              : "flex min-h-12 items-center gap-2 border border-info/35 bg-info-soft px-3 text-sm font-bold text-info"
-          }
-          role="status"
-        >
-          {offline ? (
-            <AlertTriangle className="size-5" aria-hidden="true" />
-          ) : (
-            <ClipboardCheck className="size-5" aria-hidden="true" />
-          )}
-          <span>{offline ? "Offline snapshot" : "Current assignment read"}</span>
+        <div className="flex flex-col items-start gap-1.5 sm:items-end">
+          <div
+            className={
+              offline
+                ? "inline-flex min-h-10 items-center gap-2 rounded-lg border border-warning/30 bg-warning-soft/45 px-3 text-sm font-bold text-foreground"
+                : "inline-flex min-h-10 items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 text-sm font-bold text-foreground shadow-sm"
+            }
+            role="status"
+          >
+            {offline ? (
+              <AlertTriangle className="size-[1.125rem] text-warning" aria-hidden="true" />
+            ) : (
+              <ClipboardCheck className="size-[1.125rem] text-accent" aria-hidden="true" />
+            )}
+            <span>{offline ? "Saved copy" : "Up to date"}</span>
+          </div>
+          <p className="text-xs leading-5 text-muted">
+            {offline ? "Saved" : "Generated"} {formatFieldTimestamp(generatedAt, dateOptions)}
+          </p>
         </div>
       </div>
-      <p className="mt-4 text-sm leading-6 text-muted">
-        {offline ? "Saved schedule" : "Read generated"}{" "}
-        {formatFieldTimestamp(generatedAt, dateOptions)}
-      </p>
     </header>
   );
 }
@@ -280,8 +281,8 @@ function OfflineScheduleNotice({
     >
       <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
       <p className="font-bold leading-6">
-        Offline snapshot for {formatFieldDay(date, dateOptions)}. Saved work remains queued;
-        reconnect before relying on a changed schedule.
+        This is a saved copy for {formatFieldDay(date, dateOptions)}. Your saved work is safe. Go
+        online before you trust a changed time or job.
       </p>
     </div>
   );
@@ -291,11 +292,11 @@ function TodayDataLimits({ fields }: { fields: string[] }) {
   return (
     <details className="border border-border bg-surface-raised">
       <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
-        Some dispatch data may be limited
+        Some details may be old
       </summary>
       <div className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        This read may be stale for {fields.map(humanizeFieldName).join(", ")}. Open the job packet
-        before relying on a field that may have changed.
+        Check the job again before you use these details: {fields.map(humanizeFieldName).join(", ")}
+        .
       </div>
     </details>
   );
@@ -317,45 +318,53 @@ function PacketAvailabilityPanel({
   const state = checking
     ? {
         Icon: CircleDashed,
-        label: "Checking saved packets",
-        detail: "Packet availability is still being checked on this device.",
-        className: "border-info/35 bg-info-soft text-info",
+        label: "Checking saved job plans",
+        detail: "This phone is checking what it can open with no signal.",
+        surfaceClassName: "border-border bg-surface-raised",
+        iconClassName: "text-info",
       }
     : saving
       ? {
           Icon: CircleDashed,
-          label: "Saving packets for offline use",
-          detail: "Keep the app open while remaining site packets are being saved.",
-          className: "border-warning/35 bg-warning-soft text-warning",
+          label: "Saving job plans",
+          detail: "Keep the app open while the last job plans save to this phone.",
+          surfaceClassName: "border-warning/30 bg-surface-raised",
+          iconClassName: "text-warning",
         }
       : savedCount === jobCount
         ? {
             Icon: PackageCheck,
-            label: "Packets saved on this device",
-            detail: "Open the job packet for current gate and safety detail before work.",
-            className: "border-ok/35 bg-ok-soft text-ok",
+            label: "Job plans saved on this phone",
+            detail: "Open each job and check its work and safety steps before you start.",
+            surfaceClassName: "border-ok/25 bg-surface-raised",
+            iconClassName: "text-ok",
           }
         : {
             Icon: AlertTriangle,
             label: offline
-              ? "Some packets are not saved on this device"
-              : "Some packets need saving",
+              ? "Some job plans are not on this phone"
+              : "Some job plans still need to save",
             detail: offline
-              ? "Reconnect to save missing packets before leaving for those sites."
-              : "The run sheet will retry preparation when this app reconnects or returns to the foreground.",
-            className: "border-warning/35 bg-warning-soft text-warning",
+              ? "Go online and save them before you leave for those sites."
+              : "Keep the app open. It will try again when the phone is online.",
+            surfaceClassName: "border-warning/30 bg-surface-raised",
+            iconClassName: "text-warning",
           };
   const StateIcon = state.Icon;
   return (
-    <section className={`border p-4 sm:p-5 ${state.className}`} aria-label="Packet availability">
+    <section className={`border px-4 py-3 ${state.surfaceClassName}`} aria-label="Saved job plans">
       <div className="flex items-start gap-3">
-        <StateIcon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-        <div>
-          <p className="font-black">{state.label}</p>
-          <p className="mt-1 text-sm leading-6">
-            {savedCount} of {jobCount} saved on this device.
+        <span className="grid size-9 shrink-0 place-items-center rounded-md bg-surface-muted">
+          <StateIcon className={`size-[1.125rem] ${state.iconClassName}`} aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1 sm:flex sm:items-start sm:justify-between sm:gap-6">
+          <div>
+            <p className="font-black text-foreground">{state.label}</p>
+            <p className="mt-0.5 text-sm leading-5 text-muted">{state.detail}</p>
+          </div>
+          <p className="mt-2 shrink-0 text-sm font-bold text-foreground sm:mt-0">
+            {savedCount} of {jobCount} saved on this phone.
           </p>
-          <p className="mt-1 text-sm leading-6 opacity-90">{state.detail}</p>
         </div>
       </div>
     </section>
@@ -379,15 +388,17 @@ function TodayJobRow({
 }) {
   const blocked = job.blocked_gate_count > 0;
   const actionLabel = blocked
-    ? "Review gate and packet"
+    ? "Check what blocks work"
     : fieldCaptureAllowed
-      ? "Open job packet"
-      : "Review job packet";
+      ? "Open job"
+      : "Review job";
   const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
   return (
-    <li className="py-5 sm:py-6">
-      <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
-        <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+    <li>
+      <article
+        className={`grid overflow-hidden border bg-surface-raised lg:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_3px_0_0_var(--danger)]" : "border-border"}`}
+      >
+        <div className="border-b border-border bg-surface-muted/55 p-4 lg:border-b-0 lg:border-r">
           <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>
           <p className="mt-1 text-base font-black leading-6">
             {formatFieldSchedule(job.scheduled_start, dateOptions)}
@@ -398,7 +409,7 @@ function TodayJobRow({
             </p>
           ) : null}
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <p className="font-black tracking-[-0.02em]">{job.job_number ?? job.id}</p>
             {job.status ? <p className="text-sm font-semibold text-muted">{job.status}</p> : null}
@@ -407,33 +418,33 @@ function TodayJobRow({
             {job.address ?? "Address unavailable"}
           </h3>
           {blocked ? (
-            <div className="mt-4 flex items-start gap-2 border-l-4 border-danger pl-3 text-danger">
+            <div className="mt-3 flex items-start gap-2 text-danger">
               <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
               <p className="font-black leading-6">
                 {job.blocked_gate_count}{" "}
-                {job.blocked_gate_count === 1 ? "gate blocks work" : "gates block work"}
+                {job.blocked_gate_count === 1 ? "check blocks work" : "checks block work"}
               </p>
             </div>
           ) : null}
-          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
             <DispatchFact
               label="Assignment"
               value={assignment || "Assignment detail unavailable"}
             />
-            <DispatchFact label="Status note" value={job.next_action} />
+            <DispatchFact label="Next step" value={job.next_action} />
           </dl>
           <PacketAvailabilityBadge availability={availability} />
         </div>
-        <div className="space-y-3 lg:pt-1">
-          <Button asChild size="field" fullWidth variant={blocked ? "outline" : "accent"}>
+        <div className="space-y-2 border-t border-border p-4 lg:flex lg:flex-col lg:justify-center lg:border-l lg:border-t-0">
+          <Button asChild fullWidth variant={blocked ? "default" : "accent"}>
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>
           {canRetryPacket && (availability === "not_saved" || availability === "unavailable") ? (
-            <Button type="button" size="field" fullWidth variant="outline" onClick={onRetryPacket}>
-              Retry saving packet
+            <Button type="button" fullWidth variant="outline" onClick={onRetryPacket}>
+              Save job plan again
             </Button>
           ) : null}
         </div>
@@ -485,7 +496,7 @@ function TodayWorkObjectRow({
               label="Assignment"
               value={assignment || "Assignment detail unavailable"}
             />
-            <DispatchFact label="Status note" value={workObject.next_action} />
+            <DispatchFact label="Next step" value={workObject.next_action} />
           </dl>
         </div>
         <div className="space-y-3 lg:pt-1">
@@ -494,7 +505,7 @@ function TodayWorkObjectRow({
               to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"
               params={params}
             >
-              Open typed work packet
+              Open work plan
               <ChevronRight aria-hidden="true" />
             </Link>
           </Button>
@@ -518,7 +529,7 @@ function PacketAvailabilityBadge({ availability }: { availability: PacketAvailab
   const Icon = state.Icon;
   return (
     <p
-      className={`mt-4 inline-flex min-h-9 items-center gap-2 text-sm font-bold ${state.className}`}
+      className={`mt-3 inline-flex min-h-8 items-center gap-2 rounded-md border border-border bg-surface px-2.5 text-xs font-bold ${state.className}`}
     >
       <Icon className="size-4 shrink-0" aria-hidden="true" />
       {state.label}
@@ -529,26 +540,34 @@ function PacketAvailabilityBadge({ availability }: { availability: PacketAvailab
 function packetAvailabilityCopy(availability: PacketAvailability) {
   switch (availability) {
     case "saved":
-      return { Icon: PackageCheck, label: "Saved on this device", className: "text-ok" };
+      return {
+        Icon: PackageCheck,
+        label: "Saved on this device",
+        className: "text-muted [&_svg]:text-ok",
+      };
     case "saving":
       return {
         Icon: CircleDashed,
-        label: "Saving packet for offline use",
-        className: "text-warning",
+        label: "Saving job plan",
+        className: "text-muted [&_svg]:text-warning",
       };
     case "not_saved":
       return {
         Icon: AlertTriangle,
-        label: "Packet not saved on this device",
-        className: "text-warning",
+        label: "Job plan not saved",
+        className: "text-muted [&_svg]:text-warning",
       };
     case "unavailable":
       return {
         Icon: AlertTriangle,
-        label: "Packet availability could not be checked",
-        className: "text-warning",
+        label: "Could not check this job plan",
+        className: "text-muted [&_svg]:text-warning",
       };
     default:
-      return { Icon: CircleDashed, label: "Checking packet availability", className: "text-info" };
+      return {
+        Icon: CircleDashed,
+        label: "Checking job plan",
+        className: "text-muted [&_svg]:text-info",
+      };
   }
 }

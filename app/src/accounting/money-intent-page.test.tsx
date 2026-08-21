@@ -82,16 +82,21 @@ describe("money intent detail", () => {
     ).toBeInTheDocument();
   });
 
-  it("cites the bound evidence by fingerprint, never by provider payload", async () => {
+  it("keeps system check codes behind a plain details label", async () => {
     vi.mocked(loadAccountingIntent).mockResolvedValue(detailResponse());
+    const user = userEvent.setup();
     renderIntent();
 
-    const evidence = await screen.findByRole("region", { name: "Bound facts and evidence" });
+    const details = await screen.findByText("System details");
+    await user.click(details);
+    const evidence = details.closest("details");
+    expect(evidence).not.toBeNull();
     expect(evidence).toHaveTextContent("4620816365000000000");
     expect(evidence).toHaveTextContent("Not created yet");
     expect(evidence).toHaveTextContent("CAD 5000.00");
     expect(evidence).toHaveTextContent("a".repeat(64));
     expect(evidence).toHaveTextContent("Tax rate (GST)");
+    expect(evidence).toHaveTextContent("Saved totals code");
   });
 
   it("says nothing has been read back rather than claiming a disagreement", async () => {
@@ -99,11 +104,9 @@ describe("money intent detail", () => {
     renderIntent();
 
     const comparison = await screen.findByRole("region", {
-      name: "Our figures against QuickBooks",
+      name: "IronWrap and QuickBooks",
     });
-    expect(comparison).toHaveTextContent(
-      "Nothing has been read back from QuickBooks yet, so there is nothing to compare.",
-    );
+    expect(comparison).toHaveTextContent("QuickBooks has not answered yet");
     expect(within(comparison).getAllByText("not read yet").length).toBeGreaterThan(0);
   });
 
@@ -112,10 +115,10 @@ describe("money intent detail", () => {
     renderIntent();
 
     const comparison = await screen.findByRole("region", {
-      name: "Our figures against QuickBooks",
+      name: "IronWrap and QuickBooks",
     });
-    expect(comparison).toHaveTextContent("QuickBooks differs from what we expected");
-    expect(comparison).toHaveTextContent("total amount");
+    expect(comparison).toHaveTextContent("The numbers do not match");
+    expect(comparison).toHaveTextContent("Total amount");
     expect(comparison).toHaveTextContent("1500.00");
   });
 
@@ -131,7 +134,7 @@ describe("money intent detail", () => {
       "acct-intent:job-0001:deposit_invoice",
     );
     expect(vi.mocked(approveAccountingIntent).mock.calls[0]?.[2]).toBe(1);
-    expect(await screen.findByText(/The decision is recorded/u)).toBeInTheDocument();
+    expect(await screen.findByText(/Your choice is saved/u)).toBeInTheDocument();
   });
 
   it("records a bounded reason when the accountant does not approve", async () => {
@@ -183,7 +186,7 @@ describe("money intent detail", () => {
     await waitFor(() => expect(compensateAccountingIntent).toHaveBeenCalledTimes(1));
     expect(vi.mocked(compensateAccountingIntent).mock.calls[0]?.[3]).toBe("credit_memo_issued");
     expect(
-      await screen.findByText(/A reversal of CAD 240.00 is authorized as Issue a credit memo/u),
+      await screen.findByText(/Issue a credit memo is approved for CAD 240.00/u),
     ).toBeInTheDocument();
     expect(screen.getByText(/Nothing has been sent to QuickBooks yet/u)).toBeInTheDocument();
   });
@@ -194,7 +197,7 @@ describe("money intent detail", () => {
     const user = userEvent.setup();
     renderIntent();
 
-    await user.click(await screen.findByRole("button", { name: "Re-read QuickBooks" }));
+    await user.click(await screen.findByRole("button", { name: "Check QuickBooks again" }));
     await waitFor(() => expect(reconcileAccountingIntent).toHaveBeenCalledTimes(1));
   });
 

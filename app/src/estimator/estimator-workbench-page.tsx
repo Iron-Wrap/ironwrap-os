@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   CircleAlert,
   ClipboardList,
   FileSearch,
@@ -16,7 +17,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -107,7 +108,7 @@ function EstimatorWorkbenchScreen({
       {bounded ? <DataBoundary model={model} /> : null}
 
       <div className="grid min-w-0 items-start gap-8 2xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.72fr)]">
-        <section className="min-w-0 space-y-8" aria-label="Estimator evidence review">
+        <section className="min-w-0 space-y-8" aria-label="Estimate review">
           <CommercialDecisionRail model={model} locale={locale} />
           <CommercialSnapshot model={model} locale={locale} tenantCurrency={tenantCurrency} />
 
@@ -119,11 +120,45 @@ function EstimatorWorkbenchScreen({
             lineage={model.lineage}
           />
 
-          <VisualEvidence visual={model.visual_model} locale={locale} />
-          <RoofGraphEvidence roofGraph={selectedMeasurement?.roof_graph ?? null} locale={locale} />
-          <MeasurementSource model={model} locale={locale} />
-          <TakeoffReview model={model} locale={locale} />
-          <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+          <ReviewGroup
+            title="Roof details"
+            description="Open the property drawing, roof graph, checks, and saved measurements."
+            status={
+              selectedMeasurement
+                ? (humanize(selectedMeasurement.review_status) ?? "Check needed")
+                : "No roof data"
+            }
+            tone={
+              selectedMeasurement
+                ? reviewTone(selectedMeasurement.review_status)
+                : "bg-surface-muted text-muted"
+            }
+          >
+            <VisualEvidence visual={model.visual_model} locale={locale} />
+            <RoofGraphEvidence
+              roofGraph={selectedMeasurement?.roof_graph ?? null}
+              locale={locale}
+            />
+            <MeasurementSource model={model} locale={locale} />
+          </ReviewGroup>
+
+          <ReviewGroup
+            title="Materials and insurance"
+            description="Open the material list and any insurance proof for this job."
+            status={
+              model.takeoffs.selected
+                ? (humanize(model.takeoffs.selected.status) ?? "Check needed")
+                : "No material list"
+            }
+            tone={
+              model.takeoffs.selected
+                ? reviewTone(model.takeoffs.selected.status)
+                : "bg-surface-muted text-muted"
+            }
+          >
+            <TakeoffReview model={model} locale={locale} />
+            <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+          </ReviewGroup>
         </section>
         <CommercialRecord model={model} locale={locale} tenantCurrency={tenantCurrency} />
       </div>
@@ -151,19 +186,19 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
             <div className="min-w-0">
               <p className="text-sm font-bold text-muted">{jobIdentity}</p>
               <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] text-balance sm:text-4xl">
-                Measurement workbench
+                Roof and quote review
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Review the captured measurement, material takeoff, and commercial evidence without
-                changing price, scope, proposal, or customer communication.
+                Check the roof data, materials, and quote. This page does not change the price, job,
+                proposal, or customer messages.
               </p>
             </div>
           </div>
           <dl className="mt-7 grid border-t border-border sm:grid-cols-3">
             <HeaderFact label="Service" value={model.job.service_type ?? "Not recorded"} />
-            <HeaderFact label="Workflow" value={model.job.workflow_profile ?? "Not recorded"} />
+            <HeaderFact label="Job plan" value={model.job.workflow_profile ?? "Not recorded"} />
             <HeaderFact
-              label="Read generated"
+              label="Last checked"
               value={formatDate(model.read_model_generated_at, locale) ?? "Unavailable"}
             />
           </dl>
@@ -179,7 +214,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
             id="next-safe-step-heading"
             className="text-xs font-bold uppercase tracking-[0.12em] text-muted"
           >
-            Next safe step
+            Next step
           </h2>
           <p className={cn("mt-3 text-2xl font-black tracking-[-0.035em]", decision.titleTone)}>
             {decision.title}
@@ -187,10 +222,10 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
           <div className="mt-6 flex flex-wrap gap-2">
             <StatusChip label={decision.label} tone={decision.tone} />
-            <StatusChip label="Read-only evidence review" tone="bg-surface-muted text-muted" />
+            <StatusChip label="View only" tone="bg-surface-muted text-muted" />
           </div>
           <p className="mt-6 border-t border-border/70 pt-4 text-xs leading-5 text-muted">
-            This page directs human review only. It does not execute the next commercial action.
+            This page shows what to check. It does not take the next step.
           </p>
         </section>
       </div>
@@ -217,10 +252,9 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
 } {
   if (model.proposal_readiness.state === "blocked") {
     return {
-      title: "Resolve blocking evidence",
-      detail:
-        "A blocking evidence condition must be resolved before human proposal review. The proposal review gate retains the selected reason.",
-      label: "Blocked by evidence",
+      title: "Fix the blocked items",
+      detail: "Fix the marked items before you review the proposal. The reason is shown below.",
+      label: "Work is blocked",
       tone: "bg-warning-soft text-warning",
       surface: "bg-warning-soft/35",
       titleTone: "text-warning",
@@ -228,10 +262,9 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   }
   if (model.proposal_readiness.state === "review_required") {
     return {
-      title: "Complete human review",
-      detail:
-        "The selected evidence needs a reviewer decision before it can support a proposal. The decision rail retains the current review signals.",
-      label: "Review required",
+      title: "Review the roof and quote",
+      detail: "Check the marked items before the proposal can move on.",
+      label: "Review needed",
       tone: "bg-warning-soft text-warning",
       surface: "bg-warning-soft/28",
       titleTone: "text-foreground",
@@ -239,9 +272,8 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
   }
   if (model.proposal_readiness.state === "ready") {
     return {
-      title: "Review the evidence pack",
-      detail:
-        "The bounded read found no automatic stop condition. A human still decides whether the record is ready for the next commercial step.",
+      title: "Review the proposal",
+      detail: "No system check is stopping this job. A person must still make the final choice.",
       label: "Ready for review",
       tone: "bg-ok-soft text-ok",
       surface: "bg-ok-soft/28",
@@ -249,10 +281,9 @@ function nextSafeStep(model: EstimatorWorkbenchResponse): {
     };
   }
   return {
-    title: "Keep this review bounded",
-    detail:
-      "One or more source details are unavailable, so use the returned evidence without treating missing values as proof of absence.",
-    label: "Source incomplete",
+    title: "Use the saved details only",
+    detail: "Some details are missing. A blank field does not mean no record exists.",
+    label: "Some details are missing",
     tone: "bg-surface-muted text-muted",
     surface: "bg-surface-muted/55",
     titleTone: "text-foreground",
@@ -278,9 +309,9 @@ function CommercialSnapshot({
       >
         <div className="px-5 py-5 sm:px-6">
           <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
-            Selected commercial record
+            Quote at a glance
           </h2>
-          <EmptyInline message="No customer quote was returned. Do not infer a price, payment state, or customer-ready proposal." />
+          <EmptyInline message="No customer quote was found. Do not guess the price, payment, or proposal state." />
         </div>
       </section>
     );
@@ -294,10 +325,10 @@ function CommercialSnapshot({
       <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 sm:px-6 sm:pt-6">
         <div>
           <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
-            Selected commercial record
+            Quote at a glance
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            The quote facts that frame the next human decision.
+            Use these saved facts for this review.
           </p>
         </div>
         <StatusChip
@@ -324,8 +355,7 @@ function CommercialSnapshot({
         />
       </dl>
       <p className="px-5 py-4 text-xs leading-5 text-muted sm:px-6">
-        This is captured quote evidence for the selected version, not a live supplier-price or
-        payment check.
+        These values were saved with this quote. They are not a live supplier or payment check.
       </p>
     </section>
   );
@@ -370,7 +400,7 @@ function EvidencePath({
 }) {
   const steps = [
     {
-      label: "Measurement source",
+      label: "Roof data",
       detail: measurement
         ? `${humanize(measurement.provider) ?? "Provider unavailable"} · ${humanize(measurement.review_status) ?? "Review state unavailable"}`
         : "No report returned",
@@ -379,11 +409,11 @@ function EvidencePath({
         : "bg-surface-muted text-muted",
     },
     {
-      label: "Material takeoff",
+      label: "Materials",
       ...takeoffEvidenceStep(takeoff, lineage.measurement_to_takeoff),
     },
     {
-      label: "Proposal record",
+      label: "Proposal",
       ...proposalEvidenceStep(quote, proposal, lineage.quote_to_proposal),
     },
   ];
@@ -397,10 +427,10 @@ function EvidencePath({
           id="evidence-path-heading"
           className="text-lg font-black tracking-[-0.025em] text-foreground"
         >
-          Evidence path
+          What this quote uses
         </h2>
         <p className="mt-1 text-sm leading-6 text-muted">
-          Each record stays attached to its actual upstream evidence relationship.
+          Roof data leads to materials. The quote leads to the proposal.
         </p>
       </div>
       <ol className="grid sm:grid-cols-3" aria-label="Evidence path stages">
@@ -439,15 +469,15 @@ function takeoffEvidenceStep(
     };
   }
   if (lineage === "mismatch") {
-    return { detail: "No takeoff links to this measurement", tone: "bg-warning-soft text-warning" };
+    return { detail: "No material list uses this roof data", tone: "bg-warning-soft text-warning" };
   }
   if (lineage === "unknown") {
-    return { detail: "Takeoff linkage incomplete", tone: "bg-warning-soft text-warning" };
+    return { detail: "Material link is missing", tone: "bg-warning-soft text-warning" };
   }
   if (lineage === "no_measurement") {
     return { detail: "No measurement returned", tone: "bg-surface-muted text-muted" };
   }
-  return { detail: "No takeoff returned", tone: "bg-surface-muted text-muted" };
+  return { detail: "No material list found", tone: "bg-surface-muted text-muted" };
 }
 
 function proposalEvidenceStep(
@@ -488,19 +518,19 @@ function CommercialDecisionRail({
   const selectedMeasurement = model.measurements.selected;
   const sourceMath = selectedMeasurement
     ? selectedMeasurement.geometry.state === "recomputed"
-      ? { detail: "Source math checked", tone: "bg-ok-soft text-ok" }
+      ? { detail: "Roof math checked", tone: "bg-ok-soft text-ok" }
       : selectedMeasurement.geometry.state === "needs_review"
-        ? { detail: "Source math needs review", tone: "bg-warning-soft text-warning" }
-        : { detail: "Source math unavailable", tone: "bg-surface-muted text-muted" }
+        ? { detail: "Roof math needs review", tone: "bg-warning-soft text-warning" }
+        : { detail: "Roof math is missing", tone: "bg-surface-muted text-muted" }
     : { detail: "No measurement returned", tone: "bg-surface-muted text-muted" };
   const takeoff = takeoffDecisionStep(model);
   const pricing = pricingDecisionStep(model.pricing_snapshot);
   const proposal = proposalDecisionStep(model.proposal_readiness);
   const steps = [
-    { label: "Measurement", ...sourceMath },
-    { label: "Takeoff", ...takeoff },
-    { label: "Price snapshot", ...pricing },
-    { label: "Proposal decision", ...proposal },
+    { label: "Roof data", ...sourceMath },
+    { label: "Materials", ...takeoff },
+    { label: "Saved price", ...pricing },
+    { label: "Proposal", ...proposal },
   ];
   return (
     <section
@@ -511,12 +541,12 @@ function CommercialDecisionRail({
         <SectionHeading
           id="decision-rail-heading"
           icon={ShieldAlert}
-          title="Commercial decision rail"
-          description="A review gate for the selected quote version. It never refreshes a price, changes scope, or prepares customer communication."
+          title="What needs review"
+          description="Check the four parts of this quote. This page does not change the price, job, or customer message."
         />
         <ol
           className="mt-5 grid overflow-hidden rounded-lg border border-border sm:grid-cols-4"
-          aria-label="Commercial decision gates"
+          aria-label="Quote review steps"
         >
           {steps.map((step, index) => (
             <li
@@ -541,10 +571,8 @@ function CommercialDecisionRail({
           ))}
         </ol>
         <p className="mt-4 text-xs leading-5 text-muted">
-          Snapshot checked{" "}
-          {formatDate(model.read_model_generated_at, locale) ?? "at an unavailable time"}. A
-          recorded price book is evidence for this quote version, not a promise that supplier
-          pricing is live.
+          Price checked {formatDate(model.read_model_generated_at, locale) ?? "at an unknown time"}.
+          This is the price saved with this quote. It may not match today's supplier price.
         </p>
       </div>
     </section>
@@ -567,8 +595,8 @@ function InsuranceEvidenceRail({
         <SectionHeading
           id="insurance-evidence-heading"
           icon={ShieldAlert}
-          title="Insurance supplement evidence"
-          description="A restricted evidence lane for hail and insurance work. It records proof state, never a carrier decision."
+          title="Insurance proof"
+          description="See what proof is saved for hail and insurance work. This does not make an insurer choice."
         />
         <ol className="mt-5 divide-y divide-border border-y border-border">
           {supplements.map((supplement) => {
@@ -593,7 +621,7 @@ function InsuranceEvidenceRail({
                       {supplement.version === null ? "" : " · Version " + supplement.version}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-muted">
-                      Proof coverage only. Carrier scope is recorded, not interpreted.
+                      This only shows saved proof. IronWrap does not decide what the insurer means.
                     </p>
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
@@ -611,11 +639,11 @@ function InsuranceEvidenceRail({
                     value={insuranceMeasurementCopy(supplement.measurement_state)}
                   />
                   <InsuranceEvidenceCell
-                    label="Evidence coverage"
+                    label="Saved proof"
                     value={
                       supplement.evidence_roles.length > 0
                         ? supplement.evidence_roles.join(" · ")
-                        : "No verified evidence role returned"
+                        : "No checked proof type found"
                     }
                   />
                   <InsuranceEvidenceCell
@@ -623,7 +651,7 @@ function InsuranceEvidenceRail({
                     value={insuranceInvoiceCopy(supplement.invoice_state)}
                   />
                   <InsuranceEvidenceCell
-                    label="Recorded handoff"
+                    label="Last step"
                     value={insuranceHandoffCopy(supplement)}
                   />
                 </dl>
@@ -644,8 +672,7 @@ function InsuranceEvidenceRail({
                   <p className="mt-4 flex items-start gap-2 text-sm leading-6 text-ok">
                     <Check className="mt-1 size-4 shrink-0" aria-hidden="true" />
                     <span>
-                      Recorded evidence coverage is complete for the current internal state. Human
-                      review still controls every transition.
+                      The needed proof is saved. A person must still review the next step.
                     </span>
                   </p>
                 )}
@@ -685,44 +712,43 @@ function insuranceTone(status: string | null): string {
 function insuranceMeasurementCopy(
   state: EstimatorWorkbenchResponse["insurance_supplements"][number]["measurement_state"],
 ): string {
-  if (state === "approved") return "Approved measurement linked";
-  if (state === "review_required") return "Measurement linked, approval required";
-  if (state === "missing") return "No measurement linked";
-  return "Measurement source unavailable";
+  if (state === "approved") return "Approved roof data linked";
+  if (state === "review_required") return "Roof data linked; review needed";
+  if (state === "missing") return "No roof data linked";
+  return "Roof data unavailable";
 }
 
 function insuranceInvoiceCopy(
   state: EstimatorWorkbenchResponse["insurance_supplements"][number]["invoice_state"],
 ): string {
-  if (state === "recorded") return "Invoice evidence recorded";
-  if (state === "not_required") return "Invoice not required in this record";
-  if (state === "required") return "Invoice evidence or exception needed";
-  return "Invoice state unavailable";
+  if (state === "recorded") return "Invoice proof saved";
+  if (state === "not_required") return "No invoice is needed here";
+  if (state === "required") return "Add an invoice or explain why it is missing";
+  return "Invoice state is missing";
 }
 
 function insuranceHandoffCopy(
   supplement: EstimatorWorkbenchResponse["insurance_supplements"][number],
 ): string {
   if (supplement.closed_recorded) return "Closed internally";
-  if (supplement.carrier_response_recorded) return "Carrier response artifact recorded";
-  if (supplement.submission_recorded) return "Human submission artifact recorded";
+  if (supplement.carrier_response_recorded) return "Insurer reply saved";
+  if (supplement.submission_recorded) return "Sent proof saved";
   if (supplement.approval_recorded) return "Approved for submission";
-  return "No handoff artifact recorded";
+  return "No next-step proof saved";
 }
 
 function insuranceRequirementCopy(
   requirement: EstimatorWorkbenchResponse["insurance_supplements"][number]["missing_requirements"][number],
 ): string {
   const copy = {
-    approved_measurement: "Link an approved measurement report.",
-    carrier_scope: "Add verified carrier-scope evidence.",
-    code_or_manufacturer: "Add verified code or manufacturer evidence.",
-    photo: "Add verified photo evidence.",
-    invoice_or_exception: "Add invoice evidence or record a reviewer exception.",
-    submission_artifact: "Record a verified human submission artifact before using Submitted.",
-    carrier_response_artifact:
-      "Record a verified carrier-response artifact before using this state.",
-    source_detail_unavailable: "The restricted evidence detail could not be read safely.",
+    approved_measurement: "Link an approved roof report.",
+    carrier_scope: "Add the saved insurer scope.",
+    code_or_manufacturer: "Add the code or maker proof.",
+    photo: "Add checked photos.",
+    invoice_or_exception: "Add the invoice or explain why it is missing.",
+    submission_artifact: "Save proof that a person sent it before using Submitted.",
+    carrier_response_artifact: "Save the insurer reply before using this state.",
+    source_detail_unavailable: "The proof details could not be loaded.",
   } satisfies Record<
     EstimatorWorkbenchResponse["insurance_supplements"][number]["missing_requirements"][number],
     string
@@ -733,29 +759,29 @@ function insuranceRequirementCopy(
 function takeoffDecisionStep(model: EstimatorWorkbenchResponse) {
   if (model.lineage.measurement_to_takeoff !== "linked" || !model.takeoffs.selected) {
     return model.lineage.measurement_to_takeoff === "unknown"
-      ? { detail: "Linkage incomplete", tone: "bg-warning-soft text-warning" }
-      : { detail: "No linked takeoff", tone: "bg-warning-soft text-warning" };
+      ? { detail: "Material link is missing", tone: "bg-warning-soft text-warning" }
+      : { detail: "No linked materials", tone: "bg-warning-soft text-warning" };
   }
   return model.takeoffs.selected.status === "Approved"
-    ? { detail: "Linked & approved", tone: "bg-ok-soft text-ok" }
-    : { detail: "Linked; review required", tone: "bg-warning-soft text-warning" };
+    ? { detail: "Materials approved", tone: "bg-ok-soft text-ok" }
+    : { detail: "Materials need review", tone: "bg-warning-soft text-warning" };
 }
 
 function pricingDecisionStep(snapshot: EstimatorWorkbenchResponse["pricing_snapshot"]) {
   const version =
     snapshot.quote_version === null ? "Quote version unavailable" : `V${snapshot.quote_version}`;
   if (snapshot.state === "recorded") {
-    return { detail: `${version} snapshot recorded`, tone: "bg-ok-soft text-ok" };
+    return { detail: `${version} saved price checked`, tone: "bg-ok-soft text-ok" };
   }
   if (snapshot.state === "expired")
     return { detail: `${version} expired`, tone: "bg-warning-soft text-warning" };
   if (snapshot.state === "incomplete") {
-    return { detail: "Snapshot incomplete", tone: "bg-warning-soft text-warning" };
+    return { detail: "Saved price is incomplete", tone: "bg-warning-soft text-warning" };
   }
   if (snapshot.state === "review_required") {
     return { detail: `${version} needs review`, tone: "bg-warning-soft text-warning" };
   }
-  return { detail: "No quote snapshot", tone: "bg-surface-muted text-muted" };
+  return { detail: "No saved quote price", tone: "bg-surface-muted text-muted" };
 }
 
 function proposalDecisionStep(readiness: EstimatorWorkbenchResponse["proposal_readiness"]) {
@@ -765,8 +791,8 @@ function proposalDecisionStep(readiness: EstimatorWorkbenchResponse["proposal_re
     return { detail: "Review required", tone: "bg-warning-soft text-warning" };
   }
   if (readiness.state === "blocked")
-    return { detail: "Blocked by evidence", tone: "bg-warning-soft text-warning" };
-  return { detail: "Source window incomplete", tone: "bg-surface-muted text-muted" };
+    return { detail: "Proof blocks this step", tone: "bg-warning-soft text-warning" };
+  return { detail: "Some source details are missing", tone: "bg-surface-muted text-muted" };
 }
 
 function VisualEvidence({
@@ -785,8 +811,8 @@ function VisualEvidence({
         <SectionHeading
           id="visual-evidence-heading"
           icon={Layers3}
-          title="Visual evidence"
-          description="No visual property model was returned for this roof job. Measurement and quote evidence remain separate."
+          title="Property drawing"
+          description="No property drawing was found for this roof job. Roof data and the quote stay separate."
         />
       </section>
     );
@@ -804,8 +830,8 @@ function VisualEvidence({
           <SectionHeading
             id="visual-evidence-heading"
             icon={Layers3}
-            title="Visual evidence"
-            description="A provenance view of the returned property model. It does not confirm site dimensions, final scope, or a customer-ready design."
+            title="Property drawing"
+            description="See the saved property drawing. It does not prove site size, final scope, or a customer-ready design."
           />
           <div className="flex flex-wrap gap-2 lg:justify-end">
             <StatusChip label={modelState.label} tone={modelState.tone} />
@@ -826,14 +852,13 @@ function VisualEvidence({
               <figure>
                 <img
                   src={visual.preview.url}
-                  alt="Visual property evidence preview"
+                  alt="Saved property drawing"
                   className="aspect-[16/10] w-full object-cover"
                   loading="lazy"
                   referrerPolicy="no-referrer"
                 />
                 <figcaption className="border-t border-border px-4 py-3 text-xs leading-5 text-muted">
-                  Preview origin passed the office allowlist. It is retained evidence, not a
-                  field-verified roof plan.
+                  This saved image is safe to view. It is not a site-checked roof plan.
                 </figcaption>
               </figure>
             ) : (
@@ -852,7 +877,7 @@ function VisualEvidence({
               bordered
             />
             <MeasurementFact
-              label="Measurement link"
+              label="Roof data link"
               value={visualMeasurementLinkCopy(visual.measurement_link)}
               bordered
             />
@@ -875,9 +900,8 @@ function VisualEvidence({
         </div>
 
         <p className="mt-5 border-l-2 border-warning bg-warning-soft/40 px-4 py-3 text-sm leading-6 text-foreground">
-          Screenshot URLs are rendered only after an exact HTTPS-origin allowlist check. This panel
-          cannot open the model URI or raw storage evidence, and it does not change measurement,
-          price, scope, or proposal state.
+          Images open only from an approved secure website. This view cannot open saved model files.
+          It does not change roof data, price, scope, or proposal state.
         </p>
       </div>
     </section>
@@ -888,11 +912,11 @@ function visualModelState(
   state: NonNullable<EstimatorWorkbenchResponse["visual_model"]>["model_state"],
 ): { label: string; tone: string } {
   const copy = {
-    approved: { label: "Approved model", tone: "bg-ok-soft text-ok" },
-    needs_review: { label: "Model needs review", tone: "bg-warning-soft text-warning" },
-    draft: { label: "Draft model", tone: "bg-warning-soft text-warning" },
-    rejected: { label: "Rejected model", tone: "bg-warning-soft text-warning" },
-    unavailable: { label: "Model unavailable", tone: "bg-surface-muted text-muted" },
+    approved: { label: "Drawing approved", tone: "bg-ok-soft text-ok" },
+    needs_review: { label: "Drawing needs review", tone: "bg-warning-soft text-warning" },
+    draft: { label: "Draft drawing", tone: "bg-warning-soft text-warning" },
+    rejected: { label: "Drawing rejected", tone: "bg-warning-soft text-warning" },
+    unavailable: { label: "Drawing unavailable", tone: "bg-surface-muted text-muted" },
   } satisfies Record<
     NonNullable<EstimatorWorkbenchResponse["visual_model"]>["model_state"],
     { label: string; tone: string }
@@ -906,28 +930,27 @@ function visualPreviewState(
   const copy = {
     available: {
       title: "Preview available",
-      detail: "A safe preview URL was returned.",
+      detail: "The saved image is ready to view.",
     },
     not_recorded: {
-      title: "No screenshot recorded",
-      detail: "The visual model has no screenshot evidence to display.",
+      title: "No image saved",
+      detail: "This property drawing has no saved image.",
     },
     not_configured: {
-      title: "Preview origin is not configured",
-      detail:
-        "Screenshot evidence exists, but no approved preview origin is configured for this office surface.",
+      title: "Image site is not set up",
+      detail: "An image exists, but this office is not set up to open it.",
     },
     blocked: {
-      title: "Preview blocked",
-      detail: "Returned screenshot URLs did not pass the office HTTPS-origin allowlist.",
+      title: "Image blocked",
+      detail: "The image did not come from an approved secure website.",
     },
     invalid: {
-      title: "Preview evidence is invalid",
-      detail: "The returned screenshot payload could not be read safely.",
+      title: "Image could not be read",
+      detail: "The saved image data is not valid.",
     },
     unavailable: {
-      title: "Preview unavailable",
-      detail: "The visual model detail could not be read safely.",
+      title: "Image unavailable",
+      detail: "The saved drawing details could not be loaded.",
     },
   } satisfies Record<
     NonNullable<EstimatorWorkbenchResponse["visual_model"]>["preview"]["state"],
@@ -940,9 +963,9 @@ function visualMeasurementLinkCopy(
   link: NonNullable<EstimatorWorkbenchResponse["visual_model"]>["measurement_link"],
 ): string {
   const copy = {
-    selected_measurement: "Linked to selected measurement",
-    other_measurement: "Linked to another measurement",
-    unlinked: "No linked measurement",
+    selected_measurement: "Linked to this roof data",
+    other_measurement: "Linked to other roof data",
+    unlinked: "No roof data linked",
     unavailable: "Link unavailable",
   } satisfies Record<
     NonNullable<EstimatorWorkbenchResponse["visual_model"]>["measurement_link"],
@@ -972,8 +995,8 @@ function MeasurementSource({
         <SectionHeading
           id="measurement-source-heading"
           icon={Ruler}
-          title="Measurement source"
-          description="No measurement report was returned for this roof job. A quote or takeoff should not be treated as measurement proof."
+          title="Roof measurements"
+          description="No roof report was found. Do not use the quote or material list as roof proof."
         />
       </section>
     );
@@ -989,8 +1012,8 @@ function MeasurementSource({
           <SectionHeading
             id="measurement-source-heading"
             icon={Ruler}
-            title="Measurement source"
-            description="Declared values are retained alongside the values recomputed from the captured source file."
+            title="Roof measurements"
+            description="Saved values are shown next to values checked from the roof file."
           />
           <div className="flex flex-wrap gap-2 lg:justify-end">
             <StatusChip
@@ -1018,8 +1041,8 @@ function MeasurementSource({
               />
             </dl>
             <p className="border-l-2 border-warning bg-warning-soft/40 px-4 py-3 text-sm leading-6 text-foreground">
-              Geometry recomputation checks the captured file, not the site. It does not verify
-              concealed conditions, substrate condition, access, or field dimensions.
+              These checks use the saved file, not the job site. They do not confirm hidden damage,
+              deck condition, access, or site size.
             </p>
           </div>
           <SourceFacetPreview geometry={geometry} locale={locale} />
@@ -1056,15 +1079,15 @@ function SourceFacetPreview({ geometry, locale }: { geometry: EstimatorGeometry;
     >
       <div className="border-b border-border px-4 py-4">
         <h3 id="source-facet-preview-heading" className="text-sm font-black text-foreground">
-          Returned facet context
+          Roof faces
         </h3>
         <p className="mt-1 text-xs leading-5 text-muted">
-          A compact index of returned source facets, not a roof plan or field measurement.
+          A short list of roof faces from the file. This is not a site check.
         </p>
       </div>
       {facets.length === 0 ? (
         <p className="px-4 py-5 text-sm leading-6 text-muted">
-          No individual source facets were returned.
+          No roof faces were found in the file.
         </p>
       ) : (
         <ul className="grid grid-cols-2 gap-px bg-border" aria-label="Returned source facets">
@@ -1083,7 +1106,7 @@ function SourceFacetPreview({ geometry, locale }: { geometry: EstimatorGeometry;
                 <p
                   className={cn("mt-2 text-xs font-semibold", flagged ? "text-warning" : "text-ok")}
                 >
-                  {facet.ring_closed ? "Ring closed" : "Ring open"}
+                  {facet.ring_closed ? "Shape closed" : "Shape open"}
                 </p>
               </li>
             );
@@ -1092,7 +1115,7 @@ function SourceFacetPreview({ geometry, locale }: { geometry: EstimatorGeometry;
       )}
       {geometry.facet_count > facets.length ? (
         <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted">
-          Facet comparison below retains the returned facet evidence.
+          Open the roof face check below to see all saved values.
         </p>
       ) : null}
     </section>
@@ -1104,35 +1127,34 @@ function GeometryFacets({ geometry, locale }: { geometry: EstimatorGeometry; loc
   if (geometry.facets.length === 0) {
     return (
       <p className="mt-6 text-sm leading-6 text-muted">
-        No roof facets were returned by the source parser.
+        No roof faces were found in the saved file.
       </p>
     );
   }
   return (
     <section className="mt-7" aria-labelledby="facet-comparison-heading">
       <h3 id="facet-comparison-heading" className="text-lg font-black tracking-[-0.02em]">
-        Facet comparison
+        Roof face check
       </h3>
       <details open={geometry.failed_check_count > 0 || geometry.facets_truncated} className="mt-3">
         <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
           <span className="text-sm leading-6 text-muted">
-            Declared and recomputed roof areas remain side by side.
+            Saved and checked roof areas are shown side by side.
           </span>
           <span className="text-sm font-semibold text-muted">
-            {geometry.facets_truncated ? "First returned facets shown" : "Facet audit detail"}
+            {geometry.facets_truncated ? "First roof faces shown" : "Roof face details"}
           </span>
         </summary>
         <p className="mt-3 text-xs font-semibold text-muted sm:hidden">
-          Swipe the table to compare every source value.
+          Swipe the table to see every value.
         </p>
         <div
           className="mt-2 overflow-x-auto rounded-lg border border-border"
-          aria-label="Facet comparison table"
+          aria-label="Roof face check table"
         >
           <table className="min-w-[45rem] w-full border-collapse text-left text-sm">
             <caption className="sr-only">
-              Captured source facets with declared and recomputed roof area, deviation, pitch, and
-              perimeter-ring evidence.
+              Roof faces with saved area, checked area, difference, pitch, and closed shape.
             </caption>
             <thead className="bg-surface-muted text-muted">
               <tr>
@@ -1206,7 +1228,7 @@ function GeometryChecks({ geometry }: { geometry: EstimatorGeometry }) {
       <details open={geometry.failed_check_count > 0 || geometry.checks_truncated} className="mt-3">
         <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
           <span className="text-sm leading-6 text-muted">
-            File references, perimeter closure, and declared geometry are checked deterministically.
+            The file name, closed shapes, and saved roof math are checked.
           </span>
           <span
             className={cn(
@@ -1221,7 +1243,7 @@ function GeometryChecks({ geometry }: { geometry: EstimatorGeometry }) {
         </summary>
         {geometry.checks.length === 0 ? (
           <div className="mt-3 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-muted">
-            No source exceptions were returned. This is not field-verification evidence.
+            No file issues were found. This is still not a site check.
           </div>
         ) : (
           <ul className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
@@ -1278,9 +1300,9 @@ function MeasurementMetrics({
       >
         <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
           <span className="text-sm leading-6 text-muted">
-            Values stay attached to their extraction or source-file reference.
+            Each value stays tied to its place in the roof file.
           </span>
-          <span className="text-sm font-semibold text-muted">Source audit detail</span>
+          <span className="text-sm font-semibold text-muted">Roof value details</span>
         </summary>
         {sourceMetrics.length > 0 ? (
           <MetricList
@@ -1299,14 +1321,14 @@ function MeasurementMetrics({
         ) : null}
         {geometryMetrics.length > 0 ? (
           <MetricList
-            title="Recomputed source metrics"
+            title="Checked roof values"
             metrics={geometryMetrics.map((metric) => ({
               id: metric.metric,
               label: metric.metric,
               value: formatNumber(metric.value),
               source: metric.source_ref,
               warning: false,
-              detail: "Derived from captured source geometry",
+              detail: "Checked from the saved roof shape",
             }))}
           />
         ) : null}
@@ -1377,8 +1399,8 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
           <SectionHeading
             id="takeoff-heading"
             icon={Layers3}
-            title="Material takeoff"
-            description="Items remain linked to their measurement reference and review state."
+            title="Materials"
+            description="Each item stays linked to its roof data and review state."
           />
           {selected ? (
             <StatusChip
@@ -1407,16 +1429,16 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
                 danger={lineage !== "linked"}
               />
             </dl>
-            <h3 className="mt-6 text-lg font-black tracking-[-0.02em]">Material evidence</h3>
+            <h3 className="mt-6 text-lg font-black tracking-[-0.02em]">Material list</h3>
             <details open={flaggedItems > 0 || selected.items_truncated} className="mt-3">
               <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
                 <span className="text-sm leading-6 text-muted">
-                  Quantities remain attached to each selected source reference.
+                  Each amount stays tied to the roof value used to make it.
                 </span>
-                <span className="text-sm font-semibold text-muted">Takeoff audit detail</span>
+                <span className="text-sm font-semibold text-muted">Material details</span>
               </summary>
               <p className="mt-3 text-xs font-semibold text-muted sm:hidden">
-                Swipe the table to review each source reference.
+                Swipe the table to see every item.
               </p>
               <div
                 className="mt-2 overflow-x-auto rounded-lg border border-border"
@@ -1424,8 +1446,7 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
               >
                 <table className="min-w-[48rem] w-full border-collapse text-left text-sm">
                   <caption className="sr-only">
-                    Material takeoff items with quantities, waste factors, source references, and
-                    review state.
+                    Materials with amount, waste, roof value, and review state.
                   </caption>
                   <thead className="bg-surface-muted text-muted">
                     <tr>
@@ -1479,7 +1500,7 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
                     ) : (
                       <tr>
                         <td colSpan={5} className="px-4 py-5 text-muted">
-                          No takeoff items were returned.
+                          No material items were found.
                         </td>
                       </tr>
                     )}
@@ -1524,7 +1545,7 @@ function CommercialRecord({
               id="quote-heading"
               icon={FileText}
               title="Customer quote"
-              description="A versioned commercial record, not a live price calculator."
+              description="This is a saved quote, not a live price tool."
             />
             {quote ? (
               <StatusChip
@@ -1560,8 +1581,8 @@ function CommercialRecord({
             <SectionHeading
               id="proposal-heading"
               icon={ScrollText}
-              title="Proposal evidence"
-              description="Proposal state stays separate from quote and payment state."
+              title="Proposal"
+              description="The proposal stays separate from the quote and payment."
             />
             {proposal ? (
               <StatusChip
@@ -1573,19 +1594,21 @@ function CommercialRecord({
           {!proposal ? (
             <EmptyInline message={proposalEmptyMessage(quote, model.proposal, proposalLineage)} />
           ) : (
-            <div className="mt-5 space-y-3 text-sm leading-6">
-              <RecordLine
-                label="Prepared"
-                value={formatDate(proposal.prepared_at, locale) ?? "Not recorded"}
-              />
-              <RecordLine
-                label="Approved"
-                value={formatDate(proposal.approved_at, locale) ?? "Not recorded"}
-              />
-              <RecordLine
-                label="Signed"
-                value={formatDate(proposal.signed_at, locale) ?? "Not recorded"}
-              />
+            <div className="mt-5 text-sm leading-6">
+              <dl className="divide-y divide-border border-y border-border">
+                <RecordLine
+                  label="Prepared"
+                  value={formatDate(proposal.prepared_at, locale) ?? "Not recorded"}
+                />
+                <RecordLine
+                  label="Approved"
+                  value={formatDate(proposal.approved_at, locale) ?? "Not recorded"}
+                />
+                <RecordLine
+                  label="Signed"
+                  value={formatDate(proposal.signed_at, locale) ?? "Not recorded"}
+                />
+              </dl>
               <AssumptionLedger
                 assumptions={proposal.assumptions}
                 exclusions={proposal.exclusions}
@@ -1614,8 +1637,8 @@ function CommercialRecord({
           <SectionHeading
             id="scope-heading"
             icon={ClipboardList}
-            title="Scope clauses"
-            description="Visible scope, assumptions, exclusions, and risks remain attributable."
+            title="Scope and risks"
+            description="See what is in the job, what is out, and what may go wrong."
           />
           <ScopeClauses clauses={model.scope_clauses} locale={locale} />
           <ScopeChangeLedger
@@ -1635,15 +1658,15 @@ function takeoffEmptyMessage(
 ): string {
   if (lineage === "mismatch") {
     const count = model.takeoffs.records.length;
-    return `${count} takeoff ${count === 1 ? "record was" : "records were"} returned, but none link to the selected measurement report. Do not infer material lineage.`;
+    return `${count} material ${count === 1 ? "list was" : "lists were"} found, but none use this roof report. Do not use their amounts.`;
   }
   if (lineage === "unknown") {
-    return "The returned takeoff history reached the safe source boundary, so linkage cannot be determined.";
+    return "Some material history could not be loaded, so the link cannot be checked.";
   }
   if (lineage === "no_measurement") {
-    return "No selected measurement report is available to anchor a material takeoff.";
+    return "No roof report is ready for a material list.";
   }
-  return "No material takeoff was returned. Do not infer material quantities from a quote total.";
+  return "No material list was found. Do not guess amounts from the quote total.";
 }
 
 function proposalEmptyMessage(
@@ -1652,17 +1675,16 @@ function proposalEmptyMessage(
   lineage: EstimatorWorkbenchResponse["lineage"]["quote_to_proposal"],
 ): string {
   if (lineage === "mismatch") {
-    return "Proposal records were returned, but none link to the selected quote. Do not imply that a customer-ready proposal exists.";
+    return "Proposals were found, but none use this quote. Do not show one to the customer.";
   }
   if (lineage === "unknown") {
-    return "The returned proposal history reached the safe source boundary, so linkage to the selected quote cannot be determined.";
+    return "Some proposal history could not be loaded, so the quote link cannot be checked.";
   }
   if (lineage === "no_quote") {
-    return "No customer quote is available to anchor proposal evidence.";
+    return "No customer quote is ready for a proposal.";
   }
-  if (!quote && !proposal)
-    return "No proposal evidence pack was returned. Do not imply that a customer-ready proposal exists.";
-  return "No proposal evidence pack was returned for the selected quote. Do not imply that a customer-ready proposal exists.";
+  if (!quote && !proposal) return "No proposal was found. Do not show a proposal to the customer.";
+  return "No proposal was found for this quote. Do not show one to the customer.";
 }
 
 function QuoteLedger({
@@ -1757,12 +1779,12 @@ function QuoteRevisionEntry({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-xl">
           <h3 id="revision-request-heading" className="text-sm font-bold text-foreground">
-            {canLaunch ? "Continue this approved record in Facet" : "Correct this version safely"}
+            {canLaunch ? "Open this approved quote in Facet" : "Fix this quote safely"}
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {canLaunch
-              ? "Open the exact customer-linked design project through the signed identity boundary. No address, price, scope, proposal, payment, or customer promise crosses with the launch."
-              : "The next step creates a human-reviewed request for a blank Draft shell. It does not copy price, tax, scope, payment, approval, acceptance, or customer terms."}
+              ? "Open the design for this customer and job. IronWrap does not send the address, price, scope, proposal, payment, or a promise to Facet."
+              : "Ask for an empty draft quote. A person must review it. Price, tax, scope, payment, approvals, and customer terms are not copied."}
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">
@@ -1788,9 +1810,7 @@ function QuoteRevisionEntry({
         </div>
       </div>
       {canLaunch && (!online || isOfflineSession(session)) ? (
-        <p className="mt-3 text-xs font-semibold text-muted">
-          Reconnect to open the signed project.
-        </p>
+        <p className="mt-3 text-xs font-semibold text-muted">Reconnect to open this design.</p>
       ) : null}
       {launch.isError ? (
         <p role="alert" className="mt-3 text-sm font-semibold text-danger">
@@ -1799,7 +1819,7 @@ function QuoteRevisionEntry({
             "facet_design_current_approved_quote_required",
             "facet_launch_idempotency_conflict",
           ].includes(launch.error.code)
-            ? "The approved quote or launch identity changed. Reload this job before opening Facet."
+            ? "The approved quote or design link changed. Reload this job before opening Facet."
             : "Facet could not be opened. IronWrap did not change the quote; try again."}
         </p>
       ) : null}
@@ -1826,14 +1846,14 @@ function PricingSnapshot({
         : "bg-warning-soft text-warning";
   const label =
     snapshot.state === "recorded"
-      ? "Captured snapshot"
+      ? "Saved price checked"
       : snapshot.state === "expired"
         ? "Quote expired"
         : snapshot.state === "incomplete"
-          ? "Snapshot incomplete"
+          ? "Saved price incomplete"
           : snapshot.state === "review_required"
-            ? "Estimator review required"
-            : "No snapshot";
+            ? "Estimator review needed"
+            : "No saved price";
   return (
     <section
       className="mt-6 border-y border-border py-4"
@@ -1842,10 +1862,10 @@ function PricingSnapshot({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 id="pricing-snapshot-heading" className="text-sm font-bold text-foreground">
-            Price snapshot
+            Saved price
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
-            Captured with this quote version. It is not a live supplier-price check.
+            Saved with this quote. It is not a live supplier price.
           </p>
         </div>
         <StatusChip label={label} tone={tone} />
@@ -1859,7 +1879,7 @@ function PricingSnapshot({
         />
         <RecordLine label="Price book" value={snapshot.price_book_version ?? "Not recorded"} />
         <RecordLine
-          label="Captured effective"
+          label="Price date"
           value={formatDate(snapshot.pricing_effective_at, locale) ?? "Not recorded"}
         />
         <RecordLine
@@ -1891,7 +1911,7 @@ function QuoteRevisionLedger({
     return (
       <section className="mt-6 border-y border-border py-4" aria-labelledby="revision-heading">
         <h3 id="revision-heading" className="text-sm font-bold text-foreground">
-          Version comparison
+          Quote changes
         </h3>
         <p className="mt-2 text-sm leading-6 text-muted">
           {quoteRevisionEmptyMessage(revision.state)}
@@ -1913,15 +1933,15 @@ function QuoteRevisionLedger({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 id="revision-heading" className="text-sm font-bold text-foreground">
-            Version comparison
+            Quote changes
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
-            Explicitly linked {prior.version === null ? "prior version" : `V${prior.version}`} →{" "}
-            {quote.version === null ? "selected version" : `V${quote.version}`}. No amount is
-            regenerated here.
+            Linked {prior.version === null ? "older quote" : `V${prior.version}`} →{" "}
+            {quote.version === null ? "this quote" : `V${quote.version}`}. This page does not make
+            new amounts.
           </p>
         </div>
-        <StatusChip label="Linked revision" tone="bg-ok-soft text-ok" />
+        <StatusChip label="Quotes linked" tone="bg-ok-soft text-ok" />
       </div>
       <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
         <RevisionMoneyLine
@@ -1977,7 +1997,7 @@ function QuoteRevisionLedger({
           aria-labelledby="correction-reason-heading"
         >
           <h3 id="correction-reason-heading" className="text-sm font-bold text-foreground">
-            Correction rationale
+            Why it changed
           </h3>
           <p className="mt-1 text-sm leading-6 text-foreground">{quote.correction_reason}</p>
         </section>
@@ -2040,12 +2060,12 @@ function ScopeChangeLedger({
       <SectionHeading
         id="scope-change-heading"
         icon={CircleAlert}
-        title="Scope change ledger"
-        description="Each change-order record declares its quote relationship and customer-decision state."
+        title="Job changes"
+        description="See which quote each job change uses and if the customer said yes."
         level="h3"
       />
       {changes.length === 0 ? (
-        <EmptyInline message="No change-order records were returned for this roof job." />
+        <EmptyInline message="No job changes were found." />
       ) : (
         <ol className="mt-5 divide-y divide-border border-y border-border">
           {changes.map((change) => {
@@ -2078,7 +2098,7 @@ function ScopeChangeLedger({
                     value={scopeChangeLinkCopy(change.quote_link)}
                   />
                   <RecordLine
-                    label="Commercial delta"
+                    label="Price change"
                     value={formatMoney(change.total_amount, locale, currency) ?? "Not recorded"}
                   />
                   <RecordLine
@@ -2122,10 +2142,10 @@ function ProposalReadiness({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
-            Proposal review gate
+            Proposal check
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
-            This gate does not create, approve, send, sign, or collect against a proposal.
+            This check does not create, approve, send, sign, or take money for a proposal.
           </p>
         </div>
         <StatusChip label={label} tone={tone} />
@@ -2140,7 +2160,7 @@ function ProposalReadiness({
         </ul>
       ) : (
         <p className="mt-4 text-sm leading-6 text-ok">
-          The bounded read model found no automatic stop condition. Human review remains required.
+          No system check is stopping this proposal. A person must still review it.
         </p>
       )}
     </section>
@@ -2208,6 +2228,43 @@ function AssumptionLedger({
       {assumptions ? <RecordLine label="Assumptions" value={assumptions} multiline /> : null}
       {exclusions ? <RecordLine label="Exclusions" value={exclusions} multiline /> : null}
     </dl>
+  );
+}
+
+function ReviewGroup({
+  title,
+  description,
+  status,
+  tone,
+  children,
+}: {
+  title: string;
+  description: string;
+  status: string;
+  tone: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group overflow-hidden rounded-xl border border-border bg-surface">
+      <summary className="flex min-h-24 cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 focus-visible:outline-offset-[-3px] [&::-webkit-details-marker]:hidden sm:px-6">
+        <span className="min-w-0">
+          <span className="block text-xl font-black tracking-[-0.025em] text-foreground">
+            {title}
+          </span>
+          <span className="mt-1 block max-w-2xl text-sm leading-6 text-muted">{description}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-3">
+          <StatusChip label={status} tone={tone} />
+          <ChevronDown
+            className="size-5 text-muted transition-transform group-open:rotate-180"
+            aria-hidden="true"
+          />
+        </span>
+      </summary>
+      <div className="space-y-6 border-t border-border bg-surface-muted/35 p-3 sm:p-4">
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -2328,11 +2385,11 @@ function DataBoundary({ model }: { model: EstimatorWorkbenchResponse }) {
     <div className="flex gap-3 rounded-lg border border-warning/40 bg-warning-soft/55 p-4 text-sm leading-6">
       <CircleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
       <div>
-        <p className="font-bold text-foreground">This is a bounded source review.</p>
+        <p className="font-bold text-foreground">Some details may be missing</p>
         <p className="mt-1 text-muted">
           {sources.length > 0
-            ? `${sources.join(", ")} ${sources.length === 1 ? "reached" : "reached"} the read limit. History and counts may be incomplete.`
-            : "One or more source details are unavailable. Do not treat an empty field as proof that the underlying record does not exist."}
+            ? `${sources.join(", ")} reached the safe read limit. The list and totals may be short.`
+            : "One or more details could not be loaded. A blank field does not mean no record exists."}
         </p>
       </div>
     </div>
@@ -2348,13 +2405,12 @@ function RefreshWarning({ onRetry }: { onRetry: () => void }) {
       <div className="flex gap-3 text-sm leading-6">
         <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
         <p>
-          Showing the last verified workbench read. The refresh did not complete, so do not assume
-          newer measurement or quote state.
+          Showing the last saved review. Refresh failed, so newer roof or quote details may exist.
         </p>
       </div>
       <Button variant="outline" size="compact" onClick={onRetry}>
         <RefreshCw aria-hidden="true" />
-        Refresh read
+        Try again
       </Button>
     </div>
   );
@@ -2363,8 +2419,8 @@ function RefreshWarning({ onRetry }: { onRetry: () => void }) {
 function EstimatorWorkbenchError({ onRetry }: { onRetry: () => void }) {
   return (
     <ErrorState
-      title="Measurement workbench is unavailable"
-      message="No source-backed estimator record was loaded. This page will not create a demo takeoff or assume a quote is current."
+      title="Roof and quote review is unavailable"
+      message="No saved review could be loaded. Nothing was created or changed."
       onRetry={onRetry}
     />
   );
@@ -2403,9 +2459,8 @@ function geometryStatusCopy(geometry: EstimatorGeometry): {
 } {
   if (geometry.state === "recomputed") {
     return {
-      title: "Geometry recomputed from source file",
-      detail:
-        "Declared geometry was recomputed from the retained source. Field verification still needs separate evidence.",
+      title: "Roof math checked from the file",
+      detail: "The saved roof math was checked again. A site check is still needed.",
       surface: "border-ok/40 bg-ok-soft/45",
       iconTone: "text-ok",
       icon: Check,
@@ -2413,15 +2468,15 @@ function geometryStatusCopy(geometry: EstimatorGeometry): {
   }
   if (geometry.state === "needs_review") {
     return {
-      title: "Geometry needs review",
-      detail: `${geometry.failed_check_count} source check${geometry.failed_check_count === 1 ? "" : "s"} failed or needs attention before a takeoff is trusted.`,
+      title: "Roof math needs review",
+      detail: `${geometry.failed_check_count} file check${geometry.failed_check_count === 1 ? "" : "s"} must be fixed before the material list can be trusted.`,
       surface: "border-warning/40 bg-warning-soft/55",
       iconTone: "text-warning",
       icon: ShieldAlert,
     };
   }
   return {
-    title: "Source geometry could not be recomputed",
+    title: "Roof math could not be checked",
     detail: geometryUnavailableCopy(geometry.reason),
     surface: "border-warning/40 bg-warning-soft/55",
     iconTone: "text-warning",
@@ -2430,24 +2485,20 @@ function geometryStatusCopy(geometry: EstimatorGeometry): {
 }
 
 function geometryUnavailableCopy(reason: string | null): string {
-  if (reason === "raw_source_not_recorded")
-    return "This measurement report has no retained raw source reference.";
-  if (reason === "raw_source_not_found") return "The retained measurement source was not found.";
-  if (reason === "raw_source_too_large")
-    return "The retained source exceeds the safe recomputation limit.";
+  if (reason === "raw_source_not_recorded") return "This roof report has no saved source file.";
+  if (reason === "raw_source_not_found") return "The saved roof file was not found.";
+  if (reason === "raw_source_too_large") return "The saved roof file is too large to check here.";
   if (reason === "raw_source_not_recomputable")
-    return "The retained source does not contain a supported recomputable geometry export.";
-  if (reason === "raw_source_rejected")
-    return "The retained source reference was rejected by the server safety boundary.";
-  if (reason === "raw_source_read_failed")
-    return "The retained source could not be read safely for recomputation.";
+    return "The saved file does not have a roof shape IronWrap can check.";
+  if (reason === "raw_source_rejected") return "The saved roof file did not pass the safety check.";
+  if (reason === "raw_source_read_failed") return "The saved roof file could not be read safely.";
   if (reason === "measurement_detail_unavailable")
-    return "The selected measurement detail is no longer available from the operating record.";
+    return "The chosen roof details are no longer available.";
   if (reason === "measurement_detail_too_large")
-    return "The selected measurement detail exceeded the safe server read limit.";
+    return "The chosen roof details are too large to load here.";
   if (reason === "measurement_detail_mismatch")
-    return "The selected measurement detail no longer matches this roof job.";
-  return "No measurement source was returned for recomputation.";
+    return "The chosen roof details no longer match this job.";
+  return "No roof file was found for this check.";
 }
 
 function measurementTone(state: EstimatorGeometry["state"]): string {
@@ -2491,21 +2542,20 @@ function changeOrderTone(status: string | null): string {
 function quoteRevisionEmptyMessage(
   state: EstimatorWorkbenchResponse["quote_revision"]["state"],
 ): string {
-  if (state === "not_revised")
-    return "This selected quote does not declare an earlier version to compare.";
+  if (state === "not_revised") return "This quote does not name an older quote to compare.";
   if (state === "unlinked_revision") {
-    return "This quote has a later version number but no explicit superseded quote link. Do not infer a prior baseline.";
+    return "This quote has a higher version number, but no older quote link. Do not guess what changed.";
   }
   if (state === "prior_quote_missing") {
-    return "The declared prior quote was not returned. Do not calculate or explain a revision delta.";
+    return "The older quote was not found. Do not guess or explain the price change.";
   }
   if (state === "history_incomplete") {
-    return "The quote history reached the safe source boundary, so the declared prior version cannot be verified.";
+    return "Some quote history could not be loaded, so the older quote cannot be checked.";
   }
   if (state === "invalid_lineage") {
-    return "The declared prior quote has an invalid version relationship. Commercial review must resolve it.";
+    return "The older quote link is wrong. Fix it before this review moves on.";
   }
-  return "No selected customer quote is available for version comparison.";
+  return "No customer quote is ready to compare.";
 }
 
 function scopeChangeLinkCopy(
@@ -2521,19 +2571,18 @@ function proposalReadinessCopy(
   reason: EstimatorWorkbenchResponse["proposal_readiness"]["reasons"][number],
 ): string {
   const copy = {
-    measurement_missing: "No selected measurement report anchors this review.",
+    measurement_missing: "No roof report is ready for this review.",
     measurement_source_review_required:
-      "Source-file math still needs review; this does not assert field verification.",
-    takeoff_link_missing: "No approved material takeoff is linked to the selected measurement.",
-    takeoff_not_approved: "The linked material takeoff has not reached Approved state.",
-    quote_missing: "No selected customer quote anchors proposal evidence.",
-    quote_snapshot_incomplete: "The selected quote lacks a complete captured price-book snapshot.",
-    quote_not_approved: "The selected quote is not Approved or Accepted.",
-    scope_change_unresolved:
-      "A change order linked to the selected quote still needs its written customer decision.",
-    proposal_link_mismatch: "Existing proposal evidence does not link to the selected quote.",
-    source_window_partial: "One or more bounded source windows are incomplete.",
-    stale_source_detail: "One or more selected source details are stale or unavailable.",
+      "Roof math from the file still needs review. This is not a site check.",
+    takeoff_link_missing: "No approved material list uses this roof report.",
+    takeoff_not_approved: "The linked material list is not approved.",
+    quote_missing: "No customer quote is ready for this proposal.",
+    quote_snapshot_incomplete: "The quote does not have a full saved price.",
+    quote_not_approved: "The quote is not approved or accepted.",
+    scope_change_unresolved: "A job change still needs the customer's written choice.",
+    proposal_link_mismatch: "The proposal does not use this quote.",
+    source_window_partial: "Some source history could not be loaded.",
+    stale_source_detail: "Some chosen details are old or missing.",
   } satisfies Record<EstimatorWorkbenchResponse["proposal_readiness"]["reasons"][number], string>;
   return copy[reason];
 }

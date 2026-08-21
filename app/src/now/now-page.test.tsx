@@ -63,7 +63,7 @@ const accountingSession = {
   },
 } satisfies AuthenticatedSession;
 
-function nowModel(title = "What needs you now"): NowResponse {
+function nowModel(title = "Work to do now"): NowResponse {
   return {
     version: 1,
     role: "owner",
@@ -100,21 +100,21 @@ function nowModel(title = "What needs you now"): NowResponse {
       schema_version: 1,
       state: "limited",
       title,
-      explanation: "Resolve the first verified exception, then return for the next one.",
-      sync_label: "Production is limited and is not treated as clear.",
+      explanation: "Start with the first item, then come back for the next one.",
+      sync_label: "Some job data is missing. IronWrap will not mark it as done.",
       primary_action: {
         id: "refresh-now",
-        label: "Refresh live records",
+        label: "Check all lists again",
         kind: "refresh",
         href: null,
-        reason: "Production may have recovered.",
+        reason: "The job list may be back.",
         citation_ids: [],
       },
       sections: [
         {
           id: "decide-first",
-          title: "Decide first",
-          summary: "One verified exception needs a decision.",
+          title: "Check first",
+          summary: "One item needs a check.",
           cards: [
             {
               id: "owner:blocked-gate",
@@ -124,16 +124,16 @@ function nowModel(title = "What needs you now"): NowResponse {
               detail: "The job cannot move until delivery is verified.",
               action: {
                 id: "open-owner",
-                label: "Review exception",
+                label: "Open item",
                 kind: "navigate",
                 href: "/owner",
-                reason: "The owner exception record has the decision context.",
+                reason: "Open the work record and choose the next safe step.",
                 citation_ids: ["owner:blocked-gate"],
               },
               citations: [
                 {
                   id: "owner:blocked-gate",
-                  label: "Owner exception record",
+                  label: "Work record",
                   source: "owned_read_model",
                   href: "/owner",
                 },
@@ -163,26 +163,28 @@ describe("NowPage", () => {
     vi.mocked(loadNow).mockResolvedValue(nowModel());
   });
 
-  it("renders the trusted owner view with one emphasized action and clear sync truth", async () => {
+  it("renders the owner work list with one main action and clear list status", async () => {
+    const user = userEvent.setup();
     renderNow();
 
-    expect(await screen.findByRole("heading", { name: "What needs you now" })).toBeVisible();
-    expect(screen.getByText("Production is limited and is not treated as clear.")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Work to do now" })).toBeVisible();
+    expect(
+      screen.getByText("Some job data is missing. IronWrap will not mark it as done."),
+    ).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "List status" })).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Refresh live records" })).toBeVisible();
-    const exceptionLink = screen.getByRole("link", { name: "Review exception" });
+    expect(screen.getByRole("button", { name: "Check all lists again" })).toBeVisible();
+    const exceptionLink = screen.getByRole("link", { name: "Open item" });
     expect(exceptionLink).toHaveAttribute("href", "/owner");
     expect(exceptionLink).toHaveAccessibleDescription(
-      "The owner exception record has the decision context. Owner exception record",
+      "Open the work record and choose the next safe step. Work record",
     );
-    expect(screen.getByRole("link", { name: "Owner exception record" })).toHaveAttribute(
-      "href",
-      "/owner",
-    );
+    expect(screen.getByRole("link", { name: "Work record" })).toHaveAttribute("href", "/owner");
     expect(
-      screen.getByRole("button", { name: "Refresh live records" }),
-    ).toHaveAccessibleDescription("Production may have recovered.");
-    expect(screen.getByText("Production").nextSibling).toHaveTextContent("Limited");
+      screen.getByRole("button", { name: "Check all lists again" }),
+    ).toHaveAccessibleDescription("The job list may be back.");
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("Jobs").nextSibling).toHaveTextContent("Needs a check");
   });
 
   it("refreshes the same bounded read when the primary action asks for fresh records", async () => {
@@ -192,7 +194,7 @@ describe("NowPage", () => {
       .mockResolvedValueOnce(nowModel("What changed now"));
     renderNow();
 
-    await user.click(await screen.findByRole("button", { name: "Refresh live records" }));
+    await user.click(await screen.findByRole("button", { name: "Check all lists again" }));
 
     expect(await screen.findByRole("heading", { name: "What changed now" })).toBeVisible();
     expect(loadNow).toHaveBeenCalledTimes(2);
@@ -213,7 +215,7 @@ describe("NowPage", () => {
     vi.mocked(loadNow).mockResolvedValue(model);
     renderNow();
 
-    expect(await screen.findByRole("link", { name: "Review exception" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Open item" })).toHaveAttribute(
       "href",
       "/marketing/postiz/intent%3A001",
     );

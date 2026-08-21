@@ -56,7 +56,7 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         <div>
-          <p className="text-sm font-semibold text-danger">Saved work recovery</p>
+          <p className="text-sm font-semibold text-danger">Saved work</p>
           <h2 id="saved-work-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
             {actions.length === 1
               ? "One saved item needs review"
@@ -72,7 +72,6 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
       <ol className="mt-5 space-y-3">
         {actions.map((action) => {
           const conflict = action.conflict;
-          const detail = conflict ?? action.lastError;
           const retryable = isOutboxActionSafeToRetry(action);
           const busy = retryingActionId === action.deviceActionId;
           return (
@@ -94,15 +93,19 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
                 <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
                   <dt className="font-semibold text-muted">Why it stopped</dt>
                   <dd className="leading-6">
-                    {detail?.message ?? "This saved item needs office review before it can sync."}
+                    {conflict
+                      ? "The office copy changed after this item was saved."
+                      : retryable
+                        ? "The server could not take this item yet."
+                        : "The office must check this item before it can send."}
                   </dd>
                 </div>
               </dl>
 
               {conflict ? (
                 <p className="mt-3 text-sm leading-6 text-danger" role="note">
-                  The office copy changed ({conflict.code}). Keep this item as saved and ask the
-                  office to review both versions before a new capture is made.
+                  The office copy changed. Keep this item saved. Ask the office to check both copies
+                  before you make a new one.
                 </p>
               ) : retryable ? (
                 <div className="mt-4">
@@ -114,17 +117,15 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
                     onClick={() => void retry(action)}
                   >
                     <RefreshCw aria-hidden="true" />
-                    Retry saved item
+                    Try again
                   </Button>
                   <p className="mt-2 text-sm leading-6 text-muted" role="status">
-                    This retries only a transient server response. The original saved item keeps its
-                    same device action ID.
+                    This only tries to send the same saved item again. It does not make a copy.
                   </p>
                 </div>
               ) : (
                 <p className="mt-3 text-sm leading-6 text-muted" role="note">
-                  This item cannot be retried safely from this device. Keep it saved for office
-                  review.
+                  Do not try again from this phone. Keep the item saved for the office.
                 </p>
               )}
               {retryError[action.deviceActionId] ? (
@@ -142,12 +143,12 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
 
 const actionNames: Record<OutboxAction["kind"], string> = {
   field_checkin: "Field check-in",
-  work_package_acknowledgement: "Work Package acknowledgement",
+  work_package_acknowledgement: "Work plan review",
   work_package_stop: "Stop Work report",
   safety_action: "Safety report",
   fleet_pre_trip_inspection: "Pre-trip inspection",
   fleet_post_trip_inspection: "Post-trip inspection",
-  fleet_defect_report: "Defect report",
+  fleet_defect_report: "Fault report",
 };
 
 function actionLabel(action: OutboxAction): string {
@@ -156,8 +157,8 @@ function actionLabel(action: OutboxAction): string {
   const jobId = jobIdFromEndpoint(action.endpoint);
   return [
     actionNames[action.kind],
-    workPackageId ? `package ${workPackageId}` : null,
-    assetId ? `asset ${assetId}` : null,
+    workPackageId ? `plan ${workPackageId}` : null,
+    assetId ? `vehicle ${assetId}` : null,
     jobId ? `job ${jobId}` : null,
   ]
     .filter((value): value is string => Boolean(value))
@@ -205,6 +206,6 @@ function formatSavedAt(value: number, locale: string): string {
   }
 }
 
-function messageFor(error: unknown): string {
-  return error instanceof Error ? error.message : "The saved item could not be queued for retry.";
+function messageFor(_error: unknown): string {
+  return "This item could not try again. Keep it saved and tell the office.";
 }

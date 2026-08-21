@@ -14,9 +14,10 @@ import {
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
-import { GateChip } from "../field/gate-chip";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import { ErrorState } from "../components/ui/state-panel";
+import { GateChip } from "../field/gate-chip";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import { loadProductionRunway } from "./production-api";
@@ -40,39 +41,38 @@ const laneCopy: Record<
   { title: string; description: string; icon: LucideIcon; tone: string; iconTone: string }
 > = {
   blocked: {
-    title: "Blocked",
-    description: "A gate, crew assignment, or material exception needs human resolution.",
+    title: "Work stopped",
+    description: "A step, crew, or material issue stops work.",
     icon: AlertTriangle,
-    tone: "border-danger/30 bg-danger-soft",
+    tone: "border-l-danger",
     iconTone: "bg-danger text-danger-foreground",
   },
   scheduled: {
-    title: "Scheduled",
-    description: "A recorded schedule is visible; gate coverage still requires review.",
+    title: "Start date set",
+    description: "A start date is saved. Check every step before the crew goes.",
     icon: CalendarClock,
-    tone: "border-info/30 bg-info-soft",
+    tone: "border-l-info",
     iconTone: "bg-info text-white",
   },
   needs_assignment: {
-    title: "Needs a crew",
-    description: "No active crew assignment is returned for this active job.",
+    title: "Crew needed",
+    description: "This job has no active crew.",
     icon: UserRoundPlus,
-    tone: "border-warning/30 bg-warning-soft",
+    tone: "border-l-warning",
     iconTone: "bg-warning text-white",
   },
   ready_for_review: {
-    title: "Ready to review",
-    description:
-      "All expected gate rows are returned non-blocking; a human still decides scheduling.",
+    title: "Ready to check",
+    description: "All saved start steps look clear. A person still sets the date.",
     icon: ClipboardCheck,
-    tone: "border-ok/30 bg-ok-soft",
+    tone: "border-l-ok",
     iconTone: "bg-ok text-white",
   },
   needs_verification: {
-    title: "Needs gate verification",
-    description: "An assignment exists, but the required gate record is incomplete or unavailable.",
+    title: "Steps need a check",
+    description: "A crew is named, but one or more start steps are missing.",
     icon: ShieldCheck,
-    tone: "border-border bg-surface-muted/50",
+    tone: "border-l-border-strong",
     iconTone: "bg-foreground text-background",
   },
 };
@@ -144,29 +144,42 @@ function ProductionRunwayScreen({
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <CalendarClock className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Production runway
-              </h1>
-              <p className="mt-1 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Review crew coverage, production gates, and material exceptions in one source-backed
-                read. This view does not schedule, dispatch, or alter a job.
-              </p>
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <CalendarClock className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Job work
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  Production plan
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Check crews, start dates, safety steps, and material needs. This page does not
+                  change a job.
+                </p>
+              </div>
             </div>
           </div>
-          <p className="text-sm text-muted">
-            {formatDateTime(model.read_model_generated_at, locale, timeZone)
-              ? `Read generated ${formatDateTime(model.read_model_generated_at, locale, timeZone)}`
-              : "Read timing unavailable"}
-          </p>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">Today</p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {model.summary.active_jobs}{" "}
+              {model.summary.active_jobs === 1 ? "active job" : "active jobs"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {formatDateTime(model.read_model_generated_at, locale, timeZone)
+                ? `List made ${formatDateTime(model.read_model_generated_at, locale, timeZone)}`
+                : "List time not found"}
+            </p>
+            <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
+          </div>
+        </header>
+      </Card>
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -193,52 +206,57 @@ function ProductionRunwayScreen({
 
 function RunwaySignals({ model }: { model: ProductionRunwayResponse }) {
   const signals = [
-    { label: "Blocked", value: model.summary.blocked, tone: "text-danger", dot: "bg-danger" },
-    { label: "Scheduled", value: model.summary.scheduled, tone: "text-info", dot: "bg-info" },
     {
-      label: "Needs crew",
+      label: "Work stopped",
+      value: model.summary.blocked,
+      tone: "text-danger",
+      dot: "bg-danger",
+    },
+    { label: "Start date set", value: model.summary.scheduled, tone: "text-info", dot: "bg-info" },
+    {
+      label: "Crew needed",
       value: model.summary.needs_assignment,
       tone: "text-warning",
       dot: "bg-warning",
     },
-    { label: "Review ready", value: model.summary.ready_for_review, tone: "text-ok", dot: "bg-ok" },
     {
-      label: "Needs proof",
+      label: "Ready to check",
+      value: model.summary.ready_for_review,
+      tone: "text-ok",
+      dot: "bg-ok",
+    },
+    {
+      label: "Steps to check",
       value: model.summary.needs_verification,
       tone: "text-muted",
-      dot: "bg-surface-muted",
+      dot: "bg-border-strong",
     },
   ];
   return (
-    <dl
-      className="grid grid-cols-2 border-y border-border sm:grid-cols-5"
-      aria-label="Production runway signals"
-    >
-      {signals.map((signal, index) => (
-        <div
-          key={signal.label}
-          className={cn(
-            "min-h-20 px-3 py-3 sm:min-h-24 sm:px-4 sm:py-4",
-            index > 0 && "border-l border-border",
-            index === 2 && "sm:border-l sm:border-t-0 border-t border-border",
-            index === 4 && "col-span-2 sm:col-span-1 border-t border-border sm:border-t-0",
-          )}
-        >
-          <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
-            <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
-            {signal.label}
-          </dt>
-          <dd
+    <Card className="overflow-hidden">
+      <dl className="grid grid-cols-2 sm:grid-cols-5" aria-label="Production job counts">
+        {signals.map((signal, index) => (
+          <div
+            key={signal.label}
             className={cn(
-              "mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl",
-              signal.tone,
+              "min-h-20 px-4 py-3 sm:min-h-24 sm:px-4 sm:py-4",
+              index % 2 === 1 && "border-l border-border",
+              index >= 2 && "border-t border-border sm:border-t-0",
+              index > 0 && "sm:border-l sm:border-border",
+              index === 4 && "col-span-2 sm:col-span-1",
             )}
           >
-            {signal.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+            <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
+              <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
+              {signal.label}
+            </dt>
+            <dd className={cn("mt-2 text-2xl font-black tracking-[-0.03em]", signal.tone)}>
+              {signal.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
@@ -246,26 +264,25 @@ function DataBoundary({ model }: { model: ProductionRunwayResponse }) {
   const sourceLabels = model.partial_sources.map(humanizeSource);
   const staleLabels = model.stale_fields.map(humanizeSource);
   return (
-    <aside
-      className="border border-warning/35 bg-warning-soft px-4 py-4"
-      aria-label="Production data boundary"
-    >
-      <div className="flex items-start gap-3">
-        <Clock3 className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
-        <div>
-          <h2 className="font-bold tracking-[-0.01em]">Source boundary needs review</h2>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            This is a bounded read. It does not infer missing gates or make a job safe to dispatch.
-          </p>
-          {sourceLabels.length > 0 ? (
-            <p className="mt-2 text-sm text-muted">Limited source: {sourceLabels.join(", ")}.</p>
-          ) : null}
-          {staleLabels.length > 0 ? (
-            <p className="mt-1 text-sm text-muted">Review: {staleLabels.join(", ")}.</p>
-          ) : null}
+    <Card className="border-warning/35 bg-warning-soft/45 p-4 sm:p-5">
+      <aside aria-label="Production data check">
+        <div className="flex items-start gap-3">
+          <Clock3 className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
+          <div className="min-w-0">
+            <h2 className="font-bold tracking-[-0.01em]">Some job data is missing</h2>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              Do not send a crew until you check the job.
+            </p>
+            {sourceLabels.length > 0 ? (
+              <p className="mt-2 text-sm text-muted">Missing from: {sourceLabels.join(", ")}.</p>
+            ) : null}
+            {staleLabels.length > 0 ? (
+              <p className="mt-1 text-sm text-muted">May be old: {staleLabels.join(", ")}.</p>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </Card>
   );
 }
 
@@ -290,45 +307,45 @@ function RunwayLane({
   const Icon = copy.icon;
   const headingId = `production-lane-${lane}`;
   return (
-    <section aria-labelledby={headingId}>
-      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
-        <div className="flex items-start gap-3">
-          <span className={cn("grid size-9 place-items-center rounded-md", copy.iconTone)}>
-            <Icon className="size-4" aria-hidden="true" />
-          </span>
-          <div>
-            <h2 id={headingId} className="text-xl font-black tracking-[-0.025em] sm:text-2xl">
-              {copy.title}
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-muted">{copy.description}</p>
+    <Card className="scroll-mt-28 overflow-hidden">
+      <section aria-labelledby={headingId}>
+        <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border p-5 sm:p-6">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className={cn("grid size-9 place-items-center rounded-md", copy.iconTone)}>
+              <Icon className="size-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h2 id={headingId} className="text-xl font-black tracking-[-0.025em] sm:text-2xl">
+                {copy.title}
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-muted">{copy.description}</p>
+            </div>
           </div>
-        </div>
-        <p className="text-sm font-semibold text-muted">
-          {jobs.length} {jobs.length === 1 ? "job" : "jobs"}
-        </p>
-      </header>
-      {jobs.length > 0 ? (
-        <ol className="grid gap-3 lg:grid-cols-2">
-          {jobs.map((job) => (
-            <li key={job.id}>
-              <RunwayJobCard
-                job={job}
-                locale={locale}
-                timeZone={timeZone}
-                tone={copy.tone}
-                canOpenJob={canOpenJob}
-                canPrepareSchedule={canPrepareSchedule}
-                canClearGates={canClearGates}
-              />
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <div className="border border-dashed border-border px-4 py-5 text-sm leading-6 text-muted">
-          No source records currently fall in this lane.
-        </div>
-      )}
-    </section>
+          <p className="text-sm font-semibold text-muted">
+            {jobs.length} {jobs.length === 1 ? "job" : "jobs"}
+          </p>
+        </header>
+        {jobs.length > 0 ? (
+          <ol className="grid gap-3 p-3 sm:p-4 lg:grid-cols-2">
+            {jobs.map((job) => (
+              <li key={job.id}>
+                <RunwayJobCard
+                  job={job}
+                  locale={locale}
+                  timeZone={timeZone}
+                  tone={copy.tone}
+                  canOpenJob={canOpenJob}
+                  canPrepareSchedule={canPrepareSchedule}
+                  canClearGates={canClearGates}
+                />
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="p-5 text-sm leading-6 text-muted sm:p-6">No jobs are in this group.</div>
+        )}
+      </section>
+    </Card>
   );
 }
 
@@ -352,23 +369,22 @@ function RunwayJobCard({
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
     job.gate_coverage === "complete"
-      ? `${job.gate_summary.expected}/${job.gate_summary.expected} expected gate records returned`
+      ? `${job.gate_summary.expected} of ${job.gate_summary.expected} start steps found`
       : job.gate_coverage === "incomplete"
-        ? "Expected gate records are incomplete"
-        : "Gate coverage is unavailable in this bounded read";
+        ? "Some start steps are missing"
+        : "Start steps are not known";
 
   return (
-    <article className={cn("border p-4 sm:p-5", tone)}>
+    <article
+      className={cn("rounded-lg border border-border border-l-2 bg-surface p-4 sm:p-5", tone)}
+    >
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
             {job.brand ?? "Unbranded job"}
           </p>
           <h3 className="mt-1 text-lg font-black tracking-[-0.02em]">{job.job_number ?? job.id}</h3>
-          <p className="mt-1 text-sm text-muted">
-            {[job.service_type, job.status].filter(Boolean).join(" · ") ||
-              "Operational state unavailable"}
-          </p>
+          <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">
           {canOpenJob ? (
@@ -378,7 +394,7 @@ function RunwayJobCard({
                 params={{ jobId: job.id }}
                 aria-label={`Open ${job.job_number ?? job.id}`}
               >
-                Open
+                Open job
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>
@@ -388,9 +404,9 @@ function RunwayJobCard({
               <Link
                 to="/production/schedule/$jobId"
                 params={{ jobId: job.id }}
-                aria-label={`Prepare schedule request for ${job.job_number ?? job.id}`}
+                aria-label={`Start schedule check for ${job.job_number ?? job.id}`}
               >
-                Prepare schedule
+                Start schedule check
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>
@@ -400,55 +416,48 @@ function RunwayJobCard({
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">
         <div>
-          <dt className="font-semibold text-muted">Crew assignment</dt>
-          <dd className="mt-0.5 leading-5">
-            {job.assignment
-              ? [
-                  job.assignment.type ?? "Assignment",
-                  job.assignment.status ?? "Status unavailable",
-                ].join(" · ")
-              : "No active assignment returned"}
-          </dd>
+          <dt className="font-semibold text-muted">Crew</dt>
+          <dd className="mt-0.5 leading-5">{job.assignment ? "Crew set" : "No crew found"}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-muted">Schedule</dt>
-          <dd className="mt-0.5 leading-5">{schedule ?? "No start time returned"}</dd>
+          <dt className="font-semibold text-muted">Start time</dt>
+          <dd className="mt-0.5 leading-5">{schedule ?? "No start time found"}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-muted">Scheduling-gate coverage</dt>
+          <dt className="font-semibold text-muted">Start steps</dt>
           <dd className="mt-0.5 leading-5">{gateCoverage}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-muted">Gate signals</dt>
+          <dt className="font-semibold text-muted">Step check</dt>
           <dd className="mt-0.5 leading-5">
             {job.gate_summary.blocked > 0
-              ? `${job.gate_summary.blocked} blocked`
-              : `${job.gate_summary.ready + job.gate_summary.waived + job.gate_summary.done} non-blocking returned`}
+              ? `${job.gate_summary.blocked} ${job.gate_summary.blocked === 1 ? "step stops" : "steps stop"} work`
+              : `${job.gate_summary.ready + job.gate_summary.waived + job.gate_summary.done} saved steps look clear`}
           </dd>
         </div>
       </dl>
 
       <div className="mt-4">
-        <p className="text-sm font-semibold text-muted">Scheduling locks</p>
+        <p className="text-sm font-semibold text-muted">Start steps</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {job.scheduling_gates.map((gate) => (
             <GateChip key={gate.name} name={gate.name} state={gate.state ?? "Unavailable"} />
           ))}
         </div>
         <p className="mt-2 text-xs leading-5 text-muted">
-          Completion is reviewed at closeout, not before scheduling.
+          Final work is checked when the job is done. It is not a start step.
         </p>
         {canClearGates ? <GateClearancePanel job={job} /> : null}
       </div>
 
       {job.material_attention.length > 0 ? (
-        <section className="mt-3 border-l-2 border-danger pl-3" aria-label="Material attention">
-          <p className="text-sm font-semibold text-danger">Material attention</p>
+        <section className="mt-3 border-l-2 border-danger pl-3" aria-label="Material issue">
+          <p className="text-sm font-semibold text-danger">Material issue</p>
           <ul className="mt-1 space-y-1 text-sm leading-6 text-danger">
             {job.material_attention.map((item, index) => (
               <li key={`${item.status}:${item.requested_delivery_date ?? "unknown"}:${index}`}>
                 <span className="font-semibold">
-                  {item.status} · Requested delivery:{" "}
+                  {item.status} · Asked for:{" "}
                   {formatDeliveryDate(item.requested_delivery_date, locale)}
                 </span>
               </li>
@@ -456,22 +465,58 @@ function RunwayJobCard({
           </ul>
         </section>
       ) : null}
-      <p className="mt-3 text-sm leading-6 text-muted">{job.next_action}</p>
+      <p className="mt-3 text-sm font-semibold leading-6 text-foreground">
+        Next: {laneNextStep(job.lane)}
+      </p>
+      <details className="group mt-3 rounded-lg border border-border">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold [&::-webkit-details-marker]:hidden">
+          <span>System details</span>
+          <ChevronRight
+            className="size-4 text-muted transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2">
+          <MetadataLine label="Job ID" value={job.id} />
+          <MetadataLine label="Job state" value={job.status ?? "Not found"} />
+          <MetadataLine label="Crew record" value={job.assignment?.id ?? "Not found"} />
+          <MetadataLine label="Crew state" value={job.assignment?.status ?? "Not found"} />
+          <MetadataLine label="Step data" value={job.gate_coverage} />
+          <MetadataLine label="Saved next step" value={job.next_action} />
+        </dl>
+      </details>
     </article>
   );
 }
 
+function MetadataLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="font-semibold text-foreground">{label}</dt>
+      <dd className="mt-0.5 break-words">{value}</dd>
+    </div>
+  );
+}
+
+function laneNextStep(lane: ProductionRunwayLane): string {
+  if (lane === "blocked") return "Clear the issue before you set a start date.";
+  if (lane === "scheduled") return "Check every start step before the crew goes.";
+  if (lane === "needs_assignment") return "Choose a crew before you set a start date.";
+  if (lane === "ready_for_review") return "A manager can check this job for a start date.";
+  return "Find the missing start step before you set a date.";
+}
+
 function RefreshWarning({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border border-warning/35 bg-warning-soft px-4 py-3">
+    <Card className="flex flex-wrap items-center justify-between gap-3 border-warning/35 bg-warning-soft/45 p-4">
       <p className="text-sm leading-6">
-        The last refresh failed; the visible runway is the previous read.
+        This may be an old job list. The last load failed. Load again before you act.
       </p>
       <Button variant="outline" size="compact" onClick={onRetry}>
         <RefreshCw aria-hidden="true" />
-        Retry
+        Load again
       </Button>
-    </div>
+    </Card>
   );
 }
 
@@ -479,9 +524,9 @@ function ProductionRunwayError({ onRetry }: { onRetry: () => void }) {
   return (
     <section className="mx-auto max-w-7xl">
       <ErrorState
-        title="Production runway is unavailable"
-        message="The operating read could not be refreshed. No scheduling or job data was changed."
-        action={<Button onClick={onRetry}>Retry</Button>}
+        title="Job plan could not load"
+        message="Nothing changed. Check your link, then load the job list again."
+        action={<Button onClick={onRetry}>Load again</Button>}
       />
     </section>
   );
@@ -492,17 +537,17 @@ function ProductionRunwaySkeleton() {
     <section
       className="mx-auto max-w-7xl space-y-6"
       aria-busy="true"
-      aria-label="Loading production runway"
+      aria-label="Loading the production plan"
     >
-      <div className="h-24 border-b border-border bg-surface-muted/60" />
-      <div className="grid grid-cols-2 border-y border-border sm:grid-cols-5">
+      <Card className="h-56 bg-surface-muted/60" />
+      <Card className="grid grid-cols-2 overflow-hidden sm:grid-cols-5">
         {[0, 1, 2, 3, 4].map((index) => (
           <div key={index} className="min-h-24 border-l border-border bg-surface-muted/45" />
         ))}
-      </div>
+      </Card>
       <div className="grid gap-3 lg:grid-cols-2">
         {[0, 1].map((index) => (
-          <div key={index} className="h-56 border border-border bg-surface-muted/40" />
+          <Card key={index} className="h-56 bg-surface-muted/40" />
         ))}
       </div>
     </section>
@@ -525,9 +570,9 @@ function formatDateTime(value: string | null, locale: string, timeZone: string):
 }
 
 function formatDeliveryDate(value: string | null, locale: string): string {
-  if (!value) return "Delivery date unavailable";
+  if (!value) return "date not found";
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return "Delivery date unavailable";
+  if (!match) return "date not found";
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -537,7 +582,7 @@ function formatDeliveryDate(value: string | null, locale: string): string {
     date.getUTCMonth() !== month - 1 ||
     date.getUTCDate() !== day
   ) {
-    return "Delivery date unavailable";
+    return "date not found";
   }
   try {
     return new Intl.DateTimeFormat(locale, {

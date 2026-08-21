@@ -15,6 +15,7 @@ import {
 
 import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import { RoleGuard } from "../components/role-guard";
 import type {
   MeasurementIntakeOwnerException,
@@ -116,32 +117,49 @@ function OwnerNowScreen({
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0;
   const generatedAt = safeFormattedDate(model.read_model_generated_at, locale);
+  const stoppedCount = model.summary.field_blockers + model.summary.blocked_gates;
+  const checkCount = model.exceptions.length + (measurementExceptions?.measurements.length ?? 0);
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <CircleGauge className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Now
-              </h1>
-              <p className="mt-1 text-sm leading-6 text-muted sm:text-base">
-                {model.summary.active_jobs} active{" "}
-                {model.summary.active_jobs === 1 ? "job" : "jobs"}
-                {generatedAt ? <> · Read generated {generatedAt}</> : null}
-              </p>
+    <section className="mx-auto max-w-7xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <CircleGauge className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Owner desk
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  Now
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  See work that needs a choice. IronWrap does not guess when a fact is missing.
+                </p>
+              </div>
             </div>
           </div>
-          <p className="hidden max-w-sm text-sm leading-6 text-muted sm:block sm:text-right">
-            The decision board shows verified exceptions first. It does not infer missing impact,
-            approvals, or follow-up.
-          </p>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
+            </p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {stoppedCount > 0
+                ? `${stoppedCount} ${stoppedCount === 1 ? "work stop" : "work stops"}`
+                : checkCount > 0
+                  ? `${checkCount} ${checkCount === 1 ? "item" : "items"} to check`
+                  : "No open checks"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {model.summary.active_jobs} open {model.summary.active_jobs === 1 ? "job" : "jobs"}
+              {generatedAt ? ` · List made ${generatedAt}` : ""}
+            </p>
+          </div>
+        </header>
+      </Card>
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -202,27 +220,29 @@ function RuntimeTruthPanel({
   onCheck: () => void;
 }) {
   const actionLabel = checking
-    ? "Checking runtime truth"
+    ? "Running check"
     : data
-      ? "Refresh runtime truth"
+      ? "Run again"
       : failed
-        ? "Retry runtime truth"
-        : "Check runtime truth";
+        ? "Try again"
+        : "Run system check";
   if (!data) {
     return (
-      <section className="border-y border-border py-5" aria-labelledby="runtime-truth-heading">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="p-5 sm:p-6" aria-labelledby="system-check-heading">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 id="runtime-truth-heading" className="text-xl font-black tracking-[-0.025em]">
-              Runtime truth
+            <h2
+              id="system-check-heading"
+              className="scroll-mt-36 text-xl font-black tracking-[-0.025em] sm:scroll-mt-24"
+            >
+              System check
             </h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-              Run a bounded server-side readiness and operations read. It changes no provider or job
-              state.
+              Read saved app health. This does not change a job or a linked app.
             </p>
             {failed ? (
               <p className="mt-2 text-sm font-semibold text-warning" role="status">
-                The runtime read was unavailable. Retry does not change operating state.
+                The check could not load. Trying again will not change work.
               </p>
             ) : null}
           </div>
@@ -231,7 +251,7 @@ function RuntimeTruthPanel({
             {actionLabel}
           </Button>
         </div>
-      </section>
+      </Card>
     );
   }
 
@@ -239,42 +259,58 @@ function RuntimeTruthPanel({
   const readyChecks = data.readiness.checks.length - failedChecks.length;
   const heartbeat = data.operations.heartbeat;
   const heartbeatState = !heartbeat
-    ? "No heartbeat"
+    ? "Not found"
     : heartbeat.fresh && heartbeat.reconciled
-      ? "Fresh"
-      : "Attention";
+      ? "Current"
+      : "Needs a check";
   const quickBooksState = !data.operations.quickbooks_receipts.available
-    ? "No receipt"
+    ? "Not found"
     : data.operations.quickbooks_receipts.fresh
-      ? "Fresh"
-      : "Attention";
-  const metrics = [
-    { label: "Readiness groups", value: `${readyChecks}/${data.readiness.checks.length}` },
-    { label: "Operations", value: data.operations.status === "ok" ? "OK" : "Degraded" },
-    { label: "Heartbeat", value: heartbeatState },
-    { label: "Open dead letters", value: String(data.operations.counts.open_dead_letters) },
-    { label: "Stuck envelopes", value: String(data.operations.counts.stuck) },
-    { label: "Frappe errors", value: String(data.operations.counts.frappe_errors) },
+      ? "Current"
+      : "Needs a check";
+  const issueCount =
+    data.operations.counts.open_dead_letters +
+    data.operations.counts.stuck +
+    data.operations.counts.frappe_errors +
+    data.operations.counts.replay_failed +
+    data.operations.counts.replay_stuck +
+    data.operations.audit_failures_observed;
+  const summaryMetrics = [
+    { label: "Checks passed", value: `${readyChecks}/${data.readiness.checks.length}` },
+    { label: "App work", value: data.operations.status === "ok" ? "Good" : "Needs a check" },
+    { label: "Last app check", value: heartbeatState },
+    { label: "Items to fix", value: String(issueCount) },
+  ];
+  const systemMetrics = [
     {
-      label: "Replay failures",
+      label: "Messages not finished",
+      value: String(data.operations.counts.open_dead_letters),
+    },
+    { label: "Work queue items stuck", value: String(data.operations.counts.stuck) },
+    { label: "Job record errors", value: String(data.operations.counts.frappe_errors) },
+    {
+      label: "Failed retry work",
       value: String(data.operations.counts.replay_failed + data.operations.counts.replay_stuck),
     },
     {
-      label: `Audit failures observed (${data.operations.audit_failure_window_hours}h, max 20)`,
+      label: `Save record errors in ${data.operations.audit_failure_window_hours} hours`,
       value: String(data.operations.audit_failures_observed),
     },
-    { label: "QuickBooks receipts", value: quickBooksState },
+    { label: "QuickBooks save proof", value: quickBooksState },
   ];
   const generatedAt = safeFormattedDate(data.read_model_generated_at, locale);
   const heartbeatAt = heartbeat ? safeFormattedDate(heartbeat.ran_at, locale) : null;
 
   return (
-    <section className="border-y border-border py-5" aria-labelledby="runtime-truth-heading">
+    <Card className="p-5 sm:p-6" aria-labelledby="system-check-heading">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id="runtime-truth-heading" className="text-xl font-black tracking-[-0.025em]">
-              Runtime truth
+            <h2
+              id="system-check-heading"
+              className="scroll-mt-36 text-xl font-black tracking-[-0.025em] sm:scroll-mt-24"
+            >
+              System check
             </h2>
             <span
               className={`inline-flex items-center gap-1.5 text-sm font-bold ${data.status === "ready" ? "text-ok" : "text-warning"}`}
@@ -283,12 +319,12 @@ function RuntimeTruthPanel({
                 className={`size-1.5 rounded-full ${data.status === "ready" ? "bg-ok" : "bg-warning"}`}
                 aria-hidden="true"
               />
-              {data.status === "ready" ? "Ready" : "Attention"}
+              {data.status === "ready" ? "Ready" : "Needs a check"}
             </span>
           </div>
           <p className="mt-1 text-sm leading-6 text-muted">
-            {generatedAt ? `Read ${generatedAt}. ` : ""}
-            This is a server read, not deployment or business-acceptance proof.
+            {generatedAt ? `Checked ${generatedAt}. ` : ""}
+            This does not prove that customers can use every part.
           </p>
         </div>
         <Button variant="outline" size="compact" busy={checking} onClick={onCheck}>
@@ -299,32 +335,46 @@ function RuntimeTruthPanel({
 
       {failed ? (
         <p className="mt-3 text-sm text-warning" role="status">
-          Showing the previous runtime read because the latest check failed.
+          The last check failed. The old result is still shown.
         </p>
       ) : null}
 
-      <dl className="mt-4 grid gap-x-6 gap-y-3 border-y border-border py-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
-        {metrics.map((metric) => (
-          <div key={metric.label}>
-            <dt className="text-muted">{metric.label}</dt>
-            <dd className="mt-0.5 font-bold text-foreground">{metric.value}</dd>
+      <dl className="mt-4 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+        {summaryMetrics.map((metric) => (
+          <div key={metric.label} className="bg-surface-raised p-4">
+            <dt className="text-sm font-semibold text-muted">{metric.label}</dt>
+            <dd className="mt-1 font-black tracking-[-0.02em] text-foreground">{metric.value}</dd>
           </div>
         ))}
       </dl>
-      {heartbeatAt ? (
-        <p className="mt-3 text-sm leading-6 text-muted">Latest heartbeat: {heartbeatAt}.</p>
-      ) : null}
-      {failedChecks.length > 0 ? (
-        <p className="mt-3 text-sm leading-6 text-muted">
-          Readiness attention: {failedChecks.map((check) => check.id.replace(/_/g, " ")).join(", ")}
-          .
-        </p>
-      ) : (
-        <p className="mt-3 text-sm leading-6 text-muted">
-          All bounded readiness groups reported ready in this read.
-        </p>
-      )}
-    </section>
+      <details className="group mt-4 rounded-lg border border-border">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
+          <span>System details</span>
+          <ChevronRight
+            className="size-5 text-muted transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="border-t border-border p-4">
+          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+            {systemMetrics.map((metric) => (
+              <div key={metric.label}>
+                <dt className="text-muted">{metric.label}</dt>
+                <dd className="mt-0.5 font-bold text-foreground">{metric.value}</dd>
+              </div>
+            ))}
+          </dl>
+          {heartbeatAt ? (
+            <p className="mt-4 text-sm leading-6 text-muted">Last app check: {heartbeatAt}.</p>
+          ) : null}
+          <p className="mt-2 text-sm leading-6 text-muted">
+            {failedChecks.length > 0
+              ? `Checks to fix: ${failedChecks.map((check) => systemCheckName(check.id)).join(", ")}.`
+              : "All saved checks passed."}
+          </p>
+        </div>
+      </details>
+    </Card>
   );
 }
 
@@ -333,48 +383,48 @@ function DecisionSummary({ model }: { model: OwnerNowResponse }) {
     {
       label: "Work stopped",
       value: model.summary.field_blockers + model.summary.blocked_gates,
-      detail: "Crew reports and gate locks",
+      detail: "Crew reports and job gates",
       tone: "text-danger",
       dot: "bg-danger",
     },
     {
-      label: "Needs review",
+      label: "Needs a check",
       value:
         model.summary.open_incidents +
         model.summary.material_exceptions +
         model.summary.finance_exceptions,
-      detail: "Operations, materials, and finance",
+      detail: "App, material, and money work",
       tone: "text-warning",
       dot: "bg-warning",
     },
     {
-      label: "Lead attention",
+      label: "Lead checks",
       value: model.summary.untriaged_leads + model.summary.lead_triage_unknown,
-      detail: "Triage state and acknowledgement evidence",
+      detail: "New leads and reply proof",
       tone: "text-info",
       dot: "bg-info",
     },
   ];
   return (
-    <dl className="grid grid-cols-3 border-y border-border" aria-label="Current operating signals">
-      {signals.map((signal, index) => (
-        <div
-          key={signal.label}
-          className={`min-h-20 px-3 py-3 sm:min-h-24 sm:px-5 sm:py-4 ${index > 0 ? "border-l border-border" : ""}`}
-        >
-          <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
-            <span className={`size-2 rounded-full ${signal.dot}`} aria-hidden="true" />
-            {signal.label}
-          </dt>
-          <dd
-            className={`mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl ${signal.tone}`}
+    <Card className="overflow-hidden">
+      <dl className="grid sm:grid-cols-3" aria-label="Work to check">
+        {signals.map((signal, index) => (
+          <div
+            key={signal.label}
+            className={`min-h-24 px-5 py-4 ${index > 0 ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
           >
-            {signal.value}
-          </dd>
-          <p className="mt-1 hidden text-sm leading-5 text-muted sm:block">{signal.detail}</p>
-        </div>
-      ))}
-    </dl>
+            <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
+              <span className={`size-2 rounded-full ${signal.dot}`} aria-hidden="true" />
+              {signal.label}
+            </dt>
+            <dd className={`mt-2 text-2xl font-black tracking-[-0.03em] ${signal.tone}`}>
+              {signal.value}
+            </dd>
+            <p className="mt-1 text-sm leading-5 text-muted">{signal.detail}</p>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
@@ -393,52 +443,44 @@ function MeasurementIntakeExceptionsPanel({
 }) {
   if (!data && loading) {
     return (
-      <section
-        className="border-y border-border py-5"
-        aria-busy="true"
-        aria-label="Loading measurement intake exceptions"
-      >
-        <p className="text-sm leading-6 text-muted">
-          Loading measurement reports needing attention…
-        </p>
-      </section>
+      <Card className="p-5 sm:p-6" aria-busy="true" aria-label="Loading roof reports">
+        <p className="text-sm leading-6 text-muted">Loading roof reports…</p>
+      </Card>
     );
   }
   if (!data && refreshFailed) {
     return (
-      <section className="border-y border-warning/35 bg-warning-soft px-4 py-4" role="status">
+      <Card className="border-warning/35 bg-warning-soft p-5" role="status">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="font-bold tracking-[-0.015em]">Measurement intake read unavailable</h2>
+            <h2 className="font-bold tracking-[-0.015em]">Roof reports could not load</h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              The report exception queue could not load. Retrying does not reprocess or change a
-              report.
+              No report changed. Check your link, then load the list again.
             </p>
           </div>
           <Button variant="outline" size="compact" onClick={onRetry}>
             <RotateCcw aria-hidden="true" />
-            Retry read
+            Load again
           </Button>
         </div>
-      </section>
+      </Card>
     );
   }
   if (!data) return null;
 
   const reports = data.measurements;
   return (
-    <section aria-labelledby="measurement-intake-exceptions-heading">
-      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
+    <Card className="overflow-hidden" aria-labelledby="roof-reports-heading">
+      <header className="flex flex-wrap items-end justify-between gap-3 p-5 sm:p-6">
         <div>
           <h2
-            id="measurement-intake-exceptions-heading"
+            id="roof-reports-heading"
             className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
           >
-            Measurement reports needing attention
+            Roof reports to check
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            Unmatched reports wait for a job decision. The server marks other reports as scheduled,
-            blocked, or at the retry limit; this panel cannot replay, assign, or alter either one.
+            These reports need a job match or a safe try. This screen cannot change them.
           </p>
         </div>
         <p className="text-sm font-semibold text-muted">
@@ -447,29 +489,27 @@ function MeasurementIntakeExceptionsPanel({
       </header>
       {refreshFailed ? (
         <p
-          className="mb-3 border-y border-warning/35 bg-warning-soft px-3 py-2 text-sm text-muted"
+          className="border-t border-warning/35 bg-warning-soft px-5 py-3 text-sm text-muted"
           role="status"
         >
-          Showing the previous measurement read.
+          The last load failed. The old list is still shown.
         </p>
       ) : null}
       {reports.length === 0 ? (
-        <div className="border-y border-border py-5">
-          <p className="font-semibold">
-            No unmatched or retryable measurement reports were returned.
-          </p>
+        <div className="border-t border-border px-5 py-5 sm:px-6">
+          <p className="font-semibold">No roof reports need a check.</p>
           <p className="mt-1 text-sm leading-6 text-muted">
-            This is a read-only exception list, not a proof that every provider feed is operating.
+            This list does not show if each roof service is online.
           </p>
         </div>
       ) : (
-        <ol className="border-y border-border divide-y divide-border">
+        <ol className="border-t border-border divide-y divide-border px-5 sm:px-6">
           {reports.map((report) => (
             <MeasurementIntakeExceptionRow key={report.id} report={report} locale={locale} />
           ))}
         </ol>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -506,11 +546,11 @@ function MeasurementIntakeExceptionRow({
               {report.provider}{" "}
               {unmatched
                 ? report.reason === "ocr_review_required"
-                  ? "report needs OCR review"
-                  : "report needs a job match"
+                  ? "report needs a text check"
+                  : "report needs a job"
                 : retryScheduled
-                  ? "report is retrying"
-                  : "report needs recovery"}
+                  ? "report will try again"
+                  : "report needs help"}
             </p>
             <span
               className={`inline-flex items-center gap-1.5 text-sm font-semibold ${unmatched || needsRecovery ? "text-warning" : "text-info"}`}
@@ -520,20 +560,20 @@ function MeasurementIntakeExceptionRow({
                 aria-hidden="true"
               />
               {unmatched
-                ? "Manual review"
+                ? "Needs a person"
                 : retryScheduled
-                  ? "Automatic retry"
+                  ? "Will try again"
                   : recoveryBlocked
-                    ? "Recovery blocked"
-                    : "Retry limit reached"}
+                    ? "Help needed"
+                    : "No more tries"}
             </span>
           </div>
           <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted">
             {measurementExceptionCopy(report)}
           </p>
           <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm leading-5 text-muted">
-            {report.job_number ? <Metadata label="Supplied job" value={report.job_number} /> : null}
-            {!unmatched ? <Metadata label="Attempts" value={String(report.attempts)} /> : null}
+            {report.job_number ? <Metadata label="Job given" value={report.job_number} /> : null}
+            {!unmatched ? <Metadata label="Tries" value={String(report.attempts)} /> : null}
             {updatedAt ? <Metadata label="Last update" value={updatedAt} /> : null}
           </dl>
           {reportUrl || folderUrl ? (
@@ -564,31 +604,30 @@ function GoogleDriveLink({ href, label }: { href: string; label: string }) {
 function measurementExceptionCopy(report: MeasurementIntakeOwnerException): string {
   if (report.status === "unmatched") {
     if (report.reason === "ocr_review_required") {
-      return "AI extracted candidates with page references. An operator must compare them with the saved report before they become accepted measurements.";
+      return "The app found roof numbers and page links. A person must check them against the saved report before they are used.";
     }
     if (report.reason === "job_number_missing") {
-      return "No job number was supplied. This report waits for an operator to decide its job relationship and is not retried automatically.";
+      return "The report has no job number. Pick the right job. The app will not try again on its own.";
     }
-    return "The supplied job did not resolve. This report waits for an operator to decide its job relationship and is not retried automatically.";
+    return "The job number did not match a saved job. Pick the right job. The app will not try again on its own.";
   }
   const reason = {
-    ocr_failed: "The AI measurement extraction could not be completed safely.",
-    drive_not_configured: "Drive filing is not configured.",
-    report_fetch_failed: "The report source could not be fetched.",
-    raw_source_missing: "The saved raw source is unavailable.",
-    frappe_sync_failed: "The Frappe measurement sync needs recovery.",
-    retry_pending: "The prior retry did not complete.",
+    ocr_failed: "The app could not read the roof report safely.",
+    drive_not_configured: "The Google Drive folder is not set up.",
+    report_fetch_failed: "The app could not get the roof report.",
+    raw_source_missing: "The saved roof report is missing.",
+    frappe_sync_failed: "The job record did not save.",
+    retry_pending: "The last try did not finish.",
   } as const;
-  const summary =
-    reason[report.reason as keyof typeof reason] ?? "The prior retry did not complete.";
+  const summary = reason[report.reason as keyof typeof reason] ?? "The last try did not finish.";
   if (report.recovery_disposition === "retry_scheduled") {
-    return `${summary} The Worker will retry automatically when due.`;
+    return `${summary} The app will try again at the saved time.`;
   }
   if (report.recovery_disposition === "recovery_blocked") {
-    return `${summary} Automatic recovery is blocked and needs operator investigation.`;
+    return `${summary} The app cannot try again. A team member must check it.`;
   }
   if (report.recovery_disposition === "retry_exhausted") {
-    return `${summary} The automatic retry limit has been reached and needs operator investigation.`;
+    return `${summary} The app has used all tries. A team member must check it.`;
   }
   return summary;
 }
@@ -619,8 +658,8 @@ function DecisionLane({
 }) {
   const headingId = `owner-decision-lane-${lane.id}`;
   return (
-    <section aria-labelledby={headingId}>
-      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
+    <Card className="overflow-hidden" aria-labelledby={headingId}>
+      <header className="flex flex-wrap items-end justify-between gap-3 p-5 sm:p-6">
         <div>
           <h2
             id={headingId}
@@ -631,10 +670,10 @@ function DecisionLane({
           <p className="mt-1 text-sm leading-6 text-muted">{lane.description}</p>
         </div>
         <p className="text-sm font-semibold text-muted">
-          {lane.exceptions.length} {lane.exceptions.length === 1 ? "record" : "records"}
+          {lane.exceptions.length} {lane.exceptions.length === 1 ? "item" : "items"}
         </p>
       </header>
-      <ol className="border-y border-border divide-y divide-border">
+      <ol className="border-t border-border divide-y divide-border px-5 sm:px-6">
         {lane.exceptions.map((exception) => (
           <DecisionRow
             key={`${lane.id}:${exception.id}`}
@@ -645,7 +684,7 @@ function DecisionLane({
           />
         ))}
       </ol>
-    </section>
+    </Card>
   );
 }
 
@@ -705,9 +744,9 @@ function DecisionRow({
             to="/jobs/$jobId"
             params={{ jobId: exception.job_id }}
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-bold text-background transition-colors hover:bg-foreground/88 focus-visible:outline-offset-3 sm:mt-0"
-            aria-label={`Open job packet for ${exception.job_id}`}
+            aria-label={`Open job ${exception.job_id}`}
           >
-            Open job packet
+            Open job
             <ChevronRight className="size-5" aria-hidden="true" />
           </Link>
         ) : null}
@@ -739,17 +778,20 @@ function LeadAcknowledgementEvidence({
   const state = exception.mctb ? mctbEvidenceLabel(exception.mctb.state) : null;
   if (!state && !deadlineAt && !observedAt) return null;
   return (
-    <details className="mt-3 border-t border-border pt-1">
+    <details className="group mt-3 border-t border-border pt-1">
       <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
-        <span>Acknowledgement evidence</span>
-        <ChevronRight className="size-5 shrink-0 text-muted" aria-hidden="true" />
+        <span>Reply proof</span>
+        <ChevronRight
+          className="size-5 shrink-0 text-muted transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
       </summary>
       <div className="border-l border-border pb-3 pl-3 text-sm leading-6">
         {state ? <p className="font-semibold text-foreground">{state}</p> : null}
         {deadlineAt || observedAt ? (
           <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-muted">
-            {deadlineAt ? <Metadata label="Deadline" value={deadlineAt} /> : null}
-            {observedAt ? <Metadata label="Observed" value={observedAt} /> : null}
+            {deadlineAt ? <Metadata label="Reply due" value={deadlineAt} /> : null}
+            {observedAt ? <Metadata label="Proof saved" value={observedAt} /> : null}
           </dl>
         ) : null}
       </div>
@@ -773,7 +815,7 @@ function DataConfidence({
   const warnings = [
     ...model.stale_fields.map(humanizeStaleField),
     ...(model.partial_sources.length > 0
-      ? [`Counts are lower bounds for ${model.partial_sources.map(humanizeSource).join(", ")}.`]
+      ? [`Some counts may be low for ${model.partial_sources.map(humanizeSource).join(", ")}.`]
       : []),
   ];
   const limited = !sourceUpdatedAt || warnings.length > 0;
@@ -786,12 +828,12 @@ function DataConfidence({
     <>
       <dl className="mt-3 space-y-2 text-sm leading-5 text-muted">
         <div>
-          <dt className="font-semibold text-foreground">Source update</dt>
-          <dd>{sourceUpdatedAt ?? "Unavailable"}</dd>
+          <dt className="font-semibold text-foreground">Work data updated</dt>
+          <dd>{sourceUpdatedAt ?? "Not known"}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-foreground">Queue generated</dt>
-          <dd>{generatedAt ?? "Unavailable"}</dd>
+          <dt className="font-semibold text-foreground">List made</dt>
+          <dd>{generatedAt ?? "Not known"}</dd>
         </div>
       </dl>
       {warnings.length > 0 ? (
@@ -802,7 +844,7 @@ function DataConfidence({
         </ul>
       ) : (
         <p className="mt-4 border-t border-border pt-3 text-sm leading-5 text-muted">
-          No source-limit or stale-field warning was returned.
+          No data warning was found.
         </p>
       )}
     </>
@@ -811,19 +853,19 @@ function DataConfidence({
   if (compact) {
     return (
       <details
-        className={`rounded-lg ${limited ? "bg-warning-soft" : "bg-surface-muted"} ${className}`}
+        className={`rounded-lg border border-border ${limited ? "bg-warning-soft" : "bg-surface-muted"} ${className}`}
       >
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm [&::-webkit-details-marker]:hidden">
           <span className="flex items-center gap-2 font-bold tracking-[-0.015em]">
             {statusIcon}
-            Data confidence
+            Data check
           </span>
           <span className="text-right text-muted">
             {sourceUpdatedAt
               ? warnings.length > 0
-                ? `${warnings.length} limits`
-                : "No limits"
-              : "Source unavailable"}
+                ? `${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}`
+                : "Looks current"
+              : "Data not found"}
           </span>
         </summary>
         <div className="border-t border-border px-4 pb-4">{detail}</div>
@@ -833,13 +875,13 @@ function DataConfidence({
 
   return (
     <section
-      className={`rounded-lg ${limited ? "bg-warning-soft" : "bg-surface-muted"} p-4 ${className}`}
-      aria-label="Data confidence"
+      className={`rounded-lg border border-border ${limited ? "bg-warning-soft" : "bg-surface-muted"} p-4 ${className}`}
+      aria-label="Data check"
       role={limited ? "status" : undefined}
     >
       <div className="flex items-center gap-2">
         {statusIcon}
-        <h2 className="font-bold tracking-[-0.015em]">Data confidence</h2>
+        <h2 className="font-bold tracking-[-0.015em]">Data check</h2>
       </div>
       {detail}
     </section>
@@ -853,14 +895,12 @@ function RefreshWarning({ onRetry }: { onRetry: () => void }) {
       role="status"
     >
       <p className="text-sm leading-6">
-        <span className="font-bold">Showing the previous read.</span>{" "}
-        <span className="text-muted">
-          Refresh failed, so this board may not include the newest source state.
-        </span>
+        <span className="font-bold">This may be an old list.</span>{" "}
+        <span className="text-muted">The last load failed. Load again before you choose.</span>
       </p>
       <Button variant="outline" size="compact" onClick={onRetry}>
         <RotateCcw aria-hidden="true" />
-        Retry queue
+        Load again
       </Button>
     </div>
   );
@@ -873,11 +913,9 @@ function EmptyDecisionBoard({
   limited: boolean;
   generatedAt: string | null;
 }) {
-  const title = limited
-    ? "No exceptions were returned from available sources"
-    : "No exceptions in this read model";
+  const title = limited ? "No work was found in the data we have" : "No work needs a check";
   return (
-    <section className="border-y border-border py-8" aria-live="polite">
+    <Card className="p-5 sm:p-6" aria-live="polite">
       <div className="flex max-w-xl gap-3">
         <span className="grid size-10 shrink-0 place-items-center rounded-md bg-surface-muted text-muted">
           <CircleGauge className="size-5" aria-hidden="true" />
@@ -886,62 +924,64 @@ function EmptyDecisionBoard({
           <h2 className="text-xl font-black tracking-[-0.025em]">{title}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {limited
-              ? "Keep the data-confidence details visible before treating this as a clear operating state."
-              : "The queue contains no blocked gates, field work-stops, operating exceptions, or lead-attention records."}
-            {generatedAt ? ` Read generated ${generatedAt}.` : ""}
+              ? "Open Data check before you call this list clear."
+              : "There are no work stops, job gates, saved app issues, or lead checks in this list."}
+            {generatedAt ? ` List made ${generatedAt}.` : ""}
           </p>
         </div>
       </div>
-    </section>
+    </Card>
   );
 }
 
 function OwnerNowError({ onRetry }: { onRetry: () => void }) {
   return (
-    <section className="mx-auto max-w-2xl border-y border-danger/35 py-8" role="alert">
+    <Card className="mx-auto max-w-2xl border-danger/35 p-6" role="alert">
       <div className="flex gap-3">
         <span className="grid size-10 shrink-0 place-items-center rounded-md bg-danger-soft text-danger">
           <AlertTriangle className="size-5" aria-hidden="true" />
         </span>
         <div>
-          <h1 className="text-xl font-black tracking-[-0.025em]">Current queue unavailable</h1>
+          <h1 className="text-xl font-black tracking-[-0.025em]">
+            Today&apos;s work could not load
+          </h1>
           <p className="mt-2 text-sm leading-6 text-muted">
-            The current queue could not load. Retrying does not change jobs or acknowledgements.
+            Nothing changed. Check your link, then load the list again.
           </p>
           <Button className="mt-5" variant="outline" onClick={onRetry}>
             <RotateCcw aria-hidden="true" />
-            Retry queue
+            Load again
           </Button>
         </div>
       </div>
-    </section>
+    </Card>
   );
 }
 
 function OwnerNowSkeleton() {
   return (
     <section
-      className="mx-auto max-w-6xl space-y-6"
+      className="mx-auto max-w-7xl space-y-6"
       aria-busy="true"
-      aria-label="Loading current decision queue"
+      aria-label="Loading owner work"
     >
-      <div className="h-20 border-b border-border bg-surface-muted/70" />
-      <div className="grid border-y border-border sm:grid-cols-3">
+      <Card className="h-44 bg-surface-muted/70" />
+      <Card className="grid overflow-hidden sm:grid-cols-3">
         {[0, 1, 2].map((index) => (
           <div
             key={index}
             className={`min-h-24 bg-surface-muted/60 ${index > 0 ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
           />
         ))}
-      </div>
-      <div className="space-y-0 border-y border-border">
+      </Card>
+      <Card className="space-y-0 overflow-hidden">
         {[0, 1, 2].map((index) => (
           <div
             key={index}
             className={`min-h-28 bg-surface-muted/45 ${index > 0 ? "border-t border-border" : ""}`}
           />
         ))}
-      </div>
+      </Card>
     </section>
   );
 }
@@ -985,7 +1025,7 @@ function stateFor(exception: OwnerException): {
           };
     case "material_exception":
       return {
-        label: "Materials review",
+        label: "Check materials",
         Icon: PackageCheck,
         iconSurface: "bg-warning-soft",
         iconTone: "text-warning",
@@ -994,7 +1034,7 @@ function stateFor(exception: OwnerException): {
       };
     case "finance_exception":
       return {
-        label: "Finance review",
+        label: "Check money",
         Icon: ClipboardCheck,
         iconSurface: "bg-info-soft",
         iconTone: "text-info",
@@ -1004,7 +1044,7 @@ function stateFor(exception: OwnerException): {
     case "untriaged_lead":
     case "lead_triage_unknown":
       return {
-        label: "Lead attention",
+        label: "Check lead",
         Icon: UsersRound,
         iconSurface: "bg-info-soft",
         iconTone: "text-info",
@@ -1026,4 +1066,19 @@ function stateFor(exception: OwnerException): {
 function safeFormattedDate(value: string | null, locale: OwnerDateFormatOptions): string | null {
   const formatted = value ? formatOwnerDate(value, locale) : null;
   return formatted === "Date unavailable" ? null : formatted;
+}
+
+function systemCheckName(value: string): string {
+  const names: Record<string, string> = {
+    owned_persistence: "Saved data",
+    queue: "Work queue",
+    core_auth: "Sign in",
+    provider_delivery: "Linked apps",
+    office_bff: "Office app link",
+    customer_portal: "Customer portal",
+    production_schedule: "Job plan",
+    public_estimate: "Estimate form",
+    newo: "Phone desk",
+  };
+  return names[value] ?? humanizeSource(value);
 }

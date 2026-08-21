@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  frappeFieldAuthorization,
   frappeFieldWriter,
   type PersistFieldCheckInInput,
   type PersistFieldMediaInput,
@@ -430,3 +431,43 @@ async function withFetch(replacement: typeof fetch, run: () => Promise<void>): P
     globalThis.fetch = original;
   }
 }
+
+// The routing above is proved through the writer's real fetches. These call the authorizer
+// directly, because that is the contract `tools/validate-rail-credential-isolation.mjs` executes
+// (ELEC-143): reading the branch as text cannot tell a live one from an unreachable one, so the
+// isolation guarantee is pinned to what this function RETURNS, here and in the validator.
+const WORK_PACKAGE_PATH =
+  "/api/method/ironwrap_roofing.work_package_api.capture_work_package_evidence";
+const FIELD_EVIDENCE_PATH =
+  "/api/method/ironwrap_roofing.field_evidence_api.record_verified_field_evidence";
+
+test("the field writer's authorizer hands each rail its own identity", () => {
+  const env = testEnv();
+  assert.equal(
+    frappeFieldAuthorization(env, WORK_PACKAGE_PATH),
+    "token work-package-key:work-package-secret",
+  );
+  // The field-evidence rail is out of this split's scope and legitimately keeps the bus pair.
+  assert.equal(frappeFieldAuthorization(env, FIELD_EVIDENCE_PATH), "token bus-key:bus-secret");
+  assert.equal(
+    frappeFieldAuthorization(env, "/api/resource/Field%20Check-in"),
+    "token bus-key:bus-secret",
+  );
+});
+
+test("the work-package rail fails closed rather than degrading to the bus pair", () => {
+  // An unset binding must be a visible outage, not a silent widening back to a System Manager:
+  // that is the difference between a rotation window and a privilege escalation.
+  const env = { ...testEnv() } as Record<string, unknown>;
+  delete env.WORK_PACKAGE_FRAPPE_API_KEY;
+  delete env.WORK_PACKAGE_FRAPPE_API_SECRET;
+  assert.throws(
+    () => frappeFieldAuthorization(env as never, WORK_PACKAGE_PATH),
+    /work_package_frappe_not_configured/,
+  );
+  // The rail it shares the module with is unaffected by the other rail's outage.
+  assert.equal(
+    frappeFieldAuthorization(env as never, FIELD_EVIDENCE_PATH),
+    "token bus-key:bus-secret",
+  );
+});

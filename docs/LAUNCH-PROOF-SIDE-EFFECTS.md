@@ -8,14 +8,15 @@ Source of truth for behaviour: `tools/launch-proof.mjs`, `workers-bus/src/index.
 `workers-bus/src/estimates.ts`, `workers-bus/src/store.ts`, `workers-bus/src/notify.ts`,
 `workers-bus/src/google.ts`, `workers-bus/src/jobnimbus.ts`, `workers-bus/src/erpnext.ts`,
 `workers-bus/src/operations.ts`,
-`frappe-apps/ironwrap_roofing/ironwrap_roofing/launch_proof_api.py`.
+`frappe-apps/ironwrap_roofing/ironwrap_roofing/launch_proof_api.py` (historical Frappe lookup; **not** the IRO-189 gate).
 
 ## 1. Modes
 
 `node tools/launch-proof.mjs` **without** `--execute` performs **no I/O at all**. It builds the
-plan, prints one `curl` template per step with `$BUS_BASE_URL` / `$INGEST_TOKEN` / `$ADMIN_TOKEN` /
-`$FRAPPE_*` left unexpanded, and returns `{ mode: "dry_run", plan }`. It does not read env vars, does
-not resolve DNS, and cannot detect any defect in the system under test.
+plan, prints one `curl` template per step with `$BUS_BASE_URL` / `$INGEST_TOKEN` / `$ADMIN_TOKEN`
+left unexpanded, and returns `{ mode: "dry_run", plan }`. It does not read env vars, does
+not resolve DNS, and cannot detect any defect in the system under test. It does not print a
+Frappe lookup.
 
 `--execute` sends every request below against whatever `BUS_BASE_URL` names. The tool has no
 production guard: the only thing separating a staging run from a production run is the value of
@@ -27,23 +28,12 @@ production guard: the only thing separating a staging run from a production run 
 |---|---|---|
 | `BUS_BASE_URL` | yes | Worker origin; trailing slashes stripped. Empty ⇒ assertion failure before any request. |
 | `INGEST_TOKEN` | yes | `Authorization: Bearer` on both `/ingest/*` steps. Must equal the Worker's `INGEST_TOKEN` secret. |
-| `ADMIN_TOKEN` | yes | `Authorization: Bearer` on `/ready`, `/admin/envelopes`, `/admin/reconcile`, `/admin/status`. Must equal the Worker's `ADMIN_TOKEN` secret. |
-| `FRAPPE_BASE_URL` | yes | Frappe origin for the projection lookup. Validated **before** the first HTTP call. |
-| `FRAPPE_API_KEY` / `FRAPPE_API_SECRET` | yes | `Authorization: token key:secret` for the projection lookup. **Not** the Worker's `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` — this is the separate least-privilege launch-proof reader identity. |
-| `FRAPPE_PROOF_POLL_ATTEMPTS` | no | 1–5, default 3. |
-| `FRAPPE_PROOF_POLL_INTERVAL_MS` | no | 0–5000, default 1000. |
+| `ADMIN_TOKEN` | yes | `Authorization: Bearer` on `/ready`, `/admin/envelopes`, `/admin/envelope/:id`, `/admin/reconcile`, `/admin/status`. Must equal the Worker's `ADMIN_TOKEN` secret. |
+| `FRAPPE_BASE_URL` / `FRAPPE_API_KEY` / `FRAPPE_API_SECRET` | no | **Out of scope.** IRO-189's gate is D1 identity. Supplying these does not make Frappe the system of record and the tool does not call Frappe. |
 
-All five required values are validated up front. A missing Frappe credential aborts the run before
-any synthetic POST — by design, so nothing is written that cannot afterwards be verified.
+A missing Frappe credential does **not** abort the run. The operating authority is D1/Worker.
 
-Not passed to the tool but required **on the Worker** for the run to pass: `ERPNEXT_ENABLED=true`
-plus `ERPNEXT_BASE_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, and a `/ready` verdict of green.
-
-Not passed to the tool but required **on the Frappe site**: site config key
-`ironwrap_launch_proof_reader_user` set to the exact reader user; that user holds the
-`IronWrap Launch Proof Reader` role and can read `Instant Estimate Session`; the API key/secret pair
-belongs to that same user. The role is created by the app's install hook; the **user, its role
-assignment, its API pair, and the site-config key are not provisioned by any script in this repo.**
+Not passed to the tool but required **on the Worker** for the run to pass: a `/ready` verdict of green. `ERPNEXT_ENABLED` and `APP_BFF_ENABLED` are **not** this proof's acceptance path (IRO-195).
 
 ## 3. Fixtures
 
@@ -153,37 +143,32 @@ document data.
 
 Hard assertions, any of which aborts the run:
 
-1. Frappe reader preflight: HTTP 200, matching `correlation_id`, `observation == "pending"`.
-2. `/health` HTTP 200.
-3. `/ready` HTTP 200 **and** `ok == true` **and** `status == "ready"` **and every entry in `checks`
+1. `/health` HTTP 200.
+2. `/ready` HTTP 200 **and** `ok == true` **and** `status == "ready"` **and every entry in `checks`
    truthy** — including the `newo_*` checks whenever `NEWO_PRODUCTION_REQUIRED=true` or
    `NEWO_ENABLED=true`.
-4. `/ingest/website` HTTP 200 with a non-empty `envelope_id`.
-5. Both `/ingest/estimate` calls HTTP **200** — note a Frappe-mirror failure returns **202**, which
-   fails this assertion — and both returning the **same** `envelope_id`.
-6. `/admin/envelopes` HTTP 200 and the lead envelope id present in the first 10 rows.
-7. `/admin/reconcile` HTTP 200.
-8. `/admin/status`: `status == "ok"`; heartbeat present, `fresh`, `reconciled`; each of
+3. `/ingest/website` HTTP 200 with a non-empty `envelope_id` and `canonical_envelope_id`.
+4. `/ingest/website` replay HTTP 200, `duplicate == true`, same `canonical_envelope_id`.
+5. Both `/ingest/estimate` calls HTTP **200** and both returning the **same** `envelope_id`.
+6. `GET /admin/envelope/:id` HTTP 200 with the stored D1 row (tenant_id + contact identity).
+7. `/admin/envelopes` HTTP 200 and the lead envelope id present in the first 10 rows.
+8. `/admin/reconcile` HTTP 200.
+9. `/admin/status`: `status == "ok"`; heartbeat present, `fresh`, `reconciled`; each of
    `open_dead_letters`, `stuck`, `frappe_errors`, `replay_failed`, `replay_stuck` == 0; zero recent
    audit failures.
-9. Final CLI gate: `evidence.frappe_projection.state == "matched"`.
+10. Final CLI gate: `evidence.operating_authority == "d1"` and `evidence.d1_lead.state == "matched"`.
+    `frappe_projection.state` is `out_of_scope` and is **not** the gate.
 
-The projection poll resolves to `matched`, `mismatch`, `timeout`, or `unavailable`. Only `matched`
-passes; every other state leaves `reconciliation_required: true`.
-
-The Frappe projection observed by step 9 is written by the **estimate** path (synchronously, in
-step 4). The **lead** path's Frappe and JobNimbus effects happen in the queue consumer and are
-**never asserted** — a green launch-proof therefore does not prove the lead reached JobNimbus,
-Frappe, or Drive.
+A Frappe projection is not required and is not called. The D1 envelope is the operating record.
 
 ## 7. Evidence produced
 
-`--execute` prints one redacted JSON object to stdout (`proof: "ironwrap-launch-proof-v3"`) holding
+`--execute` prints one redacted JSON object to stdout (`proof: "ironwrap-launch-proof-v4"`) holding
 the envelope id, project id, per-step HTTP status and request id, the readiness check map,
-reconciliation day/gap counts, operational status, and the projection state. No payloads, tokens,
-contact fields, or Frappe document names. Nothing is written to disk — archiving it is the
-operator's step. `bridge_keep_enabled` is hard-coded `true`: a green proof is release evidence, not
-authority to retire the JobNimbus bridge.
+reconciliation day/gap counts, operational status, and D1 lead identity. No payloads, tokens,
+or contact fields. Nothing is written to disk — archiving it is the operator's step. Frappe is
+`out_of_scope`; a green proof is D1 operating-authority evidence, not authority to retire JobNimbus
+and not a HELM permit/receipt (IRO-190).
 
 ## 8. Reversal
 
@@ -201,6 +186,6 @@ authority to retire the JobNimbus bridge.
 
 A production run is **not** dry-runnable: dry-run exercises nothing. The lowest-side-effect real
 rehearsal is to point `BUS_BASE_URL` at a non-production Worker whose `JOBNIMBUS_ENABLED=false`,
-whose `GOOGLE_SERVICE_ACCOUNT_JSON` is unset, and whose Frappe is a throwaway site — that removes
-every email, every CRM write, and every Drive write while still exercising D1, R2, the queue, the
-estimate path, and the Frappe projection seam.
+whose `GOOGLE_SERVICE_ACCOUNT_JSON` is unset — that removes
+every email, every CRM write, and every Drive write while still exercising D1, R2, the queue, and
+the estimate path. Frappe is not part of this proof.

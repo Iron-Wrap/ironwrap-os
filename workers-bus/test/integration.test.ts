@@ -23,6 +23,7 @@ function fakeEnv() {
     BACKUP_ALERT_EMAIL: "backup@example.com",
     FROM_EMAIL: "ops@example.com",
     JOBNIMBUS_ENABLED: "false",
+    APP_TENANT_ID: "ironwrap",
     DEDUP_WINDOW_HOURS: "72",
     STUCK_THRESHOLD_MIN: "15",
     // GOOGLE_SERVICE_ACCOUNT_JSON intentionally absent → instant-ack throws and is swallowed by ctx.waitUntil.
@@ -60,6 +61,7 @@ function fakeEnv() {
                     intent_queue: args[17],
                     created_at: args[18],
                     updated_at: args[19],
+                    tenant_id: args[20],
                   };
                   envelopesById.set(String(row.envelope_id), row);
                   if (row.estimate_submission_key) {

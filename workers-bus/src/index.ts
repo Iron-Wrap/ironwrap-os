@@ -17,6 +17,7 @@ import {
   reconcileDiff,
   parseBody,
   validateSourceCount,
+  operatingTenantId,
   isOn,
 } from "./core.ts";
 import * as store from "./store.ts";
@@ -713,6 +714,9 @@ async function handleIngest(
   if (!(ALLOWED_SOURCES as readonly string[]).includes(source))
     return json({ error: "bad_source" }, 400);
 
+  const tenantId = operatingTenantId((env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID);
+  if (!tenantId) return json({ error: "tenant_identity_required" }, 403);
+
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
   const rawText = await req.text();
@@ -760,6 +764,7 @@ async function handleIngest(
     jn_contact_id: null,
     jn_job_id: null,
     intent_queue: classifyIntent(intentText),
+    tenant_id: tenantId,
     created_at: now,
     updated_at: now,
   };
@@ -791,6 +796,8 @@ async function handleIngest(
 
   return json({
     envelope_id: envelopeId,
+    canonical_envelope_id: dupOf ?? envelopeId,
+    tenant_id: tenantId,
     status: rec.status,
     duplicate: !!dupOf,
     queue: rec.intent_queue,

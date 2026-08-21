@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   normalizePhone, extractContact, normalizeEnvelope, dedupKey, validateInbound,
   classifyIntent, reconcileDiff, isStuck, backoffMs, newEnvelopeId,
-  validateSourceCount, MAX_SOURCE_COUNT, parseBody,
+  validateSourceCount, MAX_SOURCE_COUNT, parseBody, operatingTenantId,
 } from "../src/core.ts";
 
 test("normalizePhone → E.164 (+1 for bare CA/US 10-digit)", () => {
@@ -98,4 +98,13 @@ test("newEnvelopeId is unique and ow_-prefixed", () => {
   const b = newEnvelopeId();
   assert.match(a, /^ow_[0-9a-f-]{36}$/);
   assert.notEqual(a, b);
+});
+
+test("operatingTenantId accepts pinned ids and refuses unverified labels", () => {
+  assert.equal(operatingTenantId(undefined), "ironwrap");
+  assert.equal(operatingTenantId(""), "ironwrap");
+  assert.equal(operatingTenantId("ironwrap"), "ironwrap");
+  assert.equal(operatingTenantId("acme-roofing"), "acme-roofing");
+  assert.equal(operatingTenantId("IronWrap"), null);
+  assert.equal(operatingTenantId("not a tenant"), null);
 });

@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 62,
-      "latest": "0079_production_schedule_approval_refusal.sql"
+      "count": 63,
+      "latest": "0080_replay_requests_envelope_idx.sql"
     },
     "tests": {
       "pwa": 520,
-      "worker": 1028
+      "worker": 1038
     }
   },
   "proof_state_policy": {
@@ -205,7 +205,12 @@ Implemented:
 - D1 envelopes, audit, dead letter, source counts, heartbeat, dedup, replay, auth, field action,
   field Work Package action, approval, portal, measurement, rate-limit, outbox, and Newo ledgers.
 - R2 raw/evidence references.
-- Queue/retry/reconciliation behavior.
+- Queue/retry/reconciliation behavior, including an automated dead-letter reconciliation sweep on
+  the five-minute cron: dead envelopes are re-driven with exponential backoff and a bounded attempt
+  cap, both counted from the `replay_requests` ledger rather than `envelopes.attempts`, which two
+  unrelated intake/mirror retry paths already own. Reaching the cap ends automatic recovery only —
+  the envelope stays `dead` with its dead-letter row open, so `POST /admin/replay` still works.
+  Migration `0080_replay_requests_envelope_idx.sql` adds the per-envelope index that read needs.
 - Idempotency and approval ledgers.
 - Backup/restore contracts with fail-closed target selection and immutable completion markers.
 

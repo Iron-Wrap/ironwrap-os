@@ -1987,12 +1987,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // numbered 0046 while that number was still free on its own head, and was renumbered
     // above every shipped migration once `main` landed 0046 elsewhere. 0079 keeps the reason
     // a production schedule was refused (ELEC-132 defect B); it skipped to 0079 because open
-    // heads #92-#97 hold every number from 0069 to 0078, so 0070..0078 were never free.
-    assert.equal(migrations.length, 62);
+    // heads #92-#97 hold every number from 0069 to 0078, so 0070..0078 were never free. 0080 is
+    // the per-envelope replay_requests index the ELEC-52 dead-letter sweep reads its attempt cap
+    // and backoff clock from: 0079 is `main`'s highest and #92-#97 stop at 0078, so 0080 was the
+    // first number free of both.
+    assert.equal(migrations.length, 63);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0079_production_schedule_approval_refusal.sql",
+      "0080_replay_requests_envelope_idx.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2051,8 +2054,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // state-transition fence, the three event appenders, and the three append-only guards.
     // 0079 adds no table or index - one nullable column on the shipped schedule-approval
     // ledger - and two triggers that keep the refusal reason bounded and confined to the
-    // one state where it means anything.
-    assert.deepEqual({ ...counts }, { tables: 146, indexes: 208, triggers: 343 });
+    // one state where it means anything. 0080 adds no table and no trigger: one index on the
+    // shipped replay_requests ledger, so the ELEC-52 dead-letter sweep can read a single
+    // envelope's attempt count and backoff clock without scanning the whole ledger per tick.
+    assert.deepEqual({ ...counts }, { tables: 146, indexes: 209, triggers: 343 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
-import { BULK_REPLAY_CONFIRMATION } from "../src/operations.ts";
-import { markDeadLettersRecovered } from "../src/store.ts";
+import {
+  BULK_REPLAY_CONFIRMATION,
+  deadLetterReplayDueAt,
+  sweepDeadLetterAutoReplay,
+} from "../src/operations.ts";
+import { DEAD_LETTER_SWEEP_APPROVER, markDeadLettersRecovered } from "../src/store.ts";
 
 const A = "ow_11111111-1111-4111-8111-111111111111";
 const B = "ow_22222222-2222-4222-8222-222222222222";
@@ -110,6 +114,16 @@ function fakeEnv(options: FakeOptions = {}) {
     if (sql.includes("COUNT(*) AS frappe_errors")) {
       return { frappe_errors: (options.counts ?? { pending: 3, stuck: 1, frappe_errors: 2 }).frappe_errors };
     }
+    if (sql.includes("COUNT(DISTINCT r.envelope_id)")) {
+      const approver = String(args[0]);
+      const settled = new Set(
+        [...replayRequests.values()]
+          .filter((row) => row.approved_by === approver && row.envelope_id !== null)
+          .map((row) => row.envelope_id as string)
+          .filter((id) => !["dead", "pending_jn_push"].includes(statuses.get(id) ?? "")),
+      );
+      return { n: settled.size };
+    }
     if (sql.includes("FROM replay_requests") && sql.includes("AS failed")) {
       return options.replayCounts ?? { failed: 0, stuck: 0 };
     }
@@ -132,6 +146,34 @@ function fakeEnv(options: FakeOptions = {}) {
 
   const executeAll = async (sql: string, args: unknown[]) => {
     sqlCalls.push({ sql, args });
+    // The sweep's own candidate query. Checked before the shared replayable-dead query below,
+    // which it would otherwise match on "FROM dead_letter d".
+    if (sql.includes("AS dead_since")) {
+      const approver = String(args[0]);
+      const noop = new Set([String(args[1]), String(args[2])]);
+      const limit = Number(args[3]);
+      const deadSince = new Map<string, string>();
+      for (const row of deadLetters) {
+        if (row.recovered !== 0 || statuses.get(row.envelope_id) !== "dead") continue;
+        const seen = deadSince.get(row.envelope_id);
+        if (seen === undefined || row.ts < seen) deadSince.set(row.envelope_id, row.ts);
+      }
+      const rows = [...deadSince].map(([envelope_id, dead_since]) => {
+        const booked = [...replayRequests.values()].filter((row) =>
+          row.envelope_id === envelope_id && row.approved_by === approver &&
+          (row.last_error === null || !noop.has(row.last_error))
+        );
+        const stamps = booked.map((row) => row.created_at).sort();
+        return {
+          envelope_id,
+          attempts: booked.length,
+          last_attempt_at: stamps.at(-1) ?? null,
+          dead_since,
+        };
+      });
+      rows.sort((a, b) => a.dead_since < b.dead_since ? -1 : a.dead_since > b.dead_since ? 1 : 0);
+      return { results: rows.slice(0, limit) };
+    }
     if (sql.includes("FROM dead_letter d")) {
       const selected = args[0] == null ? null : String(args[0]);
       const ids = deadLetters
@@ -160,6 +202,22 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (sql.includes("INSERT INTO replay_requests")) {
       const runId = String(args[0]);
+      // Migration 0010's CHECK constraints, enforced here so a malformed automated claim fails in
+      // tests the way D1 would fail it in production -- inside ctx.waitUntil, where it is invisible.
+      const selection = String(args[1]);
+      const insertEnvelopeId = args[2] === null ? null : String(args[2]);
+      if (runId.length < 3 || runId.length > 128) {
+        throw new Error("CHECK constraint failed: replay_requests.run_id");
+      }
+      if (String(args[3]).length < 3 || String(args[3]).length > 128) {
+        throw new Error("CHECK constraint failed: replay_requests.approved_by");
+      }
+      if (String(args[4]).length < 10 || String(args[4]).length > 500) {
+        throw new Error("CHECK constraint failed: replay_requests.reason");
+      }
+      if ((selection === "targeted") !== (insertEnvelopeId !== null)) {
+        throw new Error("CHECK constraint failed: replay_requests.selection");
+      }
       if (replayRequests.has(runId)) throw new Error("UNIQUE constraint failed: replay_requests.run_id");
       replayRequests.set(runId, {
         run_id: runId,
@@ -1067,4 +1125,265 @@ test("dead-letter recovery update is envelope-scoped", async () => {
   assert.equal(recovered, 1);
   assert.equal(deadLetters.find((row) => row.envelope_id === A)?.recovered, 1);
   assert.equal(deadLetters.find((row) => row.envelope_id === B)?.recovered, 0);
+});
+
+
+// --------------------------------------------------------- ELEC-52 / IRO-194: auto-replay sweep
+//
+// The sweep re-drives dead-letter envelopes on the five-minute cron so the dual-surface pipeline
+// heals itself. Dead-letter timestamps are set relative to Date.now() rather than to the fixture's
+// hard-coded 2026-07-10 stamps, so the backoff assertions do not depend on the wall clock.
+
+const MINUTE = 60_000;
+
+/** Age every open dead letter by `minutes`, which is the sweep's clock before its first attempt. */
+function ageDeadLetters(
+  deadLetters: Array<{ envelope_id: string; recovered: number; ts: string }>,
+  minutes: number,
+  only?: string,
+): void {
+  for (const row of deadLetters) {
+    if (only !== undefined && row.envelope_id !== only) continue;
+    row.ts = new Date(Date.now() - minutes * MINUTE).toISOString();
+  }
+}
+
+/** Book a completed sweep replay for `envelopeId`, the way a previous tick would have left it. */
+function seedSweepAttempts(
+  replayRequests: Map<string, Record<string, unknown>>,
+  envelopeId: string,
+  attempts: number,
+  minutesAgo = 600,
+): void {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const runId = `dls-${envelopeId}-${attempt}`;
+    const at = new Date(Date.now() - minutesAgo * MINUTE).toISOString();
+    replayRequests.set(runId, {
+      run_id: runId,
+      selection: "targeted",
+      envelope_id: envelopeId,
+      approved_by: DEAD_LETTER_SWEEP_APPROVER,
+      reason: `Automated dead-letter reconciliation sweep: attempt ${attempt} of 5 for envelope ${envelopeId}.`,
+      status: "completed",
+      matched: 1,
+      requeued: 1,
+      last_error: null,
+      attempt_count: 1,
+      created_at: at,
+      updated_at: at,
+      completed_at: at,
+    });
+  }
+}
+
+test("the sweep auto-replays due dead-letter envelopes and books each under the cron identity", async () => {
+  const { env, statuses, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 120);
+
+  const result = await sweepDeadLetterAutoReplay(env as never);
+
+  // C's dead letter is open but its envelope is already 'pushed', so it is not a candidate.
+  assert.equal(result.scanned, 2);
+  assert.equal(result.due, 2);
+  assert.equal(result.replayed, 2);
+  assert.equal(result.given_up, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(result.conflicted, 0);
+  assert.equal(result.truncated, false);
+  assert.deepEqual(queue.sort(), [A, B].sort());
+  assert.equal(statuses.get(A), "pending_jn_push");
+  assert.equal(statuses.get(B), "pending_jn_push");
+  assert.equal(statuses.get(C), "pushed");
+
+  // Trap 3: targeted, never bulk -- 'bulk' forces envelope_id IS NULL and would erase the
+  // per-envelope attribution the attempt cap is counted from.
+  const booked = [...replayRequests.values()].filter((row) => row.approved_by === DEAD_LETTER_SWEEP_APPROVER);
+  assert.equal(booked.length, 2);
+  for (const row of booked) {
+    assert.equal(row.selection, "targeted");
+    assert.ok(row.envelope_id === A || row.envelope_id === B);
+    assert.equal(row.status, "completed");
+    assert.equal(row.run_id, `dls-${row.envelope_id}-1`);
+    // Trap 2: migration 0010 CHECKs length(reason) BETWEEN 10 AND 500 and approved_by 3..128.
+    assert.ok(row.reason.length >= 10 && row.reason.length <= 500);
+    assert.ok(row.approved_by.length >= 3 && row.approved_by.length <= 128);
+    assert.ok(row.run_id.length >= 3 && row.run_id.length <= 128);
+  }
+});
+
+test("a freshly dead envelope waits out its backoff window before the first automatic attempt", async () => {
+  const { env, deadLetters, queue } = fakeEnv();
+  ageDeadLetters(deadLetters, 120);
+  ageDeadLetters(deadLetters, 1, A); // died a minute ago: inside the 5-minute default window
+
+  const result = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(result.scanned, 2);
+  assert.equal(result.due, 1);
+  assert.equal(result.replayed, 1);
+  assert.deepEqual(queue, [B]);
+});
+
+test("backoff doubles per booked attempt and is clamped so it cannot overflow", () => {
+  const at = "2026-08-21T00:00:00.000Z";
+  const base = Date.parse(at);
+  assert.equal(deadLetterReplayDueAt(at, 0, 5), base + 5 * MINUTE);
+  assert.equal(deadLetterReplayDueAt(at, 1, 5), base + 10 * MINUTE);
+  assert.equal(deadLetterReplayDueAt(at, 2, 5), base + 20 * MINUTE);
+  assert.equal(deadLetterReplayDueAt(at, 3, 5), base + 40 * MINUTE);
+  assert.equal(deadLetterReplayDueAt(at, 4, 5), base + 80 * MINUTE);
+  // Clamped at 2^10 rather than growing without bound.
+  assert.equal(deadLetterReplayDueAt(at, 99, 5), base + 5 * MINUTE * 1024);
+  assert.equal(deadLetterReplayDueAt("not-a-date", 0, 5), null);
+});
+
+test("an envelope inside its backoff window is skipped, and replayed once the window elapses", async () => {
+  const { env, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+  // One booked attempt => the next is due 10 minutes after it, not 5.
+  seedSweepAttempts(replayRequests, A, 1, 6);
+  seedSweepAttempts(replayRequests, B, 1, 11);
+
+  const result = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(result.scanned, 2);
+  assert.equal(result.due, 1);
+  assert.equal(result.replayed, 1);
+  assert.deepEqual(queue, [B]);
+  assert.equal(replayRequests.get(`dls-${B}-2`)?.status, "completed");
+  assert.equal(replayRequests.has(`dls-${A}-2`), false);
+});
+
+test("the sweep gives up at the attempt cap and leaves the envelope for manual replay", async () => {
+  const { env, statuses, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+  seedSweepAttempts(replayRequests, A, 5);
+
+  const result = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(result.scanned, 2);
+  assert.equal(result.given_up, 1);
+  assert.equal(result.replayed, 1);
+  assert.deepEqual(queue, [B]);
+  // Terminal for the SWEEP only: the envelope stays dead with its dead letter open, which is what
+  // keeps the admin path below possible.
+  assert.equal(statuses.get(A), "dead");
+  assert.equal(replayRequests.has(`dls-${A}-6`), false);
+
+  // AC #1: manual replay still works after the cap.
+  const response = await worker.fetch(new Request("https://bus.example/admin/replay", {
+    method: "POST",
+    headers: { authorization: "Bearer admin-secret", "content-type": "application/json" },
+    body: JSON.stringify({ envelope_id: A, ...APPROVAL }),
+  }), env as never, ctx);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    replayed: false,
+    matched: 1,
+    requeued: 1,
+    envelope_id: A,
+    run_id: APPROVAL.run_id,
+  });
+  assert.equal(statuses.get(A), "pending_jn_push");
+  assert.ok(queue.includes(A));
+});
+
+test("each attempt takes a fresh run id, so a repeat sweep re-queues instead of replaying a cached outcome", async () => {
+  const { env, statuses, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+
+  const first = await sweepDeadLetterAutoReplay(env as never);
+  assert.equal(first.replayed, 2);
+
+  // The replay did not stick: the envelope died again and its dead letter is still open. Backdate
+  // the booked attempt so the second tick is past the 10-minute window one attempt earns.
+  statuses.set(A, "dead");
+  ageDeadLetters(deadLetters, 600, A);
+  const booked = replayRequests.get(`dls-${A}-1`)!;
+  booked.created_at = new Date(Date.now() - 30 * MINUTE).toISOString();
+
+  const second = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(second.replayed, 1);
+  // Trap 1: claimReplayRequest keys on run_id. Reusing `dls-<A>-1` would return the cached
+  // completed outcome and queue nothing at all.
+  assert.equal(replayRequests.get(`dls-${A}-2`)?.status, "completed");
+  assert.equal(queue.filter((id) => id === A).length, 2);
+});
+
+test("losing a race to an admin replay does not burn one of the envelope's automatic attempts", async () => {
+  const racing: FakeOptions = { claimConflictFor: A };
+  const { env, statuses, deadLetters, queue, replayRequests } = fakeEnv(racing);
+  ageDeadLetters(deadLetters, 600);
+
+  const raced = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(raced.replayed, 1); // B only
+  assert.equal(raced.conflicted, 1); // A was already claimed elsewhere
+  assert.equal(raced.failed, 0);
+  assert.deepEqual(queue, [B]);
+  assert.equal(replayRequests.get(`dls-${A}-1`)?.last_error, "dead_letter_replay_conflict");
+
+  // Trap 4: that ledger row records "nothing left to replay", not a failed delivery attempt, so it
+  // is excluded from the attempt count -- the exact retry reclaims the same run id and re-queues.
+  racing.claimConflictFor = undefined; // the competing claim has finished
+  statuses.set(A, "dead");
+  const retry = await sweepDeadLetterAutoReplay(env as never);
+
+  assert.equal(retry.replayed, 1);
+  assert.equal(retry.conflicted, 0);
+  assert.equal(replayRequests.get(`dls-${A}-1`)?.status, "completed");
+  assert.equal(replayRequests.has(`dls-${A}-2`), false);
+  assert.ok(queue.includes(A));
+});
+
+test("the sweep counts envelopes it replayed that have since settled, and reports a truncated scan", async () => {
+  const { env, statuses, deadLetters, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+  seedSweepAttempts(replayRequests, C, 1); // C's envelope is 'pushed': a completed recovery
+
+  const result = await sweepDeadLetterAutoReplay(
+    Object.assign(env, { DEAD_LETTER_AUTO_REPLAY_SCAN_LIMIT: "1" }) as never,
+  );
+
+  assert.equal(result.scanned, 1);
+  assert.equal(result.truncated, true);
+  assert.equal(result.recovered, 1);
+  // An in-flight replay is not a recovery: the envelope it just queued is pending, not settled.
+  assert.equal(statuses.get(A), "pending_jn_push");
+});
+
+test("the sweep can be switched off without a deploy and then queues nothing", async () => {
+  const { env, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+
+  const result = await sweepDeadLetterAutoReplay(
+    Object.assign(env, { DEAD_LETTER_AUTO_REPLAY_ENABLED: "false" }) as never,
+  );
+
+  assert.deepEqual(result, {
+    scanned: 0, due: 0, replayed: 0, conflicted: 0, failed: 0, given_up: 0, recovered: 0,
+    truncated: false,
+  });
+  assert.deepEqual(queue, []);
+  assert.equal(replayRequests.size, 0);
+});
+
+test("the five-minute cron runs the sweep", async () => {
+  const { env, deadLetters, queue, replayRequests } = fakeEnv();
+  ageDeadLetters(deadLetters, 600);
+  const pending: Promise<unknown>[] = [];
+
+  await worker.scheduled(
+    { cron: "*/5 * * * *", scheduledTime: Date.now(), noRetry() {} } as never,
+    env as never,
+    { waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException() {} } as never,
+  );
+  await Promise.all(pending.map((promise) => promise.catch(() => {})));
+
+  assert.deepEqual(queue.sort(), [A, B].sort());
+  assert.equal(
+    [...replayRequests.values()].filter((row) => row.approved_by === DEAD_LETTER_SWEEP_APPROVER).length,
+    2,
+  );
 });

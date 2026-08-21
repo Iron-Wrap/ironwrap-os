@@ -1172,6 +1172,87 @@ export async function listReplayableDeadEnvelopeIds(
   return (res.results ?? []).map((row) => row.envelope_id);
 }
 
+/** Ledger identity every automated sweep replay is booked under, and the key its attempt count is derived from. */
+export const DEAD_LETTER_SWEEP_APPROVER = "cron@dead-letter-sweep";
+
+/**
+ * Ledger outcomes that mean "nothing was left to replay", not "the replay failed".
+ *
+ * `executeReplayRequest` books both when a targeted replay matches or requeues nothing, which for
+ * the sweep means an admin replay claimed the envelope first. Excluding them from the attempt
+ * count keeps a race from burning one of the envelope's bounded automatic attempts.
+ */
+export const REPLAY_NOOP_ERRORS = [
+  "dead_letter_not_replayable",
+  "dead_letter_replay_conflict",
+] as const;
+
+export interface AutoReplayCandidate {
+  envelope_id: string;
+  /** Sweep replays already booked for this envelope; the attempt cap counts these. */
+  attempts: number;
+  /** Most recent sweep replay, or null when the sweep has never touched this envelope. */
+  last_attempt_at: string | null;
+  /** Oldest open dead-letter row, which is the backoff clock before the first attempt. */
+  dead_since: string;
+}
+
+/**
+ * Dead envelopes the sweep may consider, carrying the ledger facts its cap and backoff need.
+ *
+ * Deliberately a separate query rather than a filter on `listReplayableDeadEnvelopeIds`: that one
+ * also backs the admin replay endpoint, so narrowing it would make manual replay impossible for
+ * exactly the envelopes that exhausted their automatic attempts and need a human most.
+ */
+export async function listAutoReplayCandidates(
+  env: Env,
+  limit: number,
+): Promise<AutoReplayCandidate[]> {
+  const res = await env.DB.prepare(
+    `SELECT d.envelope_id AS envelope_id,
+            COUNT(r.run_id) AS attempts,
+            MAX(r.created_at) AS last_attempt_at,
+            MIN(d.ts) AS dead_since
+     FROM dead_letter d
+     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id
+     LEFT JOIN replay_requests r
+            ON r.envelope_id = d.envelope_id
+           AND r.approved_by = ?
+           AND (r.last_error IS NULL OR r.last_error NOT IN (?, ?))
+     WHERE d.recovered = 0 AND e.status = 'dead' AND d.envelope_id IS NOT NULL
+     GROUP BY d.envelope_id
+     ORDER BY MIN(d.ts) ASC
+     LIMIT ?`,
+  ).bind(
+    DEAD_LETTER_SWEEP_APPROVER,
+    REPLAY_NOOP_ERRORS[0],
+    REPLAY_NOOP_ERRORS[1],
+    limit,
+  ).all<{ envelope_id: string; attempts: number; last_attempt_at: string | null; dead_since: string }>();
+  return (res.results ?? []).map((row) => ({
+    envelope_id: row.envelope_id,
+    attempts: Number(row.attempts ?? 0),
+    last_attempt_at: row.last_attempt_at ?? null,
+    dead_since: row.dead_since,
+  }));
+}
+
+/**
+ * Envelopes the sweep replayed that have since reached a settled outcome.
+ *
+ * `pending_jn_push` is excluded on purpose: that is a replay still in flight, not a recovery.
+ */
+export async function countRecoveredAutoReplays(env: Env): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT r.envelope_id) AS n
+     FROM replay_requests r
+     INNER JOIN envelopes e ON e.envelope_id = r.envelope_id
+     WHERE r.approved_by = ? AND r.envelope_id IS NOT NULL
+       AND e.status NOT IN ('dead', 'pending_jn_push')`,
+  ).bind(DEAD_LETTER_SWEEP_APPROVER).first<{ n: number }>();
+  return Number(row?.n ?? 0);
+}
+
 /** Claim a dead envelope for replay without clearing its forensic error state. */
 export async function markEnvelopeReplayPending(env: Env, envelopeId: string): Promise<boolean> {
   const result = await env.DB.prepare(

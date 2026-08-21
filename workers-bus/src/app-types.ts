@@ -145,6 +145,14 @@ export type AppEnv = Env & {
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;
+  // Dedicated Frappe issuer credentials for the two bounded field-capture rails. Frappe already
+  // refuses any session user that is not the pinned `ironwrap_fleet_capture_issuer_user` /
+  // `ironwrap_work_package_issuer_user`; these are the Worker half of that isolation. They must
+  // never hold the broad ERPNEXT_API_KEY/SECRET pair - see rail-frappe-credentials.ts.
+  FLEET_CAPTURE_FRAPPE_API_KEY?: string;
+  FLEET_CAPTURE_FRAPPE_API_SECRET?: string;
+  WORK_PACKAGE_FRAPPE_API_KEY?: string;
+  WORK_PACKAGE_FRAPPE_API_SECRET?: string;
   // Dedicated HMAC for the narrow authority-record executor. Browser sessions
   // and the ordinary app bearer never authorize Frappe authority mutations.
   AUTHORITY_RECORD_EXECUTOR_HMAC_KEY?: string;

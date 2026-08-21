@@ -51,6 +51,16 @@ APP_CUSTOMER_ACCEPTANCE_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY=""
 APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET=""
 
+# Dedicated per-rail Frappe issuers for fleet capture and work package (ELEC-56). Each pair
+# must belong to its own `IronWrap Fleet Capture Issuer` / `IronWrap Work Package Issuer`
+# user, never to the broad bus identity above: the Worker REFUSES a pair that matches
+# ERPNEXT_API_KEY/SECRET, and the Frappe site pins each rail to its own issuer user.
+# `npm run dev` provisions both users and writes their keys here.
+FLEET_CAPTURE_FRAPPE_API_KEY=""
+FLEET_CAPTURE_FRAPPE_API_SECRET=""
+WORK_PACKAGE_FRAPPE_API_KEY=""
+WORK_PACKAGE_FRAPPE_API_SECRET=""
+
 # Dedicated Facet-to-IronWrap event authority; never reuse INGEST_TOKEN or ERP credentials.
 FACET_DESIGN_INGEST_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 # Exact Facet source tenant -> local IronWrap tenant allowlist; required before enabling ingress.

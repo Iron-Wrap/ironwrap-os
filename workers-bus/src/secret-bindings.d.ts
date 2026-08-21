@@ -32,6 +32,11 @@ interface Env {
   QB_RECONCILIATION_ISSUER_API_SECRET: string;
   ERPNEXT_API_KEY: string;
   ERPNEXT_API_SECRET: string;
+  /** Per-rail Frappe issuers; never the broad ERPNEXT pair (rail-frappe-credentials.ts). */
+  FLEET_CAPTURE_FRAPPE_API_KEY: string;
+  FLEET_CAPTURE_FRAPPE_API_SECRET: string;
+  WORK_PACKAGE_FRAPPE_API_KEY: string;
+  WORK_PACKAGE_FRAPPE_API_SECRET: string;
   PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;
   PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: string;
   APP_AUTH_PEPPER: string;
@@ -78,6 +83,10 @@ declare namespace Cloudflare {
     QB_RECONCILIATION_ISSUER_API_SECRET: string;
     ERPNEXT_API_KEY: string;
     ERPNEXT_API_SECRET: string;
+    FLEET_CAPTURE_FRAPPE_API_KEY: string;
+    FLEET_CAPTURE_FRAPPE_API_SECRET: string;
+    WORK_PACKAGE_FRAPPE_API_KEY: string;
+    WORK_PACKAGE_FRAPPE_API_SECRET: string;
     PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;
     PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: string;
     APP_AUTH_PEPPER: string;

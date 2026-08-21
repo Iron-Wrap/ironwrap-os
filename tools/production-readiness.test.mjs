@@ -1444,6 +1444,10 @@ function validLiveEnv() {
     ERPNEXT_API_KEY: "frappe_key_8c921",
     ERPNEXT_API_SECRET: "frappe_secret_d1a9f80c42",
     ERPNEXT_INTEGRATION_USER: "worker@ironwrapexteriors.com",
+    FLEET_CAPTURE_FRAPPE_API_KEY: "fleet_capture_key_8c921",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet_capture_secret_d1a9f80c42",
+    WORK_PACKAGE_FRAPPE_API_KEY: "work_package_key_8c921",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work_package_secret_d1a9f80c42",
     QB_WEBHOOK_TOKEN: "quickbooks_webhook_4c8f0b2d6a9137e5",
     QB_EXPECTED_REALM_ID: "123456789012345",
     QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
@@ -1858,6 +1862,42 @@ test("live-env mode binds Frappe receipt verification to a safe public key path 
     "live.frappe.site_base_url_consistency",
   ]) {
     assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("live-env mode rejects a fleet or work-package rail wearing the shared bus credential", async () => {
+  // The ELEC-48 arrangement expressed through the new binding names: the rail LOOKS isolated,
+  // the identity behind it is still the broad bus pair, and the blast radius is unchanged.
+  for (const binding of [
+    "FLEET_CAPTURE_FRAPPE_API_KEY",
+    "FLEET_CAPTURE_FRAPPE_API_SECRET",
+    "WORK_PACKAGE_FRAPPE_API_KEY",
+    "WORK_PACKAGE_FRAPPE_API_SECRET",
+  ]) {
+    const env = validLiveEnv();
+    env[binding] = binding.endsWith("_SECRET") ? env.ERPNEXT_API_SECRET : env.ERPNEXT_API_KEY;
+
+    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+    assert.equal(result.ok, false, binding);
+    assert.equal(
+      result.checks.find((item) => item.id === "live.secret.separation")?.status,
+      "fail",
+      binding,
+    );
+  }
+});
+
+test("live-env mode requires both per-rail Frappe issuer pairs to be present", async () => {
+  for (const binding of [
+    "FLEET_CAPTURE_FRAPPE_API_KEY",
+    "WORK_PACKAGE_FRAPPE_API_SECRET",
+  ]) {
+    const env = validLiveEnv();
+    delete env[binding];
+
+    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+    assert.equal(result.ok, false, binding);
+    assert.equal(result.checks.find((item) => item.id === `live.env.${binding}`)?.status, "fail", binding);
   }
 });
 

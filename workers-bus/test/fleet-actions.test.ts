@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import {
   d1FleetActionStore,
+  frappeFleetWriter,
   parseFleetActionRequest,
   processFleetAction,
   type FleetActionStore,
@@ -507,8 +508,10 @@ function fleetRouteEnv(rows: Record<string, FrappeStubRow[]>): {
   const statements: string[] = [];
   const env = {
     ERPNEXT_BASE_URL: "https://frappe.example.invalid",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    FLEET_CAPTURE_FRAPPE_API_KEY: "fleet-key",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet-secret",
     DB: {
       prepare(sql: string) {
         const normalized = sql.replace(/\s+/g, " ").trim();
@@ -698,8 +701,10 @@ test("the evidence status write is lease-guarded like every other fleet action w
 test("every fleet route refuses office roles and bad CSRF before any mutation", async () => {
   const appEnv = {
     ERPNEXT_BASE_URL: "https://frappe.example.invalid",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    FLEET_CAPTURE_FRAPPE_API_KEY: "fleet-key",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet-secret",
   } as AppEnv;
   const paths = [
     "/api/v1/fleet/assets/asset-truck-1/pre-trip-inspections",
@@ -735,4 +740,84 @@ test("every fleet route refuses office roles and bad CSRF before any mutation", 
     globalThis.fetch = original;
   }
   assert.equal(upstreamCalls, 0, "a refused route must never reach Frappe");
+});
+
+const DEFECT_INPUT: PersistFleetActionInput = {
+  kind: "defect_report",
+  fleetAssetId: "asset-truck-1",
+  actorUser: "driver@example.invalid",
+  deviceActionId: "device-action-fleet-1",
+  manifestKey: "fleet/manifest.json",
+  payload: {
+    fleet_asset_id: "asset-truck-1",
+    detected_at: "2026-07-11T06:30:00.000Z",
+    severity: "Out of Service",
+    description: "Brake line weeping at the rear axle.",
+  },
+};
+
+test("the fleet-capture rail presents its own Frappe issuer, never the shared bus pair", async () => {
+  const env = {
+    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    FLEET_CAPTURE_FRAPPE_API_KEY: "fleet-key",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet-secret",
+  } as unknown as AppEnv;
+  const original = globalThis.fetch;
+  let authorization = "";
+  globalThis.fetch = async (_input, init) => {
+    authorization = String((init?.headers as Record<string, string> | undefined)?.authorization ?? "");
+    return Response.json({ message: {
+      record: { name: "ASI-0001" },
+      fleet_asset: { name: "asset-truck-1" },
+    } });
+  };
+  try {
+    assert.deepEqual(await frappeFleetWriter(env).persistAction(DEFECT_INPUT), {
+      recordName: "ASI-0001",
+      assetName: "asset-truck-1",
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(authorization, "token fleet-key:fleet-secret");
+});
+
+test("the fleet-capture rail refuses the shared bus pair before contacting Frappe", async () => {
+  // Same identity behind a rail-shaped binding name is the state the split exists to prevent.
+  const env = {
+    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    FLEET_CAPTURE_FRAPPE_API_KEY: "bus-key",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "bus-secret",
+  } as unknown as AppEnv;
+  const original = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return Response.json({});
+  };
+  try {
+    await assert.rejects(
+      frappeFleetWriter(env).persistAction(DEFECT_INPUT),
+      /fleet_frappe_shared_credential_rejected/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(called, false);
+});
+
+test("an unissued fleet-capture credential fails closed rather than borrowing the bus pair", async () => {
+  const env = {
+    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+  } as unknown as AppEnv;
+  await assert.rejects(
+    frappeFleetWriter(env).persistAction(DEFECT_INPUT),
+    /fleet_frappe_not_configured/,
+  );
 });

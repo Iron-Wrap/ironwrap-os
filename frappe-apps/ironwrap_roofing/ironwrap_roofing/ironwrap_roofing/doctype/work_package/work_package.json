@@ -102,7 +102,8 @@
     { "create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1 },
     { "create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production", "write": 1 },
     { "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Field" },
-    { "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout" }
+    { "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout" },
+    { "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Work Package Issuer" }
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

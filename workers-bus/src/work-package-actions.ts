@@ -11,6 +11,10 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import {
+  railAuthorizationHeader,
+  requireRailFrappeCredential,
+} from "./rail-frappe-credentials.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
 import {
   fieldWorkPackageForAssignment,
@@ -463,8 +467,9 @@ export async function processWorkPackageAction(
 export function frappeWorkPackageWriter(env: AppEnv): WorkPackageFrappeWriter {
   return {
     async persistAction(input) {
-      if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
-        throw new Error("work_package_frappe_not_configured");
+      // Fail before the effect ledger books anything: an unissued or shared rail credential is
+      // a configuration fault, not a provider outage, and must not consume a retry budget.
+      requireRailFrappeCredential(env, "work_package");
       const method = {
         acknowledge: "acknowledge_work_package",
         stop_work: "stop_work",
@@ -571,7 +576,7 @@ async function persistWorkPackageActionDirect(
   path: string,
   body: Record<string, unknown>,
 ): Promise<{ workPackageName: string; eventName: string }> {
-      if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("work_package_frappe_not_configured");
+      const authorization = railAuthorizationHeader(env, "work_package");
       const controller = new AbortController();
       const timer = setTimeout(
         () => controller.abort(),
@@ -586,7 +591,7 @@ async function persistWorkPackageActionDirect(
             signal: controller.signal,
             headers: {
               accept: "application/json",
-              authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+              authorization,
               "content-type": "application/json",
               "user-agent": "ironwrap-bff/1.0",
             },
@@ -633,7 +638,7 @@ async function workPackageActionReadback(
         redirect: "manual",
         headers: {
           accept: "application/json",
-          authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+          authorization: railAuthorizationHeader(env, "work_package"),
         },
       },
     );

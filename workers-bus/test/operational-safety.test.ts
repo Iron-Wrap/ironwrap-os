@@ -369,6 +369,12 @@ function enableAppBff(env: Record<string, unknown>): void {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "frappe-key",
     ERPNEXT_API_SECRET: "frappe-secret",
+    // An enabled BFF carries both field-capture rails, and each holds its own Frappe
+    // issuer pair. Reusing the bus pair here would be the very state readiness rejects.
+    FLEET_CAPTURE_FRAPPE_API_KEY: "fleet-capture-key",
+    FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet-capture-secret",
+    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
   });
 }
 

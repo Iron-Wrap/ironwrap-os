@@ -858,18 +858,23 @@ test("runtime-governed work-package actions read back the immutable event and re
   const db = new SqliteD1();
   const env = {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
     APP_TENANT_ID: "ironwrap",
     EFFECT_RUNTIME_ENABLED: "true",
     DB: db,
   } as unknown as AppEnv;
   const originalFetch = globalThis.fetch;
-  const requests: Array<{ method: string; url: string }> = [];
+  const requests: Array<{ method: string; url: string; authorization: string }> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     const method = String(init?.method ?? "GET");
-    requests.push({ method, url });
+    const authorization = String(
+      (init?.headers as Record<string, string> | undefined)?.authorization ?? "",
+    );
+    requests.push({ method, url, authorization });
     if (method === "GET") {
       const eventName = decodeURIComponent(url.split("/").pop() ?? "");
       return Response.json({ data: {
@@ -913,6 +918,11 @@ test("runtime-governed work-package actions read back the immutable event and re
   }
   assert.equal(requests.filter((request) => request.method === "POST").length, 1);
   assert.equal(requests.filter((request) => request.method === "GET").length, 2);
+  // Both the mutation and its readback ride the work-package rail's own Frappe issuer.
+  // A leak of the broad bus pair must not reach this rail at all (ELEC-48 audit section 3).
+  for (const request of requests) {
+    assert.equal(request.authorization, "token work-package-key:work-package-secret");
+  }
   const effect = db.raw.prepare(
     "SELECT state, provider_external_id FROM external_effects WHERE action = 'work_package.mutation'",
   ).get() as { state: string; provider_external_id: string };
@@ -920,11 +930,62 @@ test("runtime-governed work-package actions read back the immutable event and re
   assert.match(effect.provider_external_id, /^wpe_/);
 });
 
+test("the work-package rail refuses to issue with the shared bus pair, before any request", async () => {
+  const db = new SqliteD1();
+  const env = {
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    // The old arrangement, expressed through the new binding names: same identity, new label.
+    WORK_PACKAGE_FRAPPE_API_KEY: "bus-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "bus-secret",
+    APP_TENANT_ID: "ironwrap",
+    EFFECT_RUNTIME_ENABLED: "true",
+    DB: db,
+  } as unknown as AppEnv;
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return Response.json({});
+  };
+  try {
+    await assert.rejects(
+      frappeWorkPackageWriter(env).persistAction({
+        kind: "acknowledge",
+        workPackageId: "work_package_a",
+        workPackageVersion: 1,
+        jobId: "JOB-A",
+        assignmentId: "ASSIGN-A",
+        actorUser: "crew@example.com",
+        deviceActionId: "device-action-456",
+        blockerReason: null,
+        releaseAttemptId: null,
+        workObjectType: null,
+        workObjectId: null,
+        physicalContextType: null,
+        physicalContextId: null,
+      }),
+      /work_package_frappe_shared_credential_rejected/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(called, false, "a shared credential must fail before Frappe is contacted");
+  // A configuration fault must not book an effect and burn a retry budget either.
+  assert.equal(
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM external_effects").get() as { n: number }).n,
+    0,
+  );
+});
+
 test("all work-package routes fail before mutation for office roles, bad CSRF, or unassigned field users", async () => {
   const appEnv = {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
   } as AppEnv;
   const paths = [
     "/api/v1/jobs/JOB-C/work-package/acknowledgements",
@@ -990,8 +1051,10 @@ test("typed completion route binds exact authority identity and declared role be
   let actionStoreTouched = false;
   const appEnv = {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
     DB: {
       prepare() {
         actionStoreTouched = true;

@@ -340,6 +340,17 @@ try {
   fail("could not configure the local Facet design projection HMAC key");
 }
 
+// Dedicated per-rail Frappe issuers (ELEC-56). `containerCredentials` is declared just
+// below and hoisted, so these two reads sit here beside the other service identities.
+const fleetCaptureIssuerCreds = containerCredentials(
+  ".fleet_capture_issuer_credentials",
+  "fleet-capture issuer",
+);
+const workPackageIssuerCreds = containerCredentials(
+  ".work_package_issuer_credentials",
+  "work-package issuer",
+);
+
 // Broker actor credentials. Each broker process authenticates to Frappe as its
 // own operator identity and refuses to start if the token resolves to anyone
 // else, so these pairs are what make the approval rails bootable by script
@@ -398,6 +409,12 @@ const next = applyVars(vars, [
   ["ERPNEXT_API_SECRET", creds.api_secret],
   ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
   ["QB_RECONCILIATION_ISSUER_API_SECRET", quickBooksIssuerCreds.api_secret],
+  // Never `creds.*`: the point of the split is that a leaked bus pair cannot issue these
+  // two rails, and the Frappe site config now pins them to their own users anyway.
+  ["FLEET_CAPTURE_FRAPPE_API_KEY", fleetCaptureIssuerCreds.api_key],
+  ["FLEET_CAPTURE_FRAPPE_API_SECRET", fleetCaptureIssuerCreds.api_secret],
+  ["WORK_PACKAGE_FRAPPE_API_KEY", workPackageIssuerCreds.api_key],
+  ["WORK_PACKAGE_FRAPPE_API_SECRET", workPackageIssuerCreds.api_secret],
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],

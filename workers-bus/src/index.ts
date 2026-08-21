@@ -32,6 +32,7 @@ import {
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
+import { materializeOperatingCore } from "./operating-core.ts";
 import { pushToErpNext, syncLeadSkipToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
@@ -805,6 +806,38 @@ async function handleIngest(
     error: rec.last_error,
     recovery_owner: env.OWNER_ALERT_EMAIL,
   });
+
+  // 4b) Materialize the tenant-bound operating graph. Envelope intake stays the
+  // desk-visible lead (#123). This write is best-effort so a missing 0090 apply
+  // or a test fake without D1.batch cannot hide the envelope.
+  if (valid.ok) {
+    try {
+      const operating = await materializeOperatingCore(env, rec);
+      await store.recordAudit(env, {
+        automation: "operating_core",
+        trigger: source,
+        envelope_id: envelopeId,
+        target_ids: [
+          `lead:${operating.leadId}`,
+          `customer:${operating.customerId}`,
+          operating.propertyId ? `property:${operating.propertyId}` : null,
+          `roof_job:${operating.roofJobId}`,
+        ].filter(Boolean).join(","),
+        action: operating.reused ? "readback" : "materialize",
+        result: "ok",
+      });
+    } catch (err) {
+      await store.recordAudit(env, {
+        automation: "operating_core",
+        trigger: source,
+        envelope_id: envelopeId,
+        action: "materialize",
+        result: "error",
+        error: String(err),
+        recovery_owner: env.OWNER_ALERT_EMAIL,
+      }).catch(() => {});
+    }
+  }
 
   // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
   ctx.waitUntil(

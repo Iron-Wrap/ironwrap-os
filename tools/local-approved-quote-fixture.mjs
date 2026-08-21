@@ -335,6 +335,14 @@ try {
   });
   say("  customer quote Needs Review -> Approved");
 
+  // Link the job back to the quote it now has. Nothing else in the fixture path does,
+  // and a Roof Job with no `quotation` is not a cosmetic gap: the customer portal shows
+  // `proposal: null`, and `customer_contract_acceptance_api.prepare_customer_portal_
+  // contract_acceptance` refuses outright on `job.quotation` (:417). Every traverse that
+  // got this far had to set it by hand first (ELEC-128 run notes).
+  await frappe.update("Roof Job", roofJobId, { quotation: quoteId });
+  say(`  roof job ${roofJobId} linked to quotation ${quoteId}`);
+
   const approved = await frappe.get("Customer Quote", quoteId, [
     "name",
     "status",

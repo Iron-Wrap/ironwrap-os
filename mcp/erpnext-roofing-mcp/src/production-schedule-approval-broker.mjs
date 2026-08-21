@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   approvedArgs,
+  brokerMcpChildEnvironment,
   canonicalJson,
   digest,
   parseToolPayload,
@@ -96,6 +97,7 @@ export function createProductionScheduleApprovalBroker({ config, invokeMcp, now 
         try {
           return respond(200, await previewProductionSchedule(inbound.body, config, invokeMcp, now));
         } catch (error) {
+          logBrokerFailure("preview", error, { roof_job_id: inbound.body?.roof_job_id });
           return respond(422, { error: safeBrokerError(error, "broker_production_schedule_preview_rejected") });
         }
       }
@@ -103,6 +105,7 @@ export function createProductionScheduleApprovalBroker({ config, invokeMcp, now 
       try {
         return respond(200, await executeProductionSchedule(inbound.body, config, invokeMcp, now));
       } catch (error) {
+        logBrokerFailure("execute", error);
         return respond(200, {
           outcome: {
             state: "failed",
@@ -157,7 +160,11 @@ export function productionScheduleApprovalBrokerConfigFromEnv(env = process.env)
     actorUser: runtime.actorUser,
     agentRole: runtime.agentRole,
     siteId: digest({ frappe_base_url: runtime.baseUrl }),
-    mcpEnv: productionScheduleMcpChildEnvironment(env, runtime),
+    mcpEnv: brokerMcpChildEnvironment(env, {
+      agentRole: PRODUCTION_SCHEDULE_AGENT_ROLE,
+      actorUser: runtime.actorUser,
+      approverId: runtime.approverId,
+    }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(
       env.PRODUCTION_SCHEDULE_BROKER_MAX_CLOCK_SKEW_MS,
@@ -188,10 +195,29 @@ export function createStdioMcpInvoker(config) {
       env: config.mcpEnv,
       stderr: "pipe",
     });
+    // The child's stderr was piped and then dropped on the floor, so a child that died
+    // at boot said nothing anywhere - the single reason ELEC-128 defect 1 needed
+    // child-process interception to diagnose. Keep the pipe (inheriting would corrupt
+    // the broker's own stdio contract) and drain it into this process's log.
+    //
+    // Attached BEFORE connect(), not after: with `stderr: "pipe"` the transport creates
+    // its PassThrough in the constructor, and a child that dies inside `configFromEnv`
+    // never reaches a connected state - which is precisely the failure worth reading.
+    let childStderr = "";
+    const captureStderr = (chunk) => {
+      childStderr = (childStderr + chunk.toString()).slice(-4000);
+    };
+    transport.stderr?.on("data", captureStderr);
     try {
       await client.connect(transport);
       return await client.callTool({ name, arguments: args }, CallToolResultSchema, { timeout: config.requestTimeoutMs });
+    } catch (error) {
+      if (childStderr.trim()) {
+        console.error(`[production-schedule-broker] mcp child stderr (${name}):`, childStderr.trim());
+      }
+      throw error;
     } finally {
+      transport.stderr?.off("data", captureStderr);
       await client.close().catch(() => {});
       await transport.close().catch(() => {});
     }
@@ -328,7 +354,13 @@ async function executeProductionSchedule(body, config, invokeMcp, now) {
       };
     }
     // Hermes Run is the durable idempotency fence. Once a write starts, return
-    // uncertainty instead of risking a second physical assignment creation.
+    // uncertainty instead of risking a second physical assignment creation. The
+    // uncertainty is real and stays; what changes is that the operator can now read
+    // WHY without intercepting the child process (ELEC-128).
+    logBrokerFailure("write", error, {
+      hermes_run_id: record.runId,
+      target: record.targetName,
+    });
     return {
       outcome: {
         state: "execution_uncertain",
@@ -596,7 +628,10 @@ async function loadCrewAuthorityRequirements(input, config, invokeMcp) {
     payload = parseToolPayload(await invokeMcp(PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL, {
       crew_profile_id: input.crewProfileId,
     }));
-  } catch {
+  } catch (error) {
+    // This bare `catch {}` is where ELEC-128 defect 1 hid: a child that died at
+    // `configFromEnv` looked exactly like a Crew Profile that could not be read.
+    logBrokerFailure("crew_roster", error, { crew_profile_id: input.crewProfileId });
     throw new Error("broker_production_schedule_crew_roster_unavailable");
   }
   const roster = requiredObject(payload?.data, "broker_production_schedule_crew_roster_invalid");
@@ -846,22 +881,6 @@ function assertProductionScheduleBrokerRuntime(config) {
   }
 }
 
-function productionScheduleMcpChildEnvironment(env, runtime) {
-  const allow = [
-    "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
-    "ERPNEXT_ALLOW_INSECURE_LOCAL",
-    "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
-    "HERMES_APPROVAL_PUBLIC_KEY",
-  ];
-  const child = {};
-  for (const key of allow) if (typeof env[key] === "string" && env[key]) child[key] = env[key];
-  child.ERPNEXT_WRITE_ENABLED = "true";
-  child.HERMES_AGENT_ROLE = PRODUCTION_SCHEDULE_AGENT_ROLE;
-  child.HERMES_ACTOR_USER = runtime.actorUser;
-  child.HERMES_APPROVER_ID = runtime.approverId;
-  child.PATH = process.env.PATH ?? "/usr/bin:/bin";
-  return child;
-}
 
 function boundedApprovalExpiry(expiresAt, now, maxLifetimeMs) {
   const expiresMs = Date.parse(expiresAt);
@@ -988,6 +1007,32 @@ function safeBrokerError(error, fallback) {
   const message = String(error?.message ?? error).toLowerCase();
   const match = message.match(/\b(broker_[a-z0-9_:-]{2,119})\b/);
   return match?.[1] ?? fallback;
+}
+
+/**
+ * Write the underlying failure to the broker's own stderr, then let the caller keep the
+ * narrow code.
+ *
+ * The narrow code is deliberate - a caller must not learn Frappe's internals from a
+ * refusal - but for ELEC-128 it meant `broker_production_schedule_crew_roster_unavailable`
+ * and `broker_mcp_call_ambiguous` were the ONLY things anyone could see, and reading the
+ * real `erpnext_http_500` underneath took child-process interception plus the Frappe
+ * container log. The text belongs in the operator's log, not in the response; this is
+ * the only place that decides which is which.
+ */
+function logBrokerFailure(stage, error, context = {}) {
+  const detail = error?.stack ?? String(error?.message ?? error);
+  const fields = Object.entries(context)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
+  console.error(
+    `[production-schedule-broker] ${stage} failed${fields ? ` ${fields}` : ""}:`,
+    detail.slice(0, 2000),
+  );
+  if (error?.cause) {
+    console.error(`[production-schedule-broker] ${stage} cause:`, String(error.cause).slice(0, 1000));
+  }
 }
 
 async function runHttpProductionScheduleBroker() {

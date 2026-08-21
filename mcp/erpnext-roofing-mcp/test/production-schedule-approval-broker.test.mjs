@@ -18,7 +18,10 @@ import {
   signDryRunReceipt,
   verifyApprovalReceipt,
 } from "../src/approval-contract.mjs";
-import { executeProductionScheduleApproval } from "../../../workers-bus/src/production-schedule-approval-broker-client.ts";
+import {
+  executeProductionScheduleApproval,
+  previewProductionScheduleApproval,
+} from "../../../workers-bus/src/production-schedule-approval-broker-client.ts";
 
 const NOW = Date.now();
 const NOW_ISO = new Date(NOW).toISOString();
@@ -106,6 +109,24 @@ function previewInput() {
     request_text: "Schedule the verified crew after owner review.",
     requested_by_user_id: "appu_owner_0001",
     requested_by_frappe_user: "owner@example.com",
+  };
+}
+
+/** The same request, in the camelCase shape the Worker's own preview entry point takes. */
+function workerPreviewInput(body) {
+  return {
+    approvalRequestId: body.approval_request_id,
+    tenantId: body.tenant_id,
+    runId: body.run_id,
+    roofJobId: body.roof_job_id,
+    crewProfileId: body.crew_profile_id,
+    scheduledStart: body.scheduled_start,
+    scheduledEnd: body.scheduled_end,
+    supersedesAssignmentId: body.supersedes_assignment_id,
+    correctionReason: body.correction_reason,
+    requestText: body.request_text,
+    requestedByUserId: body.requested_by_user_id,
+    requestedByFrappeUser: body.requested_by_frappe_user,
   };
 }
 
@@ -885,4 +906,199 @@ test("an empty active roster is left for Frappe to refuse, and an unreadable one
     // compiled is not previewed at all.
     assert.deepEqual(runtime.calls.map(({ name }) => name), ["get_crew_authority_roster"]);
   }
+});
+
+// ELEC-128 defect 2. `#105` added `authority_requirements` to the broker's write args
+// and nothing updated the Worker's `matchesExactWriteArgs` key list. Its length check
+// is exact, so EVERY real packet failed it: `parsePreviewPacket` threw a plain error,
+// the caller's fallback answered `502 production_schedule_broker_unavailable`, and the
+// production-schedule rail was permanently unreachable while the broker itself was
+// answering correctly. The broker-only test above passed throughout - it never asked
+// the Worker to read what the broker had just produced.
+//
+// These two hold the seam itself, in both directions.
+
+test("the Worker parses the real broker packet, compiled authority requirements and all", async () => {
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig);
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const body = previewInput();
+
+  // The Worker's OWN parse of the broker's OWN output - the step nothing covered.
+  const packet = await previewProductionScheduleApproval(
+    workerEnv(brokerConfig),
+    workerPreviewInput(body),
+    {
+      now: () => NOW,
+      nonce: () => "nonce-worker-parses-authority",
+      fetch: async (input, init) => await broker.handle(input instanceof Request ? input : new Request(input, init)),
+    },
+  );
+
+  assert.equal(packet.targetName, "assignment:job-1-production-crew-metal-1");
+  assert.deepEqual(
+    JSON.parse(packet.writeArgsJson).authority_requirements,
+    EXPECTED_REQUIREMENTS,
+    "the parsed packet must carry the exact compiled requirement list",
+  );
+  assert.deepEqual(packet.productionScheduleGatePreview, { required: true, stateEligible: true });
+});
+
+test("the broker's write-arg key set and the Worker's expected key set match in both directions", async () => {
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig);
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const body = previewInput();
+
+  // Direction 1 - the broker grew a key. Reading the key set back through the WORKER's
+  // parse, not the broker's response, is what makes this direction real: a key added to
+  // `writeArgsFromInput` without teaching `matchesExactWriteArgs` fails here, which is
+  // precisely what #105 shipped and no test caught.
+  const parsed = await previewProductionScheduleApproval(
+    workerEnv(brokerConfig),
+    workerPreviewInput(body),
+    {
+      now: () => NOW,
+      nonce: () => "nonce-keyset-drift",
+      fetch: async (input, init) => await broker.handle(input instanceof Request ? input : new Request(input, init)),
+    },
+  );
+  const produced = Object.keys(JSON.parse(parsed.writeArgsJson)).sort();
+  assert.deepEqual(produced, [
+    "approved_by",
+    "assigned_by",
+    "assignment_type",
+    "authority_requirements",
+    "correction_reason",
+    "crew_profile_id",
+    "notes",
+    "request_text",
+    "roof_job_id",
+    "run_id",
+    "scheduled_end",
+    "scheduled_start",
+    "status",
+    "supersedes",
+  ]);
+
+  // Direction 2 - the Worker expects a key the broker does not send. A parser that
+  // required `authority_requirements` would refuse the legitimate empty-roster packet,
+  // which the broker deliberately leaves for Frappe to refuse by its own authority.
+  const emptyRosterRuntime = invoker(brokerConfig, { roster: [] });
+  const emptyRosterBroker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: emptyRosterRuntime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const packet = await previewProductionScheduleApproval(
+    workerEnv(brokerConfig),
+    workerPreviewInput(body),
+    {
+      now: () => NOW,
+      nonce: () => "nonce-keyset-empty-roster",
+      fetch: async (input, init) =>
+        await emptyRosterBroker.handle(input instanceof Request ? input : new Request(input, init)),
+    },
+  );
+  assert.equal(
+    Object.hasOwn(JSON.parse(packet.writeArgsJson), "authority_requirements"),
+    false,
+    "an empty active roster compiles to no requirements and the key is omitted",
+  );
+});
+
+test("the Worker refuses authority requirements scoped to another job", async () => {
+  // The compiled list travels inside the approved write args, so a broker that widened
+  // it to another job's authority would be approving something the packet does not say.
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig);
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const body = previewInput();
+  await assert.rejects(
+    previewProductionScheduleApproval(
+      workerEnv(brokerConfig),
+      workerPreviewInput(body),
+      {
+        now: () => NOW,
+        nonce: () => "nonce-foreign-scope",
+        fetch: async (input, init) => {
+          const response = await broker.handle(input instanceof Request ? input : new Request(input, init));
+          const payload = JSON.parse(await response.text());
+          const writeArgs = JSON.parse(payload.packet.write_args_json);
+          writeArgs.authority_requirements = writeArgs.authority_requirements.map((row) => ({
+            ...row,
+            scope_ref: "job:someone-elses",
+          }));
+          payload.packet.write_args_json = JSON.stringify(writeArgs);
+          return new Response(JSON.stringify(payload), {
+            status: response.status,
+            headers: response.headers,
+          });
+        },
+      },
+    ),
+    /production_schedule_broker_response_invalid/,
+  );
+});
+
+test("a collapsed refusal logs its real cause while the caller still gets the narrow code", async () => {
+  // ELEC-128's "open the error masks". The narrow code is deliberate - a caller must not
+  // learn Frappe's internals from a refusal - but it was also the ONLY thing anyone could
+  // see, so reading the real error took child-process interception plus container logs.
+  // The cause belongs in the operator's log; the response must not change.
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig, { rosterUnavailable: true });
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+
+  const logged = [];
+  const realError = console.error;
+  console.error = (...parts) => logged.push(parts.map(String).join(" "));
+  let preview;
+  try {
+    const body = previewInput();
+    preview = await verifiedBody(
+      await broker.handle(request(brokerConfig, "/v1/production-schedule/preview", body, "nonce-mask-opened-log")),
+      brokerConfig,
+      "/v1/production-schedule/preview",
+      body,
+      "nonce-mask-opened-log",
+    );
+  } finally {
+    console.error = realError;
+  }
+
+  // Unchanged for the caller.
+  assert.equal(preview.error, "broker_production_schedule_crew_roster_unavailable");
+  assert.equal(
+    JSON.stringify(preview).includes("erpnext_http_404"),
+    false,
+    "the underlying provider error must never reach the caller",
+  );
+
+  // Visible to whoever is holding the pager.
+  const crewLog = logged.find((line) => line.includes("crew_roster failed"));
+  assert.ok(crewLog, "the swallowed roster failure must be logged");
+  assert.ok(crewLog.includes("erpnext_http_404"), "the log must carry the real cause");
+  assert.ok(crewLog.includes("crew_profile_id=crew:metal-1"), "and the identity it failed on");
 });

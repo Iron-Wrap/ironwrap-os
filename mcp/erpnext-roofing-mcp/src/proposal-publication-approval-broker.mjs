@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   approvedArgs,
+  brokerMcpChildEnvironment,
   canonicalJson,
   digest,
   parseToolPayload,
@@ -152,7 +153,11 @@ export function proposalPublicationBrokerConfigFromEnv(env = process.env) {
     actorUser: runtime.actorUser,
     agentRole: runtime.agentRole,
     siteId: expectedSiteId,
-    mcpEnv: proposalPublicationMcpChildEnvironment(env, runtime),
+    mcpEnv: brokerMcpChildEnvironment(env, {
+      agentRole: PROPOSAL_PUBLICATION_AGENT_ROLE,
+      actorUser: runtime.actorUser,
+      approverId: runtime.approverId,
+    }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(
       env.PROPOSAL_PUBLICATION_BROKER_MAX_CLOCK_SKEW_MS,
@@ -779,27 +784,6 @@ function assertProposalPublicationBrokerRuntime(config) {
   }
 }
 
-function proposalPublicationMcpChildEnvironment(env, runtime) {
-  // The child inherits the runtime it needs to build a write-enabled server and
-  // nothing else. ERPNEXT_TENANT_ID and the effect-runtime coordinates are part
-  // of that minimum: configFromEnv refuses a write runtime without them, so a
-  // child started without them cannot answer a single tool call.
-  const allow = [
-    "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
-    "ERPNEXT_ALLOW_INSECURE_LOCAL", "ERPNEXT_TENANT_ID",
-    "IRONWRAP_EFFECT_RUNTIME_ENABLED", "IRONWRAP_EFFECT_RUNTIME_URL", "IRONWRAP_EFFECT_RUNTIME_TOKEN",
-    "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
-    "HERMES_APPROVAL_PUBLIC_KEY",
-  ];
-  const child = {};
-  for (const key of allow) if (typeof env[key] === "string" && env[key]) child[key] = env[key];
-  child.ERPNEXT_WRITE_ENABLED = "true";
-  child.HERMES_AGENT_ROLE = PROPOSAL_PUBLICATION_AGENT_ROLE;
-  child.HERMES_ACTOR_USER = runtime.actorUser;
-  child.HERMES_APPROVER_ID = runtime.approverId;
-  child.PATH = process.env.PATH ?? "/usr/bin:/bin";
-  return child;
-}
 
 function boundedApprovalExpiry(expiresAt, now, maxLifetimeMs) {
   const expiresMs = Date.parse(expiresAt);

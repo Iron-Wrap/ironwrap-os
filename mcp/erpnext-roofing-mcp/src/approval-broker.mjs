@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   approvedArgs,
+  brokerMcpChildEnvironment,
   canonicalJson,
   digest,
   parseToolPayload,
@@ -199,7 +200,11 @@ export function brokerConfigFromEnv(env = process.env) {
     actorUser: runtime.actorUser,
     agentRole: runtime.agentRole,
     siteId: expectedSiteId,
-    mcpEnv: mcpChildEnvironment(env, runtime),
+    mcpEnv: brokerMcpChildEnvironment(env, {
+      agentRole: "lead-concierge",
+      actorUser: runtime.actorUser,
+      approverId: runtime.approverId,
+    }),
     requestTimeoutMs: runtime.requestTimeoutMs,
     maxClockSkewMs: parseBoundedMs(env.APPROVAL_BROKER_MAX_CLOCK_SKEW_MS, MAX_CLOCK_SKEW_MS, 10_000, 120_000),
     maxApprovalLifetimeMs: parseBoundedMs(
@@ -490,22 +495,6 @@ function json(body, status) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
 }
 
-function mcpChildEnvironment(env, runtime) {
-  const allow = [
-    "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
-    "ERPNEXT_ALLOW_INSECURE_LOCAL",
-    "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
-    "HERMES_APPROVAL_PUBLIC_KEY",
-  ];
-  const child = {};
-  for (const key of allow) if (typeof env[key] === "string" && env[key]) child[key] = env[key];
-  child.ERPNEXT_WRITE_ENABLED = "true";
-  child.HERMES_AGENT_ROLE = "lead-concierge";
-  child.HERMES_ACTOR_USER = runtime.actorUser;
-  child.HERMES_APPROVER_ID = runtime.approverId;
-  child.PATH = process.env.PATH ?? "/usr/bin:/bin";
-  return child;
-}
 
 function boundedApprovalExpiry(expiresAt, now, maxLifetimeMs) {
   const expiresMs = Date.parse(expiresAt);

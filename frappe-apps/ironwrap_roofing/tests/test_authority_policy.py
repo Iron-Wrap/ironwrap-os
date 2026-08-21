@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import date, datetime
 
 from ironwrap_roofing.authority_policy import (
     AuthorityPolicyViolation,
@@ -421,6 +422,66 @@ class AuthorityPolicyTests(unittest.TestCase):
                 tenant="tenant:ironwrap",
                 reference_date="2026-08-17",
             )
+
+
+class AuthorityDigestLoadPathTests(unittest.TestCase):
+    """ELEC-128 defect 3.
+
+    The release gate reads Authority Records through raw
+    `frappe.db.sql(..., as_dict=True)`, which hands back native `date`/`datetime`
+    objects where the DocType controller's `as_dict()` had text. `json.dumps` cannot
+    serialise those, so `authority_state_digest` raised `TypeError` for every record
+    the gate resolved - and the caller's blanket except relabelled that crash as an
+    ordinary authority refusal, so the gate had never once resolved a real record.
+    """
+
+    def _sql_shaped(self, record: dict[str, object]) -> dict[str, object]:
+        """The same record as the raw-SQL row loader returns it."""
+
+        row = dict(record)
+        row["effective_from"] = date.fromisoformat(str(record["effective_from"]))
+        row["expires_at"] = date.fromisoformat(str(record["expires_at"]))
+        row["verified_at"] = datetime.strptime(str(record["verified_at"]), "%Y-%m-%d %H:%M:%S")
+        return row
+
+    def test_digest_is_identical_across_both_record_loading_paths(self) -> None:
+        record = authority()
+        self.assertEqual(
+            authority_state_digest(self._sql_shaped(record)),
+            authority_state_digest(record),
+            "a date-typed row and a text row are the same authority and must hash alike",
+        )
+
+    def test_digest_of_a_date_typed_row_does_not_raise(self) -> None:
+        # The exact failure: `TypeError: Object of type date is not JSON serializable`.
+        digest = authority_state_digest(self._sql_shaped(authority()))
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_a_date_typed_row_still_validates_and_resolves(self) -> None:
+        # The digest stored at save time must still verify when the gate recomputes it
+        # from the raw-SQL row, or every resolution would refuse `state_digest_mismatch`.
+        row = self._sql_shaped(authority())
+        validate_authority_record(row)
+        resolved = resolve_current_authority(
+            [row],
+            tenant="tenant:ironwrap",
+            subject_type="Person",
+            subject_ref="user:worker-1",
+            authority_kind="Worker Competency",
+            scope_type="Field",
+            scope_ref="field:job-1",
+            reference_date="2026-08-17",
+        )
+        self.assertEqual(resolved["authority_record_id"], "auth:worker:1")
+
+    def test_stored_digests_are_unchanged_by_the_fix(self) -> None:
+        # A pinned digest of the text-shaped record. If normalisation ever widened to
+        # coerce ints or text, every `state_digest_sha256` already in the database would
+        # stop verifying - this is the guard against that being done casually.
+        self.assertEqual(
+            authority_state_digest(authority()),
+            "862ceea57ce85d95151c5170843a7d748b0134edf2dbf16e6dae5d98b9542988",
+        )
 
 
 if __name__ == "__main__":

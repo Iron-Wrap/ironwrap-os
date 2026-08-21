@@ -413,10 +413,22 @@ function matchesExactWriteArgs(
   input: NormalizedPreviewInput,
   actorUser: string,
 ): boolean {
+  // `authority_requirements` is present exactly when the broker's crew-roster compiler
+  // produced rows, which depends on the roster - a fact the Worker cannot recompute and
+  // must not guess. So it is optional HERE and checked for shape BELOW: presence is the
+  // broker's call, contents are still held to the contract.
+  //
+  // The strict length check below is why this key had to be named at all: when #105
+  // started emitting it and this list was not updated, every real packet failed the
+  // count, `parsePreviewPacket` threw a non-typed error, and the caller's fallback
+  // answered a permanent 502 (ELEC-128 defect 2). Any key added to `writeArgsFromInput`
+  // must be added here in the same change; `production-schedule-approval-broker.test.mjs`
+  // compares the two key sets in both directions so it cannot be forgotten again.
   const keys = [
     "roof_job_id", "assignment_type", "status", "crew_profile_id", "scheduled_start", "assigned_by", "notes",
     "request_text", "approved_by", "run_id",
     ...(input.scheduledEnd ? ["scheduled_end"] : []),
+    ...(Object.hasOwn(value, "authority_requirements") ? ["authority_requirements"] : []),
     ...(input.supersedesAssignmentId ? ["supersedes", "correction_reason"] : []),
   ];
   return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key)) &&
@@ -425,8 +437,40 @@ function matchesExactWriteArgs(
     value.assigned_by === actorUser && value.notes === "" && value.request_text === input.requestText &&
     text(value.approved_by, 3, 140) !== null && value.run_id === input.runId &&
     (input.scheduledEnd === null || value.scheduled_end === input.scheduledEnd) &&
+    matchesExactAuthorityRequirements(value.authority_requirements, input) &&
     (input.supersedesAssignmentId === null ||
       (value.supersedes === input.supersedesAssignmentId && value.correction_reason === input.correctionReason));
+}
+
+/**
+ * Hold the compiled authority list to the shape `compileCrewAuthorityRequirements`
+ * promises, without pretending to know the roster.
+ *
+ * What the Worker can prove: every row is scoped to the job THIS approval is for, and
+ * every row is the Worker Competency / Person / Worker kind the compiler emits. That is
+ * enough to stop a broker from widening an approval to another job's authority while
+ * the approver reads a packet about this one. What it cannot prove - that the subjects
+ * are exactly the active crew - is Frappe's, and `_require_canonical_authorities`
+ * resolves it against locked Authority Records at the write.
+ */
+function matchesExactAuthorityRequirements(value: unknown, input: NormalizedPreviewInput): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) return false;
+  const subjects = new Set<string>();
+  for (const entry of value) {
+    const row = record(entry);
+    if (!row) return false;
+    const keys = ["subject_type", "subject_role", "subject_ref", "authority_kind", "scope_type", "scope_ref"];
+    if (Object.keys(row).length !== keys.length || !keys.every((key) => Object.hasOwn(row, key))) return false;
+    const subjectRef = text(row.subject_ref, 3, 140);
+    if (row.subject_type !== "Person" || row.subject_role !== "Worker" || subjectRef === null ||
+        row.authority_kind !== "Worker Competency" || row.scope_type !== "Roof Job" ||
+        row.scope_ref !== input.roofJobId) return false;
+    // The compiler de-duplicates by subject; a repeated row would mean drift.
+    if (subjects.has(subjectRef)) return false;
+    subjects.add(subjectRef);
+  }
+  return true;
 }
 
 function parseSafePreview(

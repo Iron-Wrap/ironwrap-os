@@ -189,3 +189,43 @@ function assertApprovalReceiptWindow(payload) {
     throw new Error("hermes_approval_receipt_window_invalid");
   }
 }
+
+/** The env keys a broker forwards into its per-call MCP child. */
+export const BROKER_MCP_CHILD_FORWARDED_KEYS = Object.freeze([
+  "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
+  "ERPNEXT_ALLOW_INSECURE_LOCAL", "ERPNEXT_TENANT_ID",
+  "IRONWRAP_EFFECT_RUNTIME_ENABLED", "IRONWRAP_EFFECT_RUNTIME_URL", "IRONWRAP_EFFECT_RUNTIME_TOKEN",
+  "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
+  "HERMES_APPROVAL_PUBLIC_KEY",
+]);
+
+/**
+ * The exact environment a broker hands its per-call MCP child.
+ *
+ * Every broker spawns `server.mjs` with `ERPNEXT_WRITE_ENABLED=true`, so the child
+ * runs `configFromEnv`'s write-runtime branch: it refuses to boot without a stable
+ * `ERPNEXT_TENANT_ID` and without the effect-runtime coordinates. A broker that
+ * forwards less than this minimum does not get a degraded child - it gets no child
+ * at all, and the crash lands at process boot, before any tool name is even read.
+ *
+ * That failure is indistinguishable from a domain refusal at the broker's own catch
+ * sites, which is exactly how three brokers shipped unable to complete a single real
+ * call while reporting it as a roster/preview rejection (ELEC-128 defect 1). Keeping
+ * ONE allowlist is what stops the next broker from inheriting the same hole: the list
+ * lives with the contract both sides share, not copied per broker.
+ *
+ * Still an allowlist, not `process.env`: the child gets the runtime it needs to build
+ * a write-enabled server and nothing else.
+ */
+export function brokerMcpChildEnvironment(env, { agentRole, actorUser, approverId }) {
+  const child = {};
+  for (const key of BROKER_MCP_CHILD_FORWARDED_KEYS) {
+    if (typeof env[key] === "string" && env[key]) child[key] = env[key];
+  }
+  child.ERPNEXT_WRITE_ENABLED = "true";
+  child.HERMES_AGENT_ROLE = agentRole;
+  child.HERMES_ACTOR_USER = actorUser;
+  child.HERMES_APPROVER_ID = approverId;
+  child.PATH = process.env.PATH ?? "/usr/bin:/bin";
+  return child;
+}

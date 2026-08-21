@@ -2,8 +2,8 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-17
-Latest phase delta verified: 2026-08-20 (IRO-2 Facet v2 chain and IRO-20 customer portal switched on in configuration and driven on a local stack; repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
+Last verified: 2026-08-21
+Latest phase delta verified: 2026-08-21 (IRO-44 Frappe safety projection declared obsolete under IRO-195; D1 9-ledger substrate is the operational safety system of record. Prior 2026-08-20 delta: IRO-2 Facet v2 chain and IRO-20 customer portal switched on in configuration and driven on a local stack. Repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -402,6 +402,12 @@ stale from before that merge):
   emergency drill covering rescue, failed PPE, a duplicate offline report, a late corrective action,
   and independent release. It still has no deployment, runtime, business-acceptance, or real-device
   proof.
+- Direction (2026-08-21, Ivan via IRO-195 cutover): this D1 substrate is the system of record for
+  operational safety. A Frappe-side projection of the occurrence, equipment, notification, and
+  corrective-action ledgers is obsolete and will not be built. Frappe `Safety Plan` /
+  acknowledgement remains the preconstruction plan object and is not a substitute for these
+  ledgers. Remaining IRO-44 proof is the real-device emergency/rescue drill (deploy-gated on
+  IRO-30 / IRO-194).
 
 IRO-62 shipped-migration remediation:
 
@@ -447,7 +453,7 @@ IRO-45 branch-local inventory ledger:
 Missing for autonomous target:
 
 - general event/transition envelope across every company aggregate;
-- shop/fleet/workforce/safety/quality/accounting event ledgers;
+- shop/workforce/quality event ledgers (operational safety lives on the D1 IRO-44 substrate; fleet and accounting already have D1/Frappe hybrid ledgers);
 - inventory HTTP routes, warehouse/receiving PWA surfaces, and the QuickBooks
   Bill/PurchaseOrder/Vendor adapter that would feed the AP readback;
 - universal evidence freshness, revocation, conflict, and compensation semantics;
@@ -479,8 +485,6 @@ Material target gaps:
 - receiving inspection, first-piece/in-process/final inspection, NCR, quarantine, disposition;
 - carrier status, collision, toll/parking, and tire/key registers (vehicle, trailer, driver, inspection, maintenance, and cargo are implemented);
 - production-proven physical evidence-slot capture and independent hold release across real devices;
-- Frappe-side projection of the D1-owned safety occurrence, equipment, notification, and corrective
-  action records;
 - controlled assembly/manufacturer document/technical bulletin/recall/claims substantiation;
 - complete jurisdiction rules and live issuer readback continuity for Authority Records;
 - invoice/holdback/refund/filing/payroll mirrors and provider reconciliation;
@@ -549,7 +553,7 @@ Target gaps:
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
 - employee/competency/training and subcontractor clearance;
 - fleet incident/collision lifecycle and shop-machine work-centre tooling;
-- safety incident, emergency, NCR, quarantine, and corrective action;
+- real-device emergency/rescue drill on the existing D1 safety panel (report/rescue/make-safe already ship); quality NCR/quarantine surfaces;
 - customer complaint/warranty service surfaces in the portal and mobile field app;
 - compliance/licence/permit/claims calendars;
 - finance/cash/tax exception views;
@@ -603,7 +607,7 @@ Target gaps:
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
-| Safety | plan/acknowledgement plus Crew Profile competence, WCB, and active-stop release fences; individually issued equipment with inspection/defect/quarantine/replacement, injury/near-miss/hazard/environmental/emergency occurrences, external notification, corrective action with independent verification, and readiness snapshots consumed by Work Package and schedule release | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
+| Safety | D1 system of record (IRO-44, #59): nine ledgers for equipment, occurrences, notifications, corrective actions, readiness snapshots, and offline device actions, plus the PWA safety panel; Frappe Safety Plan/acknowledgement remains the preconstruction plan object only — no Frappe projection of the D1 ledgers will be built (IRO-195, 2026-08-21). Crew Profile competence, WCB, and active-stop release fences still consume readiness. | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |

@@ -360,6 +360,118 @@ test("production schedule broker fails closed on a timeout", async () => {
   );
 });
 
+/** Answer the execute call with one broker outcome, verbatim. */
+async function executeWithOutcome(outcome: Record<string, unknown>) {
+  return await executeProductionScheduleApproval(env(), requestRecord(), {
+    now: () => NOW,
+    nonce: () => NONCE,
+    fetch: async (input, init) => {
+      const inbound = requestFrom(input, init);
+      const raw = await inbound.text();
+      const path = new URL(inbound.url).pathname;
+      return signedBrokerResponse(inbound, path, raw, { outcome });
+    },
+  });
+}
+
+const REFUSAL_MESSAGE =
+  "the exact tenant-scoped Authority Record requirements are not satisfied: no current authority " +
+  "matches the exact tenant, subject, kind, and scope: Worker Competency for crew@ironwrap.local " +
+  "scoped to Roof Job job:001";
+
+test("a refused schedule keeps the reason the approver has to act on", async () => {
+  // ELEC-132 defect B at the Worker boundary. `failed` rather than `execution_uncertain`
+  // is the load-bearing half: the domain decided, nothing was written, and there is no
+  // reconciliation work to queue.
+  const outcome = await executeWithOutcome({
+    state: "failed",
+    hermes_run_id: "run-production-schedule-001",
+    result_json: null,
+    error_code: "broker_production_schedule_refused",
+    refusal: {
+      code: "authority_missing_current_authority",
+        message: REFUSAL_MESSAGE,
+    },
+  });
+
+  assert.equal(outcome.state, "failed");
+  assert.equal(outcome.errorCode, "broker_production_schedule_refused");
+  assert.equal(outcome.resultJson, null);
+  assert.deepEqual(outcome.refusal, {
+    code: "authority_missing_current_authority",
+    message: REFUSAL_MESSAGE,
+  });
+});
+
+test("an outcome carrying no refusal reports none", async () => {
+  const outcome = await executeWithOutcome({
+    state: "execution_uncertain",
+    hermes_run_id: "run-production-schedule-001",
+    result_json: null,
+    error_code: "broker_mcp_call_ambiguous",
+  });
+  assert.equal(outcome.refusal, null);
+});
+
+test("a refusal the Worker cannot vouch for is a malformed response, not a message to show", async () => {
+  // The broker is private and its response is signed, but this is the one field that
+  // reaches a human as prose. Every one of these would render somewhere as text, so each
+  // has to fail closed rather than be trimmed into something plausible.
+  const wellFormed = {
+    code: "authority_missing_current_authority",
+    message: REFUSAL_MESSAGE,
+  };
+  const rejected: Array<[string, Record<string, unknown>]> = [
+    ["a state that never means a decision", { state: "execution_uncertain", refusal: wellFormed }],
+    ["a refusal on a successful write", { state: "executed", refusal: wellFormed }],
+    ["markup in the message", { state: "failed", refusal: { ...wellFormed, message: "<script>alert(1)</script>" } }],
+    ["a newline in the message", { state: "failed", refusal: { ...wellFormed, message: "line one\nline two" } }],
+    ["an over-long message", { state: "failed", refusal: { ...wellFormed, message: "x".repeat(401) } }],
+    ["an empty message", { state: "failed", refusal: { ...wellFormed, message: "" } }],
+    ["a code that is not a code", { state: "failed", refusal: { ...wellFormed, code: "Authority Missing!" } }],
+    ["an unexpected key", { state: "failed", refusal: { ...wellFormed, detail: "extra" } }],
+    ["a refusal that is not an object", { state: "failed", refusal: "authority_missing_current_authority" }],
+  ];
+
+  for (const [label, override] of rejected) {
+    const base: Record<string, unknown> = override.state === "executed"
+      ? {
+          state: "executed",
+          hermes_run_id: "run-production-schedule-001",
+          result_json: JSON.stringify({
+            run_id: "run-production-schedule-001",
+            assignment_id: "assignment:job-001-production-crew-metal-1",
+            roof_job_id: "job:001",
+            crew_profile_id: "crew:metal-1",
+            scheduled_start: "2026-07-18T14:00:00.000Z",
+            scheduled_end: "2026-07-18T20:00:00.000Z",
+            supersedes_assignment_id: "assignment:prior-001",
+            created: true,
+            audit_finalized: true,
+            replayed: false,
+            append_only: true,
+            assigned_user_mutated: false,
+            crew_notified: false,
+            customer_notified: false,
+            accounting_mutated: false,
+          }),
+          error_code: null,
+        }
+      : {
+          state: override.state,
+          hermes_run_id: "run-production-schedule-001",
+          result_json: null,
+          error_code: "broker_production_schedule_refused",
+        };
+    await assert.rejects(
+      () => executeWithOutcome({ ...base, refusal: override.refusal }),
+      (error: unknown) => error instanceof ProductionScheduleApprovalBrokerError &&
+        error.code === "production_schedule_broker_response_invalid",
+      label,
+    );
+  }
+});
+
 function requestRecord(): ProductionScheduleApprovalRequestRecord {
   return {
     production_schedule_approval_id: "schedule-approval:001",

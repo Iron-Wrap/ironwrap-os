@@ -249,6 +249,15 @@ function invoker(brokerConfig, state = {}) {
       args_digest: digest(approvedArgs(args)),
     });
     writeAttempts += 1;
+    // The MCP child's refusal envelope: an errored result whose body is the structured
+    // decision, emitted only when the audited write proved nothing was written.
+    if (state.writeRefusal) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ error: "domain_refusal", refusal: state.writeRefusal }) }],
+      };
+    }
+    if (state.writeFailure) throw new Error(state.writeFailure);
     if (writeAttempts === 1) assignmentCreates += 1;
     return {
       content: [{
@@ -1101,4 +1110,162 @@ test("a collapsed refusal logs its real cause while the caller still gets the na
   assert.ok(crewLog, "the swallowed roster failure must be logged");
   assert.ok(crewLog.includes("erpnext_http_404"), "the log must carry the real cause");
   assert.ok(crewLog.includes("crew_profile_id=crew:metal-1"), "and the identity it failed on");
+});
+
+/** Drive preview + execute once and return the verified execute body. */
+async function executeOnce(brokerConfig, runtime, nonce) {
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const initial = previewInput();
+  const preview = await verifiedBody(
+    await broker.handle(request(brokerConfig, "/v1/production-schedule/preview", initial, `${nonce}-preview`)),
+    brokerConfig,
+    "/v1/production-schedule/preview",
+    initial,
+    `${nonce}-preview`,
+  );
+  const body = executionBody(preview);
+  const outcome = await verifiedBody(
+    await broker.handle(request(brokerConfig, "/v1/production-schedule/execute", body, `${nonce}-execute`)),
+    brokerConfig,
+    "/v1/production-schedule/execute",
+    body,
+    `${nonce}-execute`,
+  );
+  return { outcome, preview, body };
+}
+
+const AUTHORITY_REFUSAL = {
+  code: "authority_missing_current_authority",
+  message:
+    "the exact tenant-scoped Authority Record requirements are not satisfied: no current authority " +
+    "matches the exact tenant, subject, kind, and scope: Worker Competency for installer@example.com " +
+    "scoped to Roof Job job:1",
+  mutation_applied: false,
+};
+
+test("a crew member with no competency record is refused, and the approver is told which one", async () => {
+  // ELEC-132's second negative proof. The gate already refused correctly; what it could
+  // not do was say why. `execution_uncertain` was doubly wrong here - it told the approver
+  // a deliberate decision was an unknown outcome, and it queued reconciliation work for a
+  // write that provably never happened.
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig, { writeRefusal: AUTHORITY_REFUSAL });
+  const logged = [];
+  const realError = console.error;
+  console.error = (...parts) => logged.push(parts.map(String).join(" "));
+  let outcome;
+  try {
+    ({ outcome } = await executeOnce(brokerConfig, runtime, "nonce-production-refusal-1"));
+  } finally {
+    console.error = realError;
+  }
+
+  assert.equal(outcome.outcome.state, "failed");
+  assert.equal(outcome.outcome.error_code, "broker_production_schedule_refused");
+  assert.equal(outcome.outcome.result_json, null);
+  assert.equal(outcome.outcome.refusal.code, "authority_missing_current_authority");
+  assert.match(outcome.outcome.refusal.message, /^the exact tenant-scoped/);
+  assert.match(outcome.outcome.refusal.message, /Worker Competency/);
+  assert.match(outcome.outcome.refusal.message, /installer@example\.com/);
+  // No assignment was created, and the refusal is still logged for whoever holds the pager.
+  assert.equal(runtime.counts().assignmentCreates, 0);
+  assert.ok(logged.find((line) => line.includes("write failed") && line.includes("authority_missing_current_authority")));
+});
+
+test("a failure that is not a decision is still an uncertain execution", async () => {
+  // The narrow default has to survive the new path: only a refusal that carried its own
+  // proof of non-application may claim `failed`. Everything else keeps the ambiguity,
+  // because a write that started may have landed.
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig, { writeFailure: "erpnext_timeout_10000ms" });
+  const realError = console.error;
+  console.error = () => {};
+  let outcome;
+  try {
+    ({ outcome } = await executeOnce(brokerConfig, runtime, "nonce-production-refusal-2"));
+  } finally {
+    console.error = realError;
+  }
+
+  assert.equal(outcome.outcome.state, "execution_uncertain");
+  assert.equal(outcome.outcome.error_code, "broker_mcp_call_ambiguous");
+  assert.equal(Object.hasOwn(outcome.outcome, "refusal"), false);
+  // And the provider's own error text never reaches the caller.
+  assert.equal(JSON.stringify(outcome).includes("erpnext_timeout"), false);
+});
+
+test("the Worker re-derives the refusal it shows an approver", async () => {
+  // The cross-boundary half: the real broker response, parsed by the real Worker client.
+  // Everything the approver is shown is re-derived here under a fixed key set and a plain
+  // character class - the broker is private and signed, but a refusal is the one part of a
+  // failed execution that reaches a human as prose.
+  const brokerConfig = config();
+  const runtime = invoker(brokerConfig, { writeRefusal: AUTHORITY_REFUSAL });
+  const broker = createProductionScheduleApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: runtime.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+
+  const realError = console.error;
+  console.error = () => {};
+  let outcome;
+  try {
+    const brokerFetch = async (input, init) =>
+      await broker.handle(input instanceof Request ? input : new Request(input, init));
+    const packet = await previewProductionScheduleApproval(
+      workerEnv(brokerConfig),
+      workerPreviewInput(previewInput()),
+      { fetch: brokerFetch, now: () => NOW, nonce: () => "nonce-worker-refusal-preview" },
+    );
+    outcome = await executeProductionScheduleApproval(
+      workerEnv(brokerConfig),
+      {
+        production_schedule_approval_id: packet.approvalRequestId,
+        tenant_id: packet.tenantId,
+        request_kind: packet.requestKind,
+        write_tool: packet.writeTool,
+        dry_run_tool: packet.dryRunTool,
+        agent_role: packet.agentRole,
+        actor_user: packet.actorUser,
+        site_id: packet.siteId,
+        target_doctype: packet.targetDoctype,
+        target_name: packet.targetName,
+        roof_job_id: packet.roofJobId,
+        crew_profile_id: packet.crewProfileId,
+        scheduled_start: packet.scheduledStart,
+        scheduled_end: packet.scheduledEnd,
+        supersedes_assignment_id: packet.supersedesAssignmentId,
+        correction_reason: packet.correctionReason,
+        request_text: packet.requestText,
+        write_args_json: packet.writeArgsJson,
+        preview_json: packet.previewJson,
+        args_digest: packet.argsDigest,
+        preview_digest: packet.previewDigest,
+        receipt_preview_digest: packet.receiptPreviewDigest,
+        dry_run_receipt: packet.dryRunReceipt,
+        expires_at: packet.expiresAt,
+        run_id: packet.runId,
+        approved_by_frappe_user: "owner@example.com",
+        decision_idempotency_key: "decision-production-schedule-refusal",
+      },
+      { fetch: brokerFetch, now: () => NOW, nonce: () => "nonce-worker-refusal-execute" },
+    );
+  } finally {
+    console.error = realError;
+  }
+
+  assert.equal(outcome.state, "failed");
+  assert.equal(outcome.errorCode, "broker_production_schedule_refused");
+  assert.equal(outcome.resultJson, null);
+  assert.equal(outcome.refusal.code, "authority_missing_current_authority");
+  assert.match(outcome.refusal.message, /^the exact tenant-scoped/);
+  assert.match(outcome.refusal.message, /Worker Competency/);
+  assert.match(outcome.refusal.message, /installer@example\.com/);
 });

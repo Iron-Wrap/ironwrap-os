@@ -61,6 +61,7 @@ export interface ProductionScheduleApprovalRequestRecord {
   hermes_run_id: string | null;
   result_json: string | null;
   error_code: string | null;
+  refusal_message: string | null;
   reconciled_at: string | null;
   reconciled_by_user_id: string | null;
   reconciled_by_frappe_user: string | null;
@@ -134,6 +135,8 @@ export interface ProductionScheduleApprovalRequestProjection {
   hermes_run_id: string | null;
   outcome: ProductionScheduleApprovalOutcome | null;
   error_code: string | null;
+  /** Why the domain refused, in its own words. Present only on a `failed` request. */
+  refusal_message: string | null;
   reconciliation: {
     at: string;
     by_user_id: string;
@@ -489,12 +492,14 @@ export async function finalizeProductionScheduleApprovalExecution(
     hermesRunId?: string | null;
     resultJson?: string | null;
     errorCode?: string | null;
+    refusalMessage?: string | null;
     now: string;
   },
 ): Promise<FinalizeProductionScheduleApprovalExecutionResult> {
   const result = await env.DB.prepare(
     `UPDATE production_schedule_approval_requests
      SET state = ?, version = version + 1, hermes_run_id = ?, result_json = ?, error_code = ?,
+         refusal_message = ?,
          execution_lease_expires_at = NULL, completed_at = ?,
          transition_actor_kind = 'approval_broker', transition_actor_id = 'production-schedule-broker',
          transition_actor_frappe_user = NULL, transition_detail_code = ?, updated_at = ?
@@ -505,6 +510,8 @@ export async function finalizeProductionScheduleApprovalExecution(
     input.hermesRunId ?? null,
     input.resultJson ?? null,
     input.errorCode ?? null,
+    // The storage trigger refuses a reason on any state but `failed`; never send one.
+    input.state === "failed" ? input.refusalMessage ?? null : null,
     input.now,
     terminalTransitionCode(input.state),
     input.now,
@@ -644,6 +651,7 @@ export function productionScheduleApprovalProjection(
     hermes_run_id: record.hermes_run_id,
     outcome: safeProductionScheduleApprovalOutcome(record.result_json, record),
     error_code: record.error_code,
+    refusal_message: safeProductionScheduleApprovalRefusalMessage(record),
     reconciliation: record.reconciled_at && record.reconciled_by_user_id && record.reconciled_by_frappe_user &&
         record.reconciliation_outcome && record.reconciliation_evidence
       ? {
@@ -667,7 +675,8 @@ const selectProductionScheduleApprovalRequestSql = `SELECT
   scheduled_end, supersedes_assignment_id, correction_reason, request_text, write_args_json, preview_json,
   args_digest, preview_digest, receipt_preview_digest, dry_run_receipt, expires_at, requested_by_user_id,
   requested_by_frappe_user, approved_by_user_id, approved_by_frappe_user, approved_at, decision_idempotency_key,
-  rejection_reason, run_id, execution_lease_expires_at, hermes_run_id, result_json, error_code, reconciled_at,
+  rejection_reason, run_id, execution_lease_expires_at, hermes_run_id, result_json, error_code,
+  refusal_message, reconciled_at,
   reconciled_by_user_id, reconciled_by_frappe_user, reconciliation_outcome, reconciliation_evidence,
   transition_actor_kind, transition_actor_id, transition_actor_frappe_user, transition_detail_code,
   created_at, updated_at, completed_at
@@ -740,6 +749,7 @@ function normalizeProductionScheduleApprovalRequest(
     hermes_run_id: nullableText(row.hermes_run_id),
     result_json: nullableText(row.result_json),
     error_code: nullableText(row.error_code),
+    refusal_message: nullableText(row.refusal_message),
     reconciled_at: nullableText(row.reconciled_at),
     reconciled_by_user_id: nullableText(row.reconciled_by_user_id),
     reconciled_by_frappe_user: nullableText(row.reconciled_by_frappe_user),
@@ -756,6 +766,21 @@ function normalizeProductionScheduleApprovalRequest(
     transition_detail_code: nullableText(row.transition_detail_code),
     completed_at: nullableText(row.completed_at),
   };
+}
+
+/**
+ * The refusal reason, only where it can mean anything.
+ *
+ * `failed` is the one terminal state that means the domain decided against this
+ * schedule; on `execution_uncertain` or `audit_failed` nobody knows what happened, and a
+ * confident-sounding sentence there would be worse than none. The column is guarded the
+ * same way at the storage boundary - this is the read-side half of the same rule.
+ */
+function safeProductionScheduleApprovalRefusalMessage(
+  record: ProductionScheduleApprovalRequestRecord,
+): string | null {
+  if (record.state !== "failed") return null;
+  return boundedText(record.refusal_message, 3, 400) ?? null;
 }
 
 function safeProductionScheduleApprovalPreview(

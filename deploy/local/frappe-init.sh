@@ -125,6 +125,19 @@ sync_app_source() {
 # Before this existed, `deploy/*-approval-broker.env.example` named actors nothing
 # provisioned, so steps 5 and 6 of the six-step workflow could only be reached by
 # hand-creating users first (ELEC-95 process risk 3).
+#
+# Every key-minting block below imports `generate_keys` by name instead of reaching
+# for `frappe.core.doctype.user.user.generate_keys`.  The dotted path is not a real
+# attribute of `frappe.core.doctype` - it only resolves once something has imported
+# the User controller module in THIS interpreter, which `frappe.get_doc` happens to
+# do as a side effect.  Every caller here creates the user first, so the attribute
+# was always there by accident.  The moment PR #106 added `owner@ironwrap.local`
+# below - a user `provision_operator_users` has already created in a SEPARATE
+# `bench console` subprocess - the create branch was skipped, nothing imported the
+# controller, and the bare dotted reference raised
+# `AttributeError: module 'frappe.core.doctype' has no attribute 'user'`, taking
+# every fresh local checkout down on its first boot (ELEC-132 defect A).  An
+# explicit import cannot depend on who ran before it.
 provision_broker_identity() {
   local email="$1" first_name="$2" creds_file="$3"
   local target="$BENCH_DIR/sites/$SITE/$creds_file"
@@ -132,12 +145,13 @@ provision_broker_identity() {
   log "creating broker actor identity $email with API keys"
   bench --site "$SITE" console > "/tmp/${creds_file#.}_raw.json" <<PYEOF
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "$email"
 if not frappe.db.exists("User", email):
     u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "$first_name",
                         "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
     u.insert(ignore_permissions=True)
-frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
@@ -327,12 +341,13 @@ if [ ! -s "sites/$SITE/.integration_credentials" ] || ! grep -q '^{' "sites/$SIT
   log "creating Worker integration user with API keys"
   bench --site "$SITE" console > /tmp/integration_raw.json <<'PYEOF'
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "ironwrap-bus@ironwrap.local"
 if not frappe.db.exists("User", email):
     u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "IronWrap Bus",
                         "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
     u.insert(ignore_permissions=True)
-keys = frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
@@ -345,6 +360,7 @@ if [ ! -s "sites/$SITE/.customer_acceptance_credentials" ] || ! grep -q '^{' "si
   log "creating scoped customer-acceptance service user with API keys"
   bench --site "$SITE" console > /tmp/customer_acceptance_raw.json <<'PYEOF'
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "ironwrap-customer-acceptance@ironwrap.local"
 role = "IronWrap Customer Acceptance Service"
 if not frappe.db.exists("User", email):
@@ -356,7 +372,7 @@ else:
     if role not in {entry.role for entry in u.roles}:
         u.append("roles", {"role": role})
         u.save(ignore_permissions=True)
-frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
@@ -371,6 +387,7 @@ if [ ! -s "sites/$SITE/.customer_decision_credentials" ] || ! grep -q '^{' "site
   log "creating scoped customer-decision service user with API keys"
   bench --site "$SITE" console > /tmp/customer_decision_raw.json <<'PYEOF'
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "ironwrap-customer-decision@ironwrap.local"
 role = "IronWrap Customer Decision Service"
 if not frappe.db.exists("User", email):
@@ -382,7 +399,7 @@ else:
     if role not in {entry.role for entry in u.roles}:
         u.append("roles", {"role": role})
         u.save(ignore_permissions=True)
-frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
@@ -395,6 +412,7 @@ if [ ! -s "sites/$SITE/.quickbooks_reconciliation_issuer_credentials" ] || ! gre
   log "creating least-privilege QuickBooks reconciliation issuer with API keys"
   bench --site "$SITE" console > /tmp/quickbooks_reconciliation_issuer_raw.json <<'PYEOF'
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "ironwrap-quickbooks-issuer@ironwrap.local"
 role = "IronWrap QuickBooks Reconciliation Issuer"
 if not frappe.db.exists("User", email):
@@ -406,7 +424,7 @@ else:
     if role not in {entry.role for entry in u.roles}:
         u.append("roles", {"role": role})
         u.save(ignore_permissions=True)
-frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
@@ -424,6 +442,7 @@ if [ ! -s "sites/$SITE/.facet_design_projection_credentials" ] || ! grep -q '^{'
   log "creating scoped Facet design projection service user with API keys"
   bench --site "$SITE" console > /tmp/facet_design_projection_raw.json <<'PYEOF'
 import frappe, json
+from frappe.core.doctype.user.user import generate_keys
 email = "ironwrap-facet-projection@ironwrap.local"
 role = "IronWrap Facet Design Projection Service"
 if not frappe.db.exists("User", email):
@@ -435,7 +454,7 @@ else:
     if role not in {entry.role for entry in u.roles}:
         u.append("roles", {"role": role})
         u.save(ignore_permissions=True)
-frappe.core.doctype.user.user.generate_keys(email)
+generate_keys(email)
 u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))

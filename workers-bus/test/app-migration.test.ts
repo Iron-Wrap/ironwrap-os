@@ -1985,12 +1985,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
     // expected and not a missing migration. 0067 is the IRO-45 inventory ledger: it was
     // numbered 0046 while that number was still free on its own head, and was renumbered
-    // above every shipped migration once `main` landed 0046 elsewhere.
-    assert.equal(migrations.length, 61);
+    // above every shipped migration once `main` landed 0046 elsewhere. 0079 keeps the reason
+    // a production schedule was refused (ELEC-132 defect B); it skipped to 0079 because open
+    // heads #92-#97 hold every number from 0069 to 0078, so 0070..0078 were never free.
+    assert.equal(migrations.length, 62);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0069_customer_portal_decision_intents.sql",
+      "0079_production_schedule_approval_refusal.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2047,7 +2049,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // ledger on top of both. 0069 adds the customer material-decision vertical: its intent
     // and event tables, three indexes, and eight triggers - intent immutability, the
     // state-transition fence, the three event appenders, and the three append-only guards.
-    assert.deepEqual({ ...counts }, { tables: 146, indexes: 208, triggers: 341 });
+    // 0079 adds no table or index - one nullable column on the shipped schedule-approval
+    // ledger - and two triggers that keep the refusal reason bounded and confined to the
+    // one state where it means anything.
+    assert.deepEqual({ ...counts }, { tables: 146, indexes: 208, triggers: 343 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it
@@ -2474,11 +2479,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
         "append_production_schedule_approval_reconciliation_event",
         "append_production_schedule_approval_transition_event",
         "enforce_production_schedule_approval_reconciliation",
+        "enforce_production_schedule_approval_refusal_message",
         "enforce_production_schedule_approval_transition",
         "prevent_production_schedule_approval_binding_rewrite",
         "prevent_production_schedule_approval_delete",
         "prevent_production_schedule_approval_event_delete",
         "prevent_production_schedule_approval_event_update",
+        "prevent_production_schedule_approval_refusal_insert",
       ],
     );
   } finally {

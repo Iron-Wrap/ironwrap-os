@@ -48,6 +48,7 @@ function approval() {
     hermes_run_id: null,
     outcome: null,
     error_code: null,
+    refusal_message: null,
     reconciliation: null,
     created_at: "2026-07-19T12:00:00.000Z",
     updated_at: "2026-07-19T12:00:00.000Z",
@@ -110,5 +111,42 @@ describe("production schedule approval contracts", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts a refusal reason only on a refused schedule, and only as plain text", () => {
+    // ELEC-132 defect B: this sentence is the one part of a failed execution an office
+    // user reads as prose, so the browser re-checks the same rule the Worker and the
+    // storage boundary already enforce - a widened server must not be able to start
+    // rendering markup, a newline, or a paragraph in an office surface.
+    const refused = {
+      ...approval(),
+      state: "failed",
+      completed_at: "2026-07-20T14:05:00.000Z",
+      error_code: "broker_production_schedule_refused",
+      refusal_message:
+        "the exact tenant-scoped Authority Record requirements are not satisfied: Worker " +
+        "Competency for crew@ironwrap.local scoped to Roof Job JOB-001",
+    };
+    expect(productionScheduleApprovalRequestSchema.safeParse(refused).success).toBe(true);
+
+    for (const message of [
+      "<script>alert(1)</script>",
+      "line one\nline two",
+      "x".repeat(401),
+      "",
+    ]) {
+      expect(
+        productionScheduleApprovalRequestSchema.safeParse({ ...refused, refusal_message: message })
+          .success,
+      ).toBe(false);
+    }
+
+    // An uncertain execution means nobody knows what happened; a confident sentence there
+    // would read as a decision that was never made.
+    for (const state of ["execution_uncertain", "audit_failed", "executing", "pending"]) {
+      expect(productionScheduleApprovalRequestSchema.safeParse({ ...refused, state }).success).toBe(
+        false,
+      );
+    }
   });
 });

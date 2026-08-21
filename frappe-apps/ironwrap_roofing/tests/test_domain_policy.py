@@ -5550,6 +5550,66 @@ class DomainPolicyTests(unittest.TestCase):
             context=self._canonical_schedule_context(authority_records=[]),
         )
 
+    def test_an_authority_refusal_names_the_requirement_it_could_not_satisfy(self) -> None:
+        """ELEC-132 defect B, at the source.
+
+        The refusal was already correct and fail-closed; it just would not say what it
+        refused. "Requirements are not satisfied" reads the same for a crew member with
+        no competency record, an expired one, and a revoked one, so the office user who
+        can fix it could not tell which person or which certificate to look at. The
+        decision here is unchanged - only what the refusal is able to tell an approver.
+        """
+
+        refusal = self.assert_policy(
+            "authority_missing_current_authority",
+            validate_record,
+            "job_assignment",
+            self._canonical_assignment(),
+            context=self._canonical_schedule_context(authority_records=[]),
+        )
+
+        message = str(refusal)
+        self.assertIn("Worker Competency", message)
+        self.assertIn("user:worker-1", message)
+        self.assertIn("Field field:job-1", message)
+        # The refusal is office-facing, so it says what was asked for - never what was
+        # searched, which tenant snapshot was locked, or what any other record holds.
+        self.assertNotIn("tenant:ironwrap", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_a_refusal_names_the_failing_requirement_out_of_several(self) -> None:
+        """One requirement out of many is the case a generic message cannot serve."""
+
+        assignment = self._canonical_assignment()
+        assignment["authority_requirements_json"] = json.dumps([
+            {
+                "subject_type": "Person",
+                "subject_ref": "user:worker-1",
+                "authority_kind": "Worker Competency",
+                "scope_type": "Field",
+                "scope_ref": "field:job-1",
+            },
+            {
+                "subject_type": "Person",
+                "subject_ref": "user:worker-2",
+                "authority_kind": "Worker Competency",
+                "scope_type": "Field",
+                "scope_ref": "field:job-1",
+            },
+        ])
+        # Only the first worker holds a record, so the second is the one that refuses.
+        refusal = self.assert_policy(
+            "authority_missing_current_authority",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context=self._canonical_schedule_context(
+                authority_records=[canonical_authority_record(record_id="authority:worker:1")],
+            ),
+        )
+        self.assertIn("user:worker-2", str(refusal))
+        self.assertNotIn("user:worker-1", str(refusal))
+
     def _canonical_assignment(self) -> dict[str, object]:
         return {
             "name": "assignment:production:canonical",

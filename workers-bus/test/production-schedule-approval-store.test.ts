@@ -27,6 +27,7 @@ class SqliteD1 {
     this.raw.exec("PRAGMA foreign_keys = ON");
     this.raw.exec(readFileSync(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8"));
     this.raw.exec(readFileSync(new URL("../migrations/0020_production_schedule_approval_requests.sql", import.meta.url), "utf8"));
+    this.raw.exec(readFileSync(new URL("../migrations/0079_production_schedule_approval_refusal.sql", import.meta.url), "utf8"));
     this.seedUser("appu_owner_0001", "ironwrap", "owner@example.com");
     this.seedUser("appu_owner_0002", "iroof", "owner@iroofalberta.ca");
   }
@@ -362,6 +363,134 @@ test("production schedule execution result is distinct from a lost CAS claim and
     now: "2026-07-17T10:01:11.000Z",
   });
   assert.equal(lost.kind, "lost_claim");
+});
+
+const REFUSAL_MESSAGE =
+  "the exact tenant-scoped Authority Record requirements are not satisfied: no current authority " +
+  "matches the exact tenant, subject, kind, and scope: Worker Competency for crew@ironwrap.local " +
+  "scoped to Roof Job job:001";
+
+/** Take one request from prepared to `executing`, ready to be finalized. */
+async function claimed(appEnv: AppEnv, decisionKey: string) {
+  await createProductionScheduleApprovalRequest(appEnv, input());
+  await claimProductionScheduleApprovalExecution(appEnv, {
+    tenantId: "ironwrap",
+    requestId: "production-schedule-approval:0001",
+    expectedVersion: 1,
+    decisionIdempotencyKey: decisionKey,
+    approvedByUserId: "appu_owner_0001",
+    approvedByFrappeUser: "owner@example.com",
+    now: "2026-07-17T10:01:00.000Z",
+    leaseExpiresAt: "2026-07-17T10:02:00.000Z",
+  });
+}
+
+test("a refused schedule keeps its reason where the next approver will read it", async () => {
+  // The approve response is not the only place this has to land. An approver who re-opens
+  // the request tomorrow needs the same sentence the one who clicked approve saw, or the
+  // fix only works for whoever was holding the browser at the time.
+  const appEnv = env();
+  await claimed(appEnv, "production-schedule-decision-refused");
+  const final = await finalizeProductionScheduleApprovalExecution(appEnv, {
+    tenantId: "ironwrap",
+    requestId: "production-schedule-approval:0001",
+    decisionIdempotencyKey: "production-schedule-decision-refused",
+    state: "failed",
+    hermesRunId: "run-production-schedule-0001",
+    resultJson: null,
+    errorCode: "broker_production_schedule_refused",
+    refusalMessage: REFUSAL_MESSAGE,
+    now: "2026-07-17T10:01:10.000Z",
+  });
+
+  assert.equal(final.kind, "finalized");
+  const projection = productionScheduleApprovalProjection(final.request!);
+  assert.equal(projection.state, "failed");
+  assert.equal(projection.error_code, "broker_production_schedule_refused");
+  assert.equal(projection.refusal_message, REFUSAL_MESSAGE);
+  assert.equal(projection.outcome, null);
+  assert.equal(containsForbidden(projection), false);
+});
+
+test("an uncertain execution is never given a confident-sounding reason", async () => {
+  // `execution_uncertain` means nobody knows what happened. A sentence there would read
+  // as a decision, so the storage boundary refuses one and the projection drops it.
+  const appEnv = env();
+  await claimed(appEnv, "production-schedule-decision-uncertain");
+  const final = await finalizeProductionScheduleApprovalExecution(appEnv, {
+    tenantId: "ironwrap",
+    requestId: "production-schedule-approval:0001",
+    decisionIdempotencyKey: "production-schedule-decision-uncertain",
+    state: "execution_uncertain",
+    hermesRunId: "run-production-schedule-0001",
+    resultJson: null,
+    errorCode: "broker_mcp_call_ambiguous",
+    refusalMessage: REFUSAL_MESSAGE,
+    now: "2026-07-17T10:01:10.000Z",
+  });
+
+  assert.equal(final.kind, "finalized");
+  assert.equal(productionScheduleApprovalProjection(final.request!).refusal_message, null);
+});
+
+test("the storage boundary refuses a reason that is not a bounded, single-line refusal", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await claimed(appEnv, "production-schedule-decision-guarded");
+  for (const [label, message] of [
+    ["markup", "<script>alert(1)</script>"],
+    ["a newline", "line one\nline two"],
+    ["an over-long sentence", "x".repeat(401)],
+  ]) {
+    assert.throws(
+      () => db.raw.prepare(
+        `UPDATE production_schedule_approval_requests
+         SET state = 'failed', version = version + 1, error_code = 'broker_production_schedule_refused',
+             refusal_message = ?, execution_lease_expires_at = NULL, completed_at = ?,
+             transition_actor_kind = 'approval_broker', transition_actor_id = 'production-schedule-broker',
+             transition_detail_code = 'production_schedule_broker_execution_failed', updated_at = ?
+         WHERE production_schedule_approval_id = 'production-schedule-approval:0001'`,
+      ).run(message, "2026-07-17T10:01:10.000Z", "2026-07-17T10:01:10.000Z"),
+      /production_schedule_approval_refusal_message_invalid/,
+      label,
+    );
+  }
+});
+
+test("a reason cannot be attached to a state that is not a decision, or rewritten later", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await claimed(appEnv, "production-schedule-decision-state-guard");
+  assert.throws(
+    () => db.raw.prepare(
+      `UPDATE production_schedule_approval_requests
+       SET state = 'execution_uncertain', version = version + 1, error_code = 'broker_mcp_call_ambiguous',
+           refusal_message = ?, execution_lease_expires_at = NULL, completed_at = ?,
+           transition_actor_kind = 'approval_broker', transition_actor_id = 'production-schedule-broker',
+           transition_detail_code = 'production_schedule_broker_execution_uncertain', updated_at = ?
+       WHERE production_schedule_approval_id = 'production-schedule-approval:0001'`,
+    ).run(REFUSAL_MESSAGE, "2026-07-17T10:01:10.000Z", "2026-07-17T10:01:10.000Z"),
+    /production_schedule_approval_refusal_requires_failed_state/,
+  );
+
+  await finalizeProductionScheduleApprovalExecution(appEnv, {
+    tenantId: "ironwrap",
+    requestId: "production-schedule-approval:0001",
+    decisionIdempotencyKey: "production-schedule-decision-state-guard",
+    state: "failed",
+    hermesRunId: "run-production-schedule-0001",
+    resultJson: null,
+    errorCode: "broker_production_schedule_refused",
+    refusalMessage: REFUSAL_MESSAGE,
+    now: "2026-07-17T10:01:10.000Z",
+  });
+  // What an approver was told is a recorded fact, not a field to correct.
+  assert.throws(
+    () => db.raw.prepare(
+      "UPDATE production_schedule_approval_requests SET refusal_message = ? WHERE production_schedule_approval_id = ?",
+    ).run("a different reason entirely", "production-schedule-approval:0001"),
+    /production_schedule_approval_refusal_immutable/,
+  );
 });
 
 test("expired schedule approval cannot be claimed and retains an append-only expiry event", async () => {

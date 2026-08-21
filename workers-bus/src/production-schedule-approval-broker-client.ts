@@ -88,11 +88,18 @@ export interface ProductionScheduleApprovalRequestRecord {
   decision_idempotency_key: string | null;
 }
 
+/** Why the domain refused, in the words it wrote for an operator. */
+export interface ProductionScheduleBrokerRefusal {
+  code: string;
+  message: string;
+}
+
 export interface ProductionScheduleBrokerExecutionOutcome {
   state: "executed" | "failed" | "audit_failed" | "execution_uncertain";
   hermesRunId: string | null;
   resultJson: string | null;
   errorCode: string | null;
+  refusal: ProductionScheduleBrokerRefusal | null;
 }
 
 export class ProductionScheduleApprovalBrokerError extends Error {
@@ -521,23 +528,62 @@ function parseExecutionOutcome(
   assertOnlyKeys(response, ["outcome"]);
   const outcome = record(response.outcome);
   if (!outcome) invalid();
-  assertOnlyKeys(outcome, ["state", "hermes_run_id", "result_json", "error_code"]);
+  assertOnlyKeys(outcome, ["state", "hermes_run_id", "result_json", "error_code", "refusal"]);
   const state = outcome.state;
   if (state !== "executed" && state !== "failed" && state !== "audit_failed" && state !== "execution_uncertain") invalid();
   const hermesRunId = nullableText(outcome.hermes_run_id, 8, 128);
   const errorCode = nullableErrorCode(outcome.error_code);
   if (state === "executed") {
     const rawResult = nullableJsonText(outcome.result_json);
-    if (!hermesRunId || hermesRunId !== request.run_id || !rawResult || errorCode) invalid();
+    if (!hermesRunId || hermesRunId !== request.run_id || !rawResult || errorCode ||
+        outcome.refusal !== undefined) invalid();
     return {
       state,
       hermesRunId,
       resultJson: safeExecutedResult(rawResult, request),
       errorCode: null,
+      refusal: null,
     };
   }
   if (outcome.result_json !== null || !errorCode || (hermesRunId !== null && hermesRunId !== request.run_id)) invalid();
-  return { state, hermesRunId, resultJson: null, errorCode };
+  return { state, hermesRunId, resultJson: null, errorCode, refusal: safeRefusal(outcome.refusal, state) };
+}
+
+/**
+ * Re-derive the refusal the office user is shown; never forward the broker's bytes.
+ *
+ * The broker is private and its response is HMAC-verified, but a refusal is the one part
+ * of a failed execution that reaches a human as prose, so it gets the same treatment as
+ * every other projection here: a fixed key set, bounded lengths, and a character class
+ * that leaves nothing to interpret. A refusal is only meaningful on `failed` - the state
+ * that means the domain decided - so any other state carrying one is a malformed
+ * response, not a value to keep.
+ */
+function safeRefusal(
+  value: unknown,
+  state: ProductionScheduleBrokerExecutionOutcome["state"],
+): ProductionScheduleBrokerRefusal | null {
+  if (value === undefined || value === null) return null;
+  if (state !== "failed") invalid();
+  const refusal = record(value);
+  if (!refusal) invalid();
+  assertOnlyKeys(refusal, ["code", "message"]);
+  const code = nullableErrorCode(refusal.code);
+  const message = refusalMessage(refusal.message);
+  if (!code || !message) invalid();
+  return { code, message };
+}
+
+/**
+ * Printable, single-line, bounded. The domain writes these sentences for operators, so
+ * the vocabulary is plain text plus record identifiers; anything with control characters
+ * or markup in it did not come from a `PolicyViolation`.
+ */
+function refusalMessage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (normalized.length < 3 || normalized.length > 400) return null;
+  return /^[A-Za-z0-9 ,.:;'()\-_@/+#]+$/.test(normalized) ? normalized : null;
 }
 
 function safeExecutedResult(raw: string, request: ProductionScheduleApprovalRequestRecord): string {

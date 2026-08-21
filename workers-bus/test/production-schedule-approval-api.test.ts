@@ -192,7 +192,7 @@ function containsCapability(value: unknown): boolean {
   return false;
 }
 
-function installUpstreamMock() {
+function installUpstreamMock(executeOutcome?: Record<string, unknown>) {
   const original = globalThis.fetch;
   const brokerCalls: string[] = [];
   globalThis.fetch = async (
@@ -212,7 +212,12 @@ function installUpstreamMock() {
       return signedBrokerResponse(inbound, path, raw, previewResponse(body));
     }
     if (path === "/v1/production-schedule/execute") {
-      return signedBrokerResponse(inbound, path, raw, executeResponse(body));
+      return signedBrokerResponse(
+        inbound,
+        path,
+        raw,
+        executeOutcome ? { outcome: executeOutcome } : executeResponse(body),
+      );
     }
     return signedBrokerResponse(inbound, path, raw, { error: "not_found" }, 404);
   };
@@ -570,6 +575,80 @@ test("production schedule API keeps scheduling staged, source-backed, and browse
         "/v1/production-schedule/execute",
       ],
       "approval replay must not execute twice",
+    );
+  } finally {
+    upstream.restore();
+  }
+});
+
+test("a refused schedule tells the approving office user which crew member and which certificate", async () => {
+  // ELEC-132 defect B, end to end through the office-facing route. Before this the same
+  // refusal - correct, deliberate, fail-closed - arrived as a bare 502 with
+  // `broker_mcp_call_ambiguous`, so the one person who could fix it was told only that
+  // something had gone wrong, and could not tell whether a crew had been scheduled.
+  const refusalMessage =
+    "the exact tenant-scoped Authority Record requirements are not satisfied: no current authority " +
+    "matches the exact tenant, subject, kind, and scope: Worker Competency for crew@ironwrap.local " +
+    `scoped to Roof Job ${JOB_ID}`;
+  const appEnv = env();
+  const upstream = installUpstreamMock({
+    state: "failed",
+    hermes_run_id: null,
+    result_json: null,
+    error_code: "broker_production_schedule_refused",
+    refusal: {
+      code: "authority_missing_current_authority",
+        message: refusalMessage,
+    },
+  });
+  try {
+    const prepared = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/production-schedule-approvals",
+        preparationBody(),
+        "prepare-production-schedule-refused-0001",
+      ),
+      appEnv,
+      auth("owner"),
+    );
+    assert.equal(prepared.status, 201);
+    const preparedJson = await prepared.json() as { approval: { id: string; version: number } };
+
+    const refused = await handleAuthenticatedRoute(
+      request(
+        `/api/v1/production-schedule-approvals/${preparedJson.approval.id}/approve`,
+        { version: preparedJson.approval.version },
+        "decision-production-schedule-refused-0001",
+      ),
+      appEnv,
+      auth("owner"),
+    );
+
+    // 422, not 502: the domain decided, and nothing was written. The difference is what
+    // stops this becoming reconciliation work for a write that never happened.
+    assert.equal(refused.status, 422);
+    const body = await refused.json() as {
+      approval: { state: string; error_code: string; refusal_message: string; outcome: unknown };
+    };
+    assert.equal(body.approval.state, "failed");
+    assert.equal(body.approval.error_code, "broker_production_schedule_refused");
+    assert.equal(body.approval.refusal_message, refusalMessage);
+    assert.equal(body.approval.outcome, null);
+    assert.equal(containsCapability(body), false);
+
+    // And re-reading the request later still shows the same sentence.
+    const reread = await handleAuthenticatedRoute(
+      new Request(
+        `https://app.example.com/api/v1/production-schedule-approvals/${preparedJson.approval.id}`,
+        { method: "GET" },
+      ),
+      appEnv,
+      auth("owner"),
+    );
+    assert.equal(reread.status, 200);
+    assert.equal(
+      (await reread.json() as { approval: { refusal_message: string } }).approval.refusal_message,
+      refusalMessage,
     );
   } finally {
     upstream.restore();

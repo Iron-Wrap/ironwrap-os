@@ -94,6 +94,11 @@ class AuthorityPolicyViolation(ValueError):
     def __init__(self, code: str, message: str, field: str | None = None):
         self.code = code
         self.field = field
+        # The message without the code/field decoration.  A caller that wants to
+        # re-frame this refusal - name the requirement it belongs to, or hand it to
+        # an office approver - needs the sentence, not the formatted line, and must
+        # not have to unpick `str(exc)` to get it.
+        self.detail = message
         super().__init__(f"{code}: {message}" + (f" [{field}]" if field else ""))
 
 
@@ -760,6 +765,37 @@ def resolve_authority_record(
     )
 
 
+def requirement_label(requirement: Mapping[str, Any]) -> str:
+    """Name one requirement the way an office approver needs to read it.
+
+    A gate declares a list of requirements and refuses when any one of them cannot be
+    satisfied, but the resolver only knows about the requirement it was handed, so the
+    refusal it raises cannot say WHICH of them failed.  Everything named here is already
+    the caller's own input - the subject, kind and scope it asked us to resolve - so this
+    tells an approver which crew member and which certificate to go fix without exposing
+    anything about the records that were searched.
+    """
+
+    subject = str(requirement.get("subject_ref") or "").strip() or "an unnamed subject"
+    kind = str(requirement.get("authority_kind") or "").strip() or "authority"
+    scope_type = str(requirement.get("scope_type") or "").strip()
+    scope_ref = str(requirement.get("scope_ref") or "").strip()
+    scope = f" scoped to {scope_type} {scope_ref}".rstrip() if scope_type or scope_ref else ""
+    record_id = str(requirement.get("authority_record_id") or "").strip()
+    reference = f" (record {record_id})" if record_id else ""
+    return f"{kind} for {subject}{scope}{reference}"
+
+
+def _requirement_scoped(exc: AuthorityPolicyViolation, requirement: Mapping[str, Any]) -> AuthorityPolicyViolation:
+    """Re-raise the SAME refusal decision, saying which requirement produced it."""
+
+    return AuthorityPolicyViolation(
+        exc.code,
+        f"{exc.detail}: {requirement_label(requirement)}",
+        exc.field,
+    )
+
+
 def require_authority_gate(
     records: Sequence[Any],
     requirements: Sequence[Mapping[str, Any]],
@@ -772,68 +808,80 @@ def require_authority_gate(
     validated = _requirement_rows(requirements)
     snapshots: list[dict[str, Any]] = []
     for requirement in validated:
-        authority_record_id = requirement.get("authority_record_id")
-        snapshot = (
-            resolve_authority_record(
-                records,
-                tenant=tenant,
-                authority_record_id=str(authority_record_id),
-                reference_date=reference_date,
-            )
-            if authority_record_id
-            else resolve_current_authority(
-                records,
-                tenant=tenant,
-                subject_type=requirement["subject_type"],
-                subject_ref=requirement["subject_ref"],
-                authority_kind=requirement["authority_kind"],
-                scope_type=requirement["scope_type"],
-                scope_ref=requirement["scope_ref"],
-                reference_date=reference_date,
-            )
+        try:
+            snapshots.append(_resolve_gate_requirement(records, requirement, tenant, reference_date))
+        except AuthorityPolicyViolation as exc:
+            raise _requirement_scoped(exc, requirement) from exc
+    return snapshots
+
+
+def _resolve_gate_requirement(
+    records: Sequence[Any],
+    requirement: Mapping[str, Any],
+    tenant: str,
+    reference_date: str,
+) -> dict[str, Any]:
+    authority_record_id = requirement.get("authority_record_id")
+    snapshot = (
+        resolve_authority_record(
+            records,
+            tenant=tenant,
+            authority_record_id=str(authority_record_id),
+            reference_date=reference_date,
         )
-        for requirement_field, snapshot_field in (
-            ("subject_type", "subject_type"),
-            ("subject_ref", "subject_ref"),
-            ("authority_kind", "authority_kind"),
-            ("scope_type", "scope_type"),
-            ("scope_ref", "scope_ref"),
-            ("subject_role", "subject_role"),
-            ("authority_scope", "authority_scope"),
-            ("issuer_name", "issuer_name"),
-            ("issuer_jurisdiction", "issuer_jurisdiction"),
-            ("issuer_reference", "issuer_reference"),
-            ("source_version", "source_version"),
-        ):
-            expected = requirement.get(requirement_field)
-            if expected and snapshot[snapshot_field] != expected:
-                raise AuthorityPolicyViolation(
-                    "authority_requirement_mismatch",
-                    f"the resolved authority does not match {requirement_field}",
-                    requirement_field,
-                )
-        if requirement.get("version") is not None:
-            try:
-                expected_version = int(requirement["version"])
-            except (TypeError, ValueError) as exc:
-                raise AuthorityPolicyViolation(
-                    "invalid_authority_requirement",
-                    "version must be a positive integer",
-                    "authority_requirements_json",
-                ) from exc
-            if snapshot["version"] != expected_version:
-                raise AuthorityPolicyViolation(
-                    "authority_requirement_mismatch",
-                    "the resolved authority does not match version",
-                    "version",
-                )
-        if requirement.get("state_digest_sha256") and snapshot["state_digest_sha256"] != str(
-            requirement["state_digest_sha256"]
-        ).lower():
+        if authority_record_id
+        else resolve_current_authority(
+            records,
+            tenant=tenant,
+            subject_type=requirement["subject_type"],
+            subject_ref=requirement["subject_ref"],
+            authority_kind=requirement["authority_kind"],
+            scope_type=requirement["scope_type"],
+            scope_ref=requirement["scope_ref"],
+            reference_date=reference_date,
+        )
+    )
+    for requirement_field, snapshot_field in (
+        ("subject_type", "subject_type"),
+        ("subject_ref", "subject_ref"),
+        ("authority_kind", "authority_kind"),
+        ("scope_type", "scope_type"),
+        ("scope_ref", "scope_ref"),
+        ("subject_role", "subject_role"),
+        ("authority_scope", "authority_scope"),
+        ("issuer_name", "issuer_name"),
+        ("issuer_jurisdiction", "issuer_jurisdiction"),
+        ("issuer_reference", "issuer_reference"),
+        ("source_version", "source_version"),
+    ):
+        expected = requirement.get(requirement_field)
+        if expected and snapshot[snapshot_field] != expected:
             raise AuthorityPolicyViolation(
                 "authority_requirement_mismatch",
-                "the resolved authority does not match state digest",
-                "state_digest_sha256",
+                f"the resolved authority does not match {requirement_field}",
+                requirement_field,
             )
-        snapshots.append(snapshot)
-    return snapshots
+    if requirement.get("version") is not None:
+        try:
+            expected_version = int(requirement["version"])
+        except (TypeError, ValueError) as exc:
+            raise AuthorityPolicyViolation(
+                "invalid_authority_requirement",
+                "version must be a positive integer",
+                "authority_requirements_json",
+            ) from exc
+        if snapshot["version"] != expected_version:
+            raise AuthorityPolicyViolation(
+                "authority_requirement_mismatch",
+                "the resolved authority does not match version",
+                "version",
+            )
+    if requirement.get("state_digest_sha256") and snapshot["state_digest_sha256"] != str(
+        requirement["state_digest_sha256"]
+    ).lower():
+        raise AuthorityPolicyViolation(
+            "authority_requirement_mismatch",
+            "the resolved authority does not match state digest",
+            "state_digest_sha256",
+        )
+    return snapshot

@@ -1215,13 +1215,98 @@ async function erpRequestDirect(config, method, path, body) {
   }
 
   const responseText = await res.text();
-  if (!res.ok) throw new Error(`erpnext_http_${res.status}: ${res.statusText || "request_failed"}`);
+  if (!res.ok) throw frappeRequestError(res, responseText);
   if (!responseText) return {};
   try {
     return JSON.parse(responseText);
   } catch {
     throw new Error(`erpnext_invalid_json_${res.status}`);
   }
+}
+
+// The shape `domain_policy.PolicyViolation` formats: `[code] message`, where the message
+// begins with `<field>: ` when the violation named one. That prefix is deliberately NOT
+// split back out: `[required_fields] required: dry_run_receipt` has no field and
+// `[stale_active_stop] active_stop_reason: ...` does, and the two are indistinguishable
+// on the wire. Guessing produced a confidently wrong `field` on a real refusal from a
+// live stack, so the whole remainder travels as the message and the reader loses nothing.
+const DOMAIN_REFUSAL_PATTERN = /^\[([a-z][a-z0-9_]{1,79})\][ ](.{1,400})$/;
+// Frappe answers a `frappe.throw(..., exc=frappe.ValidationError)` with 417 and nothing
+// else with it. Every IronWrap business refusal arrives on that one status
+// (`document_validation.validate_business_document`), so keeping the classification
+// this narrow means no other failure - a 404 read, a 409 idempotency claim, a 500 - can
+// ever be mistaken for a decision the domain made.
+const DOMAIN_REFUSAL_STATUS = 417;
+
+/**
+ * Keep a refusal the domain deliberately authored; discard everything else.
+ *
+ * `erpnext_http_417: EXPECTATION FAILED` used to be the whole of what survived a failed
+ * write, because the response body was read and dropped. That is right for a stack
+ * trace or a SQL error - a caller must not learn Frappe's internals from a failure -
+ * but a `PolicyViolation` is not an internal: it is a sentence the domain wrote FOR an
+ * operator, in a fixed `[code] field: message` shape. ELEC-132 defect B is what the
+ * difference costs: a correct, fail-closed "this crew member's competency is not on
+ * file" reached the approving office user as a generic 502. Only text that matches that
+ * shape, on that one status, is carried; anything else keeps the opaque code it had.
+ */
+function frappeRequestError(res, responseText) {
+  const error = new Error(`erpnext_http_${res.status}: ${res.statusText || "request_failed"}`);
+  if (res.status !== DOMAIN_REFUSAL_STATUS) return error;
+  const refusal = domainRefusalFromFrappeBody(responseText);
+  if (!refusal) return error;
+  error.domainRefusal = refusal;
+  // The operator's log gets the real sentence too; the narrow prefix stays so every
+  // existing `erpnext_http_<status>` match keeps working.
+  error.message = `${error.message}: [${refusal.code}] ${refusal.message}`;
+  return error;
+}
+
+function domainRefusalFromFrappeBody(responseText) {
+  for (const candidate of frappeErrorMessages(responseText)) {
+    const match = DOMAIN_REFUSAL_PATTERN.exec(candidate.trim());
+    if (match) return { code: match[1], message: match[2].trim() };
+  }
+  return null;
+}
+
+/** Every place Frappe puts a thrown message, most specific first. */
+function frappeErrorMessages(responseText) {
+  let body;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    return [];
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+  const messages = [];
+  let serverMessages = body._server_messages;
+  if (typeof serverMessages === "string") {
+    try {
+      serverMessages = JSON.parse(serverMessages);
+    } catch {
+      serverMessages = null;
+    }
+  }
+  for (const entry of Array.isArray(serverMessages) ? serverMessages : []) {
+    if (typeof entry !== "string") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(entry);
+    } catch {
+      messages.push(entry);
+      continue;
+    }
+    if (typeof parsed === "string") messages.push(parsed);
+    else if (parsed && typeof parsed.message === "string") messages.push(parsed.message);
+  }
+  for (const key of ["_error_message", "message", "exception"]) {
+    const value = body[key];
+    if (typeof value !== "string") continue;
+    // `exception` is prefixed with the Python class, e.g. `frappe.exceptions.ValidationError: `.
+    messages.push(value.replace(/^[A-Za-z_][\w.]*(?:Error|Exception):\s*/, ""));
+  }
+  return messages;
 }
 
 async function erpRequestThroughEffectRuntime(config, method, path, body, context) {
@@ -4189,16 +4274,47 @@ function createAuthorizedRegistrar(mcpServer, config) {
       handlers.set(name, handler);
       if (!allowedTools.has(name)) return;
       rawRegisterTool(name, definition, async (args) => {
-        await authorizeToolInvocation(config, name, args);
-        if (name.startsWith("dry_run_")) {
-          return attachDryRunReceipt(config, name, args, await handler(args));
+        try {
+          await authorizeToolInvocation(config, name, args);
+          if (name.startsWith("dry_run_")) {
+            return attachDryRunReceipt(config, name, args, await handler(args));
+          }
+          if (Object.hasOwn(REQUEST_TO_DRY_RUN, name)) {
+            await assertApprovedWriteContract(config, name, args, handlers);
+          }
+          return handler({ ...args, __hermes_actor_user: config.actorUser });
+        } catch (error) {
+          const refusal = domainRefusalResult(error);
+          if (!refusal) throw error;
+          return refusal;
         }
-        if (Object.hasOwn(REQUEST_TO_DRY_RUN, name)) {
-          await assertApprovedWriteContract(config, name, args, handlers);
-        }
-        return handler({ ...args, __hermes_actor_user: config.actorUser });
       });
     },
+  };
+}
+
+/**
+ * Turn a proven-not-written domain refusal into a result a caller can actually read.
+ *
+ * A thrown tool error reaches the client as free text, which is why ELEC-132's refusal
+ * arrived as an unparseable string and collapsed into `mcp_tool_payload_invalid`. The
+ * result stays `isError` - this is still a failure, and `parseToolPayload` still refuses
+ * to hand it back as a payload - but its body is now the structured refusal instead of
+ * prose. Nothing else becomes a refusal: only a write whose audit trail proved the
+ * mutation did not apply is eligible.
+ */
+function domainRefusalResult(error) {
+  const refusal = error?.domainRefusal;
+  if (!refusal || refusal.mutation_applied !== false) return null;
+  return {
+    isError: true,
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        error: "domain_refusal",
+        refusal: { code: refusal.code, message: refusal.message, mutation_applied: false },
+      }, null, 2),
+    }],
   };
 }
 
@@ -9797,6 +9913,16 @@ export async function executeAuditedWrite(config, {
       await erpPut(config, resourcePath("Hermes Run", runId), {
         ...failurePatch,
       }).catch(() => {});
+    }
+    // A refusal may only be reported as a refusal when this run can prove nothing was
+    // written. `mutationApplied` is the only thing that knows: it is set from the
+    // executor, and the Hermes Run just above records the same fact durably. Without
+    // this, a 417 raised by a LATER call - after the target mutation landed - would
+    // look exactly like the pre-write refusal and would turn a genuinely uncertain
+    // execution into a confident "nothing happened".
+    if (err?.domainRefusal) {
+      if (mutationApplied) delete err.domainRefusal;
+      else err.domainRefusal = { ...err.domainRefusal, mutation_applied: false };
     }
     throw err;
   }

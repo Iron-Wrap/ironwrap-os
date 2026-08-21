@@ -5,6 +5,7 @@ const nullableText = (min: number, max: number) => boundedText(min, max).nullabl
 const identifier = boundedText(1, 140);
 const positiveVersion = z.number().int().positive();
 const isoDateTime = z.string().datetime({ offset: true });
+const refusalMessage = boundedText(3, 400).regex(/^[A-Za-z0-9 ,.:;'()\-_@/+#]+$/);
 
 const productionScheduleEffectsSchema = z
   .object({
@@ -167,6 +168,13 @@ export const productionScheduleApprovalRequestSchema = z
     hermes_run_id: nullableText(1, 256),
     outcome: productionScheduleApprovalOutcomeSchema.nullable(),
     error_code: nullableText(1, 160),
+    // Why the domain refused, in its own words - "Worker Competency for
+    // crew@ironwrap.local scoped to Roof Job job:001" rather than "something went
+    // wrong" (ELEC-132 defect B). The Worker only ever sets it on `failed`, the one
+    // terminal state that means a decision was made, and only after re-deriving it
+    // under a plain character class; the same rule is asserted here so a widened
+    // server can never quietly start rendering markup in an office surface.
+    refusal_message: refusalMessage.nullable(),
     reconciliation: z
       .object({
         at: boundedText(1, 80),
@@ -204,6 +212,13 @@ export const productionScheduleApprovalRequestSchema = z
         code: "custom",
         path: ["preview"],
         message: "Production schedule preview does not match its approval request.",
+      });
+    }
+    if (approval.refusal_message !== null && approval.state !== "failed") {
+      context.addIssue({
+        code: "custom",
+        path: ["refusal_message"],
+        message: "Only a refused production schedule may carry a refusal reason.",
       });
     }
     if (

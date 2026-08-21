@@ -179,6 +179,14 @@ PYEOF
 
 provision_broker_identities() {
   provision_operator_users
+  # The owner needs API keys, not just a login. Seeding a Verified Authority Record -
+  # which every #105 release gate now requires - must be done as a holder of
+  # `IronWrap Owner`; `ironwrap-bus@ironwrap.local`, the Worker's own least-privilege
+  # integration identity, deliberately does not hold it and must not be widened to.
+  # Before this, the only way to act as the owner over REST was to mint a key by hand
+  # in a bench console (ELEC-128 run notes). Same file pattern as the broker actors, so
+  # `predev`/runbook readers find it where they already look.
+  provision_broker_identity owner@ironwrap.local "Owner Approver" .owner_operator_credentials
   provision_broker_identity lead-concierge@ironwrap.local "Lead Concierge" .lead_triage_broker_credentials
   provision_broker_identity estimator-assistant@ironwrap.local "Estimator Assistant" .quote_revision_broker_credentials
   provision_broker_identity production-controller@ironwrap.local "Production Controller" .production_schedule_broker_credentials
@@ -283,6 +291,19 @@ if ! bench --site "$SITE" list-apps 2>/dev/null | grep -q ironwrap_roofing; then
   log "installing ironwrap_roofing on $SITE (committed DocTypes and policy hooks)"
   bench --site "$SITE" install-app ironwrap_roofing
 fi
+
+# 5b. migrate the freshly-installed site --------------------------------------
+# `install-app` syncs the DocTypes it sees at install time, and the stale-volume
+# path below has always ended with `bench migrate` - but the FRESH path never ran
+# one, so a first boot could leave a newly-added DocType's metadata unmigrated
+# while the app source was provably in sync. ELEC-128 lost time to exactly that:
+# `White-Label Tenant` was absent from a freshly-provisioned site, and since
+# `document_validation._locked_authority_records` reads `tabWhite-Label Tenant`
+# to resolve ANY authority, every release gate on that site failed for a reason
+# that had nothing to do with the code under test. A migrate here is idempotent
+# and cheap; discovering its absence by hand is neither.
+log "bench migrate (brings DocType metadata on the new site up to the app source)"
+bench --site "$SITE" migrate
 
 # 6. build assets (desk UI) ---------------------------------------------------
 if [ ! -f sites/.assets-built ]; then

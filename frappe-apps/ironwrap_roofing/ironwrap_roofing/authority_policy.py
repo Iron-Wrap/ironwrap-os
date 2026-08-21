@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 
@@ -178,11 +178,41 @@ def _record_refs(record: Any) -> set[str]:
     }
 
 
+def _digest_value(value: Any) -> Any:
+    """Canonicalise one digest input so both record-loading paths hash the same bytes.
+
+    The same Authority Record reaches this function two ways. The DocType controller
+    digests `self.as_dict()` at save time, where a Date the client supplied is still
+    the text it sent. Release gates digest rows `document_validation._locked_authority_
+    records` loaded with raw `frappe.db.sql(..., as_dict=True)`, where the driver has
+    already turned those columns into native `date`/`datetime` objects.
+
+    `json.dumps` cannot serialise the second form at all, so `authority_state_digest`
+    raised `TypeError` for EVERY record the release path resolved - valid or not - and
+    `_require_canonical_authorities`' blanket except turned that crash into an ordinary
+    authority refusal (ELEC-128 defect 3). The authority gate had therefore never
+    resolved a single record successfully.
+
+    Only date and datetime are normalised, and only into the exact text the save-time
+    path already hashed: `str(date(2026, 1, 1))` is `"2026-01-01"`, which is the string a
+    client submits. Digests already persisted in `state_digest_sha256` stay valid, so
+    this is a fix with no re-digest migration behind it. Ints and text are deliberately
+    passed through untouched - coercing `version` to text here WOULD invalidate every
+    stored digest.
+    """
+
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
 def authority_state_digest(record: Any) -> str:
     """Hash the exact version and lifecycle facts gates must snapshot."""
 
     payload = {
-        field: _get(record, field) or ""
+        field: _digest_value(_get(record, field)) or ""
         for field in (
             "authority_record_id",
             "tenant",

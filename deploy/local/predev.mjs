@@ -505,4 +505,14 @@ try {
   fail("local D1 migration apply failed");
 }
 
+// Seeding a Verified Authority Record - which every #105 release gate requires - has to
+// be done as a holder of `IronWrap Owner`, and the Worker's own integration identity
+// deliberately is not one. The keys now exist; saying where stops the next tester
+// minting one by hand in a bench console (ELEC-128 run notes).
+log(
+  "owner (IronWrap Owner) REST keys for fixture seeding: " +
+    "docker compose -f deploy/local/docker-compose.yml exec frappe " +
+    "cat sites/ironwrap.localhost/.owner_operator_credentials",
+);
+
 log(`OK - local stack ready (Frappe ${frappeUrl}). Starting wrangler dev on ${workerOrigin}`);

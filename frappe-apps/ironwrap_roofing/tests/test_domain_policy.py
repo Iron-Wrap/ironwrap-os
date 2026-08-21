@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from ironwrap_roofing.domain_policy import (
     WRITE_ONCE_FIELDS,
@@ -5492,6 +5492,112 @@ class DomainPolicyTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_the_authority_gate_resolves_records_loaded_as_native_dates(self) -> None:
+        """ELEC-128 defect 3, at the gate rather than at the digest.
+
+        Release consumers get their Authority Records from
+        `document_validation._locked_authority_records`, which loads them with raw
+        `frappe.db.sql(..., as_dict=True)`. That driver returns Date and Datetime
+        columns as `date`/`datetime` objects, `json.dumps` refused them inside
+        `authority_state_digest`, and `_require_canonical_authorities` relabelled the
+        resulting `TypeError` as `authority_authority_gate_block` - the same refusal a
+        genuinely missing record produces. Every refusal the gate had ever issued was
+        this crash.
+        """
+
+        authority = canonical_authority_record(record_id="authority:worker:1")
+        # Exactly what the row loader hands back for this record.
+        sql_row = {
+            **authority,
+            "effective_from": date(2026, 1, 1),
+            "expires_at": date(2026, 12, 31),
+            "verified_at": datetime(2026, 8, 17, 10, 0, 0),
+        }
+        context = self._canonical_schedule_context(authority_records=[sql_row])
+        validate_record("job_assignment", self._canonical_assignment(), context=context)
+
+    def test_an_internal_fault_does_not_wear_an_authority_refusal_s_mask(self) -> None:
+        """The second half of defect 3: the mask, not the crash.
+
+        A refusal means the authority policy decided something. An internal fault means
+        this code is broken. The blanket `except Exception` reported both as
+        `authority_authority_gate_block`, which is why a `TypeError` could hide for as
+        long as #105 had shipped. A non-policy error must now reach the caller as
+        itself.
+        """
+
+        authority = canonical_authority_record(record_id="authority:worker:1")
+
+        class Exploding(dict):
+            def get(self, key, default=None):  # noqa: D102 - stands in for a broken row
+                if key == "effective_from":
+                    raise RuntimeError("simulated internal fault")
+                return super().get(key, default)
+
+        context = self._canonical_schedule_context(
+            authority_records=[Exploding(authority)],
+        )
+        with self.assertRaisesRegex(RuntimeError, "simulated internal fault"):
+            validate_record("job_assignment", self._canonical_assignment(), context=context)
+
+        # And a real policy refusal still arrives as a coded PolicyViolation.
+        self.assert_policy(
+            "authority_missing_current_authority",
+            validate_record,
+            "job_assignment",
+            self._canonical_assignment(),
+            context=self._canonical_schedule_context(authority_records=[]),
+        )
+
+    def _canonical_assignment(self) -> dict[str, object]:
+        return {
+            "name": "assignment:production:canonical",
+            "assignment_id": "assignment:production:canonical",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.invalid",
+            "assigned_at": "2026-08-17 07:00:00",
+            "scheduled_start": "2026-08-17 08:00:00",
+            "scheduled_end": "2026-08-17 16:00:00",
+            "authority_requirements_json": json.dumps([
+                {
+                    "subject_type": "Person",
+                    "subject_ref": "user:worker-1",
+                    "authority_kind": "Worker Competency",
+                    "scope_type": "Field",
+                    "scope_ref": "field:job-1",
+                }
+            ]),
+        }
+
+    def _canonical_schedule_context(self, *, authority_records: list) -> dict[str, object]:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": name,
+                "state": "Done",
+                "evidence_item": f"evidence:{name.lower()}",
+                "owner_user": "production@example.invalid",
+                "assigned_at": "2026-08-17 08:00:00",
+            }
+            for name in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        return {
+            "gates": gates,
+            "gate_evidence": gate_evidence_context(gates),
+            "job_assignment_rows": [],
+            "supplier_order_exception_rows": [],
+            "scheduled_assignment_crew_profile": current_crew_authority(),
+            "job_compliance_rows": [
+                current_compliance_authority(gate, authority_record="authority:worker:1")
+                for gate in ("Crew", "Safety", "Access")
+            ],
+            "authority_tenant": "tenant:ironwrap",
+            "authority_records": authority_records,
+        }
 
     def test_canonical_authorities_bind_schedule_and_work_package_consumers(self) -> None:
         gates = [

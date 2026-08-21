@@ -9382,7 +9382,7 @@ function safetyAcknowledgementEvidencePolicy(method) {
 function createOnlyExecutor(config, doctype, before, draft, errorCode) {
   return async () => {
     if (before) throw new Error(errorCode);
-    return await erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, draft);
+    return await erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, frappeRowForDoctype(doctype, draft));
   };
 }
 
@@ -9529,12 +9529,80 @@ async function finalizeHermesRun(config, runId, patch) {
 // mark the run failed on error. A caller-supplied run_id is a single-use mutation claim:
 // only the request which successfully creates its Hermes Run may execute. Later retries
 // either receive the completed result or fail closed, never resume an uncertain mutation.
+/**
+ * An instant that carries its own offset: RFC 3339 with a `Z` or a `±HH:MM`.
+ *
+ * The offset is the whole point. `new Date("2026-08-25 08:00:00")` - the naive form
+ * Frappe stores - is parsed as LOCAL time, so re-converting an already-converted value
+ * shifts it by the host's timezone offset. Matching only offset-bearing text is what
+ * makes the conversion below idempotent, and what keeps a value the deploy host's TZ
+ * would otherwise silently move.
+ */
+const OFFSET_BEARING_DATETIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
 /** MariaDB DATETIME columns reject ISO-8601 "T…Z" text; convert to Frappe's "YYYY-MM-DD HH:MM:SS". */
 function frappeDatetimeIso(value) {
+  if (typeof value === "string" && !OFFSET_BEARING_DATETIME.test(value)) return value;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toISOString().replace("T", " ").slice(0, 19);
 }
+
+/**
+ * The Datetime columns of every DocType these executors write (ELEC-128 defect 4).
+ *
+ * A draft is built once and used twice: the broker digests it as the preview an approver
+ * approves, and the same object is then handed to Frappe. Those two want different text.
+ * The preview contract is RFC 3339 - it is what the Worker sent, what the digests cover,
+ * and what `assertExact(draft.scheduled_start, input.scheduledStart)` compares - while a
+ * MariaDB DATETIME column rejects that form outright:
+ *
+ *   ERROR 1292 (22007): Incorrect datetime value: '2026-08-25T08:00:00.000Z'
+ *     for column `tabJob Assignment`.`scheduled_start` at row 1
+ *
+ * So the conversion belongs HERE, at the storage boundary, and nowhere earlier: the
+ * canonical inter-service representation stays RFC 3339 and only the row written to
+ * Frappe is in Frappe's format.
+ *
+ * Named fields rather than "anything that looks like a timestamp", because Data and Code
+ * fields may legitimately carry RFC 3339 text that must survive as written.
+ * `production-schedule-datetime.test.mjs` re-derives this map from the DocType JSONs, so
+ * a Datetime column added later cannot quietly stay unconverted.
+ */
+const FRAPPE_DATETIME_FIELDS = Object.freeze({
+  "Change Order": ["accepted_at", "approved_at", "requested_at"],
+  "Communication Consent": ["captured_at", "effective_from", "expires_at", "revoked_at"],
+  "Communication Event": ["approved_at", "event_ts", "policy_checked_at", "sent_at"],
+  "Customer Decision": ["decided_at"],
+  "Customer Quote": ["accepted_at", "approved_at", "payment_truth_at", "prepared_at", "pricing_effective_at"],
+  "Insurance Supplement": ["approved_at", "carrier_response_at", "closed_at", "submitted_at"],
+  "Job Assignment": ["accepted_at", "assigned_at", "completed_at", "scheduled_end", "scheduled_start", "started_at"],
+  "Market Watch Item": ["observed_at"],
+  "Material Takeoff": ["approved_at", "prepared_at"],
+  "Proposal Evidence Pack": ["approved_at", "prepared_at", "signed_at"],
+  "Review Request": ["approved_at", "eligibility_checked_at", "prepared_at", "sent_at"],
+  "Safety Plan": ["approved_at", "prepared_at"],
+  "Supplier Order": ["approved_at", "internal_transmitted_at", "prepared_at", "received_at", "supplier_acknowledged_at"],
+  "Supplier Quote": ["approved_at", "prepared_at", "quoted_at"],
+  "Tenant Export Run": ["completed_at", "requested_at", "started_at"],
+  "Warranty Packet": ["approved_at", "issued_at", "prepared_at"],
+});
+
+export function frappeRowForDoctype(doctype, draft) {
+  const fields = FRAPPE_DATETIME_FIELDS[doctype];
+  if (!fields || !draft || typeof draft !== "object") return draft;
+  let row = draft;
+  for (const field of fields) {
+    if (!Object.hasOwn(draft, field)) continue;
+    const converted = frappeDatetimeIso(draft[field]);
+    if (converted === draft[field]) continue;
+    if (row === draft) row = { ...draft };
+    row[field] = converted;
+  }
+  return row;
+}
+
+export { FRAPPE_DATETIME_FIELDS };
 
 export async function executeAuditedWrite(config, {
   runId,
@@ -9819,9 +9887,10 @@ function canonicalJson(value) {
 
 // Shared upsert executor for request_create_* tools that write a full draft document.
 function upsertDraftExecutor(config, doctype, name, draft, before) {
+  const row = frappeRowForDoctype(doctype, draft);
   return before
-    ? () => erpPut(config, resourcePath(doctype, name), draft)
-    : () => erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, draft);
+    ? () => erpPut(config, resourcePath(doctype, name), row)
+    : () => erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, row);
 }
 
 function fieldAssignmentBoundUpsertExecutor(config, roofJobId, doctype, name, draft, before) {

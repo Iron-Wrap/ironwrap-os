@@ -1956,11 +1956,17 @@ def _require_current_compliance_authority(
                         ),
                     )
             except Exception as exc:
+                from ironwrap_roofing.authority_policy import AuthorityPolicyViolation
+
                 if isinstance(exc, PolicyViolation):
                     raise
-                code = getattr(exc, "code", "authority_record_block")
+                # Same narrowing as `_require_canonical_authorities` below, and for the
+                # same reason: this path calls the same resolver, so it masked the same
+                # digest crash behind `compliance_authority_record_block`.
+                if not isinstance(exc, AuthorityPolicyViolation):
+                    raise
                 raise PolicyViolation(
-                    f"compliance_{code}",
+                    f"compliance_{exc.code}",
                     "the linked compliance Authority Record is not current, verified, and effective",
                     "authority_record",
                 ) from exc
@@ -2052,11 +2058,22 @@ def _require_canonical_authorities(
 
                 require_issuer_readback(snapshot, readback)
     except Exception as exc:
+        from ironwrap_roofing.authority_policy import AuthorityPolicyViolation
+
         if isinstance(exc, PolicyViolation):
             raise
-        code = getattr(exc, "code", "authority_gate_block")
+        # Only a decision the authority policy actually MADE becomes a refusal.
+        # Anything else is a bug in this path and re-raises as itself. The blanket
+        # `except Exception` that used to stand here dressed every internal fault in the
+        # same `authority_authority_gate_block` a genuinely missing record produces, so a
+        # `TypeError` inside the digest was indistinguishable from a policy refusal and
+        # hid for as long as #105 had shipped (ELEC-128 defect 3). Re-raising is still
+        # fail-closed - the exception aborts the enclosing write either way - but it now
+        # says what actually happened instead of blaming the record.
+        if not isinstance(exc, AuthorityPolicyViolation):
+            raise
         raise PolicyViolation(
-            f"authority_{code}",
+            f"authority_{exc.code}",
             "the exact tenant-scoped Authority Record requirements are not satisfied",
             field,
         ) from exc

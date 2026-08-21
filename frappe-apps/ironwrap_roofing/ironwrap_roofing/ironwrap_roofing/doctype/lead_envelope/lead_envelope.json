@@ -61,7 +61,7 @@
       "in_list_view": 1,
       "in_standard_filter": 1,
       "label": "Bus Status",
-      "options": "received\npending_jn_push\npushed\nreconciled\nduplicate\ndead",
+      "options": "received\npending_jn_push\npushed\njn_skipped\nreconciled\nduplicate\ndead",
       "reqd": 1
     },
     {
@@ -165,7 +165,7 @@
   "index_web_pages_for_search": 0,
   "istable": 0,
   "links": [],
-  "modified": "2026-07-08 00:00:00.000000",
+  "modified": "2026-08-20 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "IronWrap Roofing",
   "name": "Lead Envelope",

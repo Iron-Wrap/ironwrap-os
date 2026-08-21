@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  collisionCandidates,
   generateTenantConfig,
   render,
   resolveAnswers,
@@ -106,4 +109,66 @@ test("a token standing alone adopts its answer's type, and one inside prose is i
   assert.deepEqual(render({ text: "pack for {{TENANT_ID}}" }, { TENANT_ID: "x" }), { text: "pack for x" });
   assert.throws(() => render({ text: "for {{SERVICES}}" }, { SERVICES: ["a"] }), /is not scalar/);
   assert.throws(() => render({ text: "{{NOPE}}" }, {}), /has no answer/);
+});
+
+test("--force excludes the tenant's OWN config from the collision list, and nothing else", () => {
+  const northline = JSON.parse(readFileSync(join(root, "config/tenants/northline-metal.json"), "utf8"));
+  const onDisk = [ironwrap, northline];
+
+  // Unforced: nothing is excluded, so claiming a live tenant's id still fails closed.
+  assert.deepEqual(collisionCandidates(onDisk, "northline-metal", false), onDisk);
+  // Forced: only the tenant being regenerated drops out; the other tenant still guards its
+  // sender domain.
+  assert.deepEqual(collisionCandidates(onDisk, "northline-metal", true), [ironwrap]);
+  assert.deepEqual(collisionCandidates(onDisk, "brand-new-tenant", true), onDisk);
+});
+
+test("a forced regeneration of a live tenant succeeds instead of colliding with itself", () => {
+  // ELEC-143 finding 2, reproduced end to end: this exact command threw
+  // `tenant id northline-metal is already taken by another config` before the fix, so the
+  // documented "re-run with --force to regenerate" path could not be run at all.
+  const out = join(mkdtempSync(join(tmpdir(), "tenant-force-")), "northline-metal.json");
+  const stdout = execFileSync(
+    "node",
+    [
+      join(root, "tools/generate-tenant-config.mjs"),
+      "--answers", join(root, "deploy/templates/tenant-answers.example.json"),
+      "--set", "TENANT_ID=northline-metal",
+      "--out", out,
+      "--force",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.match(stdout, /^ok wrote .*northline-metal\.json for tenant northline-metal$/m);
+  const regenerated = JSON.parse(readFileSync(out, "utf8"));
+  assert.equal(regenerated.tenant.id, "northline-metal");
+  assert.deepEqual(
+    regenerated,
+    JSON.parse(readFileSync(join(root, "config/tenants/northline-metal.json"), "utf8")),
+    "a forced regeneration must reproduce the shipped config, not drift from it",
+  );
+});
+
+test("without --force, writing another tenant's id elsewhere is still refused", () => {
+  // The fail-closed half of the same predicate: `--out` sidesteps the "already exists" early
+  // exit, so the collision list is the only thing standing between a stray run and two configs
+  // claiming one tenant id.
+  const out = join(mkdtempSync(join(tmpdir(), "tenant-collide-")), "clash.json");
+  assert.throws(
+    () =>
+      execFileSync(
+        "node",
+        [
+          join(root, "tools/generate-tenant-config.mjs"),
+          "--answers", join(root, "deploy/templates/tenant-answers.example.json"),
+          "--out", out,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    (error) => {
+      assert.match(error.stderr, /tenant id northline-metal is already taken by another config/);
+      return true;
+    },
+  );
+  assert.equal(existsSync(out), false, "a refused run must not leave a half-written config behind");
 });

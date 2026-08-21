@@ -25,6 +25,17 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** Placeholder D1 id: shaped like a real one so wrangler parses it, obviously not a real one. */
 export const UNPROVISIONED_DATABASE_ID = "00000000-0000-0000-0000-000000000000";
 
+/**
+ * A tenant id is also a Cloudflare resource prefix (`<id>-bus`, `<id>-bus-raw`), a Frappe site
+ * prefix and a config filename, so the same shape is required in three places:
+ * `deploy/clone-tenant.sh`, `tools/generate-tenant-config.mjs`, and here.
+ *
+ * Checked again here on purpose rather than imported from one of the others (ELEC-143 finding
+ * 4): this generator was safe only because its single caller happened to validate first, which
+ * is a property of the caller, not of this file. A test asserts all three literals still agree.
+ */
+export const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
+
 /** Strip `//` and block comments from JSONC without touching comment-like text inside strings. */
 export function stripJsonComments(source) {
   let out = "";
@@ -134,7 +145,14 @@ export function generateTenantWorkerConfig({ base, sourceEnv = "local", tenant, 
   const environment = sourceEnvironment(base, sourceEnv);
   const sourceTenantId = environment.vars?.APP_TENANT_ID;
   if (!sourceTenantId) throw new Error(`source environment ${sourceEnv} declares no APP_TENANT_ID`);
-  const tenantId = tenant.tenant.id;
+  const tenantId = tenant?.tenant?.id;
+  if (typeof tenantId !== "string" || !TENANT_ID_PATTERN.test(tenantId)) {
+    // An unchecked id reaches wrangler as a resource name and this repo as a filename. `../x`
+    // or an empty string would produce a config naming resources nobody meant to create.
+    throw new Error(
+      `tenant id ${JSON.stringify(tenantId)} must be lowercase alphanumeric with hyphens (${TENANT_ID_PATTERN}): it is also a Cloudflare resource prefix and a site prefix`,
+    );
+  }
   if (tenantId === sourceTenantId) throw new Error(`tenant ${tenantId} is the source tenant, not a clone of it`);
 
   const vars = {};
@@ -263,6 +281,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     };
     const tenantId = read("--tenant");
     if (!tenantId) throw new Error("--tenant <id> is required");
+    // Validated before it is used to build a path: `--tenant ../../something` would otherwise
+    // read and write outside config/tenants and workers-bus.
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      throw new Error(`--tenant ${JSON.stringify(tenantId)} must match ${TENANT_ID_PATTERN}`);
+    }
     const out = read("--out", join(root, "workers-bus", `wrangler.${tenantId}.jsonc`));
     const tenant = JSON.parse(readFileSync(join(root, "config", "tenants", `${tenantId}.json`), "utf8"));
     const base = JSON.parse(stripJsonComments(readFileSync(join(root, "workers-bus", "wrangler.jsonc"), "utf8")));

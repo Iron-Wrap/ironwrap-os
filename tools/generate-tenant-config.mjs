@@ -157,6 +157,22 @@ export function generateTenantConfig({ template, answers, existingTenants = [] }
   return body;
 }
 
+/**
+ * The configs a run must be checked against for an id or sender-domain collision.
+ *
+ * `--force` means "regenerate THIS tenant", so on a forced run the tenant's own config on disk
+ * is not a collision - it is the thing being replaced. On an unforced run nothing is excluded,
+ * so writing a second config that claims an existing tenant's id still fails closed.
+ *
+ * This filter used to read `doc.tenant?.id !== tenantId || force`, which is the same condition
+ * inverted: with `--force` the predicate is true for every document, so the tenant's own config
+ * was ADDED to the collision list and every forced regeneration died on a self-collision
+ * (ELEC-143 finding 2). The documented `--force` path was unusable and no test exercised it.
+ */
+export function collisionCandidates(existing, tenantId, force) {
+  return existing.filter((doc) => !(force && doc.tenant?.id === tenantId));
+}
+
 function parseArgv(argv) {
   const answers = {};
   let out = null;
@@ -186,10 +202,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const fromFile = answersFile ? JSON.parse(readFileSync(answersFile, "utf8")) : {};
     const merged = { ...fromFile, ...answers };
     const template = JSON.parse(readFileSync(TEMPLATE_PATH, "utf8"));
-    const existingTenants = readdirSync(TENANT_DIR)
+    const onDisk = readdirSync(TENANT_DIR)
       .filter((file) => file.endsWith(".json"))
-      .map((file) => JSON.parse(readFileSync(join(TENANT_DIR, file), "utf8")))
-      .filter((doc) => doc.tenant?.id !== merged.TENANT_ID || force);
+      .map((file) => JSON.parse(readFileSync(join(TENANT_DIR, file), "utf8")));
+    const existingTenants = collisionCandidates(onDisk, merged.TENANT_ID, force);
 
     const target = out ?? join(TENANT_DIR, `${merged.TENANT_ID}.json`);
     if (existsSync(target) && !force) {

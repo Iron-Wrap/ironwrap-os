@@ -293,8 +293,13 @@ counts it as a pass. Any `FAIL` exits non-zero.
    shows only the demo tenant's rows; the IronWrap database count is unchanged by demo traffic.
 4. R2: demo raw payloads land only in `<tenant>-bus-raw`; spot-check the IronWrap bucket
    for the same timestamps.
-5. Frappe site: the demo lead exists only on the tenant site; search the IronWrap site for
-   the demo contact and expect zero hits.
+5. Frappe site: the demo lead exists only on the tenant site. Search **every doctype the app
+   ships**, not just `Lead Envelope` — the ingest fan-out writes the same contact into several
+   (`Roofing Customer.email` among them), so a single-doctype search reports zero hits while a
+   leaked customer record sits on the other site. `deploy/local/frappe-marker-sweep.mjs` does
+   this from the app's own doctype JSONs, and reports a query that failed to run as an error
+   rather than as an absence of rows; `tools/validate-ingest-doctype-coverage.mjs` fails CI if a
+   doctype `workers-bus/src/erpnext.ts` names ever falls outside the sweep.
 6. Drive: the demo job folder exists only in the tenant's Shared Drive.
 7. MCP: from the tenant Hermes profile, `list_recent_envelopes` returns only tenant data;
    attempting the other tenant's `ERPNEXT_BASE_URL` credentials fails.

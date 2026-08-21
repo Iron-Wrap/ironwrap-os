@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  TENANT_ID_PATTERN,
   UNPROVISIONED_DATABASE_ID,
   auditForSourceTenantReferences,
   generateTenantWorkerConfig,
@@ -117,4 +118,38 @@ test("cloning the source tenant onto itself is refused", () => {
 test("a resource name is moved onto the tenant whether or not it carries the source prefix", () => {
   assert.equal(tenantResourceName("ironwrap-jn-push", "acme", "ironwrap"), "acme-jn-push");
   assert.equal(tenantResourceName("shared-queue", "acme", "ironwrap"), "acme-shared-queue");
+});
+
+test("a tenant id this generator would turn into a resource name is validated here, not by its caller", () => {
+  // ELEC-143 finding 4: the only reason a malformed id never reached this file was that
+  // deploy/clone-tenant.sh happened to check first. That is the caller's property, not this
+  // file's, and every one of these ids becomes a Cloudflare resource prefix and a filename.
+  for (const id of ["", "../../etc/passwd", "Northline Metal", "-leading-hyphen", "UPPER", "x", "a".repeat(65)]) {
+    assert.throws(
+      () =>
+        generateTenantWorkerConfig({
+          base,
+          tenant: { ...tenant, tenant: { ...tenant.tenant, id } },
+          runtime: RUNTIME,
+        }),
+      /must be lowercase alphanumeric with hyphens/,
+      `tenant id ${JSON.stringify(id)} must be refused`,
+    );
+  }
+  assert.throws(
+    () => generateTenantWorkerConfig({ base, tenant: {}, runtime: RUNTIME }),
+    /must be lowercase alphanumeric with hyphens/,
+    "a config with no tenant block must be refused, not dereferenced",
+  );
+});
+
+test("the tenant-id shape is the same literal in all three places that enforce it", () => {
+  // Independent checks, one agreed shape: a clone whose id passes clone-tenant.sh must not be
+  // rejected here, and one this file accepts must not produce a config the others refuse.
+  const configGenerator = readFileSync(join(root, "tools/generate-tenant-config.mjs"), "utf8");
+  const cloneScript = readFileSync(join(root, "deploy/clone-tenant.sh"), "utf8");
+  const shape = TENANT_ID_PATTERN.source;
+  assert.equal(shape, "^[a-z0-9][a-z0-9-]{1,63}$");
+  assert.ok(configGenerator.includes(shape), "tools/generate-tenant-config.mjs enforces a different shape");
+  assert.ok(cloneScript.includes(shape), "deploy/clone-tenant.sh enforces a different shape");
 });

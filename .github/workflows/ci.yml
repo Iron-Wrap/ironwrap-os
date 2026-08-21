@@ -70,6 +70,14 @@ jobs:
         run: node --test tools/generate-tenant-worker-config.test.mjs
       - name: Test local .dev.vars composition (port overrides + example scaffold)
         run: node --test deploy/local/dev-vars.test.mjs
+      - name: Validate tenant-leakage check 5 sweeps every doctype the Worker writes
+        run: node tools/validate-ingest-doctype-coverage.mjs
+      - name: Test ingest doctype coverage guard
+        run: node --test tools/validate-ingest-doctype-coverage.test.mjs
+      - name: Test the cross-tenant marker sweep
+        run: node --test deploy/local/frappe-marker-sweep.test.mjs
+      - name: Test local Frappe provisioner per-site scratch isolation
+        run: node --test deploy/local/frappe-init.test.mjs
       - name: Validate IronWrap runtime tenant identity
         env:
           IRONWRAP_TENANT_CONFIG: ironwrap

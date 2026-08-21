@@ -97,8 +97,18 @@ let raw = ""; process.stdin.on("data", (d) => (raw += d)).on("end", () => {
   process.stdout.write(String(Object.values(row)[0] ?? ""));
 });'; }
 
-MARKER="leakcheck-$(node -e 'console.log(require("node:crypto").randomBytes(4).toString("hex"))')"
+# Random per run so a stale row from an earlier run can never be mistaken for this one's traffic.
+# Pinnable (`IRONWRAP_LEAKCHECK_MARKER=leakcheck-deadbeef`) for the one case that needs a known
+# value: planting a row cross-tenant on purpose and confirming the checks BITE. A suite that has
+# only ever been quiet has not been shown to detect anything.
+MARKER="${IRONWRAP_LEAKCHECK_MARKER:-leakcheck-$(node -e 'console.log(require("node:crypto").randomBytes(4).toString("hex"))')}"
 MARKER_EMAIL="$MARKER@$TENANT_B.example"
+
+# Per-run scratch, not shared /tmp paths: two tenant pairs proven at once on one machine would
+# otherwise read each other's captured payloads and call the result isolation.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/$MARKER.XXXXXX")"
+chmod 700 "$SCRATCH"
+trap 'rm -rf "$SCRATCH"' EXIT
 
 printf '\033[1m Tenant leakage checks: %s (A) vs %s (B)\033[0m\n' "$TENANT_A" "$TENANT_B"
 note "marker for this run: $MARKER"
@@ -133,7 +143,7 @@ fi
 check 3 "data plane: a lead ingested into B never appears in A's D1"
 a_before="$(d1_query "$A_CONFIG" "--env $A_CONFIG_ENV" "$A_PERSIST" "$TENANT_A-bus" \
   "SELECT COUNT(*) AS n FROM envelopes" | d1_scalar)"
-ingest_status="$(curl -s -o /tmp/leakcheck-ingest.json -w '%{http_code}' --max-time 20 \
+ingest_status="$(curl -s -o "$SCRATCH/ingest.json" -w '%{http_code}' --max-time 20 \
   -X POST "$B_ORIGIN/ingest/estimate" \
   -H "authorization: Bearer $B_INGEST" -H 'content-type: application/json' \
   -d "{\"project_id\":\"$MARKER\",\"name\":\"$MARKER Demo\",\"email\":\"$MARKER_EMAIL\",\"phone\":\"5875550100\",\"address\":\"1 Demo Way\",\"service\":\"metal roofing\"}")"
@@ -162,11 +172,11 @@ if [[ -z "$RAW_KEY" ]]; then
 else
   b_object=1; a_object=1
   ( cd "$ROOT_DIR/workers-bus" && CI=true npx wrangler r2 object get "$TENANT_B-bus-raw/$RAW_KEY" \
-      --local --persist-to "$B_PERSIST" --config "$B_CONFIG" --pipe >/tmp/leakcheck-raw-b.json 2>/dev/null ) || b_object=0
+      --local --persist-to "$B_PERSIST" --config "$B_CONFIG" --pipe >"$SCRATCH/raw-b.json" 2>/dev/null ) || b_object=0
   ( cd "$ROOT_DIR/workers-bus" && CI=true npx wrangler r2 object get "$TENANT_A-bus-raw/$RAW_KEY" \
-      --local --persist-to "$A_PERSIST" --config "$A_CONFIG" --env "$A_CONFIG_ENV" --pipe >/tmp/leakcheck-raw-a.json 2>/dev/null ) || a_object=0
+      --local --persist-to "$A_PERSIST" --config "$A_CONFIG" --env "$A_CONFIG_ENV" --pipe >"$SCRATCH/raw-a.json" 2>/dev/null ) || a_object=0
   note "object present in $TENANT_B-bus-raw: $b_object | in $TENANT_A-bus-raw: $a_object"
-  if [[ "$b_object" == "1" && "$a_object" == "0" ]] && grep -q "$MARKER" /tmp/leakcheck-raw-b.json; then
+  if [[ "$b_object" == "1" && "$a_object" == "0" ]] && grep -q "$MARKER" "$SCRATCH/raw-b.json"; then
     pass "the raw payload exists in B's bucket and the same key is absent from A's"
   else
     fail "raw payload isolation not proven (B=$b_object, A=$a_object)"
@@ -174,21 +184,47 @@ else
 fi
 
 # --------------------------------------------------------------------------- 5
-check 5 "Frappe: B's lead exists on B's site and nowhere on A's"
-frappe_hits() { # site key secret
-  curl -s --max-time 15 -H "authorization: token $2:$3" \
-    --get "http://$1:$FRAPPE_PORT/api/resource/Lead%20Envelope" \
-    --data-urlencode "filters=[[\"contact_email\",\"=\",\"$MARKER_EMAIL\"]]" \
-    --data-urlencode "limit_page_length=5" |
-    node -e 'let r="";process.stdin.on("data",d=>r+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(r).data??[]).length))}catch{process.stdout.write("err")}})'
+check 5 "Frappe: B's lead is on B's site and its marker appears in no doctype on A's"
+# This asked ONE doctype - `Lead Envelope` - until ELEC-143 finding 1. The ingest fan-out
+# (`workers-bus/src/erpnext.ts`, pushToErpNext) writes the same contact across several doctypes,
+# `Roofing Customer.email` (erpnext.ts:665) among them, so a leak confined to the customer-dedup
+# path answered "0 rows" here and was counted as isolation. The sweep asks every doctype the app
+# ships - the enumeration comes from the doctype JSONs, not from a list anyone maintains - and
+# tools/validate-ingest-doctype-coverage.mjs fails CI if a doctype erpnext.ts names ever falls
+# outside it.
+marker_sweep() { # site key secret out-file
+  node "$ROOT_DIR/deploy/local/frappe-marker-sweep.mjs" \
+    --site "$1" --port "$FRAPPE_PORT" --key "$2" --secret "$3" --marker "$MARKER" >"$4"
 }
-b_hits="$(frappe_hits "$B_SITE" "$B_FRAPPE_KEY" "$B_FRAPPE_SECRET")"
-a_hits="$(frappe_hits "$A_SITE" "$A_FRAPPE_KEY" "$A_FRAPPE_SECRET")"
-note "Lead Envelope rows matching the marker: B=$b_hits A=$a_hits"
-if [[ "$b_hits" == "1" && "$a_hits" == "0" ]]; then
-  pass "the projected lead is on B's site only"
+sweep_field() { # file key
+  node -e '
+const doc = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+const value = doc[process.argv[2]];
+process.stdout.write(
+  Array.isArray(value)
+    ? value.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry))).join(" | ")
+    : String(value ?? ""),
+);' "$1" "$2"
+}
+b_swept=1; marker_sweep "$B_SITE" "$B_FRAPPE_KEY" "$B_FRAPPE_SECRET" "$SCRATCH/sweep-b.json" || b_swept=0
+a_swept=1; marker_sweep "$A_SITE" "$A_FRAPPE_KEY" "$A_FRAPPE_SECRET" "$SCRATCH/sweep-a.json" || a_swept=0
+b_hits="$(sweep_field "$SCRATCH/sweep-b.json" totalHits)"
+a_hits="$(sweep_field "$SCRATCH/sweep-a.json" totalHits)"
+b_where="$(sweep_field "$SCRATCH/sweep-b.json" hitDoctypes)"
+a_where="$(sweep_field "$SCRATCH/sweep-a.json" hitDoctypes)"
+queried="$(sweep_field "$SCRATCH/sweep-b.json" queried)"
+doctypes="$(sweep_field "$SCRATCH/sweep-b.json" doctypes)"
+note "swept $doctypes doctypes ($queried queries per site) for marker $MARKER"
+note "marker rows on B: $b_hits in [${b_where:-none}]"
+note "marker rows on A: $a_hits in [${a_where:-none}]"
+[[ "$b_swept" == "1" ]] || note "B sweep errors: $(sweep_field "$SCRATCH/sweep-b.json" errors)"
+[[ "$a_swept" == "1" ]] || note "A sweep errors: $(sweep_field "$SCRATCH/sweep-a.json" errors)"
+# Both sweeps must have RUN: a query that errored found nothing for the same reason an empty
+# table does, and only one of those is isolation.
+if [[ "$b_swept" == "1" && "$a_swept" == "1" && "$a_hits" == "0" ]] && [[ "$b_hits" -ge 1 ]]; then
+  pass "B's marker is present on B's site (in $b_where) and absent from all $doctypes doctypes on A's"
 else
-  fail "expected B=1 A=0, got B=$b_hits A=$a_hits"
+  fail "sweep ran B=$b_swept A=$a_swept; marker rows B=$b_hits ([$b_where]) A=$a_hits ([$a_where]), expected A=0 and B>=1"
 fi
 
 # --------------------------------------------------------------------------- 6

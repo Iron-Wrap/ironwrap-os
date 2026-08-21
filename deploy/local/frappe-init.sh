@@ -31,6 +31,15 @@ IDENTITY_DOMAIN="${IRONWRAP_LOCAL_IDENTITY_DOMAIN:-ironwrap.local}"
 # bench-wide "done" marker would send the second site straight down the already-provisioned
 # fast path and it would never be created at all.
 STAMP="$BENCH_DIR/sites/.ironwrap_init_done.$SITE"
+# Scratch for the `bench console` dumps the credential helpers below grep.  Namespaced by SITE
+# and readable only by this user: each dump carries a freshly minted api_secret, and the path
+# used to be a bench-wide /tmp name derived from the credential file alone.  Two sites
+# provisioned through one container would then write and read the SAME file, and a rail could
+# end up holding another site's credentials - the isolation this script exists to create,
+# undone by a scratch path.  Safe until now only because clone-tenant.sh runs frappe-init as a
+# fresh one-shot container per site, which is the invocation model's property rather than this
+# script's (ELEC-143 finding 3).
+SCRATCH_DIR="${TMPDIR:-/tmp}/ironwrap-frappe-init/$SITE"
 # A bench provisioned before the marker was per-site carries the old bench-wide one.
 LEGACY_STAMP="$BENCH_DIR/sites/.ironwrap_init_done"
 # Which local domain a site's identities live on, recorded so a bench-wide resync can
@@ -45,6 +54,12 @@ RESYNC_MARKER="$BENCH_DIR/sites/.ironwrap_app_resync_pending"
 APP_RESYNC="${IRONWRAP_LOCAL_APP_RESYNC:-on}"
 
 log() { printf '\n\033[1;34m[ironwrap-init]\033[0m %s\n' "$*"; }
+# A scratch path that belongs to THIS site and to this user only.
+site_scratch() {
+  mkdir -p "$SCRATCH_DIR"
+  chmod 700 "$SCRATCH_DIR"
+  printf '%s/%s' "$SCRATCH_DIR" "$1"
+}
 loud() {
   printf '\n\033[1;33m========================================================================\033[0m\n'
   printf '\033[1;33m[ironwrap-init] %s\033[0m\n' "$*"
@@ -163,9 +178,10 @@ sync_app_source() {
 provision_broker_identity() {
   local email="$1" first_name="$2" creds_file="$3"
   local target="$BENCH_DIR/sites/$SITE/$creds_file"
+  local raw; raw="$(site_scratch "${creds_file#.}_raw.json")"
   if [ -s "$target" ] && grep -q '^{' "$target" 2>/dev/null; then return 0; fi
   log "creating broker actor identity $email with API keys"
-  bench --site "$SITE" console > "/tmp/${creds_file#.}_raw.json" <<PYEOF
+  bench --site "$SITE" console > "$raw" <<PYEOF
 import frappe, json
 from frappe.core.doctype.user.user import generate_keys
 email = "$email"
@@ -178,7 +194,10 @@ u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
 PYEOF
-  grep -o 'CREDS:{.*}' "/tmp/${creds_file#.}_raw.json" | sed 's/^CREDS://' > "$target"
+  grep -o 'CREDS:{.*}' "$raw" | sed 's/^CREDS://' > "$target"
+  # Only once the secret is safely in the site directory. A failed grep aborts under `set -e`
+  # before this line, which is exactly when the raw dump is still worth reading.
+  rm -f "$raw"
 }
 
 # The approver the brokers name in every receipt (HERMES_APPROVER_ID) and the
@@ -219,9 +238,10 @@ PYEOF
 provision_rail_issuer() {
   local email="$1" first_name="$2" role="$3" creds_file="$4"
   local target="$BENCH_DIR/sites/$SITE/$creds_file"
+  local raw; raw="$(site_scratch "${creds_file#.}_raw.json")"
   if [ -s "$target" ] && grep -q '^{' "$target" 2>/dev/null; then return 0; fi
   log "creating least-privilege rail issuer $email ($role) with API keys"
-  bench --site "$SITE" console > "/tmp/${creds_file#.}_raw.json" <<PYEOF
+  bench --site "$SITE" console > "$raw" <<PYEOF
 import frappe, json
 from frappe.core.doctype.user.user import generate_keys
 from ironwrap_roofing.install import ensure_roles
@@ -246,7 +266,10 @@ u = frappe.get_doc("User", email)
 frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
 PYEOF
-  grep -o 'CREDS:{.*}' "/tmp/${creds_file#.}_raw.json" | sed 's/^CREDS://' > "$target"
+  grep -o 'CREDS:{.*}' "$raw" | sed 's/^CREDS://' > "$target"
+  # Only once the secret is safely in the site directory. A failed grep aborts under `set -e`
+  # before this line, which is exactly when the raw dump is still worth reading.
+  rm -f "$raw"
 }
 
 # The two rails Frappe already scopes per issuer but the Worker used to authenticate with the

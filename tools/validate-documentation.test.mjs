@@ -11,6 +11,29 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const validator = resolve(root, "tools/validate-documentation.mjs");
 const matrix = resolve(root, "docs/CAPABILITY-MATRIX.md");
+const playbook = resolve(root, "docs/WHITE-LABEL-CLONE-PLAYBOOK.md");
+
+// The gate is exercised against a temporary copy, never the tracked file: a test
+// that edits the real runbook leaves the worktree dirty when it crashes, and the
+// capability receipt reads worktree cleanliness as a proof state.
+function withPlaybookCopy(prefix, rewrite, assertResult) {
+  const temp = mkdtempSync(join(tmpdir(), prefix));
+  try {
+    const current = readFileSync(playbook, "utf8");
+    const rewritten = rewrite(current);
+    assert.notEqual(rewritten, current, "rewrite must change the playbook");
+    const copy = join(temp, "WHITE-LABEL-CLONE-PLAYBOOK.md");
+    writeFileSync(copy, rewritten);
+    assertResult(
+      spawnSync(process.execPath, [validator, "--clone-playbook", copy], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
 
 test("documentation gate rejects a deliberately stale capability count", () => {
   const temp = mkdtempSync(join(tmpdir(), "ironwrap-capability-stale-"));
@@ -47,6 +70,51 @@ test("documentation gate rejects a deliberately stale capability count", () => {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test("documentation gate rejects a count the clone playbook restates staler than the repository", () => {
+  // Derive the live numbers rather than hard-coding them, for the same reason the
+  // capability test does: a lane that adds a DocType or a migration must fail on
+  // its own drift, not on this test.
+  const current = readFileSync(playbook, "utf8");
+  const doctypes = Number(/\b(\d+)-DocType\s+pack\b/.exec(current)?.[1]);
+  const migrations = Number(/\bAll (\d+) D1 migrations\b/.exec(current)?.[1]);
+  assert.ok(Number.isInteger(doctypes) && doctypes > 1, "playbook must state a DocType pack size");
+  assert.ok(Number.isInteger(migrations) && migrations > 1, "playbook must state a migration count");
+
+  withPlaybookCopy(
+    "ironwrap-playbook-stale-",
+    (content) =>
+      content
+        .replace(`${doctypes}-DocType`, `${doctypes - 1}-DocType`)
+        .replace(`All ${migrations} D1 migrations`, `All ${migrations - 1} D1 migrations`),
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `stale DocType pack size; document "${doctypes - 1}", repository "${doctypes}"`,
+        ),
+      );
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `stale migration chain length; document "${migrations - 1}", repository "${migrations}"`,
+        ),
+      );
+    },
+  );
+});
+
+test("documentation gate rejects deleting a restated count instead of correcting it", () => {
+  withPlaybookCopy(
+    "ironwrap-playbook-missing-",
+    (content) => content.replace(/\b\d+-DocType(\s+)pack\b/, "DocType$1pack"),
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /missing DocType pack size claim/);
+    },
+  );
 });
 
 test("documentation gate separates source from the tested checkout", () => {

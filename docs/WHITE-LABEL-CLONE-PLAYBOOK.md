@@ -69,7 +69,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0031_quickbooks_projection_outbox.sql`).
+   `0080_replay_requests_envelope_idx.sql`; `node tools/validate-documentation.mjs`
+   fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
    never pass a generic Cloudflare token to a repository script. Required set:
@@ -93,7 +94,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    (own database, own users). Never install the erpnext app; the site is Frappe-only.
 2. Install the custom app: `bench get-app frappe-apps/ironwrap_roofing` then
    `bench --site <tenant-site> install-app ironwrap_roofing`.
-3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 50-DocType
+3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 79-DocType
    pack shape; on the site, confirm the IronWrap Roofing DocTypes exist.
 4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
    Hermes MCP actor. Each MCP pair must be issued to exactly that process's
@@ -229,7 +230,7 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 31 D1 migrations through `0031_quickbooks_projection_outbox.sql` applied to the tenant database.
+- [ ] All 63 D1 migrations through `0080_replay_requests_envelope_idx.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user`, `ironwrap_fleet_capture_issuer_user`,
   `ironwrap_work_package_issuer_user` and `ironwrap_production_gate_issuer_user` all bound

@@ -177,6 +177,36 @@ jobs:
             --worker-test-output "$RUNNER_TEMP/ironwrap-worker-tests.tap" \
             --evidence "$RUNNER_TEMP/ironwrap-capability-evidence.json"
 
+  # Secret scanning runs on its own runner, before and independently of any dependency
+  # install, so the only bytes on the machine are the tracked tree. The scanner binary is
+  # pinned by version and verified by SHA-256 rather than run through a marketplace action:
+  # gitleaks-action requires an organisation licence key, and an unpinned installer is a
+  # supply-chain hole in the one job whose purpose is supply-chain hygiene.
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Install pinned gitleaks
+        shell: bash
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+      - name: Scan the tracked tree for committed secrets
+        env:
+          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+        run: node tools/secret-scan.mjs
+
   # The paired-device budget is a timing measurement, so it gets a runner of its own.
   # Sharing one with the validator, unit, Playwright and Python suites left ~10 minutes
   # of prior work on the machine before Lighthouse started and pushed the job into its
@@ -260,17 +290,19 @@ jobs:
   validate-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [build-and-test, paired-device-lighthouse]
+    needs: [build-and-test, paired-device-lighthouse, secret-scan]
     if: always()
     steps:
       - name: Require every CI job to have succeeded
         env:
           BUILD_AND_TEST: ${{ needs.build-and-test.result }}
           PAIRED_DEVICE_LIGHTHOUSE: ${{ needs.paired-device-lighthouse.result }}
+          SECRET_SCAN: ${{ needs.secret-scan.result }}
         run: |
           echo "build-and-test: $BUILD_AND_TEST"
           echo "paired-device-lighthouse: $PAIRED_DEVICE_LIGHTHOUSE"
-          if [ "$BUILD_AND_TEST" != "success" ] || [ "$PAIRED_DEVICE_LIGHTHOUSE" != "success" ]; then
+          echo "secret-scan: $SECRET_SCAN"
+          if [ "$BUILD_AND_TEST" != "success" ] || [ "$PAIRED_DEVICE_LIGHTHOUSE" != "success" ] || [ "$SECRET_SCAN" != "success" ]; then
             echo "a required CI job did not succeed" >&2
             exit 1
           fi

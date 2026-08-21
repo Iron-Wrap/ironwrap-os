@@ -134,7 +134,10 @@ server.listen(port, '127.0.0.1', () => {
 });
 NODE
 
-# Workers bus runtime
+# Workers bus runtime. The port this script picked has to reach predev too, or the
+# origin it writes into .dev.vars (APP_PUBLIC_ORIGIN and its allowlist) would name a
+# port the Worker is not listening on.
+export IRONWRAP_LOCAL_WORKER_PORT="$HERMES_BUS_PORT"
 start_service "workers-bus" "$ROOT_DIR/workers-bus" "$LOG_DIR/workers-bus.log" \
   npm run dev -- --port "$HERMES_BUS_PORT"
 

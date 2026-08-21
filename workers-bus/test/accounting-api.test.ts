@@ -19,6 +19,8 @@ import {
   SECOND_ACCOUNTANT_ID,
   apiTestEnv,
   call,
+  knownJobs,
+  unreachableJobDirectory,
 } from "./accounting-api-fixture.ts";
 import {
   AT_READ,
@@ -692,6 +694,139 @@ test("a derivation that refuses writes no receipt, so the same key can be retrie
   });
   assert.equal(retried.status, 201, JSON.stringify(retried.body));
   assert.equal(retried.body.replayed, false);
+});
+
+test("a derivation names a job the operating core does not have, and is refused", async () => {
+  // ELEC-112 finding 3. `roof_job_id` was a text pattern and nothing else: a job that had never
+  // existed produced a real `201 pending_review` deposit invoice, one approval away from a
+  // provider. The reference is now resolved against the tenant's operating core first.
+  const { env, db } = apiTestEnv();
+  await seedTaxSnapshot(env);
+  const intents = () =>
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents").get() as { n: number }).n;
+  const deps = { accounting: { jobDirectory: knownJobs({ "job-0001": "Proposal" }) } };
+
+  const invented = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody({ roof_job_id: "job-does-not-exist" }),
+    idempotencyKey: "idem-derive-nojob-00001",
+    deps,
+  });
+  assert.equal(invented.status, 404, JSON.stringify(invented.body));
+  assert.equal(invented.body.error, "accounting_intent_roof_job_not_found");
+  // Refused before the engine: no candidate, and therefore nothing anybody could approve.
+  assert.equal(intents(), 0);
+
+  // The gate refuses a reference, not the route: the job that does exist still derives.
+  const real = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(), idempotencyKey: "idem-derive-nojob-00002", deps,
+  });
+  assert.equal(real.status, 201, JSON.stringify(real.body));
+  assert.equal(intents(), 1);
+});
+
+test("another tenant's session cannot derive against this tenant's jobs", async () => {
+  // Rule 2 of the module: an id from another tenant reads as `not_found`. The operating core
+  // behind `ERPNEXT_BASE_URL` belongs to the configured tenant, so a session from anywhere else
+  // is refused without the directory being consulted at all - a lookup that answered would be
+  // this tenant's answer given to somebody else.
+  const { env, db } = apiTestEnv();
+  await seedTaxSnapshot(env);
+  let consulted = 0;
+  const deps = {
+    accounting: {
+      jobDirectory: async (_env: AppEnv, name: string) => {
+        consulted += 1;
+        return { name, roofJobId: name, jobStatus: "Proposal" };
+      },
+    },
+  };
+
+  const foreign = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(),
+    idempotencyKey: "idem-derive-tenant-0001",
+    tenantId: "some-other-tenant",
+    deps,
+  });
+  assert.equal(foreign.status, 404, JSON.stringify(foreign.body));
+  assert.equal(foreign.body.error, "accounting_intent_roof_job_not_found");
+  assert.equal(consulted, 0);
+  assert.equal(
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents").get() as { n: number }).n,
+    0,
+  );
+
+  // The same request from the tenant that owns the operating core derives normally.
+  const own = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(), idempotencyKey: "idem-derive-tenant-0002", deps,
+  });
+  assert.equal(own.status, 201, JSON.stringify(own.body));
+  assert.equal(consulted, 1);
+});
+
+test("an operating core the Worker cannot reach refuses the derivation, it does not wave it through", async () => {
+  // "We could not check" must never be worth more than "we checked". A directory that throws is
+  // an unknown job, and an unknown job is not one the money desk may bill against.
+  const { env, db } = apiTestEnv();
+  await seedTaxSnapshot(env);
+
+  const refused = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(),
+    idempotencyKey: "idem-derive-directory-01",
+    deps: { accounting: { jobDirectory: unreachableJobDirectory } },
+  });
+  assert.equal(refused.status, 503, JSON.stringify(refused.body));
+  assert.equal(refused.body.error, "accounting_job_directory_unavailable");
+  assert.equal(
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents").get() as { n: number }).n,
+    0,
+  );
+
+  // Nothing was derived, so nothing burned the key either: the same request retries once the
+  // operating core is back, exactly like the `tax_mapping_missing` retry above.
+  const retried = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(), idempotencyKey: "idem-derive-directory-01",
+  });
+  assert.equal(retried.status, 201, JSON.stringify(retried.body));
+});
+
+test("the eligibility seam's refusal is wired, so the pending ruling is a one-line change", async () => {
+  // `moneyIntentJobEligible` accepts every existing job today - deliberately, because that is the
+  // behaviour this gate inherited and the eligibility semantics are the architect's call, not
+  // this route's. What is proven here is the wire: when that predicate says no, the route refuses
+  // with its own code and derives nothing. Substituting the ruling changes one function.
+  const { env, db } = apiTestEnv();
+  await seedTaxSnapshot(env);
+
+  const refused = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(),
+    idempotencyKey: "idem-derive-eligible-01",
+    deps: {
+      accounting: {
+        jobDirectory: knownJobs({ "job-0001": "Proposal" }),
+        jobEligibility: (job) => job.jobStatus === "Won",
+      },
+    },
+  });
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.equal(refused.body.error, "accounting_intent_roof_job_not_eligible");
+  assert.equal(
+    (db.raw.prepare("SELECT COUNT(*) AS n FROM accounting_intents").get() as { n: number }).n,
+    0,
+  );
+
+  // The same predicate against a job that does satisfy it derives, so the refusal above is the
+  // predicate talking and not the gate refusing everything.
+  const allowed = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody({ roof_job_id: "job-0002" }),
+    idempotencyKey: "idem-derive-eligible-02",
+    deps: {
+      accounting: {
+        jobDirectory: knownJobs({ "job-0002": "Won" }),
+        jobEligibility: (job) => job.jobStatus === "Won",
+      },
+    },
+  });
+  assert.equal(allowed.status, 201, JSON.stringify(allowed.body));
 });
 
 test("a D1 trigger refusal reaches the caller as its own code at 409, never as 502", async () => {

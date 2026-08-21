@@ -8,17 +8,22 @@ cd workers-bus && npm run dev
 
 `predev.mjs` (wired into `npm run dev`) guarantees, idempotently:
 
-1. `app/dist` is built (PWA served by the Worker on `http://localhost:7100`)
+1. `app/dist` is built (PWA served by the Worker on `http://localhost:7100`, or on
+   `IRONWRAP_LOCAL_WORKER_PORT` - see "Two stacks on one machine")
 2. throwaway Hermes approval key material exists in `deploy/local/keys/` (gitignored)
 3. the docker-compose Frappe v15 + MariaDB + Redis stack is up and answering on
-   `http://localhost:8000` (the committed DocType contract is provisioned by `frappe-init.sh`)
-4. `workers-bus/.dev.vars` carries the local Frappe integration API key/secret
+   `http://localhost:8000` (or `IRONWRAP_LOCAL_FRAPPE_PORT`; the committed DocType contract
+   is provisioned by `frappe-init.sh`)
+4. `workers-bus/.dev.vars` carries the local Frappe integration API key/secret, and the
+   host-port-bearing values (`ERPNEXT_BASE_URL`, `APP_PUBLIC_ORIGIN` and its allowlist, the
+   broker URLs) that override `wrangler.jsonc`'s single-stack defaults
 5. every D1 migration is applied to the local Miniflare database
 6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
    and the container restarted; see "App source edits vs the bench copy" below)
 7. `deploy/local/keys/*-broker.env` exist for the two scripted approval brokers
 
-Then `wrangler dev --env local --port 7100 --test-scheduled` starts: the Worker serves
+Then `wrangler dev --env local --port 7100 --test-scheduled` starts (the port follows
+`IRONWRAP_LOCAL_WORKER_PORT`): the Worker serves
 the built PWA and every API route. The `local` env keeps all bridge rails OFF
 (JobNimbus/Drive), turns the BFF + public estimator ON, uses Turnstile always-pass
 test keys, and captures magic-link **and customer contract-acceptance** email into the
@@ -161,18 +166,52 @@ to detect that edit as drift and put the bench back on the repo revision.
 
 ## Two stacks on one machine
 
-The compose project name and the host port are both overridable, so a second stack gets
-its own containers and its own volumes instead of resyncing a bench another run is
-mid-proof on:
+Every host port the stack binds is overridable, so a second stack gets its own containers,
+its own volumes and its own ports instead of resyncing a bench another run is mid-proof on
+- or, worse, quietly answering with the first stack's data. Export the three variables
+together and run the second stack from its own checkout:
+
+| Variable | Default | Moves |
+|---|---|---|
+| `IRONWRAP_LOCAL_FRAPPE_PORT` | `8000` | Frappe's host port, the compose site base URL, and the Worker's `ERPNEXT_BASE_URL` |
+| `IRONWRAP_LOCAL_WORKER_PORT` | `7100` | `wrangler dev`'s port, `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, `PUBLIC_ESTIMATE_ALLOWED_ORIGINS`, and the brokers' `IRONWRAP_EFFECT_RUNTIME_URL` |
+| `IRONWRAP_LOCAL_BROKER_PORT_BASE` | `9100` | the four approval brokers (`base+1` approval, `+2` quote revision, `+3` production schedule, `+4` proposal publication) and the `APP_*_BROKER_URL` the Worker calls them on |
 
 ```bash
-export COMPOSE_PROJECT_NAME=ironwrap-scratch IRONWRAP_LOCAL_FRAPPE_PORT=8001
+export COMPOSE_PROJECT_NAME=ironwrap-scratch
+export IRONWRAP_LOCAL_FRAPPE_PORT=8001 IRONWRAP_LOCAL_WORKER_PORT=7101 IRONWRAP_LOCAL_BROKER_PORT_BASE=9200
 docker compose -f deploy/local/docker-compose.yml up -d
+cd workers-bus && npm run dev          # same shell, so predev sees all three
+deploy/local/start-approval-brokers.sh # same shell again
 ```
 
-`predev.mjs` and `start-approval-brokers.sh` both read `IRONWRAP_LOCAL_FRAPPE_PORT`
-(and `IRONWRAP_LOCAL_FRAPPE_URL` respectively). Defaults are unchanged: one stack,
-project `ironwrap-local`, port 8000.
+`wrangler.jsonc` is static JSON and cannot read the environment, so the `local` env still
+pins the single-stack defaults. `predev.mjs` re-declares every port-bearing value into
+`workers-bus/.dev.vars`, which `wrangler dev` loads **over** the config's `vars` - that
+override is what makes the second Worker talk to the second Frappe.
+
+The bindings table `wrangler dev` prints at start-up is how you check it, though it shows
+the override by *hiding* the value rather than by printing it: a var still coming from
+`wrangler.jsonc` prints in the clear, and one shadowed by `.dev.vars` prints `(hidden)`.
+
+```
+env.ERPNEXT_BASE_URL ("(hidden)")        <- overridden, this stack has its own Frappe
+env.ERPNEXT_ENABLED ("true")             <- still straight from wrangler.jsonc
+```
+
+So `env.ERPNEXT_BASE_URL ("http://localhost:8000")` printed in the clear is the failure to
+look for: it means `.dev.vars` has no override and this Worker is pointed at the FIRST
+stack's Frappe. The usual cause is that the variables were not exported in the shell that
+ran `npm run dev`; re-export and re-run rather than hand-editing `.dev.vars` (predev
+rewrites those lines on every boot).
+
+Two things stay single-stack on purpose: the optional TLS Worker for the Facet v2 ingest
+leg (`--port 7443`, above - pass a different `--port` and matching `FACET_V2_ROUTES_JSON`
+if a second one is needed), and `.wrangler/state` plus `deploy/local/keys/`, which are
+per-checkout rather than per-port. Run the second stack from a second checkout.
+
+Defaults are unchanged: one stack, project `ironwrap-local`, Frappe 8000, Worker 7100,
+brokers 9101-9104.
 
 ## Reset
 

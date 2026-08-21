@@ -24,7 +24,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KEYS_DIR="$ROOT_DIR/deploy/local/keys"
 LOG_DIR="$ROOT_DIR/.runtime-logs"
 MCP_DIR="$ROOT_DIR/mcp/erpnext-roofing-mcp"
-FRAPPE_URL="${IRONWRAP_LOCAL_FRAPPE_URL:-http://localhost:8000}"
+# Follows the same IRONWRAP_LOCAL_FRAPPE_PORT a second stack exports for compose and
+# predev, so one variable moves the whole stack instead of three that must agree.
+FRAPPE_URL="${IRONWRAP_LOCAL_FRAPPE_URL:-http://localhost:${IRONWRAP_LOCAL_FRAPPE_PORT:-8000}}"
 WAIT_SECONDS="${IRONWRAP_BROKER_WAIT_SECONDS:-180}"
 # Set by a caller that runs the Worker somewhere other than the predev default
 # (start-local-runtime.sh picks its own free bus port).

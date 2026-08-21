@@ -31,12 +31,32 @@ class SqliteD1 {
           first: async <T>() => (statement.get(...args) ?? null) as T | null,
           all: async <T>() => ({ results: statement.all(...args) as T[] }),
           run: async () => {
-            const result = statement.run(...args);
-            return { success: true, meta: { changes: Number(result.changes) } };
+            // Mirror real D1: meta.changes includes trigger-written rows, so
+            // report the total_changes() delta, not sqlite3_changes().
+            const before = this.totalChanges();
+            statement.run(...args);
+            return { success: true, meta: { changes: this.totalChanges() - before } };
           },
         };
       },
     };
+  }
+
+  async batch(statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private totalChanges(): number {
+    return Number((this.raw.prepare("SELECT total_changes() AS n").get() as { n: number }).n);
   }
 }
 

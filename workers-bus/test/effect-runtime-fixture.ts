@@ -76,7 +76,25 @@ class EffectLedgerTestD1 {
     return this.base.prepare(sql);
   }
 
-  batch(statements: unknown[]) {
+  /**
+   * D1 runs a `batch` as one implicit transaction, so a statement that throws leaves none of the
+   * batch applied. The effect-runtime claim path depends on exactly that: the UPDATE that takes the
+   * lease and the INSERT that records its attempt row have to land together or not at all. Model it
+   * here rather than delegating to the business double, which has no ledger to write to.
+   */
+  async batch(statements: unknown[]) {
+    if (statements.length > 0 && statements.every((statement) => statement instanceof SqliteStatement)) {
+      this.ledger.exec("BEGIN");
+      try {
+        const results = [];
+        for (const statement of statements as SqliteStatement[]) results.push(await statement.run());
+        this.ledger.exec("COMMIT");
+        return results;
+      } catch (error) {
+        this.ledger.exec("ROLLBACK");
+        throw error;
+      }
+    }
     if (typeof this.base?.batch !== "function") throw new Error("test_business_db_batch_unavailable");
     return this.base.batch(statements);
   }

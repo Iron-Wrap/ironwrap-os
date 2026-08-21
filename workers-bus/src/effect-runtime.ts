@@ -399,6 +399,55 @@ export async function authorizeExternalEffect(
   return authorized;
 }
 
+/**
+ * Claim one execution attempt: flip the effect to executing and record its attempt row in a single
+ * atomic batch.
+ *
+ * `< 1`, not `!== 1`: D1's `meta.changes` is a `total_changes()` delta and therefore *includes rows
+ * written by triggers*, and `0042` writes an `external_effect_events` row on every state change.
+ * The CAS is the `WHERE ... AND state IN (...)` clause - `effect_id` is the primary key, so it
+ * matches one row or none - so zero means the lease was lost and anything else means this caller
+ * won it. Asserting exactly 1 meant every transition against real D1 threw while succeeding
+ * (ELEC-75, proven on the local stack: the ledger recorded the transition and the caller was told
+ * it conflicted).
+ *
+ * The batch is what the claim path needs beyond that guard. A claim that commits without its
+ * attempt row can never leave 'executing': `external_effect_attempt_projection` RAISEs on every
+ * later transition when the attempt row is missing, so the lease sweep cannot recover it either.
+ * Running the UPDATE and the attempt INSERT as one `env.DB.batch` closes that window, and the
+ * `INSERT ... SELECT` re-checks ownership so a lost race inserts nothing rather than attaching an
+ * orphan attempt to a claim it does not own.
+ */
+async function claimEffectAttempt(
+  env: AppEnv,
+  effect: ExternalEffectRecord,
+  attemptId: string,
+  attemptNumber: number,
+  leaseExpiresAt: string,
+  nowIso: string,
+): Promise<void> {
+  const [claim, attempt] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE external_effects
+         SET state = 'executing', attempt_count = ?, lease_expires_at = ?, result_code = NULL, updated_at = ?
+       WHERE effect_id = ? AND state IN ('authorized', 'retry') AND attempt_count = ?`,
+    ).bind(attemptNumber, leaseExpiresAt, nowIso, effect.effect_id, effect.attempt_count),
+    // Re-select the freshly claimed row, so a lost claim inserts nothing
+    // instead of attaching an orphan attempt to a claim it does not own.
+    env.DB.prepare(
+      `INSERT INTO external_effect_attempts (
+        attempt_id, effect_id, attempt_number, business_idempotency_key, request_hash,
+        state, started_at
+      ) SELECT ?, effect_id, ?, idempotency_key, request_hash, 'executing', ?
+          FROM external_effects
+         WHERE effect_id = ? AND state = 'executing' AND attempt_count = ? AND lease_expires_at = ?`,
+    ).bind(attemptId, attemptNumber, nowIso, effect.effect_id, attemptNumber, leaseExpiresAt),
+  ]);
+  if (Number(claim.meta?.changes ?? 0) < 1 || Number(attempt.meta?.changes ?? 0) < 1) {
+    throw new EffectRuntimeError("effect_lease_lost");
+  }
+}
+
 /** Execute exactly one leased attempt. Unknown provider outcomes are never retried here. */
 export async function executeExternalEffect<T = unknown>(
   env: AppEnv,
@@ -429,24 +478,7 @@ export async function executeExternalEffect<T = unknown>(
   }
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
-  const claim = await env.DB.prepare(
-    `UPDATE external_effects
-       SET state = 'executing', attempt_count = ?, lease_expires_at = ?, result_code = NULL, updated_at = ?
-     WHERE effect_id = ? AND state IN ('authorized', 'retry') AND attempt_count = ?`,
-  ).bind(attemptNumber, leaseExpiresAt, now.toISOString(), effect.effect_id, effect.attempt_count).run();
-  // `< 1`, not `!== 1`: D1's `meta.changes` is a `total_changes()` delta and therefore *includes
-  // rows written by triggers*, and `0042` writes an `external_effect_events` row on every state
-  // change. The CAS is the `WHERE ... AND state IN (...)` clause - it matches one row or none - so
-  // zero means the lease was lost and anything else means this caller won it. Asserting exactly 1
-  // meant every transition against real D1 threw while succeeding (ELEC-75, proven on the local
-  // stack: the ledger recorded the transition and the caller was told it conflicted).
-  if (Number(claim.meta?.changes ?? 0) < 1) throw new EffectRuntimeError("effect_lease_lost");
-  await env.DB.prepare(
-    `INSERT INTO external_effect_attempts (
-      attempt_id, effect_id, attempt_number, business_idempotency_key, request_hash,
-      state, started_at
-    ) VALUES (?, ?, ?, ?, ?, 'executing', ?)`,
-  ).bind(attemptId, effect.effect_id, attemptNumber, effect.idempotency_key, effect.request_hash, now.toISOString()).run();
+  await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
   effect = (await getExternalEffect(env, effectId))!;
   let attempt = await getExternalEffectAttempt(env, attemptId);
   if (!attempt) throw new EffectRuntimeError("effect_attempt_missing");
@@ -517,24 +549,7 @@ export async function claimExternalEffect(
   if (attemptNumber > effect.retry_limit + 1) throw new EffectRuntimeError("effect_retry_exhausted");
   const attemptId = `${effect.effect_id}:attempt:${crypto.randomUUID()}`;
   const leaseExpiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
-  const claim = await env.DB.prepare(
-    `UPDATE external_effects
-       SET state = 'executing', attempt_count = ?, lease_expires_at = ?, result_code = NULL, updated_at = ?
-     WHERE effect_id = ? AND state IN ('authorized', 'retry') AND attempt_count = ?`,
-  ).bind(attemptNumber, leaseExpiresAt, now.toISOString(), effect.effect_id, effect.attempt_count).run();
-  // `< 1`, not `!== 1`: D1's `meta.changes` is a `total_changes()` delta and therefore *includes
-  // rows written by triggers*, and `0042` writes an `external_effect_events` row on every state
-  // change. The CAS is the `WHERE ... AND state IN (...)` clause - it matches one row or none - so
-  // zero means the lease was lost and anything else means this caller won it. Asserting exactly 1
-  // meant every transition against real D1 threw while succeeding (ELEC-75, proven on the local
-  // stack: the ledger recorded the transition and the caller was told it conflicted).
-  if (Number(claim.meta?.changes ?? 0) < 1) throw new EffectRuntimeError("effect_lease_lost");
-  await env.DB.prepare(
-    `INSERT INTO external_effect_attempts (
-      attempt_id, effect_id, attempt_number, business_idempotency_key, request_hash,
-      state, started_at
-    ) VALUES (?, ?, ?, ?, ?, 'executing', ?)`,
-  ).bind(attemptId, effect.effect_id, attemptNumber, effect.idempotency_key, effect.request_hash, now.toISOString()).run();
+  await claimEffectAttempt(env, effect, attemptId, attemptNumber, leaseExpiresAt, now.toISOString());
   const claimed = await getExternalEffect(env, effectId);
   const attempt = await getExternalEffectAttempt(env, attemptId);
   if (!claimed || !attempt) throw new EffectRuntimeError("effect_attempt_missing");
@@ -681,7 +696,7 @@ export async function recoverExpiredExternalEffects(
   env: AppEnv,
   now = new Date().toISOString(),
   limit = 100,
-): Promise<{ scanned: number; recovered: number }> {
+): Promise<{ scanned: number; recovered: number; failed: number; failures: Array<{ effect_id: string; error: string }> }> {
   if (!Number.isFinite(Date.parse(now))) throw new EffectRuntimeError("effect_recovery_time_invalid");
   const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 500)) : 100;
   const rows = await env.DB.prepare(
@@ -691,6 +706,8 @@ export async function recoverExpiredExternalEffects(
       ORDER BY lease_expires_at ASC LIMIT ?`,
   ).bind(now, boundedLimit).all<{ effect_id: string }>();
   let recovered = 0;
+  let failed = 0;
+  const failures: Array<{ effect_id: string; error: string }> = [];
   for (const row of rows.results ?? []) {
     try {
       await recoverExpiredExternalEffect(env, row.effect_id, now);
@@ -698,10 +715,14 @@ export async function recoverExpiredExternalEffects(
     } catch (error) {
       const code = error instanceof EffectRuntimeError ? error.code : "";
       if (code === "effect_lease_not_active" || code === "effect_lease_not_expired" || code === "effect_transition_conflict") continue;
-      throw error;
+      // One unrecoverable row must not abort the rest of the sweep; report it
+      // in the result instead of rethrowing, keeping the identity of the first
+      // few so an operator can tell a poisoned row from a transient outage.
+      failed += 1;
+      if (failures.length < 10) failures.push({ effect_id: row.effect_id, error: String(error) });
     }
   }
-  return { scanned: rows.results?.length ?? 0, recovered };
+  return { scanned: rows.results?.length ?? 0, recovered, failed, failures };
 }
 
 /** Permit another attempt only after the prior unknown result has been reconciled. */

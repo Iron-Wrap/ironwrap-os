@@ -43,6 +43,14 @@ class SqliteD1 {
     }
   }
 
+  // The effect runtime claims an attempt through env.DB.batch; a sequential
+  // run is equivalent for a synchronous test double.
+  async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+
   prepare(sql: string) {
     return {
       bind: (...args: unknown[]) => new SqliteStatement(this, sql, args),

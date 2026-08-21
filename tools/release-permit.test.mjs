@@ -448,7 +448,7 @@ function payload(overrides = {}) {
       workflow: "affected-workflow:authenticated-core",
       authenticated: true,
       result: "passed",
-      affected_workflow_ids: ["admin_envelopes", "admin_reconcile", "admin_status", "frappe_reader", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ready"],
+      affected_workflow_ids: ["admin_envelopes", "admin_reconcile", "admin_status", "d1_lead", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ingest_website_replay", "ready"],
       source_commit: COMMIT,
       revision: STAGING_VERSION,
       evidence_digest: EVIDENCE,
@@ -765,7 +765,7 @@ test("generation advance requires an immutable production receipt for the exact 
     service_readback_digest: sha("service-readback-receipt"),
     smoke_evidence_digest: sha("production-smoke"),
     smoke_result: "passed",
-    smoke_step_names: ["admin_envelopes", "admin_reconcile", "admin_status", "frappe_reader", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ready"],
+    smoke_step_names: ["admin_envelopes", "admin_reconcile", "admin_status", "d1_lead", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ingest_website_replay", "ready"],
     health_digest: sha("production-health"),
     readiness_digest: sha("production-ready"),
   };
@@ -1310,7 +1310,7 @@ test("migration inventory is ordered and expand-contract only", async () => {
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
   assert.equal(
     migrations.ordered.at(-1),
-    "0081_dead_letter_terminal_recovery_backfill.sql",
+    "0082_envelope_operating_tenant.sql",
   );
 });
 

@@ -1,21 +1,17 @@
 #!/usr/bin/env node
-// Launch proof: drives one synthetic lead + one estimator session through the live bus, verifies
-// readiness before mutating anything, then records only redacted release evidence. Dry-run is the
-// default; --execute is required before it sends any request.
+// Launch proof: drives one synthetic lead + one estimator session through the
+// owned D1/Worker operating authority. Frappe/ERPNext stand-up is out of scope
+// (IRO-189 rewrite 2026-08-21; IRO-195 owns Frappe retirement).
 //
-// BUS_BASE_URL=https://... INGEST_TOKEN=... ADMIN_TOKEN=... FRAPPE_BASE_URL=https://... \\
-// FRAPPE_API_KEY=... FRAPPE_API_SECRET=... node tools/launch-proof.mjs --execute
+// Dry-run is the default; --execute is required before it sends any request.
+//
+// BUS_BASE_URL=https://... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute
 import assert from "node:assert/strict";
 
-const FRAPPE_LOOKUP_PATH =
-  "/api/method/ironwrap_roofing.launch_proof_api.lookup_synthetic_correlation";
-const DEFAULT_FRAPPE_POLL_ATTEMPTS = 3;
-const DEFAULT_FRAPPE_POLL_INTERVAL_MS = 1_000;
-const MAX_FRAPPE_POLL_ATTEMPTS = 5;
-const MAX_FRAPPE_POLL_INTERVAL_MS = 5_000;
 const SYNTHETIC_PROOF_TIMESTAMP_RE = /^[0-9]{13}$/;
 const SYNTHETIC_RANDOM_SUFFIX_RE = /^[a-f0-9]{32}$/;
 const SYNTHETIC_RANDOM_SUFFIX_BYTES = 16;
+const OPERATING_AUTHORITY = "d1";
 
 export function createLaunchProofPlan({
   stamp = Date.now(),
@@ -45,16 +41,6 @@ export function createLaunchProofPlan({
     project_url: `https://estimator.example/projects/LP-${executionId}`,
   };
   const requestId = (name) => `launch-proof:${executionId}:${name}`;
-  const frappeCorrelation = `launch-proof:${estimateFixture.project_id}`;
-  const frappeLookup = {
-    name: "frappe_projection",
-    method: "GET",
-    path: `${FRAPPE_LOOKUP_PATH}?${new URLSearchParams({
-      correlation_id: frappeCorrelation,
-    })}`,
-    auth: "frappe",
-    requestId: requestId("frappe-projection"),
-  };
   const steps = [
     {
       name: "health",
@@ -77,6 +63,14 @@ export function createLaunchProofPlan({
       auth: "ingest",
       body: leadFixture,
       requestId: requestId("website"),
+    },
+    {
+      name: "ingest_website_replay",
+      method: "POST",
+      path: "/ingest/website",
+      auth: "ingest",
+      body: leadFixture,
+      requestId: requestId("website-replay"),
     },
     {
       name: "ingest_estimate",
@@ -119,13 +113,12 @@ export function createLaunchProofPlan({
     },
   ];
   return {
+    operatingAuthority: OPERATING_AUTHORITY,
     proofStamp,
     proofRandomSuffix,
     executionId,
     leadFixture,
     estimateFixture,
-    frappeCorrelation,
-    frappeLookup,
     steps,
   };
 }
@@ -138,8 +131,6 @@ export function curlFor(step, base = "") {
     parts.push("-H 'Authorization: Bearer $INGEST_TOKEN'");
   if (step.auth === "admin")
     parts.push("-H 'Authorization: Bearer $ADMIN_TOKEN'");
-  if (step.auth === "frappe")
-    parts.push("-H 'Authorization: token $FRAPPE_API_KEY:$FRAPPE_API_SECRET'");
   if (step.requestId) parts.push(`-H 'X-Request-ID: ${step.requestId}'`);
   if (step.idempotencyKey)
     parts.push(`-H 'Idempotency-Key: ${step.idempotencyKey}'`);
@@ -154,44 +145,18 @@ export async function executeLaunchProof({
   base,
   ingestToken,
   adminToken,
-  frappeBase,
-  frappeApiKey,
-  frappeApiSecret,
-  frappePollAttempts = DEFAULT_FRAPPE_POLL_ATTEMPTS,
-  frappePollIntervalMs = DEFAULT_FRAPPE_POLL_INTERVAL_MS,
   fetchImpl = globalThis.fetch,
   stamp = Date.now(),
   randomSuffix,
-  sleep = defaultSleep,
   onStep,
 } = {}) {
   const normalizedBase = requiredBase(base, "BUS_BASE_URL");
   const normalizedIngestToken = requiredSecret(ingestToken, "INGEST_TOKEN");
   const normalizedAdminToken = requiredSecret(adminToken, "ADMIN_TOKEN");
   assert.equal(typeof fetchImpl, "function", "fetch implementation required");
-  assert.equal(typeof sleep, "function", "sleep implementation required");
-  // Validate every proof dependency before even the health request. This is
-  // intentionally stricter than the old readiness gate: no synthetic POST may
-  // be sent when its Frappe projection cannot be checked afterwards.
-  const frappeProofConfig = validateFrappeProofConfig({
-    frappeBase,
-    frappeApiKey,
-    frappeApiSecret,
-    frappePollAttempts,
-    frappePollIntervalMs,
-  });
 
   const plan = createLaunchProofPlan({ stamp, randomSuffix });
   const results = {};
-  results.frappe_reader = await preflightFrappeReader({
-    lookup: plan.frappeLookup,
-    correlationId: plan.frappeCorrelation,
-    base: frappeProofConfig.base,
-    apiKey: frappeProofConfig.apiKey,
-    apiSecret: frappeProofConfig.apiSecret,
-    fetchImpl,
-    onStep,
-  });
   for (const step of plan.steps) {
     results[step.name] = await runStep(step, {
       base: normalizedBase,
@@ -208,6 +173,19 @@ export async function executeLaunchProof({
   assert.equal(results.ingest_website.status, 200, "website ingest failed");
   const leadEnvelope = results.ingest_website.json?.envelope_id;
   assert.ok(leadEnvelope, "website ingest returned no envelope_id");
+  const canonicalLead =
+    results.ingest_website.json?.canonical_envelope_id ?? leadEnvelope;
+  assert.equal(results.ingest_website_replay.status, 200, "website replay failed");
+  assert.equal(
+    results.ingest_website_replay.json?.duplicate,
+    true,
+    "website replay was not marked duplicate",
+  );
+  assert.equal(
+    results.ingest_website_replay.json?.canonical_envelope_id,
+    canonicalLead,
+    "website replay did not return the original lead identity",
+  );
   assert.equal(results.ingest_estimate.status, 200, "estimate ingest failed");
   assert.equal(
     results.ingest_estimate_replay.status,
@@ -219,31 +197,49 @@ export async function executeLaunchProof({
     results.ingest_estimate_replay.json?.envelope_id,
     "estimate replay was not idempotent",
   );
+
+  const d1Lead = await runStep(
+    {
+      name: "d1_lead",
+      method: "GET",
+      path: `/admin/envelope/${encodeURIComponent(canonicalLead)}`,
+      auth: "admin",
+      requestId: `launch-proof:${plan.executionId}:d1-lead`,
+    },
+    {
+      base: normalizedBase,
+      ingestToken: normalizedIngestToken,
+      adminToken: normalizedAdminToken,
+      fetchImpl,
+    },
+  );
+  results.d1_lead = d1Lead;
+  onStep?.("d1_lead", d1Lead);
+  assert.equal(d1Lead.status, 200, "D1 lead read-back failed");
+  const stored = d1Lead.json?.envelope;
+  assert.ok(stored?.envelope_id, "D1 read-back missing the fixture envelope");
+  assert.equal(stored.envelope_id, canonicalLead, "D1 read-back identity mismatch");
+  assert.ok(stored.tenant_id, "D1 lead is missing tenant identity");
+  assert.equal(stored.contact_name, plan.leadFixture.name);
+
   assert.equal(results.admin_envelopes.status, 200, "admin read-back failed");
   const listed = (results.admin_envelopes.json?.envelopes ?? []).map(
     (envelope) => envelope?.envelope_id,
   );
   assert.ok(
-    listed.includes(leadEnvelope),
+    listed.includes(canonicalLead),
     "admin read-back missing the fixture envelope",
   );
   assert.equal(results.admin_reconcile.status, 200, "reconciliation failed");
   assertOperationalStatus(results.admin_status);
 
-  const frappeProjection = await pollFrappeProjection({
-    lookup: plan.frappeLookup,
-    correlationId: plan.frappeCorrelation,
-    base: frappeProofConfig.base,
-    apiKey: frappeProofConfig.apiKey,
-    apiSecret: frappeProofConfig.apiSecret,
-    attempts: frappeProofConfig.attempts,
-    intervalMs: frappeProofConfig.intervalMs,
-    fetchImpl,
-    sleep,
-    onStep,
+  return redactedEvidence({
+    plan,
+    results,
+    leadEnvelope: canonicalLead,
+    d1Lead: stored,
+    leadReplay: results.ingest_website_replay.json,
   });
-
-  return redactedEvidence({ plan, results, leadEnvelope, frappeProjection });
 }
 
 export async function runLaunchProofCli({
@@ -257,9 +253,11 @@ export async function runLaunchProofCli({
   if (!argv.includes("--execute")) {
     log("DRY RUN (pass --execute to send). Plan:\n");
     for (const step of plan.steps) log(`# ${step.name}\n${curlFor(step)}\n`);
-    log(`# ${plan.frappeLookup.name}\n${curlFor(plan.frappeLookup, "$FRAPPE_BASE_URL")}\n`);
     log(
-      "After a successful run, archive the redacted JSON evidence. A Frappe projection mismatch, timeout, or unavailable lookup keeps the bridge enabled and requires reconciliation.",
+      "Operating authority is D1/Worker. Frappe/ERPNext stand-up is out of scope (IRO-189 / IRO-195).",
+    );
+    log(
+      "After a successful run, archive the redacted JSON evidence. D1 identity, tenant isolation, and ingest replay are the gate; a Frappe lookup is not.",
     );
     return { mode: "dry_run", plan };
   }
@@ -268,11 +266,6 @@ export async function runLaunchProofCli({
     base: env.BUS_BASE_URL,
     ingestToken: env.INGEST_TOKEN,
     adminToken: env.ADMIN_TOKEN,
-    frappeBase: env.FRAPPE_BASE_URL,
-    frappeApiKey: env.FRAPPE_API_KEY,
-    frappeApiSecret: env.FRAPPE_API_SECRET,
-    frappePollAttempts: env.FRAPPE_PROOF_POLL_ATTEMPTS,
-    frappePollIntervalMs: env.FRAPPE_PROOF_POLL_INTERVAL_MS,
     fetchImpl,
     stamp: plan.proofStamp,
     randomSuffix: plan.proofRandomSuffix,
@@ -280,9 +273,14 @@ export async function runLaunchProofCli({
   });
   log(JSON.stringify(evidence, null, 2));
   assert.equal(
-    evidence.frappe_projection.state,
+    evidence.operating_authority,
+    "d1",
+    "launch-proof gate failed: operating authority is not D1",
+  );
+  assert.equal(
+    evidence.d1_lead.state,
     "matched",
-    "launch-proof gate failed: Frappe projection did not match; keep the bridge enabled and reconcile",
+    "launch-proof gate failed: D1 lead identity did not match",
   );
   return { mode: "execute", evidence };
 }
@@ -328,47 +326,6 @@ function requiredSecret(value, name) {
   return normalized;
 }
 
-function boundedInteger(value, name, { fallback, minimum, maximum }) {
-  const candidate = value === undefined || value === "" ? fallback : Number(value);
-  assert.ok(
-    Number.isInteger(candidate) && candidate >= minimum && candidate <= maximum,
-    `${name} must be an integer from ${minimum} to ${maximum}`,
-  );
-  return candidate;
-}
-
-function validateFrappeProofConfig({
-  frappeBase,
-  frappeApiKey,
-  frappeApiSecret,
-  frappePollAttempts,
-  frappePollIntervalMs,
-}) {
-  return {
-    base: requiredBase(frappeBase, "FRAPPE_BASE_URL"),
-    apiKey: requiredSecret(frappeApiKey, "FRAPPE_API_KEY"),
-    apiSecret: requiredSecret(frappeApiSecret, "FRAPPE_API_SECRET"),
-    attempts: boundedInteger(frappePollAttempts, "FRAPPE_PROOF_POLL_ATTEMPTS", {
-      fallback: DEFAULT_FRAPPE_POLL_ATTEMPTS,
-      minimum: 1,
-      maximum: MAX_FRAPPE_POLL_ATTEMPTS,
-    }),
-    intervalMs: boundedInteger(
-      frappePollIntervalMs,
-      "FRAPPE_PROOF_POLL_INTERVAL_MS",
-      {
-        fallback: DEFAULT_FRAPPE_POLL_INTERVAL_MS,
-        minimum: 0,
-        maximum: MAX_FRAPPE_POLL_INTERVAL_MS,
-      },
-    ),
-  };
-}
-
-function defaultSleep(delayMs) {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
 async function runStep(step, { base, ingestToken, adminToken, fetchImpl }) {
   const headers = {
     accept: "application/json",
@@ -397,136 +354,6 @@ async function runStep(step, { base, ingestToken, adminToken, fetchImpl }) {
       response.headers.get("x-correlation-id") ??
       null,
   };
-}
-
-async function pollFrappeProjection({
-  lookup,
-  correlationId,
-  base,
-  apiKey,
-  apiSecret,
-  attempts,
-  intervalMs,
-  fetchImpl,
-  sleep,
-  onStep,
-}) {
-  let lastResult = null;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      lastResult = await runFrappeLookup(lookup, {
-        base,
-        apiKey,
-        apiSecret,
-        fetchImpl,
-      });
-    } catch {
-      onStep?.(lookup.name, { status: 0 });
-      return { state: "unavailable", attempts: attempt, requestId: null, httpStatus: null };
-    }
-    onStep?.(lookup.name, lastResult);
-    if (lastResult.status !== 200)
-      return {
-        state: "unavailable",
-        attempts: attempt,
-        requestId: lastResult.requestId,
-        httpStatus: lastResult.status,
-      };
-
-    const response = lastResult.json?.message ?? lastResult.json;
-    if (!response || response.correlation_id !== correlationId)
-      return {
-        state: "mismatch",
-        attempts: attempt,
-        requestId: lastResult.requestId,
-        httpStatus: lastResult.status,
-      };
-    if (response.observation === "matched")
-      return {
-        state: "matched",
-        attempts: attempt,
-        requestId: lastResult.requestId,
-        httpStatus: lastResult.status,
-      };
-    if (response.observation === "mismatch")
-      return {
-        state: "mismatch",
-        attempts: attempt,
-        requestId: lastResult.requestId,
-        httpStatus: lastResult.status,
-      };
-    if (response.observation !== "pending")
-      return {
-        state: "unavailable",
-        attempts: attempt,
-        requestId: lastResult.requestId,
-        httpStatus: lastResult.status,
-      };
-    if (attempt < attempts && intervalMs > 0) await sleep(intervalMs);
-  }
-  return {
-    state: "timeout",
-    attempts,
-    requestId: lastResult?.requestId ?? null,
-    httpStatus: lastResult?.status ?? null,
-  };
-}
-
-async function runFrappeLookup(lookup, { base, apiKey, apiSecret, fetchImpl }) {
-  const response = await fetchImpl(base + lookup.path, {
-    method: "GET",
-    headers: {
-      accept: "application/json",
-      authorization: `token ${apiKey}:${apiSecret}`,
-      "x-request-id": lookup.requestId,
-    },
-  });
-  let json = null;
-  try {
-    json = await response.json();
-  } catch {
-    // Never add an unparsed Frappe response body to release evidence.
-  }
-  return {
-    status: response.status,
-    json,
-    requestId:
-      response.headers.get("x-request-id") ??
-      response.headers.get("x-correlation-id") ??
-      null,
-  };
-}
-
-async function preflightFrappeReader({
-  lookup,
-  correlationId,
-  base,
-  apiKey,
-  apiSecret,
-  fetchImpl,
-  onStep,
-}) {
-  let result;
-  try {
-    result = await runFrappeLookup(lookup, { base, apiKey, apiSecret, fetchImpl });
-  } catch {
-    onStep?.("frappe_reader", { status: 0 });
-    assert.fail("Frappe reader preflight failed");
-  }
-  onStep?.("frappe_reader", result);
-  assert.equal(result.status, 200, "Frappe reader preflight failed");
-  const response = result.json?.message ?? result.json;
-  assert.equal(
-    response?.correlation_id,
-    correlationId,
-    "Frappe reader preflight correlation mismatch",
-  );
-  assert.equal(
-    response?.observation,
-    "pending",
-    "Frappe reader preflight must confirm an unused synthetic correlation",
-  );
-  return result;
 }
 
 function assertReadiness(result) {
@@ -577,12 +404,12 @@ function assertOperationalStatus(result) {
   );
 }
 
-function redactedEvidence({ plan, results, leadEnvelope, frappeProjection }) {
+function redactedEvidence({ plan, results, leadEnvelope, d1Lead, leadReplay }) {
   const operational = results.admin_status.json;
   const reconciliation = results.admin_reconcile.json;
-  const reconciliationRequired = frappeProjection.state !== "matched";
   return {
-    proof: "ironwrap-launch-proof-v3",
+    proof: "ironwrap-launch-proof-v4",
+    operating_authority: OPERATING_AUTHORITY,
     fixture: {
       envelope_id: leadEnvelope,
       project_id: plan.estimateFixture.project_id,
@@ -618,18 +445,21 @@ function redactedEvidence({ plan, results, leadEnvelope, frappeProjection }) {
       recent_audit_failure_count:
         operational?.recent_audit_failures?.entries?.length ?? null,
     },
-    frappe_projection: {
-      correlation_id: plan.frappeCorrelation,
-      state: frappeProjection.state,
-      attempts: frappeProjection.attempts,
-      http_status: frappeProjection.httpStatus,
-      request_id: frappeProjection.requestId,
+    d1_lead: {
+      state: d1Lead?.envelope_id === leadEnvelope ? "matched" : "mismatch",
+      envelope_id: d1Lead?.envelope_id ?? null,
+      canonical_envelope_id: leadEnvelope,
+      tenant_id: d1Lead?.tenant_id ?? null,
     },
+    lead_replay: {
+      duplicate: leadReplay?.duplicate === true,
+      canonical_envelope_id: leadReplay?.canonical_envelope_id ?? null,
+    },
+    frappe_projection: {
+      state: "out_of_scope",
+    },
+    // This proof does not retire JobNimbus (IRO-192) and is not a HELM permit/receipt (IRO-190).
     bridge_keep_enabled: true,
-    reconciliation_required: reconciliationRequired,
-    next: reconciliationRequired
-      ? "Keep the bridge enabled and reconcile the bounded Frappe projection before any cutover decision."
-      : "Keep the bridge enabled; this synthetic Frappe match is release evidence, not bridge-retirement authority.",
   };
 }
 

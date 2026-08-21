@@ -35,6 +35,32 @@ const CONFIG = "d".repeat(64);
 const STAGING = "11111111-1111-4111-8111-111111111111";
 const PRODUCTION = "22222222-2222-4222-8222-222222222222";
 const sha = (value) => createHash("sha256").update(value).digest("hex");
+const V4_SMOKE_STEPS = [
+  "admin_envelopes",
+  "admin_reconcile",
+  "admin_status",
+  "d1_lead",
+  "health",
+  "ingest_estimate",
+  "ingest_estimate_replay",
+  "ingest_website",
+  "ingest_website_replay",
+  "ready",
+];
+function v4SmokeEvidence(overrides = {}) {
+  return {
+    proof: "ironwrap-launch-proof-v4",
+    operating_authority: "d1",
+    fixture: { envelope_id: "env-123" },
+    bridge_keep_enabled: true,
+    frappe_projection: { state: "out_of_scope" },
+    d1_lead: { state: "matched", envelope_id: "env-123", tenant_id: "ironwrap" },
+    steps: Object.fromEntries(
+      V4_SMOKE_STEPS.map((name) => [name, { http_status: 200, request_id: `req-${name}` }]),
+    ),
+    ...overrides,
+  };
+}
 function mergePolicyFixture() {
   const fields = {
     schema: "ironwrap_github_merge_policy_v1",
@@ -798,23 +824,7 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
 
   const evidence = path.join(root, "smoke.json");
   const smokeOutput = path.join(root, "smoke.receipt.json");
-  await writeFile(evidence, JSON.stringify({
-    proof: "ironwrap-launch-proof-v3",
-    fixture: { envelope_id: "env-123" },
-    bridge_keep_enabled: true,
-    frappe_projection: { state: "matched" },
-    steps: {
-      admin_envelopes: { http_status: 200, request_id: "req-admin-envelopes" },
-      admin_reconcile: { http_status: 200, request_id: "req-admin-reconcile" },
-      admin_status: { http_status: 200, request_id: "req-admin-status" },
-      frappe_reader: { http_status: 200, request_id: "req-frappe-reader" },
-      health: { http_status: 200, request_id: "req-health" },
-      ingest_estimate: { http_status: 200, request_id: "req-estimate" },
-      ingest_estimate_replay: { http_status: 200, request_id: "req-estimate-replay" },
-      ingest_website: { http_status: 200, request_id: "req-website" },
-      ready: { http_status: 200, request_id: "req-ready" },
-    },
-  }));
+  await writeFile(evidence, JSON.stringify(v4SmokeEvidence()));
   await main(["smoke-receipt", "--evidence", evidence, "--output", smokeOutput, "--source-commit", COMMIT, "--revision", STAGING]);
   const smoke = JSON.parse(await readFile(smokeOutput, "utf8"));
   assert.equal(smoke.authenticated, true);
@@ -855,22 +865,7 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
   await writeFile(rollbackHealth, JSON.stringify({ ok: true }));
   await writeFile(rollbackReady, JSON.stringify({ ok: true }));
   await writeFile(rollbackRepromoted, `${STAGING}\n`);
-  await writeFile(rollbackSmoke, JSON.stringify({
-    proof: "ironwrap-launch-proof-v3",
-    bridge_keep_enabled: true,
-    frappe_projection: { state: "matched" },
-    steps: {
-      admin_envelopes: { http_status: 200, request_id: "req-admin-envelopes" },
-      admin_reconcile: { http_status: 200, request_id: "req-admin-reconcile" },
-      admin_status: { http_status: 200, request_id: "req-admin-status" },
-      frappe_reader: { http_status: 200, request_id: "req-frappe-reader" },
-      health: { http_status: 200, request_id: "req-health" },
-      ingest_estimate: { http_status: 200, request_id: "req-estimate" },
-      ingest_estimate_replay: { http_status: 200, request_id: "req-estimate-replay" },
-      ingest_website: { http_status: 200, request_id: "req-website" },
-      ready: { http_status: 200, request_id: "req-ready" },
-    },
-  }));
+  await writeFile(rollbackSmoke, JSON.stringify(v4SmokeEvidence()));
   await main(["rollback-receipt", "--readback", rollbackReadback, "--re-promoted", rollbackRepromoted, "--health", rollbackHealth, "--ready", rollbackReady, "--smoke", rollbackSmoke, "--output", rollbackOutput, "--source-commit", COMMIT, "--candidate", STAGING, "--previous", "33333333-3333-4333-8333-333333333333"]);
   assert.equal(JSON.parse(await readFile(rollbackOutput, "utf8")).readback, "matched");
 });
@@ -964,15 +959,7 @@ test("production receipt binds active revision, config, readiness, and exact smo
   await writeFile(active, `${PRODUCTION}\n`);
   await writeFile(health, JSON.stringify({ ok: true }));
   await writeFile(ready, JSON.stringify({ ok: true }));
-  await writeFile(smoke, JSON.stringify({
-    proof: "ironwrap-launch-proof-v3",
-    bridge_keep_enabled: true,
-    frappe_projection: { state: "matched" },
-    steps: Object.fromEntries([
-      "admin_envelopes", "admin_reconcile", "admin_status", "frappe_reader", "health",
-      "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ready",
-    ].map((name) => [name, { http_status: 200, request_id: `req-${name}` }])),
-  }));
+  await writeFile(smoke, JSON.stringify(v4SmokeEvidence()));
   const receiptArgs = [
     "production-receipt",
     "--active",
@@ -1023,7 +1010,7 @@ test("production receipt binds active revision, config, readiness, and exact smo
   await writeFile(active, `${STAGING}\n`);
   await assert.rejects(() => main(receiptArgs), /release_promotion_production_active_revision_drift/);
   await writeFile(active, `${PRODUCTION}\n`);
-  await writeFile(smoke, JSON.stringify({ proof: "ironwrap-launch-proof-v3", bridge_keep_enabled: true, frappe_projection: { state: "matched" }, steps: { health: { http_status: 200, request_id: "only-one" } } }));
+  await writeFile(smoke, JSON.stringify(v4SmokeEvidence({ steps: { health: { http_status: 200, request_id: "only-one" } } })));
   await assert.rejects(() => main(receiptArgs), /release_promotion_smoke_step_set_invalid/);
 });
 

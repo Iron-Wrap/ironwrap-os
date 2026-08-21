@@ -19,7 +19,6 @@ const PROJECT_ID = `LP-${STAMP}-${RANDOM_SUFFIX}`;
 const LEAD_ENVELOPE = "ow_12345678-1234-4123-8123-123456789abc";
 const FRAPPE_LOOKUP_PATH =
   "/api/method/ironwrap_roofing.launch_proof_api.lookup_synthetic_correlation";
-const FRAPPE_CORRELATION = `launch-proof:${PROJECT_ID}`;
 
 function json(body, { status = 200, requestId = "proof-request-1234" } = {}) {
   return new Response(JSON.stringify(body), {
@@ -70,41 +69,79 @@ function operationalBody(overrides = {}) {
   };
 }
 
-function frappeLookupBody({
-  correlationId = FRAPPE_CORRELATION,
-  observation = "matched",
-  extra = {},
-} = {}) {
-  return { message: { correlation_id: correlationId, observation, ...extra } };
-}
-
 function healthyFetch({
   operational = operationalBody(),
   calls = [],
-  frappePreflightResponse,
-  frappeResponses = [],
+  websiteBodies,
+  omitD1Lead = false,
 } = {}) {
-  let frappePreflightPending = true;
+  let websiteCalls = 0;
   return async (input) => {
     const url = new URL(String(input));
     calls.push(url.origin + url.pathname + url.search);
+    if (url.pathname === FRAPPE_LOOKUP_PATH) {
+      throw new Error("D1-native launch-proof must not call Frappe");
+    }
     if (url.pathname === "/health")
       return json({ ok: true }, { requestId: "request-health" });
     if (url.pathname === "/ready")
       return json(readyBody(), { requestId: "request-ready" });
-    if (url.pathname === "/ingest/website")
+    if (url.pathname === "/ingest/website") {
+      websiteCalls += 1;
+      const preset = websiteBodies?.[websiteCalls - 1];
+      if (preset) return json(preset, { requestId: `request-website-${websiteCalls}` });
+      if (websiteCalls === 1) {
+        return json(
+          {
+            envelope_id: LEAD_ENVELOPE,
+            canonical_envelope_id: LEAD_ENVELOPE,
+            tenant_id: "ironwrap",
+            duplicate: false,
+            status: "pending_jn_push",
+          },
+          { requestId: "request-website" },
+        );
+      }
       return json(
-        { envelope_id: LEAD_ENVELOPE },
-        { requestId: "request-website" },
+        {
+          envelope_id: "ow-duplicate-row",
+          canonical_envelope_id: LEAD_ENVELOPE,
+          tenant_id: "ironwrap",
+          duplicate: true,
+          status: "duplicate",
+        },
+        { requestId: "request-website-replay" },
       );
+    }
     if (url.pathname === "/ingest/estimate")
       return json(
         { envelope_id: "ow-estimate-1" },
         { requestId: "request-estimate" },
       );
+    if (url.pathname === `/admin/envelope/${LEAD_ENVELOPE}`) {
+      return json(
+        {
+          envelope: omitD1Lead
+            ? null
+            : {
+                envelope_id: LEAD_ENVELOPE,
+                tenant_id: "ironwrap",
+                contact_name: "Launch Proof",
+                contact_phone: "+15875550000",
+                contact_email: `launch-proof+${STAMP}-${RANDOM_SUFFIX}@example.invalid`,
+                status: "pending_jn_push",
+              },
+        },
+        { requestId: "request-d1-lead" },
+      );
+    }
     if (url.pathname === "/admin/envelopes") {
       return json(
-        { envelopes: [{ envelope_id: LEAD_ENVELOPE }] },
+        {
+          envelopes: omitD1Lead
+            ? []
+            : [{ envelope_id: LEAD_ENVELOPE, tenant_id: "ironwrap" }],
+        },
         { requestId: "request-envelopes" },
       );
     }
@@ -116,22 +153,6 @@ function healthyFetch({
     }
     if (url.pathname === "/admin/status")
       return json(operational, { requestId: "request-status" });
-    if (url.pathname === FRAPPE_LOOKUP_PATH) {
-      if (frappePreflightPending) {
-        frappePreflightPending = false;
-        return frappePreflightResponse ?? json(
-          frappeLookupBody({
-            correlationId: url.searchParams.get("correlation_id"),
-            observation: "pending",
-          }),
-          { requestId: "request-frappe-preflight" },
-        );
-      }
-      return frappeResponses.shift() ?? json(
-        frappeLookupBody({ correlationId: url.searchParams.get("correlation_id") }),
-        { requestId: "request-frappe" },
-      );
-    }
     throw new Error(`unexpected request ${url}`);
   };
 }
@@ -141,9 +162,6 @@ function executionOptions(overrides = {}) {
     base: BASE,
     ingestToken: INGEST_TOKEN,
     adminToken: ADMIN_TOKEN,
-    frappeBase: FRAPPE_BASE,
-    frappeApiKey: FRAPPE_API_KEY,
-    frappeApiSecret: FRAPPE_API_SECRET,
     stamp: STAMP,
     randomSuffix: RANDOM_SUFFIX,
     ...overrides,
@@ -167,9 +185,12 @@ test("launch proof dry-run never performs a network request", async () => {
   assert.equal(fetchCalls, 0);
   assert.match(output.join("\n"), /admin_reconcile/);
   assert.match(output.join("\n"), /admin_status/);
+  assert.match(output.join("\n"), /ingest_website_replay/);
   assert.match(output.join("\n"), /\$BUS_BASE_URL/);
-  assert.match(output.join("\n"), /\$FRAPPE_BASE_URL/);
+  assert.equal(output.join("\n").includes("$FRAPPE_BASE_URL"), false);
+  assert.equal(output.join("\n").includes(FRAPPE_LOOKUP_PATH), false);
   assert.equal(result.plan.steps.find((step) => step.name === "ready")?.auth, "admin");
+  assert.equal(result.plan.operatingAuthority, "d1");
   assert.match(result.plan.leadFixture.email, /@example\.invalid$/);
   assert.equal(
     result.plan.leadFixture.source_url,
@@ -177,43 +198,38 @@ test("launch proof dry-run never performs a network request", async () => {
   );
 });
 
-test("launch proof rejects incomplete Frappe proof configuration before any network request or synthetic POST", async () => {
+test("launch proof executes without Frappe configuration", async () => {
   const calls = [];
-  await assert.rejects(
-    () =>
-      executeLaunchProof({
-        base: BASE,
-        ingestToken: INGEST_TOKEN,
-        adminToken: ADMIN_TOKEN,
-        fetchImpl: async (input) => {
-          calls.push(String(input));
-          throw new Error("must not fetch");
-        },
-      }),
-    /FRAPPE_BASE_URL required/,
-  );
-  assert.deepEqual(calls, []);
+  const evidence = await executeLaunchProof({
+    ...executionOptions(),
+    fetchImpl: healthyFetch({ calls }),
+  });
+  assert.equal(evidence.operating_authority, "d1");
+  assert.equal(evidence.d1_lead.state, "matched");
+  assert.equal(evidence.d1_lead.envelope_id, LEAD_ENVELOPE);
+  assert.equal(evidence.d1_lead.tenant_id, "ironwrap");
+  assert.equal(evidence.frappe_projection.state, "out_of_scope");
+  assert.equal(evidence.bridge_keep_enabled, true);
+  assert.equal(calls.some((call) => call.includes(FRAPPE_LOOKUP_PATH)), false);
+  assert.equal(calls.some((call) => call.startsWith(FRAPPE_BASE)), false);
 });
 
-test("launch proof rejects an unavailable Frappe reader before any synthetic POST", async () => {
+test("launch proof does not call Frappe even when FRAPPE_* is set", async () => {
   const calls = [];
-  await assert.rejects(
-    () =>
-      executeLaunchProof({
-        ...executionOptions(),
-        fetchImpl: healthyFetch({
-          calls,
-          frappePreflightResponse: json(
-            { message: "reader configuration is unavailable" },
-            { status: 403, requestId: "frappe-reader-denied" },
-          ),
-        }),
-      }),
-    /Frappe reader preflight failed/,
-  );
-  assert.deepEqual(calls, [
-    `${FRAPPE_BASE}${FRAPPE_LOOKUP_PATH}?correlation_id=${encodeURIComponent(FRAPPE_CORRELATION)}`,
-  ]);
+  const evidence = await executeLaunchProof({
+    ...executionOptions({
+      frappeBase: FRAPPE_BASE,
+      frappeApiKey: FRAPPE_API_KEY,
+      frappeApiSecret: FRAPPE_API_SECRET,
+    }),
+    fetchImpl: healthyFetch({ calls }),
+  });
+  assert.equal(evidence.operating_authority, "d1");
+  assert.equal(evidence.frappe_projection.state, "out_of_scope");
+  assert.equal(calls.some((call) => call.includes("frappe.example")), false);
+  const serialized = JSON.stringify(evidence);
+  assert.equal(serialized.includes(FRAPPE_API_KEY), false);
+  assert.equal(serialized.includes(FRAPPE_API_SECRET), false);
 });
 
 test("failed readiness stops launch proof before any intake mutation", async () => {
@@ -225,8 +241,6 @@ test("failed readiness stops launch proof before any intake mutation", async () 
         fetchImpl: async (input) => {
           const url = new URL(String(input));
           calls.push(url.pathname);
-          if (url.pathname === FRAPPE_LOOKUP_PATH)
-            return json(frappeLookupBody({ observation: "pending" }));
           if (url.pathname === "/health") return json({ ok: true });
           if (url.pathname === "/ready")
             return json(
@@ -238,25 +252,28 @@ test("failed readiness stops launch proof before any intake mutation", async () 
       }),
     /readiness failed/,
   );
-  assert.deepEqual(calls, [FRAPPE_LOOKUP_PATH, "/health", "/ready"]);
+  assert.deepEqual(calls, ["/health", "/ready"]);
 });
 
-test("launch proof verifies idempotency and emits redacted release evidence", async () => {
+test("launch proof verifies D1 identity, lead replay, estimate idempotency, and redacted evidence", async () => {
   const evidence = await executeLaunchProof({
     ...executionOptions(),
     fetchImpl: healthyFetch(),
   });
 
+  assert.equal(evidence.proof, "ironwrap-launch-proof-v4");
   assert.equal(evidence.fixture.envelope_id, LEAD_ENVELOPE);
   assert.equal(evidence.fixture.project_id, PROJECT_ID);
+  assert.equal(evidence.steps.ingest_website.http_status, 200);
+  assert.equal(evidence.steps.ingest_website_replay.http_status, 200);
   assert.equal(evidence.steps.ingest_estimate.http_status, 200);
-  assert.equal(evidence.steps.frappe_reader.request_id, "request-frappe-preflight");
+  assert.equal(evidence.steps.d1_lead.request_id, "request-d1-lead");
   assert.equal(evidence.steps.admin_status.request_id, "request-status");
   assert.equal(evidence.operational_status.heartbeat.reconciled, true);
   assert.equal(evidence.reconciliation.gaps, 0);
-  assert.equal(evidence.frappe_projection.state, "matched");
-  assert.equal(evidence.bridge_keep_enabled, true);
-  assert.equal(evidence.reconciliation_required, false);
+  assert.equal(evidence.d1_lead.canonical_envelope_id, LEAD_ENVELOPE);
+  assert.equal(evidence.lead_replay.duplicate, true);
+  assert.equal(evidence.lead_replay.canonical_envelope_id, LEAD_ENVELOPE);
   const serialized = JSON.stringify(evidence);
   assert.equal(serialized.includes(INGEST_TOKEN), false);
   assert.equal(serialized.includes(ADMIN_TOKEN), false);
@@ -264,7 +281,7 @@ test("launch proof verifies idempotency and emits redacted release evidence", as
   assert.equal(serialized.includes(FRAPPE_API_SECRET), false);
 });
 
-test("launch proof uses an execution-unique ID and rejects a stale prior Frappe session", async () => {
+test("launch proof uses an execution-unique ID", async () => {
   const prior = createLaunchProofPlan({
     stamp: STAMP,
     randomSuffix: RANDOM_SUFFIX,
@@ -272,133 +289,23 @@ test("launch proof uses an execution-unique ID and rejects a stale prior Frappe 
   const laterStamp = String(Number(STAMP) + 100_000_000);
   const later = createLaunchProofPlan({
     stamp: laterStamp,
-    // Keeping the injected suffix equal isolates the full timestamp regression.
     randomSuffix: RANDOM_SUFFIX,
   });
 
   assert.equal(Number(later.proofStamp) - Number(prior.proofStamp), 100_000_000);
   assert.notEqual(later.estimateFixture.project_id, prior.estimateFixture.project_id);
-  assert.notEqual(later.frappeCorrelation, prior.frappeCorrelation);
+  assert.notEqual(later.leadFixture.email, prior.leadFixture.email);
+});
 
-  const calls = [];
-  const evidence = await executeLaunchProof({
-    ...executionOptions({
-      stamp: later.proofStamp,
-      randomSuffix: later.proofRandomSuffix,
-      frappePollAttempts: 1,
-      frappePollIntervalMs: 0,
-    }),
-    fetchImpl: healthyFetch({
-      calls,
-      frappeResponses: [
-        json(
-          frappeLookupBody({
-            correlationId: prior.frappeCorrelation,
-            observation: "matched",
-          }),
-          { requestId: "frappe-stale-prior" },
-        ),
-      ],
-    }),
-  });
-
-  assert.equal(evidence.frappe_projection.state, "mismatch");
-  assert.equal(evidence.reconciliation_required, true);
-  assert.ok(
-    calls.includes(
-      `${FRAPPE_BASE}${FRAPPE_LOOKUP_PATH}?correlation_id=${encodeURIComponent(later.frappeCorrelation)}`,
-    ),
+test("launch proof fails closed when D1 admin read-back is missing the fixture envelope", async () => {
+  await assert.rejects(
+    () =>
+      executeLaunchProof({
+        ...executionOptions(),
+        fetchImpl: healthyFetch({ omitD1Lead: true }),
+      }),
+    /D1 read-back missing the fixture envelope|admin read-back missing/,
   );
-});
-
-test("launch proof accepts a delayed bounded Frappe projection match", async () => {
-  const calls = [];
-  const sleeps = [];
-  const evidence = await executeLaunchProof({
-    ...executionOptions({ frappePollAttempts: 2, frappePollIntervalMs: 17 }),
-    fetchImpl: healthyFetch({
-      calls,
-      frappeResponses: [
-        json(frappeLookupBody({ observation: "pending" }), { requestId: "frappe-pending" }),
-        json(frappeLookupBody(), { requestId: "frappe-matched" }),
-      ],
-    }),
-    sleep: async (delay) => sleeps.push(delay),
-  });
-
-  assert.equal(evidence.frappe_projection.state, "matched");
-  assert.equal(evidence.frappe_projection.attempts, 2);
-  assert.equal(evidence.frappe_projection.request_id, "frappe-matched");
-  assert.deepEqual(sleeps, [17]);
-  assert.equal(calls.filter((call) => call.includes(FRAPPE_LOOKUP_PATH)).length, 3);
-});
-
-test("launch proof preserves the bridge for mismatched, missing, or unavailable Frappe evidence", async () => {
-  const mismatch = await executeLaunchProof({
-    ...executionOptions({ frappePollAttempts: 2, frappePollIntervalMs: 0 }),
-    fetchImpl: healthyFetch({
-      frappeResponses: [
-        json(frappeLookupBody({ observation: "mismatch" }), { requestId: "frappe-mismatch" }),
-      ],
-    }),
-  });
-  assert.equal(mismatch.frappe_projection.state, "mismatch");
-  assert.equal(mismatch.bridge_keep_enabled, true);
-  assert.equal(mismatch.reconciliation_required, true);
-
-  const missing = await executeLaunchProof({
-    ...executionOptions({ frappePollAttempts: 2, frappePollIntervalMs: 0 }),
-    fetchImpl: healthyFetch({
-      frappeResponses: [
-        json(frappeLookupBody({ observation: "pending" })),
-        json(frappeLookupBody({ observation: "pending" })),
-      ],
-    }),
-  });
-  assert.equal(missing.frappe_projection.state, "timeout");
-  assert.equal(missing.bridge_keep_enabled, true);
-  assert.equal(missing.reconciliation_required, true);
-
-  const unavailable = await executeLaunchProof({
-    ...executionOptions(),
-    fetchImpl: healthyFetch({
-      frappeResponses: [
-        json(
-          { message: "raw unavailable evidence must never enter the artifact" },
-          { status: 503, requestId: "frappe-unavailable" },
-        ),
-      ],
-    }),
-  });
-  assert.equal(unavailable.frappe_projection.state, "unavailable");
-  assert.equal(unavailable.bridge_keep_enabled, true);
-  assert.equal(unavailable.reconciliation_required, true);
-  assert.equal(
-    JSON.stringify(unavailable).includes("raw unavailable evidence"),
-    false,
-  );
-});
-
-test("launch proof bounds a pending Frappe poll and redacts its credentials", async () => {
-  const calls = [];
-  const evidence = await executeLaunchProof({
-    ...executionOptions({ frappePollAttempts: 3, frappePollIntervalMs: 0 }),
-    fetchImpl: healthyFetch({
-      calls,
-      frappeResponses: [
-        json(frappeLookupBody({ observation: "pending" })),
-        json(frappeLookupBody({ observation: "pending" })),
-        json(frappeLookupBody({ observation: "pending" })),
-      ],
-    }),
-  });
-
-  assert.equal(evidence.frappe_projection.state, "timeout");
-  assert.equal(evidence.frappe_projection.attempts, 3);
-  assert.equal(calls.filter((call) => call.includes(FRAPPE_LOOKUP_PATH)).length, 4);
-  const serialized = JSON.stringify(evidence);
-  assert.equal(serialized.includes(FRAPPE_API_KEY), false);
-  assert.equal(serialized.includes(FRAPPE_API_SECRET), false);
 });
 
 test("execute CLI writes a standalone redacted JSON artifact to standard output", async () => {
@@ -410,10 +317,6 @@ test("execute CLI writes a standalone redacted JSON artifact to standard output"
       BUS_BASE_URL: BASE,
       INGEST_TOKEN,
       ADMIN_TOKEN,
-      FRAPPE_BASE_URL: FRAPPE_BASE,
-      FRAPPE_API_KEY,
-      FRAPPE_API_SECRET,
-      FRAPPE_PROOF_POLL_INTERVAL_MS: "0",
     },
     fetchImpl: healthyFetch(),
     log: (line) => stdout.push(line),
@@ -423,46 +326,9 @@ test("execute CLI writes a standalone redacted JSON artifact to standard output"
   assert.equal(result.mode, "execute");
   assert.deepEqual(JSON.parse(stdout.join("")), result.evidence);
   assert.match(stderr.join("\n"), /health: HTTP 200/);
+  assert.equal(result.evidence.operating_authority, "d1");
   assert.equal(stdout.join("").includes(INGEST_TOKEN), false);
   assert.equal(stdout.join("").includes(ADMIN_TOKEN), false);
-  assert.equal(stdout.join("").includes(FRAPPE_API_KEY), false);
-  assert.equal(stdout.join("").includes(FRAPPE_API_SECRET), false);
-});
-
-test("execute CLI writes redacted failed evidence and exits non-zero for an unmatched Frappe projection", async () => {
-  const stdout = [];
-  const stderr = [];
-  await assert.rejects(
-    () =>
-      runLaunchProofCli({
-        argv: ["--execute"],
-        env: {
-          BUS_BASE_URL: BASE,
-          INGEST_TOKEN,
-          ADMIN_TOKEN,
-          FRAPPE_BASE_URL: FRAPPE_BASE,
-          FRAPPE_API_KEY,
-          FRAPPE_API_SECRET,
-          FRAPPE_PROOF_POLL_INTERVAL_MS: "0",
-        },
-        fetchImpl: healthyFetch({
-          frappeResponses: [
-            json(frappeLookupBody({ observation: "mismatch" }), {
-              requestId: "frappe-mismatch",
-            }),
-          ],
-        }),
-        log: (line) => stdout.push(line),
-        errorLog: (line) => stderr.push(line),
-      }),
-    /launch-proof gate failed/,
-  );
-
-  const evidence = JSON.parse(stdout.join(""));
-  assert.equal(evidence.frappe_projection.state, "mismatch");
-  assert.equal(evidence.reconciliation_required, true);
-  assert.equal(JSON.stringify(evidence).includes(FRAPPE_API_SECRET), false);
-  assert.match(stderr.join("\n"), /frappe_projection: HTTP 200/);
 });
 
 test("launch proof rejects degraded and stale operational status", async () => {

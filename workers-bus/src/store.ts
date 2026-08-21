@@ -1,7 +1,15 @@
 // store.ts — owned system of record (Cloudflare D1 + R2).
 // The owned store IS the bus: every event is written here FIRST, before JobNimbus.
 
-import type { EnvelopeRecord, Status } from "./core.ts";
+import { operatingTenantId, type EnvelopeRecord, type Status } from "./core.ts";
+
+function envTenantId(env: { APP_TENANT_ID?: string }): string | null {
+  return operatingTenantId(env.APP_TENANT_ID);
+}
+
+function dedupClaimKey(tenantId: string, key: string): string {
+  return `t:${tenantId}:${key}`;
+}
 
 export interface AuditEntry {
   automation: string;
@@ -170,23 +178,29 @@ export async function putRaw(env: Env, key: string, body: string, contentType: s
 }
 
 export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<void> {
+  const tenantId = rec.tenant_id ?? envTenantId(env);
+  if (!tenantId) throw new Error("tenant_identity_required");
   await env.DB.prepare(
     `INSERT INTO envelopes (envelope_id, source, contact_name, contact_phone, contact_email,
        job_ref, payload_json, raw_key, ts, status, dedup_key, dup_of, attempts, last_error,
-       jn_contact_id, jn_job_id, estimate_submission_key, intent_queue, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       jn_contact_id, jn_job_id, estimate_submission_key, intent_queue, created_at, updated_at,
+       tenant_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).bind(
     rec.envelope_id, rec.source, rec.contact_name, rec.contact_phone, rec.contact_email,
     rec.job_ref, rec.payload_json, rec.raw_key, rec.ts, rec.status, rec.dedup_key, rec.dup_of,
     rec.attempts, rec.last_error, rec.jn_contact_id, rec.jn_job_id,
     rec.estimate_submission_key ?? null, rec.intent_queue,
-    rec.created_at, rec.updated_at,
+    rec.created_at, rec.updated_at, tenantId,
   ).run();
 }
 
 export async function getEnvelope(env: Env, id: string): Promise<EnvelopeRecord | null> {
-  return await env.DB.prepare(`SELECT * FROM envelopes WHERE envelope_id = ?`)
-    .bind(id).first<EnvelopeRecord>();
+  const tenantId = envTenantId(env);
+  if (!tenantId) return null;
+  return await env.DB.prepare(
+    `SELECT * FROM envelopes WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(id, tenantId).first<EnvelopeRecord>();
 }
 
 /**
@@ -237,9 +251,11 @@ export async function listLeadMctbEvidence(
 }
 
 export async function listRecentEnvelopes(env: Env, limit: number): Promise<EnvelopeRecord[]> {
+  const tenantId = envTenantId(env);
+  if (!tenantId) return [];
   const res = await env.DB.prepare(
-    `SELECT * FROM envelopes ORDER BY created_at DESC LIMIT ?`,
-  ).bind(limit).all<EnvelopeRecord>();
+    `SELECT * FROM envelopes WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`,
+  ).bind(tenantId, limit).all<EnvelopeRecord>();
   return res.results ?? [];
 }
 
@@ -263,7 +279,10 @@ export async function claimDedup(
   nowIsoValue: string,
   sinceIso: string,
 ): Promise<string | null> {
-  const existing = await getDedupClaim(env, key);
+  const tenantId = envTenantId(env);
+  if (!tenantId) throw new Error("tenant_identity_required");
+  const claimKey = dedupClaimKey(tenantId, key);
+  const existing = await getDedupClaim(env, claimKey);
   if (existing && existing.first_seen_at >= sinceIso) return existing.first_envelope_id;
 
   if (existing) {
@@ -271,10 +290,10 @@ export async function claimDedup(
       `UPDATE dedup_claims
        SET first_envelope_id = ?, first_seen_at = ?, updated_at = ?
        WHERE dedup_key = ? AND first_seen_at < ?`,
-    ).bind(envelopeId, nowIsoValue, nowIsoValue, key, sinceIso).run();
+    ).bind(envelopeId, nowIsoValue, nowIsoValue, claimKey, sinceIso).run();
     if (Number((res as { meta?: { changes?: number } }).meta?.changes ?? 0) > 0) return null;
 
-    const raced = await getDedupClaim(env, key);
+    const raced = await getDedupClaim(env, claimKey);
     return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
   }
 
@@ -282,11 +301,11 @@ export async function claimDedup(
     await env.DB.prepare(
       `INSERT INTO dedup_claims (dedup_key, first_envelope_id, first_seen_at, updated_at)
        VALUES (?,?,?,?)`,
-    ).bind(key, envelopeId, nowIsoValue, nowIsoValue).run();
+    ).bind(claimKey, envelopeId, nowIsoValue, nowIsoValue).run();
     return null;
   } catch (err) {
     if (!isUniqueConstraintError(err)) throw err;
-    const raced = await getDedupClaim(env, key);
+    const raced = await getDedupClaim(env, claimKey);
     return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
   }
 }
@@ -302,11 +321,13 @@ function isUniqueConstraintError(err: unknown): boolean {
 }
 
 export async function findEstimateSubmission(env: Env, key: string): Promise<EnvelopeRecord | null> {
+  const tenantId = envTenantId(env);
+  if (!tenantId) return null;
   return await env.DB.prepare(
     `SELECT * FROM envelopes
-     WHERE estimate_submission_key = ?
+     WHERE estimate_submission_key = ? AND tenant_id = ?
      ORDER BY created_at ASC LIMIT 1`,
-  ).bind(key).first<EnvelopeRecord>();
+  ).bind(key, tenantId).first<EnvelopeRecord>();
 }
 
 export async function setStatus(
@@ -662,7 +683,7 @@ export type ReadinessColumnProbe = { table: string; columns: readonly string[] }
 export const READINESS_COLUMN_PROBES: readonly ReadinessColumnProbe[] = [
   {
     table: "envelopes",
-    columns: ["envelope_id", "status", "updated_at", "erpnext_error", "estimate_submission_key"],
+    columns: ["envelope_id", "status", "updated_at", "erpnext_error", "estimate_submission_key", "tenant_id"],
   },
   { table: "audit_log", columns: ["ts", "result", "run_id", "approved_by", "reason"] },
   { table: "dead_letter", columns: ["envelope_id", "recovered"] },

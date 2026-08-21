@@ -1995,11 +1995,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // stranded open before ELEC-137 fixed them forward, which is what keeps a stale row from a
     // resolved outage out of the episode boundary the sweep's attempt cap is now scoped to. It
     // took 0081 because `main` had just landed 0080 and open heads #92-#97 still stop at 0078.
-    assert.equal(migrations.length, 64);
+    // 0082 binds envelopes.tenant_id so a synthetic lead is readable only under the Worker
+    // tenant that ingested it (IRO-189 D1-native proof). Additive column only — inventory
+    // counts stay at 146 / 209 / 343. It took 0082 because `main` already ships 0079–0081
+    // and IRO-195 stack PRs #92–#97 still own 0070–0078.
+    assert.equal(migrations.length, 65);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0081_dead_letter_terminal_recovery_backfill.sql",
+      "0082_envelope_operating_tenant.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {

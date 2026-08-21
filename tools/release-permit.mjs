@@ -59,11 +59,12 @@ export const LAUNCH_PROOF_STEP_NAMES = Object.freeze([
   "admin_envelopes",
   "admin_reconcile",
   "admin_status",
-  "frappe_reader",
+  "d1_lead",
   "health",
   "ingest_estimate",
   "ingest_estimate_replay",
   "ingest_website",
+  "ingest_website_replay",
   "ready",
 ]);
 export const RELEASE_SCOPE_NAMES = Object.freeze([

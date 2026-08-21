@@ -1538,7 +1538,13 @@ function parseLaunchProofEvidence(rawEvidence) {
     if (error?.message?.startsWith("release_promotion_")) throw error;
     fail("smoke_evidence_invalid");
   }
-  if (evidence.proof !== "ironwrap-launch-proof-v3" || evidence.frappe_projection?.state !== "matched" || evidence.bridge_keep_enabled !== true) fail("smoke_not_proven");
+  if (
+    evidence.proof !== "ironwrap-launch-proof-v4" ||
+    evidence.operating_authority !== "d1" ||
+    evidence.d1_lead?.state !== "matched" ||
+    evidence.frappe_projection?.state !== "out_of_scope" ||
+    evidence.bridge_keep_enabled !== true
+  ) fail("smoke_not_proven");
   const steps = json(evidence.steps, "smoke_steps_invalid");
   const stepNames = Object.keys(steps).sort();
   if (JSON.stringify(stepNames) !== JSON.stringify([...LAUNCH_PROOF_STEP_NAMES].sort())) fail("smoke_step_set_invalid");
@@ -1742,7 +1748,7 @@ async function rollbackReceipt(args) {
     health_digest: sha256(healthRaw),
     readiness_digest: sha256(readyRaw),
     smoke_evidence_digest: smokeEvidenceDigest,
-    smoke_result: evidence.frappe_projection?.state === "matched" ? "passed" : "failed",
+    smoke_result: evidence.d1_lead?.state === "matched" && evidence.operating_authority === "d1" ? "passed" : "failed",
     source_commit: sourceCommit,
   };
   if (fields.smoke_result !== "passed") fail("rollback_smoke_not_passed");

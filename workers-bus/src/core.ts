@@ -59,6 +59,7 @@ export interface EnvelopeRecord {
   erpnext_synced_at?: string | null;
   erpnext_error?: string | null;
   intent_queue: string | null;
+  tenant_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +74,17 @@ export interface ReconcileRow {
 export type SourceCountValidation =
   | { ok: true; day: string; channel: Source; count: number }
   | { ok: false; reason: "invalid_day" | "invalid_channel" | "invalid_count" };
+
+/** Worker-pinned tenant id. Empty/missing defaults to the wrangler pin; unverified labels fail closed. */
+export const OPERATING_TENANT_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+
+export function operatingTenantId(raw: unknown): string | null {
+  if (raw == null) return "ironwrap";
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (value === "") return "ironwrap";
+  return OPERATING_TENANT_ID_RE.test(value) ? value : null;
+}
 
 /** Stable owned-intake identity for an event. */
 export function newEnvelopeId(): string {

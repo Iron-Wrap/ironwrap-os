@@ -127,10 +127,7 @@ function SalesDeskScreen({
                 <BriefcaseBusiness className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Sales work
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Sales desk
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -141,9 +138,7 @@ function SalesDeskScreen({
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {attentionCount === 0
                 ? "No lead checks"
@@ -250,9 +245,7 @@ function FilterRail({
 }) {
   return (
     <Card className="overflow-hidden p-2">
-      <p className="px-3 pb-2 pt-1 text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-        Show
-      </p>
+      <p className="px-3 pb-2 pt-1 text-sm font-bold text-muted">Show</p>
       <div
         className="flex gap-1 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible"
         aria-label="Sales filters"

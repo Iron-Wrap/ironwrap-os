@@ -44,35 +44,35 @@ const laneCopy: Record<
     title: "Work stopped",
     description: "A step, crew, or material issue stops work.",
     icon: AlertTriangle,
-    tone: "border-danger/35",
+    tone: "border-danger/35 bg-danger-soft",
     iconTone: "bg-danger text-danger-foreground",
   },
   scheduled: {
     title: "Start date set",
     description: "A start date is saved. Check every step before the crew goes.",
     icon: CalendarClock,
-    tone: "border-info/35",
+    tone: "border-info/35 bg-info-soft",
     iconTone: "bg-info text-white",
   },
   needs_assignment: {
     title: "Crew needed",
     description: "This job has no active crew.",
     icon: UserRoundPlus,
-    tone: "border-warning/35",
+    tone: "border-warning/35 bg-warning-soft",
     iconTone: "bg-warning text-white",
   },
   ready_for_review: {
     title: "Ready to check",
     description: "All saved start steps look clear. A person still sets the date.",
     icon: ClipboardCheck,
-    tone: "border-ok/35",
+    tone: "border-ok/35 bg-ok-soft",
     iconTone: "bg-ok text-white",
   },
   needs_verification: {
     title: "Steps need a check",
     description: "A crew is named, but one or more start steps are missing.",
     icon: ShieldCheck,
-    tone: "border-border-strong",
+    tone: "border-border bg-surface-muted",
     iconTone: "bg-foreground text-background",
   },
 };
@@ -152,10 +152,7 @@ function ProductionRunwayScreen({
                 <CalendarClock className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Job work
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Production plan
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -166,7 +163,7 @@ function ProductionRunwayScreen({
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">Today</p>
+            <p className="text-sm font-bold text-muted">Today</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.summary.active_jobs}{" "}
               {model.summary.active_jobs === 1 ? "active job" : "active jobs"}
@@ -312,7 +309,7 @@ function RunwayLane({
   const Icon = copy.icon;
   const headingId = `production-lane-${lane}`;
   return (
-    <Card className="scroll-mt-28 overflow-hidden">
+    <Card className={cn("scroll-mt-28 overflow-hidden", copy.tone)}>
       <section aria-labelledby={headingId}>
         <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border p-5 sm:p-6">
           <div className="flex min-w-0 items-start gap-3">

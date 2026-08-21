@@ -143,6 +143,7 @@ function NowScreen({
           </div>
           {model.ui.primary_action ? (
             <aside className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+              <p className="mb-3 text-sm font-bold text-muted">Next step</p>
               <ActionWithContext
                 action={model.ui.primary_action}
                 citations={primaryCitations}
@@ -179,7 +180,7 @@ function NowScreen({
         <div className="space-y-8 lg:col-start-1 lg:row-start-1">
           {model.ui.sections.map((section, sectionIndex) => (
             <section key={section.id} aria-labelledby={`now-section-${sectionIndex}`}>
-              <header className="mb-4 border-accent pl-4 sm:pl-5">
+              <header className="mb-4">
                 <h2
                   id={`now-section-${sectionIndex}`}
                   className="text-xl font-black tracking-[-0.025em] sm:text-2xl"
@@ -273,8 +274,7 @@ function NowCardView({
   if ("kind" in card) return <QuickBooksNowCardView card={card} />;
   return (
     <Card className={cn("flex flex-col p-5 sm:p-6", cardTone[card.tone])}>
-      <p className="text-xs font-semibold text-muted">{card.eyebrow}</p>
-      <h3 className="mt-2 text-xl font-black tracking-[-0.025em]">{card.title}</h3>
+      <h3 className="text-xl font-black tracking-[-0.025em]">{card.title}</h3>
       <p className="mt-2 text-sm leading-6 text-muted">{card.detail}</p>
 
       <div className="mt-auto pt-5">
@@ -302,8 +302,7 @@ function QuickBooksNowCardView({ card }: { card: QuickBooksNowCard }) {
       : "This invoice needs a money check.";
   return (
     <Card className={cn("flex flex-col p-5 sm:p-6", quickBooksCardTone[card.tone])}>
-      <p className="text-xs font-semibold text-muted">{card.eyebrow}</p>
-      <h3 className="mt-2 text-xl font-black tracking-[-0.025em]">{card.title}</h3>
+      <h3 className="text-xl font-black tracking-[-0.025em]">{card.title}</h3>
       <p className="mt-3 text-2xl font-black tracking-[-0.03em]">{card.detail}</p>
       <dl className="mt-4 space-y-3 border-t border-current/15 pt-4 text-sm">
         <div>

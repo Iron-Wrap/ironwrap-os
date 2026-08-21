@@ -130,10 +130,7 @@ function OwnerNowScreen({
                 <CircleGauge className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Owner desk
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Now
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -143,9 +140,7 @@ function OwnerNowScreen({
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {stoppedCount > 0
                 ? `${stoppedCount} ${stoppedCount === 1 ? "work stop" : "work stops"}`

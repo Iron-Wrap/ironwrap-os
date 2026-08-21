@@ -44,13 +44,7 @@ export function OperatingIntakePanel(): JSX.Element | null {
             <Inbox className="size-5 text-accent" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Website leads
-            </p>
-            <h2
-              id="operating-intake-heading"
-              className="mt-1 text-xl font-black tracking-[-0.025em]"
-            >
+            <h2 id="operating-intake-heading" className="text-xl font-black tracking-[-0.025em]">
               Website intake
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">

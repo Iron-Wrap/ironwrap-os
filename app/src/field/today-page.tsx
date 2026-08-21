@@ -173,13 +173,7 @@ export function TodayPage() {
         <section aria-labelledby="today-run-sheet-heading">
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
             <div>
-              <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-                Before you leave
-              </p>
-              <h2
-                id="today-run-sheet-heading"
-                className="mt-1 text-2xl font-black tracking-[-0.035em]"
-              >
+              <h2 id="today-run-sheet-heading" className="text-2xl font-black tracking-[-0.035em]">
                 Today's work
               </h2>
             </div>
@@ -238,7 +232,7 @@ function TodayDispatchHeader({
     <header className="border-b border-border pb-4">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Your work</p>
+          <p className="text-sm font-bold text-muted">Your work</p>
           <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] sm:text-4xl">Today</h1>
           <p className="mt-1.5 text-sm leading-6 text-muted sm:text-base">
             {formatFieldDay(date, dateOptions)} · {jobCount} {jobCount === 1 ? "site" : "sites"}
@@ -401,7 +395,7 @@ function TodayJobRow({
         className={`grid overflow-hidden border bg-surface-raised lg:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_0_2px_0_var(--danger)]" : "border-border"}`}
       >
         <div className="border-b border-border bg-surface-muted/55 p-4 lg:border-b-0 lg:border-r">
-          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>
+          <p className="text-sm font-bold text-muted">On the board</p>
           <p className="mt-1 text-base font-black leading-6">
             {formatFieldSchedule(job.scheduled_start, dateOptions)}
           </p>
@@ -475,7 +469,7 @@ function TodayWorkObjectRow({
     <li className="py-5 sm:py-6">
       <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
         <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
-          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>
+          <p className="text-sm font-bold text-muted">On the board</p>
           <p className="mt-1 text-base font-black leading-6">
             {formatFieldSchedule(workObject.scheduled_start, dateOptions)}
           </p>

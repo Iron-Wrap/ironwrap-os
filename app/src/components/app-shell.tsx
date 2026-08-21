@@ -108,7 +108,7 @@ export function AppShell() {
           aria-label="Main navigation"
         >
           <nav className="sticky top-20 space-y-1.5">
-            <p className="px-3 pb-2 text-xs font-semibold text-chrome-muted">Navigate</p>
+            <p className="px-3 pb-2 text-sm font-bold text-chrome-muted">Work</p>
             {items.map((item) => (
               <DesktopNavItem
                 key={item.to}

@@ -1,11 +1,34 @@
-# Hermes Runtime for IronWrap OS
+# Hermes Prompts and Configuration for IronWrap OS
+
+## What this directory is, and is not
+
+**`hermes/` contains no executable code.** It is 20 Markdown role and skill packs plus two JSON
+configuration files (`agents/roles.json` and `mcp-servers.json`), and nothing else. Read the
+directory listing as the contract: 22 tracked files, zero of them a program.
+
+**The runtime lives in [`mcp/`](../mcp).** Every process this directory configures is implemented
+there:
+
+| You are looking for | It is in |
+| --- | --- |
+| MCP server processes, tool registration, role filtering at runtime | `mcp/erpnext-roofing-mcp/`, `mcp/ironwrap-bus-mcp/`, `mcp/newo-mcp/` |
+| Approval brokers and the desktop text pilot server | `mcp/ironwrap-bus-mcp/src/` |
+| Which tools each role may call, as source of truth | `hermes/agents/roles.json` (here) |
+| Launch command, args, and env var names per server | `hermes/mcp-servers.json` (here) |
+| Agent role prompts and procedure packs | `hermes/agents/*.md`, `hermes/skills/*.md` (here) |
+
+So a change to what an agent is allowed to do belongs here; a change to how that restriction is
+enforced belongs in `mcp/`. `tools/validate-hermes-config.mjs` is what holds the two in agreement,
+and it reads the implemented `mcp/` sources, not this prose.
+
+The rest of this file describes the Hermes layer the configuration here defines.
+
+## Layer role in the system
 
 Hermes is the operating brain for IronWrap OS, not the database. It reads broadly across
 system truth and writes only through narrow, review-gated command tools. The proprietary
 IronWrap OS Frappe app (roofing operating core) and the IronWrap bus stay the record of truth; Hermes never holds primary
 state and never mutates a system of record with a free-form write.
-
-## Layer role
 
 - Hermes plans, drafts, and proposes. It composes MCP tool calls to read job/lead/evidence
   state and to draft mutations.
@@ -106,7 +129,8 @@ Newo provider mutations require a Worker-signed exact-argument dry-run receipt, 
 recorded human approval receipt, a one-time D1 execution claim, the MCP and Worker write gates,
 and an audit record. Customer sends additionally require `NEWO_OUTBOUND_ENABLED=true`.
 
-Additional hard boundaries in the committed 50-DocType model:
+Additional hard boundaries in the committed DocType model, whose current size is stated once in
+[`docs/CAPABILITY-MATRIX.md`](../docs/CAPABILITY-MATRIX.md) and gated there against the repository:
 
 - Crew Profile and Contract Acceptance are read-only. No Hermes tool signs, accepts, or
   rejects on a customer's behalf.

@@ -133,7 +133,7 @@ jobs:
           node "$RELEASE_ENFORCER" ci-checks \
             --repository "$RELEASE_REPOSITORY" \
             --run-id "$RELEASE_CI_RUN_ID" \
-            --job-names build-and-test,paired-device-lighthouse,validate-and-test \
+            --job-names build-and-test,paired-device-lighthouse,secret-scan,validate-and-test \
             --output "$RUNNER_TEMP/ci-checks.json"
 
       - name: Publish exact source-review candidate context

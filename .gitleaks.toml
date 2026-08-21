@@ -1,0 +1,62 @@
+# Secret-scanning contract for IronWrap OS. Consumed by `tools/secret-scan.mjs`,
+# which CI runs as the `secret-scan` job. The scan covers the tracked tree at
+# `HEAD` - the merged result a reviewer approves - so a secret is blocked before
+# it lands rather than reported after it is already in history.
+#
+# Every allowlist below is scoped, and none of them disables a provider rule. The
+# default rule pack's AWS, GitHub, Cloudflare, Google, Stripe, Slack, private-key
+# and other vendor-specific detections stay armed everywhere in the repository,
+# including tests and fixtures. Only `generic-api-key` and `jwt` - the two entropy
+# heuristics that cannot tell a synthetic constant from a real credential - are
+# relaxed, and only where `docs/DOCUMENTATION-CONTRACT.md` already permits
+# synthetic fixtures.
+
+title = "IronWrap OS"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Test suites and their fixtures carry key-shaped synthetic constants: idempotency
+keys, presentation keys, HMAC material, and a signed launch envelope whose key
+decodes to a self-labelling placeholder. They are required for deterministic
+validation and hold no real credential. Provider rules still apply here, so a
+real vendor token pasted into a test is still a CI failure.
+"""
+targetRules = ["generic-api-key", "jwt"]
+paths = [
+  '''(^|/)test/''',
+  '''(^|/)tests/''',
+  '''(^|/)fixtures/''',
+  '''\.test\.(?:c|m)?[jt]sx?$''',
+]
+
+[[allowlists]]
+description = """
+`deploy/env.example` is the environment template. Its values are angle-bracket
+placeholders, never credentials. The heuristic latches onto the tail of one
+(`...-frappe-api-secret>`) and spills into the following line, so the allowlist
+matches exactly that shape: a span that opens inside a placeholder and runs past
+its closing bracket, which a pasted value cannot produce.
+
+Scope honestly: `generic-api-key` does not detect an opaque high-entropy string
+pasted over a placeholder here even with this allowlist removed - verified
+against stock gitleaks defaults - so this allowlist gives up nothing that was
+being caught. A provider-shaped credential in the same position is caught by its
+own rule, which this allowlist does not touch.
+"""
+targetRules = ["generic-api-key"]
+paths = ['''^deploy/env\.example$''']
+regexTarget = "match"
+regexes = ['''^[a-z0-9-]+>\n''']
+
+[[allowlists]]
+description = """
+`deploy/local/predev.mjs` names the local key files it generates. The match is a
+`.txt` path constant next to a `*_KEY`/`*_SECRET` binding name, not a value.
+"""
+targetRules = ["generic-api-key"]
+paths = ['''^deploy/local/predev\.mjs$''']
+regexTarget = "line"
+regexes = ['''path\.join\(keysDir, "[a-z0-9.-]+\.txt"\)''']

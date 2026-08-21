@@ -49,6 +49,7 @@ const fail = (message) => failures.push(message);
 const allowedOptions = new Set([
   "--app-test-output",
   "--capability-matrix",
+  "--clone-playbook",
   "--evidence",
   "--worker-test-output",
 ]);
@@ -175,6 +176,71 @@ function compareCapabilityFact(label, expected, actual) {
   }
 }
 
+// Repository counts are authored once, in docs/CAPABILITY-MATRIX.md's evidence
+// contract, and that contract is gated above. Documents that legitimately restate
+// a count in prose were not gated, and every one of them drifted: the clone
+// playbook told an operator to stand up a tenant against "the 50-DocType pack"
+// (58% under the real total) and "all 31 D1 migrations through 0031" while `main`
+// was eighteen shipped migrations further on. Each restatement below is checked
+// against the same repository facts, and each must still be present, so the gate
+// cannot be silenced by deleting the sentence instead of correcting it.
+const restatedCountDocuments = [
+  {
+    option: "--clone-playbook",
+    path: "docs/WHITE-LABEL-CLONE-PLAYBOOK.md",
+    claims: [
+      {
+        label: "DocType pack size",
+        shape: "`<total>-DocType pack`",
+        // Prose wraps, so every pattern here spans whitespace rather than a
+        // literal space: the claims sit mid-paragraph in a hand-edited runbook.
+        pattern: /\b(\d+)-DocType\s+pack\b/g,
+        expected: (facts) => String(facts.frappe_doctypes.total),
+      },
+      {
+        label: "migration chain length",
+        shape: "`All <count> D1 migrations`",
+        pattern: /\bAll (\d+) D1 migrations\b/g,
+        expected: (facts) => String(facts.d1_migrations.count),
+      },
+      {
+        label: "latest migration filename",
+        shape: "``migrations ... through `<latest>.sql` ``",
+        pattern: /\bmigrations,? (?:currently )?through\s+`(\d{4}_[a-z0-9_]+\.sql)`/g,
+        expected: (facts) => facts.d1_migrations.latest,
+      },
+    ],
+  },
+];
+
+function validateRestatedCounts(facts) {
+  for (const document of restatedCountDocuments) {
+    const path = resolve(root, options.get(document.option) ?? document.path);
+    if (!existsSync(path)) {
+      fail(`${document.path}: count-gated document not found at ${path}`);
+      continue;
+    }
+    const content = readFileSync(path, "utf8");
+    for (const claim of document.claims) {
+      const stated = [...content.matchAll(claim.pattern)].map((match) => match[1]);
+      if (stated.length === 0) {
+        fail(
+          `${document.path}: missing ${claim.label} claim; the count gate requires it stated as ${claim.shape}`,
+        );
+        continue;
+      }
+      const expected = claim.expected(facts);
+      for (const value of stated) {
+        if (value !== expected) {
+          fail(
+            `${document.path}: stale ${claim.label}; document ${JSON.stringify(value)}, repository ${JSON.stringify(expected)}`,
+          );
+        }
+      }
+    }
+  }
+}
+
 function cleanTestOutput(path) {
   const resolved = resolve(path);
   if (!existsSync(resolved)) {
@@ -296,6 +362,7 @@ const capabilityMatrixPath = resolve(
 );
 const capabilityContract = loadCapabilityContract(capabilityMatrixPath);
 const capabilityFacts = repositoryCapabilityFacts();
+validateRestatedCounts(capabilityFacts);
 const observedAppTests = appTestCount(options.get("--app-test-output"));
 const observedWorkerTests = workerTestCount(
   options.get("--worker-test-output"),
@@ -528,5 +595,6 @@ if (evidencePath) {
 
 console.log(
   `ok ${trackedDocuments.length} registered documents validated; ` +
-    `${capabilityFacts.frappe_doctypes.total} DocTypes and ${capabilityFacts.d1_migrations.count} migrations match the capability contract`,
+    `${capabilityFacts.frappe_doctypes.total} DocTypes and ${capabilityFacts.d1_migrations.count} migrations match the capability contract ` +
+    `and every count restated by ${restatedCountDocuments.map((document) => document.path).join(", ")}`,
 );

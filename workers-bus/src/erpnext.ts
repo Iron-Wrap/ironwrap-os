@@ -340,6 +340,25 @@ export async function syncLeadTransportToErpNext(
 }
 
 /**
+ * After a terminal JobNimbus skip, mirror bus `jn_skipped` onto the owned Lead Envelope.
+ * No fake `pushed`, no fake JN ids, no Roof Job JN mirror.
+ */
+export async function syncLeadSkipToErpNext(
+  env: Env,
+  rec: EnvelopeRecord,
+): Promise<ErpNextTransportSyncResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const doctype = cfg.ERPNEXT_LEAD_ENVELOPE_DOCTYPE || "Lead Envelope";
+  const existing = await findByTerm(cfg, base, doctype, "envelope_id", rec.envelope_id);
+  if (!existing) throw new Error("erpnext_lead_envelope_missing");
+  await erpFetch(cfg, base, "PUT", `/api/resource/${enc(doctype)}/${enc(existing)}`, leadTransportDoc(rec));
+  return { name: existing };
+}
+
+/**
  * Mirror the provider-neutral receptionist snapshot after its owned D1/R2 write. Transcript and
  * recording bodies are intentionally absent: the DocTypes receive only reviewed structure and
  * opaque provider/R2 pointers.

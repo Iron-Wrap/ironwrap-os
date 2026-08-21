@@ -30,7 +30,7 @@ import {
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
-import { pushToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
+import { pushToErpNext, syncLeadSkipToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
@@ -882,6 +882,25 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.setStatus(env, envelopeId, "jn_skipped", {
       last_error: "jobnimbus_disabled",
     });
+    const skippedRec: EnvelopeRecord = {
+      ...rec,
+      status: "jn_skipped",
+      last_error: "jobnimbus_disabled",
+    };
+    try {
+      await syncLeadSkipToErpNext(env, skippedRec);
+    } catch (err) {
+      await store.recordAudit(env, {
+        automation: "erpnext_push",
+        trigger: "queue",
+        envelope_id: envelopeId,
+        action: "sync_jn_skip",
+        result: "error",
+        error: `erpnext_skip_sync: ${String(err)}`,
+        recovery_owner: env.OWNER_ALERT_EMAIL,
+      });
+      // Skip stays terminal: do not rethrow (ack, no DLQ). Desk may still lag.
+    }
     return;
   }
 

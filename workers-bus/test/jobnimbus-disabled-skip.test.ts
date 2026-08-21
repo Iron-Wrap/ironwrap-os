@@ -89,6 +89,11 @@ function frappeOnlyFetch(fetches: Array<{ url: string; init: RequestInit }>) {
       frappeRecords.set("Lead Envelope:LE-0001", value);
       return json({ data: value });
     }
+    if (url.endsWith("/api/resource/Lead%20Envelope/LE-0001") && method === "PUT") {
+      const value = { ...frappeRecords.get("Lead Envelope:LE-0001"), ...JSON.parse(String(init?.body)), name: "LE-0001" };
+      frappeRecords.set("Lead Envelope:LE-0001", value);
+      return json({ data: value });
+    }
     if (url.includes("/api/resource/Roofing%20Customer?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Roofing%20Customer")) {
       const value = { ...JSON.parse(String(init?.body)), name: "RC-0001" };
@@ -134,6 +139,18 @@ test("queue: JOBNIMBUS_ENABLED=false skips JN without throw, DLQ, or fake pushed
   assert.equal(acked, 1, "disabled skip must ack so the message does not retry into DLQ");
   assert.equal(retried, 0, "disabled skip must not retry");
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Lead%20Envelope")), "Frappe still lands");
+  const leadEnvelopeWrites = fetches.filter((f) => {
+    const method = String(f.init.method ?? "GET").toUpperCase();
+    return (method === "PUT" || method === "POST") && f.url.includes("/api/resource/Lead%20Envelope");
+  });
+  assert.ok(
+    leadEnvelopeWrites.some((f) => JSON.parse(String(f.init.body)).status === "jn_skipped"),
+    "Lead Envelope PUT/POST must include status jn_skipped",
+  );
+  assert.ok(
+    !leadEnvelopeWrites.some((f) => JSON.parse(String(f.init.body)).status === "pushed"),
+    "skip must not stamp Frappe status pushed",
+  );
   assert.equal(fetches.filter((f) => f.url.includes("app.jobnimbus.com")).length, 0);
   assert.ok(writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("jn_skipped")));
   assert.ok(!writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("pushed")));
@@ -150,6 +167,34 @@ test("queue: JOBNIMBUS_ENABLED=false skips JN without throw, DLQ, or fake pushed
   assert.equal(statusWrite?.args.includes("jobnimbus_disabled"), true);
   assert.equal(statusWrite?.args[2], null, "jn_contact_id stays unset — no fake CRM id");
   assert.equal(statusWrite?.args[3], null, "jn_job_id stays unset — no fake CRM id");
+});
+
+test("queue: JOBNIMBUS_ENABLED=false and ERPNEXT_ENABLED=false still acks skip with no Frappe fetch", async (t) => {
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", frappeOnlyFetch(fetches));
+
+  const writes: Array<{ sql: string; args: unknown[] }> = [];
+  const env = withTestEffectRuntime({
+    JOBNIMBUS_ENABLED: "false",
+    JOBNIMBUS_API_KEY: "jn-key-must-not-be-used",
+    ERPNEXT_ENABLED: "false",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+    OWNER_ALERT_EMAIL: "owner@example.com",
+    DB: fakeDb(pending, writes),
+  });
+  const { batch, counts } = queueBatch(pending.envelope_id);
+
+  await worker.queue(batch as never, env as never, {} as never);
+
+  const { acked, retried } = counts();
+  assert.equal(acked, 1, "disabled skip must ack so the message does not retry into DLQ");
+  assert.equal(retried, 0, "disabled skip must not retry");
+  assert.equal(fetches.length, 0, "ERPNext off means no Frappe fetch on skip");
+  assert.equal(fetches.filter((f) => f.url.includes("app.jobnimbus.com")).length, 0);
+  assert.ok(writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("jn_skipped")));
+  assert.ok(!writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("pushed")));
 });
 
 test("queue: jn_skipped re-delivery is a no-op ack, not a fake push or retry", async (t) => {

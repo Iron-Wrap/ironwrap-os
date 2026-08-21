@@ -5,6 +5,7 @@ import {
   ArrowRight,
   CalendarClock,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   ClipboardCheck,
   Hourglass,
@@ -14,15 +15,18 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { loadProductionRunway } from "./production-api";
+import type { ProductionRunwayResponse } from "./production-contracts";
 import {
   approveProductionScheduleApproval,
   loadProductionScheduleApproval,
@@ -50,13 +54,23 @@ type ScheduleDecisionAction =
       evidence: string;
     };
 
+const ACTION_LABELS: Record<string, string> = {
+  create_job_assignment: "Record a crew assignment",
+};
+
+const RECONCILIATION_LABELS: Record<ReconciliationOutcome, string> = {
+  executed: "Assignment was recorded",
+  not_executed: "Assignment was not recorded",
+  inconclusive: "Inconclusive",
+};
+
 const statePresentation: Record<
   ProductionScheduleApprovalRequest["state"],
   { label: string; description: string; tone: string; Icon: LucideIcon }
 > = {
   pending: {
-    label: "Needs decision",
-    description: "A designated owner must decide before any crew assignment is recorded.",
+    label: "Needs a check",
+    description: "A designated owner must decide before any crew assignment is saved.",
     tone: "bg-warning-soft text-warning",
     Icon: CircleAlert,
   },
@@ -68,7 +82,7 @@ const statePresentation: Record<
   },
   executed: {
     label: "Assignment recorded",
-    description: "The append-only Job Assignment and Hermes Run are recorded.",
+    description: "The crew assignment is saved. The schedule service recorded the outcome.",
     tone: "bg-ok-soft text-ok",
     Icon: CheckCircle2,
   },
@@ -98,9 +112,9 @@ const statePresentation: Record<
     Icon: TriangleAlert,
   },
   execution_uncertain: {
-    label: "Execution uncertain",
+    label: "Outcome uncertain",
     description:
-      "The broker result could not be verified. Reconcile the recorded state and do not retry.",
+      "The schedule service result could not be verified. Reconcile the recorded outcome and do not retry.",
     tone: "bg-danger-soft text-danger",
     Icon: TriangleAlert,
   },
@@ -130,6 +144,13 @@ function ProductionScheduleApprovalQueueContent() {
     queryFn: () => loadProductionScheduleApprovals(),
     retry: false,
   });
+  const runwayQuery = useQuery({
+    queryKey: ["production-runway", session.tenant.id, session.user.id],
+    queryFn: () => loadProductionRunway(),
+    retry: false,
+  });
+  const locale = session.tenant.locale;
+  const timeZone = session.tenant.time_zone;
 
   if (!query.data && query.isPending)
     return <LoadingState label="Loading schedule request queue…" />;
@@ -165,7 +186,7 @@ function ProductionScheduleApprovalQueueContent() {
                   Owner review
                 </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Schedule request queue
+                  Schedule requests
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
                   Each request is limited to one append-only Job Assignment. This queue does not
@@ -211,7 +232,12 @@ function ProductionScheduleApprovalQueueContent() {
         <ol className="border-y border-border" aria-label="Schedule requests">
           {model.approvals.map((approval) => (
             <li key={approval.id} className="border-b border-border last:border-b-0">
-              <ScheduleQueueRow approval={approval} />
+              <ScheduleQueueRow
+                approval={approval}
+                runway={runwayQuery.data}
+                locale={locale}
+                timeZone={timeZone}
+              />
             </li>
           ))}
         </ol>
@@ -220,7 +246,18 @@ function ProductionScheduleApprovalQueueContent() {
   );
 }
 
-function ScheduleQueueRow({ approval }: { approval: ProductionScheduleApprovalRequest }) {
+function ScheduleQueueRow({
+  approval,
+  runway,
+  locale,
+  timeZone,
+}: {
+  approval: ProductionScheduleApprovalRequest;
+  runway?: ProductionRunwayResponse;
+  locale: string;
+  timeZone: string;
+}) {
+  const display = scheduleDisplay(approval, runway, locale, timeZone);
   return (
     <Link
       to="/production/schedule-approvals/$approvalId"
@@ -230,13 +267,13 @@ function ScheduleQueueRow({ approval }: { approval: ProductionScheduleApprovalRe
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold text-foreground">
-            <span>Job {approval.roof_job_id}</span>
+            <span>Job {display.jobNumber}</span>
             <ArrowRight className="size-4 text-muted" aria-hidden="true" />
-            <span>Crew {approval.crew_profile_id}</span>
+            <span>Crew {display.crewName}</span>
           </p>
-          <p className="mt-1 break-all text-sm text-muted">
-            Start {approval.scheduled_start}
-            {approval.scheduled_end ? ` · End ${approval.scheduled_end}` : ""}
+          <p className="mt-1 text-sm text-muted">
+            Start {display.startLabel}
+            {display.endLabel ? ` · End ${display.endLabel}` : ""}
           </p>
           {approval.correction_reason ? (
             <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
@@ -252,9 +289,6 @@ function ScheduleQueueRow({ approval }: { approval: ProductionScheduleApprovalRe
           />
         </div>
       </div>
-      <p className="mt-3 break-all text-xs font-semibold text-muted">
-        Assignment {approval.target.assignment_id}
-      </p>
     </Link>
   );
 }
@@ -288,6 +322,13 @@ function ProductionScheduleApprovalDetailContent() {
     queryFn: () => loadProductionScheduleApproval(approvalId!),
     retry: false,
   });
+  const runwayQuery = useQuery({
+    queryKey: ["production-runway", session.tenant.id, session.user.id],
+    queryFn: () => loadProductionRunway(),
+    retry: false,
+  });
+  const locale = session.tenant.locale;
+  const timeZone = session.tenant.time_zone;
 
   async function refreshCurrentRequest() {
     try {
@@ -359,8 +400,8 @@ function ProductionScheduleApprovalDetailContent() {
           : action.kind === "reject"
             ? "The request was rejected. No crew assignment was created."
             : result.approval.state === "executed"
-              ? "The Job Assignment and Hermes Run are recorded."
-              : "The protected decision state changed. Review the current recorded outcome.",
+              ? "The crew assignment is saved. The schedule service recorded the outcome."
+              : "The recorded outcome changed. Review the current saved record.",
       );
     },
     onError: (error) => {
@@ -381,7 +422,7 @@ function ProductionScheduleApprovalDetailContent() {
         message="No request was provided. Return to the queue and select a recorded request."
         action={
           <Button asChild variant="outline">
-            <Link to="/production/schedule-approvals">Open schedule request queue</Link>
+            <Link to="/production/schedule-approvals">Open schedule requests</Link>
           </Button>
         }
       />
@@ -401,6 +442,7 @@ function ProductionScheduleApprovalDetailContent() {
 
   const model = query.data;
   const approval = model.approval;
+  const display = scheduleDisplay(approval, runwayQuery.data, locale, timeZone);
   const decisionReadStale = requiresFreshRead || query.isError;
   const canApprove =
     !offline &&
@@ -456,7 +498,7 @@ function ProductionScheduleApprovalDetailContent() {
             <Button asChild variant="ghost" size="compact" className="-ml-2">
               <Link to="/production/schedule-approvals">
                 <ArrowLeft aria-hidden="true" />
-                Schedule request queue
+                Schedule requests
               </Link>
             </Button>
             <div className="mt-4 flex min-w-0 items-start gap-3">
@@ -521,13 +563,14 @@ function ProductionScheduleApprovalDetailContent() {
         </Notice>
       ) : null}
 
-      <ScheduleDecisionRail approval={approval} />
+      <ScheduleDecisionRail approval={approval} display={display} />
       <AssignmentFence />
-      <ScheduleRequestFacts approval={approval} />
+      <ScheduleRequestFacts approval={approval} display={display} />
+      <ScheduleSystemDetails approval={approval} display={display} />
 
       {approval.state === "pending" ? (
         <PendingDecisionPanel
-          approval={approval}
+          display={display}
           canApprove={canApprove}
           canReject={canReject}
           offline={offline}
@@ -572,7 +615,7 @@ function ProductionScheduleApprovalDetailContent() {
           onSubmit={reconcile}
         />
       ) : null}
-      {approval.state === "executed" ? <ExecutedPanel approval={approval} /> : null}
+      {approval.state === "executed" ? <ExecutedPanel display={display} /> : null}
       {["denied", "expired", "failed", "audit_failed"].includes(approval.state) ? (
         <ClosedRequestPanel approval={approval} />
       ) : null}
@@ -589,7 +632,7 @@ function QueueSignals({ approvals }: { approvals: ProductionScheduleApprovalRequ
       className="grid border-y border-border sm:grid-cols-3"
       aria-label="Schedule request queue state"
     >
-      <QueueSignal label="Needs review" value={pending} tone="text-warning" dot="bg-warning" />
+      <QueueSignal label="Needs a check" value={pending} tone="text-warning" dot="bg-warning" />
       <QueueSignal
         label="Recording once"
         value={recording}
@@ -639,7 +682,13 @@ function QueueSignal({
   );
 }
 
-function ScheduleDecisionRail({ approval }: { approval: ProductionScheduleApprovalRequest }) {
+function ScheduleDecisionRail({
+  approval,
+  display,
+}: {
+  approval: ProductionScheduleApprovalRequest;
+  display: ScheduleDisplay;
+}) {
   const status = statePresentation[approval.state];
   return (
     <section aria-labelledby="schedule-decision-path">
@@ -653,10 +702,14 @@ function ScheduleDecisionRail({ approval }: { approval: ProductionScheduleApprov
         <StatusBadge status={approval.state} />
       </div>
       <ol className="mt-3 grid border border-border sm:grid-cols-4">
-        <RailStep label="Job" detail={approval.roof_job_id} />
-        <RailStep label="Crew" detail={approval.crew_profile_id} bordered />
+        <RailStep label="Job" detail={display.jobNumber} />
+        <RailStep label="Crew" detail={display.crewName} bordered />
         <RailStep label="Human decision" detail={status.label} tone={status.tone} bordered />
-        <RailStep label="Hermes Run" detail={approval.hermes_run_id ?? "Pending record"} bordered />
+        <RailStep
+          label="Save record"
+          detail={approval.state === "executed" ? "Recorded" : "Pending"}
+          bordered
+        />
       </ol>
     </section>
   );
@@ -716,7 +769,13 @@ function AssignmentFence() {
   );
 }
 
-function ScheduleRequestFacts({ approval }: { approval: ProductionScheduleApprovalRequest }) {
+function ScheduleRequestFacts({
+  approval,
+  display,
+}: {
+  approval: ProductionScheduleApprovalRequest;
+  display: ScheduleDisplay;
+}) {
   return (
     <section
       className="grid border-y border-border sm:grid-cols-2"
@@ -724,17 +783,15 @@ function ScheduleRequestFacts({ approval }: { approval: ProductionScheduleApprov
     >
       <div className="min-w-0 px-4 py-5 sm:px-5">
         <p className="text-sm font-bold text-muted">Job</p>
-        <p className="mt-2 break-all font-bold text-foreground">{approval.roof_job_id}</p>
-        <p className="mt-1 break-words text-sm text-muted">
-          {approval.action.replaceAll("_", " ")}
-        </p>
+        <p className="mt-2 font-bold text-foreground">{display.jobNumber}</p>
+        {display.actionLabel ? (
+          <p className="mt-1 text-sm text-muted">{display.actionLabel}</p>
+        ) : null}
       </div>
       <div className="min-w-0 border-t border-border px-4 py-5 sm:border-t-0 sm:border-l sm:px-5">
         <p className="text-sm font-bold text-muted">Proposed assignment</p>
-        <p className="mt-2 break-all font-bold text-foreground">{approval.target.assignment_id}</p>
-        <p className="mt-1 break-all text-sm text-muted">
-          Crew {approval.crew_profile_id} · start {approval.scheduled_start}
-        </p>
+        <p className="mt-2 font-bold text-foreground">{display.crewName}</p>
+        <p className="mt-1 text-sm text-muted">Start {display.startLabel}</p>
       </div>
       {approval.correction_reason ? (
         <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
@@ -757,7 +814,7 @@ function ScheduleRequestFacts({ approval }: { approval: ProductionScheduleApprov
 }
 
 function PendingDecisionPanel({
-  approval,
+  display,
   canApprove,
   canReject,
   offline,
@@ -771,7 +828,7 @@ function PendingDecisionPanel({
   onRejectionReasonChange,
   onReject,
 }: {
-  approval: ProductionScheduleApprovalRequest;
+  display: ScheduleDisplay;
   canApprove: boolean;
   canReject: boolean;
   offline: boolean;
@@ -813,8 +870,8 @@ function PendingDecisionPanel({
           Decide this crew assignment
         </h2>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-          Approval records only <span className="break-all">{approval.target.assignment_id}</span>{" "}
-          for {approval.roof_job_id}. Crew and customer stay unnotified.
+          Approval saves only the crew assignment for {display.jobNumber} with {display.crewName}.
+          Crew and customer stay unnotified.
         </p>
       </div>
       {rejecting ? (
@@ -941,21 +998,16 @@ function UncertainExecutionPanel({
             Do not retry this request
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            The broker result is uncertain. A second write is never issued automatically. Inspect
-            the recorded Hermes Run and reconcile the outcome instead.
+            The schedule service result is uncertain. A second write is never issued automatically.
+            Inspect the recorded outcome and reconcile it instead.
           </p>
-          {approval.error_code ? (
-            <p className="mt-3 text-sm font-semibold text-danger">
-              Recorded boundary: {humanizeCode(approval.error_code)}
-            </p>
-          ) : null}
         </div>
       </div>
 
       {approval.reconciliation ? (
         <div className="mt-5 border-t border-danger/25 pt-5" role="status">
           <p className="font-bold">
-            Reconciliation recorded: {humanizeCode(approval.reconciliation.outcome)}
+            Reconciliation recorded: {RECONCILIATION_LABELS[approval.reconciliation.outcome]}
           </p>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
             {approval.reconciliation.evidence}
@@ -1033,8 +1085,7 @@ function UncertainExecutionPanel({
   );
 }
 
-function ExecutedPanel({ approval }: { approval: ProductionScheduleApprovalRequest }) {
-  const outcome = approval.outcome;
+function ExecutedPanel({ display }: { display: ScheduleDisplay }) {
   return (
     <section
       className="border border-ok/40 bg-ok-soft px-5 py-6 sm:px-6"
@@ -1047,22 +1098,15 @@ function ExecutedPanel({ approval }: { approval: ProductionScheduleApprovalReque
             Assignment recorded
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            The protected write is audit-finalized. No crew message, customer contact, or accounting
-            change was made.
+            The crew assignment is saved. No crew message, customer contact, or accounting change
+            was made.
           </p>
         </div>
       </div>
       <dl className="mt-5 grid border-y border-ok/25 sm:grid-cols-3">
-        <ResultFact
-          label="Assignment"
-          value={outcome?.assignment_id ?? approval.target.assignment_id}
-        />
-        <ResultFact
-          label="Crew"
-          value={outcome?.crew_profile_id ?? approval.crew_profile_id}
-          bordered
-        />
-        <ResultFact label="Hermes Run" value={approval.hermes_run_id ?? approval.run_id} bordered />
+        <ResultFact label="Job" value={display.jobNumber} />
+        <ResultFact label="Crew" value={display.crewName} bordered />
+        <ResultFact label="Start" value={display.startLabel} bordered />
       </dl>
     </section>
   );
@@ -1098,9 +1142,7 @@ function ClosedRequestPanel({ approval }: { approval: ProductionScheduleApproval
       ? approval.refusal_message
       : approval.state === "denied" && approval.rejection_reason
         ? approval.rejection_reason
-        : approval.error_code
-          ? humanizeCode(approval.error_code)
-          : presentation.description;
+        : presentation.description;
   return (
     <section className="border border-border bg-surface px-5 py-6 sm:px-6" role="status">
       <div className="flex items-start gap-3">
@@ -1130,34 +1172,92 @@ function StatusBadge({ status }: { status: ProductionScheduleApprovalRequest["st
   );
 }
 
-function Notice({
-  tone,
-  title,
-  children,
+function ScheduleSystemDetails({
+  approval,
+  display,
 }: {
-  tone: "warning" | "danger" | "success";
-  title: string;
-  children: ReactNode;
+  approval: ProductionScheduleApprovalRequest;
+  display: ScheduleDisplay;
 }) {
-  const toneClasses = {
-    warning: "border-warning/35 bg-warning-soft",
-    danger: "border-danger/35 bg-danger-soft",
-    success: "border-ok/35 bg-ok-soft",
-  }[tone];
   return (
-    <section className={`border px-4 py-4 ${toneClasses}`} role="status">
-      <p className="font-bold">{title}</p>
-      <p className="mt-1 text-sm leading-6 text-muted">{children}</p>
-    </section>
+    <details className="group rounded-lg border border-border bg-surface-raised">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold sm:min-h-14 sm:px-5 [&::-webkit-details-marker]:hidden">
+        <span>System details</span>
+        <ChevronRight
+          className="size-4 text-muted transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
+      </summary>
+      <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2 sm:px-5">
+        <MetadataLine label="Request ID" value={approval.id} />
+        <MetadataLine label="Job ID" value={approval.roof_job_id} />
+        <MetadataLine label="Crew ID" value={approval.crew_profile_id} />
+        <MetadataLine label="Assignment ID" value={approval.target.assignment_id} />
+        <MetadataLine label="Record ID" value={approval.run_id} />
+        {approval.hermes_run_id ? (
+          <MetadataLine label="Save record ID" value={approval.hermes_run_id} />
+        ) : null}
+        <MetadataLine label="Start" value={approval.scheduled_start} />
+        {approval.scheduled_end ? (
+          <MetadataLine label="End" value={approval.scheduled_end} />
+        ) : null}
+        <MetadataLine label="Expires" value={approval.expires_at} />
+        {display.actionLabel ? null : <MetadataLine label="Action" value={approval.action} />}
+        {approval.error_code ? (
+          <MetadataLine label="Recorded code" value={approval.error_code} />
+        ) : null}
+      </dl>
+    </details>
   );
 }
 
-function humanizeCode(value: string): string {
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
+function MetadataLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="font-semibold text-foreground">{label}</dt>
+      <dd className="mt-0.5 break-all">{value}</dd>
+    </div>
+  );
+}
+
+type ScheduleDisplay = {
+  jobNumber: string;
+  crewName: string;
+  startLabel: string;
+  endLabel: string | null;
+  actionLabel: string | undefined;
+};
+
+function scheduleDisplay(
+  approval: ProductionScheduleApprovalRequest,
+  runway: ProductionRunwayResponse | undefined,
+  locale: string,
+  timeZone: string,
+): ScheduleDisplay {
+  const job = runway?.jobs.find((candidate) => candidate.id === approval.roof_job_id);
+  const crew = runway?.crews.find((candidate) => candidate.id === approval.crew_profile_id);
+  return {
+    jobNumber: job?.job_number?.trim() || "This job",
+    crewName: crew?.name?.trim() || "Selected crew",
+    startLabel: formatScheduleTime(approval.scheduled_start, locale, timeZone) ?? "Start not found",
+    endLabel: formatScheduleTime(approval.scheduled_end, locale, timeZone),
+    actionLabel: ACTION_LABELS[approval.action],
+  };
+}
+
+function formatScheduleTime(value: string | null, locale: string, timeZone: string): string | null {
+  if (!value || Number.isNaN(Date.parse(value))) return null;
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone,
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return null;
+  }
 }
 
 function messageFor(error: unknown): string {
@@ -1166,13 +1266,13 @@ function messageFor(error: unknown): string {
   }
   switch (error.code) {
     case "production_schedule_broker_unavailable":
-      return "The private schedule broker is unavailable. No crew assignment was recorded.";
+      return "The schedule service is unavailable. No crew assignment was saved.";
     case "production_schedule_approval_expired":
       return "This review window expired before a decision. Prepare a current request from the job.";
     case "production_schedule_approval_version_conflict":
       return "This recorded request changed. Refresh before making another decision.";
     case "execution_uncertain":
-      return "The result is uncertain. Do not retry. Reconcile the recorded Hermes Run instead.";
+      return "The result is uncertain. Do not retry. Reconcile the recorded outcome instead.";
     case "production_schedule_approval_already_decided":
       return "This request is no longer awaiting a decision. Refresh to inspect the recorded state.";
     default:

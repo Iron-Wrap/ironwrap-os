@@ -25,7 +25,7 @@ export function OperatingIntakePanel(): JSX.Element | null {
   if (!query.data && query.isError) {
     return (
       <Card className="border-warning/35 bg-warning-soft p-5 sm:p-6" role="status">
-        <p className="font-bold">Website intake from D1 did not load</p>
+        <p className="font-bold">Website intake could not load</p>
         <p className="mt-1 text-sm leading-6 text-muted">
           Assigned work and money records were not changed. Try again.
         </p>
@@ -45,7 +45,7 @@ export function OperatingIntakePanel(): JSX.Element | null {
           </span>
           <div className="min-w-0">
             <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              D1 operating authority
+              Website leads
             </p>
             <h2
               id="operating-intake-heading"
@@ -54,8 +54,8 @@ export function OperatingIntakePanel(): JSX.Element | null {
               Website intake
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-              These are website leads stored on D1. They are not assigned field jobs, not published
-              portal proposals, and not money intents.
+              These are website leads saved from the website. They are not assigned field jobs, not
+              published portal proposals, and not money intents.
             </p>
           </div>
         </header>

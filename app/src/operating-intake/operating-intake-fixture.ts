@@ -19,6 +19,8 @@ export function operatingIntakePayload(
         received_at: "2026-08-21T15:59:00.000Z",
         job_ref: null,
         desk_state: "intake",
+        not_a_scheduled_job: true,
+        not_a_money_intent: true,
       },
     ],
     ...overrides,

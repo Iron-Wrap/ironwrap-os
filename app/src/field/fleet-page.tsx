@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ShieldCheck, Truck, Wrench } from "lucide-react";
+import { AlertTriangle, Car, ShieldCheck, Truck, Wrench } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { getDeviceSecret } from "../auth/device-credential";
@@ -19,8 +19,12 @@ import { cacheFieldModel, getCachedFieldModel } from "./field-cache";
 import {
   checkPointsForAsset,
   fleetBlockerMessage,
+  fleetCollisionEndpoint,
+  fleetCollisionResponseSchema,
   fleetDefectEndpoint,
+  fleetVerifiedActionSchema,
   fleetDefectSeverities,
+  newFleetCollisionId,
   fleetDefectSeverityLabels,
   fleetInspectionEndpoint,
   fleetItemResultLabels,
@@ -35,6 +39,7 @@ import {
 } from "./fleet-contracts";
 import { formatFieldSchedule, type FieldDateOptions } from "./field-formatting";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
+import { uploadFleetPhotoEvidence } from "./fleet-photo";
 
 const OBSERVATION_MAX_LENGTH = 1_200;
 const DESCRIPTION_MAX_LENGTH = 1_200;
@@ -48,7 +53,8 @@ interface ChecklistRow {
 
 type Draft =
   | { kind: "pre_trip" | "post_trip"; rows: ChecklistRow[]; meterReading: string }
-  | { kind: "defect"; severity: FleetDefectSeverity; description: string };
+  | { kind: "defect"; severity: FleetDefectSeverity; description: string; photos: File[] }
+  | { kind: "collision"; severity: FleetDefectSeverity; description: string };
 
 /**
  * The driver's own vehicle.
@@ -172,10 +178,25 @@ export function FleetPage() {
                 size="field"
                 fullWidth
                 className="sm:col-span-2"
-                onClick={() => startDraft({ kind: "defect", severity: "Minor", description: "" })}
+                onClick={() =>
+                  startDraft({ kind: "defect", severity: "Minor", description: "", photos: [] })
+                }
               >
                 <Wrench aria-hidden="true" />
                 Report a fault
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="field"
+                fullWidth
+                className="sm:col-span-2"
+                onClick={() =>
+                  startDraft({ kind: "collision", severity: "Major", description: "" })
+                }
+              >
+                <Car aria-hidden="true" />
+                Report a collision
               </Button>
             </div>
           )}
@@ -219,11 +240,82 @@ export function FleetPage() {
                   onChange={(event) => setDraft({ ...draft, description: event.target.value })}
                 />
               </label>
+              <label className="block text-sm font-bold">
+                Photos
+                <input
+                  className="mt-1 block w-full text-sm"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                  multiple
+                  onChange={(event) => {
+                    const files = [...(event.target.files ?? [])].slice(0, 4);
+                    setDraft({ ...draft, photos: files });
+                  }}
+                />
+              </label>
+              {draft.photos.length > 0 ? (
+                <p className="text-sm leading-6 text-muted">
+                  {draft.photos.length === 1
+                    ? "1 photo selected. It uploads when you have signal, then the fault goes up as JSON."
+                    : `${draft.photos.length} photos selected. They upload when you have signal, then the fault goes up as JSON.`}
+                </p>
+              ) : (
+                <p className="text-sm leading-6 text-muted">
+                  Photos are optional. They never ride the offline outbox — only JSON references do.
+                </p>
+              )}
               <FormActions busy={busy} onCancel={resetDraft} label="Save and send fault" />
             </form>
           ) : null}
 
-          {draft && draft.kind !== "defect" ? (
+          {draft?.kind === "collision" ? (
+            <form
+              className="space-y-4 border-t pt-5"
+              aria-label="Report a collision"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitCollision(asset, draft);
+              }}
+            >
+              <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">Report a collision</h2>
+              <p className="leading-6 text-muted">
+                This is a vehicle incident, not a worker injury or near-miss. Those stay on the
+                safety report.
+              </p>
+              <label className="block text-sm font-bold">
+                How bad is it
+                <Select
+                  field
+                  className="mt-1"
+                  value={draft.severity}
+                  onChange={(event) => {
+                    const severity = parseFleetDefectSeverity(event.target.value);
+                    if (severity) setDraft({ ...draft, severity });
+                  }}
+                >
+                  {fleetDefectSeverities.map((severity) => (
+                    <option key={severity} value={severity}>
+                      {fleetDefectSeverityLabels[severity]}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label htmlFor={`${descriptionId}-collision`} className="block text-sm font-bold">
+                What happened
+                <Textarea
+                  id={`${descriptionId}-collision`}
+                  className="mt-1 min-h-32"
+                  maxLength={DESCRIPTION_MAX_LENGTH}
+                  required
+                  value={draft.description}
+                  onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+                />
+              </label>
+              <FormActions busy={busy} onCancel={resetDraft} label="Save and send collision" />
+            </form>
+          ) : null}
+
+          {draft && (draft.kind === "pre_trip" || draft.kind === "post_trip") ? (
             <form
               className="space-y-5 border-t pt-5"
               aria-label={
@@ -369,20 +461,125 @@ export function FleetPage() {
       setError("Say what is wrong in a few words before saving.");
       return;
     }
+    let photoEvidence: Awaited<ReturnType<typeof uploadFleetPhotoEvidence>>[] = [];
+    if (defect.photos.length > 0) {
+      if (!navigator.onLine || offlineSession) {
+        setError("Photos attach when you have signal. Save the fault without them, or wait.");
+        return;
+      }
+      try {
+        photoEvidence = [];
+        for (const file of defect.photos) {
+          photoEvidence.push(
+            await uploadFleetPhotoEvidence({
+              fleetAssetId: target.fleet_asset_id,
+              file,
+              csrfToken: session.csrf_token,
+              deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+            }),
+          );
+        }
+      } catch (caught) {
+        setError(refusalMessage(caught));
+        return;
+      }
+    }
+    const payload = {
+      fleet_asset_id: target.fleet_asset_id,
+      detected_at: new Date().toISOString(),
+      severity: defect.severity,
+      description: description.slice(0, DESCRIPTION_MAX_LENGTH),
+      ...(photoEvidence.length > 0 ? { photo_evidence: photoEvidence } : {}),
+    };
+    if (photoEvidence.length > 0) {
+      await submitPhotoDefect(target, payload, defect.severity);
+      return;
+    }
     await submit({
       kind: "fleet_defect_report",
       endpoint: fleetDefectEndpoint(target.fleet_asset_id),
-      payload: {
-        fleet_asset_id: target.fleet_asset_id,
-        detected_at: new Date().toISOString(),
-        severity: defect.severity,
-        description: description.slice(0, DESCRIPTION_MAX_LENGTH),
-      },
+      payload,
       savedMessage:
         defect.severity === "Out of Service"
           ? "Fault saved on this device. Do not use this one. It goes up on its own."
           : "Fault saved on this device. It goes up on its own and keeps the same record if you retry.",
     });
+  }
+
+  async function submitPhotoDefect(
+    target: FleetPanelAsset,
+    payload: Record<string, unknown>,
+    severity: FleetDefectSeverity,
+  ) {
+    const deviceActionId = crypto.randomUUID();
+    setBusy(true);
+    setError(undefined);
+    setStatus(undefined);
+    try {
+      await apiRequest({
+        path: fleetDefectEndpoint(target.fleet_asset_id),
+        schema: fleetVerifiedActionSchema,
+        method: "POST",
+        csrfToken: session.csrf_token,
+        deviceActionId,
+        idempotencyKey: deviceActionId,
+        deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+        body: {
+          device_action_id: deviceActionId,
+          payload,
+        },
+      });
+      setStatus(
+        severity === "Out of Service"
+          ? "Fault and photos recorded. Do not use this one."
+          : "Fault and photos recorded. The outbox never carried the images.",
+      );
+      setDraft(undefined);
+      await query.refetch();
+    } catch (caught) {
+      setError(refusalMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitCollision(
+    target: FleetPanelAsset,
+    collision: Extract<Draft, { kind: "collision" }>,
+  ) {
+    const description = collision.description.trim();
+    if (description.length < 3) {
+      setError("Say what happened in a few words before saving.");
+      return;
+    }
+    if (!navigator.onLine || offlineSession) {
+      setError("A collision report needs a connection. It is not queued through the JSON outbox.");
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setStatus(undefined);
+    try {
+      await apiRequest({
+        path: fleetCollisionEndpoint(target.fleet_asset_id),
+        schema: fleetCollisionResponseSchema,
+        method: "POST",
+        csrfToken: session.csrf_token,
+        deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+        body: {
+          collision_id: newFleetCollisionId(),
+          occurred_at: new Date().toISOString(),
+          severity: collision.severity,
+          description: description.slice(0, DESCRIPTION_MAX_LENGTH),
+        },
+      });
+      setStatus("Collision recorded. This is a vehicle incident, not a safety occurrence.");
+      setDraft(undefined);
+    } catch (caught) {
+      setError(refusalMessage(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(input: {
@@ -694,4 +891,11 @@ function refusalMessage(error: unknown): string {
 function isNonNegativeNumber(value: string): boolean {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0;
+}
+
+function parseFleetDefectSeverity(value: string): FleetDefectSeverity | null {
+  for (const severity of fleetDefectSeverities) {
+    if (severity === value) return severity;
+  }
+  return null;
 }

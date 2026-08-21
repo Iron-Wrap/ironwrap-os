@@ -57,9 +57,16 @@ class FakeDocument(dict):
             raise AssertionError("a bounded fleet capture must not use generic writes")
         self.insert_count += 1
         self.setdefault(
-            "name", self.get("asset_inspection_id") or self.get("asset_defect_id")
+            "name",
+            self.get("asset_inspection_id")
+            or self.get("asset_defect_id")
+            or self.get("evidence_id"),
         )
-        self["name"] = self.get("asset_inspection_id") or self.get("asset_defect_id")
+        self["name"] = (
+            self.get("asset_inspection_id")
+            or self.get("asset_defect_id")
+            or self.get("evidence_id")
+        )
         self._on_write("insert", self)
 
 
@@ -117,6 +124,12 @@ class FakeDb:
                 dict(row)
                 for row in self.fixtures["defects"]
                 if row.get("device_action_id") == values[0]
+            ]
+        if "`tabEvidence Item`" in normalized:
+            return [
+                dict(row)
+                for row in self.fixtures.get("evidence_items", [])
+                if row.get("evidence_id") == values[0]
             ]
         raise AssertionError(f"unexpected SQL: {normalized}")
 
@@ -197,6 +210,8 @@ class FleetOperationsApiTestCase(unittest.TestCase):
                 fixtures["inspections"].append(dict(document))
             elif document.get("doctype") == "Asset Defect":
                 fixtures["defects"].append(dict(document))
+            elif document.get("doctype") == "Evidence Item":
+                fixtures.setdefault("evidence_items", []).append(dict(document))
             else:
                 fixtures["assets"][document["name"]] = dict(document)
 
@@ -504,6 +519,38 @@ class DefectCaptureTests(FleetOperationsApiTestCase):
         module, _fixtures, _db, _transitions = self.load_api()
         with self.assertRaises(FakeValidationError):
             self.record_defect(module, defect={"severity": "Cosmetic"})
+
+    def test_photo_evidence_writes_the_defect_evidence_item(self) -> None:
+        module, fixtures, _db, _transitions = self.load_api()
+        sha256 = "ab" * 32
+        photo = {
+            "attachment_id": "photo-fleet-0001",
+            "file_name": "chamber.jpg",
+            "content_type": "image/jpeg",
+            "sha256": sha256,
+            "r2_key": "fleet/v1/scope/photo/asset-truck-1/photo-fleet-0001.bin",
+        }
+        result = self.record_defect(
+            module,
+            defect={"severity": "Major", "photo_evidence": [photo]},
+        )
+
+        evidence_id = f"fleet-photo:device-fleet-0002:{sha256[:16]}"
+        self.assertEqual(result["record"]["evidence_item"], evidence_id)
+        self.assertEqual(fixtures["defects"][0]["evidence_item"], evidence_id)
+        self.assertEqual(len(fixtures["evidence_items"]), 1)
+        self.assertEqual(fixtures["evidence_items"][0]["evidence_type"], "Photo")
+        self.assertTrue(fixtures["evidence_items"][0]["r2_key"].startswith("fleet/v1/"))
+
+        # A lost-response retry must replay both the defect and the Evidence Item.
+        replay = self.record_defect(
+            module,
+            defect={"severity": "Major", "photo_evidence": [photo]},
+        )
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(replay["record"]["evidence_item"], evidence_id)
+        self.assertEqual(len(fixtures["evidence_items"]), 1)
+        self.assertEqual(len(fixtures["defects"]), 1)
 
 
 class CaptureAuthorizationTests(FleetOperationsApiTestCase):

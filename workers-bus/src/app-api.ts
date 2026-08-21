@@ -142,6 +142,11 @@ import {
 } from "./field-actions.ts";
 import { type FrappeRow } from "./frappe-read.ts";
 import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
+import {
+  handleFleetCollisionCollection,
+  handleFleetCollisionTransition,
+} from "./fleet-collision-api.ts";
+import { handleFleetPhotoUpload } from "./fleet-photo-evidence.ts";
 import { buildFleetPanelReadModel } from "./fleet-panel.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import {
@@ -1102,6 +1107,30 @@ export async function handleAuthenticatedRoute(
   );
   if (req.method === "POST" && fleetDefectMatch) {
     return await handleFleetAssetRoute(req, env, auth, fleetDefectMatch[1], "defect_report");
+  }
+  const fleetPhotoMatch = url.pathname.match(
+    /^\/api\/v1\/fleet\/assets\/([^/]+)\/photo-evidence$/,
+  );
+  if (req.method === "POST" && fleetPhotoMatch) {
+    return await handleFleetPhotoUpload(req, env, auth, fleetPhotoMatch[1]);
+  }
+  const fleetCollisionMatch = url.pathname.match(
+    /^\/api\/v1\/fleet\/assets\/([^/]+)\/collisions$/,
+  );
+  if (fleetCollisionMatch && (req.method === "GET" || req.method === "POST")) {
+    return await handleFleetCollisionCollection(req, env, auth, fleetCollisionMatch[1]);
+  }
+  const fleetCollisionTransitionMatch = url.pathname.match(
+    /^\/api\/v1\/fleet\/assets\/([^/]+)\/collisions\/([^/]+)\/transitions$/,
+  );
+  if (req.method === "POST" && fleetCollisionTransitionMatch) {
+    return await handleFleetCollisionTransition(
+      req,
+      env,
+      auth,
+      fleetCollisionTransitionMatch[1],
+      fleetCollisionTransitionMatch[2],
+    );
   }
   const workPackageCompleteMatch = url.pathname.match(
     /^\/api\/v1\/jobs\/([^/]+)\/work-package\/complete$/,

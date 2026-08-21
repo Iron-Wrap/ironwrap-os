@@ -36,6 +36,8 @@ export interface OperatingIntakeLead {
   received_at: string;
   job_ref: string | null;
   desk_state: IntakeDeskState;
+  not_a_scheduled_job: true;
+  not_a_money_intent: true;
 }
 
 export interface OperatingIntakeReadModel {
@@ -107,6 +109,8 @@ export function projectIntakeLead(
       received_at: row.ts,
       job_ref: row.job_ref,
       desk_state: DESK_STATE,
+      not_a_scheduled_job: true,
+      not_a_money_intent: true,
     },
   ];
 }

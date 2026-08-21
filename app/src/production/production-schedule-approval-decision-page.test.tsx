@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
 import { ApiError } from "../lib/api";
+import { loadProductionRunway } from "./production-api";
+import type { ProductionRunwayResponse } from "./production-contracts";
 import {
   approveProductionScheduleApproval,
   loadProductionScheduleApproval,
@@ -43,6 +45,7 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => router.params,
   useNavigate: () => router.navigate,
 }));
+vi.mock("./production-api", () => ({ loadProductionRunway: vi.fn() }));
 vi.mock("./production-schedule-approval-api", () => ({
   approveProductionScheduleApproval: vi.fn(),
   loadProductionScheduleApproval: vi.fn(),
@@ -133,6 +136,81 @@ function request(
   };
 }
 
+function runwayModel(): ProductionRunwayResponse {
+  return {
+    version: 1,
+    source_updated_at: "2026-07-20T12:00:00.000Z",
+    read_model_generated_at: "2026-07-20T12:00:01.000Z",
+    stale_fields: [],
+    permissions: ["jobs:read:any"],
+    allowed_actions: ["job.read", "production.read"],
+    partial_sources: [],
+    summary: {
+      active_jobs: 1,
+      blocked: 0,
+      scheduled: 1,
+      needs_assignment: 0,
+      ready_for_review: 0,
+      needs_verification: 0,
+    },
+    jobs: [
+      {
+        id: "JOB-001",
+        job_number: "IW-1001",
+        brand: "IronWrap Exteriors",
+        service_type: "Roofing",
+        status: "In Production",
+        version: 1,
+        assignment: {
+          id: "assignment:001",
+          type: "Production",
+          status: "Assigned",
+          assignment_version: 1,
+          roof_job_version: 1,
+          crew_id: "crew:metal-1",
+          crew_version: 1,
+          scheduled_start: "2026-07-20T14:00:00.000Z",
+          scheduled_end: null,
+        },
+        scheduling_preparation_allowed: true,
+        lane: "scheduled",
+        next_action: "Review a bounded schedule request.",
+        gate_coverage: "complete",
+        gate_summary: { expected: 6, blocked: 0, ready: 6, waived: 0, done: 0 },
+        scheduling_gates: [
+          { name: "Deposit", state: "Ready" },
+          { name: "Materials", state: "Ready" },
+          { name: "Safety", state: "Ready" },
+          { name: "Access", state: "Ready" },
+          { name: "Weather", state: "Ready" },
+          { name: "Crew", state: "Ready" },
+        ],
+        material_attention: [],
+      },
+    ],
+    crews: [{ id: "crew:metal-1", name: "Metal crew one", version: 1 }],
+  };
+}
+
+function expectNotInFirstView(text: string | RegExp) {
+  const firstView = screen.queryAllByText(text).filter((match) => {
+    const details = match.closest("details");
+    return !details || details.open;
+  });
+  expect(firstView).toEqual([]);
+}
+
+function firstViewHidesSystemIds() {
+  expectNotInFirstView(/Hermes/i);
+  expectNotInFirstView(/broker/i);
+  expectNotInFirstView("JOB-001");
+  expectNotInFirstView("crew:metal-1");
+  expectNotInFirstView("assignment:001");
+  expectNotInFirstView("2026-07-20T14:00:00.000Z");
+  expectNotInFirstView("run:production-schedule:ui-001");
+  expect(screen.queryByText("create_job_assignment")).not.toBeInTheDocument();
+}
+
 function listModel(
   approval = request(),
   allowedActions = ["production_schedule_approval.read"],
@@ -175,6 +253,7 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
     router.params = { approvalId: "production-schedule-approval:ui-001" };
     vi.mocked(loadProductionScheduleApprovals).mockResolvedValue(listModel());
     vi.mocked(loadProductionScheduleApproval).mockResolvedValue(detailModel());
+    vi.mocked(loadProductionRunway).mockResolvedValue(runwayModel());
     vi.mocked(newProductionScheduleApprovalDecisionKey).mockReturnValue(
       "production-schedule-approval:decision-ui-001",
     );
@@ -183,14 +262,15 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
   it("lists prepared schedule requests without exposing broker internals", async () => {
     const { container } = renderPage(<ProductionScheduleApprovalQueuePage />);
 
-    await screen.findByRole("heading", { name: "Schedule request queue" });
-    expect(screen.getByText("Job JOB-001")).toBeVisible();
-    expect(screen.getByText("Crew crew:metal-1")).toBeVisible();
+    await screen.findByRole("heading", { name: "Schedule requests" });
+    expect(screen.getByText("Job IW-1001")).toBeVisible();
+    expect(screen.getByText("Crew Metal crew one")).toBeVisible();
     expect(screen.getByText(/does not notify the crew/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: /job job-001 crew crew:metal-1/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /job iw-1001 crew metal crew one/i })).toHaveAttribute(
       "href",
       "/production/schedule-approvals/production-schedule-approval:ui-001",
     );
+    firstViewHidesSystemIds();
     expect(container.textContent).not.toMatch(/dry_run_receipt|write_args_json|tool_name/i);
   });
 
@@ -264,7 +344,70 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
       );
     });
     expect(rejectProductionScheduleApproval).not.toHaveBeenCalled();
-    expect(await screen.findByText(/job assignment and hermes run are recorded/i)).toBeVisible();
+    expect(
+      await screen.findByText(/the crew assignment is saved. the schedule service recorded/i),
+    ).toBeVisible();
+    expect(screen.getAllByText("IW-1001").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Metal crew one").length).toBeGreaterThan(0);
+    firstViewHidesSystemIds();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("JOB-001")).toBeVisible();
+    expect(screen.getByText("crew:metal-1")).toBeVisible();
+    expect(screen.getByText("assignment:001")).toBeVisible();
+    expect(screen.getAllByText("run:production-schedule:ui-001").length).toBeGreaterThan(0);
+  });
+
+  it("posts reject to the recorded request with the caller-stable idempotency key", async () => {
+    const user = userEvent.setup();
+    const pending = request();
+    const denied = request({
+      state: "denied",
+      version: 2,
+      rejection_reason: "Weather window is wrong.",
+    });
+    vi.mocked(loadProductionScheduleApproval)
+      .mockResolvedValueOnce(
+        detailModel(pending, [
+          "production_schedule_approval.read",
+          "production_schedule_approval.approve",
+          "production_schedule_approval.reject",
+        ]),
+      )
+      .mockResolvedValue(
+        detailModel(denied, [
+          "production_schedule_approval.read",
+          "production_schedule_approval.reject",
+        ]),
+      );
+    vi.mocked(rejectProductionScheduleApproval).mockResolvedValue({ approval: denied });
+    renderPage(<ProductionScheduleApprovalDetailPage />);
+
+    await screen.findByRole("heading", { name: "Crew assignment request" });
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await user.click(screen.getByLabelText("Why should this request be rejected?"));
+    await user.paste("Weather window is wrong.");
+    await user.click(screen.getByRole("button", { name: "Reject request" }));
+
+    await waitFor(() => {
+      expect(rejectProductionScheduleApproval).toHaveBeenCalledWith(
+        ownerSession,
+        "production-schedule-approval:ui-001",
+        1,
+        "Weather window is wrong.",
+        "production-schedule-approval:decision-ui-001",
+      );
+    });
+    expect(approveProductionScheduleApproval).not.toHaveBeenCalled();
+    expect(newProductionScheduleApprovalDecisionKey).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByText(/the request was rejected. no crew assignment was created/i),
+    ).toBeVisible();
+    expect(screen.getAllByText("Not approved").length).toBeGreaterThan(0);
+    expect(screen.getByText("Weather window is wrong.")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Approve crew assignment" }),
+    ).not.toBeInTheDocument();
+    firstViewHidesSystemIds();
   });
 
   it("fails closed when an uncertain decision cannot be followed by a current read", async () => {
@@ -290,7 +433,9 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
     await screen.findByRole("heading", { name: "Crew assignment request" });
     await user.click(screen.getByRole("button", { name: "Approve crew assignment" }));
 
-    expect(await screen.findByText(/the result is uncertain. do not retry/i)).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /the result is uncertain. do not retry/i,
+    );
     expect(screen.getAllByText("Refresh before another decision").length).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: "Approve crew assignment" }),
@@ -319,7 +464,7 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
         by_user_id: "appu_owner",
         by_frappe_user: "owner@ironwrapexteriors.com",
         outcome: "inconclusive" as const,
-        evidence: "The Hermes Run was unavailable; no second assignment was issued.",
+        evidence: "The schedule service result was unavailable; no second assignment was issued.",
       },
     };
     vi.mocked(loadProductionScheduleApproval)
@@ -343,10 +488,11 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
     expect(
       screen.queryByRole("button", { name: "Approve crew assignment" }),
     ).not.toBeInTheDocument();
+    firstViewHidesSystemIds();
     await user.click(screen.getByRole("button", { name: "Reconcile recorded outcome" }));
-    await user.type(
-      screen.getByLabelText("Reconciliation evidence"),
-      "The Hermes Run was unavailable; no second assignment was issued.",
+    await user.click(screen.getByLabelText("Reconciliation evidence"));
+    await user.paste(
+      "The schedule service result was unavailable; no second assignment was issued.",
     );
     await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
 
@@ -356,7 +502,7 @@ describe("ProductionScheduleApprovalDecisionPages", () => {
         "production-schedule-approval:ui-001",
         3,
         "inconclusive",
-        "The Hermes Run was unavailable; no second assignment was issued.",
+        "The schedule service result was unavailable; no second assignment was issued.",
       );
     });
     expect(approveProductionScheduleApproval).not.toHaveBeenCalled();

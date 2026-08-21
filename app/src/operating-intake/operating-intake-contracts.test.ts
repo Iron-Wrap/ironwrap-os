@@ -33,6 +33,18 @@ describe("Operating intake browser contract", () => {
         leads: [{ ...lead, job_id: "JOB-A" }],
       }).success,
     ).toBe(false);
+    expect(
+      operatingIntakeResponseSchema.safeParse({
+        ...payload,
+        leads: [{ ...lead, not_a_scheduled_job: false }],
+      }).success,
+    ).toBe(false);
+    expect(
+      operatingIntakeResponseSchema.safeParse({
+        ...payload,
+        leads: [{ ...lead, not_a_money_intent: false }],
+      }).success,
+    ).toBe(false);
   });
 
   it("fails closed if the envelope identity is not a website envelope id", () => {

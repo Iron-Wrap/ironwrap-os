@@ -458,7 +458,7 @@ export default {
           recoverExpiredExternalEffects(
             env as import("./app-types.ts").AppEnv,
           ).then((result) => {
-            if (result.recovered > 0) log({ at: "external_effect_lease_sweep", ...result });
+            if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
           }).catch((error) =>
             log({ at: "external_effect_lease_sweep", error: String(error) }),
           ),

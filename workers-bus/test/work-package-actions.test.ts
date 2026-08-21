@@ -28,6 +28,14 @@ class SqliteD1 {
     this.raw.exec(readFileSync(new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url), "utf8"));
   }
 
+  // The effect runtime claims an attempt through env.DB.batch; a sequential
+  // run is equivalent for a synchronous test double.
+  async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+
   prepare(sql: string) {
     return {
       bind: (...args: unknown[]) => {

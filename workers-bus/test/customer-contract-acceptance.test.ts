@@ -46,7 +46,11 @@ class SqliteD1 {
   async batch(statements: SqliteStatement[]): Promise<unknown[]> {
     this.raw.exec("BEGIN IMMEDIATE");
     try {
-      const result = statements.map((statement) => statement.execute());
+      // Return the same D1Result shape as run(): batch callers read meta.changes.
+      const result = statements.map((statement) => {
+        const raw = statement.execute();
+        return { success: true as const, meta: { changes: Number(raw.changes ?? 0) } };
+      });
       this.raw.exec("COMMIT");
       return result;
     } catch (error) {

@@ -75,6 +75,19 @@ class SqliteD1 {
       },
     };
   }
+
+  async batch(statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 function env(db = new SqliteD1()): AppEnv {
@@ -455,7 +468,7 @@ test("the scheduled lease sweep reconciles abandoned attempts and never leaves a
   const effect = await authorized(appEnv, "email:sweep");
   const claimed = await claimExternalEffect(appEnv, effect.effect_id, new Date("2026-08-16T11:58:00.000Z"));
   const result = await recoverExpiredExternalEffects(appEnv, NOW);
-  assert.deepEqual(result, { scanned: 1, recovered: 1 });
+  assert.deepEqual(result, { scanned: 1, recovered: 1, failed: 0, failures: [] });
   const recovered = await getExternalEffect(appEnv, effect.effect_id);
   assert.equal(recovered?.state, "unknown");
   const attempt = await appEnv.DB.prepare(
@@ -514,6 +527,47 @@ test("authority maxAttempts is a total-attempt ceiling, not a retry count", asyn
     () => authorizeExternalEffect(appEnv, twoAttempts.effect_id, { ...AUTHORITY, maxAttempts: 1 }, NOW),
     /effect_policy_retry_ceiling_exceeded/,
   );
+});
+
+test("the lease sweep continues past an unrecoverable row and reports its identity", async () => {
+  const appEnv = env();
+  const healthy = await authorized(appEnv, "email:sweep-healthy");
+  await claimExternalEffect(appEnv, healthy.effect_id, new Date("2026-08-16T11:00:00.000Z"));
+  // A poisoned row: executing with attempt_count > 0 and no attempt row — what
+  // the pre-fix commit-then-throw bug left behind. The runtime can no longer
+  // produce this state, so manufacture it with a direct ledger UPDATE.
+  const poisoned = await authorized(appEnv, "email:sweep-poisoned");
+  await appEnv.DB.prepare(
+    "UPDATE external_effects SET state = 'executing', attempt_count = 1, lease_expires_at = ? WHERE effect_id = ?",
+  ).bind("2026-08-16T11:00:00.000Z", poisoned.effect_id).run();
+
+  const result = await recoverExpiredExternalEffects(appEnv, NOW);
+  assert.equal(result.scanned, 2);
+  assert.equal(result.recovered, 1);
+  assert.equal(result.failed, 1);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].effect_id, poisoned.effect_id);
+  assert.match(result.failures[0].error, /external_effect_attempt_projection_missing/);
+  assert.equal((await getExternalEffect(appEnv, healthy.effect_id))?.state, "unknown");
+  assert.equal((await getExternalEffect(appEnv, poisoned.effect_id))?.state, "executing");
+});
+
+test("a second drive of an executing effect reports in-flight and never double-claims", async () => {
+  const appEnv = env();
+  const effect = await authorized(appEnv);
+  const claimed = await claimExternalEffect(appEnv, effect.effect_id, new Date(NOW));
+  assert.equal(claimed.effect.state, "executing");
+  assert.equal(claimed.attempt.attempt_number, 1);
+  await assert.rejects(
+    () => runExternalEffect(appEnv, request(), {
+      async dispatch() { throw new Error("must_not_dispatch"); },
+      async replay() { throw new Error("must_not_replay"); },
+    }, new Date(NOW)),
+    (error: unknown) => error instanceof EffectRuntimeError && error.code === "effect_in_flight",
+  );
+  const after = (await getExternalEffect(appEnv, effect.effect_id))!;
+  assert.equal(after.state, "executing");
+  assert.equal(after.attempt_count, 1);
 });
 
 test("a remotely claimed attempt uses the same provider readback settlement rules", async () => {

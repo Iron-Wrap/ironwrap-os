@@ -81,7 +81,9 @@ class SqliteD1 {
   }
 
   async batch(statements: SqliteStatement[]): Promise<unknown[]> {
-    if (this.failNextBatch) {
+    // The effect runtime batches its lease claim too; the synthetic loss must
+    // hit the business receipt write, not the claim.
+    if (this.failNextBatch && statements.some((statement) => statement.sql.includes("quickbooks_final_invoice"))) {
       this.failNextBatch = false;
       throw new Error("synthetic business receipt loss");
     }
@@ -99,7 +101,7 @@ class SqliteD1 {
 
 class SqliteStatement {
   private readonly raw: DatabaseSync;
-  private readonly sql: string;
+  readonly sql: string;
   private readonly args: unknown[];
 
   constructor(raw: DatabaseSync, sql: string, args: unknown[]) {

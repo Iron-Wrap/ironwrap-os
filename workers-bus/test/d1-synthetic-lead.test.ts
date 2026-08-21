@@ -5,7 +5,49 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
+import * as leadStore from "../src/store.ts";
 import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
+
+function envelopeWriteTarget(sql: string, args: unknown[]) {
+  if (sql.includes("AND tenant_id = ?")) {
+    return { id: String(args[args.length - 2]), tenantId: String(args[args.length - 1]) };
+  }
+  return { id: String(args[args.length - 1]), tenantId: null };
+}
+
+function applyEnvelopeUpdate(sql: string, args: unknown[], row: Record<string, unknown>) {
+  if (sql.includes("SET status = ?")) {
+    row.status = args[0];
+    if (args[1] != null) row.job_ref = args[1];
+    if (args[2] != null) row.jn_contact_id = args[2];
+    if (args[3] != null) row.jn_job_id = args[3];
+    if (args[4] != null) row.dup_of = args[4];
+    row.last_error = args[5];
+    row.updated_at = args[6];
+    return;
+  }
+  if (sql.includes("SET erpnext_lead_envelope_id")) {
+    row.erpnext_lead_envelope_id = args[0];
+    if (args[1] != null) row.erpnext_roofing_property_id = args[1];
+    if (args[2] != null) row.erpnext_roof_job_id = args[2];
+    if (args[3] != null) row.erpnext_instant_estimate_session_id = args[3];
+    row.erpnext_synced_at = args[4];
+    row.updated_at = args[5];
+    row.erpnext_error = null;
+    return;
+  }
+  if (sql.includes("attempts = attempts + 1")) {
+    row.attempts = Number(row.attempts ?? 0) + 1;
+    if (sql.includes("erpnext_error")) row.erpnext_error = args[0];
+    if (sql.includes("last_error")) row.last_error = args[0];
+    row.updated_at = args[1];
+    return;
+  }
+  if (sql.includes("SET erpnext_error")) {
+    row.erpnext_error = args[0];
+    row.updated_at = args[1];
+  }
+}
 
 const LEAD = {
   name: "Launch Proof",
@@ -112,12 +154,29 @@ function adminEnvBindings(options: {
                     updated_at: args[3],
                   });
                 }
+                if (sql.includes("UPDATE envelopes")) {
+                  const target = envelopeWriteTarget(sql, args);
+                  const row = options.envelopes.get(target.id);
+                  if (!row || (target.tenantId && String(row.tenant_id) !== target.tenantId)) {
+                    return { success: true, meta: { changes: 0 } };
+                  }
+                  applyEnvelopeUpdate(sql, args, row);
+                  return { success: true, meta: { changes: 1 } };
+                }
                 return { success: true, meta: { changes: 1 } };
               },
               first: async () => {
                 options.writes.push({ sql, args });
                 if (sql.includes("FROM dedup_claims")) {
                   return options.dedupClaims.get(String(args[0])) ?? null;
+                }
+                if (sql.includes("SELECT attempts FROM envelopes")) {
+                  const target = envelopeWriteTarget(sql, args);
+                  const row = options.envelopes.get(target.id);
+                  if (!row || (target.tenantId && String(row.tenant_id) !== target.tenantId)) {
+                    return null;
+                  }
+                  return { attempts: row.attempts };
                 }
                 if (sql.includes("SELECT * FROM envelopes WHERE envelope_id = ?")) {
                   const row = options.envelopes.get(String(args[0])) ?? null;
@@ -131,6 +190,22 @@ function adminEnvBindings(options: {
               },
               all: async () => {
                 options.writes.push({ sql, args });
+                if (sql.includes("FROM envelopes") && sql.includes("envelope_id IN")) {
+                  const tenantId = sql.includes("tenant_id") ? String(args[args.length - 1]) : null;
+                  const ids = (tenantId ? args.slice(0, -1) : args).map(String);
+                  return {
+                    results: ids
+                      .map((id) => options.envelopes.get(id))
+                      .filter((row): row is Record<string, unknown> =>
+                        Boolean(row) && (!tenantId || String(row.tenant_id) === tenantId),
+                      )
+                      .map((row) => ({
+                        envelope_id: row.envelope_id,
+                        received_at: row.ts,
+                        bus_status: row.status,
+                      })),
+                  };
+                }
                 if (sql.includes("FROM envelopes") && sql.includes("ORDER BY created_at")) {
                   const tenantId = sql.includes("tenant_id") ? String(args[0]) : null;
                   const results = [...options.envelopes.values()].filter((row) =>
@@ -228,7 +303,10 @@ test("repeating the same synthetic lead returns the original envelope identity",
   assert.equal(firstBody.duplicate, false);
   assert.equal(secondBody.duplicate, true);
   assert.equal(secondBody.status, "duplicate");
+  assert.equal(secondBody.envelope_id, firstBody.envelope_id);
   assert.equal(secondBody.canonical_envelope_id, firstBody.envelope_id);
+  assert.equal(store.envelopes.size, 1, "replay must not mint a second D1 lead row");
+  assert.equal(store.envelopes.get(firstBody.envelope_id)?.status, "pending_jn_push");
   assert.equal(store.queue.length, 1);
   assert.equal(store.queue[0].envelope_id, firstBody.envelope_id);
 });
@@ -270,6 +348,46 @@ test("a second tenant cannot read the first tenant's synthetic lead", async () =
     listedBody.envelopes.some((row) => row.envelope_id === createdBody.envelope_id),
     false,
   );
+});
+
+test("a second tenant cannot write the first tenant's envelope", async () => {
+  const memory = sharedStore();
+  const tenantA = adminEnvBindings({ tenantId: "ironwrap", ...memory });
+  const tenantB = adminEnvBindings({ tenantId: "acme-roofing", ...memory });
+  const created = await worker.fetch(ingestRequest(LEAD), tenantA as never, fakeCtx() as never);
+  const createdBody = (await created.json()) as { envelope_id: string };
+  assert.equal(created.status, 200);
+
+  await leadStore.setStatus(tenantB as never, createdBody.envelope_id, "dead", {
+    last_error: "cross-tenant",
+  });
+  await leadStore.setErpNextSync(tenantB as never, createdBody.envelope_id, {
+    leadEnvelopeId: "LE-LEAK",
+  });
+  await leadStore.setErpNextError(tenantB as never, createdBody.envelope_id, "leaked");
+  const attempts = await leadStore.bumpAttempt(
+    tenantB as never,
+    createdBody.envelope_id,
+    "leaked",
+  );
+  const mirrorAttempts = await leadStore.bumpErpNextMirrorAttempt(
+    tenantB as never,
+    createdBody.envelope_id,
+    "leaked",
+  );
+  const evidence = await leadStore.listLeadMctbEvidence(tenantB as never, [
+    createdBody.envelope_id,
+  ]);
+
+  const row = memory.envelopes.get(createdBody.envelope_id);
+  assert.equal(row?.status, "pending_jn_push");
+  assert.equal(row?.last_error, null);
+  assert.equal(row?.attempts, 0);
+  assert.equal(row?.erpnext_lead_envelope_id, undefined);
+  assert.equal(row?.erpnext_error, undefined);
+  assert.equal(attempts, 0);
+  assert.equal(mirrorAttempts, 0);
+  assert.equal(evidence.envelopes.length, 0);
 });
 
 test("ingest refuses an unverified tenant identity before any D1 mutation", async () => {

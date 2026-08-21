@@ -17,7 +17,7 @@ inbound (website/phone/gbp/ad/referral/manual)
   │  POST /ingest/:source   (Bearer INGEST_TOKEN)
   ▼
 [1] raw body → R2  ............... FIRST, nothing is ever lost
-[2] canonical envelope → D1 ...... system of record (status=pending_jn_push)
+[2] canonical envelope → D1 ...... system of record (`envelopes.tenant_id` + status=pending_jn_push)
 [3] instant-ack (ctx.waitUntil) .. prospect email + owner alert — OFF the owned-store write
 [4] enqueue → JN_QUEUE
         │
@@ -61,7 +61,8 @@ IronWrap PWA
 | Canonical lead envelope `{source,contact,job_ref,payload,ts}` | `core.ts:normalizeEnvelope` |
 | Raw submission stored FIRST | `index.ts:handleIngest` step 1 → `store.putRaw` (R2) |
 | Owned intake record precedes side effects | `store.insertEnvelope` (D1) before any JN push |
-| Dedup/idempotency on phone/email, all paths | `core.ts:dedupKey` + `store.claimDedup` backed by D1 `dedup_claims` |
+| Dedup/idempotency on phone/email, all paths | `core.ts:dedupKey` + `store.claimDedup` backed by D1 `dedup_claims`; a contact replay returns the original `envelope_id` / `canonical_envelope_id` and does not insert a second `envelopes` row |
+| Operating tenant on the lead row | `envelopes.tenant_id` (migration 0082); ingest refuses unverified `APP_TENANT_ID` labels before mutation |
 | Instant-ack/MCTB off the owned-store write (interim email pre-A2P) | `index.ts` step 5 → `notify.sendInstantAck` |
 | Partial-write repair (pending_jn_push→pushed, retry sweep) | `queue` handler + `scheduled` retry sweep |
 | Dead-letter on a redundant channel (email, not SMS-only) | DLQ consumer → `notify.sendOwnerAlert`; dead-letter rows keep a redacted payload pointer |
@@ -168,7 +169,7 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
+| POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual); response includes `envelope_id`, `canonical_envelope_id`, and `tenant_id` |
 | POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/facet-design` | dedicated HMAC + exact source-tenant map | receive only `facet.design.approved.v1` design-decision evidence; raw R2 first, immutable local-tenant D1 receipt/nonce second, no quote/contract/Frappe side effect |

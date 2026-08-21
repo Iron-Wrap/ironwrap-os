@@ -7,6 +7,12 @@ function envTenantId(env: { APP_TENANT_ID?: string }): string | null {
   return operatingTenantId(env.APP_TENANT_ID);
 }
 
+function requireEnvTenantId(env: { APP_TENANT_ID?: string }): string {
+  const tenantId = envTenantId(env);
+  if (!tenantId) throw new Error("tenant_identity_required");
+  return tenantId;
+}
+
 function dedupClaimKey(tenantId: string, key: string): string {
   return `t:${tenantId}:${key}`;
 }
@@ -235,12 +241,13 @@ export async function listLeadMctbEvidence(
   const ids = [...new Set(envelopeIds.filter((id) => id.length > 0))];
   if (ids.length === 0) return { envelopes: [], receipts: [] };
   if (ids.length > 100) throw new Error("lead_mctb_too_many_envelopes");
+  const tenantId = requireEnvTenantId(env);
   const placeholders = ids.map(() => "?").join(",");
   const [envelopes, receipts] = await Promise.all([
     env.DB.prepare(
       `SELECT envelope_id, ts AS received_at, status AS bus_status
-       FROM envelopes WHERE envelope_id IN (${placeholders})`,
-    ).bind(...ids).all<LeadMctbEnvelope>(),
+       FROM envelopes WHERE envelope_id IN (${placeholders}) AND tenant_id = ?`,
+    ).bind(...ids, tenantId).all<LeadMctbEnvelope>(),
     env.DB.prepare(
       `SELECT receipt_id, envelope_id, channel, outcome, observed_at, provider_message_id, error_code, created_at
        FROM lead_ack_receipts WHERE envelope_id IN (${placeholders})
@@ -333,14 +340,15 @@ export async function findEstimateSubmission(env: Env, key: string): Promise<Env
 export async function setStatus(
   env: Env, id: string, status: Status, patch: Partial<EnvelopeRecord> = {},
 ): Promise<void> {
+  const tenantId = requireEnvTenantId(env);
   await env.DB.prepare(
     `UPDATE envelopes SET status = ?, job_ref = COALESCE(?, job_ref),
        jn_contact_id = COALESCE(?, jn_contact_id),
        jn_job_id = COALESCE(?, jn_job_id), dup_of = COALESCE(?, dup_of),
-       last_error = ?, updated_at = ? WHERE envelope_id = ?`,
+       last_error = ?, updated_at = ? WHERE envelope_id = ? AND tenant_id = ?`,
   ).bind(
     status, patch.job_ref ?? null, patch.jn_contact_id ?? null, patch.jn_job_id ?? null, patch.dup_of ?? null,
-    patch.last_error ?? null, nowIso(), id,
+    patch.last_error ?? null, nowIso(), id, tenantId,
   ).run();
 }
 
@@ -352,13 +360,14 @@ export interface ErpNextSyncPatch {
 }
 
 export async function setErpNextSync(env: Env, id: string, patch: ErpNextSyncPatch): Promise<void> {
+  const tenantId = requireEnvTenantId(env);
   await env.DB.prepare(
     `UPDATE envelopes SET erpnext_lead_envelope_id = ?,
        erpnext_roofing_property_id = COALESCE(?, erpnext_roofing_property_id),
        erpnext_roof_job_id = COALESCE(?, erpnext_roof_job_id),
        erpnext_instant_estimate_session_id = COALESCE(?, erpnext_instant_estimate_session_id),
        erpnext_synced_at = ?,
-       erpnext_error = NULL, updated_at = ? WHERE envelope_id = ?`,
+       erpnext_error = NULL, updated_at = ? WHERE envelope_id = ? AND tenant_id = ?`,
   ).bind(
     patch.leadEnvelopeId,
     patch.roofingPropertyId ?? null,
@@ -367,13 +376,15 @@ export async function setErpNextSync(env: Env, id: string, patch: ErpNextSyncPat
     nowIso(),
     nowIso(),
     id,
+    tenantId,
   ).run();
 }
 
 export async function setErpNextError(env: Env, id: string, error: string): Promise<void> {
+  const tenantId = requireEnvTenantId(env);
   await env.DB.prepare(
-    `UPDATE envelopes SET erpnext_error = ?, updated_at = ? WHERE envelope_id = ?`,
-  ).bind(error, nowIso(), id).run();
+    `UPDATE envelopes SET erpnext_error = ?, updated_at = ? WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(error, nowIso(), id, tenantId).run();
 }
 
 /**
@@ -385,21 +396,25 @@ export async function setErpNextError(env: Env, id: string, error: string): Prom
  * look invalid on a later idempotent request.
  */
 export async function bumpErpNextMirrorAttempt(env: Env, id: string, error: string): Promise<number> {
+  const tenantId = requireEnvTenantId(env);
   await env.DB.prepare(
-    `UPDATE envelopes SET attempts = attempts + 1, erpnext_error = ?, updated_at = ? WHERE envelope_id = ?`,
-  ).bind(error, nowIso(), id).run();
-  const row = await env.DB.prepare(`SELECT attempts FROM envelopes WHERE envelope_id = ?`)
-    .bind(id).first<{ attempts: number }>();
+    `UPDATE envelopes SET attempts = attempts + 1, erpnext_error = ?, updated_at = ? WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(error, nowIso(), id, tenantId).run();
+  const row = await env.DB.prepare(
+    `SELECT attempts FROM envelopes WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(id, tenantId).first<{ attempts: number }>();
   return row?.attempts ?? 0;
 }
 
 /** Atomically bump attempts and stamp the error; returns the new attempt count. */
 export async function bumpAttempt(env: Env, id: string, error: string): Promise<number> {
+  const tenantId = requireEnvTenantId(env);
   await env.DB.prepare(
-    `UPDATE envelopes SET attempts = attempts + 1, last_error = ?, updated_at = ? WHERE envelope_id = ?`,
-  ).bind(error, nowIso(), id).run();
-  const row = await env.DB.prepare(`SELECT attempts FROM envelopes WHERE envelope_id = ?`)
-    .bind(id).first<{ attempts: number }>();
+    `UPDATE envelopes SET attempts = attempts + 1, last_error = ?, updated_at = ? WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(error, nowIso(), id, tenantId).run();
+  const row = await env.DB.prepare(
+    `SELECT attempts FROM envelopes WHERE envelope_id = ? AND tenant_id = ?`,
+  ).bind(id, tenantId).first<{ attempts: number }>();
   return row?.attempts ?? 0;
 }
 
@@ -1299,19 +1314,21 @@ export async function countRecoveredAutoReplays(env: Env): Promise<number> {
 
 /** Claim a dead envelope for replay without clearing its forensic error state. */
 export async function markEnvelopeReplayPending(env: Env, envelopeId: string): Promise<boolean> {
+  const tenantId = requireEnvTenantId(env);
   const result = await env.DB.prepare(
     `UPDATE envelopes SET status = 'pending_jn_push', updated_at = ?
-     WHERE envelope_id = ? AND status = 'dead'`,
-  ).bind(nowIso(), envelopeId).run();
+     WHERE envelope_id = ? AND tenant_id = ? AND status = 'dead'`,
+  ).bind(nowIso(), envelopeId, tenantId).run();
   return d1Changes(result) === 1;
 }
 
 /** Roll back only an unconsumed replay claim after queue publication fails or is uncertain. */
 export async function restoreEnvelopeReplayDead(env: Env, envelopeId: string): Promise<boolean> {
+  const tenantId = requireEnvTenantId(env);
   const result = await env.DB.prepare(
     `UPDATE envelopes SET status = 'dead', updated_at = ?
-     WHERE envelope_id = ? AND status = 'pending_jn_push'`,
-  ).bind(nowIso(), envelopeId).run();
+     WHERE envelope_id = ? AND tenant_id = ? AND status = 'pending_jn_push'`,
+  ).bind(nowIso(), envelopeId, tenantId).run();
   return d1Changes(result) === 1;
 }
 

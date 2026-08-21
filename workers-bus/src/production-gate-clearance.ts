@@ -126,16 +126,11 @@ export function isClearableProductionGate(
 }
 
 /**
- * Who may ask for a clearance at the edge. The decision of record is still the
- * Frappe actor check: an office session whose app user carries no Frappe identity
- * has nobody to attribute the clearance to, and a clearance nobody is accountable
- * for is the one thing this rail must not produce.
+ * Who may ask for a clearance at the edge. Attribution is the app user and
+ * role, not a leftover Frappe identity.
  */
 export function mayClearProductionGate(auth: AuthContext): boolean {
-  return (
-    auth.permissions.includes(CLEARANCE_PERMISSION) &&
-    Boolean(auth.session.frappe_user_id?.trim())
-  );
+  return auth.permissions.includes(CLEARANCE_PERMISSION);
 }
 
 export function parseProductionGateClearance(
@@ -215,7 +210,7 @@ export function depositSettlementReceipt(input: {
   tenantId: string;
   roofJobId: string;
   decisionId: string;
-  clearedByFrappeUser: string;
+  clearedByUserId: string;
   intent: AccountingIntentRecord;
 }): string {
   return canonicalJson({
@@ -226,7 +221,7 @@ export function depositSettlementReceipt(input: {
     tenant_id: input.tenantId,
     roof_job_id: input.roofJobId,
     decision_id: input.decisionId,
-    cleared_by_frappe_user: input.clearedByFrappeUser,
+    cleared_by_user_id: input.clearedByUserId,
     settlement_observed_at: settlementObservedAt(input.intent),
     money_intent: {
       intent_id: input.intent.intent_id,
@@ -373,7 +368,15 @@ export function frappeRefusalCode(body: string): string {
 }
 
 export interface ProductionGateClearanceDeps {
+  /** Leftover Frappe writer. The required path persists on D1 and ignores this. */
   frappe?: ProductionGateClearanceFrappeWriter;
+}
+
+interface NativeClearanceResult {
+  gate: Record<string, unknown>;
+  evidence_item: string | null;
+  actor_role: string;
+  replayed: boolean;
 }
 
 export async function handleProductionGateClearance(
@@ -384,6 +387,7 @@ export async function handleProductionGateClearance(
   gate: string,
   deps: ProductionGateClearanceDeps = {},
 ): Promise<Response> {
+  void deps;
   if (!mayClearProductionGate(auth)) {
     return json({ error: "production_gate_clearance_forbidden" }, 403);
   }
@@ -423,28 +427,22 @@ export async function handleProductionGateClearance(
     return json({ error: "production_gate_record_unavailable" }, 409);
   }
 
-  const frappe = deps.frappe ?? frappeProductionGateWriter(env);
-  const actorUser = auth.session.frappe_user_id!.trim();
+  const actorUserId = auth.session.user_id.trim();
   try {
     const result = input.basis === "deposit_settlement" || input.reason === null
-      ? await clearOnDepositSettlement(env, auth, input, actorUser, frappe)
-      : await frappe.clear({
-        roofJobId: input.roofJobId,
-        gate: input.gate,
-        clearance: "waived",
-        actorUser,
-        decisionId: input.decisionId,
-        reason: input.reason,
+      ? await clearOnDepositSettlement(env, auth, input, actorUserId)
+      : await persistNativeClearance(env, auth, input, {
+        state: "waived",
+        evidenceItem: null,
+        evidenceRefs: null,
+        clearedAt: new Date().toISOString(),
       });
     return json({
       gate: result.gate,
       basis: input.basis,
-      // A waiver is a decision, not a proof, and the answer says so in the same
-      // field the screen reads: nothing downstream should have to infer it from
-      // the absence of an evidence id.
       clearance: input.basis === "deposit_settlement" ? "verified" : "waived",
       evidence_item: result.evidence_item ?? null,
-      actor_role: result.actor_role ?? null,
+      actor_role: result.actor_role,
       replayed: result.replayed === true,
     });
   } catch (error) {
@@ -455,13 +453,98 @@ export async function handleProductionGateClearance(
   }
 }
 
+async function persistNativeClearance(
+  env: AppEnv,
+  auth: AuthContext,
+  input: ProductionGateClearanceRequest,
+  write: {
+    state: "complete" | "waived";
+    evidenceItem: string | null;
+    evidenceRefs: Record<string, unknown> | null;
+    clearedAt: string;
+  },
+): Promise<NativeClearanceResult> {
+  if (!env.DB) {
+    throw new ProductionGateClearanceError("production_gate_store_unavailable", 503);
+  }
+  const existing = await env.DB.prepare(
+    `SELECT gate_id, tenant_id, roof_job_id, gate, state, version, clearance_decision_id
+       FROM operating_production_gates
+      WHERE tenant_id = ? AND roof_job_id = ? AND gate = ?
+      LIMIT 1`,
+  ).bind(auth.session.tenant_id, input.roofJobId, input.gate).first<{
+    gate_id: string;
+    tenant_id: string;
+    roof_job_id: string;
+    gate: string;
+    state: string;
+    version: number;
+    clearance_decision_id: string | null;
+  }>();
+  if (!existing) {
+    throw new ProductionGateClearanceError("production_gate_record_unavailable", 409);
+  }
+  if (existing.clearance_decision_id === input.decisionId) {
+    return {
+      gate: {
+        name: existing.gate_id,
+        gate: existing.gate,
+        roof_job: existing.roof_job_id,
+        state: existing.state === "waived" ? "Waived" : "Ready",
+      },
+      evidence_item: write.evidenceItem,
+      actor_role: auth.session.role,
+      replayed: true,
+    };
+  }
+  if (existing.state === "complete" || existing.state === "waived") {
+    throw new ProductionGateClearanceError("production_gate_already_cleared", 409);
+  }
+  const result = await env.DB.prepare(
+    `UPDATE operating_production_gates
+        SET state = ?,
+            version = version + 1,
+            updated_at = ?,
+            clearance_basis = ?,
+            clearance_decision_id = ?,
+            cleared_by_user_id = ?,
+            evidence_refs_json = ?,
+            cleared_at = ?
+      WHERE gate_id = ? AND tenant_id = ? AND version = ?`,
+  ).bind(
+    write.state,
+    write.clearedAt,
+    input.basis,
+    input.decisionId,
+    auth.session.user_id,
+    write.evidenceRefs ? JSON.stringify(write.evidenceRefs) : null,
+    write.clearedAt,
+    existing.gate_id,
+    auth.session.tenant_id,
+    existing.version,
+  ).run();
+  if (Number(result.meta?.changes ?? 0) !== 1) {
+    throw new ProductionGateClearanceError("production_gate_version_conflict", 409);
+  }
+  return {
+    gate: {
+      name: existing.gate_id,
+      gate: existing.gate,
+      roof_job: existing.roof_job_id,
+      state: write.state === "waived" ? "Waived" : "Ready",
+    },
+    evidence_item: write.evidenceItem,
+    actor_role: auth.session.role,
+    replayed: false,
+  };
+}
+
 async function clearOnDepositSettlement(
   env: AppEnv,
   auth: AuthContext,
   input: ProductionGateClearanceRequest,
-  actorUser: string,
-  frappe: ProductionGateClearanceFrappeWriter,
-): Promise<Record<string, unknown>> {
+  actorUserId: string,
+): Promise<NativeClearanceResult> {
   let intents: AccountingIntentRecord[];
   try {
     intents = await listAccountingIntents(env, auth.session.tenant_id, {
@@ -476,9 +559,6 @@ async function clearOnDepositSettlement(
   if (!intent) {
     throw new ProductionGateClearanceError("deposit_settlement_not_observed", 409);
   }
-  // The gate's Evidence Item is captured when the settlement was observed, not when
-  // an office manager happened to press the button. A money record with no readable
-  // observation time cannot be dated honestly, so it clears nothing.
   const observedAt = settlementObservedAt(intent);
   if (!observedAt) {
     throw new ProductionGateClearanceError("deposit_settlement_not_observed", 409);
@@ -487,7 +567,7 @@ async function clearOnDepositSettlement(
     tenantId: auth.session.tenant_id,
     roofJobId: input.roofJobId,
     decisionId: input.decisionId,
-    clearedByFrappeUser: actorUser,
+    clearedByUserId: actorUserId,
     intent,
   });
   const checksum = await sha256Hex(receipt);
@@ -497,20 +577,18 @@ async function clearOnDepositSettlement(
   } catch {
     throw new ProductionGateClearanceError("production_gate_receipt_unavailable", 503);
   }
-  return await frappe.clear({
-    roofJobId: input.roofJobId,
-    gate: input.gate,
-    clearance: "verified",
-    actorUser,
-    decisionId: input.decisionId,
-    reason: depositReason(intent),
-    evidence: {
-      r2_key: r2Key,
-      content_checksum: checksum,
-      content_type: RECEIPT_CONTENT_TYPE,
-      content_length: new TextEncoder().encode(receipt).byteLength,
-      captured_at: observedAt,
-      summary: `Deposit settlement observed on money intent ${intent.intent_id}`,
-    },
+  const evidence = {
+    r2_key: r2Key,
+    content_checksum: checksum,
+    content_type: RECEIPT_CONTENT_TYPE,
+    content_length: new TextEncoder().encode(receipt).byteLength,
+    captured_at: observedAt,
+    summary: `Deposit settlement observed on money intent ${intent.intent_id}`,
+  };
+  return await persistNativeClearance(env, auth, input, {
+    state: "complete",
+    evidenceItem: `gate-clearance:${input.decisionId}`,
+    evidenceRefs: evidence,
+    clearedAt: observedAt,
   });
 }

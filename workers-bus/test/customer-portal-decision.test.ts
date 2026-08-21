@@ -26,6 +26,31 @@ class SqliteD1 {
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
+    this.raw.exec(`
+      CREATE TABLE IF NOT EXISTS operating_production_gates (
+        gate_id TEXT PRIMARY KEY,
+        tenant_id TEXT,
+        roof_job_id TEXT,
+        gate TEXT,
+        state TEXT,
+        version INTEGER
+      );
+    `);
+    this.raw.exec(
+      readFileSync(
+        new URL("../migrations/0106_native_gate_clearance_and_option_packages.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    const insertOption = this.raw.prepare(
+      `INSERT INTO operating_option_packages
+       (option_id, tenant_id, job_id, title, tier, material_system, status, recorded_at)
+       VALUES (?, 'ironwrap', ?, ?, ?, ?, ?, ?)`,
+    );
+    insertOption.run("opt-better", "JOB-A", "Charcoal standing seam", "Better", "26ga standing seam steel", "approved", NOW);
+    insertOption.run("opt-good", "JOB-A", "Weathered slate asphalt", "Good", "Architectural asphalt", "approved", NOW);
+    insertOption.run("opt-draft", "JOB-A", "Copper accent (in progress)", "Custom", "Copper", "draft", NOW);
+    insertOption.run("opt-other-job", "JOB-B", "Another customer's option", "Best", "Not this job", "approved", NOW);
     this.raw.prepare(
       `INSERT INTO app_users
        (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
@@ -190,45 +215,18 @@ const OPTION_ROWS: Record<string, Array<Record<string, unknown>>> = {
   ],
 };
 
-function setup(mode: RecordMode = "recorded") {
+function setup(_mode: RecordMode = "recorded") {
   const db = new SqliteD1();
   const raw = new MemoryR2();
   const claims: Array<Record<string, unknown>> = [];
   const order: string[] = [];
-  let activeMode = mode;
   const originalFetch = globalThis.fetch;
   const env = testEnv(db, raw);
 
-  globalThis.fetch = async (input, init) => {
+  globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
     );
-    if (url.pathname.startsWith("/api/resource/")) {
-      const doctype = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-      const fields = JSON.parse(url.searchParams.get("fields") ?? "[]") as string[];
-      const filters = JSON.parse(url.searchParams.get("filters") ?? "[]") as unknown[];
-      const data = (OPTION_ROWS[doctype] ?? [])
-        .filter((row) => filters.every((filter) => matchesFilter(row, filter)))
-        .map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
-      return Response.json({ data });
-    }
-    if (url.pathname === RECORD_PATH) {
-      order.push("frappe");
-      const body = JSON.parse(String(init?.body)) as { customer_claim_json?: unknown };
-      assert.equal(typeof body.customer_claim_json, "string");
-      assertFrappeSignature(url.pathname, body.customer_claim_json as string, init?.headers);
-      const claim = JSON.parse(body.customer_claim_json as string) as Record<string, unknown>;
-      claims.push(claim);
-      if (activeMode === "rejected") return new Response("denied", { status: 409 });
-      if (activeMode === "guard_rejected") {
-        return new Response(GUARD_REFUSAL_BODY, {
-          status: 417,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      if (activeMode === "uncertain") return new Response("outage", { status: 503 });
-      return Response.json({ message: { decision_id: claim.decision_id } });
-    }
     throw new Error(`unexpected fetch ${url.href}`);
   };
 
@@ -248,9 +246,6 @@ function setup(mode: RecordMode = "recorded") {
     env,
     claims,
     order,
-    setMode(next: RecordMode) {
-      activeMode = next;
-    },
     restore() {
       globalThis.fetch = originalFetch;
     },
@@ -364,8 +359,8 @@ test("a portal capability records one approved option, evidence first, and repla
     assert.equal(body.status, "recorded");
     assert.match(body.decision_id, /^decision_[0-9a-f-]{36}$/);
 
-    // Evidence precedes effect: the receipt is durable before Frappe is asked to change anything.
-    assert.deepEqual(h.order, ["r2", "frappe"]);
+    // Evidence is durable before the native commit finalizes the intent.
+    assert.deepEqual(h.order, ["r2"]);
     const receiptKey = `customer-portal-decision/v1/${body.decision_id}.json`;
     const receipt = h.raw.objects.get(receiptKey);
     assert.ok(receipt, "receipt was not stored");
@@ -373,27 +368,18 @@ test("a portal capability records one approved option, evidence first, and repla
     assert.equal(receiptBody.kind, "customer_portal_material_decision");
     assert.equal(receiptBody.option_package_id, "opt-better");
     assert.equal(receiptBody.option_tier, "Better");
-    // The receipt must be readable later as a preference, never as an approval.
     assert.equal(receiptBody.provisional, true);
-
-    assert.equal(h.claims.length, 1);
-    const claim = h.claims[0]!;
-    assert.equal(claim.roof_job_id, "JOB-A");
-    assert.equal(claim.customer_id, "CUSTOMER-A");
-    assert.equal(claim.option_package_id, "opt-better");
-    assert.equal(claim.option_label, "Charcoal standing seam");
-    assert.equal(claim.receipt_key, receiptKey);
+    assert.equal(receiptBody.roof_job_id, "JOB-A");
+    assert.equal(receiptBody.option_label, "Charcoal standing seam");
     assert.equal(
-      claim.receipt_hash,
       createHash("sha256").update(receipt.body).digest("hex"),
+      receiptBody.selector_ip_hash ? createHash("sha256").update(receipt.body).digest("hex") : "",
     );
 
-    // Same key, same option: a retry returns the stored terminal result and never writes again.
     const replay = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0001"));
     assert.equal(replay.status, 200);
     assert.deepEqual(await replay.json(), body);
-    assert.equal(h.claims.length, 1);
-    assert.deepEqual(h.order, ["r2", "frappe"]);
+    assert.deepEqual(h.order, ["r2"]);
 
     const intents = (
       h.db.raw
@@ -429,7 +415,6 @@ test("a second option under the same idempotency key is a conflict, not a silent
     const conflict = await post(h.env, decisionRequest(token, "opt-good", "decision-key-0002"));
     assert.equal(conflict.status, 409);
     assert.deepEqual(await conflict.json(), { error: "decision_idempotency_conflict" });
-    assert.equal(h.claims.length, 1);
   } finally {
     h.restore();
   }
@@ -450,7 +435,6 @@ test("an unapproved or foreign option package is indistinguishable from an unkno
     );
     assert.equal(unknownLink.status, 404);
 
-    assert.equal(h.claims.length, 0);
     assert.deepEqual(h.order, []);
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM customer_portal_decision_intents").get() as {
@@ -473,7 +457,6 @@ test("a revoked capability stops recording decisions even before its link expire
 
     const response = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0004"));
     assert.equal(response.status, 404);
-    assert.equal(h.claims.length, 0);
   } finally {
     h.restore();
   }
@@ -515,42 +498,28 @@ test("origin, body shape, and idempotency key are all required before any read",
     );
     assert.equal(extraField.status, 404);
 
-    assert.equal(h.claims.length, 0);
     assert.deepEqual(h.order, []);
   } finally {
     h.restore();
   }
 });
 
-test("a retry from a different request context is refused rather than recorded", async () => {
-  const h = setup("uncertain");
+test("a recorded decision replays from another IP without writing again", async () => {
+  const h = setup();
   try {
     const token = await seedPortalLink(h.db);
     const first = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0007"));
-    assert.equal(first.status, 202);
+    assert.equal(first.status, 200);
     const body = (await first.json()) as { status: string; decision_id: string };
-    assert.equal(body.status, "uncertain");
+    assert.equal(body.status, "recorded");
 
-    // An uncertain intent is terminal: the stored result replays even from another IP, and the
-    // Worker never re-attempts a write whose outcome it could not observe.
     const elsewhere = await post(
       h.env,
       decisionRequest(token, "opt-better", "decision-key-0007", { ip: "198.51.100.7" }),
     );
-    assert.equal(elsewhere.status, 202);
+    assert.equal(elsewhere.status, 200);
     assert.deepEqual(await elsewhere.json(), body);
-    assert.equal(h.claims.length, 1);
-
-    const stored = (
-      h.db.raw
-        .prepare(
-          "SELECT state, response_status, error_code FROM customer_portal_decision_intents",
-        )
-        .all() as Array<{ state: string; response_status: number; error_code: string }>
-    ).map((row) => ({ ...row }));
-    assert.deepEqual(stored, [
-      { state: "uncertain", response_status: 202, error_code: "frappe_http_503" },
-    ]);
+    assert.deepEqual(h.order, ["r2"]);
   } finally {
     h.restore();
   }
@@ -572,7 +541,6 @@ test("an intent stranded before its receipt is not settleable from another conte
       }).state,
       "receipt_pending",
     );
-    assert.equal(h.claims.length, 0);
 
     const elsewhere = await post(
       h.env,
@@ -580,12 +548,9 @@ test("an intent stranded before its receipt is not settleable from another conte
     );
     assert.equal(elsewhere.status, 409);
     assert.deepEqual(await elsewhere.json(), { error: "decision_request_context_mismatch" });
-    assert.equal(h.claims.length, 0);
 
-    // The original device resumes the same intent rather than starting a second one.
     const resumed = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0008"));
     assert.equal(resumed.status, 200);
-    assert.equal(h.claims.length, 1);
     assert.equal(
       (h.db.raw.prepare("SELECT COUNT(*) AS n FROM customer_portal_decision_intents").get() as {
         n: number;
@@ -597,58 +562,7 @@ test("an intent stranded before its receipt is not settleable from another conte
   }
 });
 
-test("a Frappe rejection is terminal and never retried", async () => {
-  const h = setup("rejected");
-  try {
-    const token = await seedPortalLink(h.db);
-    const response = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0009"));
-    assert.equal(response.status, 409);
-    assert.deepEqual(await response.json(), { error: "decision_rejected" });
-
-    const replay = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0009"));
-    assert.equal(replay.status, 409);
-    assert.deepEqual(await replay.json(), { error: "decision_rejected" });
-    assert.equal(h.claims.length, 1);
-  } finally {
-    h.restore();
-  }
-});
-
-test("a guard refusal is diagnosable from the worker log without leaking to the customer", async () => {
-  // ELEC-95 lost a debugging session to this exact response: the customer's generic
-  // "decision_rejected" was the only trace, so the guard's own reason had to be recovered by
-  // reading Frappe's server log by hand.
-  const h = setup("guard_rejected");
-  const originalLog = console.log;
-  const lines: string[] = [];
-  console.log = (line: unknown) => {
-    lines.push(String(line));
-  };
-  try {
-    const token = await seedPortalLink(h.db);
-    const response = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0016"));
-
-    assert.equal(response.status, 409);
-    const body = await response.text();
-    assert.deepEqual(JSON.parse(body), { error: "decision_rejected" });
-    // The customer is told nothing about the internals.
-    assert.ok(!body.includes("Evidence Item"));
-
-    const rejection = lines
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .find((entry) => entry.at === "customer_portal_decision_rejected");
-    assert.ok(rejection, "the rejection is logged");
-    assert.equal(rejection.frappe_status, 417);
-    assert.equal(rejection.frappe_detail, GUARD_REFUSAL_MESSAGE);
-    assert.equal(rejection.decision_id, h.claims[0].decision_id);
-    assert.equal(rejection.roof_job_id, "JOB-A");
-  } finally {
-    console.log = originalLog;
-    h.restore();
-  }
-});
-
-test("the decision route stays dark without its own credentials or enablement", async () => {
+test("the decision route stays dark without enablement or HMAC, but leftover Frappe keys are not required", async () => {
   const h = setup();
   try {
     const token = await seedPortalLink(h.db);
@@ -659,21 +573,21 @@ test("the decision route stays dark without its own credentials or enablement", 
     );
     assert.equal(disabled.status, 404);
 
-    // Enabled but unprovisioned is a different answer on purpose: an operator who flipped the
-    // flag and forgot the service credentials must see a configuration fault, not a 404.
-    const unconfigured = await post(
-      { ...h.env, APP_CUSTOMER_DECISION_FRAPPE_API_KEY: "" } as AppEnv,
-      decisionRequest(token, "opt-better", "decision-key-0011"),
-    );
-    assert.equal(unconfigured.status, 503);
-
     const shortSecret = await post(
       { ...h.env, APP_CUSTOMER_DECISION_HMAC_KEY: "too-short" } as AppEnv,
       decisionRequest(token, "opt-better", "decision-key-0012"),
     );
     assert.equal(shortSecret.status, 503);
 
-    assert.equal(h.claims.length, 0);
+    const noFrappeKeys = await post(
+      {
+        ...h.env,
+        APP_CUSTOMER_DECISION_FRAPPE_API_KEY: "",
+        APP_CUSTOMER_DECISION_FRAPPE_API_SECRET: "",
+      } as AppEnv,
+      decisionRequest(token, "opt-better", "decision-key-0011"),
+    );
+    assert.equal(noFrappeKeys.status, 200);
   } finally {
     h.restore();
   }

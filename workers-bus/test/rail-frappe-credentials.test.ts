@@ -80,7 +80,18 @@ test("readiness reports the isolation gap only for a Worker that actually serves
   assert.equal(railCredentialIsolationConfigured(env({ APP_BFF_ENABLED: "false" })), true);
   assert.deepEqual(railCredentialIsolationFailures(env({ APP_BFF_ENABLED: "false" })), []);
 
-  const enabled = { APP_BFF_ENABLED: "true" } as Partial<AppEnv>;
+  // Office BFF without the leftover Frappe projection must stay ready even if
+  // the dead rail bindings were never issued.
+  assert.equal(
+    railCredentialIsolationConfigured(env({
+      APP_BFF_ENABLED: "true",
+      FLEET_CAPTURE_FRAPPE_API_KEY: "",
+      WORK_PACKAGE_FRAPPE_API_KEY: "",
+    })),
+    true,
+  );
+
+  const enabled = { APP_BFF_ENABLED: "true", ERPNEXT_ENABLED: "true" } as Partial<AppEnv>;
   assert.equal(railCredentialIsolationConfigured(env(enabled)), true);
   assert.equal(
     railCredentialIsolationConfigured(env({ ...enabled, WORK_PACKAGE_FRAPPE_API_KEY: "" })),

@@ -182,7 +182,7 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(decisionHmacKey)) {
 // 2. Frappe stack -------------------------------------------------------------
 log("ensuring local Frappe stack is up (docker compose)");
 try {
-  execSync(`docker compose -f "${composeFile}" up -d`, { stdio: "inherit" });
+  execSync(`docker compose -f "${composeFile}" --profile frappe up -d`, { stdio: "inherit" });
 } catch {
   fail(
     "docker compose up failed - is Docker running? A frappe-init exit 1 with a STALE VOLUME banner " +

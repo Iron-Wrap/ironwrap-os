@@ -48,7 +48,7 @@ const fs = require("node:fs");
 function fail() { process.exit(1); }
 let lock;
 try { lock = JSON.parse(fs.readFileSync(process.argv[2], "utf8")); } catch { fail(); }
-if (lock.schema_version !== 1 || lock.policy?.architecture !== "frappe-only" || lock.policy?.erpnext !== "forbidden" || lock.policy?.floating_references !== "forbidden") fail();
+if (lock.schema_version !== 1 || lock.policy?.architecture !== "d1-worker" || lock.policy?.erpnext !== "forbidden" || lock.policy?.floating_references !== "forbidden") fail();
 if (JSON.stringify(Object.keys(lock.components ?? {}).sort()) !== JSON.stringify(["frappe", "frappe_docker", "hermes"])) fail();
 if (JSON.stringify(Object.keys(lock.container_bases ?? {}).sort()) !== JSON.stringify(["frappe_base", "frappe_build"])) fail();
 const expectedSources = {

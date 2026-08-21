@@ -59,7 +59,7 @@ if [[ -r "$PRODUCTION_LOCK" ]]; then
   if ! jq -e '
     ((.host_requirements.architectures | sort) == ["x86_64"]) and
     (.host_requirements.memory_gib_minimum >= 8) and
-    (.policy.architecture == "frappe-only")
+    (.policy.architecture == "d1-worker")
   ' "$PRODUCTION_LOCK" >/dev/null 2>&1; then
     echo "error: deploy/runtime-lock.json no longer states the strict production floor;" >&2
     echo "       the development stand refuses to run against a weakened production contract" >&2
@@ -155,4 +155,4 @@ if (( failures > 0 )); then
 fi
 echo "development stand preflight passed"
 echo "bring the stack up with:"
-echo "  docker compose -f deploy/local/docker-compose.yml up -d"
+echo "  docker compose -f deploy/local/docker-compose.yml --profile frappe up -d"

@@ -19,7 +19,8 @@ const CHECKS = {
   production_schedule_configuration: true,
   public_estimate_configuration: true,
   measurement_ocr_configuration: true,
-  newo_enabled: false, // the deliberate production gate
+  rail_credential_isolation: true,
+  newo_enabled: false, // leftover Newo gate — not the default office plane
   newo_webhook_credentials: true,
   newo_api_authentication: true,
   newo_production_actor: true,
@@ -34,7 +35,7 @@ const CHECKS = {
 
 test("readiness: failures stay inside their named operating plane", () => {
   assert.deepEqual(readinessVerdicts(CHECKS), {
-    ok: false,
+    ok: true,
     core_ok: true,
     owned_core_ok: true,
     office_operating_plane_ok: true,
@@ -46,7 +47,7 @@ test("readiness: failures stay inside their named operating plane", () => {
     frappe_configuration: false,
   } as never;
   assert.deepEqual(readinessVerdicts(projectionBroken), {
-    ok: false,
+    ok: true,
     core_ok: true,
     owned_core_ok: true,
     office_operating_plane_ok: true,

@@ -78,7 +78,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 if ! jq -e '
   .schema_version == 1 and
-  .policy.architecture == "frappe-only" and
+  .policy.architecture == "d1-worker" and
   .policy.erpnext == "forbidden" and
   .policy.floating_references == "forbidden" and
   ((.components | keys | sort) == ["frappe", "frappe_docker", "hermes"]) and
@@ -89,7 +89,7 @@ if ! jq -e '
   (.host_requirements.node_version_minimum | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
   ((.host_requirements.architectures | sort) == ["x86_64"])
 ' "$LOCK" >/dev/null 2>&1; then
-  echo "error: runtime lock host policy is invalid or not Frappe-only" >&2
+  echo "error: runtime lock host policy is invalid or not D1/Worker" >&2
   exit 1
 fi
 HOST_LOCK=()

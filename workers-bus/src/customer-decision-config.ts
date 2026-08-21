@@ -3,9 +3,9 @@ import type { AppEnv } from "./app-types.ts";
 /**
  * A recorded material preference is a provisional customer signal, not a legal act, so it keeps a
  * configuration surface separate from contract acceptance: a site may publish curated options and
- * collect selections without ever holding the acceptance signing credentials, and vice versa. The
- * Frappe identity behind these credentials is the dedicated decision service role, which can
- * create a Customer Decision and its receipt evidence and nothing else.
+ * collect selections without ever holding the acceptance signing credentials, and vice versa.
+ * Leftover Frappe service-user helpers remain for projection compatibility and are not required
+ * for the native D1 commit.
  */
 export function customerDecisionBackendEnabled(env: AppEnv): boolean {
   return String(env.APP_CUSTOMER_PORTAL_DECISION_ENABLED) === "true";
@@ -25,11 +25,9 @@ export function customerDecisionFrappeApiSecret(env: AppEnv): string | null {
 }
 
 /**
- * Fail closed on absent credentials. The enablement flag alone never opens the write path, which
- * is what keeps a deployed environment dark until an operator has actually provisioned the
- * dedicated Frappe service user.
+ * Fail closed on an absent HMAC. The enablement flag alone never opens the write path. Leftover
+ * Frappe service-user bindings are not required for the native D1 commit.
  */
 export function customerDecisionBackendConfigured(env: AppEnv): boolean {
-  return customerDecisionBackendEnabled(env) && !!customerDecisionHmacKey(env) &&
-    !!customerDecisionFrappeApiKey(env) && !!customerDecisionFrappeApiSecret(env);
+  return customerDecisionBackendEnabled(env) && !!customerDecisionHmacKey(env);
 }

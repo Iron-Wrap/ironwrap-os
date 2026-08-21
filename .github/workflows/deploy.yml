@@ -33,9 +33,6 @@ env:
   RELEASE_INDEPENDENT_REVIEW_TASK_ID: independent-source-review
   RELEASE_INDEPENDENT_EVIDENCE_TASK_ID: independent-release-evidence
   RELEASE_INDEPENDENT_ISSUER_KEY_VERSION: review-key-2026-08
-  RELEASE_SERVICE_ADAPTER_IDENTITY: service-release@ironwrapexteriors.com
-  RELEASE_SERVICE_ADAPTER_TASK_ID: frappe-release-adapter
-  RELEASE_SERVICE_ADAPTER_KEY_VERSION: service-key-2026-08
 
 jobs:
   admission:
@@ -675,14 +672,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
           RELEASE_PRODUCTION_INGEST_TOKEN: ${{ secrets.RELEASE_PRODUCTION_INGEST_TOKEN }}
           RELEASE_PRODUCTION_ADMIN_TOKEN: ${{ secrets.RELEASE_PRODUCTION_ADMIN_TOKEN }}
-          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
-          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
-          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
           RELEASE_INDEPENDENT_ISSUER_URL: ${{ secrets.RELEASE_INDEPENDENT_ISSUER_URL }}
           RELEASE_INDEPENDENT_ISSUER_TOKEN: ${{ secrets.RELEASE_INDEPENDENT_ISSUER_TOKEN }}
         run: |
           set -euo pipefail
-          for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN RELEASE_SERVICE_ADAPTER_URL RELEASE_SERVICE_ADAPTER_TOKEN RELEASE_SERVICE_ADAPTER_PUBLIC_KEY RELEASE_INDEPENDENT_ISSUER_URL RELEASE_INDEPENDENT_ISSUER_TOKEN; do
+          for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN RELEASE_INDEPENDENT_ISSUER_URL RELEASE_INDEPENDENT_ISSUER_TOKEN; do
             if [[ -z "${!required:-}" ]]; then echo "release_production_missing_external_secret:$required" >&2; exit 1; fi
           done
 
@@ -909,28 +903,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
         run: '"$WRANGLER_BIN" d1 migrations apply ironwrap-bus --config workers-bus/wrangler.jsonc --remote'
 
-      - name: Promote the prepared Frappe artifact through the authenticated adapter
-        id: promote_frappe
-        env:
-          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
-          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
-          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
-          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$RELEASE_SERVICE_ADAPTER_PUBLIC_KEY" > "$RUNNER_TEMP/service-adapter.pub"
-          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
-          node "$RELEASE_ENFORCER" service-adapter \
-            --operation promote --url "$RELEASE_SERVICE_ADAPTER_URL" \
-            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
-            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
-            --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
-            --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
-            --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
-            --issuer-run-id "github:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
-            --output "$RUNNER_TEMP/service-promotion.receipt"
-
       - name: Promote the pre-verified immutable production version
         id: promote_production
         env:
@@ -959,23 +931,6 @@ jobs:
             --input "$RUNNER_TEMP/production-post-smoke.json" --expected "$expected" \
             --output "$RUNNER_TEMP/production-post-smoke.id"
 
-      - name: Re-read the Frappe provider identity after production smoke
-        env:
-          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
-          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
-        run: |
-          set -euo pipefail
-          node "$RELEASE_ENFORCER" service-adapter \
-            --operation readback --url "$RELEASE_SERVICE_ADAPTER_URL" \
-            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
-            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
-            --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
-            --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
-            --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
-            --issuer-run-id "github:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
-            --output "$RUNNER_TEMP/service-readback.receipt"
-
       - name: Bind production active revision, readiness, and exact smoke to immutable receipt
         run: |
           set -euo pipefail
@@ -991,13 +946,6 @@ jobs:
             --version-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/production.json" --field version_digest)" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \
             --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
-            --service-promotion-receipt "$RUNNER_TEMP/service-promotion.receipt" \
-            --service-readback-receipt "$RUNNER_TEMP/service-readback.receipt" \
-            --service-public-key "$RUNNER_TEMP/service-adapter.pub" \
-            --service-issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
-            --service-issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
-            --service-issuer-run-id "github:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --service-key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
             --output "$RUNNER_TEMP/production-promotion.json"
 
       - name: Advance the durable generation only after production proof
@@ -1017,13 +965,10 @@ jobs:
             --output "$RUNNER_TEMP/generation-advance.json"
 
       - name: Automatic rollback and immutable readback after a failed promotion
-        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.promote_frappe.outcome != 'skipped' }}
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.promote_production.outcome != 'skipped' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
           RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
-          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
-          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
-          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           previous="${{ steps.capture_production.outputs.previous }}"
@@ -1034,19 +979,7 @@ jobs:
               echo "release_production_rollback_command_nonzero_reconciling_by_readback" >&2
             fi
           fi
-          printf '%s' "$RELEASE_SERVICE_ADAPTER_PUBLIC_KEY" > "$RUNNER_TEMP/service-adapter.pub"
           printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
-          node "$RELEASE_ENFORCER" service-adapter \
-            --operation rollback --url "$RELEASE_SERVICE_ADAPTER_URL" \
-            --permit "$RUNNER_TEMP/release-permit.txt" --permit-payload "$RUNNER_TEMP/release-permit.json" \
-            --permit-public-key "$RUNNER_TEMP/permit.pub" \
-            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
-            --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
-            --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
-            --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
-            --issuer-run-id "github:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
-            --output "$RUNNER_TEMP/service-rollback.receipt"
           "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback.json"
           "$WRANGLER_BIN" versions view "$previous" \
             --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback-version.json"
@@ -1063,12 +996,6 @@ jobs:
             --permit-payload "$RUNNER_TEMP/release-permit.json" \
             --version-readback "$RUNNER_TEMP/production-rollback-version-readback.json" \
             --merge-commit "$(jq -er '.merge_commit' "$RUNNER_TEMP/source-merge-receipt.json")" \
-            --service-receipt "$RUNNER_TEMP/service-rollback.receipt" \
-            --service-public-key "$RUNNER_TEMP/service-adapter.pub" \
-            --service-issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
-            --service-issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
-            --service-issuer-run-id "github:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --service-key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
             --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json" \
             --output "$RUNNER_TEMP/production-rollback-receipt.json"
           printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
@@ -1080,7 +1007,7 @@ jobs:
             --output "$RUNNER_TEMP/production-rollback-outcome.json"
 
       - name: Persist durable recovery-required outcome after an admitted migration failure
-        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.migrate_production.outcome == 'failure' && steps.promote_frappe.outcome == 'skipped' && steps.promote_production.outcome == 'skipped' }}
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.migrate_production.outcome == 'failure' && steps.promote_production.outcome == 'skipped' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
           RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}

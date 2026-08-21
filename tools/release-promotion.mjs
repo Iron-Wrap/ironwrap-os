@@ -136,6 +136,11 @@ function arg(args, name) {
   return requireString(args.get(name), `cli_${name}_required`);
 }
 
+function hasArg(args, name) {
+  const value = args.get(name);
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 async function collectCiChecks(args) {
   const repository = arg(args, "repository");
   if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
@@ -1366,40 +1371,53 @@ async function productionRollbackReceipt(args) {
       candidate
   )
     fail("production_rollback_permit_drift");
-  const serviceReceiptToken = (
-    await readFile(arg(args, "service-receipt"), "utf8")
-  ).trim();
-  const serviceReceipt = verifyServiceAdapterReceipt(
-    await readFile(arg(args, "service-public-key"), "utf8"),
-    serviceReceiptToken,
-    {
-      operation: "rollback",
-      repository: permitPayload.repository,
-      source_commit: permitPayload.source_commit,
-      source_git_tree: permitPayload.source_git_tree,
-      aggregate_artifact_digest: permitPayload.worker.artifact_digest,
-      merge_commit: requireCommit(
-        arg(args, "merge-commit"),
-        "merge_commit_invalid",
-      ),
-      "frappe.artifact_digest":
-        permitPayload.release_manifest.artifacts.frappe_wheel_digest,
-      "frappe.site_schema_digest":
-        permitPayload.release_manifest.artifacts.frappe_site_schema_digest,
-      "frappe.previous_revision":
-        permitPayload.release_manifest.recovery.prior_frappe_revision,
-      "frappe.candidate_revision":
-        permitPayload.release_manifest.production_candidates.frappe_revision,
-      "frappe.provider_readback_digest":
-        permitPayload.release_manifest.recovery.prior_frappe_readback_digest,
-      provider_reconciliation_digest:
-        permitPayload.release_manifest.provider_reconciliation.receipt_digest,
-      issuer_principal: arg(args, "service-issuer-identity"),
-      issuer_task_id: arg(args, "service-issuer-task-id"),
-      issuer_run_id: arg(args, "service-issuer-run-id"),
-      key_version: arg(args, "service-key-version"),
-    },
-  );
+  const leftoverFrappeDigest = sha256("frappe-not-required");
+  let frappePreviousRevision = "leftover-not-promoted";
+  let frappeCandidateRevision = "leftover-not-promoted";
+  let frappeRestoredRevision = "leftover-not-promoted";
+  let frappeReadbackDigest = leftoverFrappeDigest;
+  let serviceRollbackDigest = leftoverFrappeDigest;
+  if (hasArg(args, "service-receipt")) {
+    const serviceReceiptToken = (
+      await readFile(arg(args, "service-receipt"), "utf8")
+    ).trim();
+    const serviceReceipt = verifyServiceAdapterReceipt(
+      await readFile(arg(args, "service-public-key"), "utf8"),
+      serviceReceiptToken,
+      {
+        operation: "rollback",
+        repository: permitPayload.repository,
+        source_commit: permitPayload.source_commit,
+        source_git_tree: permitPayload.source_git_tree,
+        aggregate_artifact_digest: permitPayload.worker.artifact_digest,
+        merge_commit: requireCommit(
+          arg(args, "merge-commit"),
+          "merge_commit_invalid",
+        ),
+        "frappe.artifact_digest":
+          permitPayload.release_manifest.artifacts.frappe_wheel_digest,
+        "frappe.site_schema_digest":
+          permitPayload.release_manifest.artifacts.frappe_site_schema_digest,
+        "frappe.previous_revision":
+          permitPayload.release_manifest.recovery.prior_frappe_revision,
+        "frappe.candidate_revision":
+          permitPayload.release_manifest.production_candidates.frappe_revision,
+        "frappe.provider_readback_digest":
+          permitPayload.release_manifest.recovery.prior_frappe_readback_digest,
+        provider_reconciliation_digest:
+          permitPayload.release_manifest.provider_reconciliation.receipt_digest,
+        issuer_principal: arg(args, "service-issuer-identity"),
+        issuer_task_id: arg(args, "service-issuer-task-id"),
+        issuer_run_id: arg(args, "service-issuer-run-id"),
+        key_version: arg(args, "service-key-version"),
+      },
+    );
+    frappePreviousRevision = serviceReceipt.frappe.previous_revision;
+    frappeCandidateRevision = serviceReceipt.frappe.candidate_revision;
+    frappeRestoredRevision = serviceReceipt.frappe.active_revision;
+    frappeReadbackDigest = serviceReceipt.frappe.provider_readback_digest;
+    serviceRollbackDigest = sha256(serviceReceiptToken);
+  }
   const providerRaw = await readFile(arg(args, "input"));
   let deployments;
   try { deployments = JSON.parse(providerRaw); } catch { fail("production_rollback_provider_invalid"); }
@@ -1438,12 +1456,11 @@ async function productionRollbackReceipt(args) {
     pwa_candidate_revision: candidate,
     pwa_restored_revision: restored,
     pwa_provider_readback_digest: versionSnapshot.provider_readback_digest,
-    frappe_previous_revision: serviceReceipt.frappe.previous_revision,
-    frappe_candidate_revision: serviceReceipt.frappe.candidate_revision,
-    frappe_restored_revision: serviceReceipt.frappe.active_revision,
-    frappe_provider_readback_digest:
-      serviceReceipt.frappe.provider_readback_digest,
-    service_rollback_digest: sha256(serviceReceiptToken),
+    frappe_previous_revision: frappePreviousRevision,
+    frappe_candidate_revision: frappeCandidateRevision,
+    frappe_restored_revision: frappeRestoredRevision,
+    frappe_provider_readback_digest: frappeReadbackDigest,
+    service_rollback_digest: serviceRollbackDigest,
     health_digest: sha256(healthRaw),
     readiness_digest: sha256(readyRaw),
   };
@@ -1591,55 +1608,66 @@ async function productionReceipt(args) {
   const mergeReceipt = await readJson(arg(args, "merge-receipt"), "merge_receipt_invalid");
   validateSourceMergeReceipt(mergeReceipt, permitPayload);
   const mergeReceiptDigest = sha256(canonicalJson(mergeReceipt));
-  const servicePublicKey = await readFile(
-    arg(args, "service-public-key"),
-    "utf8",
-  );
-  const serviceExpected = {
-    repository: permitPayload.repository,
-    source_commit: permitPayload.source_commit,
-    source_git_tree: permitPayload.source_git_tree,
-    aggregate_artifact_digest: permitPayload.worker.artifact_digest,
-    merge_commit: mergeReceipt.merge_commit,
-    "frappe.artifact_digest":
-      permitPayload.release_manifest.artifacts.frappe_wheel_digest,
-    "frappe.site_schema_digest":
-      permitPayload.release_manifest.artifacts.frappe_site_schema_digest,
-    "frappe.previous_revision":
-      permitPayload.release_manifest.recovery.prior_frappe_revision,
-    "frappe.candidate_revision":
-      permitPayload.release_manifest.production_candidates.frappe_revision,
-    "frappe.provider_readback_digest":
-      permitPayload.release_manifest.production_candidates
-        .frappe_readback_digest,
-    provider_reconciliation_digest:
-      permitPayload.release_manifest.provider_reconciliation.receipt_digest,
-    issuer_principal: arg(args, "service-issuer-identity"),
-    issuer_task_id: arg(args, "service-issuer-task-id"),
-    issuer_run_id: arg(args, "service-issuer-run-id"),
-    key_version: arg(args, "service-key-version"),
-  };
-  const servicePromotionToken = (
-    await readFile(arg(args, "service-promotion-receipt"), "utf8")
-  ).trim();
-  const servicePromotion = verifyServiceAdapterReceipt(
-    servicePublicKey,
-    servicePromotionToken,
-    { ...serviceExpected, operation: "promote" },
-  );
-  const serviceReadbackToken = (
-    await readFile(arg(args, "service-readback-receipt"), "utf8")
-  ).trim();
-  const serviceReadback = verifyServiceAdapterReceipt(
-    servicePublicKey,
-    serviceReadbackToken,
-    { ...serviceExpected, operation: "readback" },
-  );
-  if (
-    Date.parse(serviceReadback.issued_at) <
-    Date.parse(servicePromotion.issued_at)
-  )
-    fail("production_service_readback_stale");
+  const leftoverFrappeDigest = sha256("frappe-not-required");
+  let frappeRevision = "leftover-not-promoted";
+  let frappeReadbackDigest = leftoverFrappeDigest;
+  let servicePromotionDigest = leftoverFrappeDigest;
+  let serviceReadbackDigest = leftoverFrappeDigest;
+  if (hasArg(args, "service-promotion-receipt")) {
+    const servicePublicKey = await readFile(
+      arg(args, "service-public-key"),
+      "utf8",
+    );
+    const serviceExpected = {
+      repository: permitPayload.repository,
+      source_commit: permitPayload.source_commit,
+      source_git_tree: permitPayload.source_git_tree,
+      aggregate_artifact_digest: permitPayload.worker.artifact_digest,
+      merge_commit: mergeReceipt.merge_commit,
+      "frappe.artifact_digest":
+        permitPayload.release_manifest.artifacts.frappe_wheel_digest,
+      "frappe.site_schema_digest":
+        permitPayload.release_manifest.artifacts.frappe_site_schema_digest,
+      "frappe.previous_revision":
+        permitPayload.release_manifest.recovery.prior_frappe_revision,
+      "frappe.candidate_revision":
+        permitPayload.release_manifest.production_candidates.frappe_revision,
+      "frappe.provider_readback_digest":
+        permitPayload.release_manifest.production_candidates
+          .frappe_readback_digest,
+      provider_reconciliation_digest:
+        permitPayload.release_manifest.provider_reconciliation.receipt_digest,
+      issuer_principal: arg(args, "service-issuer-identity"),
+      issuer_task_id: arg(args, "service-issuer-task-id"),
+      issuer_run_id: arg(args, "service-issuer-run-id"),
+      key_version: arg(args, "service-key-version"),
+    };
+    const servicePromotionToken = (
+      await readFile(arg(args, "service-promotion-receipt"), "utf8")
+    ).trim();
+    const servicePromotion = verifyServiceAdapterReceipt(
+      servicePublicKey,
+      servicePromotionToken,
+      { ...serviceExpected, operation: "promote" },
+    );
+    const serviceReadbackToken = (
+      await readFile(arg(args, "service-readback-receipt"), "utf8")
+    ).trim();
+    const serviceReadback = verifyServiceAdapterReceipt(
+      servicePublicKey,
+      serviceReadbackToken,
+      { ...serviceExpected, operation: "readback" },
+    );
+    if (
+      Date.parse(serviceReadback.issued_at) <
+      Date.parse(servicePromotion.issued_at)
+    )
+      fail("production_service_readback_stale");
+    frappeRevision = serviceReadback.frappe.active_revision;
+    frappeReadbackDigest = serviceReadback.frappe.provider_readback_digest;
+    servicePromotionDigest = sha256(servicePromotionToken);
+    serviceReadbackDigest = sha256(serviceReadbackToken);
+  }
   const activeRevision = (await readFile(arg(args, "active"), "utf8")).trim();
   if (activeRevision !== revision) fail("production_active_revision_drift");
   const rawEvidence = await readFile(arg(args, "smoke"), "utf8");
@@ -1670,10 +1698,10 @@ async function productionReceipt(args) {
     merge_receipt_digest: mergeReceiptDigest,
     pwa_revision: revision,
     pwa_readback_digest: versionDigest,
-    frappe_revision: serviceReadback.frappe.active_revision,
-    frappe_readback_digest: serviceReadback.frappe.provider_readback_digest,
-    service_promotion_digest: sha256(servicePromotionToken),
-    service_readback_digest: sha256(serviceReadbackToken),
+    frappe_revision: frappeRevision,
+    frappe_readback_digest: frappeReadbackDigest,
+    service_promotion_digest: servicePromotionDigest,
+    service_readback_digest: serviceReadbackDigest,
     smoke_evidence_digest: smokeEvidenceDigest,
     smoke_result: "passed",
     smoke_step_names: stepNames,

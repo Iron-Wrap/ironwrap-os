@@ -433,7 +433,7 @@ test("public readiness exposes only a generic state while admins receive the dia
   assert.equal(diagnostic.ok, true);
   assert.equal(diagnostic.owned_core_ok, true);
   assert.equal(diagnostic.office_operating_plane_ok, true);
-  assert.equal(diagnostic.projection_rails_ok, true);
+  assert.equal(diagnostic.projection_rails_ok, false);
   assert.equal(diagnostic.status, "ready");
   assert.ok(Object.values(diagnostic.checks).every(Boolean));
   const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
@@ -446,12 +446,34 @@ test("public readiness exposes only a generic state while admins receive the dia
   assert.equal(JSON.stringify(diagnostic).includes("jobnimbus-secret"), false);
 });
 
+test("default readiness stays green when the office BFF is on without leftover Frappe secrets", async () => {
+  const { env } = fakeEnv();
+  enableAppBff(env);
+  delete (env as { ERPNEXT_BASE_URL?: string }).ERPNEXT_BASE_URL;
+  delete (env as { ERPNEXT_API_KEY?: string }).ERPNEXT_API_KEY;
+  delete (env as { ERPNEXT_API_SECRET?: string }).ERPNEXT_API_SECRET;
+  delete (env as { FLEET_CAPTURE_FRAPPE_API_KEY?: string }).FLEET_CAPTURE_FRAPPE_API_KEY;
+  delete (env as { WORK_PACKAGE_FRAPPE_API_KEY?: string }).WORK_PACKAGE_FRAPPE_API_KEY;
+
+  const ready = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { ok: true });
+
+  const projection = await worker.fetch(
+    new Request("https://bus.example/ready?scope=projection"),
+    env as never,
+    ctx,
+  );
+  assert.equal(projection.status, 503);
+  assert.deepEqual(await projection.json(), { ok: false });
+});
+
 test("readiness scopes isolate Frappe projection failure from the owned and office planes", async () => {
   const { env } = fakeEnv();
   (env as Record<string, unknown>).ERPNEXT_ENABLED = "true";
 
   for (const [scope, expectedStatus] of [
-    [null, 503],
+    [null, 200],
     ["core", 200],
     ["owned_core", 200],
     ["office", 200],
@@ -546,10 +568,22 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
   delete (env as { NEWO_WEBHOOK_TOKEN?: string }).NEWO_WEBHOOK_TOKEN;
   (env as { ERPNEXT_ENABLED?: string }).ERPNEXT_ENABLED = "false";
   const blocked = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
-  const blockedBody = await blocked.json() as { checks: Record<string, boolean> };
-  assert.equal(blocked.status, 503);
+  const blockedBody = await blocked.json() as {
+    ok: boolean;
+    projection_rails_ok: boolean;
+    checks: Record<string, boolean>;
+  };
+  // Default /ready is the office plane. Newo/Frappe leftover failures stay on
+  // the projection scope instead of turning the Worker not-ready.
+  assert.equal(blocked.status, 200);
+  assert.equal(blockedBody.ok, true);
   assert.equal(blockedBody.checks.newo_webhook_credentials, false);
-  assert.equal(blockedBody.checks.newo_frappe_readiness, false);
+  const projection = await worker.fetch(
+    new Request("https://bus.example/ready?scope=projection"),
+    env as never,
+    ctx,
+  );
+  assert.equal(projection.status, 503);
 });
 
 test("health remains a backward-compatible liveness check when dependencies are unavailable", async () => {

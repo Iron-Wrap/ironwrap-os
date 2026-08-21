@@ -1,11 +1,12 @@
-# Local end-to-end Frappe stack for IronWrap OS (development/proof only).
+# Leftover Frappe compatibility stack for IronWrap OS (optional, development/proof only).
+# Owned local work uses D1 + wrangler; this compose is not required for `/ready` or office desks.
 # Production remains the digest-pinned x86_64 image in ../Containerfile.frappe +
 # ../frappe-compose.override.yml. This stack runs the SAME Frappe v15 line and the
 # SAME ironwrap_roofing app (mounted read-only from the repo) on any architecture.
 #
-# Usage (or just `npm run dev` in workers-bus, which ensures this stack is up):
-#   docker compose -f deploy/local/docker-compose.yml up -d
-#   docker compose -f deploy/local/docker-compose.yml logs -f frappe-init
+# Usage (opt-in leftover projection; `npm run dev` still starts this profile):
+#   docker compose -f deploy/local/docker-compose.yml --profile frappe up -d
+#   docker compose -f deploy/local/docker-compose.yml --profile frappe logs -f frappe-init
 #
 # Services:
 #   mariadb / redis-cache / redis-queue : infra
@@ -33,6 +34,7 @@ x-frappe-env: &frappe-env
 
 services:
   mariadb:
+    profiles: [frappe]
     image: mariadb:10.6
     platform: linux/arm64
     restart: unless-stopped
@@ -53,18 +55,21 @@ services:
       retries: 30
 
   redis-cache:
+    profiles: [frappe]
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis-cache-data:/data
 
   redis-queue:
+    profiles: [frappe]
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis-queue-data:/data
 
   frappe-init:
+    profiles: [frappe]
     image: frappe/bench:latest
     platform: linux/arm64
     depends_on:
@@ -85,6 +90,7 @@ services:
     entrypoint: ["/bin/bash", "/usr/local/bin/ironwrap-frappe-init"]
 
   frappe:
+    profiles: [frappe]
     image: frappe/bench:latest
     platform: linux/arm64
     depends_on:

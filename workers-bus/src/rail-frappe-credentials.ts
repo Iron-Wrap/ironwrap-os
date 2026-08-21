@@ -118,12 +118,16 @@ export function railFrappeCredentialConfigured(env: AppEnv, rail: FrappeRail): b
  */
 export function railCredentialIsolationConfigured(env: AppEnv): boolean {
   if (String(env.APP_BFF_ENABLED) !== "true") return true;
+  // Dead leftover bindings must not turn the office plane red. Isolation is
+  // only a readiness fault when the leftover Frappe projection is actually on.
+  if (String(env.ERPNEXT_ENABLED) !== "true") return true;
   return FRAPPE_RAILS.every((rail) => railFrappeCredentialConfigured(env, rail));
 }
 
 /** Which rails are unhealthy and why — for the admin-authenticated readiness detail only. */
 export function railCredentialIsolationFailures(env: AppEnv): string[] {
   if (String(env.APP_BFF_ENABLED) !== "true") return [];
+  if (String(env.ERPNEXT_ENABLED) !== "true") return [];
   return FRAPPE_RAILS.flatMap((rail) => {
     const resolved = resolveRailFrappeCredential(env, rail);
     return resolved.ok ? [] : [resolved.code];

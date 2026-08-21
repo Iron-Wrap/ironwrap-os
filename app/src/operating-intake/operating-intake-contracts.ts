@@ -15,6 +15,8 @@ const operatingIntakeLeadSchema = z
     received_at: z.string().min(1),
     job_ref: nullableText,
     desk_state: z.literal("intake"),
+    not_a_scheduled_job: z.literal(true),
+    not_a_money_intent: z.literal(true),
   })
   .strict();
 

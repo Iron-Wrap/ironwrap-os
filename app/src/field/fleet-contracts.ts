@@ -193,6 +193,15 @@ export const fleetRefusalText: Record<string, string> = {
   fleet_invalid_input:
     "This capture was not accepted as recorded. Start it again and check every entry.",
   fleet_payload_too_large: "This capture is too long. Shorten the notes and send it again.",
+  fleet_photo_missing: "The photo is not stored yet. Take it again when you have signal.",
+  fleet_photo_mismatch: "The stored photo does not match this capture. Take it again.",
+  unsupported_fleet_photo_type: "That photo type is not accepted. Use a JPEG, PNG, or HEIC.",
+  invalid_fleet_collision: "The collision report was not accepted. Check every entry.",
+  invalid_fleet_collision_transition: "This collision cannot move to that state.",
+  fleet_collision_physical_reporter_required:
+    "A person has to report the collision. Tracker data is not enough.",
+  telematics_cannot_authorize_collision:
+    "Tracker data cannot authorize a collision. A person has to report it.",
 };
 
 export function fleetRefusalMessage(code: string | undefined, fallback: string): string {
@@ -214,3 +223,58 @@ export const fleetInspectionEndpoint = (fleetAssetId: string, kind: FleetInspect
 
 export const fleetDefectEndpoint = (fleetAssetId: string): string =>
   `/api/v1/fleet/assets/${encodeURIComponent(fleetAssetId)}/defects`;
+
+export const fleetPhotoUploadEndpoint = (fleetAssetId: string): string =>
+  `/api/v1/fleet/assets/${encodeURIComponent(fleetAssetId)}/photo-evidence`;
+
+export const fleetCollisionEndpoint = (fleetAssetId: string): string =>
+  `/api/v1/fleet/assets/${encodeURIComponent(fleetAssetId)}/collisions`;
+
+export const fleetPhotoEvidenceSchema = z
+  .object({
+    attachment_id: z.string().min(8).max(80),
+    file_name: z.string().min(1).max(180),
+    content_type: z.enum(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    r2_key: z.string().min(16).max(240),
+  })
+  .strict();
+
+export const fleetPhotoUploadResponseSchema = z
+  .object({
+    photo_evidence: fleetPhotoEvidenceSchema,
+  })
+  .strict();
+
+export const fleetCollisionSchema = z
+  .object({
+    collision_id: z.string().regex(/^fc_[A-Za-z0-9._:-]{8,60}$/),
+    kind: z.literal("vehicle_collision"),
+    state: z.enum(["reported", "investigating", "repairing", "closed", "cancelled"]),
+    severity: z.enum(fleetDefectSeverities),
+    description: z.string().min(3),
+    telematics_reference: z.string().nullable(),
+  })
+  .passthrough();
+
+export const fleetCollisionResponseSchema = z
+  .object({
+    collision: fleetCollisionSchema,
+  })
+  .strict();
+
+export const fleetVerifiedActionSchema = z
+  .object({
+    device_action_id: z.string().min(8),
+    status: z.literal("verified"),
+    server_ref: z.string().min(1),
+    cursor: z.string().min(1),
+  })
+  .strict();
+
+export type FleetPhotoEvidenceRef = z.infer<typeof fleetPhotoEvidenceSchema>;
+export type FleetCollisionRecord = z.infer<typeof fleetCollisionSchema>;
+
+export function newFleetCollisionId(): string {
+  return `fc_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}

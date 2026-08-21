@@ -143,7 +143,7 @@ describe("the driver's vehicle surface", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the asset a driver holds and offers all three captures", async () => {
+  it("shows the asset a driver holds and offers inspection, fault, and collision", async () => {
     respondWith(panel());
     renderPage();
 
@@ -152,6 +152,7 @@ describe("the driver's vehicle surface", () => {
     expect(screen.getByRole("button", { name: "Pre-trip inspection" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Post-trip inspection" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Report a fault" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Report a collision" })).toBeVisible();
     expect(screen.getByText(/Cleared to go out/)).toBeVisible();
   });
 
@@ -337,6 +338,53 @@ describe("the driver's vehicle surface", () => {
       severity: "Out of Service",
       description: "Steering play well past spec.",
     });
+    expect(queued.payload).not.toHaveProperty("photo_evidence");
+  });
+
+  it("offers photo evidence on a fault and keeps it off the outbox", async () => {
+    respondWith(panel());
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Report a fault" }));
+    expect(screen.getByLabelText("Photos")).toBeVisible();
+    expect(screen.getByText(/never ride the offline outbox/)).toBeVisible();
+  });
+
+  it("records a collision online as a vehicle incident, not a safety occurrence", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo) => {
+      const path = String(input);
+      if (path.includes("/collisions")) {
+        return Response.json({
+          collision: {
+            collision_id: "fc_devicefleet0001aaaa",
+            kind: "vehicle_collision",
+            state: "reported",
+            severity: "Major",
+            description: "Hit a parked trailer in the yard.",
+            telematics_reference: null,
+          },
+        });
+      }
+      return Response.json(panel());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Report a collision" }));
+    expect(screen.getByText(/not a worker injury or near-miss/)).toBeVisible();
+    await user.type(
+      screen.getByRole("textbox", { name: "What happened" }),
+      "Hit a parked trailer in the yard.",
+    );
+    await user.click(screen.getByRole("button", { name: "Save and send collision" }));
+
+    expect(await screen.findByText(/Collision recorded/)).toBeVisible();
+    expect(await countOutboxActions()).toBe(0);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/collisions"))).toBe(
+      true,
+    );
   });
 
   it("saves a capture with no connection and never calls the network", async () => {

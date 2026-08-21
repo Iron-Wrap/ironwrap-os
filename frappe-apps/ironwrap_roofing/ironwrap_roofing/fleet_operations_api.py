@@ -71,6 +71,7 @@ DEFECT_RESPONSE_FIELDS = (
     "detected_at",
     "reported_by",
     "device_action_id",
+    "evidence_item",
 )
 ASSET_RESPONSE_FIELDS = (
     "name",
@@ -621,6 +622,12 @@ def record_asset_defect(
     )
     out_of_service = severity == OUT_OF_SERVICE_SEVERITY
 
+    photo_refs = _parse_defect_photo_refs(defect)
+    evidence_id = (
+        f"fleet-photo:{device_action}:{photo_refs[0]['sha256'][:16]}"
+        if photo_refs
+        else None
+    )
     expected = {
         "fleet_asset": _value(asset, "name"),
         "severity": severity,
@@ -630,6 +637,8 @@ def record_asset_defect(
         "raw_key": raw_key,
         "description": description,
     }
+    if evidence_id is not None:
+        expected["evidence_item"] = evidence_id
     existing = _locked_replay("Asset Defect", ("name", *expected.keys()), device_action)
     if existing:
         _assert_same_replay(existing, expected, tuple(expected.keys()))
@@ -639,6 +648,17 @@ def record_asset_defect(
             "fleet_asset": _asset_response(asset),
             "idempotent_replay": True,
         }
+
+    # Evidence Item is named from the device action + photo digest, so a retry
+    # after a lost response replays the same row instead of inventing a second.
+    if photo_refs:
+        _ensure_defect_photo_evidence(
+            photo_refs,
+            evidence_id=evidence_id,
+            actor=actor,
+            device_action=device_action,
+            detected_at=detected_at,
+        )
 
     document = frappe.get_doc(
         {
@@ -663,6 +683,109 @@ def record_asset_defect(
         "record": {field: _value(document, field) for field in DEFECT_RESPONSE_FIELDS},
         "fleet_asset": _asset_response(asset),
         "idempotent_replay": False,
+    }
+
+
+PHOTO_CONTENT_TYPES = frozenset(
+    ("image/jpeg", "image/png", "image/webp", "image/heic", "image/heif")
+)
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _parse_defect_photo_refs(defect: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Parse optional fleet photo refs before any write.
+
+    Asset Defect.evidence_item is a single Link. Extra photos stay on the
+    Worker manifest. A capture without photos still records the defect.
+    """
+
+    photos = defect.get("photo_evidence")
+    if photos is None:
+        return []
+    if not isinstance(photos, list) or not 1 <= len(photos) <= 4:
+        _fail("fleet_invalid_input", "photo_evidence must be 1 to 4 objects")
+    return [_clean_photo_ref(row) for row in photos]
+
+
+def _ensure_defect_photo_evidence(
+    photo_refs: list[dict[str, str]],
+    *,
+    evidence_id: str,
+    actor: str,
+    device_action: str,
+    detected_at: str,
+) -> str:
+    """Create or replay the Evidence Item named by evidence_id."""
+
+    primary = photo_refs[0]
+    expected = {
+        "evidence_id": evidence_id,
+        "device_action_id": device_action,
+        "evidence_type": "Photo",
+        "sync_state": "Uploaded",
+        "source_system": CAPTURE_SOURCE_SYSTEM,
+        "r2_key": primary["r2_key"],
+        "content_checksum": primary["sha256"],
+        "checksum_algorithm": "SHA-256",
+        "content_type": primary["content_type"],
+        "capture_actor": actor,
+        "captured_at": detected_at,
+        "proof_slot": "Other",
+        "summary": f"{len(photo_refs)} fleet photo(s)",
+    }
+    existing = _locked_evidence_item(evidence_id)
+    if existing:
+        _assert_same_replay(existing, expected, tuple(expected.keys()))
+        return _value(existing, "name") or evidence_id
+
+    document = frappe.get_doc({"doctype": "Evidence Item", **expected})
+    document.insert(ignore_permissions=True)
+    return _value(document, "name") or evidence_id
+
+
+def _locked_evidence_item(evidence_id: str) -> dict[str, Any] | None:
+    rows = _sql_locked(
+        """
+        SELECT
+            name, evidence_id, device_action_id, evidence_type, sync_state,
+            source_system, r2_key, content_checksum, checksum_algorithm,
+            content_type, capture_actor, captured_at, proof_slot, summary
+        FROM `tabEvidence Item`
+        WHERE evidence_id = %s
+        FOR UPDATE
+        """,
+        (evidence_id,),
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        _fail(
+            "fleet_replay_ambiguous",
+            "evidence_id must identify at most one Evidence Item",
+        )
+    return rows[0]
+
+
+def _clean_photo_ref(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        _fail("fleet_invalid_input", "photo_evidence entries must be objects")
+    attachment_id = _clean_required(value.get("attachment_id"), "attachment_id", maximum=80)
+    file_name = _clean_required(value.get("file_name"), "file_name", maximum=180)
+    content_type = _clean_required(value.get("content_type"), "content_type", maximum=40).lower()
+    if content_type not in PHOTO_CONTENT_TYPES:
+        _fail("fleet_invalid_input", "unsupported fleet photo type")
+    sha256 = _clean_required(value.get("sha256"), "sha256", maximum=64, minimum=64)
+    if not SHA256_RE.match(sha256):
+        _fail("fleet_invalid_input", "photo sha256 must be lowercase hex")
+    r2_key = _clean_required(value.get("r2_key"), "r2_key", maximum=240)
+    if not r2_key.startswith("fleet/v1/") or "/photo/" not in r2_key:
+        _fail("fleet_invalid_input", "photo r2_key is not a fleet photo object")
+    return {
+        "attachment_id": attachment_id,
+        "file_name": file_name,
+        "content_type": content_type,
+        "sha256": sha256,
+        "r2_key": r2_key,
     }
 
 

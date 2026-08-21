@@ -574,6 +574,63 @@ test("telematics travels as supporting evidence and never as the inspector", asy
   assert.equal(writer.calls[0]!.kind, "pre_trip_inspection");
 });
 
+test("a defect can carry stored photo refs and verifies them before Frappe", async () => {
+  const sha256 = "ab".repeat(32);
+  const photo = {
+    attachment_id: "photo-fleet-0001",
+    file_name: "chamber.jpg",
+    content_type: "image/jpeg",
+    sha256,
+    r2_key: "fleet/v1/scopedigest24charsxx/photo/asset-truck-1/photo-fleet-0001.bin",
+  };
+  const request = new Request(
+    "https://app.example.invalid/api/v1/fleet/assets/asset-truck-1/defects",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-device-action-id": "device-fleet-0004",
+      },
+      body: JSON.stringify({
+        device_action_id: "device-fleet-0004",
+        payload: {
+          fleet_asset_id: "asset-truck-1",
+          detected_at: "2026-07-11T06:35:00.000Z",
+          severity: "Major",
+          description: "Air brake chamber leaking.",
+          photo_evidence: [photo],
+        },
+      }),
+    },
+  );
+  const parsed = await parseFleetActionRequest(request, "asset-truck-1", "defect_report");
+  assert.deepEqual(parsed.payload.photo_evidence, [photo]);
+
+  const { writer, dependency } = dependencies();
+  await processFleetAction(parsed, auth(), {
+    ...dependency,
+    raw: {
+      head: async (key: string) =>
+        key === photo.r2_key ? { customMetadata: { sha256 } } : null,
+    },
+  });
+  assert.equal(writer.calls[0]!.kind, "defect_report");
+  assert.deepEqual(
+    "photo_evidence" in writer.calls[0]!.payload
+      ? writer.calls[0]!.payload.photo_evidence
+      : null,
+    [photo],
+  );
+
+  await assert.rejects(
+    processFleetAction(parsed, auth(), {
+      ...dependencies().dependency,
+      raw: { head: async () => null },
+    }),
+    (error: unknown) => error instanceof FieldActionError && error.code === "fleet_photo_missing",
+  );
+});
+
 test("a defect report carries its own bounded envelope", async () => {
   const request = new Request(
     "https://app.example.invalid/api/v1/fleet/assets/asset-truck-1/defects",

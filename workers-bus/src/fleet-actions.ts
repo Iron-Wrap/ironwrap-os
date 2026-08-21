@@ -4,6 +4,12 @@ import {
   r2ObjectStore,
   type ImmutableObjectStore,
 } from "./field-actions.ts";
+import {
+  assertFleetPhotosStored,
+  parseFleetPhotoEvidenceRefs,
+  type FleetPhotoEvidenceRef,
+  type FleetPhotoHead,
+} from "./fleet-photo-evidence.ts";
 
 const MAX_FLEET_ACTION_BYTES = 32 * 1024;
 const MAX_FLEET_TEXT_LENGTH = 1_200;
@@ -47,6 +53,7 @@ export interface FleetDefectPayload {
   severity: FleetDefectSeverity;
   description: string;
   asset_inspection_id?: string;
+  photo_evidence?: FleetPhotoEvidenceRef[];
 }
 
 export type FleetActionPayload = FleetInspectionPayload | FleetDefectPayload;
@@ -148,6 +155,7 @@ export interface ProcessFleetActionDependencies {
   store: FleetActionStore;
   objects: ImmutableObjectStore;
   writer: FleetActionWriter;
+  raw?: FleetPhotoHead;
   now?: () => Date;
   randomId?: () => string;
 }
@@ -174,6 +182,7 @@ export async function handleFleetAction(
       store: d1FleetActionStore(env),
       objects: r2ObjectStore(env.RAW),
       writer: d1FleetActionWriter(env),
+      raw: env.RAW,
     });
     return fleetJson(response);
   } catch (error) {
@@ -335,7 +344,7 @@ function parseDefectPayload(
     !optionalKeys(
       value,
       ["fleet_asset_id", "detected_at", "severity", "description"],
-      ["asset_inspection_id"],
+      ["asset_inspection_id", "photo_evidence"],
     )
   ) {
     throw invalidFleetAction();
@@ -358,6 +367,9 @@ function parseDefectPayload(
   };
   if (value.asset_inspection_id !== undefined) {
     payload.asset_inspection_id = boundedId(value.asset_inspection_id, 1, 140);
+  }
+  if (value.photo_evidence !== undefined) {
+    payload.photo_evidence = parseFleetPhotoEvidenceRefs(value.photo_evidence);
   }
   return payload;
 }
@@ -397,6 +409,19 @@ export async function processFleetAction(
   }
 
   try {
+    if (submission.kind === "defect_report" && "photo_evidence" in submission.payload) {
+      const photos = submission.payload.photo_evidence;
+      if (photos) {
+        if (!dependencies.raw) {
+          throw new FieldActionError(
+            "fleet_photo_missing",
+            409,
+            "Fleet photo evidence is not stored yet.",
+          );
+        }
+        await assertFleetPhotosStored(dependencies.raw, photos);
+      }
+    }
     const scopeDigest = (
       await sha256Text(`${auth.session.tenant_id}:${submission.fleetAssetId}`)
     ).slice(0, 24);

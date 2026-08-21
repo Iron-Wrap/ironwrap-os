@@ -43,8 +43,8 @@ implication.
       "latest": "0105_facet_native_design_projection.sql"
     },
     "tests": {
-      "pwa": 558,
-      "worker": 1170
+      "pwa": 563,
+      "worker": 1184
     }
   },
   "proof_state_policy": {

@@ -74,6 +74,11 @@ import {
   type AccountingIntentKind,
   type AccountingIntentState,
 } from "./accounting-intents.ts";
+import {
+  holdbackPayrollFailClosedRefusal,
+  isHoldbackPayrollIntentKind,
+} from "./accounting-holdback-payroll-contract.ts";
+import { isEnvelopeId } from "./operating-intake.ts";
 import { recordAccountingCompensationAuthorization } from "./accounting-compensation-authorizations.ts";
 import { readAccountingAuthorityCeiling } from "./accounting-authority-policy.ts";
 import { localFactEnvelope, type AccountingEntityType } from "./accounting-normalizers.ts";
@@ -326,6 +331,9 @@ async function deriveIntent(
     return json({ error: "unexpected_field" }, 400);
   }
 
+  if (typeof body.kind === "string" && isHoldbackPayrollIntentKind(body.kind)) {
+    return json(holdbackPayrollFailClosedRefusal(body.kind), 501);
+  }
   const kind = oneOf<AccountingIntentKind>(body.kind, DERIVABLE_KINDS);
   const roofJobId = refText(body.roof_job_id, 1, 160);
   const realmId = refText(body.realm_id, 1, 32);
@@ -528,6 +536,13 @@ async function gateDerivationJob(
   roofJobId: string,
   kind: AccountingIntentKind,
 ): Promise<Response | null> {
+  if (isEnvelopeId(roofJobId)) {
+    return json({
+      error: "accounting_intent_intake_lead_not_a_job",
+      not_a_scheduled_job: true,
+      not_a_money_intent: true,
+    }, 409);
+  }
   if (auth.session.tenant_id !== configuredTenantId(env)) {
     return json({ error: "accounting_intent_roof_job_not_found" }, 404);
   }

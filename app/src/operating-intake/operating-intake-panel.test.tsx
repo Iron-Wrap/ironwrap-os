@@ -60,13 +60,15 @@ describe("OperatingIntakePanel", () => {
     expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
     expect(
       screen.getByText(
-        "These are website leads stored on D1. They are not assigned field jobs, not published portal proposals, and not money intents.",
+        "These are website leads saved from the website. They are not assigned field jobs, not published portal proposals, and not money intents.",
       ),
     ).toBeVisible();
+    expect(screen.getByText("Website leads")).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
     expect(screen.getByText("Intake")).toBeVisible();
     expect(screen.getByText("website")).toBeVisible();
     expect(screen.queryByText(/scheduled|invoice|assigned job/i)).toBeNull();
+    expect(screen.queryByText(/D1 operating authority|stored on D1/i)).toBeNull();
     expect(screen.queryByRole("link", { name: /open job/i })).toBeNull();
   });
 

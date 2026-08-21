@@ -256,12 +256,64 @@ test("sales, field, production, and money desks read the D1 lead without Frappe"
     assert.equal(desk.status, 200, `${role} must read D1 intake`);
     assert.equal(desk.json.operating_authority, "d1");
     assert.equal(desk.json.tenant_id, "ironwrap");
-    const leads = desk.json.leads as Array<{ envelope_id: string; desk_state: string }>;
+    const leads = desk.json.leads as Array<{
+      envelope_id: string;
+      desk_state: string;
+      not_a_scheduled_job?: boolean;
+      not_a_money_intent?: boolean;
+    }>;
     assert.equal(leads.length, 1, `${role} must see exactly the ingested lead`);
     assert.equal(leads[0]?.envelope_id, envelopeId);
     assert.equal(leads[0]?.desk_state, "intake");
+    assert.equal(leads[0]?.not_a_scheduled_job, true);
+    assert.equal(leads[0]?.not_a_money_intent, true);
   }
   assert.equal(fetches.length, 0);
+});
+
+test("a D1 intake lead cannot be derived as a money job", async () => {
+  const db = new SqliteD1();
+  const env = ingestEnv(db, "ironwrap");
+  const created = await ingestLead(env);
+  assert.equal(created.status, 200);
+  const envelopeId = String(created.json.envelope_id);
+
+  const res = await handleAuthenticatedRoute(
+    new Request("https://bus.example/api/v1/accounting/intents", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": "csrf",
+        "idempotency-key": "intake-lead-is-not-a-job-01",
+      },
+      body: JSON.stringify({
+        kind: "deposit_invoice",
+        roof_job_id: envelopeId,
+        realm_id: "1234567890",
+        customer_ref: "cust-1",
+        item_ref: "item-1",
+        tax_code_ref: "tax-1",
+        subtotal: "1000.00",
+        tax_amount: "50.00",
+        txn_date: "2026-08-21",
+        due_date: "2026-09-21",
+        source_documents: [{ id: "quote-1", version: 1 }],
+        jurisdiction: "CA-AB",
+        tax_code: "GST",
+      }),
+    }),
+    env as never,
+    sessionAuth("accounting", "ironwrap"),
+  );
+  const body = (await res.json()) as {
+    error?: string;
+    not_a_scheduled_job?: boolean;
+    not_a_money_intent?: boolean;
+  };
+  assert.equal(res.status, 409);
+  assert.equal(body.error, "accounting_intent_intake_lead_not_a_job");
+  assert.equal(body.not_a_scheduled_job, true);
+  assert.equal(body.not_a_money_intent, true);
 });
 
 test("a second tenant cannot read the first tenant's D1 intake lead", async () => {

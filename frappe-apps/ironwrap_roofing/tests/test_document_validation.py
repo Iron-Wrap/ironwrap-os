@@ -65,6 +65,22 @@ CUSTOMER_QUOTE_CONTROLLER_PATH = (
     / "customer_quote"
     / "customer_quote.py"
 )
+ROOF_JOB_DOCTYPE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "roof_job"
+    / "roof_job.json"
+)
+ROOF_JOB_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "roof_job"
+    / "roof_job.py"
+)
 CONTRACT_ACCEPTANCE_CONTROLLER_PATH = (
     Path(__file__).resolve().parents[1]
     / "ironwrap_roofing"
@@ -1241,6 +1257,157 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             adapter.validate_evidence_verification_mutation(evidence)
             adapter.validate_contract_acceptance_mutation(acceptance)
             adapter.validate_customer_quote_acceptance_mutation(quote)
+
+    # ELEC-117 / ELEC-115 Path A: the Won-gate producer.  The acceptance service now
+    # holds `write_existing` on Roof Job so a signed contract can win the job; these
+    # cases are what keeps that grant to one governed transition.  RETIREMENT: delete
+    # with the producer when IRO-195's D1-native acceptance transition replaces it.
+    @staticmethod
+    def won_job(**overrides) -> "FakeDocument":
+        previous = {
+            "name": "job-1",
+            "roof_job_id": "job-1",
+            "job_number": "J-1",
+            "brand": "ironwrap",
+            "service_type": "Metal Roofing",
+            "job_status": "Proposal",
+            "workflow_profile": "",
+            "locale_policy_version": "",
+            "locale_policy_snapshot_json": "",
+            "lead_envelope": "lead-1",
+            "roofing_property": "property-1",
+            "customer": "customer-1",
+            "quotation": "cq-1",
+            "current_gate_state": "qualification",
+            "jobnimbus_contact_id": "",
+            "jobnimbus_job_id": "",
+            "qb_realm_id": "",
+            "qb_invoice_ref": "",
+        }
+        current = {
+            **previous,
+            "job_status": "Won",
+            "workflow_profile": "Residential Retail",
+            "locale_policy_version": "ca-ab-2026-01",
+            "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+        }
+        current.update(overrides.pop("current", {}))
+        previous.update(overrides.pop("previous", {}))
+        return FakeDocument(current, previous=previous)
+
+    def test_acceptance_service_wins_a_job_only_through_the_bounded_command(
+        self,
+    ) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="customer-acceptance@example.com",
+            roles=[CUSTOMER_ACCEPTANCE_SERVICE_ROLE],
+        )
+        job = self.won_job()
+
+        # A Desk or REST write by that identity carries no context at all.
+        with self.assertRaisesRegex(
+            FakePermissionError, "Customer acceptance service users"
+        ):
+            adapter.validate_customer_contract_job_transition_mutation(job)
+
+        with adapter.customer_contract_job_transition_context(job):
+            adapter.validate_customer_contract_job_transition_mutation(job)
+
+        controller = ROOF_JOB_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "validate_customer_contract_job_transition_mutation(self)", controller
+        )
+
+    def test_the_won_transition_context_authorizes_nothing_beyond_its_own_job(
+        self,
+    ) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="customer-acceptance@example.com",
+            roles=[CUSTOMER_ACCEPTANCE_SERVICE_ROLE],
+        )
+        authorized = self.won_job()
+        rejected = (
+            # A second job riding the first job's context.
+            ("another job", self.won_job(current={"name": "job-2"})),
+            # Any other job fact moving with the status.
+            ("lineage drift", self.won_job(current={"customer": "customer-9"})),
+            ("gate drift", self.won_job(current={"current_gate_state": "production"})),
+            (
+                "quickbooks drift",
+                self.won_job(current={"qb_invoice_ref": "1042"}),
+            ),
+            # Re-winning a job that already left the tentative set, with a snapshot
+            # the context does authorize: only the previous status rejects this.
+            ("already won", self.won_job(previous={"job_status": "Won"})),
+            (
+                "already in production",
+                self.won_job(previous={"job_status": "In Production"}),
+            ),
+            # A status this command has no business writing.
+            (
+                "past the tentative set",
+                self.won_job(
+                    previous={"job_status": "Won"}, current={"job_status": "Completed"}
+                ),
+            ),
+            ("not Won", self.won_job(current={"job_status": "Lost"})),
+            # A brand new job invented by the service identity.
+            ("insert", FakeDocument(dict(self.won_job()))),
+        )
+        for name, job in rejected:
+            with self.subTest(path=name):
+                with adapter.customer_contract_job_transition_context(authorized):
+                    with self.assertRaisesRegex(
+                        FakePermissionError, "Customer acceptance service users"
+                    ):
+                        adapter.validate_customer_contract_job_transition_mutation(job)
+
+    def test_the_won_guard_covers_every_roof_job_field_that_exists(self) -> None:
+        adapter, _ = self.load_adapter()
+        doctype = json.loads(
+            ROOF_JOB_DOCTYPE_PATH.read_text(encoding="utf-8")
+        )
+        data_fields = {
+            field["fieldname"]
+            for field in doctype["fields"]
+            if field["fieldtype"] not in {"Section Break", "Column Break", "Tab Break"}
+        }
+        guarded = set(adapter.CUSTOMER_CONTRACT_JOB_TRANSITION_FIELDS) | set(
+            adapter.CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS
+        )
+        # A field added to Roof Job later must join one tuple or the other; landing in
+        # neither would let the acceptance service move it unobserved.
+        self.assertEqual(guarded, data_fields)
+        self.assertEqual(
+            set(adapter.CUSTOMER_CONTRACT_JOB_TRANSITION_FIELDS)
+            & set(adapter.CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS),
+            set(),
+        )
+        self.assertEqual(
+            adapter.CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES
+            & {"Won", "In Production", "Completed", "Closed", "Lost"},
+            set(),
+        )
+        statuses = {
+            field["options"]
+            for field in doctype["fields"]
+            if field["fieldname"] == "job_status"
+        }.pop().split("\n")
+        self.assertTrue(
+            adapter.CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES <= set(statuses)
+        )
+
+    def test_the_won_guard_leaves_every_other_identity_alone(self) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="sales@example.com", roles=["IronWrap Sales"]
+        )
+        # Sales already owned the job lifecycle and still does: no context, no throw.
+        adapter.validate_customer_contract_job_transition_mutation(self.won_job())
+        adapter.validate_customer_contract_job_transition_mutation(
+            self.won_job(
+                previous={"job_status": "Won"}, current={"job_status": "In Production"}
+            )
+        )
 
     def test_work_package_lifecycle_and_events_require_private_command_contexts(
         self,

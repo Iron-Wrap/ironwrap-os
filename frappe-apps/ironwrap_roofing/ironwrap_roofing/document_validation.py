@@ -398,6 +398,18 @@ _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_customer_contract_acceptance",
     default=None,
 )
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era. The Won
+# transition moves to the D1-native acceptance path once IRO-195 defines a
+# Won-equivalent stage in `operating_roof_jobs.job_status`; delete this ContextVar,
+# `customer_contract_job_transition_context`, the CUSTOMER_CONTRACT_JOB_* field tuples
+# and `validate_customer_contract_job_transition_mutation` together when Frappe stops
+# being written for new jobs.
+_TRUSTED_CUSTOMER_CONTRACT_JOB_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar(
+    "ironwrap_trusted_customer_contract_job_transition",
+    default=None,
+)
 _TRUSTED_FACET_DESIGN_PROJECTION: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_facet_design_projection",
     default=None,
@@ -604,6 +616,41 @@ CUSTOMER_QUOTE_ACCEPTANCE_FIELDS = (
     "acceptance_evidence",
     "contract_acceptance",
     "accepted_at",
+)
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded by
+# IRO-195's D1-native acceptance transition; delete with the guard below when Frappe
+# stops being written for new jobs.
+#
+# The only Roof Job fields the bounded acceptance command may move, and every other
+# field it must leave exactly as it found them.  Split rather than merged so a field
+# added to Roof Job later cannot silently join the mutable set: `test_document_validation`
+# asserts the two tuples together cover every Roof Job data field.
+CUSTOMER_CONTRACT_JOB_TRANSITION_FIELDS = (
+    "job_status",
+    "workflow_profile",
+    "locale_policy_version",
+    "locale_policy_snapshot_json",
+)
+CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS = (
+    "roof_job_id",
+    "job_number",
+    "brand",
+    "service_type",
+    "lead_envelope",
+    "roofing_property",
+    "customer",
+    "quotation",
+    "current_gate_state",
+    "jobnimbus_contact_id",
+    "jobnimbus_job_id",
+    "qb_realm_id",
+    "qb_invoice_ref",
+)
+# The statuses a job may still be in when its customer signs.  A job already at Won or
+# past it (or explicitly Lost) is left alone: its later lifecycle belongs to production
+# and closeout, not to the acceptance command.
+CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES = frozenset(
+    {"Qualified", "Measurement", "Proposal"}
 )
 # Every durable fact the bounded portal-decision command derives for its receipt. Kept
 # as its own tuple rather than shared with the acceptance lane: the two identities are
@@ -1021,6 +1068,34 @@ def _customer_quote_acceptance_snapshot(
     )
 
 
+def _customer_contract_job_transition_snapshot(
+    document: Any,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Canonicalize the exact Roof Job Won transition the acceptance command derived."""
+
+    return (
+        str(document.get("name") or ""),
+        _runtime_snapshot(document, CUSTOMER_CONTRACT_JOB_TRANSITION_FIELDS),
+    )
+
+
+def _customer_contract_job_transition_allows(
+    document: Any, previous_document: Any
+) -> bool:
+    """Allow exactly one tentative-to-Won move that touches no other job fact."""
+
+    if (
+        str(previous_document.get("job_status") or "")
+        not in CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES
+    ):
+        return False
+    if str(document.get("job_status") or "") != "Won":
+        return False
+    return _runtime_snapshot(
+        document, CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS
+    ) == _runtime_snapshot(previous_document, CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS)
+
+
 def _customer_decision_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
     return _runtime_snapshot(document, CUSTOMER_DECISION_EVIDENCE_FIELDS)
 
@@ -1362,6 +1437,30 @@ def customer_contract_acceptance_issuance_context(
         yield
     finally:
         _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.reset(token)
+
+
+@contextmanager
+def customer_contract_job_transition_context(job: Any):
+    """Authorize one exact Roof Job tentative-to-Won transition.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native acceptance transition; delete when Frappe stops being
+    written for new jobs.
+
+    Deliberately its own context rather than a fourth slot on the acceptance
+    context above: the acceptance context authorizes the receipt lineage a fresh
+    acceptance issues, while this one also has to cover the replay branch, where no
+    evidence, acceptance or quote is written at all.  Each context still authorizes
+    exactly one document and nothing else.
+    """
+
+    token = _TRUSTED_CUSTOMER_CONTRACT_JOB_TRANSITION.set(
+        _customer_contract_job_transition_snapshot(job)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CUSTOMER_CONTRACT_JOB_TRANSITION.reset(token)
 
 
 @contextmanager
@@ -1767,6 +1866,36 @@ def validate_contract_acceptance_mutation(document: Any) -> None:
         "Contract Acceptance can only be issued by the bounded customer contract command.",
         exc=frappe.ValidationError,
     )
+
+
+def validate_customer_contract_job_transition_mutation(document: Any) -> None:
+    """Keep the acceptance service identity to one governed Roof Job Won transition.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native acceptance transition; delete when Frappe stops being
+    written for new jobs.
+
+    The acceptance service holds `write_existing` on Roof Job so the bounded command
+    can record that a signed contract won the job.  That grant is scoped here and
+    nowhere else: through this command, that identity may move a still-tentative job
+    to Won and stamp the locale-policy facts the Won invariant requires, and may not
+    touch a single other job fact, reach a job that already left the tentative set, or
+    write a Roof Job through Desk or REST at all.  Human roles keep the job lifecycle
+    they already had; this guard says nothing about them.
+    """
+
+    if not _is_customer_acceptance_service_actor():
+        return
+    previous_document = _previous(document)
+    transition_context = _TRUSTED_CUSTOMER_CONTRACT_JOB_TRANSITION.get()
+    if (
+        previous_document is not None
+        and transition_context is not None
+        and transition_context == _customer_contract_job_transition_snapshot(document)
+        and _customer_contract_job_transition_allows(document, previous_document)
+    ):
+        return
+    _reject_customer_acceptance_service_generic_write()
 
 
 def validate_customer_quote_acceptance_mutation(document: Any) -> None:

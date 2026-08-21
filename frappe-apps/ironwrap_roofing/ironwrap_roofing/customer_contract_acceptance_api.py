@@ -26,11 +26,46 @@ import frappe
 from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
 from ironwrap_roofing.document_validation import (
     customer_contract_acceptance_issuance_context,
+    customer_contract_job_transition_context,
 )
 
 
 SERVICE_USER_CONFIG_KEY = "ironwrap_customer_acceptance_service_user"
 HMAC_CONFIG_KEY = "ironwrap_customer_acceptance_hmac_key"
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded by
+# IRO-195's D1-native acceptance transition; delete these three keys, `_won_stamp`,
+# `_apply_won_transition` and their call sites together when Frappe stops being
+# written for new jobs.
+#
+# The Won invariant in `domain_policy._validate_roof_job` requires a workflow profile
+# and the locale-policy pair before a job may leave the tentative statuses, and no
+# code path in the product produced any of the three (ELEC-112 finding 2).  All three
+# are tenant reference constants, not per-job facts: one jurisdiction is in play
+# (IRO-1 scope) and the commercial profile is a tenant default, so they are pinned in
+# the site config the same way this command's own service identity is, and blessed by
+# whoever owns them for that tenant.  Nothing here invents a jurisdiction fact: an
+# unpinned site fails closed and its acceptance rail stays shut, exactly as it already
+# does for an unpinned service user.
+WORKFLOW_PROFILE_CONFIG_KEY = "ironwrap_default_workflow_profile"
+LOCALE_POLICY_VERSION_CONFIG_KEY = "ironwrap_locale_policy_version"
+LOCALE_POLICY_SNAPSHOT_CONFIG_KEY = "ironwrap_locale_policy_snapshot_json"
+# Mirrors `roof_job.json`'s `workflow_profile` Select options; `test_schema_contract`
+# fails if the two ever drift.
+WORKFLOW_PROFILES = frozenset(
+    {
+        "Residential Retail",
+        "Insurance Restoration",
+        "Commercial",
+        "Service",
+        "Warranty",
+        "Custom",
+    }
+)
+# `domain_policy` treats these as "the job has left tentative state"; a job already in
+# one of them keeps whatever produced it.
+WON_OR_LATER_STATUSES = frozenset(
+    {"Won", "In Production", "Completed", "Closed", "Lost"}
+)
 SOURCE_SYSTEM = "ironwrap-customer-portal"
 VERIFICATION_SOURCE = "ironwrap-worker-r2-customer-contract-acceptance"
 PREPARE_PATH = (
@@ -83,6 +118,7 @@ COMMIT_FIELDS = frozenset(
 )
 REQUIRED_PERMISSIONS = (
     ("Roof Job", "read"),
+    ("Roof Job", "write"),
     ("Roofing Customer", "read"),
     ("Customer Quote", "read"),
     ("Customer Quote", "write"),
@@ -703,6 +739,80 @@ def prepare_customer_portal_contract_acceptance(customer_claim_json: str) -> dic
     }
 
 
+def _won_stamp() -> dict[str, str]:
+    """Read the tenant's blessed Won-invariant constants off the site config.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native acceptance transition; delete when Frappe stops being
+    written for new jobs.
+
+    Every failure here names its own site-config key, because the operator reading it
+    is provisioning a site, not debugging a claim.
+    """
+
+    profile = _site_config(WORKFLOW_PROFILE_CONFIG_KEY)
+    if not isinstance(profile, str) or profile.strip() not in WORKFLOW_PROFILES:
+        _fail(
+            "customer_contract_workflow_profile_unconfigured",
+            f"{WORKFLOW_PROFILE_CONFIG_KEY} must be one of the Roof Job workflow profiles",
+        )
+    version = _site_config(LOCALE_POLICY_VERSION_CONFIG_KEY)
+    if not isinstance(version, str) or not version.strip():
+        _fail(
+            "customer_contract_locale_policy_unconfigured",
+            f"{LOCALE_POLICY_VERSION_CONFIG_KEY} is unavailable",
+        )
+    raw_snapshot = _site_config(LOCALE_POLICY_SNAPSHOT_CONFIG_KEY)
+    if isinstance(raw_snapshot, Mapping):
+        snapshot = dict(raw_snapshot)
+    elif isinstance(raw_snapshot, str) and raw_snapshot.strip():
+        try:
+            snapshot = json.loads(raw_snapshot)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            snapshot = None
+    else:
+        snapshot = None
+    if not isinstance(snapshot, Mapping) or not snapshot:
+        _fail(
+            "customer_contract_locale_policy_unconfigured",
+            f"{LOCALE_POLICY_SNAPSHOT_CONFIG_KEY} must be a non-empty JSON object",
+        )
+    return {
+        "workflow_profile": profile.strip(),
+        "locale_policy_version": _text(
+            version, LOCALE_POLICY_VERSION_CONFIG_KEY
+        ),
+        "locale_policy_snapshot_json": _canonical_json(dict(snapshot)),
+    }
+
+
+def _apply_won_transition(job_name: str) -> None:
+    """Record that a signed contract won this job, in the acceptance transaction.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native acceptance transition; delete when Frappe stops being
+    written for new jobs.
+
+    Runs on the fresh and the replayed acceptance alike, so an acceptance recorded
+    before this producer existed converges the next time its Worker retries instead of
+    leaving the job stranded in the tentative set forever.  A job that already left
+    that set keeps the status production or closeout gave it.  Each already-populated
+    Won-invariant field keeps its value: they are write-once in `domain_policy`, and
+    the human who filled one in outranks the tenant default.
+    """
+
+    job_document = frappe.get_doc("Roof Job", job_name)
+    if job_document.job_status in WON_OR_LATER_STATUSES:
+        return
+    stamp = _won_stamp()
+    job_document.job_status = "Won"
+    for field, value in stamp.items():
+        if not job_document.get(field):
+            setattr(job_document, field, value)
+    with customer_contract_job_transition_context(job_document):
+        job_document.save()
+
+
 @frappe.whitelist()
 def record_customer_portal_contract_acceptance(
     customer_claim_json: str,
@@ -797,6 +907,8 @@ def record_customer_portal_contract_acceptance(
                 "customer_contract_acceptance_conflict",
                 "quote is not linked to the existing acceptance",
             )
+        # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era.
+        _apply_won_transition(anchors["job"]["name"])
         return {"acceptance_id": claim["acceptance_id"]}
     if quote.get("status") != "Approved" or any(
         quote.get(field)
@@ -819,4 +931,8 @@ def record_customer_portal_contract_acceptance(
         evidence_document.insert()
         acceptance_document.insert()
         quote_document.save()
+    # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era.  Same
+    # request, so same transaction as the three writes above: a job cannot be Won
+    # without its acceptance, and an acceptance cannot commit without its job.
+    _apply_won_transition(anchors["job"]["name"])
     return {"acceptance_id": claim["acceptance_id"]}

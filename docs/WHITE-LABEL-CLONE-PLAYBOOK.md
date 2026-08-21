@@ -132,6 +132,28 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
    | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | release-time only, for `tools/launch-proof.mjs` |
 
+   Three further pins are tenant *constants* rather than identities. A Roof Job cannot
+   reach `Won` without a workflow profile and the locale-policy pair, and the customer
+   contract acceptance command is what stamps them, so a site that skips these accepts
+   no contracts at all — it fails closed rather than stamping a jurisdiction fact
+   nobody blessed. Pin the tenant's own blessed values, not IronWrap Exteriors':
+
+   ```
+   bench --site <tenant-site> set-config ironwrap_default_workflow_profile     '<Roof Job workflow profile>'
+   bench --site <tenant-site> set-config ironwrap_locale_policy_version        '<blessed locale policy version>'
+   bench --site <tenant-site> set-config ironwrap_locale_policy_snapshot_json  '<blessed locale policy JSON object>'
+   ```
+
+   `ironwrap_default_workflow_profile` must be one of the Roof Job `workflow_profile`
+   options (`Residential Retail`, `Insurance Restoration`, `Commercial`, `Service`,
+   `Warranty`, `Custom`) and is the tenant default only: a profile an operator already
+   set on a job is never overwritten. `ironwrap_locale_policy_version` and
+   `ironwrap_locale_policy_snapshot_json` (a non-empty JSON object) are the tenant's
+   jurisdiction facts, blessed by whoever owns legal/compliance for that tenant and
+   re-pinned when its jurisdiction rules change. Retirement: these three pins belong to
+   the Frappe compatibility-projection era (IRO-195 / ELEC-115 Path A) and go away with
+   it when the D1-native acceptance transition ships.
+
 7. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 

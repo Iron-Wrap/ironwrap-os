@@ -17,6 +17,14 @@ from unittest.mock import patch
 from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
 
 
+ROOF_JOB_DOCTYPE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "roof_job"
+    / "roof_job.json"
+)
 API_PATH = (
     Path(__file__).resolve().parents[1]
     / "ironwrap_roofing"
@@ -24,6 +32,9 @@ API_PATH = (
 )
 SERVICE_USER = "customer-acceptance@example.com"
 HMAC_KEY = "test-customer-contract-hmac-key"
+WORKFLOW_PROFILE = "Residential Retail"
+LOCALE_POLICY_VERSION = "ca-ab-2026-01"
+LOCALE_POLICY_SNAPSHOT = json.dumps({"country": "CA", "province": "AB"})
 
 
 class FakeValidationError(Exception):
@@ -63,6 +74,9 @@ class FakeDocument(dict):
 
     def save(self) -> None:
         self._on_save(self)
+
+    def set(self, field: str, value) -> None:
+        self[field] = value
 
 
 class FakeDb:
@@ -144,6 +158,10 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
                     "roof_job_id": "job-1",
                     "customer": "customer-1",
                     "quotation": "cq-1",
+                    "job_status": "Proposal",
+                    "workflow_profile": "",
+                    "locale_policy_version": "",
+                    "locale_policy_snapshot_json": "",
                 }
             },
             "customers": {
@@ -210,30 +228,47 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         session_user: str = SERVICE_USER,
         roles: list[str] | None = None,
         has_permission: bool = True,
+        site_config: dict | None = None,
     ):
         fixtures = fixtures or self.fixtures()
         db = FakeDb(fixtures)
         nonce_cache = FakeNonceCache()
         issuance_calls: list[tuple[dict, dict, dict]] = []
+        job_transition_calls: list[dict] = []
 
         @contextmanager
         def customer_contract_acceptance_issuance_context(evidence, acceptance, quote):
             issuance_calls.append((dict(evidence), dict(acceptance), dict(quote)))
             yield
 
+        @contextmanager
+        def customer_contract_job_transition_context(job):
+            job_transition_calls.append(dict(job))
+            yield
+
         validation_module = types.ModuleType("ironwrap_roofing.document_validation")
         validation_module.customer_contract_acceptance_issuance_context = (
             customer_contract_acceptance_issuance_context
+        )
+        validation_module.customer_contract_job_transition_context = (
+            customer_contract_job_transition_context
         )
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
         frappe_module.PermissionError = FakePermissionError
         frappe_module.db = db
         frappe_module.cache = lambda: nonce_cache
-        frappe_module.conf = {
-            "ironwrap_customer_acceptance_service_user": SERVICE_USER,
-            "ironwrap_customer_acceptance_hmac_key": HMAC_KEY,
-        }
+        frappe_module.conf = dict(
+            site_config
+            if site_config is not None
+            else {
+                "ironwrap_customer_acceptance_service_user": SERVICE_USER,
+                "ironwrap_customer_acceptance_hmac_key": HMAC_KEY,
+                "ironwrap_default_workflow_profile": WORKFLOW_PROFILE,
+                "ironwrap_locale_policy_version": LOCALE_POLICY_VERSION,
+                "ironwrap_locale_policy_snapshot_json": LOCALE_POLICY_SNAPSHOT,
+            }
+        )
         frappe_module.session = types.SimpleNamespace(user=session_user)
         frappe_module.request = types.SimpleNamespace(method="POST", headers={})
         frappe_module.get_roles = lambda _user: (
@@ -257,11 +292,18 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
                 fixtures["acceptances"].append(dict(document))
 
         def on_save(document: FakeDocument) -> None:
-            fixtures["quotes"][document["name"]] = dict(document)
+            if document.get("doctype") == "Roof Job":
+                fixtures["jobs"][document["name"]] = dict(document)
+            else:
+                fixtures["quotes"][document["name"]] = dict(document)
 
         def get_doc(*args):
             if len(args) == 2:
                 doctype, name = args
+                if doctype == "Roof Job":
+                    row = dict(fixtures["jobs"][name])
+                    row["doctype"] = "Roof Job"
+                    return FakeDocument(row, on_save, on_insert)
                 if doctype != "Customer Quote":
                     raise AssertionError(f"unexpected get_doc: {doctype}")
                 return FakeDocument(dict(fixtures["quotes"][name]), on_save, on_insert)
@@ -282,7 +324,14 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
             },
         ):
             spec.loader.exec_module(module)
-        return module, fixtures, db, issuance_calls, frappe_module
+        return (
+            module,
+            fixtures,
+            db,
+            issuance_calls,
+            frappe_module,
+            job_transition_calls,
+        )
 
     @staticmethod
     def canonical(payload: dict) -> str:
@@ -333,7 +382,7 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         passed in this suite while refusing every real record on a live site.
         """
 
-        api, fixtures, _db, _issuance_calls, frappe_module = self.load_api()
+        api, fixtures, _db, _issuance_calls, frappe_module, _jobs = self.load_api()
         fixtures["quotes"]["cq-1"]["pricing_effective_at"] = datetime(2026, 7, 31, 9, 0)
         fixtures["packs"]["proposal:cq-1"]["prepared_at"] = datetime(2026, 7, 31, 9, 1)
         fixtures["packs"]["proposal:cq-1"]["approved_at"] = datetime(2026, 7, 31, 9, 2)
@@ -353,7 +402,7 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         self.assertEqual(prepared["terms"]["proposal"]["published_at"], "2026-07-31 09:02:00")
 
     def test_prepare_and_commit_lock_exact_offer_and_replay_idempotently(self) -> None:
-        api, fixtures, db, issuance_calls, frappe_module = self.load_api()
+        api, fixtures, db, issuance_calls, frappe_module, job_transitions = self.load_api()
         prepare_json = self.signed_claim(
             api,
             frappe_module,
@@ -498,17 +547,17 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         self.assertEqual(len(issuance_calls), 1)
 
     def test_rejects_forged_hmac_missing_role_and_changed_terms(self) -> None:
-        api, fixtures, _, _, _ = self.load_api(session_user="owner@example.com")
+        api, fixtures, _, _, _, _ = self.load_api(session_user="owner@example.com")
         with self.assertRaisesRegex(FakePermissionError, "service_user_mismatch"):
             api.prepare_customer_portal_contract_acceptance("{}")
         self.assertEqual(fixtures["evidence"], [])
 
-        api, fixtures, _, _, _ = self.load_api(has_permission=False)
+        api, fixtures, _, _, _, _ = self.load_api(has_permission=False)
         with self.assertRaisesRegex(FakePermissionError, "permission_denied"):
             api.prepare_customer_portal_contract_acceptance("{}")
         self.assertEqual(fixtures["acceptances"], [])
 
-        api, fixtures, _, _, frappe_module = self.load_api()
+        api, fixtures, _, _, frappe_module, _ = self.load_api()
         prepared_json = self.signed_claim(
             api,
             frappe_module,
@@ -534,7 +583,7 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         with self.assertRaisesRegex(FakePermissionError, "customer_contract_hmac_invalid"):
             api.prepare_customer_portal_contract_acceptance(prepared_json)
 
-        api, fixtures, _, _, frappe_module = self.load_api(roles=[])
+        api, fixtures, _, _, frappe_module, _ = self.load_api(roles=[])
         claim_json = self.signed_claim(
             api,
             frappe_module,
@@ -546,7 +595,7 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
             api.prepare_customer_portal_contract_acceptance(claim_json)
         self.assertEqual(fixtures["acceptances"], [])
 
-        api, fixtures, _, _, frappe_module = self.load_api()
+        api, fixtures, _, _, frappe_module, _ = self.load_api()
         prepared_json = self.signed_claim(
             api,
             frappe_module,
@@ -616,6 +665,225 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
             api.record_customer_portal_contract_acceptance(email_drift_json)
         self.assertEqual(fixtures["evidence"], [])
         self.assertEqual(fixtures["acceptances"], [])
+
+    # ELEC-117 / ELEC-115 Path A: the Won-gate producer.  Until this shipped,
+    # `job_status = "Won"` had no writer anywhere in the product, so every gate behind
+    # it (production-schedule eligibility, `/today`, work packages) was correct but
+    # permanently empty.  RETIREMENT: these cases go with the producer when IRO-195's
+    # D1-native acceptance transition replaces it.
+    def accept(
+        self,
+        api,
+        frappe_module,
+        *,
+        acceptance_id: str = "accept-000001",
+        nonce: str,
+    ) -> dict:
+        prepare_json = self.signed_claim(
+            api,
+            frappe_module,
+            api.PREPARE_PATH,
+            self.prepare_claim(),
+            nonce=f"prepare-{nonce}",
+        )
+        prepared = api.prepare_customer_portal_contract_acceptance(prepare_json)
+        commit_claim = {
+            "acceptance_id": acceptance_id,
+            "challenge_id": "challenge-000001",
+            "portal_link_id": "portal-link-000001",
+            "tenant_id": "ironwrap",
+            "roof_job_id": prepared["roof_job_id"],
+            "customer_id": prepared["customer_id"],
+            "quote_id": prepared["quote_id"],
+            "quote_version": prepared["quote_version"],
+            "proposal_pack_id": prepared["proposal_pack_id"],
+            "terms_hash": prepared["terms_hash"],
+            "email_hash": prepared["email_hash"],
+            "signer_name": "Alex Customer",
+            "accepted_at": "2026-07-31T10:00:00Z",
+            "receipt_key": f"customer-contract-acceptance/v1/job-1/{acceptance_id}.json",
+            "receipt_hash": "a" * 64,
+            "receipt_content_type": "application/json",
+            "receipt_content_length": 512,
+            "receipt_captured_at": "2026-07-31T10:00:01Z",
+            "signer_ip": "203.0.113.10",
+        }
+        commit_json = self.signed_claim(
+            api,
+            frappe_module,
+            api.COMMIT_PATH,
+            commit_claim,
+            nonce=f"commit-{nonce}",
+        )
+        api.record_customer_portal_contract_acceptance(commit_json)
+        return commit_claim
+
+    def test_acceptance_wins_the_job_and_stamps_the_won_invariant(self) -> None:
+        api, fixtures, _, _, frappe_module, job_transitions = self.load_api()
+        self.assertEqual(fixtures["jobs"]["job-1"]["job_status"], "Proposal")
+
+        self.accept(api, frappe_module, nonce="won-000001")
+
+        job = fixtures["jobs"]["job-1"]
+        self.assertEqual(job["job_status"], "Won")
+        self.assertEqual(job["workflow_profile"], WORKFLOW_PROFILE)
+        self.assertEqual(job["locale_policy_version"], LOCALE_POLICY_VERSION)
+        self.assertEqual(
+            json.loads(job["locale_policy_snapshot_json"]),
+            {"country": "CA", "province": "AB"},
+        )
+        # The job lineage the acceptance had no business touching is untouched.
+        self.assertEqual(job["customer"], "customer-1")
+        self.assertEqual(job["quotation"], "cq-1")
+        # Exactly one governed transition, and it carried the job the command saved.
+        self.assertEqual(len(job_transitions), 1)
+        self.assertEqual(job_transitions[0]["job_status"], "Won")
+        self.assertEqual(fixtures["quotes"]["cq-1"]["status"], "Accepted")
+
+    def test_replay_converges_a_job_left_behind_by_an_earlier_acceptance(self) -> None:
+        api, fixtures, _, _, frappe_module, job_transitions = self.load_api()
+        commit_claim = self.accept(api, frappe_module, nonce="won-000002")
+        # An acceptance recorded before this producer existed: receipt and quote are
+        # already durable, the job never left the tentative set.
+        fixtures["jobs"]["job-1"]["job_status"] = "Proposal"
+        fixtures["jobs"]["job-1"]["workflow_profile"] = ""
+        fixtures["jobs"]["job-1"]["locale_policy_version"] = ""
+        fixtures["jobs"]["job-1"]["locale_policy_snapshot_json"] = ""
+
+        replay_json = self.signed_claim(
+            api,
+            frappe_module,
+            api.COMMIT_PATH,
+            commit_claim,
+            nonce="commit-won-000002-replay",
+        )
+        api.record_customer_portal_contract_acceptance(replay_json)
+
+        self.assertEqual(fixtures["jobs"]["job-1"]["job_status"], "Won")
+        self.assertEqual(
+            fixtures["jobs"]["job-1"]["locale_policy_version"], LOCALE_POLICY_VERSION
+        )
+        self.assertEqual(len(fixtures["acceptances"]), 1)
+        self.assertEqual(len(fixtures["evidence"]), 1)
+        self.assertEqual(len(job_transitions), 2)
+
+    def test_a_job_past_the_tentative_set_keeps_the_status_production_gave_it(
+        self,
+    ) -> None:
+        for status in ("Won", "In Production", "Completed", "Closed", "Lost"):
+            with self.subTest(status=status):
+                fixtures = self.fixtures()
+                fixtures["jobs"]["job-1"]["job_status"] = status
+                api, fixtures, _, _, frappe_module, job_transitions = self.load_api(
+                    fixtures
+                )
+
+                self.accept(
+                    api,
+                    frappe_module,
+                    nonce=f"won-past-{status.replace(' ', '').lower():-<12}",
+                )
+
+                self.assertEqual(fixtures["jobs"]["job-1"]["job_status"], status)
+                self.assertEqual(job_transitions, [])
+                # The acceptance itself still lands: the receipt is the durable fact.
+                self.assertEqual(len(fixtures["acceptances"]), 1)
+
+    def test_won_invariant_fields_already_filled_in_are_never_overwritten(self) -> None:
+        fixtures = self.fixtures()
+        fixtures["jobs"]["job-1"]["workflow_profile"] = "Insurance Restoration"
+        fixtures["jobs"]["job-1"]["locale_policy_version"] = "ca-ab-2025-04"
+        fixtures["jobs"]["job-1"]["locale_policy_snapshot_json"] = json.dumps(
+            {"country": "CA", "province": "AB", "revision": "operator"}
+        )
+        api, fixtures, _, _, frappe_module, _ = self.load_api(fixtures)
+
+        self.accept(api, frappe_module, nonce="won-000003")
+
+        job = fixtures["jobs"]["job-1"]
+        self.assertEqual(job["job_status"], "Won")
+        self.assertEqual(job["workflow_profile"], "Insurance Restoration")
+        self.assertEqual(job["locale_policy_version"], "ca-ab-2025-04")
+        self.assertEqual(
+            json.loads(job["locale_policy_snapshot_json"])["revision"], "operator"
+        )
+
+    def test_an_unpinned_or_invalid_tenant_constant_fails_the_acceptance_closed(
+        self,
+    ) -> None:
+        base = {
+            "ironwrap_customer_acceptance_service_user": SERVICE_USER,
+            "ironwrap_customer_acceptance_hmac_key": HMAC_KEY,
+            "ironwrap_default_workflow_profile": WORKFLOW_PROFILE,
+            "ironwrap_locale_policy_version": LOCALE_POLICY_VERSION,
+            "ironwrap_locale_policy_snapshot_json": LOCALE_POLICY_SNAPSHOT,
+        }
+        cases = (
+            ({"ironwrap_default_workflow_profile": None}, "workflow_profile_unconfigured"),
+            (
+                {"ironwrap_default_workflow_profile": "Residential"},
+                "workflow_profile_unconfigured",
+            ),
+            ({"ironwrap_locale_policy_version": None}, "locale_policy_unconfigured"),
+            ({"ironwrap_locale_policy_version": "  "}, "locale_policy_unconfigured"),
+            ({"ironwrap_locale_policy_snapshot_json": None}, "locale_policy_unconfigured"),
+            ({"ironwrap_locale_policy_snapshot_json": "{}"}, "locale_policy_unconfigured"),
+            ({"ironwrap_locale_policy_snapshot_json": "[]"}, "locale_policy_unconfigured"),
+            (
+                {"ironwrap_locale_policy_snapshot_json": "not json"},
+                "locale_policy_unconfigured",
+            ),
+        )
+        for index, (override, code) in enumerate(cases):
+            with self.subTest(override=override):
+                api, fixtures, _, _, frappe_module, job_transitions = self.load_api(
+                    site_config={**base, **override}
+                )
+                with self.assertRaisesRegex(FakeValidationError, code):
+                    self.accept(api, frappe_module, nonce=f"won-failclosed-{index:06d}")
+                self.assertEqual(fixtures["jobs"]["job-1"]["job_status"], "Proposal")
+                self.assertEqual(job_transitions, [])
+
+    def test_a_mapping_locale_snapshot_pin_is_canonicalized_not_stringified(
+        self,
+    ) -> None:
+        api, fixtures, _, _, frappe_module, _ = self.load_api(
+            site_config={
+                "ironwrap_customer_acceptance_service_user": SERVICE_USER,
+                "ironwrap_customer_acceptance_hmac_key": HMAC_KEY,
+                "ironwrap_default_workflow_profile": WORKFLOW_PROFILE,
+                "ironwrap_locale_policy_version": LOCALE_POLICY_VERSION,
+                "ironwrap_locale_policy_snapshot_json": {
+                    "province": "AB",
+                    "country": "CA",
+                },
+            }
+        )
+
+        self.accept(api, frappe_module, nonce="won-000004")
+
+        self.assertEqual(
+            fixtures["jobs"]["job-1"]["locale_policy_snapshot_json"],
+            '{"country":"CA","province":"AB"}',
+        )
+
+    def test_the_command_declares_the_roof_job_write_it_now_needs(self) -> None:
+        api, _, _, _, _, _ = self.load_api()
+        self.assertIn(("Roof Job", "write"), api.REQUIRED_PERMISSIONS)
+
+    def test_the_pinnable_workflow_profiles_are_the_ones_roof_job_accepts(self) -> None:
+        api, _, _, _, _, _ = self.load_api()
+        doctype = json.loads(ROOF_JOB_DOCTYPE_PATH.read_text(encoding="utf-8"))
+        options = {
+            field["options"]
+            for field in doctype["fields"]
+            if field["fieldname"] == "workflow_profile"
+        }.pop()
+        # A profile pinned in a site config that Roof Job would reject is a rail that
+        # fails at Won time on a real site and nowhere in CI.
+        self.assertEqual(api.WORKFLOW_PROFILES, frozenset(options.split("\n")))
+        self.assertIn(WORKFLOW_PROFILE, api.WORKFLOW_PROFILES)
+
 
 
 if __name__ == "__main__":

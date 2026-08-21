@@ -206,6 +206,13 @@ jobs:
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
           "$RUNNER_TEMP/gitleaks" version
+      # The scanner's fail-closed contract is tested here rather than in build-and-test
+      # because two of its cases need the real pinned binary, which only this runner has.
+      # The suite adds no dependency: node's own test runner, on the tracked tree.
+      - name: Test the fail-closed contract of the secret scanner
+        env:
+          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+        run: node --test tools/secret-scan.test.mjs
       - name: Scan the tracked tree for committed secrets
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks

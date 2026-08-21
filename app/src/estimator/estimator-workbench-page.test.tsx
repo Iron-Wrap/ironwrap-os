@@ -278,6 +278,10 @@ function renderWorkbench(session: AuthenticatedSession = ownerSession) {
   );
 }
 
+function openReviewGroup(name: "Roof details" | "Materials and insurance") {
+  fireEvent.click(screen.getByText(name));
+}
+
 describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -300,14 +304,14 @@ describe("EstimatorWorkbenchPage", () => {
   it("renders source geometry, takeoff lineage, and versioned commercial truth without write affordances", async () => {
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Measurement workbench" });
-    expect(screen.getByText("Geometry needs review")).toBeVisible();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    openReviewGroup("Materials and insurance");
+    expect(screen.getAllByText("Roof math needs review")[1]!).toBeVisible();
     expect(
-      screen.getByText(
-        /does not verify concealed conditions, substrate condition, access, or field dimensions/i,
-      ),
+      screen.getByText(/do not confirm hidden damage, deck condition, access, or site size/i),
     ).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Facet comparison" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Roof face check" })).toBeVisible();
     expect(screen.getByText("Architectural shingles")).toBeVisible();
     expect(screen.getAllByText(/POLYGON\[type=Roof\]/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Not customer-ready")).toBeVisible();
@@ -328,11 +332,11 @@ describe("EstimatorWorkbenchPage", () => {
   it("puts the next safe step and selected commercial record ahead of dense evidence", async () => {
     renderWorkbench();
 
-    const nextStep = await screen.findByRole("heading", { name: "Next safe step" });
-    const commercial = screen.getByRole("heading", { name: "Selected commercial record" });
-    const measurement = screen.getByRole("heading", { name: "Measurement source" });
+    const nextStep = await screen.findByRole("heading", { name: "Next step" });
+    const commercial = screen.getByRole("heading", { name: "Quote at a glance" });
+    const measurement = screen.getByRole("heading", { name: "Roof measurements" });
 
-    expect(screen.getByText("Complete human review")).toBeVisible();
+    expect(screen.getByText("Review the roof and quote")).toBeVisible();
     expect(screen.getByText("Quote total")).toBeVisible();
     expect(nextStep.compareDocumentPosition(commercial) & 4).toBeTruthy();
     expect(commercial.compareDocumentPosition(measurement) & 4).toBeTruthy();
@@ -341,15 +345,17 @@ describe("EstimatorWorkbenchPage", () => {
   it("keeps source tables semantic and leaves static geometry notices out of the live region", async () => {
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Measurement workbench" });
-    const facetTable = screen.getByRole("table", { name: /captured source facets/i });
-    const takeoffTable = screen.getByRole("table", { name: /material takeoff items/i });
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    openReviewGroup("Materials and insurance");
+    const facetTable = screen.getByRole("table", { name: /roof faces with saved area/i });
+    const takeoffTable = screen.getByRole("table", { name: /materials with amount/i });
 
     expect(within(facetTable).getByRole("rowheader", { name: "F1" })).toBeVisible();
     expect(
       within(takeoffTable).getByRole("rowheader", { name: /architectural shingles/i }),
     ).toBeVisible();
-    expect(screen.getByText("Geometry needs review").closest("[role=status]")).toBeNull();
+    expect(screen.getAllByText("Roof math needs review")[1]!.closest("[role=status]")).toBeNull();
   });
 
   it("collapses secondary audit detail when the returned evidence has no review signal", async () => {
@@ -385,10 +391,12 @@ describe("EstimatorWorkbenchPage", () => {
     });
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Measurement workbench" });
-    expect(screen.getByText("Facet audit detail").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("Source audit detail").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("Takeoff audit detail").closest("details")).not.toHaveAttribute("open");
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    openReviewGroup("Materials and insurance");
+    expect(screen.getByText("Roof face details").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Roof value details").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Material details").closest("details")).not.toHaveAttribute("open");
   });
 
   it("shows a source-read failure as unavailable instead of relabeling it as field verified", async () => {
@@ -414,10 +422,11 @@ describe("EstimatorWorkbenchPage", () => {
     });
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Measurement workbench" });
-    expect(screen.getByText("Source geometry could not be recomputed")).toBeVisible();
-    expect(screen.getByText("The retained measurement source was not found.")).toBeVisible();
-    expect(screen.queryByText("Geometry recomputed from source file")).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    expect(screen.getByText("Roof math could not be checked")).toBeVisible();
+    expect(screen.getByText("The saved roof file was not found.")).toBeVisible();
+    expect(screen.queryByText("Roof math checked from the file")).not.toBeInTheDocument();
     expect(screen.queryByText(/field verified/i)).not.toBeInTheDocument();
   });
 
@@ -439,11 +448,13 @@ describe("EstimatorWorkbenchPage", () => {
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel({ visual_model: visual }));
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Visual evidence" });
-    expect(screen.getByText("Approved model")).toBeVisible();
-    expect(screen.getByText("Linked to selected measurement")).toBeVisible();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    screen.getByRole("heading", { name: "Property drawing" });
+    expect(screen.getByText("Drawing approved")).toBeVisible();
+    expect(screen.getByText("Linked to this roof data")).toBeVisible();
     expect(screen.getByText("82%")).toBeVisible();
-    const preview = screen.getByRole("img", { name: "Visual property evidence preview" });
+    const preview = screen.getByRole("img", { name: "Saved property drawing" });
     expect(preview).toHaveAttribute(
       "src",
       "https://preview.ironwrap.example/roof-a.webp?signature=allowed",
@@ -516,24 +527,25 @@ describe("EstimatorWorkbenchPage", () => {
     });
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Roof graph evidence" });
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    screen.getByRole("heading", { name: "Roof shape drawing" });
     expect(screen.getByText("RoofRuler report")).toBeVisible();
     expect(screen.getByText("roof-graph-r3")).toBeVisible();
     expect(screen.getByText("87%")).toBeVisible();
-    expect(screen.getByText(/graph evidence is a transcription/i)).toBeVisible();
-    expect(screen.getByText(/not field verification/i)).toBeVisible();
+    expect(screen.getByText(/drawing came from the saved roof file/i)).toBeVisible();
     expect(screen.queryByText("private/roof-graph.json")).not.toBeInTheDocument();
 
-    const graph = screen.getByRole("group", { name: "Roof graph evidence" });
-    const frontPlane = within(graph).getByRole("button", { name: /select facet front plane/i });
-    const rearPlane = within(graph).getByRole("button", { name: /select facet rear plane/i });
+    const graph = screen.getByRole("group", { name: "Roof shape drawing" });
+    const frontPlane = within(graph).getByRole("button", { name: /select roof face front plane/i });
+    const rearPlane = within(graph).getByRole("button", { name: /select roof face rear plane/i });
     expect(rearPlane).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(frontPlane);
     expect(frontPlane).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Selected facet: Front plane")).toBeVisible();
+    expect(screen.getByText("Selected roof face: Front plane")).toBeVisible();
     fireEvent.keyDown(rearPlane, { key: "Enter" });
     expect(rearPlane).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Selected facet: Rear plane")).toBeVisible();
+    expect(screen.getByText("Selected roof face: Rear plane")).toBeVisible();
   });
 
   it("keeps blocked or unapproved visual evidence useful without rendering its URL", async () => {
@@ -550,13 +562,13 @@ describe("EstimatorWorkbenchPage", () => {
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel({ visual_model: visual }));
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Visual evidence" });
-    expect(screen.getByText("Model needs review")).toBeVisible();
-    expect(screen.getByText("Linked to another measurement")).toBeVisible();
-    expect(screen.getByText("Preview blocked")).toBeVisible();
-    expect(
-      screen.queryByRole("img", { name: "Visual property evidence preview" }),
-    ).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Roof details");
+    screen.getByRole("heading", { name: "Property drawing" });
+    expect(screen.getByText("Drawing needs review")).toBeVisible();
+    expect(screen.getByText("Linked to other roof data")).toBeVisible();
+    expect(screen.getByText("Image blocked")).toBeVisible();
+    expect(screen.queryByRole("img", { name: "Saved property drawing" })).not.toBeInTheDocument();
     expect(screen.queryByText("https://blocked.example/roof.webp")).not.toBeInTheDocument();
   });
 
@@ -581,10 +593,12 @@ describe("EstimatorWorkbenchPage", () => {
     );
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Insurance supplement evidence" });
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Materials and insurance");
+    screen.getByRole("heading", { name: "Insurance proof" });
     expect(screen.getByText("Carrier Scope · Code/Manufacturer · Photo · Invoice")).toBeVisible();
-    expect(screen.getByText("Link an approved measurement report.")).toBeVisible();
-    expect(screen.getByText(/carrier scope is recorded, not interpreted/i)).toBeVisible();
+    expect(screen.getByText("Link an approved roof report.")).toBeVisible();
+    expect(screen.getByText(/only shows saved proof/i)).toBeVisible();
     expect(screen.queryByText("private-claim-reference")).not.toBeInTheDocument();
     expect(screen.queryByText("private-carrier-name")).not.toBeInTheDocument();
     expect(
@@ -607,17 +621,14 @@ describe("EstimatorWorkbenchPage", () => {
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(model);
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Measurement workbench" });
-    expect(screen.getByText("No takeoff links to this measurement")).toBeVisible();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    openReviewGroup("Materials and insurance");
+    expect(screen.getByText("No material list uses this roof data")).toBeVisible();
     expect(screen.getByText("No proposal links to this quote")).toBeVisible();
     expect(
-      screen.getByText(
-        /1 takeoff record was returned, but none link to the selected measurement report/i,
-      ),
+      screen.getByText(/1 material list was found, but none use this roof report/i),
     ).toBeVisible();
-    expect(
-      screen.getByText(/proposal records were returned, but none link to the selected quote/i),
-    ).toBeVisible();
+    expect(screen.getByText(/proposals were found, but none use this quote/i)).toBeVisible();
   });
 
   it("shows a linked revision and unresolved customer scope decision without offering a repricing control", async () => {
@@ -717,14 +728,14 @@ describe("EstimatorWorkbenchPage", () => {
     });
     renderWorkbench();
 
-    await screen.findByRole("heading", { name: "Commercial decision rail" });
-    expect(screen.getByText("Version comparison")).toBeVisible();
-    expect(screen.getByText(/Explicitly linked V3 → V4/i)).toBeVisible();
-    expect(screen.getByText("Scope change ledger")).toBeVisible();
+    await screen.findByRole("heading", { name: "What needs review" });
+    expect(screen.getByText("Quote changes")).toBeVisible();
+    expect(screen.getByText(/Linked V3 → V4/i)).toBeVisible();
+    expect(screen.getByText("Job changes")).toBeVisible();
     expect(screen.getByText("Ridge ventilation addition")).toBeVisible();
-    expect(screen.getByText(/still needs its written customer decision/i)).toBeVisible();
+    expect(screen.getByText(/still needs the customer's written choice/i)).toBeVisible();
     expect(screen.getByText("Blocked")).toBeVisible();
-    expect(screen.getByText(/not a live supplier-price check/i)).toBeVisible();
+    expect(screen.getByText(/not a live supplier price/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /reprice|refresh price|create quote|send proposal/i }),
     ).not.toBeInTheDocument();
@@ -748,9 +759,7 @@ describe("EstimatorWorkbenchPage", () => {
     const request = await screen.findByRole("link", { name: /request draft revision/i });
     expect(request).toHaveAttribute("href", "/estimator/jobs/$jobId/revision");
     expect(
-      screen.getByText(
-        /does not copy price, tax, scope, payment, approval, acceptance, or customer terms/i,
-      ),
+      screen.getByText(/price, tax, scope, payment, approvals, and customer terms are not copied/i),
     ).toBeVisible();
   });
 
@@ -771,7 +780,9 @@ describe("EstimatorWorkbenchPage", () => {
       ),
     );
     expect(navigateToFacetLaunch).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/No address, price, scope, proposal, payment/i)).toBeVisible();
+    expect(
+      screen.getByText(/does not send the address, price, scope, proposal, payment/i),
+    ).toBeVisible();
     expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
   });
 

@@ -9,13 +9,15 @@ import {
   RefreshCw,
   ShieldAlert,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -53,62 +55,58 @@ const statePresentation: Record<
   { label: string; explanation: string; tone: string }
 > = {
   connection_required: {
-    label: "QuickBooks connection required",
-    explanation: "An owner must connect QuickBooks before this candidate can move.",
+    label: "Connect QuickBooks",
+    explanation: "An owner must connect QuickBooks before this invoice can move.",
     tone: "border-warning/40 bg-warning-soft",
   },
   blocked: {
-    label: "Blocked before review",
-    explanation: "The recorded blocker must be resolved before approval is available.",
+    label: "Not ready to review",
+    explanation: "Fix the item below before anyone can approve this invoice.",
     tone: "border-warning/40 bg-warning-soft",
   },
   pending_review: {
-    label: "Needs finance review",
-    explanation: "Review the immutable final-invoice candidate and its evidence before deciding.",
+    label: "Ready to review",
+    explanation: "Check this invoice and its source records before you decide.",
     tone: "border-warning/40 bg-warning-soft",
   },
   rejected: {
     label: "Not approved",
-    explanation: "The candidate was rejected. No QuickBooks invoice was authorized by this review.",
+    explanation: "This invoice was not approved. Nothing was sent to QuickBooks.",
     tone: "border-border bg-surface-muted/60",
   },
   submission_pending: {
-    label: "Submission pending",
-    explanation:
-      "Approval is recorded and the durable submission event is pending. Do not submit another invoice.",
+    label: "Waiting to send",
+    explanation: "Approval is saved. IronWrap is waiting to send it. Do not send another invoice.",
     tone: "border-info/40 bg-info-soft",
   },
   submitted: {
-    label: "Accepted by QuickBooks",
-    explanation:
-      "The provider accepted the invoice submission. IronWrap is awaiting authenticated readback; this is not a match or payment confirmation.",
+    label: "QuickBooks got it",
+    explanation: "QuickBooks accepted this invoice. IronWrap still needs to check the saved copy.",
     tone: "border-info/40 bg-info-soft",
   },
   matched: {
-    label: "Matched by authenticated readback",
-    explanation:
-      "The server matched this exact invoice to authenticated QuickBooks readback. Payment is not implied.",
+    label: "QuickBooks record matches",
+    explanation: "IronWrap checked this exact invoice. The customer may still owe money.",
     tone: "border-ok/40 bg-ok-soft",
   },
   failed: {
-    label: "Submission failed",
+    label: "Send failed",
     explanation:
-      "No matched QuickBooks invoice is proven. Follow the recorded next step; do not create a replacement from this screen.",
+      "IronWrap cannot prove QuickBooks got it. Follow the next step. Do not make a new invoice here.",
     tone: "border-danger/40 bg-danger-soft",
   },
   reconciliation_required: {
-    label: "Reconciliation required",
-    explanation:
-      "Provider truth is uncertain or drifted. Reconcile the recorded invoice before any new submission.",
+    label: "Needs a QuickBooks check",
+    explanation: "The QuickBooks record may have changed. Check this invoice before you try again.",
     tone: "border-danger/40 bg-danger-soft",
   },
 };
 
 const rejectionLabels: Record<QuickBooksRejectionReason, string> = {
-  evidence_incomplete: "Required evidence is incomplete",
-  commercial_values_disputed: "Commercial values are disputed",
+  evidence_incomplete: "Source records are missing",
+  commercial_values_disputed: "The amounts are not right",
   duplicate_or_already_billed: "Duplicate or already billed",
-  mapping_requires_correction: "QuickBooks mapping needs correction",
+  mapping_requires_correction: "A QuickBooks link needs a fix",
   not_ready_to_invoice: "Work is not ready to invoice",
 };
 
@@ -116,32 +114,32 @@ const blockerLabels: Record<
   NonNullable<QuickBooksFinalInvoiceResponse["intent"]["blocker"]>["code"],
   string
 > = {
-  oauth_connection_required: "QuickBooks connection is required",
-  realm_mismatch: "The connected QuickBooks company does not match",
-  customer_mapping_missing: "Customer mapping is missing",
-  item_mapping_missing: "Item mapping is missing",
-  tax_mapping_missing: "Tax mapping is missing",
-  terms_mapping_missing: "Terms mapping is missing",
-  commercial_policy_hold: "Commercial policy placed this candidate on hold",
-  candidate_invalid: "The final-invoice candidate is invalid",
-  candidate_changed: "The candidate changed after this read",
-  provider_response_uncertain: "The provider response is uncertain",
-  provider_readback_drift: "QuickBooks readback no longer matches",
-  provider_invoice_missing: "The expected QuickBooks invoice is missing",
-  frappe_bind_pending: "The QuickBooks identity is waiting to bind to the operating record",
-  frappe_resolver_pending: "The operating-record resolver is still pending",
+  oauth_connection_required: "QuickBooks is not connected",
+  realm_mismatch: "The wrong QuickBooks company is connected",
+  customer_mapping_missing: "The customer link is missing",
+  item_mapping_missing: "The item link is missing",
+  tax_mapping_missing: "The tax link is missing",
+  terms_mapping_missing: "The payment terms link is missing",
+  commercial_policy_hold: "A business rule blocks this invoice",
+  candidate_invalid: "This invoice is not ready",
+  candidate_changed: "This invoice changed after you opened it",
+  provider_response_uncertain: "QuickBooks may not have saved the invoice",
+  provider_readback_drift: "The saved QuickBooks invoice changed",
+  provider_invoice_missing: "The QuickBooks invoice is missing",
+  frappe_bind_pending: "IronWrap is still saving the QuickBooks link",
+  frappe_resolver_pending: "IronWrap is still finding the work record",
 };
 
 const nextStepLabels: Record<
   NonNullable<QuickBooksFinalInvoiceResponse["intent"]["blocker"]>["next_step"],
   string
 > = {
-  connect_quickbooks: "Ask the owner to connect the intended QuickBooks company.",
-  fix_frappe_mapping: "Correct the owned QuickBooks mapping, then refresh this candidate.",
-  resolve_commercial_policy: "Resolve the recorded commercial-policy hold, then refresh.",
-  refresh_candidate: "Refresh the candidate from current owned records.",
-  reconcile_provider_invoice: "Reconcile the exact provider invoice and authenticated readback.",
-  retry_frappe_projection: "Retry the bounded operating-record projection, then refresh.",
+  connect_quickbooks: "Ask the owner to connect QuickBooks.",
+  fix_frappe_mapping: "Fix the QuickBooks link, then refresh.",
+  resolve_commercial_policy: "Fix the business hold, then refresh.",
+  refresh_candidate: "Refresh to load the latest records.",
+  reconcile_provider_invoice: "Check this exact invoice in QuickBooks.",
+  retry_frappe_projection: "Try saving the work record again, then refresh.",
 };
 
 const lineCodeLabels: Record<string, string> = {
@@ -187,7 +185,7 @@ function ReconciliationHealthCard() {
   if (summary.isPending && !summary.data) {
     return (
       <Card className="p-5 sm:p-6">
-        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <h2 className="text-xl font-black tracking-[-0.025em]">QuickBooks checks</h2>
         <p className="mt-2 text-sm leading-6 text-muted">Loading the money desk…</p>
       </Card>
     );
@@ -195,10 +193,10 @@ function ReconciliationHealthCard() {
   if (!summary.data) {
     return (
       <Card className="p-5 sm:p-6">
-        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <h2 className="text-xl font-black tracking-[-0.025em]">QuickBooks checks</h2>
         <p className="mt-2 text-sm leading-6 text-muted">
-          The money desk could not be read, so reconciliation health is unknown. The recorded
-          connection state above is unaffected.
+          IronWrap could not open the money desk, so these checks are unknown. The connection status
+          above is still current.
         </p>
       </Card>
     );
@@ -207,30 +205,30 @@ function ReconciliationHealthCard() {
   const health = summary.data.summary.reconciliation_health;
   return (
     <Card className="p-5 sm:p-6">
-      <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+      <h2 className="text-xl font-black tracking-[-0.025em]">QuickBooks checks</h2>
       <p className="mt-2 text-sm leading-6 text-muted">
-        How much of what IronWrap believes has been checked against QuickBooks recently.
+        See what still needs a fresh check against QuickBooks.
       </p>
       <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <HealthTile label="Open exceptions" value={health.open_exceptions} />
-        <HealthTile label="Not re-read recently" value={health.stale_observation_count} />
-        <HealthTile label="Never read back" value={health.unobserved_intent_count} />
+        <HealthTile label="Open issues" value={health.open_exceptions} />
+        <HealthTile label="Not checked lately" value={health.stale_observation_count} />
+        <HealthTile label="Never checked" value={health.unobserved_intent_count} />
       </dl>
       <p className="mt-4 text-sm leading-6">
         {health.oldest_unreconciled_intent_id ? (
           <>
-            Oldest unfinished money movement:{" "}
+            Oldest unfinished item:{" "}
             <Link
               to="/accounting/intents/$intentId"
               params={{ intentId: health.oldest_unreconciled_intent_id }}
               className="font-bold underline underline-offset-4"
             >
-              {health.oldest_unreconciled_intent_id}
+              Open item
             </Link>
             .
           </>
         ) : (
-          "Nothing is outstanding. Every money movement has reached a settled state."
+          "Everything is done. No money item is waiting for a check."
         )}
       </p>
       <Link
@@ -294,12 +292,12 @@ function QuickBooksSettingsContent() {
       }
       setConfirmRemove(false);
       setStatus(
-        "QuickBooks was removed from IronWrap. No accounting record was deleted. Intuit authorization may still need manual revocation in QuickBooks.",
+        "The QuickBooks link was removed from IronWrap. Nothing was deleted in QuickBooks. You may also need to remove IronWrap inside QuickBooks.",
       );
       queryClient.setQueryData(connectionQueryKey, result.response);
     },
     onError: () => {
-      setStatus("The requested connection change was not confirmed. No automatic retry was sent.");
+      setStatus("IronWrap could not confirm this change. It did not try again on its own.");
     },
   });
 
@@ -310,7 +308,7 @@ function QuickBooksSettingsContent() {
     return (
       <ErrorState
         title="QuickBooks connection unavailable"
-        message="No connection change is available until IronWrap can load the current recorded state."
+        message="You cannot change the link until IronWrap loads the latest status."
         onRetry={() => void connection.refetch()}
       />
     );
@@ -331,14 +329,14 @@ function QuickBooksSettingsContent() {
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Finance settings
+              Money settings
             </p>
             <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
               QuickBooks connection
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              IronWrap sends only an approved final-invoice candidate. QuickBooks remains accounting
-              truth, and the server verifies provider readback.
+              IronWrap sends an invoice only after a person approves it. QuickBooks keeps the final
+              record. IronWrap checks it after each send.
             </p>
           </div>
           {canRefresh ? (
@@ -351,29 +349,28 @@ function QuickBooksSettingsContent() {
               onClick={() => void connection.refetch()}
             >
               <RefreshCw aria-hidden="true" />
-              Refresh state
+              Refresh
             </Button>
           ) : null}
         </div>
       </header>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect before changing QuickBooks">
-          Connection changes are never queued offline. This saved screen remains read-only.
+        <Notice tone="warning" title="Reconnect before you make a change">
+          This saved screen is read-only. IronWrap must reach the server first.
         </Notice>
       ) : null}
       {callbackStatus === "connected" && connectionModel.state === "connected" ? (
-        <Notice tone="success" title="QuickBooks returned to IronWrap">
-          The server accepted the OAuth callback. Open the current finance exception to verify the
-          recorded connection and candidate state.
+        <Notice tone="success" title="QuickBooks came back to IronWrap">
+          IronWrap confirmed the link. Open the money desk to check your work.
         </Notice>
       ) : callbackStatus === "connected" ? (
-        <Notice tone="warning" title="QuickBooks return is not yet confirmed">
-          Refresh the recorded connection before treating this callback as complete.
+        <Notice tone="warning" title="QuickBooks link is not ready">
+          Refresh before you use this link.
         </Notice>
       ) : callbackStatus === "error" ? (
-        <Notice tone="danger" title="QuickBooks connection was not confirmed">
-          No browser token was retained. The owner can start a fresh connection when ready.
+        <Notice tone="danger" title="QuickBooks was not connected">
+          Nothing was saved in this browser. The owner can try again.
         </Notice>
       ) : null}
       {status ? (
@@ -386,31 +383,34 @@ function QuickBooksSettingsContent() {
       ) : null}
 
       <Card className="p-5 sm:p-6">
-        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-          Recorded state
-        </p>
+        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">Status</p>
         <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
           {connectionModel.state === "connected"
             ? "Connected"
             : connectionModel.state === "revoked"
               ? "Removed from IronWrap"
               : connectionModel.state === "reconciliation_required"
-                ? "Connection needs reconciliation"
+                ? "Connection needs a check"
                 : "Connection required"}
         </h2>
         {connectionModel.realm_id ? (
-          <p className="mt-2 break-all text-sm text-muted">
-            QuickBooks company ID {connectionModel.realm_id}
-          </p>
+          <details className="mt-3">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold">
+              System details
+            </summary>
+            <p className="break-all text-sm text-muted">
+              QuickBooks company ID {connectionModel.realm_id}
+            </p>
+          </details>
         ) : null}
       </Card>
 
       <ReconciliationHealthCard />
 
       {connectionModel.state === "reconciliation_required" ? (
-        <Notice tone="danger" title="QuickBooks connection state is uncertain">
-          IronWrap will not start a replacement connection or remove this record while provider
-          state is uncertain. Refresh after the recorded connection has been reconciled.
+        <Notice tone="danger" title="Connection needs a check">
+          IronWrap will not replace or remove this link until the check is done. Refresh after the
+          link has been checked.
         </Notice>
       ) : null}
 
@@ -418,27 +418,25 @@ function QuickBooksSettingsContent() {
         <Card className="p-5 sm:p-6">
           <h2 className="text-xl font-black tracking-[-0.025em]">
             {connectionModel.state === "connected"
-              ? "Connection changes belong to the owner"
+              ? "Only the owner can change this link"
               : connectionModel.state === "reconciliation_required"
-                ? "Connection changes are blocked while state is uncertain"
+                ? "No one can change this link yet"
                 : "Ask the owner to connect QuickBooks"}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {connectionModel.state === "reconciliation_required"
-              ? "Refresh the recorded state after reconciliation. Neither owner nor accounting can start a replacement connection while this record remains uncertain."
-              : "Ask the owner to connect or remove QuickBooks. Accounting can review, approve, reject, and reconcile eligible final-invoice candidates, but cannot change the OAuth connection."}
+              ? "Refresh after the check is done. No one can replace this link while its state is not clear."
+              : "Ask the owner to connect or remove QuickBooks. You can still review invoices and money issues."}
           </p>
         </Card>
       ) : (
         <>
           {canConnect ? (
             <Card className="p-5 sm:p-6">
-              <h2 className="text-xl font-black tracking-[-0.025em]">
-                Connect the intended company
-              </h2>
+              <h2 className="text-xl font-black tracking-[-0.025em]">Connect the right company</h2>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Continue only if you can verify the intended QuickBooks company. IronWrap never
-                stores OAuth tokens in this browser.
+                Make sure this is the QuickBooks company you want. IronWrap does not save sign-in
+                keys in this browser.
               </p>
               <Button
                 type="button"
@@ -456,15 +454,14 @@ function QuickBooksSettingsContent() {
 
           {canRemove ? (
             <section className="border border-border bg-surface p-5 sm:p-6">
-              <h2 className="text-lg font-bold">Remove from IronWrap</h2>
+              <h2 className="text-lg font-bold">Remove the QuickBooks link</h2>
               <p className="mt-2 text-sm leading-6 text-muted">
-                This revokes IronWrap&apos;s local connection. It does not delete invoices or other
-                accounting records. Intuit authorization may still require manual revocation in
-                QuickBooks.
+                This removes the link from IronWrap. It does not delete anything in QuickBooks. You
+                may also need to remove IronWrap inside QuickBooks.
               </p>
               {confirmRemove ? (
                 <div className="mt-5 border-t border-border pt-5">
-                  <p className="font-bold">Remove this connection from IronWrap now?</p>
+                  <p className="font-bold">Remove this QuickBooks link now?</p>
                   <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row">
                     <Button
                       type="button"
@@ -481,7 +478,7 @@ function QuickBooksSettingsContent() {
                       disabled={offline || mutation.isPending}
                       onClick={() => mutation.mutate("remove")}
                     >
-                      Remove from IronWrap
+                      Remove link
                     </Button>
                   </div>
                 </div>
@@ -500,7 +497,7 @@ function QuickBooksSettingsContent() {
           ) : null}
           {!canConnect && !canRemove ? (
             <p className="border border-border bg-surface-muted px-4 py-4 text-sm" role="status">
-              No connection change is permitted in this recorded state.
+              You cannot change this link right now.
             </p>
           ) : null}
         </>
@@ -579,10 +576,10 @@ function QuickBooksFinalInvoiceContent() {
       setRejectionReason("");
       setNotice(
         result.kind === "approve"
-          ? "Approval was recorded. This does not promise a matched or paid QuickBooks invoice."
+          ? "Approval is saved. This does not mean QuickBooks saved the invoice or the customer paid."
           : result.kind === "reject"
-            ? "The rejection was recorded. No QuickBooks invoice was authorized by this decision."
-            : "Reconciliation was requested for this exact recorded invoice.",
+            ? "Your choice is saved. Nothing was sent to QuickBooks."
+            : "IronWrap will check this exact QuickBooks invoice again.",
       );
     },
     onError: (error) => {
@@ -598,22 +595,22 @@ function QuickBooksFinalInvoiceContent() {
   if (!intentId) {
     return (
       <ErrorState
-        title="This finance review link is incomplete"
-        message="No final-invoice intent was provided. Return to Now and open the recorded finance exception."
+        title="This invoice link is incomplete"
+        message="This link has no invoice. Go back to Now and open the invoice again."
       />
     );
   }
-  if (!query.data && query.isPending) return <LoadingState label="Loading final-invoice review…" />;
+  if (!query.data && query.isPending) return <LoadingState label="Loading invoice…" />;
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Final-invoice review unavailable"
-        message="No finance action was changed. Reconnect and load the current recorded candidate before deciding."
+        title="Invoice review is unavailable"
+        message="Nothing was changed. Reconnect and load this invoice again."
         onRetry={() => void refresh()}
       />
     );
   }
-  if (!query.data) return <LoadingState label="Loading final-invoice review…" />;
+  if (!query.data) return <LoadingState label="Loading invoice…" />;
 
   const model = query.data;
   const intent = model.intent;
@@ -653,14 +650,14 @@ function QuickBooksFinalInvoiceContent() {
               </Link>
             </Button>
             <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              QuickBooks final invoice · job {intent.job_id}
+              QuickBooks invoice · job {intent.job_id}
             </p>
             <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
               {intent.currency} {intent.amounts.final_balance}
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              Review the server-provided candidate. Customer, item, tax, terms, lines, and amounts
-              cannot be edited here.
+              Check this invoice. You cannot edit the customer, item, tax, dates, lines, or amount
+              here.
             </p>
           </div>
           <Button
@@ -672,24 +669,23 @@ function QuickBooksFinalInvoiceContent() {
             onClick={() => void refresh()}
           >
             <RefreshCw aria-hidden="true" />
-            Refresh state
+            Refresh
           </Button>
         </div>
       </header>
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before deciding">
-          Finance writes are never queued offline. The last saved read remains visible without
-          approval, rejection, connection, or reconciliation controls.
+          This saved copy is read-only. IronWrap must reach the server before you can make a choice.
         </Notice>
       ) : null}
       {query.isError ? (
-        <Notice tone="warning" title="Showing the previous recorded read">
-          Refresh this candidate before deciding. No finance action was issued by the failed read.
+        <Notice tone="warning" title="Showing the last saved copy">
+          Refresh this invoice before you decide. Nothing was changed.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="The finance action was not confirmed">
+        <Notice tone="danger" title="IronWrap could not save your choice">
           {actionError}
         </Notice>
       ) : null}
@@ -707,11 +703,11 @@ function QuickBooksFinalInvoiceContent() {
 
       {intent.state === "connection_required" ? (
         <section className="border border-warning/40 bg-warning-soft p-5 sm:p-6">
-          <h2 className="text-lg font-bold">Connect QuickBooks before review</h2>
+          <h2 className="text-lg font-bold">Connect QuickBooks first</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {session.user.role === "owner"
-              ? "Connect the intended QuickBooks company, then return to this exact candidate."
-              : "Ask the owner to connect the intended QuickBooks company. Accounting cannot change the OAuth connection."}
+              ? "Connect the right QuickBooks company, then come back to this invoice."
+              : "Ask the owner to connect QuickBooks. Only the owner can change the link."}
           </p>
           {canConnect ? (
             <Button
@@ -752,10 +748,9 @@ function QuickBooksFinalInvoiceContent() {
 
       {canReconcile && intent.state !== "pending_review" ? (
         <section className="border border-danger/40 bg-danger-soft p-5 sm:p-6">
-          <h2 className="text-lg font-bold">Reconcile the recorded provider state</h2>
+          <h2 className="text-lg font-bold">Check this QuickBooks invoice</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            This checks the exact recorded invoice. It does not submit a replacement, record a
-            payment, or promise a match.
+            IronWrap will check this exact invoice. It will not send a new one or mark it paid.
           </p>
           <Button
             type="button"
@@ -766,7 +761,7 @@ function QuickBooksFinalInvoiceContent() {
             onClick={() => decide("reconcile")}
           >
             <RefreshCw aria-hidden="true" />
-            Reconcile exact invoice
+            Check this invoice again
           </Button>
         </section>
       ) : null}
@@ -794,19 +789,19 @@ function IntentStatus({ model }: { model: QuickBooksFinalInvoiceResponse }) {
           <p className="mt-2 text-sm leading-6 text-muted">{presentation.explanation}</p>
           {intent.blocker ? (
             <dl className="mt-4 space-y-3 border-t border-current/15 pt-4 text-sm">
-              <Fact label="Recorded blocker" value={blockerLabels[intent.blocker.code]} />
+              <Fact label="What blocks this" value={blockerLabels[intent.blocker.code]} />
               <Fact label="Next step" value={nextStepLabels[intent.blocker.next_step]} />
             </dl>
           ) : null}
           {intent.rejection_reason ? (
             <p className="mt-4 text-sm font-bold">
-              Recorded rejection: {rejectionLabels[intent.rejection_reason]}
+              Reason: {rejectionLabels[intent.rejection_reason]}
             </p>
           ) : null}
           {intent.provider ? (
             <p className="mt-4 break-all text-xs text-muted">
-              Provider invoice {intent.provider.invoice_id}
-              {intent.provider.matched_at ? " · authenticated match recorded" : ""}
+              QuickBooks invoice {intent.provider.invoice_id}
+              {intent.provider.matched_at ? " · match checked" : ""}
             </p>
           ) : null}
         </div>
@@ -820,33 +815,30 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
   return (
     <section aria-labelledby="candidate-amounts">
       <h2 id="candidate-amounts" className="text-xl font-black tracking-[-0.025em]">
-        Immutable candidate
+        Invoice totals
       </h2>
       <dl className="mt-4 grid border-y border-border sm:grid-cols-2 lg:grid-cols-4">
-        <AmountFact
-          label="Pre-tax subtotal"
-          value={`${intent.currency} ${intent.amounts.subtotal}`}
-        />
+        <AmountFact label="Before tax" value={`${intent.currency} ${intent.amounts.subtotal}`} />
         <AmountFact
           label={`Tax · ${intent.tax.code} ${intent.tax.rate}%`}
           value={`${intent.currency} ${intent.amounts.tax}`}
           bordered
         />
         <AmountFact
-          label="Already invoiced"
+          label="Already billed"
           value={`${intent.currency} ${intent.amounts.already_invoiced}`}
           bordered
         />
         <AmountFact
-          label="Final balance"
+          label="Amount due"
           value={`${intent.currency} ${intent.amounts.final_balance}`}
           bordered
           emphasis
         />
       </dl>
       <p className="mt-3 text-sm leading-6 text-muted">
-        This flow accepts only a zero-prior-billing candidate. Deposits or prior invoices block the
-        server candidate instead of being subtracted in this browser.
+        This invoice is only for jobs with no earlier bill. If there is an earlier bill or deposit,
+        IronWrap stops here.
       </p>
     </section>
   );
@@ -856,7 +848,7 @@ function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
     <section aria-labelledby="candidate-lines">
       <h2 id="candidate-lines" className="text-xl font-black tracking-[-0.025em]">
-        Immutable pre-tax lines
+        Invoice lines before tax
       </h2>
       <ul className="mt-4 border-y border-border">
         {model.intent.lines.map((line, index) => (
@@ -885,32 +877,35 @@ function ReviewBasis({ model }: { model: QuickBooksFinalInvoiceResponse }) {
         <FileCheck2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div className="min-w-0">
           <h2 id="qbo-basis" className="text-xl font-black tracking-[-0.025em]">
-            Why this review is required
+            Why you need to review
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            This candidate is bound to the exact completion, accepted quote, accepted-change set,
-            due date, tax, and commercial-policy evidence below. Approval authorizes one external
-            QuickBooks invoice submission; it does not promise provider match or payment.
+            These dates, totals, tax, and source records came from the finished job and approved
+            quote. Approving sends one invoice. It does not mean QuickBooks saved it or the customer
+            paid.
           </p>
         </div>
       </div>
       <dl className="mt-5 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
-        <Fact
-          label="Completion"
-          value={`${intent.basis.completion_id} · version ${intent.basis.completion_version}`}
-        />
-        <Fact
-          label="Accepted quote"
-          value={`${intent.basis.quote_id} · version ${intent.basis.quote_version}`}
-        />
-        <Fact label="Invoice date" value={intent.invoice_date} />
-        <Fact label="Due date" value={intent.due_date} />
-        <Fact label="Candidate version" value={String(intent.version)} />
-        <HashFact label="Basis hash" value={intent.basis.basis_hash} />
-        <HashFact label="Completion hash" value={intent.basis.completion_hash} />
-        <HashFact label="Quote hash" value={intent.basis.quote_hash} />
-        <HashFact label="Accepted changes hash" value={intent.basis.changes_hash} />
+        <Fact label="Work record" value={intent.basis.completion_id} />
+        <Fact label="Accepted quote" value={intent.basis.quote_id} />
+        <Fact label="Invoice date" value={dateLabel(intent.invoice_date)} />
+        <Fact label="Due date" value={dateLabel(intent.due_date)} />
       </dl>
+      <details className="mt-5 border-t border-border pt-2">
+        <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold">
+          System check codes
+        </summary>
+        <dl className="grid gap-4 pt-3 text-sm sm:grid-cols-2">
+          <Fact label="Invoice version" value={String(intent.version)} />
+          <Fact label="Work version" value={String(intent.basis.completion_version)} />
+          <Fact label="Quote version" value={String(intent.basis.quote_version)} />
+          <HashFact label="Invoice code" value={intent.basis.basis_hash} />
+          <HashFact label="Work code" value={intent.basis.completion_hash} />
+          <HashFact label="Quote code" value={intent.basis.quote_hash} />
+          <HashFact label="Change code" value={intent.basis.changes_hash} />
+        </dl>
+      </details>
     </section>
   );
 }
@@ -919,16 +914,22 @@ function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
     <section aria-labelledby="qbo-evidence">
       <h2 id="qbo-evidence" className="text-xl font-black tracking-[-0.025em]">
-        Evidence citations
+        Source records
       </h2>
       <ul className="mt-4 border-y border-border">
         {model.intent.citations.map((citation) => (
           <li key={citation.id} className="border-b border-border px-3 py-4 last:border-b-0">
-            <p className="font-bold">{citation.label.replaceAll("_", " ")}</p>
-            <p className="mt-1 break-all text-sm text-muted">
-              {citation.source} · {citation.source_ref}
-            </p>
-            <p className="mt-1 break-all font-mono text-xs text-muted">SHA-256 {citation.sha256}</p>
+            <p className="font-bold capitalize">{citation.label.replaceAll("_", " ")}</p>
+            <details className="mt-2">
+              <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold">
+                System details
+              </summary>
+              <dl className="space-y-3 pt-2 text-sm">
+                <Fact label="System" value={citation.source} />
+                <Fact label="Record" value={citation.source_ref} />
+                <HashFact label="Check code" value={citation.sha256} />
+              </dl>
+            </details>
           </li>
         ))}
       </ul>
@@ -973,14 +974,14 @@ function PendingDecision({
             ? "Reconnect before deciding"
             : stale
               ? "Refresh before deciding"
-              : "Decision unavailable"}
+              : "No choice is available"}
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">
           {offline
             ? "No approval or rejection is queued offline."
             : stale
-              ? "The previous action did not return a confirmed current state. Refresh before another decision."
-              : "The server did not grant a decision action for this exact candidate."}
+              ? "IronWrap could not load the latest invoice. Refresh before you decide."
+              : "You cannot approve or reject this invoice right now."}
         </p>
       </section>
     );
@@ -990,35 +991,34 @@ function PendingDecision({
     <section className="border border-border bg-surface" aria-labelledby="qbo-decision">
       <div className="border-b border-border p-5 sm:p-6">
         <h2 id="qbo-decision" className="text-lg font-bold">
-          Decide this exact external invoice
+          Approve this invoice?
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">
-          Approval authorizes submission of {model.intent.currency}{" "}
-          {model.intent.amounts.final_balance} to QuickBooks. It does not confirm a provider match,
-          payment, or collection.
+          Approve to send {model.intent.currency} {model.intent.amounts.final_balance} to
+          QuickBooks. This does not mean QuickBooks saved it or the customer paid.
         </p>
       </div>
       {rejecting ? (
         <div className="p-5 sm:p-6">
           <label htmlFor="qbo-rejection-reason" className="text-sm font-bold">
-            Rejection reason
+            Reason for not approving
           </label>
-          <select
+          <Select
             id="qbo-rejection-reason"
             value={rejectionReason}
             disabled={!canReject || busy}
             onChange={(event) =>
               onReasonChange(event.target.value as QuickBooksRejectionReason | "")
             }
-            className="mt-3 min-h-12 w-full rounded-lg border bg-surface-raised px-3 text-base outline-none focus:border-info disabled:bg-surface-muted"
+            className="mt-3"
           >
-            <option value="">Choose a recorded reason</option>
+            <option value="">Choose a reason</option>
             {quickBooksRejectionReasons.map((reason) => (
               <option key={reason} value={reason}>
                 {rejectionLabels[reason]}
               </option>
             ))}
-          </select>
+          </Select>
           <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Button type="button" variant="outline" disabled={busy} onClick={onCancelReject}>
               Cancel
@@ -1030,20 +1030,19 @@ function PendingDecision({
               disabled={!canReject || busy || !rejectionReason}
               onClick={onReject}
             >
-              Reject candidate
+              Do not approve
             </Button>
           </div>
         </div>
       ) : (
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <p className="max-w-xl text-sm leading-6 text-muted">
-            The server will re-check this candidate version. This browser cannot change its
-            customer, item, tax, terms, lines, or amount.
+            IronWrap checks this exact copy before it sends. You cannot edit it here.
           </p>
           <div className="flex flex-col-reverse gap-3 sm:flex-row">
             {canReject ? (
               <Button type="button" variant="outline" disabled={busy} onClick={onStartReject}>
-                Reject
+                Do not approve
               </Button>
             ) : null}
             {canApprove ? (
@@ -1054,8 +1053,7 @@ function PendingDecision({
                 disabled={busy}
                 onClick={onApprove}
               >
-                <ExternalLink aria-hidden="true" />
-                Approve external invoice
+                Approve invoice
               </Button>
             ) : null}
           </div>
@@ -1102,30 +1100,9 @@ function HashFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger" | "success";
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      className={cn(
-        "border px-4 py-4",
-        tone === "danger"
-          ? "border-danger/40 bg-danger-soft"
-          : tone === "success"
-            ? "border-ok/40 bg-ok-soft"
-            : "border-warning/40 bg-warning-soft",
-      )}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <p className="font-bold">{title}</p>
-      <p className="mt-1 text-sm leading-6 text-muted">{children}</p>
-    </section>
+function dateLabel(value: string): string {
+  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" }).format(
+    new Date(`${value}T00:00:00Z`),
   );
 }
 
@@ -1139,13 +1116,13 @@ function quickBooksCallbackStatus(): "connected" | "error" | null {
 
 function messageFor(error: unknown): string {
   if (!(error instanceof ApiError)) {
-    return "The action was not confirmed. Refresh the recorded candidate before deciding again.";
+    return "IronWrap could not save your choice. Refresh this invoice before you try again.";
   }
   if (error.code.includes("version")) {
-    return "This candidate changed while you were reviewing it. Refresh before another decision.";
+    return "This invoice changed while you were reading it. Refresh before you decide again.";
   }
   if (error.status === 0) {
-    return "The result is uncertain. The same action key is retained; refresh the recorded candidate before any retry.";
+    return "IronWrap did not get a clear answer. Refresh this invoice before you try again.";
   }
-  return "The action was not confirmed. Refresh the recorded candidate before deciding again.";
+  return "IronWrap could not save your choice. Refresh this invoice before you try again.";
 }

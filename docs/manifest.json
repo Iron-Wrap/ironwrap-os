@@ -2,6 +2,41 @@
   "schema_version": 1,
   "documents": [
     {
+      "path": ".superdesign/design-system.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/components.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/extractable-components.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/layouts.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/pages.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/routes.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": ".superdesign/init/theme.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "AGENTS.md",
       "class": "developer",
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]

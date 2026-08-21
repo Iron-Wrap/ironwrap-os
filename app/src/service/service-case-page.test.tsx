@@ -101,9 +101,9 @@ describe("service case", () => {
     vi.mocked(loadServiceCase).mockResolvedValue(detailResponse());
     renderCase();
 
-    expect(await screen.findByRole("form", { name: "Triage this callback" })).toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: "Record the diagnosis" })).toBeNull();
-    expect(screen.queryByRole("form", { name: "Verify the remedy" })).toBeNull();
+    expect(await screen.findByRole("form", { name: "Check this call" })).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Save the cause" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Check the fix" })).toBeNull();
     expect(screen.getByText("case opened")).toBeInTheDocument();
   });
 
@@ -119,9 +119,9 @@ describe("service case", () => {
     const user = userEvent.setup();
 
     renderCase();
-    await screen.findByRole("form", { name: "Triage this callback" });
-    await user.type(screen.getByLabelText("Triage evidence digest"), DIGEST_B);
-    await user.click(screen.getByRole("button", { name: "Record triage" }));
+    await screen.findByRole("form", { name: "Check this call" });
+    await user.type(screen.getByLabelText("Proof code"), DIGEST_B);
+    await user.click(screen.getByRole("button", { name: "Save check" }));
 
     await waitFor(() => expect(recordServiceTriage).toHaveBeenCalledTimes(1));
     expect(vi.mocked(recordServiceTriage).mock.calls[0]?.[2]).toEqual({
@@ -137,12 +137,12 @@ describe("service case", () => {
     const user = userEvent.setup();
 
     renderCase();
-    await screen.findByRole("form", { name: "Triage this callback" });
-    await user.type(screen.getByLabelText("Triage evidence digest"), DIGEST_B);
-    await user.selectOptions(screen.getByLabelText("Category"), "unknown");
+    await screen.findByRole("form", { name: "Check this call" });
+    await user.type(screen.getByLabelText("Proof code"), DIGEST_B);
+    await user.selectOptions(screen.getByLabelText("Problem type"), "unknown");
 
-    expect(await screen.findByText(/An unknown category may not assign blame/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record triage" })).toBeDisabled();
+    expect(await screen.findByText(/pick Not known/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save check" })).toBeDisabled();
   });
 
   it("asks the supervisor to verify once a remedy has been issued", async () => {
@@ -172,11 +172,11 @@ describe("service case", () => {
     const user = userEvent.setup();
 
     renderCase();
-    await screen.findByRole("form", { name: "Verify the remedy" });
-    await user.selectOptions(screen.getByLabelText("Outcome"), "failed");
-    await user.type(screen.getByLabelText("Field evidence digest"), DIGEST_B);
-    await user.type(screen.getByLabelText("Failure code"), "leak_persists");
-    await user.click(screen.getByRole("button", { name: "Record verification" }));
+    await screen.findByRole("form", { name: "Check the fix" });
+    await user.selectOptions(screen.getByLabelText("Did the fix pass?"), "failed");
+    await user.type(screen.getByLabelText("Work proof code"), DIGEST_B);
+    await user.type(screen.getByLabelText("Problem code"), "leak_persists");
+    await user.click(screen.getByRole("button", { name: "Save fix check" }));
 
     await waitFor(() => expect(verifyServiceRemedy).toHaveBeenCalledTimes(1));
     expect(vi.mocked(verifyServiceRemedy).mock.calls[0]?.[2]).toBe("svc_remedy_0001");
@@ -214,16 +214,16 @@ describe("service case", () => {
     expect(screen.getByText("$980.00")).toBeInTheDocument();
     expect(screen.getByText("$1,100.00")).toBeInTheDocument();
     expect(
-      screen.getByText(/Claiming money back from a supplier, manufacturer, or insurer/),
+      screen.getByText(/Only the owner can ask a supplier, maker, or insurance company/),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: "Claim this cost back" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Ask for money back" })).toBeNull();
     unmount();
 
     vi.mocked(loadServiceCase).mockResolvedValue(
       detailResponse({ ...withCost, allowed_actions: OWNER_ACTIONS }),
     );
     renderCase("owner");
-    expect(await screen.findByRole("form", { name: "Claim this cost back" })).toBeInTheDocument();
+    expect(await screen.findByRole("form", { name: "Ask for money back" })).toBeInTheDocument();
   });
 
   it("offers reconciliation as the only exit from an uncertain claim", async () => {
@@ -247,10 +247,8 @@ describe("service case", () => {
     );
 
     renderCase("owner");
-    expect(
-      await screen.findByRole("form", { name: "Reconcile this uncertain claim" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/one attempt permitted/)).toBeInTheDocument();
+    expect(await screen.findByRole("form", { name: "Check a send result" })).toBeInTheDocument();
+    expect(screen.getAllByText(/one send try/)).toHaveLength(2);
   });
 
   it("shows the rule that refused a step instead of a generic failure", async () => {
@@ -265,11 +263,11 @@ describe("service case", () => {
     const user = userEvent.setup();
 
     renderCase();
-    await screen.findByRole("form", { name: "Triage this callback" });
-    await user.type(screen.getByLabelText("Triage evidence digest"), DIGEST_B);
-    await user.click(screen.getByRole("button", { name: "Record triage" }));
+    await screen.findByRole("form", { name: "Check this call" });
+    await user.type(screen.getByLabelText("Proof code"), DIGEST_B);
+    await user.click(screen.getByRole("button", { name: "Save check" }));
 
-    expect(await screen.findByText("That step was refused")).toBeInTheDocument();
+    expect(await screen.findByText("We could not save this step")).toBeInTheDocument();
     expect(screen.getByText("service_case_transition_conflict")).toBeInTheDocument();
   });
 });

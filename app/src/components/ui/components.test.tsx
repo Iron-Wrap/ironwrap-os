@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { OutboxStateBadge } from "../outbox-state-badge";
 import { Button } from "./button";
+import { Notice } from "./notice";
+import { Select } from "./select";
 import { EmptyState, ErrorState, LoadingState } from "./state-panel";
+import { Textarea } from "./textarea";
 
 describe("foundation UI states", () => {
   it("keeps primary touch actions at the field minimum and reports busy truth", () => {
@@ -32,11 +35,44 @@ describe("foundation UI states", () => {
 
   it("pairs outbox color with an icon and a visible state word", () => {
     render(<OutboxStateBadge state="needs_attention" />);
-    const badge = screen.getByText("Needs attention");
+    const badge = screen.getByText("Needs a check");
     expect(badge).toBeVisible();
     expect(badge.closest("span")).toHaveAttribute(
       "title",
-      "Nothing was discarded. Review is needed before retrying.",
+      "Nothing was thrown away. Check this before you try again.",
+    );
+  });
+
+  it("announces failures assertively and routine notices politely", () => {
+    const { rerender } = render(
+      <Notice tone="danger" title="Save refused">
+        Nothing was changed.
+      </Notice>,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Nothing was changed.");
+
+    rerender(
+      <Notice tone="success" title="Saved">
+        The request is ready for review.
+      </Notice>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("The request is ready for review.");
+  });
+
+  it("keeps native field controls large and exposes invalid state", () => {
+    render(
+      <>
+        <Select field invalid aria-label="Crew">
+          <option>North crew</option>
+        </Select>
+        <Textarea invalid aria-label="Correction reason" />
+      </>,
+    );
+    expect(screen.getByRole("combobox", { name: "Crew" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("combobox", { name: "Crew" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("textbox", { name: "Correction reason" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
     );
   });
 

@@ -54,14 +54,13 @@ export function RoofGraphEvidence({
               className="flex items-center gap-2 text-xl font-black tracking-[-0.025em] text-foreground sm:text-2xl"
             >
               <Ruler className="size-5 text-accent" aria-hidden="true" />
-              Roof graph evidence
+              Roof shape drawing
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-              A read-only 2D view of the returned roof geometry. Select a facet to inspect its
-              source state.
+              This saved drawing shows each roof face. Pick a face to see its check state.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2 lg:justify-end" aria-label="Roof graph status">
+          <div className="flex flex-wrap gap-2 lg:justify-end" aria-label="Roof shape status">
             <GraphChip label={graphState.label} tone={graphState.tone} />
             <GraphChip label={roofGraph.review_status} tone={reviewTone(roofGraph.review_status)} />
           </div>
@@ -78,9 +77,9 @@ export function RoofGraphEvidence({
                   aria-describedby="roof-graph-svg-description"
                   className="aspect-[16/10] w-full bg-surface-muted/45 p-4 sm:p-6"
                 >
-                  <title id="roof-graph-svg-title">Roof graph evidence</title>
+                  <title id="roof-graph-svg-title">Roof shape drawing</title>
                   <desc id="roof-graph-svg-description">
-                    Source-derived roof facets. Selecting a facet only changes the evidence focus.
+                    Roof faces from the saved file. Picking a face only changes the selected view.
                   </desc>
                   <g aria-hidden="true">
                     {graph.edges.map((edge) => (
@@ -106,7 +105,7 @@ export function RoofGraphEvidence({
                           d={path}
                           role="button"
                           tabIndex={0}
-                          aria-label={`Select facet ${facet.label ?? facet.id}, ${facet.review_status}`}
+                          aria-label={`Select roof face ${facet.label ?? facet.id}, ${facet.review_status}`}
                           aria-pressed={selected}
                           fill={paint.fill}
                           fillOpacity={selected ? 0.9 : 0.55}
@@ -127,15 +126,14 @@ export function RoofGraphEvidence({
                   </g>
                 </svg>
                 <figcaption className="border-t border-border px-4 py-3 text-xs leading-5 text-muted">
-                  Facet outlines are derived from the returned graph. They are not a field-verified
-                  roof plan.
+                  These roof shapes came from the saved file. They are not a site check.
                 </figcaption>
               </figure>
             ) : (
               <div className="flex min-h-56 flex-col justify-center px-5 py-6">
-                <p className="font-bold text-foreground">No renderable roof graph</p>
+                <p className="font-bold text-foreground">Roof shape cannot be shown</p>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
-                  The returned source did not include complete, reviewable facet geometry.
+                  The saved file does not have enough points to draw the roof.
                 </p>
               </div>
             )}
@@ -143,10 +141,14 @@ export function RoofGraphEvidence({
 
           <dl className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-2 xl:grid-cols-1">
             <GraphFact label="Source" value={roofGraph.source ?? "Not recorded"} />
-            <GraphFact label="Revision" value={roofGraph.revision ?? "Not recorded"} bordered />
-            <GraphFact label="Provider" value={roofGraph.provider ?? "Not recorded"} bordered />
             <GraphFact
-              label="Confidence"
+              label="Drawing version"
+              value={roofGraph.revision ?? "Not recorded"}
+              bordered
+            />
+            <GraphFact label="Made by" value={roofGraph.provider ?? "Not recorded"} bordered />
+            <GraphFact
+              label="Data score"
               value={formatConfidence(roofGraph.confidence, locale)}
               bordered
             />
@@ -160,10 +162,10 @@ export function RoofGraphEvidence({
         </div>
 
         <dl className="mt-5 grid overflow-hidden rounded-lg border border-border sm:grid-cols-3">
-          <GraphFact label="Facets" value={String(roofGraph.facets.length)} />
-          <GraphFact label="Graph checks" value={String(roofGraph.check_count)} bordered />
+          <GraphFact label="Roof faces" value={String(roofGraph.facets.length)} />
+          <GraphFact label="Shape checks" value={String(roofGraph.check_count)} bordered />
           <GraphFact
-            label="Failed checks"
+            label="Checks to fix"
             value={String(roofGraph.failed_check_count)}
             bordered
             danger={roofGraph.failed_check_count > 0}
@@ -177,13 +179,13 @@ export function RoofGraphEvidence({
             aria-labelledby="selected-roof-facet-heading"
           >
             <p id="selected-roof-facet-heading" className="text-sm font-black text-foreground">
-              Selected facet: {selectedFacet.facet.label ?? selectedFacet.facet.id}
+              Selected roof face: {selectedFacet.facet.label ?? selectedFacet.facet.id}
             </p>
             <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-              <GraphDetail label="Facet ID" value={selectedFacet.facet.id} />
+              <GraphDetail label="Face ID" value={selectedFacet.facet.id} />
               <GraphDetail label="Review" value={selectedFacet.facet.review_status} />
               <GraphDetail
-                label="Confidence"
+                label="Data score"
                 value={formatConfidence(selectedFacet.facet.confidence, locale)}
               />
             </dl>
@@ -191,9 +193,8 @@ export function RoofGraphEvidence({
         ) : null}
 
         <p className="mt-5 border-l-2 border-warning bg-warning-soft/40 px-4 py-3 text-sm leading-6 text-foreground">
-          Graph evidence is a transcription of the captured source model. It is not field
-          verification and does not confirm site dimensions, material condition, access, or final
-          scope.
+          This drawing came from the saved roof file. It does not prove site size, materials,
+          access, or the final job scope.
         </p>
       </div>
     </section>
@@ -291,10 +292,10 @@ function GraphDetail({ label, value }: { label: string; value: string }) {
 }
 
 function graphStateMeta(state: RoofGraph["state"]): { label: string; tone: string } {
-  if (state === "available") return { label: "Graph available", tone: "bg-ok-soft text-ok" };
+  if (state === "available") return { label: "Shape ready", tone: "bg-ok-soft text-ok" };
   if (state === "needs_review")
-    return { label: "Graph needs review", tone: "bg-warning-soft text-warning" };
-  return { label: "Graph unavailable", tone: "bg-surface-muted text-muted" };
+    return { label: "Shape needs review", tone: "bg-warning-soft text-warning" };
+  return { label: "Shape unavailable", tone: "bg-surface-muted text-muted" };
 }
 
 function reviewTone(status: RoofGraph["review_status"]): string {

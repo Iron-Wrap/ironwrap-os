@@ -14,8 +14,8 @@ interface StatePanelProps {
 
 function StatePanel({ title, message, icon, action, live = "polite" }: StatePanelProps) {
   return (
-    <Card className="mx-auto max-w-lg p-6 text-center sm:p-8" aria-live={live}>
-      <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-surface-muted text-muted">
+    <Card className="mx-auto max-w-lg overflow-hidden p-6 text-center sm:p-8" aria-live={live}>
+      <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-md border bg-surface-muted text-muted">
         {icon}
       </div>
       <h2 className="text-xl font-bold tracking-[-0.025em]">{title}</h2>
@@ -28,9 +28,16 @@ function StatePanel({ title, message, icon, action, live = "polite" }: StatePane
 export function LoadingState({ label = "Loading your work…" }: { label?: string }) {
   return (
     <div className="grid min-h-[40dvh] place-items-center" role="status" aria-live="polite">
-      <div className="flex items-center gap-3 rounded-lg border bg-surface-raised px-5 py-4 font-medium shadow-sm">
-        <LoaderCircle className="size-5 animate-spin text-info" aria-hidden="true" />
-        <span>{label}</span>
+      <div className="w-full max-w-lg rounded-lg border bg-surface-raised p-5 sm:p-6">
+        <div className="flex items-center gap-3 text-sm font-bold text-muted">
+          <LoaderCircle className="size-5 animate-spin text-info" aria-hidden="true" />
+          <span>{label}</span>
+        </div>
+        <div className="mt-5 space-y-3" aria-hidden="true">
+          <div className="ui-skeleton h-4 w-2/5 rounded-sm bg-surface-muted" />
+          <div className="ui-skeleton h-3 w-full rounded-sm bg-surface-muted" />
+          <div className="ui-skeleton h-3 w-4/5 rounded-sm bg-surface-muted" />
+        </div>
       </div>
     </div>
   );

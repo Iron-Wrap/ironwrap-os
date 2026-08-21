@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { ApiError } from "../lib/api";
 import { loadProductionRunway } from "./production-api";
 import type { ProductionRunwayResponse } from "./production-contracts";
 import {
@@ -153,19 +154,19 @@ describe("ProductionScheduleApprovalPreparePage", () => {
     vi.mocked(prepareProductionScheduleApproval).mockResolvedValue({ approval: {} } as never);
     renderPage();
 
-    await screen.findByRole("heading", { name: "Prepare production schedule" });
-    await user.selectOptions(screen.getByLabelText("Crew profile"), "crew:metal-1");
-    fireEvent.change(screen.getByLabelText("Scheduled start"), {
+    await screen.findByRole("heading", { name: "Ask to set a start date" });
+    await user.selectOptions(screen.getByLabelText("Crew"), "crew:metal-1");
+    fireEvent.change(screen.getByLabelText("Start time"), {
       target: { value: "2026-07-20T09:30" },
     });
-    fireEvent.change(screen.getByLabelText("Scheduled end (optional)"), {
+    fireEvent.change(screen.getByLabelText("End time (optional)"), {
       target: { value: "2026-07-20T16:30" },
     });
     await user.type(
-      await screen.findByLabelText("Correction reason"),
+      await screen.findByLabelText("Why replace the saved start date?"),
       "Weather moved the install window.",
     );
-    await user.click(screen.getByRole("button", { name: "Prepare owner review" }));
+    await user.click(screen.getByRole("button", { name: "Send for a check" }));
 
     await waitFor(() => {
       expect(prepareProductionScheduleApproval).toHaveBeenCalledWith(
@@ -181,10 +182,51 @@ describe("ProductionScheduleApprovalPreparePage", () => {
         "production-schedule-approval:prepare-ui-001",
       );
     });
-    expect(screen.getByRole("status")).toHaveTextContent(/staged for owner approval/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/ready for a check/i);
     expect(document.body.textContent).not.toMatch(
-      /dry_run_receipt|approval_receipt|write_args_json|tool_name|site_id/i,
+      /dry_run_receipt|approval_receipt|write_args_json|tool_name|site_id|append-only|production runway/i,
     );
+  });
+
+  it("keeps job and crew record IDs out of the first reading path", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Ask to set a start date" });
+    expect(screen.getByText("JOB-A")).not.toBeVisible();
+    expect(screen.getByText("assignment:current")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("JOB-A")).toBeVisible();
+    expect(screen.getByText("assignment:current")).toBeVisible();
+  });
+
+  it("explains a save conflict without blaming the operator or showing codes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(prepareProductionScheduleApproval).mockRejectedValue(
+      new ApiError({
+        status: 409,
+        code: "idempotency_conflict",
+        message: "idempotency_conflict",
+      }),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Ask to set a start date" });
+    await user.selectOptions(screen.getByLabelText("Crew"), "crew:metal-1");
+    fireEvent.change(screen.getByLabelText("Start time"), {
+      target: { value: "2026-07-20T09:30" },
+    });
+    await user.type(
+      await screen.findByLabelText("Why replace the saved start date?"),
+      "Weather moved the install window.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send for a check" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /already sent with different details/i,
+    );
+    expect(screen.getByText("The start date was not sent")).toBeVisible();
+    expect(screen.queryByText("idempotency_conflict")).not.toBeInTheDocument();
   });
 
   it("fails closed when the current production read omits the prepare action", async () => {
@@ -193,8 +235,8 @@ describe("ProductionScheduleApprovalPreparePage", () => {
     );
     renderPage();
 
-    await screen.findByRole("heading", { name: "Scheduling request is not available" });
-    expect(screen.queryByRole("button", { name: "Prepare owner review" })).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "This job is not ready for a start date" });
+    expect(screen.queryByRole("button", { name: "Send for a check" })).not.toBeInTheDocument();
     expect(prepareProductionScheduleApproval).not.toHaveBeenCalled();
   });
 
@@ -202,8 +244,8 @@ describe("ProductionScheduleApprovalPreparePage", () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(model({ crews: [] }));
     renderPage();
 
-    await screen.findByRole("heading", { name: "No active crew profile is available" });
-    expect(screen.queryByLabelText("Crew profile")).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "No crew is ready" });
+    expect(screen.queryByLabelText("Crew")).not.toBeInTheDocument();
     expect(prepareProductionScheduleApproval).not.toHaveBeenCalled();
   });
 });

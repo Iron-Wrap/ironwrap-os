@@ -6,11 +6,11 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { EmptyQueue, MoneyQueueRow, MoneyQueueSection } from "./money-badge";
 import { loadAccountingSummary } from "./money-api";
 import { ageLabel, reasonLabel } from "./money-contracts";
-import { Notice } from "../service/service-notice";
 
 /**
  * The Money Desk: the accounting role's landing page (IRO-52 slice S9).
@@ -70,8 +70,8 @@ function MoneyDeskContent() {
                 Money desk
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Every money movement waiting on a person, and what each one needs next. QuickBooks
-                stays the posted truth; nothing here changes it without a decision.
+                See what needs a check, what QuickBooks is doing, and what to do next. Nothing moves
+                without a person.
               </p>
             </div>
           </div>
@@ -90,17 +90,17 @@ function MoneyDeskContent() {
       </header>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect before deciding anything">
-          Money decisions are never queued offline. This saved screen is read-only until IronWrap
-          can reach the server.
+        <Notice tone="warning" title="Reconnect before you decide">
+          This saved screen is read-only. IronWrap must reach the server before you can make a
+          choice.
         </Notice>
       ) : null}
 
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Tile label="Needs approval" value={summary.queues.needs_approval.count} />
-        <Tile label="Awaiting QuickBooks" value={summary.queues.awaiting_provider.count} />
-        <Tile label="Mismatched" value={summary.queues.mismatched.count} tone="danger" />
-        <Tile label="Exceptions" value={summary.queues.exceptions.count} tone="danger" />
+        <Tile label="Waiting for QuickBooks" value={summary.queues.awaiting_provider.count} />
+        <Tile label="Does not match" value={summary.queues.mismatched.count} tone="danger" />
+        <Tile label="Money issues" value={summary.queues.exceptions.count} tone="danger" />
       </dl>
 
       <MoneyQueueSection
@@ -120,8 +120,8 @@ function MoneyDeskContent() {
       </MoneyQueueSection>
 
       <MoneyQueueSection
-        title="Awaiting QuickBooks"
-        description="Sent, and waiting for QuickBooks to confirm. We re-read these until it does."
+        title="Waiting for QuickBooks"
+        description="These were sent. IronWrap will keep checking until QuickBooks answers."
         count={summary.queues.awaiting_provider.count}
       >
         {queues.awaiting_provider.length === 0 ? (
@@ -136,8 +136,8 @@ function MoneyDeskContent() {
       </MoneyQueueSection>
 
       <MoneyQueueSection
-        title="Mismatched"
-        description="QuickBooks does not agree with our figures. Open one to see the difference and pick a remedy."
+        title="Does not match"
+        description="QuickBooks has different numbers. Open an item to see what changed."
         count={summary.queues.mismatched.count}
       >
         {queues.mismatched.length === 0 ? (
@@ -152,12 +152,12 @@ function MoneyDeskContent() {
       </MoneyQueueSection>
 
       <MoneyQueueSection
-        title="Exceptions"
-        description="Findings that need a person. Each one names the remedies QuickBooks actually supports."
+        title="Money issues"
+        description="These need a person. Open an issue to see the safe choices."
         count={summary.queues.exceptions.count}
       >
         {queues.exceptions.length === 0 ? (
-          <EmptyQueue message="The exception queue is empty." />
+          <EmptyQueue message="There are no open money issues." />
         ) : (
           <ul>
             {queues.exceptions.map((exception) => (
@@ -170,8 +170,7 @@ function MoneyDeskContent() {
                     {reasonLabel(exception.reason_code)}
                   </span>
                   <span className="text-sm text-muted">
-                    {exception.intent_id ?? exception.subject_ref} ·{" "}
-                    {ageLabel(exception.age_seconds)} open
+                    Open for {ageLabel(exception.age_seconds)}
                   </span>
                 </Link>
               </li>
@@ -181,17 +180,17 @@ function MoneyDeskContent() {
       </MoneyQueueSection>
 
       <section
-        aria-label="Reconciliation health"
+        aria-label="QuickBooks checks"
         className="border border-border bg-surface px-4 py-5 sm:px-6"
       >
-        <h2 className="text-lg font-bold tracking-[-0.02em]">Reconciliation health</h2>
+        <h2 className="text-lg font-bold tracking-[-0.02em]">QuickBooks checks</h2>
         <p className="mt-1 text-sm leading-6 text-muted">
-          How much of what we believe has actually been checked against QuickBooks recently.
+          See what still needs a fresh check against QuickBooks.
         </p>
         <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Tile label="Open exceptions" value={health.open_exceptions} />
-          <Tile label="Not re-read recently" value={health.stale_observation_count} />
-          <Tile label="Never read back" value={health.unobserved_intent_count} />
+          <Tile label="Open issues" value={health.open_exceptions} />
+          <Tile label="Not checked lately" value={health.stale_observation_count} />
+          <Tile label="Never checked" value={health.unobserved_intent_count} />
         </dl>
         {health.oldest_unreconciled_intent_id ? (
           // A block target, not an id wrapped in an inline link. Inline, this rendered 41 px tall
@@ -202,10 +201,10 @@ function MoneyDeskContent() {
             className="mt-4 flex min-h-14 flex-col justify-center gap-0.5 border border-border px-4 py-3 hover:bg-surface-muted"
           >
             <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              Oldest unfinished money movement
+              Oldest unfinished item
             </span>
-            <span className="break-all text-sm font-bold leading-6 underline underline-offset-4">
-              {health.oldest_unreconciled_intent_id}
+            <span className="text-sm font-bold leading-6 underline underline-offset-4">
+              Open item
             </span>
             <span className="text-sm text-muted">
               {ageLabel(health.oldest_unreconciled_age_seconds ?? 0)} old
@@ -213,7 +212,7 @@ function MoneyDeskContent() {
           </Link>
         ) : (
           <p className="mt-4 text-sm leading-6 text-muted">
-            Nothing is outstanding. Every money movement has reached a settled state.
+            Everything is done. No money item is waiting for a check.
           </p>
         )}
       </section>

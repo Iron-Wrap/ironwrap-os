@@ -39,7 +39,7 @@ async function openForm() {
 async function completeForm(user: ReturnType<typeof userEvent.setup>, province = "AB") {
   await user.type(screen.getByLabelText("Full name"), "Jordan Smith");
   await user.type(screen.getByLabelText("Project address"), "123 Example Street, Calgary");
-  await user.selectOptions(screen.getByLabelText("Project province"), province);
+  await user.selectOptions(screen.getByLabelText("Province"), province);
   await user.type(screen.getByLabelText("Email"), "jordan@example.com");
   await user.selectOptions(screen.getByLabelText("What do you need help with?"), "metal_roofing");
   await user.click(
@@ -64,7 +64,7 @@ describe("PublicEstimatePage", () => {
     const user = userEvent.setup();
 
     await openForm();
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
     expect(screen.getByText("Enter your full name.")).toBeInTheDocument();
     expect(screen.getByText("Enter the project address.")).toBeInTheDocument();
@@ -91,13 +91,13 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
     expect(
-      await screen.findByRole("heading", { name: "An estimator will review your project" }),
+      await screen.findByRole("heading", { name: "We got your estimate request" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Pricing begins only after measurement evidence and estimator review."),
+      screen.getByText("We set a price only after we check the site and its size."),
     ).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(2);
 
@@ -138,13 +138,11 @@ describe("PublicEstimatePage", () => {
       }),
     ).toBeInTheDocument();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
-    await screen.findByRole("heading", { name: "An estimator will review your project" });
+    await screen.findByRole("heading", { name: "We got your estimate request" });
     expect(
-      screen.getByText(
-        "We received your request. An iRoof estimator will review the property and confirm the next step.",
-      ),
+      screen.getByText("iRoof will have an estimator check the site and tell you the next step."),
     ).toBeInTheDocument();
     const [, request] = fetcher.mock.calls[1]!;
     expect(JSON.parse(String(request?.body)).brand).toBe("iroof");
@@ -165,13 +163,13 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
     expect(
-      await screen.findByRole("heading", { name: "An estimator will review your project" }),
+      await screen.findByRole("heading", { name: "We got your estimate request" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Pricing begins only after measurement evidence and estimator review."),
+      screen.getByText("We set a price only after we check the site and its size."),
     ).toBeInTheDocument();
   });
 
@@ -190,7 +188,7 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user, "BC");
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
     expect(
       await screen.findByText("We could not submit your request. Please try again."),
@@ -207,7 +205,7 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
+    await user.click(screen.getByRole("button", { name: "Send estimate request" }));
 
     expect(
       await screen.findByText("Too many requests were sent. Please wait a moment and try again."),

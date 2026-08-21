@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/now": {
+      "targetKind": "existing-ui",
+      "projectId": "b96f4b72-bb01-48c3-899f-2d91a99c74ff",
+      "baselineDraftId": "79265d85-2377-488c-9663-b6c602df086f",
+      "activeDraftId": "15d59961-e54d-4163-861c-f7b97a55c032",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": [],
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "app/src/styles.css",
+        "app/src/components/app-shell.tsx",
+        "app/src/components/system-status.tsx",
+        "app/src/now/now-page.tsx",
+        "app/src/components/ui/button.tsx",
+        "app/src/components/ui/card.tsx",
+        "app/src/components/ui/state-panel.tsx",
+        "app/src/lib/cn.ts",
+        "app/src/lib/roles.ts"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "81966b18d211aaeabe115e9ed3e3a9e0a8d69156b57aa2fb4a0303cffc59e912",
+        "app/src/styles.css": "ba01e513d1e66703508cfb793f878beee4a33dc852a51cd5cc46ed056550df04",
+        "app/src/components/app-shell.tsx": "3dc66b850b6b247a42b8899b652635646d6e59bbd57f5d8c74cfc1786de9b401",
+        "app/src/components/system-status.tsx": "c9e0bfc2775ad993a1e68b77f21e2372b7fee08f8ff29e5982d34419be8d6fb0",
+        "app/src/now/now-page.tsx": "a0f3422ac4f0be7faffdc4b55214587e10da74b3636c762fe338a274bdf05bf5",
+        "app/src/components/ui/button.tsx": "cc3eabd00636a57eba3fae80dc4f5b820dad18a87c39e013a410dcb62a98c804",
+        "app/src/components/ui/card.tsx": "ad7b1e85cd9a47db9ef2514b456812326d4d0254f62a23cd99de83a2381acdd0",
+        "app/src/components/ui/state-panel.tsx": "91932e02316bec8e647c348f771331b0cf9b58f5f9b3e12c0ff7e51499b5ad27",
+        "app/src/lib/cn.ts": "53f3d3d070f0a9082934da25b875f9499855c2b0693868dd28be8c23d8730f68",
+        "app/src/lib/roles.ts": "82b42312146ac691de7ad6232d727ede10eb3b5f1af0218103f26561a45960cb"
+      },
+      "components": [
+        {
+          "name": "IronWrapAppShellChrome",
+          "id": "28dd4079-f944-4db6-9e23-2319155d4af1",
+          "sourcePath": "app/src/components/app-shell.tsx"
+        }
+      ],
+      "drafts": {
+        "79265d85-2377-488c-9663-b6c602df086f": {
+          "title": "IronWrap OS /now — current baseline",
+          "visualDirection": "pixel-faithful current implementation baseline",
+          "currentVersion": 1
+        },
+        "15d59961-e54d-4163-861c-f7b97a55c032": {
+          "title": "IronWrap OS /now — Command Focus",
+          "visualDirection": "spacious authority-first decision cockpit",
+          "parentDraftId": "79265d85-2377-488c-9663-b6c602df086f",
+          "currentVersion": 1
+        },
+        "9a0e0881-be04-4cce-af51-579dfa902996": {
+          "title": "IronWrap OS /now — Operations Ledger",
+          "visualDirection": "dense consequence-first operational ledger",
+          "parentDraftId": "79265d85-2377-488c-9663-b6c602df086f",
+          "currentVersion": 1
+        }
+      },
+      "updatedAt": "2026-08-20T22:22:59Z"
+    }
+  }
+}

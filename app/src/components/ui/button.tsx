@@ -6,22 +6,23 @@ import * as React from "react";
 import { cn } from "../../lib/cn";
 
 const buttonVariants = cva(
-  "inline-flex min-h-14 select-none items-center justify-center gap-2 rounded-lg px-5 text-base font-semibold tracking-[-0.01em] transition-colors disabled:pointer-events-none disabled:opacity-55 [&_svg]:size-5 [&_svg]:shrink-0",
+  "inline-flex min-h-12 select-none items-center justify-center gap-2 rounded-lg border border-transparent px-4 text-sm font-bold tracking-[-0.01em] transition-[background-color,border-color,color] duration-150 disabled:pointer-events-none disabled:opacity-55 [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default: "bg-foreground text-background hover:bg-foreground/88 active:bg-foreground/78",
-        accent:
-          "bg-accent text-accent-foreground hover:bg-accent/88 active:bg-accent/78 shadow-[0_1px_0_oklch(0_2_0/0.18)]",
-        outline: "border bg-surface text-foreground hover:bg-surface-muted active:bg-border",
-        ghost: "text-foreground hover:bg-surface-muted active:bg-border",
+        accent: "bg-accent text-accent-foreground hover:bg-accent-hover active:bg-accent-active",
+        outline:
+          "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-muted active:bg-border",
+        ghost:
+          "border-transparent bg-transparent text-foreground hover:bg-surface-muted active:bg-border",
         danger: "bg-danger text-danger-foreground hover:bg-danger/88 active:bg-danger/78",
       },
       size: {
-        default: "min-h-14",
+        default: "min-h-12",
         field: "min-h-16 px-6 text-lg",
-        icon: "size-14 min-h-14 px-0",
-        compact: "min-h-11 px-4 text-sm",
+        icon: "size-11 min-h-11 px-0",
+        compact: "min-h-11 px-3.5 text-sm",
       },
       fullWidth: {
         true: "w-full",

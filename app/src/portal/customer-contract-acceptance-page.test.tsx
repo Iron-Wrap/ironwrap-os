@@ -27,9 +27,9 @@ describe("CustomerContractAcceptancePage", () => {
       target: { value: "Customer Example" },
     });
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: /confirm acceptance/i }));
+    fireEvent.click(screen.getByRole("button", { name: /accept contract/i }));
 
-    expect(await screen.findByText(/your acceptance was recorded/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your acceptance was saved/i)).toBeInTheDocument();
     expect(confirmAcceptance).toHaveBeenCalledWith(
       expect.objectContaining({ token: emailToken, signerName: "Customer Example" }),
     );

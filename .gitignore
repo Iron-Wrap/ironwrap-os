@@ -3,6 +3,7 @@
 .codegraph/
 .cursor/
 .impeccable/
+.superdesign/tmp/
 
 # Node / build
 node_modules/

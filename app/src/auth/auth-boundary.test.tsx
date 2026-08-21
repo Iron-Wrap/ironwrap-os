@@ -67,7 +67,7 @@ describe("AuthBoundary", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("This field device needs a new pairing")).toBeVisible();
+    expect(await screen.findByText("Pair this crew phone again")).toBeVisible();
     expect(screen.queryByLabelText(/Email address/i)).not.toBeInTheDocument();
   });
 
@@ -83,7 +83,7 @@ describe("AuthBoundary", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("Pair this Field Companion device")).toBeVisible();
+    expect(await screen.findByText("Pair this crew phone")).toBeVisible();
     expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe("AuthBoundary", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("Pair this Field Companion device")).toBeVisible();
+    expect(await screen.findByText("Pair this crew phone")).toBeVisible();
     expect(screen.queryByText("Authenticated work")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
   });
@@ -150,11 +150,9 @@ describe("AuthBoundary", () => {
       </QueryClientProvider>,
     );
 
+    expect(await screen.findByRole("heading", { name: "IronWrap OS is not ready" })).toBeVisible();
     expect(
-      await screen.findByRole("heading", { name: "IronWrap OS is unavailable" }),
-    ).toBeVisible();
-    expect(
-      screen.queryByRole("heading", { name: "This device is not ready offline" }),
+      screen.queryByRole("heading", { name: "This device needs the internet" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
   });
@@ -190,7 +188,7 @@ describe("AuthBoundary", () => {
 
     expect(await screen.findByText("Sign in to IronWrap OS")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Crew phone" })).toBeVisible();
-    expect(screen.getByText(/one-time QR code on this phone/i)).toBeVisible();
+    expect(screen.getByText(/scan the QR code on this phone/i)).toBeVisible();
   });
 
   it("uses the combined field bootstrap at the unified entry when the phone is paired", async () => {

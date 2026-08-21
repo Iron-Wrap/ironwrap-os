@@ -16,17 +16,18 @@ test.describe("Estimator Workbench acceptance", () => {
     });
 
     await page.goto(`/estimator/jobs/${jobId}`);
-    await expect(page.getByRole("heading", { name: "Measurement workbench" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Roof graph evidence" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Roof and quote review" })).toBeVisible();
+    await page.getByText("Roof details").click();
+    await expect(page.getByRole("heading", { name: "Roof shape drawing" })).toBeVisible();
 
     const northFacet = page.getByRole("button", {
-      name: "Select facet North plane, Approved",
+      name: "Select roof face North plane, Approved",
     });
     await northFacet.focus();
     await expect(northFacet).toBeFocused();
     await page.keyboard.press(" ");
     await expect(northFacet).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByText("Selected facet: North plane")).toBeVisible();
+    await expect(page.getByText("Selected roof face: North plane")).toBeVisible();
 
     const payload = await (await workbenchResponse).json();
     expect(JSON.stringify(payload)).not.toMatch(/raw_?key|hash|model_?(?:url|uri)/i);

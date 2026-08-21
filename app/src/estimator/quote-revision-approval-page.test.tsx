@@ -211,11 +211,11 @@ describe("QuoteRevisionApprovalPages", () => {
   it("keeps the dedicated queue on the bounded source-to-blank-Draft decision", async () => {
     const { container } = renderPage(<QuoteRevisionApprovalQueuePage />);
 
-    await screen.findByRole("heading", { name: "Draft revision queue" });
-    expect(screen.getByText("Source V3")).toBeVisible();
-    expect(screen.getByText("Blank Draft V4")).toBeVisible();
-    expect(screen.getByText(/no pricing, tax, scope, payment/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: /source v3 blank draft v4/i })).toHaveAttribute(
+    await screen.findByRole("heading", { name: "Quote change reviews" });
+    expect(screen.getByText("Quote V3")).toBeVisible();
+    expect(screen.getByText("Empty draft V4")).toBeVisible();
+    expect(screen.getByText(/prices, job details, payments/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: /quote v3 empty draft v4/i })).toHaveAttribute(
       "href",
       "/quote-revision-approvals/$approvalId",
     );
@@ -229,12 +229,12 @@ describe("QuoteRevisionApprovalPages", () => {
     router.params = { jobId: "JOB-A" };
     renderPage(<QuoteRevisionApprovalPreparePage />);
 
-    await screen.findByRole("heading", { name: "Draft quote revision" });
+    await screen.findByRole("heading", { name: "Ask for a new quote" });
     await user.type(
-      screen.getByLabelText("Correction reason"),
+      screen.getByLabelText("What is wrong?"),
       "Correct the verified source before the next commercial review.",
     );
-    await user.click(screen.getByRole("button", { name: "Prepare draft revision" }));
+    await user.click(screen.getByRole("button", { name: "Send for review" }));
 
     await waitFor(() => {
       expect(prepareQuoteRevisionApproval).toHaveBeenCalledWith(
@@ -259,10 +259,10 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Blank Draft revision" });
-    expect(screen.queryByRole("button", { name: "Approve Draft shell" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
-    expect(screen.getByText(/waiting for the designated approver/i)).toBeVisible();
+    await screen.findByRole("heading", { name: "Review a new quote" });
+    expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
+    expect(screen.getByText(/waiting for the right person/i)).toBeVisible();
   });
 
   it("fails closed when an uncertain decision cannot be followed by a current read", async () => {
@@ -285,13 +285,15 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Blank Draft revision" });
-    await user.click(screen.getByRole("button", { name: "Approve Draft shell" }));
+    await screen.findByRole("heading", { name: "Review a new quote" });
+    await user.click(screen.getByRole("button", { name: "Make empty draft" }));
 
-    expect(await screen.findByText(/the result is uncertain. do not retry/i)).toBeVisible();
-    expect(await screen.findByText("Refresh before another decision")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve Draft shell" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/could not tell if the draft was made. do not try again/i),
+    ).toBeVisible();
+    expect(await screen.findByText("Load this request again")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
   });
 
   it("turns an uncertain broker outcome into reconciliation work without a retry", async () => {
@@ -334,15 +336,15 @@ describe("QuoteRevisionApprovalPages", () => {
     vi.mocked(reconcileQuoteRevisionApproval).mockResolvedValue({ approval: reconciled });
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Blank Draft revision" });
-    expect(screen.getByText("Do not retry this request")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve Draft shell" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Reconcile recorded outcome" }));
+    await screen.findByRole("heading", { name: "Review a new quote" });
+    expect(screen.getByText("Do not try this request again")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check saved result" }));
     await user.type(
-      screen.getByLabelText("Reconciliation evidence"),
+      screen.getByLabelText("What did you check?"),
       "The Hermes Run was unavailable; no second Draft shell was issued.",
     );
-    await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
+    await user.click(screen.getByRole("button", { name: "Save result check" }));
 
     await waitFor(() => {
       expect(reconcileQuoteRevisionApproval).toHaveBeenCalledWith(
@@ -355,9 +357,18 @@ describe("QuoteRevisionApprovalPages", () => {
     });
     expect(approveQuoteRevisionApproval).not.toHaveBeenCalled();
     expect(rejectQuoteRevisionApproval).not.toHaveBeenCalled();
-    expect(await screen.findByText(/reconciliation recorded: inconclusive/i)).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: "Reconcile recorded outcome" }),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/result check saved: not sure/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Check saved result" })).not.toBeInTheDocument();
+  });
+
+  it("keeps system IDs out of the first reading path", async () => {
+    const user = userEvent.setup();
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+
+    await screen.findByRole("heading", { name: "Review a new quote" });
+    expect(screen.getByText("QUOTE-A-V4")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("QUOTE-A-V4")).toBeVisible();
+    expect(screen.getByText("run:quote-revision:ui-001")).toBeVisible();
   });
 });

@@ -49,15 +49,17 @@ describe("money exception queue", () => {
     vi.mocked(resolveAccountingException).mockReset();
   });
 
-  it("names the finding in words and shows both fingerprints", async () => {
+  it("names the issue in words and keeps both check codes in system details", async () => {
     vi.mocked(loadAccountingExceptions).mockResolvedValue(exceptionListResponse());
+    const user = userEvent.setup();
     renderQueue();
 
     expect(
       await screen.findByRole("heading", { name: "More was paid than was invoiced" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Our fingerprint")).toBeInTheDocument();
-    expect(screen.getByText("QuickBooks fingerprint")).toBeInTheDocument();
+    await user.click(screen.getByText("System check"));
+    expect(screen.getByText("Our check code")).toBeInTheDocument();
+    expect(screen.getByText("QuickBooks check code")).toBeInTheDocument();
     expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
     expect(screen.getByText("b".repeat(64))).toBeInTheDocument();
   });
@@ -69,14 +71,12 @@ describe("money exception queue", () => {
     vi.mocked(loadAccountingExceptions).mockResolvedValue(exceptionListResponse());
     renderQueue();
 
-    expect(await screen.findByText(/To put the money back, authorize/u)).toBeInTheDocument();
+    expect(await screen.findByText(/To put money back, open the money item/u)).toBeInTheDocument();
     expect(
       screen.queryByLabelText("Reference of the reversal in QuickBooks"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Close this exception" })).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Nothing can be closed from this screen for this finding."),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close this issue" })).not.toBeInTheDocument();
+    expect(screen.getByText("You cannot close this issue from this page.")).toBeInTheDocument();
   });
 
   it("offers only the remedies that move no money, in the exception's own words", async () => {
@@ -93,12 +93,12 @@ describe("money exception queue", () => {
     );
     renderQueue();
 
-    const select = await screen.findByLabelText("What was done about it");
+    const select = await screen.findByLabelText("What did you do?");
     const options = within(select)
       .getAllByRole("option")
       .map((option) => option.textContent);
     expect(options).toEqual([
-      "Choose a remedy",
+      "Choose an answer",
       "Accept what QuickBooks holds",
       "Replace it with new figures",
     ]);
@@ -118,13 +118,13 @@ describe("money exception queue", () => {
     renderQueue();
 
     await user.selectOptions(
-      await screen.findByLabelText("What was done about it"),
+      await screen.findByLabelText("What did you do?"),
       "Accept what QuickBooks holds",
     );
     expect(
       screen.queryByLabelText("Reference of the reversal in QuickBooks"),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Close this exception" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Close this issue" })).toBeEnabled();
   });
 
   it("sends the chosen remedy and never a compensating effect", async () => {
@@ -141,17 +141,17 @@ describe("money exception queue", () => {
     renderQueue();
 
     await user.selectOptions(
-      await screen.findByLabelText("What was done about it"),
+      await screen.findByLabelText("What did you do?"),
       "Accept what QuickBooks holds",
     );
-    await user.click(screen.getByRole("button", { name: "Close this exception" }));
+    await user.click(screen.getByRole("button", { name: "Close this issue" }));
 
     await waitFor(() => expect(resolveAccountingException).toHaveBeenCalledTimes(1));
     const call = vi.mocked(resolveAccountingException).mock.calls[0];
     expect(call?.[2]).toBe("accepted_as_posted");
     // The screen has nothing to claim a reversal with, which is the point.
     expect(call?.[3]).toBeNull();
-    expect(await screen.findByText("Exception closed")).toBeInTheDocument();
+    expect(await screen.findByText("Issue closed")).toBeInTheDocument();
   });
 
   it("turns a server refusal into a sentence rather than a code", async () => {
@@ -169,10 +169,10 @@ describe("money exception queue", () => {
     renderQueue();
 
     await user.selectOptions(
-      await screen.findByLabelText("What was done about it"),
+      await screen.findByLabelText("What did you do?"),
       "Accept what QuickBooks holds",
     );
-    await user.click(screen.getByRole("button", { name: "Close this exception" }));
+    await user.click(screen.getByRole("button", { name: "Close this issue" }));
 
     expect(
       await screen.findByText(
@@ -190,7 +190,7 @@ describe("money exception queue", () => {
     renderQueue();
 
     expect(await screen.findByText("Closed as Issue a credit memo.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Close this exception" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close this issue" })).not.toBeInTheDocument();
   });
 
   it("hides the resolve control from a role that may only read", async () => {
@@ -201,7 +201,7 @@ describe("money exception queue", () => {
     renderQueue();
 
     await screen.findByRole("heading", { name: "More was paid than was invoiced" });
-    expect(screen.queryByRole("button", { name: "Close this exception" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close this issue" })).not.toBeInTheDocument();
   });
 
   it("says the queue is empty rather than showing an empty list", async () => {
@@ -209,7 +209,7 @@ describe("money exception queue", () => {
     renderQueue();
 
     expect(
-      await screen.findByText("Nothing needs a decision. Every finding has been answered."),
+      await screen.findByText("Nothing needs your help. All money issues are closed."),
     ).toBeInTheDocument();
   });
 
@@ -219,9 +219,9 @@ describe("money exception queue", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { name: "Exception queue unavailable" }),
+        screen.getByRole("heading", { name: "Money issues are unavailable" }),
       ).toBeInTheDocument(),
     );
-    expect(screen.getByText(/Nothing was resolved or changed/u)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was changed/u)).toBeInTheDocument();
   });
 });

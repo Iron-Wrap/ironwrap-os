@@ -43,7 +43,7 @@ implication.
       "latest": "0082_envelope_operating_tenant.sql"
     },
     "tests": {
-      "pwa": 520,
+      "pwa": 525,
       "worker": 1059
     }
   },

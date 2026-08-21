@@ -5,6 +5,7 @@ import type { ZodError } from "zod";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { clearStableClientSubmissionId, stableClientSubmissionId } from "./client-submission-id";
 import {
@@ -195,7 +196,7 @@ export function PublicEstimatePage() {
     return (
       <PublicEstimateFrame brand={brand}>
         <ErrorState
-          title="Estimate requests are unavailable"
+          title="The estimate form is not ready"
           message="We could not open the estimate form. Check your connection and try again."
           onRetry={() => {
             setConfigError(false);
@@ -222,10 +223,10 @@ export function PublicEstimatePage() {
             <CircleAlert className="size-6" aria-hidden="true" />
           </div>
           <h1 className="mt-5 text-2xl font-black tracking-[-0.035em]">
-            Estimate requests are paused
+            The estimate form is paused
           </h1>
           <p className="mt-3 text-sm leading-6 text-muted">
-            An estimator can still help with your project. Please try this form again shortly.
+            An estimator can still help with your job. Please try this form again soon.
           </p>
         </section>
       </PublicEstimateFrame>
@@ -251,7 +252,7 @@ export function PublicEstimatePage() {
               Tell us about the exterior work.
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
-              We use these details to route your project to an estimator for measurement and review.
+              We use this to send your job to an estimator for a site check.
             </p>
           </div>
           <CardContent className="p-5 sm:p-7">
@@ -310,7 +311,7 @@ function EstimateIntroduction() {
     <section className="pt-1 sm:pt-4">
       <p className="text-xs font-bold tracking-[0.15em] text-ok">CLEAR SCOPE. NO SURPRISES.</p>
       <h2 className="mt-4 max-w-lg text-4xl font-black leading-[0.96] tracking-[-0.055em] sm:text-5xl">
-        Start with the property, not a sales pitch.
+        Tell us about your home. No sales pitch.
       </h2>
       <div className="mt-7 flex max-w-md items-center gap-3" aria-hidden="true">
         <span className="h-px flex-1 bg-border" />
@@ -320,18 +321,15 @@ function EstimateIntroduction() {
         <span className="h-px flex-1 bg-border" />
       </div>
       <p className="mt-7 max-w-lg text-base leading-7 text-muted">
-        Share the basics. Every request goes to estimator review without an invented online price.
+        Share the basics. An estimator will check the job before you get a price.
       </p>
       <dl className="mt-8 grid max-w-lg gap-3 border-y border-border py-5 text-sm">
-        <InfoRow label="1" text="We check scope and property details." />
-        <InfoRow label="2" text="An estimator confirms measurements, access, and materials." />
-        <InfoRow
-          label="3"
-          text="Approved pricing is prepared only from verified project evidence."
-        />
+        <InfoRow label="1" text="We check the job and home." />
+        <InfoRow label="2" text="An estimator checks the size, site access, and materials." />
+        <InfoRow label="3" text="We set the price from checked job facts." />
       </dl>
       <p className="mt-5 text-sm leading-6 text-muted">
-        This request goes straight to estimator review. We won’t invent a price online.
+        An estimator checks every request. We do not guess a price online.
       </p>
     </section>
   );
@@ -410,18 +408,18 @@ function EstimateForm({
           />
         </FormField>
         <FormField
-          label="Project province"
-          hint="An estimator reviews the project location before pricing."
+          label="Province"
+          hint="We check the job site before we set a price."
           error={errors.province}
           inputId={`${fieldId}-province`}
         >
-          <select
+          <Select
+            field
             id={`${fieldId}-province`}
             name="province"
             value={selectedProvince}
-            aria-invalid={Boolean(errors.province) || undefined}
+            invalid={Boolean(errors.province)}
             aria-describedby={errors.province ? `${fieldId}-province-error` : undefined}
-            className="min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base text-foreground shadow-inner shadow-black/3 focus-visible:border-info focus-visible:outline-info aria-[invalid=true]:border-danger"
             onChange={(event) => {
               onProvinceChange(event.currentTarget.value as PublicEstimateProvince);
               onFieldChange("province");
@@ -432,7 +430,7 @@ function EstimateForm({
                 {province.label}
               </option>
             ))}
-          </select>
+          </Select>
         </FormField>
         <FormField
           label="Email"
@@ -477,13 +475,13 @@ function EstimateForm({
         error={errors.service}
         inputId={`${fieldId}-service`}
       >
-        <select
+        <Select
+          field
           id={`${fieldId}-service`}
           name="service"
           defaultValue="roofing"
-          aria-invalid={Boolean(errors.service) || undefined}
+          invalid={Boolean(errors.service)}
           aria-describedby={errors.service ? `${fieldId}-service-error` : undefined}
-          className="min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base text-foreground shadow-inner shadow-black/3 focus-visible:border-info focus-visible:outline-info aria-[invalid=true]:border-danger"
           onChange={() => onFieldChange("service")}
         >
           {PUBLIC_ESTIMATE_SERVICES.map((service) => (
@@ -491,7 +489,7 @@ function EstimateForm({
               {service.label}
             </option>
           ))}
-        </select>
+        </Select>
       </FormField>
 
       <fieldset className="space-y-3 border-t border-border pt-5">
@@ -537,7 +535,7 @@ function EstimateForm({
         busy={submitting}
         disabled={isChallengePending}
       >
-        Request estimator review
+        Send estimate request
       </Button>
       <p className="text-xs leading-5 text-muted">{disclaimer}</p>
     </form>
@@ -589,12 +587,12 @@ function ConsentField({
 }) {
   return (
     <div>
-      <label className="flex cursor-pointer items-start gap-3 text-sm leading-6">
+      <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
         <input
           id={id}
           name={name}
           type="checkbox"
-          className="mt-1 size-4 rounded border-border text-accent focus-visible:outline-info"
+          className="mt-0.5 size-5 shrink-0 rounded-sm border-border text-accent"
           aria-invalid={Boolean(checkedError) || undefined}
           aria-describedby={checkedError ? `${id}-error` : undefined}
           onChange={onChange}
@@ -626,16 +624,16 @@ function EstimateResult({
         <div className="border-b border-border bg-ok-soft px-5 py-6 sm:px-8 sm:py-8">
           <CheckCircle2 className="size-9 text-ok" aria-hidden="true" />
           <h1 className="mt-4 text-3xl font-black tracking-[-0.045em]">
-            An estimator will review your project
+            We got your estimate request
           </h1>
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted">
-            {`We received your request. An ${brandCopy.shortName} estimator will review the property and confirm the next step.`}
+            {`${brandCopy.shortName} will have an estimator check the site and tell you the next step.`}
           </p>
         </div>
         <CardContent className="p-5 sm:p-8">
           <div className="flex gap-3 border-l-4 border-info bg-info-soft px-5 py-5 text-sm leading-6">
             <ClipboardCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
-            <p>Pricing begins only after measurement evidence and estimator review.</p>
+            <p>We set a price only after we check the site and its size.</p>
           </div>
           <p className="mt-6 text-sm leading-6 text-muted">{result.disclaimer}</p>
           <Button className="mt-7" variant="outline" fullWidth onClick={onStartAnotherRequest}>

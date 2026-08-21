@@ -17,7 +17,10 @@ import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import {
   issueDevicePairing,
@@ -196,9 +199,9 @@ function OfficeDevicePairingSettings() {
                 >
                   Self-configuring Hermes bootstrap prompt
                 </label>
-                <textarea
+                <Textarea
                   id="hermes-desktop-bootstrap-prompt"
-                  className="min-h-48 w-full rounded-lg border bg-surface-muted px-3 py-3 font-mono text-xs"
+                  className="min-h-48 bg-surface-muted px-3 py-3 font-mono text-xs"
                   readOnly
                   value={desktopIssued.bootstrap_prompt}
                   onFocus={(event) => event.currentTarget.select()}
@@ -212,9 +215,9 @@ function OfficeDevicePairingSettings() {
                 >
                   One-time Hermes desktop pairing link
                 </label>
-                <input
+                <Input
                   id="hermes-desktop-pairing-link"
-                  className="min-h-14 w-full rounded-lg border bg-surface-muted px-3 font-mono text-xs"
+                  className="min-h-14 bg-surface-muted font-mono text-xs"
                   readOnly
                   value={desktopPairingUrl}
                   onFocus={(event) => event.currentTarget.select()}
@@ -248,9 +251,10 @@ function OfficeDevicePairingSettings() {
               <label className="block font-extrabold" htmlFor="field-user">
                 Active field user
               </label>
-              <select
+              <Select
+                field
                 id="field-user"
-                className="min-h-16 w-full rounded-lg border bg-surface px-4 text-base font-bold"
+                className="bg-surface font-bold"
                 value={activeUserId}
                 onChange={(event) => {
                   setSelectedUserId(event.target.value);
@@ -263,7 +267,7 @@ function OfficeDevicePairingSettings() {
                     {user.display_name} · {user.email}
                   </option>
                 ))}
-              </select>
+              </Select>
               {selectedUser?.frappe_user_id ? (
                 <p className="text-sm text-muted">
                   Linked operating user: {selectedUser.frappe_user_id}
@@ -412,9 +416,9 @@ function IssuedPairingCard({
               <label className="block text-sm font-extrabold" htmlFor="pairing-link">
                 No camera? Copy or open this one-time link on the crew device.
               </label>
-              <input
+              <Input
                 id="pairing-link"
-                className="min-h-14 w-full rounded-lg border bg-surface-muted px-3 font-mono text-xs"
+                className="min-h-14 bg-surface-muted font-mono text-xs"
                 readOnly
                 value={pairingUrl}
                 onFocus={(event) => event.currentTarget.select()}

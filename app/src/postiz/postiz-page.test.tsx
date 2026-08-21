@@ -132,20 +132,21 @@ describe("PostizPage", () => {
       screen.getByText("Book a documented spring roof inspection before the next thaw."),
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Review content" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Approve intent" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Reject intent" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Stop intent" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Reconcile state" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Approve post" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Turn down" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Stop post" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check saved state" })).toBeVisible();
     expect(screen.queryByText("provider_detail_not_exposed")).toBeNull();
+    expect(screen.queryByText("marketing.social.publish.reviewed")).not.toBeVisible();
   });
 
   it("offers stop only after submission", async () => {
     vi.mocked(loadPostizIntent).mockResolvedValue(submittedPostizIntentFixture());
     renderPage();
 
-    expect(await screen.findByRole("button", { name: "Stop intent" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve intent" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Reject intent" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Stop post" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Approve post" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Turn down" })).toBeNull();
   });
 
   it("shows publication drift as manual reconciliation and never offers stop or a remote link", async () => {
@@ -167,10 +168,10 @@ describe("PostizPage", () => {
     });
     renderPage();
 
-    expect(await screen.findByText(/previously observed publication/i)).toBeVisible();
-    expect(screen.getByText(/public retraction is not automated/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Reconcile state" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Stop intent" })).toBeNull();
+    expect(await screen.findByText(/no longer matches what IronWrap saved/i)).toBeVisible();
+    expect(screen.getByText(/will not take the post down/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check saved state" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Stop post" })).toBeNull();
     expect(screen.queryByRole("link", { name: "View published post" })).toBeNull();
   });
 
@@ -178,7 +179,7 @@ describe("PostizPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole("button", { name: "Approve intent" }));
+    await user.click(await screen.findByRole("button", { name: "Approve post" }));
 
     await waitFor(() =>
       expect(approvePostizIntent).toHaveBeenCalledWith(
@@ -199,9 +200,9 @@ describe("PostizPage", () => {
 
     expect(await screen.findByRole("link", { name: "Review content" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Connect Facebook" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Approve intent" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Stop intent" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Reconcile state" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve post" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop post" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check saved state" })).toBeNull();
   });
 
   it.each([opsSession, fieldSession])(

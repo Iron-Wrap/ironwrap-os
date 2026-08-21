@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import { quickBooksFinalInvoiceFixture } from "../src/accounting/quickbooks-test-fixture";
+
 // Mobile-first acceptance for the money desk (IRO-52 slice S9).
 //
 // Mobile-first is a gating product rule, not a preference: "contractors primarily work from their
@@ -71,7 +73,12 @@ test.describe("Money desk mobile acceptance", () => {
     await expect(page.getByRole("heading", { name: "Money desk" })).toBeVisible();
 
     // The four queues section 8.2 names, all reachable by scrolling down and nothing else.
-    for (const queue of ["Needs approval", "Awaiting QuickBooks", "Mismatched", "Exceptions"]) {
+    for (const queue of [
+      "Needs approval",
+      "Waiting for QuickBooks",
+      "Does not match",
+      "Money issues",
+    ]) {
       await expect(page.getByRole("heading", { name: queue })).toBeVisible();
     }
     // A row carries its own next step, in words.
@@ -104,18 +111,16 @@ test.describe("Money desk mobile acceptance", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Do not approve" })).toBeVisible();
     // The comparison is readable without a table that scrolls sideways.
-    await expect(
-      page.getByRole("region", { name: "Our figures against QuickBooks" }),
-    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "IronWrap and QuickBooks" })).toBeVisible();
 
     await assertNoHorizontalScroll(page, "intent detail");
     await assertActionsAreReachable(page, "intent detail");
     await page.screenshot({ path: `${SHOT_DIR}/money-intent.png`, fullPage: true });
   });
 
-  test("the exception queue offers its remedies without a sideways scroll", async ({ page }) => {
+  test("the money issue queue offers safe choices without a sideways scroll", async ({ page }) => {
     await page.goto("/accounting/exceptions");
-    await expect(page.getByRole("heading", { name: "Exceptions", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Money issues", exact: true })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "More was paid than was invoiced" }),
     ).toBeVisible();
@@ -123,9 +128,9 @@ test.describe("Money desk mobile acceptance", () => {
     // A reversal is authorized on the money movement and dispatched by the system, so the queue
     // points there instead of offering a box to type a reference into. The box is what ELEC-71
     // closed a real $240 overpayment with, using a string it invented on the spot.
-    await expect(page.getByText(/To put the money back, authorize/)).toBeVisible();
+    await expect(page.getByText(/To put money back, open the money item/)).toBeVisible();
     await expect(page.getByLabel("Reference of the reversal in QuickBooks")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Open the money movement" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open the money item" })).toBeVisible();
     // Section 8.2: reversal is provider-supported, never a delete.
     await expect(page.getByRole("button", { name: /delete/i })).toHaveCount(0);
 
@@ -134,15 +139,37 @@ test.describe("Money desk mobile acceptance", () => {
     await page.screenshot({ path: `${SHOT_DIR}/money-exceptions.png`, fullPage: true });
   });
 
-  test("the settings page carries reconciliation health on a phone", async ({ page }) => {
+  test("the settings page carries QuickBooks checks on a phone", async ({ page }) => {
     await page.goto("/accounting/quickbooks");
     await expect(page.getByRole("heading", { name: "QuickBooks connection" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Reconciliation health" })).toBeVisible();
-    await expect(page.getByText("Not re-read recently")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "QuickBooks checks" })).toBeVisible();
+    await expect(page.getByText("Not checked lately")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the money desk" })).toBeVisible();
 
     await assertNoHorizontalScroll(page, "quickbooks settings");
     await page.screenshot({ path: `${SHOT_DIR}/money-settings.png`, fullPage: true });
+  });
+
+  test("the final invoice is clear and fixed on a phone", async ({ page }) => {
+    await page.route("**/api/v1/quickbooks/final-invoices/**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ json: quickBooksFinalInvoiceFixture() });
+    });
+
+    await page.goto("/accounting/quickbooks/final-invoices/qbo_final_01JEXAMPLE0001");
+    await expect(page.getByRole("heading", { name: "CAD 1050.00" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Invoice totals" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Invoice lines before tax" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Source records" })).toBeVisible();
+    await expect(page.getByText("System check codes")).toBeVisible();
+    await expect(page.getByText("Aug 13, 2026")).toBeVisible();
+    await expect(page.getByText(/Frappe:/).first()).toBeHidden();
+    await expect(page.getByRole("button", { name: "Approve invoice" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Do not approve" })).toBeVisible();
+
+    await assertNoHorizontalScroll(page, "final invoice");
+    await assertActionsAreReachable(page, "final invoice");
+    await page.screenshot({ path: `${SHOT_DIR}/final-invoice.png`, fullPage: true });
   });
 
   test("the accounting role's navigation reaches every money screen", async ({ page }) => {
@@ -153,7 +180,7 @@ test.describe("Money desk mobile acceptance", () => {
     await expect(nav.getByRole("link", { name: "Setup" })).toBeVisible();
 
     await nav.getByRole("link", { name: "Issues" }).click();
-    await expect(page.getByRole("heading", { name: "Exceptions", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Money issues", exact: true })).toBeVisible();
     await assertNoHorizontalScroll(page, "navigation");
   });
 });

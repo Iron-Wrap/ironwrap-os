@@ -75,10 +75,10 @@ describe("MaterialComparisonSection", () => {
 
     expect(screen.getByRole("heading", { name: "Charcoal standing seam" })).toBeInTheDocument();
     expect(screen.getByText("Better")).toBeInTheDocument();
-    expect(screen.getByText("+$2,400 vs. your current price")).toBeInTheDocument();
+    expect(screen.getByText("Costs $2,400 more")).toBeInTheDocument();
     expect(screen.getByText("Charcoal")).toBeInTheDocument();
     expect(screen.getByText("Panel profile:")).toBeInTheDocument();
-    expect(screen.getByText("Included in your current price")).toBeInTheDocument();
+    expect(screen.getByText("In your current price")).toBeInTheDocument();
   });
 
   it("renders an office-authored option value as text, never as markup", () => {
@@ -94,7 +94,7 @@ describe("MaterialComparisonSection", () => {
     recordDecision.mockResolvedValue({ status: "recorded", decision_id: "decision_abc12345" });
 
     render(<MaterialComparisonSection model={model()} portalToken={TOKEN} />);
-    fireEvent.click(screen.getAllByRole("button", { name: /choose this option/i })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: /pick this option/i })[0]!);
 
     await waitFor(() => expect(recordDecision).toHaveBeenCalledTimes(1));
     const call = recordDecision.mock.calls[0]![0];
@@ -102,7 +102,7 @@ describe("MaterialComparisonSection", () => {
     expect(call.optionPackageId).toBe("OPT-GOOD");
     expect(call.idempotencyKey).toMatch(/^portal-decision:OPT-GOOD:/);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      /You chose Weathered slate asphalt.*nothing\s+is billed or ordered/s,
+      /You picked Weathered slate asphalt.*does not order or bill\s+anything/s,
     );
   });
 
@@ -110,9 +110,9 @@ describe("MaterialComparisonSection", () => {
     recordDecision.mockRejectedValue(new Error("decision_rejected"));
 
     render(<MaterialComparisonSection model={model()} portalToken={TOKEN} />);
-    fireEvent.click(screen.getAllByRole("button", { name: /choose this option/i })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: /pick this option/i })[0]!);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/could not save that choice/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not save your choice/i);
     expect(screen.queryByText(/decision_rejected/)).toBeNull();
   });
 
@@ -125,7 +125,7 @@ describe("MaterialComparisonSection", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Charcoal standing seam" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /choose this option/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /pick this option/i })).toBeNull();
   });
 });
 
@@ -140,11 +140,11 @@ describe("CustomerPortalView materials placement", () => {
     render(<CustomerPortalView model={model()} portalToken={TOKEN} />);
 
     const headings = screen.getAllByRole("heading").map((heading) => heading.textContent ?? "");
-    expect(headings.indexOf("Approved scope")).toBeLessThan(
+    expect(headings.indexOf("Work in your plan")).toBeLessThan(
       headings.indexOf("Materials and colours"),
     );
     expect(headings.indexOf("Materials and colours")).toBeLessThan(
-      headings.indexOf("Verified progress"),
+      headings.indexOf("Project updates"),
     );
   });
 });

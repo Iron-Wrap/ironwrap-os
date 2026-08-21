@@ -199,16 +199,18 @@ describe("ApprovalInboxPage", () => {
     vi.mocked(approveApproval).mockResolvedValue({ approval: executed });
     const { container } = renderInbox();
 
-    await screen.findByRole("heading", { name: "Approvals" });
-    expect(screen.getByText("Exact proposed change")).toBeVisible();
+    await screen.findByRole("heading", { name: "Lead reviews" });
+    expect(screen.getByText("What will change")).toBeVisible();
     expect(
-      screen.getByText("No customer message. Transport unchanged. No quote or accounting change."),
+      screen.getByText(
+        "No customer message. Lead delivery stays the same. Quotes and money records do not change.",
+      ),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Approve local triage" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save lead check" })).toBeVisible();
     expect(container.textContent).not.toMatch(/dry_run_receipt|approval_receipt|write_args_json/i);
     expect(container.textContent).not.toMatch(/sent|delivered|contacted customer/i);
 
-    await user.click(screen.getByRole("button", { name: "Approve local triage" }));
+    await user.click(screen.getByRole("button", { name: "Save lead check" }));
 
     await waitFor(() => {
       expect(approveApproval).toHaveBeenCalledWith(
@@ -219,7 +221,9 @@ describe("ApprovalInboxPage", () => {
       );
     });
     expect(rejectApproval).not.toHaveBeenCalled();
-    expect((await screen.findAllByText("Triage recorded")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Lead check saved")).length).toBeGreaterThan(0);
+    expect(screen.getByText("run:lead-triage:ui-001")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
     expect(screen.getByText("run:lead-triage:ui-001")).toBeVisible();
   });
 
@@ -231,20 +235,20 @@ describe("ApprovalInboxPage", () => {
     vi.mocked(loadApprovals).mockResolvedValueOnce(model(pendingApproval(), ["approval.read"]));
     renderInbox({ session: opsSession });
 
-    await screen.findByRole("heading", { name: "Approvals" });
-    expect(screen.queryByRole("button", { name: "Approve local triage" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Waiting for the server-designated approver/i)).toBeVisible();
+    await screen.findByRole("heading", { name: "Lead reviews" });
+    expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the right owner/i)).toBeVisible();
   });
 
   it("turns ambiguity into explicit manual reconciliation work without an automatic retry control", async () => {
     vi.mocked(loadApprovals).mockResolvedValueOnce(model(uncertainApproval()));
     renderInbox();
 
-    await screen.findByRole("heading", { name: "Approvals" });
-    expect(screen.getByText("Do not retry this request")).toBeVisible();
-    expect(screen.getByText(/a second write is not issued automatically/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve local triage" })).not.toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Lead reviews" });
+    expect(screen.getByText("Do not try this request again")).toBeVisible();
+    expect(screen.getByText(/check the save record before you do anything else/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
   });
 
   it("records reconciliation evidence without reopening or repeating the protected write", async () => {
@@ -256,13 +260,13 @@ describe("ApprovalInboxPage", () => {
     vi.mocked(reconcileApproval).mockResolvedValue({ approval: reconciled });
     renderInbox();
 
-    await screen.findByRole("heading", { name: "Approvals" });
-    await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
+    await screen.findByRole("heading", { name: "Lead reviews" });
+    await user.click(screen.getByRole("button", { name: "Check saved result" }));
     await user.type(
-      screen.getByLabelText("Reconciliation evidence"),
+      screen.getByLabelText("What did you check?"),
       "The recorded Hermes Run was unavailable; no second write was issued.",
     );
-    await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
+    await user.click(screen.getByRole("button", { name: "Save result check" }));
 
     await waitFor(() => {
       expect(reconcileApproval).toHaveBeenCalledWith(
@@ -274,6 +278,6 @@ describe("ApprovalInboxPage", () => {
       );
     });
     expect(approveApproval).not.toHaveBeenCalled();
-    expect(screen.getByText(/Reconciliation recorded: inconclusive/i)).toBeVisible();
+    expect(screen.getByText(/Result check saved: Not sure/i)).toBeVisible();
   });
 });

@@ -134,19 +134,18 @@ export function CustomerPortalOfficeAccess({
           </span>
           <div className="min-w-0">
             <h2 id="customer-access-heading" className="text-lg font-bold tracking-[-0.02em]">
-              Customer access
+              Customer link
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Issue a time-limited project link only when you are ready to share it. The raw link is
-              shown once, then cannot be recovered from IronWrap OS.
+              Make a private project link only when it is ready to share. You can copy the new link
+              once.
             </p>
           </div>
         </div>
 
         {offline ? (
-          <AccessNotice tone="warning" title="Customer links are unavailable offline.">
-            Reconnect to inspect or change access. No link was issued or revoked from this saved
-            session.
+          <AccessNotice tone="warning" title="Customer links need the internet.">
+            Go online to view or change links. Nothing changed.
           </AccessNotice>
         ) : query.isPending ? (
           <div
@@ -154,8 +153,8 @@ export function CustomerPortalOfficeAccess({
             aria-busy="true"
           />
         ) : query.isError ? (
-          <AccessNotice tone="warning" title="Customer access could not be read.">
-            No link was changed. Refresh the current access record before issuing a replacement.
+          <AccessNotice tone="warning" title="We could not load customer links.">
+            Nothing changed. Load the list again before you make a new link.
             <Button
               type="button"
               variant="outline"
@@ -164,7 +163,7 @@ export function CustomerPortalOfficeAccess({
               onClick={() => void query.refetch()}
             >
               <RefreshCw aria-hidden="true" />
-              Refresh access
+              Load links
             </Button>
           </AccessNotice>
         ) : (
@@ -172,9 +171,8 @@ export function CustomerPortalOfficeAccess({
             <AccessLedger links={links} locale={locale} onRevoke={startRevoke} />
 
             {revokeCandidate ? (
-              <AccessNotice tone="danger" title="Revoke this customer link?">
-                This ends access immediately. A replacement must be issued deliberately if the
-                customer still needs the portal.
+              <AccessNotice tone="danger" title="Turn off this customer link?">
+                This ends access now. Make a new link if the customer still needs the project page.
                 <div className="mt-3 flex flex-wrap gap-3">
                   <Button
                     type="button"
@@ -184,7 +182,7 @@ export function CustomerPortalOfficeAccess({
                     onClick={confirmRevoke}
                   >
                     <ShieldOff aria-hidden="true" />
-                    Revoke link
+                    Turn off link
                   </Button>
                   <Button
                     type="button"
@@ -200,18 +198,17 @@ export function CustomerPortalOfficeAccess({
             ) : null}
 
             {revoke.isError ? (
-              <AccessNotice tone="danger" title="The link was not revoked.">
-                Reconnect and re-read this access record before trying again.
+              <AccessNotice tone="danger" title="The link is still on.">
+                Go online and load the link list before you try again.
               </AccessNotice>
             ) : null}
 
             <form className="mt-5 border-t border-border pt-5" onSubmit={submitIssue}>
               <label htmlFor="customer-portal-expiry" className="text-sm font-bold text-foreground">
-                Access expires at
+                Link ends
               </label>
               <p id="customer-portal-expiry-help" className="mt-1 text-sm leading-6 text-muted">
-                Choose the exact local expiry. Issuing a new link revokes any active link for this
-                project.
+                Pick a local date and time. A new link turns off the old link for this job.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <Input
@@ -231,7 +228,7 @@ export function CustomerPortalOfficeAccess({
                   disabled={!hasValidExpiry || revoke.isPending}
                 >
                   <KeyRound aria-hidden="true" />
-                  {activeLink ? "Replace active link" : "Issue customer link"}
+                  {activeLink ? "Replace link" : "Make customer link"}
                 </Button>
               </div>
             </form>
@@ -239,15 +236,11 @@ export function CustomerPortalOfficeAccess({
             {issueError ? (
               <AccessNotice
                 tone="danger"
-                title={
-                  issueError === "expiry"
-                    ? "Choose a current customer-access expiry."
-                    : "The link was not issued."
-                }
+                title={issueError === "expiry" ? "Pick a new end time." : "The link was not made."}
               >
                 {issueError === "expiry"
-                  ? "The selected time is no longer within the one-hour to 90-day access window. Choose a new expiry before issuing a link."
-                  : "Check the selected expiry, then re-read this project before trying again. No link can be inferred from an incomplete request."}
+                  ? "Pick a time from one hour to 90 days from now."
+                  : "Check the end time. Then load this job again before you try. Nothing changed."}
               </AccessNotice>
             ) : null}
 
@@ -258,7 +251,7 @@ export function CustomerPortalOfficeAccess({
                   <div className="min-w-0">
                     <p className="font-bold text-foreground">Copy the new customer link now.</p>
                     <p className="mt-1 text-sm leading-6 text-muted">
-                      This raw bearer link is not saved in the office record or browser history.
+                      The full link is not saved here or in your browser history.
                     </p>
                   </div>
                 </div>
@@ -281,7 +274,7 @@ export function CustomerPortalOfficeAccess({
                 </div>
                 {copyState === "failed" ? (
                   <p className="mt-2 text-sm font-semibold text-warning">
-                    Clipboard access was unavailable. Select and copy the displayed link manually.
+                    Copy did not work. Select the link and copy it.
                   </p>
                 ) : null}
               </div>
@@ -305,7 +298,7 @@ function AccessLedger({
   if (links.length === 0) {
     return (
       <p className="mt-5 border border-border bg-surface-muted/45 px-4 py-3 text-sm leading-6 text-muted">
-        No customer portal link has been issued for this project.
+        No customer link has been made for this job.
       </p>
     );
   }
@@ -322,7 +315,7 @@ function AccessLedger({
               <div className="min-w-0">
                 <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-foreground">
                   <AccessState state={state} />
-                  <span>{state === "active" ? "Current customer access" : "Recorded access"}</span>
+                  <span>{state === "active" ? "Current customer link" : "Old customer link"}</span>
                 </p>
                 <dl className="mt-2 grid gap-x-5 gap-y-1 text-sm leading-6 text-muted sm:grid-cols-2">
                   <div>
@@ -362,7 +355,7 @@ function AccessLedger({
                   onClick={() => onRevoke(link)}
                 >
                   <ShieldOff aria-hidden="true" />
-                  Revoke access
+                  Turn off access
                 </Button>
               ) : null}
             </div>

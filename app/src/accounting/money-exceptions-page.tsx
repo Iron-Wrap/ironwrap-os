@@ -7,9 +7,10 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
-import { Notice } from "../service/service-notice";
 import {
   loadAccountingExceptions,
   newAccountingActionKey,
@@ -111,12 +112,12 @@ function MoneyExceptionsContent() {
     },
   });
 
-  if (!query.data && query.isPending) return <LoadingState label="Loading the exception queue…" />;
+  if (!query.data && query.isPending) return <LoadingState label="Loading money issues…" />;
   if (!query.data) {
     return (
       <ErrorState
-        title="Exception queue unavailable"
-        message="Nothing was resolved or changed. Reconnect and re-open the queue before deciding anything."
+        title="Money issues are unavailable"
+        message="Nothing was changed. Reconnect and open this page again."
         onRetry={() => void query.refetch()}
         action={<BackToDesk />}
       />
@@ -141,11 +142,10 @@ function MoneyExceptionsContent() {
                 Accounting
               </p>
               <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Exceptions
+                Money issues
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Findings that need a person. Each one names only the remedies QuickBooks actually
-                supports — there is never a delete.
+                See what needs your help. Each issue shows only safe choices.
               </p>
             </div>
           </div>
@@ -164,18 +164,18 @@ function MoneyExceptionsContent() {
       </header>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect before resolving anything">
-          Resolutions are never queued offline.
+        <Notice tone="warning" title="Reconnect before you decide">
+          IronWrap must reach the server before you can close an issue.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Nothing was resolved">
+        <Notice tone="danger" title="Nothing was changed">
           {actionError}
         </Notice>
       ) : null}
       {resolved ? (
-        <Notice tone="success" title="Exception closed">
-          The remedy you performed is recorded against the exception. Nothing was deleted.
+        <Notice tone="success" title="Issue closed">
+          Your choice is saved. Nothing was deleted.
         </Notice>
       ) : null}
 
@@ -186,12 +186,12 @@ function MoneyExceptionsContent() {
           checked={showResolved}
           onChange={(event) => setShowResolved(event.target.checked)}
         />
-        Include already-closed exceptions
+        Include closed issues
       </label>
 
       {exceptions.length === 0 ? (
         <p className="border border-border bg-surface px-4 py-6 text-sm leading-6 text-muted sm:px-6">
-          Nothing needs a decision. Every finding has been answered.
+          Nothing needs your help. All money issues are closed.
         </p>
       ) : (
         <ul className="space-y-4">
@@ -250,75 +250,79 @@ function ExceptionCard({
             params={{ intentId: exception.intent_id }}
             className="mt-2 inline-flex min-h-12 items-center font-bold underline underline-offset-4"
           >
-            Open the money movement
+            Open the money item
           </Link>
         ) : null}
       </div>
 
-      <dl className="divide-y divide-border">
-        <div className="px-4 py-3 sm:px-6">
-          <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-            Our fingerprint
-          </dt>
-          <dd className="mt-1">
-            <code className="break-all text-xs">{exception.expected_sha256 ?? "—"}</code>
-          </dd>
-        </div>
-        <div className="px-4 py-3 sm:px-6">
-          <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-            QuickBooks fingerprint
-          </dt>
-          <dd className="mt-1">
-            <code className="break-all text-xs">{exception.observed_sha256 ?? "—"}</code>
-          </dd>
-        </div>
-      </dl>
+      <details className="border-b border-border">
+        <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold sm:px-6">
+          System check
+        </summary>
+        <dl className="divide-y divide-border border-t border-border">
+          <div className="px-4 py-3 sm:px-6">
+            <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+              Our check code
+            </dt>
+            <dd className="mt-1">
+              <code className="break-all text-xs">{exception.expected_sha256 ?? "—"}</code>
+            </dd>
+          </div>
+          <div className="px-4 py-3 sm:px-6">
+            <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+              QuickBooks check code
+            </dt>
+            <dd className="mt-1">
+              <code className="break-all text-xs">{exception.observed_sha256 ?? "—"}</code>
+            </dd>
+          </div>
+        </dl>
+      </details>
 
       {canResolve ? (
         <div className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:px-6">
           {reversals.length > 0 ? (
             <p className="text-sm leading-6 text-muted">
-              To put the money back, authorize {orList(reversals)} on the money movement above. We
-              send it to QuickBooks and close this on the entry QuickBooks gives back — there is
-              nothing to type in here.
+              To put money back, open the money item above and approve {orList(reversals)}. IronWrap
+              will send it to QuickBooks. There is nothing to type here.
             </p>
           ) : null}
           {byHand.length > 0 ? (
             <p className="text-sm leading-6 text-muted">
-              {orList(byHand)} still has to be done in QuickBooks by hand. We cannot record it as
-              done here, because we have no way to check that it happened.
+              Do this by hand: {orList(byHand)}. IronWrap cannot mark it done because it cannot
+              check the work.
             </p>
           ) : null}
           {recordable.length === 0 ? (
             <p className="text-sm leading-6 text-muted">
-              Nothing can be closed from this screen for this finding.
+              You cannot close this issue from this page.
             </p>
           ) : (
             <>
               <label className="text-sm font-bold" htmlFor={remedyFieldId}>
-                What was done about it
+                What did you do?
               </label>
-              <select
+              <Select
                 id={remedyFieldId}
-                className="min-h-14 w-full rounded-md border border-border bg-surface px-3 text-base"
+                className="min-h-14 rounded-md bg-surface"
                 value={remedy}
                 disabled={busy}
                 onChange={(event) => setRemedy(event.target.value as AccountingRemedy)}
               >
-                <option value="">Choose a remedy</option>
+                <option value="">Choose an answer</option>
                 {recordable.map((option) => (
                   <option key={option} value={option}>
                     {remedyLabel(option)}
                   </option>
                 ))}
-              </select>
+              </Select>
               <Button
                 type="button"
                 className="min-h-14 w-full"
                 disabled={submitDisabled}
                 onClick={() => remedy !== "" && onResolve(remedy)}
               >
-                Close this exception
+                Close this issue
               </Button>
             </>
           )}
@@ -341,7 +345,7 @@ function BackToDesk() {
 }
 
 function messageFor(error: unknown): string {
-  if (!(error instanceof ApiError)) return "The exception was not closed.";
+  if (!(error instanceof ApiError)) return "The issue was not closed.";
   const messages: Record<string, string> = {
     accounting_exception_compensating_effect_required:
       "A remedy that moves money is authorized on the money movement, not closed from here.",
@@ -356,10 +360,10 @@ function messageFor(error: unknown): string {
     accounting_exception_remedy_dispatch_unavailable:
       "IronWrap cannot perform that remedy yet, so it cannot record it as done.",
     accounting_exception_transition_invalid:
-      "This exception was already answered by somebody else. Refresh to see how.",
+      "Someone else already closed this issue. Refresh to see what they did.",
     accounting_exception_resolution_invalid:
       "That is not a remedy this finding offers. Pick one from the list.",
     csrf_failed: "Your session needs refreshing. Reload the page and try again.",
   };
-  return messages[error.code] ?? "The exception was not closed, and nothing was changed.";
+  return messages[error.code] ?? "The issue was not closed. Nothing was changed.";
 }

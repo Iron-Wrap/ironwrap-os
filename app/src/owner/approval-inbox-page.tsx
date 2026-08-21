@@ -17,7 +17,10 @@ import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import {
   approveApproval,
@@ -110,12 +113,12 @@ function ApprovalInboxContent() {
       setReconciliationEvidence("");
       setNotice(
         action.kind === "reconcile"
-          ? "Reconciliation was recorded. No second write was issued."
+          ? "The result check was saved. No lead was changed again."
           : action.kind === "reject"
-            ? "The request was rejected. No broker write was started."
+            ? "The request was turned down. No lead was changed."
             : result.approval.state === "executed"
-              ? "Triage recorded with its Hermes Run."
-              : "The decision state changed. Review the recorded outcome.",
+              ? "The lead check and save record are ready."
+              : "The saved state changed. Check it before you do more.",
       );
     },
     onError: (error) => {
@@ -131,8 +134,8 @@ function ApprovalInboxContent() {
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Approval inbox unavailable"
-        message="No approval was changed. Reconnect to inspect the current recorded state before deciding anything."
+        title="Reviews could not load"
+        message="Nothing changed. Check your link, then load the saved list again."
         onRetry={() => void query.refetch()}
       />
     );
@@ -167,64 +170,69 @@ function ApprovalInboxContent() {
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <ShieldCheck className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                Human review
-              </p>
-              <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Approvals
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Review an exact diff before one bounded write. This queue never sends a customer
-                message, changes lead transport, or touches a quote or accounting record.
-              </p>
+    <section className="mx-auto max-w-7xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <ShieldCheck className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Owner review
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  Lead reviews
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Check one lead note before IronWrap saves it. Customer messages, quotes, and money
+                  records stay out.
+                </p>
+              </div>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            disabled={query.isFetching}
-            busy={query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            <RefreshCw aria-hidden="true" />
-            Refresh
-          </Button>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
+            </p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {model.approvals.length === 0
+                ? "No lead reviews"
+                : `${model.approvals.length} ${model.approvals.length === 1 ? "lead review" : "lead reviews"}`}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Open each card and check the note before you choose.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="compact"
+              className="mt-5"
+              disabled={query.isFetching}
+              busy={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              <RefreshCw aria-hidden="true" />
+              Load again
+            </Button>
+          </div>
+        </header>
+      </Card>
 
-      <ApprovalSummary approvals={model.approvals} />
+      <Card className="overflow-hidden">
+        <ApprovalSummary approvals={model.approvals} />
+      </Card>
 
       {offline ? (
-        <section
-          className="border-l-4 border-warning bg-warning-soft px-4 py-4 text-sm leading-6"
-          role="status"
-        >
-          <p className="font-bold">Reconnect before deciding</p>
-          <p className="mt-1 text-muted">
-            Approval decisions are never queued offline or retried by this app. The last known
-            review state remains visible.
-          </p>
-        </section>
+        <Notice tone="warning" title="Go online before you choose">
+          IronWrap will not save this choice while you are offline. The last saved state stays here.
+        </Notice>
       ) : null}
       {query.isError ? (
-        <section
-          className="border-l-4 border-warning bg-warning-soft px-4 py-4 text-sm leading-6"
-          role="status"
-        >
-          <p className="font-bold">Showing the last recorded inbox read.</p>
-          <p className="mt-1 text-muted">
-            Refresh before deciding if a connection warning remains.
-          </p>
-        </section>
+        <Notice tone="warning" title="This may be an old list">
+          Load the list again before you choose.
+        </Notice>
       ) : null}
       {notice ? (
         <p className="sr-only" aria-live="polite">
@@ -232,27 +240,23 @@ function ApprovalInboxContent() {
         </p>
       ) : null}
       {actionError ? (
-        <section
-          className="border-l-4 border-danger bg-danger-soft px-4 py-4 text-sm leading-6"
-          role="alert"
-        >
-          <p className="font-bold">The decision was not confirmed</p>
-          <p className="mt-1 text-muted">{actionError}</p>
-        </section>
+        <Notice tone="danger" title="Your choice was not saved">
+          {actionError}
+        </Notice>
       ) : null}
 
       {model.approvals.length === 0 ? (
         <Card className="p-6 text-center sm:p-8">
           <FileCheck2 className="mx-auto size-7 text-ok" aria-hidden="true" />
           <h2 className="mt-4 text-xl font-bold tracking-[-0.025em]">
-            No approval requests are recorded
+            No lead reviews need a choice
           </h2>
           <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted">
-            Nothing is waiting for a decision in the available approval ledger.
+            New lead notes will show here when they need an owner check.
           </p>
         </Card>
       ) : (
-        <ol className="space-y-5" aria-label="Approval requests">
+        <ol className="space-y-5" aria-label="Lead review requests">
           {model.approvals.map((approval) => (
             <li key={approval.id}>
               <ApprovalCard
@@ -307,11 +311,17 @@ function ApprovalSummary({ approvals }: { approvals: ApprovalRequest[] }) {
   const recording = approvals.filter((approval) => approval.state === "executing").length;
   const uncertain = approvals.filter((approval) => approval.state === "execution_uncertain").length;
   return (
-    <dl className="grid grid-cols-3 border-y border-border" aria-label="Approval queue state">
+    <dl className="grid sm:grid-cols-3" aria-label="Lead review list state">
       <SummaryMetric label="Needs review" value={pending} tone="text-warning" dot="bg-warning" />
-      <SummaryMetric label="Recording" value={recording} tone="text-info" dot="bg-info" bordered />
       <SummaryMetric
-        label="Reconcile"
+        label="Being saved"
+        value={recording}
+        tone="text-info"
+        dot="bg-info"
+        bordered
+      />
+      <SummaryMetric
+        label="Needs a check"
         value={uncertain}
         tone="text-danger"
         dot="bg-danger"
@@ -336,7 +346,7 @@ function SummaryMetric({
 }) {
   return (
     <div
-      className={`min-h-20 px-3 py-3 sm:min-h-24 sm:px-5 sm:py-4 ${bordered ? "border-l border-border" : ""}`}
+      className={`min-h-20 px-5 py-4 sm:min-h-24 ${bordered ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
     >
       <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
         <span className={`size-2 rounded-full ${dot}`} aria-hidden="true" />
@@ -423,7 +433,7 @@ function ApprovalCard({
             </span>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <CardTitle id={titleId}>Local lead triage</CardTitle>
+                <CardTitle id={titleId}>Lead check</CardTitle>
                 <span
                   className={`inline-flex items-center gap-1.5 text-sm font-bold ${state.labelTone}`}
                 >
@@ -432,25 +442,24 @@ function ApprovalCard({
                 </span>
               </div>
               <CardDescription className="mt-1">
-                {approval.target.doctype} · {approval.target.lead_envelope_id}
+                Check one saved note before it is added.
               </CardDescription>
             </div>
           </div>
-          <p className="text-sm font-semibold text-muted">Recorded {created}</p>
+          <p className="text-sm font-semibold text-muted">Asked {created}</p>
         </div>
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
         <ScopeFence />
         {approval.preview ? <TriageDiff preview={approval.preview} /> : <PreviewUnavailable />}
-        <p className="text-sm leading-6 text-muted">{approval.request_text}</p>
-        <ApprovalMetadata approval={approval} locale={locale} expiration={expiration} />
+        <ApprovalSystemDetails approval={approval} locale={locale} expiration={expiration} />
         <ApprovalStateNotice approval={approval} />
 
         {approval.state === "pending" && !approveVisible && !rejectVisible ? (
           <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
             {offline
-              ? "Reconnect before deciding. This decision is not queued on this device."
-              : "Waiting for the server-designated approver. This view cannot grant decision authority."}
+              ? "Go online before you choose. IronWrap will not save this choice on this device."
+              : "Waiting for the right owner. You can read this request, but you cannot choose."}
           </p>
         ) : null}
 
@@ -467,7 +476,7 @@ function ApprovalCard({
                 onClick={onApprove}
               >
                 <CheckCircle2 aria-hidden="true" />
-                Approve local triage
+                Save lead check
               </Button>
             ) : null}
             {rejectVisible ? (
@@ -480,30 +489,30 @@ function ApprovalCard({
                 onClick={onOpenReject}
               >
                 <XCircle aria-hidden="true" />
-                Reject
+                Turn down
               </Button>
             ) : null}
           </div>
         ) : null}
 
         {approval.state === "pending" && rejecting ? (
-          <section className="border-t border-border pt-5" aria-label="Reject local triage">
+          <section className="border-t border-border pt-5" aria-label="Turn down lead check">
             <label
               className="block text-sm font-extrabold"
               htmlFor={`reject-reason-${approval.id}`}
             >
-              Why should this local triage request be rejected?
+              Why should we stop this lead check?
             </label>
-            <textarea
+            <Textarea
               id={`reject-reason-${approval.id}`}
-              className="mt-3 min-h-28 w-full rounded-lg border bg-surface-raised p-4 text-base shadow-inner shadow-black/3 focus-visible:border-danger focus-visible:outline-danger"
+              className="mt-3 min-h-28 focus-visible:border-danger focus-visible:outline-danger"
               value={rejectionReason}
               maxLength={1_000}
-              placeholder="Record the reason for the durable rejection."
+              placeholder="Say what must be fixed before someone asks again."
               onChange={(event) => onReasonChange(event.target.value)}
             />
             <p className="mt-2 text-sm text-muted">
-              Rejection is durable and does not contact the customer or invoke the broker.
+              Turning it down does not contact the customer or change the lead.
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <Button type="button" variant="outline" disabled={acting} onClick={onCancelReject}>
@@ -517,7 +526,7 @@ function ApprovalCard({
                 onClick={onReject}
               >
                 <XCircle aria-hidden="true" />
-                Reject local triage
+                Turn down lead check
               </Button>
             </div>
           </section>
@@ -534,22 +543,22 @@ function ApprovalCard({
               onClick={onOpenReconcile}
             >
               <FileCheck2 aria-hidden="true" />
-              Record reconciliation
+              Check saved result
             </Button>
           </div>
         ) : null}
 
         {reconcileVisible && reconciling ? (
-          <section className="border-t border-border pt-5" aria-label="Record reconciliation">
+          <section className="border-t border-border pt-5" aria-label="Check saved result">
             <label
               className="block text-sm font-extrabold"
               htmlFor={`reconciliation-outcome-${approval.id}`}
             >
-              What did the recorded Hermes Run prove?
+              What happened?
             </label>
-            <select
+            <Select
               id={`reconciliation-outcome-${approval.id}`}
-              className="mt-3 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base font-semibold"
+              className="mt-3 min-h-14 px-4 font-semibold"
               value={reconciliationOutcome}
               onChange={(event) => {
                 const outcome = event.target.value;
@@ -562,30 +571,26 @@ function ApprovalCard({
                 }
               }}
             >
-              <option value="inconclusive">Inconclusive — run cannot yet be proven</option>
-              <option value="executed">
-                Executed — recorded run proves the local triage write
-              </option>
-              <option value="not_executed">
-                Not executed — recorded run proves no local triage write
-              </option>
-            </select>
+              <option value="inconclusive">Not sure</option>
+              <option value="executed">Lead check was saved</option>
+              <option value="not_executed">Lead check was not saved</option>
+            </Select>
             <label
               className="mt-4 block text-sm font-extrabold"
               htmlFor={`reconciliation-evidence-${approval.id}`}
             >
-              Reconciliation evidence
+              What did you check?
             </label>
-            <textarea
+            <Textarea
               id={`reconciliation-evidence-${approval.id}`}
-              className="mt-3 min-h-28 w-full rounded-lg border bg-surface-raised p-4 text-base shadow-inner shadow-black/3 focus-visible:border-warning focus-visible:outline-warning"
+              className="mt-3 min-h-28 focus-visible:border-warning focus-visible:outline-warning"
               value={reconciliationEvidence}
               maxLength={1_000}
-              placeholder="State the Hermes Run or audit evidence you compared."
+              placeholder="Say what you checked and why no new lead change is needed."
               onChange={(event) => onReconciliationEvidenceChange(event.target.value)}
             />
             <p className="mt-2 text-sm text-muted">
-              This records audit evidence only. It does not reopen or retry the protected write.
+              This saves your check only. It does not try the lead change again.
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <Button type="button" variant="outline" disabled={acting} onClick={onCancelReconcile}>
@@ -599,7 +604,7 @@ function ApprovalCard({
                 onClick={onReconcile}
               >
                 <FileCheck2 aria-hidden="true" />
-                Record reconciliation
+                Save result check
               </Button>
             </div>
           </section>
@@ -609,7 +614,7 @@ function ApprovalCard({
         !approval.reconciliation &&
         !reconcileVisible ? (
           <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
-            Only the server-designated owner can record reconciliation evidence for this request.
+            Only the right owner can save this result check.
           </p>
         ) : null}
       </CardContent>
@@ -620,12 +625,12 @@ function ApprovalCard({
 function ScopeFence() {
   return (
     <section
-      className="border-l-4 border-info bg-info-soft px-4 py-3 text-sm leading-6"
-      aria-label="Approval scope"
+      className="rounded-lg border border-ok/25 bg-ok-soft/45 px-4 py-4 text-sm leading-6"
+      aria-label="What stays out"
     >
-      <p className="font-bold">Bounded scope</p>
+      <p className="font-bold">What stays out</p>
       <p className="mt-1 text-muted">
-        No customer message. Transport unchanged. No quote or accounting change.
+        No customer message. Lead delivery stays the same. Quotes and money records do not change.
       </p>
     </section>
   );
@@ -633,30 +638,30 @@ function ScopeFence() {
 
 function TriageDiff({ preview }: { preview: NonNullable<ApprovalRequest["preview"]> }) {
   return (
-    <section aria-label="Exact proposed change">
+    <section aria-label="What will change">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted">
-          Exact proposed change
+          What will change
         </h3>
-        <span className="text-sm font-semibold text-muted">Preview only · no write yet</span>
+        <span className="text-sm font-semibold text-muted">Check only · not saved yet</span>
       </div>
       <div className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-2">
         <DiffColumn
-          title="Before"
+          title="Now"
           tone="bg-surface-muted"
           rows={[
-            ["Triage status", preview.before.triage_status ?? "Not recorded"],
-            ["Triage summary", preview.before.triage_summary ?? "Not recorded"],
-            ["Triaged by", preview.before.triaged_by ?? "Not recorded"],
+            ["Lead status", leadStatus(preview.before.triage_status)],
+            ["Lead note", preview.before.triage_summary ?? "Not saved"],
+            ["Checked by", preview.before.triaged_by ?? "Not saved"],
           ]}
         />
         <DiffColumn
-          title="Proposed"
+          title="After"
           tone="bg-ok-soft/45"
           rows={[
-            ["Triage status", preview.patch.triage_status],
-            ["Triage summary", preview.patch.triage_summary],
-            ["Triaged by", preview.patch.triaged_by],
+            ["Lead status", leadStatus(preview.patch.triage_status)],
+            ["Lead note", preview.patch.triage_summary],
+            ["Checked by", preview.patch.triaged_by],
           ]}
         />
       </div>
@@ -675,7 +680,7 @@ function DiffColumn({
 }) {
   return (
     <section
-      className={`${tone} p-4 ${title === "Proposed" ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
+      className={`${tone} p-4 ${title === "After" ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
     >
       <h4 className="font-extrabold">{title}</h4>
       <dl className="mt-3 space-y-3 text-sm leading-6">
@@ -696,15 +701,15 @@ function PreviewUnavailable() {
       className="border-l-4 border-warning bg-warning-soft px-4 py-3 text-sm leading-6"
       role="status"
     >
-      <p className="font-bold">Preview is unavailable</p>
+      <p className="font-bold">The change could not load</p>
       <p className="mt-1 text-muted">
-        This request cannot be approved from this view until its exact preview is present.
+        Do not choose yet. Load the request again so you can see the full change.
       </p>
     </section>
   );
 }
 
-function ApprovalMetadata({
+function ApprovalSystemDetails({
   approval,
   locale,
   expiration,
@@ -717,23 +722,32 @@ function ApprovalMetadata({
     ? formatOwnerDate(approval.approved_by.approved_at, locale)
     : null;
   return (
-    <dl className="grid gap-x-6 gap-y-3 border-t border-border pt-4 text-sm leading-5 sm:grid-cols-2">
-      <Metadata
-        label="Requested by"
-        value={approval.requested_by.frappe_user ?? approval.requested_by.user_id}
-      />
-      <Metadata label="Preview expires" value={expiration} />
-      {approval.approved_by ? (
-        <Metadata label="Decision by" value={approval.approved_by.frappe_user} />
-      ) : null}
-      {approvedAt ? <Metadata label="Decision recorded" value={approvedAt} /> : null}
-      {approval.hermes_run_id ? (
-        <Metadata label="Hermes Run" value={approval.hermes_run_id} mono />
-      ) : null}
-      {approval.rejection_reason ? (
-        <Metadata label="Rejection reason" value={approval.rejection_reason} />
-      ) : null}
-    </dl>
+    <details className="rounded-lg border border-border bg-surface-raised">
+      <summary className="min-h-14 cursor-pointer px-4 py-4 font-bold">System details</summary>
+      <dl className="grid gap-x-6 gap-y-4 border-t border-border px-4 py-4 text-sm leading-5 sm:grid-cols-2">
+        <Metadata label="Request ID" value={approval.id} mono />
+        <Metadata label="Lead ID" value={approval.target.lead_envelope_id} mono />
+        <Metadata
+          label="Asked by"
+          value={approval.requested_by.frappe_user ?? approval.requested_by.user_id}
+        />
+        <Metadata label="Review ends" value={expiration} />
+        <Metadata label="Request note" value={approval.request_text} />
+        {approval.approved_by ? (
+          <Metadata label="Choice by" value={approval.approved_by.frappe_user} />
+        ) : null}
+        {approvedAt ? <Metadata label="Choice saved" value={approvedAt} /> : null}
+        {approval.hermes_run_id ? (
+          <Metadata label="Save record" value={approval.hermes_run_id} mono />
+        ) : null}
+        {approval.rejection_reason ? (
+          <Metadata label="Turn-down note" value={approval.rejection_reason} />
+        ) : null}
+        {approval.error_code ? (
+          <Metadata label="Error code" value={approval.error_code} mono />
+        ) : null}
+      </dl>
+    </details>
   );
 }
 
@@ -764,12 +778,12 @@ function ApprovalStateNotice({ approval }: { approval: ApprovalRequest }) {
   ) {
     return (
       <section
-        className="border-l-4 border-ok bg-ok-soft px-4 py-3 text-sm leading-6"
+        className="rounded-lg border border-ok/25 bg-ok-soft px-4 py-4 text-sm leading-6"
         role="status"
       >
-        <p className="font-bold">Triage recorded</p>
+        <p className="font-bold">Lead check saved</p>
         <p className="mt-1 text-muted">
-          The protected write and Hermes Run are recorded. No customer communication was changed.
+          The lead note and save record are ready. No customer message changed.
         </p>
       </section>
     );
@@ -777,21 +791,21 @@ function ApprovalStateNotice({ approval }: { approval: ApprovalRequest }) {
   if (approval.state === "execution_uncertain") {
     return (
       <section
-        className="border-l-4 border-warning bg-warning-soft px-4 py-3 text-sm leading-6"
+        className="rounded-lg border border-warning/30 bg-warning-soft px-4 py-4 text-sm leading-6"
         role="alert"
       >
-        <p className="font-bold">Do not retry this request</p>
+        <p className="font-bold">Do not try this request again</p>
         {approval.reconciliation ? (
           <>
             <p className="mt-1 text-muted">
-              Reconciliation recorded: {approval.reconciliation.outcome}.
+              Result check saved: {resultLabel(approval.reconciliation.outcome)}.
             </p>
             <p className="mt-1 text-muted">{approval.reconciliation.evidence}</p>
           </>
         ) : (
           <p className="mt-1 text-muted">
-            The broker result could not be proven. Check the recorded Hermes Run and reconcile the
-            immutable request; a second write is not issued automatically.
+            We could not tell if the lead check was saved. Check the save record before you do
+            anything else.
           </p>
         )}
       </section>
@@ -800,12 +814,12 @@ function ApprovalStateNotice({ approval }: { approval: ApprovalRequest }) {
   if (approval.state === "executing") {
     return (
       <section
-        className="border-l-4 border-info bg-info-soft px-4 py-3 text-sm leading-6"
+        className="rounded-lg border border-info/30 bg-info-soft px-4 py-4 text-sm leading-6"
         role="status"
       >
-        <p className="font-bold">Decision is being recorded</p>
+        <p className="font-bold">Saving the lead check</p>
         <p className="mt-1 text-muted">
-          Keep this request open until the ledger returns a terminal outcome.
+          Keep this request open until IronWrap shows a saved result.
         </p>
       </section>
     );
@@ -813,25 +827,23 @@ function ApprovalStateNotice({ approval }: { approval: ApprovalRequest }) {
   if (approval.state === "expired") {
     return (
       <section
-        className="border-l-4 border-warning bg-warning-soft px-4 py-3 text-sm leading-6"
+        className="rounded-lg border border-warning/30 bg-warning-soft px-4 py-4 text-sm leading-6"
         role="status"
       >
-        <p className="font-bold">Preview expired</p>
-        <p className="mt-1 text-muted">
-          A new preview is required before a local triage write can be approved.
-        </p>
+        <p className="font-bold">Review ended</p>
+        <p className="mt-1 text-muted">Ask for a new review before this lead note can be saved.</p>
       </section>
     );
   }
   if (approval.state === "failed" || approval.state === "audit_failed") {
     return (
       <section
-        className="border-l-4 border-danger bg-danger-soft px-4 py-3 text-sm leading-6"
+        className="rounded-lg border border-danger/30 bg-danger-soft px-4 py-4 text-sm leading-6"
         role="status"
       >
-        <p className="font-bold">No completed lead triage was proven</p>
+        <p className="font-bold">Lead check was not saved</p>
         <p className="mt-1 text-muted">
-          Review the recorded error and Hermes Run before preparing a new request.
+          Open System details and check the saved error before you ask again.
         </p>
       </section>
     );
@@ -858,7 +870,7 @@ function approvalState(approval: ApprovalRequest): {
     };
   if (approval.state === "executing")
     return {
-      label: "Recording",
+      label: "Being saved",
       Icon: Clock3,
       iconSurface: "bg-info-soft",
       iconTone: "text-info",
@@ -871,7 +883,7 @@ function approvalState(approval: ApprovalRequest): {
     approval.outcome.audit_finalized
   )
     return {
-      label: "Triage recorded",
+      label: "Lead check saved",
       Icon: CheckCircle2,
       iconSurface: "bg-ok-soft",
       iconTone: "text-ok",
@@ -880,7 +892,7 @@ function approvalState(approval: ApprovalRequest): {
     };
   if (approval.state === "execution_uncertain")
     return {
-      label: "Needs reconciliation",
+      label: "Check needed",
       Icon: AlertTriangle,
       iconSurface: "bg-warning-soft",
       iconTone: "text-warning",
@@ -889,7 +901,7 @@ function approvalState(approval: ApprovalRequest): {
     };
   if (approval.state === "denied")
     return {
-      label: "Rejected",
+      label: "Turned down",
       Icon: XCircle,
       iconSurface: "bg-surface-muted",
       iconTone: "text-muted",
@@ -898,7 +910,7 @@ function approvalState(approval: ApprovalRequest): {
     };
   if (approval.state === "expired")
     return {
-      label: "Expired",
+      label: "Review ended",
       Icon: Clock3,
       iconSurface: "bg-surface-muted",
       iconTone: "text-muted",
@@ -906,7 +918,7 @@ function approvalState(approval: ApprovalRequest): {
       dot: "bg-muted",
     };
   return {
-    label: "Not completed",
+    label: "Not saved",
     Icon: AlertTriangle,
     iconSurface: "bg-danger-soft",
     iconTone: "text-danger",
@@ -926,35 +938,44 @@ function updateApproval(
   };
 }
 
+function resultLabel(outcome: "executed" | "not_executed" | "inconclusive"): string {
+  if (outcome === "executed") return "Lead check was saved";
+  if (outcome === "not_executed") return "Lead check was not saved";
+  return "Not sure";
+}
+
+function leadStatus(value: string | null | undefined): string {
+  if (value === "Triaged") return "Checked";
+  if (value === "Untriaged") return "Not checked";
+  return value ? "Other" : "Not saved";
+}
+
 function messageFor(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === "execution_uncertain") {
-      return "The broker result could not be proven. The request is now reconciliation work and will not be retried automatically.";
+      return "We could not tell if the lead check was saved. Do not try again. Check the saved result.";
     }
     if (error.code === "recent_session_required")
-      return "Start a fresh owner session before deciding this request.";
+      return "Sign in again as the owner before you choose.";
     if (error.code === "approval_version_conflict" || error.code === "approval_already_decided") {
-      return "This request changed while you were reviewing it. The inbox has been refreshed.";
+      return "This request changed while you read it. Check the new saved state before you choose.";
     }
     if (error.code === "approval_expired")
-      return "The preview expired before the decision. Prepare a fresh request.";
-    return (
-      error.message ||
-      "The decision was not confirmed. Refresh the recorded state before trying again."
-    );
+      return "This review ended before you chose. Ask for a new review.";
+    return "We could not save this choice. Load the saved list before you choose again.";
   }
-  return "The decision was not confirmed. Refresh the recorded state before trying again.";
+  return "We could not save this choice. Load the saved list before you choose again.";
 }
 
 function ApprovalInboxSkeleton() {
   return (
     <section
-      className="mx-auto max-w-6xl space-y-6"
+      className="mx-auto max-w-7xl space-y-6"
       aria-busy="true"
-      aria-label="Loading approval inbox"
+      aria-label="Loading lead reviews"
     >
-      <div className="h-32 border-b border-border bg-surface-muted/70" />
-      <div className="grid border-y border-border sm:grid-cols-3">
+      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
+      <div className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-3">
         {[0, 1, 2].map((index) => (
           <div
             key={index}
@@ -962,7 +983,7 @@ function ApprovalInboxSkeleton() {
           />
         ))}
       </div>
-      <div className="h-96 rounded-xl border bg-surface-muted/50" />
+      <div className="h-96 rounded-lg border border-border bg-surface-muted/50" />
     </section>
   );
 }

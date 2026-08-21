@@ -61,8 +61,8 @@ export function MaterialComparisonSection({
             <CardTitle>Materials and colours</CardTitle>
             <CardDescription>
               {selectable
-                ? "Compare the options your project team prepared, then tell them which you prefer."
-                : "The options your project team prepared for this project."}
+                ? "See your choices. Pick the one you like."
+                : "These are the choices for your job."}
             </CardDescription>
           </div>
         </div>
@@ -82,8 +82,8 @@ export function MaterialComparisonSection({
         </ul>
         {state.kind === "chosen" ? (
           <p className="mt-5 text-sm font-semibold leading-6 text-success" role="status">
-            You chose {state.label}. Your project team will follow up on the next steps — nothing is
-            billed or ordered from this choice.
+            You picked {state.label}. Your project team will call you. This does not order or bill
+            anything.
           </p>
         ) : null}
       </CardContent>
@@ -158,14 +158,14 @@ function OptionCard({
                 Chosen
               </>
             ) : pending ? (
-              "Saving your choice…"
+              "Saving choice…"
             ) : (
-              "Choose this option"
+              "Pick this option"
             )}
           </Button>
           {failed ? (
             <p className="mt-3 text-sm font-semibold text-danger" role="alert">
-              We could not save that choice. Please try again.
+              We could not save your choice. Try again.
             </p>
           ) : null}
         </>
@@ -203,11 +203,9 @@ function humanizeKey(key: string): string {
 }
 
 function formatDelta(value: number, currency: string | null): string {
-  if (value === 0) return "Included in your current price";
+  if (value === 0) return "In your current price";
   const formatted = formatMoney(Math.abs(value), currency);
-  return value > 0
-    ? `+${formatted} vs. your current price`
-    : `−${formatted} vs. your current price`;
+  return value > 0 ? `Costs ${formatted} more` : `Costs ${formatted} less`;
 }
 
 function formatMoney(value: number, currency: string | null): string {

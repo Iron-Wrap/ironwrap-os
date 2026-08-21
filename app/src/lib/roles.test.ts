@@ -12,6 +12,11 @@ describe("role-shaped navigation", () => {
     ]);
     expect(navigationForRole("owner")[0]?.to).toBe("/now");
     expect(navigationForRole("ops")[0]?.to).toBe("/now");
+    expect(roleLabel("field")).toBe("Crew");
+    expect(roleLabel("ops")).toBe("Operations");
+    expect(navigationForRole("owner").find((item) => item.to === "/facet-designs")?.label).toBe(
+      "Designs",
+    );
   });
 
   it("gives sales only its own daily surfaces", () => {

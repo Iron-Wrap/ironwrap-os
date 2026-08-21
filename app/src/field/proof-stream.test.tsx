@@ -6,8 +6,8 @@ import { ProofStream } from "./proof-stream";
 describe("ProofStream states", () => {
   it("announces an accessible empty state without inventing proof", () => {
     render(<ProofStream items={[]} hasMore={false} loadingMore={false} onLoadMore={vi.fn()} />);
-    expect(screen.getByRole("heading", { name: "No verified proof yet" })).toBeInTheDocument();
-    expect(screen.getByText(/only after the exact device action is verified/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No sent job proof yet" })).toBeInTheDocument();
+    expect(screen.getByText(/Photos, notes, and check-ins show here/i)).toBeInTheDocument();
   });
 
   it("renders only a bounded virtual window for more than 1,000 proof records", () => {
@@ -23,9 +23,9 @@ describe("ProofStream states", () => {
       blocker: false,
     }));
     render(<ProofStream items={items} hasMore loadingMore={false} onLoadMore={vi.fn()} />);
-    expect(screen.getByRole("feed", { name: "Job proof stream" })).toBeInTheDocument();
+    expect(screen.getByRole("feed", { name: "Job proof" })).toBeInTheDocument();
     expect(screen.getAllByRole("article").length).toBeLessThan(20);
-    expect(screen.getByRole("button", { name: "Load older proof" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("button", { name: "Show older proof" })).toHaveClass("min-h-16");
   });
 
   it("renders proof provenance and tenant-local time without inventing media detail", () => {
@@ -51,7 +51,7 @@ describe("ProofStream states", () => {
         timeZone="America/Edmonton"
       />,
     );
-    expect(screen.getByText(/10:00.*field_checkin.*Internal/i)).toBeVisible();
+    expect(screen.getByText(/10:00.*field_checkin.*Team only/i)).toBeVisible();
     expect(screen.queryByText(/preview|play media/i)).not.toBeInTheDocument();
   });
 });

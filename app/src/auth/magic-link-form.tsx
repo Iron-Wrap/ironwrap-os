@@ -1,7 +1,7 @@
 import { CheckCircle2, Mail } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
-import { apiCommand, ApiError } from "../lib/api";
+import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -26,12 +26,8 @@ export function MagicLinkForm() {
     try {
       await apiCommand({ path: API_PATHS.magicLinkRequest, body: { email } });
       setSent(true);
-    } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? caught.message
-          : "The sign-in email could not be requested. Check your connection and try again.",
-      );
+    } catch {
+      setError("We could not send the sign-in email. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -46,8 +42,8 @@ export function MagicLinkForm() {
           </div>
           <CardTitle>Check your email</CardTitle>
           <CardDescription>
-            If that address is active for IronWrap OS, a one-time sign-in link is on its way. The
-            link expires and can be used once.
+            If this email has access, we sent a one-time sign-in link. It works once and will end
+            soon.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -66,9 +62,7 @@ export function MagicLinkForm() {
           <Mail className="size-6" aria-hidden="true" />
         </div>
         <CardTitle>Sign in to IronWrap OS</CardTitle>
-        <CardDescription>
-          Use your approved work email. There is no password to remember or enter on site.
-        </CardDescription>
+        <CardDescription>Use your work email. You do not need a password.</CardDescription>
       </CardHeader>
       <CardContent>
         <form className="space-y-4" onSubmit={submit}>
@@ -95,10 +89,10 @@ export function MagicLinkForm() {
             ) : null}
           </div>
           <Button type="submit" variant="accent" size="field" fullWidth busy={busy}>
-            Email me a sign-in link
+            Send sign-in link
           </Button>
           <p className="text-xs leading-5 text-muted">
-            For privacy, this screen never confirms whether an email is registered.
+            For privacy, we do not say if an email has access.
           </p>
         </form>
       </CardContent>

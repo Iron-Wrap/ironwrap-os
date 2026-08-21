@@ -12,7 +12,7 @@ test.describe("Field Companion PWA acceptance", () => {
       if (url.pathname.startsWith("/api/v1/")) appRequests.push(url.pathname);
     });
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today", exact: true })).toBeVisible();
     await expect(page.locator("#app-boot-shell")).toHaveCount(0);
 
     await page.keyboard.press("Tab");
@@ -20,10 +20,10 @@ test.describe("Field Companion PWA acceptance", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#main-content")).toBeFocused();
 
-    await expect(page.getByRole("heading", { name: "Run sheet" })).toBeVisible();
-    await expect(page.getByText("1 gate blocks work")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
+    await expect(page.getByText("1 check blocks work")).toBeVisible();
     await expect(page.getByText("Delivery confirmation is missing")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Review gate and packet" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "Check what blocks work" })).toHaveAttribute(
       "href",
       "/jobs/JOB-ACCEPTANCE",
     );
@@ -32,7 +32,7 @@ test.describe("Field Companion PWA acceptance", () => {
     expect(appRequests).not.toContain("/api/v1/session");
     expect(appRequests).not.toContain("/api/v1/today");
 
-    const reviewAction = page.getByRole("link", { name: "Review gate and packet" });
+    const reviewAction = page.getByRole("link", { name: "Check what blocks work" });
     const bounds = await reviewAction.boundingBox();
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
@@ -52,7 +52,7 @@ test.describe("Field Companion PWA acceptance", () => {
   }) => {
     await seedPairedFieldDevice(page);
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today", exact: true })).toBeVisible();
 
     const manifestHref = await page.locator('link[rel="manifest"]').getAttribute("href");
     expect(manifestHref).toBeTruthy();
@@ -75,9 +75,9 @@ test.describe("Field Companion PWA acceptance", () => {
     await context.setOffline(true);
     await page.reload({ waitUntil: "domcontentloaded" });
 
-    await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
-    await expect(page.getByText("Offline snapshot", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Saved work remains queued/i)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today", exact: true })).toBeVisible();
+    await expect(page.getByText(/This is a saved copy for/i)).toBeVisible();
+    await expect(page.getByText(/Your saved work is safe/i)).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null))
       .toBe(true);
@@ -91,9 +91,7 @@ test.describe("Field Companion PWA acceptance", () => {
     await page.goto("/jobs/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
     await expect(page.getByText("v3 · Released")).toBeVisible();
-    await expect(
-      page.getByText(/Pending independent release by Production manager/i),
-    ).toBeVisible();
+    await expect(page.getByText(/Waiting for Production manager/i)).toBeVisible();
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then(Boolean)))
       .toBe(true);
@@ -102,15 +100,11 @@ test.describe("Field Companion PWA acceptance", () => {
     await context.setOffline(true);
     await page.reload({ waitUntil: "domcontentloaded" });
 
-    await expect(
-      page.getByText(/This is a saved package copy. It may be expired or superseded/i),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    await expect(page.getByText(/This is a saved copy from/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Start work from current packet" })).toHaveCount(
-      0,
-    );
-    await expect(page.getByText(/this app cannot release the hold point/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start work" })).toHaveCount(0);
+    await expect(page.getByText(/this app cannot clear the stop/i)).toBeVisible();
   });
 
   test("uses one proof-bound bootstrap read for an already paired field device", async ({
@@ -126,7 +120,7 @@ test.describe("Field Companion PWA acceptance", () => {
     });
 
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Run sheet" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(bootstrapRequests).toEqual([{ deviceProof }]);
   });
 
@@ -141,10 +135,8 @@ test.describe("Field Companion PWA acceptance", () => {
 
     await page.goto("/today");
 
-    await expect(
-      page.getByRole("heading", { name: "Pair this Field Companion device" }),
-    ).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Run sheet" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Pair this crew phone" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toHaveCount(0);
     expect(bootstrapRequests).toEqual([{ deviceProof: undefined }]);
   });
 });
@@ -154,9 +146,7 @@ async function seedPairedFieldDevice(
   proof = "a".repeat(43),
 ) {
   await page.goto("/today");
-  await expect(
-    page.getByRole("heading", { name: "Pair this Field Companion device" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pair this crew phone" })).toBeVisible();
   await page.evaluate(async (deviceProof) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("ironwrap-os");

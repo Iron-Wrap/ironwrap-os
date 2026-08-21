@@ -37,20 +37,20 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
     await expect(page.getByText("v3 · Released")).toBeVisible();
 
-    // 1. Acknowledge -- requires the review checkbox first, matches the real UI gate.
+    // 1. Review -- requires the review checkbox first, matching the real UI gate.
     await page.getByRole("checkbox").check();
-    await page.getByRole("button", { name: "Acknowledge this package" }).click();
-    await expect(page.getByText(/You acknowledged this exact package/i)).toBeVisible();
-    await expect(page.getByText("v3 · Acknowledged")).toBeVisible();
+    await page.getByRole("button", { name: "I reviewed this plan" }).click();
+    await expect(page.getByText(/You reviewed this work plan/i)).toBeVisible();
+    await expect(page.getByText("v3 · Reviewed")).toBeVisible();
 
     // 2. Start -- online-only direct command, not the offline outbox.
-    await page.getByRole("button", { name: "Start work from current packet" }).click();
+    await page.getByRole("button", { name: "Start work" }).click();
     await expect(page.getByText("v3 · In Progress")).toBeVisible();
-    await expect(page.getByText(/No capture recorded yet/i).first()).toBeVisible();
+    await expect(page.getByText(/No proof added yet/i).first()).toBeVisible();
 
     // 3. Capture evidence into the step:1 slot via the real check-in flow (multipart upload).
-    await page.getByRole("link", { name: "Capture evidence for step 1" }).click();
-    await expect(page.getByRole("heading", { name: "Capture what you see" })).toBeVisible();
+    await page.getByRole("link", { name: "Add proof for step 1" }).click();
+    await expect(page.getByRole("heading", { name: "Add job proof" })).toBeVisible();
     await page.setInputFiles('input[type="file"][accept*="image"]', {
       name: "anchor-inspection.jpg",
       mimeType: "image/jpeg",
@@ -59,13 +59,13 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await page.getByRole("button", { name: "Continue to review" }).click();
     await page.getByRole("button", { name: "Save on device" }).click();
     await expect(page.getByRole("heading", { name: "Check-in saved" })).toBeVisible();
-    await expect(page.getByText("Verified", { exact: true })).toBeVisible();
+    await expect(page.getByText("Sent", { exact: true })).toBeVisible();
 
-    await page.getByRole("link", { name: "Return to job packet" }).click();
+    await page.getByRole("link", { name: "Return to job" }).click();
     await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
     // Step 1's slot now reads back captured evidence; hold:1 was never captured, so
-    // exactly one "No capture recorded yet" placeholder remains (the hold point).
-    await expect(page.getByText(/No capture recorded yet/i)).toHaveCount(1);
+    // exactly one "No proof added yet" placeholder remains (the hold point).
+    await expect(page.getByText(/No proof added yet/i)).toHaveCount(1);
     await expect(page.getByText(/Open · Current · None/i)).toBeVisible();
 
     // 4. Complete -- only reachable once the server-side ledger (ack + start + evidence) agrees.
@@ -73,10 +73,8 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // FIELD_WORK_PACKAGE_CURRENT_STATUSES) only ever returns Released/Acknowledged/
     // In Progress, so a completed package reads back as no current package at all --
     // that is the state read-back that proves completion actually landed server-side.
-    await page.getByRole("button", { name: "Complete from current ledger" }).click();
-    await expect(
-      page.getByRole("heading", { name: "No current released Work Package" }),
-    ).toBeVisible();
+    await page.getByRole("button", { name: "Finish work" }).click();
+    await expect(page.getByRole("heading", { name: "No work plan is ready" })).toBeVisible();
   });
 
   test("safety: open the panel, submit a rescue call, see it reflected after reconnect", async ({
@@ -84,7 +82,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
   }) => {
     await seedPairedFieldDevice(page);
     await page.goto("/today");
-    await expect(page.getByRole("heading", { name: "Run sheet" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
 
     await page.locator("summary", { hasText: "Safety" }).click();
     await expect(page.getByRole("region", { name: /^safety$/i })).toBeVisible();
@@ -113,7 +111,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // now-mutated state through /api/v1/safety/panel -- proving the round trip, not
     // just the local outbox write.
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Run sheet" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
     await page.locator("summary", { hasText: "Safety" }).click();
     const stops = page.getByRole("list", { name: "Active safety stops" });
     await expect(stops).toBeVisible();
@@ -130,9 +128,7 @@ async function seedPairedFieldDevice(
   proof = "a".repeat(43),
 ) {
   await page.goto("/today");
-  await expect(
-    page.getByRole("heading", { name: "Pair this Field Companion device" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pair this crew phone" })).toBeVisible();
   await page.evaluate(async (deviceProof) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("ironwrap-os");
@@ -156,5 +152,5 @@ async function seedPairedFieldDevice(
     }
   }, proof);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Run sheet" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
 }

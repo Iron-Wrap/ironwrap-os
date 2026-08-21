@@ -113,7 +113,7 @@ export async function recoverOfflineSession(error: unknown): Promise<SessionResp
     throw new ApiError({
       status: 0,
       code: "offline_session_invalid",
-      message: "The saved sign-in could not be verified. Reconnect and sign in again.",
+      message: "We could not check the saved sign-in. Go online and sign in again.",
       cause: parsed.success ? undefined : parsed.error,
     });
   }

@@ -29,18 +29,17 @@ function FacetDesignContent() {
     retry: false,
   });
 
-  if (!query.data && query.isPending)
-    return <LoadingState label="Loading signed Facet decisions…" />;
+  if (!query.data && query.isPending) return <LoadingState label="Loading Facet designs…" />;
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Signed Facet evidence is unavailable"
-        message="No identity, project, or quote state was inferred. Reconnect and load the immutable v2 decision chain again."
+        title="Facet designs are unavailable"
+        message="Nothing was linked or changed. Reconnect and try again."
         onRetry={() => void query.refetch()}
       />
     );
   }
-  if (!query.data) return <LoadingState label="Loading signed Facet decisions…" />;
+  if (!query.data) return <LoadingState label="Loading Facet designs…" />;
 
   const counts = query.data.evidence.reduce(
     (result, evidence) => ({
@@ -60,15 +59,14 @@ function FacetDesignContent() {
           </span>
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Facet · signed v2 handoff
+              Facet designs
             </p>
             <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-              Customer design evidence
+              Customer designs
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted sm:text-base">
-              Every card is an exact OIDC-bound customer decision joined to its durable IronWrap
-              project link. Accepted decisions create only a blank Draft Quote Revision; they never
-              change approved pricing, contact a customer, or post accounting.
+              See each design choice Facet sent to IronWrap. A choice starts an empty quote draft.
+              It does not change the price, email the customer, or send anything to QuickBooks.
             </p>
           </div>
         </div>
@@ -78,46 +76,49 @@ function FacetDesignContent() {
           onClick={() => void query.refetch()}
         >
           <RefreshCw aria-hidden="true" />
-          Refresh evidence
+          Refresh
         </Button>
       </header>
 
       {offline ? (
         <div className="border-y border-warning/35 bg-warning-soft px-4 py-3 text-sm" role="status">
-          <p className="font-bold">Showing the last verified response</p>
+          <p className="font-bold">Showing saved designs</p>
           <p className="mt-1 leading-6 text-muted">
-            Reconnect to read current receipt and projection evidence. IronWrap OS will not infer a
-            newer result while offline.
+            Reconnect to check for new customer choices. IronWrap will not guess while offline.
           </p>
         </div>
       ) : null}
       {query.isError && query.data ? (
         <div className="border-y border-danger/30 bg-danger-soft px-4 py-3 text-sm" role="alert">
-          <p className="font-bold">The latest refresh was not verified</p>
+          <p className="font-bold">Refresh failed</p>
           <p className="mt-1 leading-6 text-muted">
-            The cards below are the prior verified response; no newer state is claimed.
+            The designs below are the last saved copy. No new state is shown.
           </p>
         </div>
       ) : null}
 
-      <div className="grid gap-px border border-border bg-border sm:grid-cols-4">
-        <Metric label="Projected Drafts" value={counts.projected} tone="ok" />
-        <Metric label="Awaiting projection" value={counts.awaiting_projection} tone="warning" />
-        <Metric label="Lifecycle holds" value={counts.held} tone="muted" />
-        <Metric label="Needs attention" value={counts.attention_required} tone="danger" />
+      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4">
+        <Metric label="Quote drafts ready" value={counts.projected} tone="ok" />
+        <Metric label="Waiting to start" value={counts.awaiting_projection} tone="warning" />
+        <Metric label="On hold" value={counts.held} tone="muted" />
+        <Metric label="Needs help" value={counts.attention_required} tone="danger" />
       </div>
 
       {query.data.intake_exceptions.length > 0 ? (
         <section className="space-y-3" aria-labelledby="facet-delivery-exceptions-heading">
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-danger">
-              Signed delivery exceptions
+              Design link issues
             </p>
             <h2 id="facet-delivery-exceptions-heading" className="mt-1 text-xl font-black">
-              Recover without a manual association
+              Fix a design link
             </h2>
           </div>
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div
+            className={
+              query.data.intake_exceptions.length > 1 ? "grid gap-3 lg:grid-cols-2" : "grid gap-3"
+            }
+          >
             {query.data.intake_exceptions.map((exception) => (
               <IntakeExceptionCard
                 key={`${exception.event_id}:${exception.received_at}`}
@@ -130,11 +131,14 @@ function FacetDesignContent() {
 
       {query.data.evidence.length === 0 ? (
         <EmptyState
-          title="No signed Facet decisions yet"
-          message="A customer-approved v2 decision will appear here after the signed producer delivery is accepted."
+          title="No Facet design choices yet"
+          message="A customer choice will show here after Facet sends it to IronWrap."
         />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2" aria-live="polite">
+        <div
+          className={query.data.evidence.length > 1 ? "grid gap-4 lg:grid-cols-2" : "grid gap-4"}
+          aria-live="polite"
+        >
           {query.data.evidence.map((evidence) => (
             <EvidenceCard key={evidence.event_id} evidence={evidence} />
           ))}
@@ -142,7 +146,7 @@ function FacetDesignContent() {
       )}
 
       <p className="text-right text-xs text-muted">
-        Read model generated {readableDate(query.data.read_model_generated_at)}
+        Last checked {readableDate(query.data.read_model_generated_at)}
       </p>
     </section>
   );
@@ -160,19 +164,24 @@ function IntakeExceptionCard({ exception }: { exception: FacetDesignIntakeExcept
         )}
         <div className="min-w-0 flex-1">
           <h3 className="font-black">
-            {awaiting ? "Waiting for the exact project link" : "Signed delivery rejected"}
+            {awaiting ? "Waiting for the right job" : "Design could not be linked"}
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {awaiting
-              ? "IronWrap saved the signed delivery and is retrying reconciliation automatically. If it stays here, open the approved estimator job and issue a fresh signed Facet launch."
-              : "IronWrap rejected this delivery before any Draft was created. Correct the source identity or decision chain, then reissue it from the approved estimator job."}
+              ? "IronWrap saved this design and is trying to find its job. If it stays here, open the right job in Facet and send it again."
+              : "No quote draft was made. Check the customer and job in Facet. Then send the design again from that job."}
           </p>
-          <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            <Detail label="Event" value={exception.event_id} mono />
-            <Detail label="Reason" value={exception.status_code.replaceAll("_", " ")} />
-          </dl>
+          <details className="mt-3 border-t border-current/15 pt-2">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold">
+              System details
+            </summary>
+            <dl className="grid gap-2 pt-2 text-xs sm:grid-cols-2">
+              <Detail label="Event" value={exception.event_id} mono />
+              <Detail label="Reason" value={exception.status_code.replaceAll("_", " ")} />
+            </dl>
+          </details>
           <Button asChild variant="outline" size="compact" className="mt-4">
-            <Link to="/sales">Open the governed sales path</Link>
+            <Link to="/sales">Open sales</Link>
           </Button>
         </div>
       </div>
@@ -211,9 +220,9 @@ function EvidenceCard({ evidence }: { evidence: FacetDesignEvidence }) {
       <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
         <div className="min-w-0">
           <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-            {evidence.decision_kind} · {evidence.brand_id}
+            {decisionLabel(evidence.decision_kind)} in Facet
           </p>
-          <h2 className="mt-1 truncate text-lg font-black">Project {evidence.facet_project_id}</h2>
+          <h2 className="mt-1 truncate text-lg font-black">Design for {evidence.roof_job_id}</h2>
         </div>
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 text-xs font-bold ${presentation.tone}`}
@@ -227,39 +236,38 @@ function EvidenceCard({ evidence }: { evidence: FacetDesignEvidence }) {
         <p className="text-sm leading-6 text-muted">{presentation.detail}</p>
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <Detail label="Roof job" value={evidence.roof_job_id} />
-          <Detail label="Source quote" value={evidence.customer_quote_id} />
-          <Detail label="Customer decision" value={readableDate(evidence.occurred_at)} />
-          <Detail label="Identity proof" value="Google OIDC · exact project link" />
+          <Detail label="Quote" value={evidence.customer_quote_id} />
+          <Detail label="Customer choice" value={readableDate(evidence.occurred_at)} />
+          <Detail label="Match" value="Customer and job matched" />
           {evidence.projection?.draft_customer_quote_id ? (
-            <Detail
-              label="Draft Quote Revision"
-              value={evidence.projection.draft_customer_quote_id}
-            />
-          ) : null}
-          {evidence.projection?.draft_quote_version ? (
-            <Detail
-              label="Draft version"
-              value={`Version ${evidence.projection.draft_quote_version}`}
-            />
+            <Detail label="Quote draft" value={evidence.projection.draft_customer_quote_id} />
           ) : null}
         </dl>
         <details className="border-t border-border pt-4 text-sm">
-          <summary className="cursor-pointer font-semibold text-muted">
-            Immutable evidence anchors
+          <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-muted">
+            System details
           </summary>
           <dl className="mt-3 grid gap-3 break-all text-xs">
+            <Detail label="Facet project" value={evidence.facet_project_id} mono />
             <Detail label="Event" value={evidence.event_id} mono />
             <Detail label="Revision" value={evidence.design_revision_id} mono />
-            <Detail label="Design SHA-256" value={evidence.design_revision_sha256} mono />
-            <Detail label="Frozen evidence SHA-256" value={evidence.frozen_evidence_sha256} mono />
-            <Detail label="Association SHA-256" value={evidence.association_sha256} mono />
+            <Detail label="Design check code" value={evidence.design_revision_sha256} mono />
+            <Detail label="Saved choice code" value={evidence.frozen_evidence_sha256} mono />
+            <Detail label="Link check code" value={evidence.association_sha256} mono />
             <Detail label="Project link" value={evidence.external_project_link_id} mono />
+            {evidence.projection?.draft_quote_version ? (
+              <Detail
+                label="Quote draft version"
+                value={String(evidence.projection.draft_quote_version)}
+              />
+            ) : null}
             {evidence.projection?.evidence_id ? (
-              <Detail label="Frappe evidence" value={evidence.projection.evidence_id} mono />
+              <Detail label="IronWrap record" value={evidence.projection.evidence_id} mono />
             ) : null}
             {evidence.projection?.reconciliation_id ? (
-              <Detail label="Reconciliation" value={evidence.projection.reconciliation_id} mono />
+              <Detail label="Check record" value={evidence.projection.reconciliation_id} mono />
             ) : null}
+            <Detail label="Status code" value={evidence.status_code.replaceAll("_", " ")} />
           </dl>
         </details>
       </div>
@@ -275,39 +283,48 @@ function statusPresentation(evidence: FacetDesignEvidence): {
 } {
   if (evidence.projection_state === "projected") {
     return {
-      label: evidence.projection?.outcome === "reconciled" ? "Reconciled" : "Draft projected",
+      label: "Quote draft ready",
       detail:
-        "IronWrap verified the signed receipt and recorded an empty Draft Quote Revision for estimator work.",
+        "IronWrap matched the customer and job. It made an empty quote draft for the estimator.",
       tone: "text-ok",
       icon: CheckCircle2,
     };
   }
   if (evidence.projection_state === "awaiting_projection") {
     return {
-      label: "Awaiting projection",
-      detail:
-        "The signed customer decision is accepted and queued for its first blank Draft projection.",
+      label: "Waiting to start",
+      detail: "IronWrap saved the customer choice. It will make an empty quote draft.",
       tone: "text-warning",
       icon: Clock3,
     };
   }
   if (evidence.projection_state === "held") {
     return {
-      label: "Lifecycle hold",
+      label: evidence.decision_kind === "withdrawn" ? "Customer removed it" : "Newer design used",
       detail:
         evidence.decision_kind === "withdrawn"
-          ? "The customer withdrew this design. IronWrap preserved the chain and blocked projection."
-          : "This design was superseded. IronWrap preserved the chain and blocked projection.",
+          ? "The customer removed this design. IronWrap kept the record. It did not make a quote draft."
+          : "A newer design replaced this one. IronWrap kept the record. It did not make a quote draft.",
       tone: "text-muted",
       icon: FileCheck2,
     };
   }
   return {
-    label: "Needs attention",
-    detail: `IronWrap failed closed before claiming a Draft projection (${evidence.status_code.replaceAll("_", " ")}).`,
+    label: "Needs help",
+    detail: "IronWrap stopped before making a quote draft. No price or customer record changed.",
     tone: "text-danger",
     icon: AlertTriangle,
   };
+}
+
+function decisionLabel(decision: FacetDesignEvidence["decision_kind"]): string {
+  const labels: Record<FacetDesignEvidence["decision_kind"], string> = {
+    approved: "Customer picked this",
+    corrected: "Customer changed this",
+    withdrawn: "Customer removed this",
+    superseded: "Newer design replaced this",
+  };
+  return labels[decision];
 }
 
 function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {

@@ -71,7 +71,7 @@ const officeNavigation = [
   },
   {
     label: "Service",
-    mobileLabel: "Callbacks",
+    mobileLabel: "Service",
     to: "/service",
     icon: LifeBuoy,
     activeColor: "warning",
@@ -79,7 +79,7 @@ const officeNavigation = [
   { label: "Today", to: "/today", icon: ClipboardCheck, activeColor: "accent" },
   { label: "Sales", to: "/sales", icon: BriefcaseBusiness, activeColor: "ok" },
   {
-    label: "Facet designs",
+    label: "Designs",
     mobileLabel: "Designs",
     to: "/facet-designs",
     icon: Palette,
@@ -193,5 +193,5 @@ export function roleLabel(role: AppRole): string {
           ? "Production"
           : role === "accounting"
             ? "Accounting"
-            : "Field crew";
+            : "Crew";
 }

@@ -111,7 +111,7 @@ describe("SafetyActionPanel", () => {
     expect(await screen.findByRole("button", { name: /call for rescue/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /report a hazard or injury/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /record making it safe/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /condemn equipment/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /mark equipment unsafe/i })).toBeTruthy();
   });
 
   it("shows the active stop and the equipment the worker must not use", async () => {
@@ -191,10 +191,10 @@ describe("SafetyActionPanel", () => {
     expect(await queuedSafetyActions()).toEqual([]);
   });
 
-  it("condemning equipment cannot be submitted without naming the item", async () => {
+  it("marking equipment unsafe cannot be submitted without naming the item", async () => {
     const user = userEvent.setup();
     render(<SafetyActionPanel session={session} fetcher={offlineFetcher()} />);
-    await user.click(await screen.findByRole("button", { name: /condemn equipment/i }));
+    await user.click(await screen.findByRole("button", { name: /mark equipment unsafe/i }));
     const item = screen.getByLabelText(/which item/i) as HTMLInputElement;
     expect(item.required).toBe(true);
     expect(item.value).toBe("");

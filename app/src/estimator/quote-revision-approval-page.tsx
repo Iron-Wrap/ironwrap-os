@@ -21,7 +21,11 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { loadEstimatorWorkbench } from "./estimator-api";
@@ -59,52 +63,51 @@ const statePresentation: Record<
   { label: string; description: string; tone: string; Icon: LucideIcon }
 > = {
   pending: {
-    label: "Needs decision",
-    description: "A designated human must decide before any Draft shell can be recorded.",
+    label: "Needs review",
+    description: "A person must say yes before IronWrap can make the empty draft.",
     tone: "bg-warning-soft text-warning",
     Icon: CircleAlert,
   },
   executing: {
-    label: "Recording once",
-    description: "The approved Draft-shell write is in progress. Do not submit a second decision.",
+    label: "Saving draft",
+    description: "The empty draft is being made. Do not choose again.",
     tone: "bg-info-soft text-info",
     Icon: Hourglass,
   },
   executed: {
-    label: "Draft shell recorded",
-    description: "The append-only Draft shell and Hermes Run are recorded.",
+    label: "Draft made",
+    description: "The empty draft and its save record are done.",
     tone: "bg-ok-soft text-ok",
     Icon: CheckCircle2,
   },
   denied: {
-    label: "Not approved",
-    description: "The request was rejected before any Draft shell was created.",
+    label: "Turned down",
+    description: "The request was turned down. No draft was made.",
     tone: "bg-surface-muted text-muted",
     Icon: XCircle,
   },
   expired: {
-    label: "Review window expired",
-    description:
-      "This request can no longer create a Draft shell. Prepare a current review instead.",
+    label: "Review ended",
+    description: "This request is too old. Start a new review from the quote.",
     tone: "bg-warning-soft text-warning",
     Icon: Hourglass,
   },
   failed: {
-    label: "Preparation failed",
-    description: "No confirmed Draft shell is available from this request.",
+    label: "Draft not made",
+    description: "This request did not make a saved draft.",
     tone: "bg-danger-soft text-danger",
     Icon: TriangleAlert,
   },
   audit_failed: {
-    label: "Audit not finalized",
-    description: "The protected operation did not reach its required audit state.",
+    label: "Save check failed",
+    description: "The work could not be saved safely.",
     tone: "bg-danger-soft text-danger",
     Icon: TriangleAlert,
   },
   execution_uncertain: {
-    label: "Execution uncertain",
+    label: "Check needed",
     description:
-      "The broker result could not be verified. Reconcile the recorded state and do not retry.",
+      "We could not tell if the draft was made. Check the saved record. Do not try again.",
     tone: "bg-danger-soft text-danger",
     Icon: TriangleAlert,
   },
@@ -147,8 +150,8 @@ function QuoteRevisionApprovalQueueContent() {
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Draft revision queue unavailable"
-        message="No request was changed. Reconnect to inspect the current recorded queue before deciding anything."
+        title="Quote reviews could not load"
+        message="Nothing changed. Check your link, then load the saved list again."
         onRetry={() => void query.refetch()}
       />
     );
@@ -157,70 +160,89 @@ function QuoteRevisionApprovalQueueContent() {
 
   const model = query.data;
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <Button asChild variant="ghost" size="compact" className="-ml-2">
-              <Link to="/sales">
-                <ArrowLeft aria-hidden="true" />
-                Back to sales
-              </Link>
-            </Button>
-            <div className="mt-4 flex min-w-0 items-start gap-3">
-              <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-                <ClipboardCheck className="size-5 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Estimator review
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Draft revision queue
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Each request is limited to a blank Draft shell. No pricing, tax, scope, payment,
-                  acceptance, proposal, customer message, or accounting change travels through this
-                  queue.
-                </p>
+    <section className="mx-auto max-w-7xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="min-w-0">
+              <Button asChild variant="ghost" size="compact" className="-ml-2">
+                <Link to="/sales">
+                  <ArrowLeft aria-hidden="true" />
+                  Back to sales
+                </Link>
+              </Button>
+              <div className="mt-5 flex min-w-0 items-start gap-4">
+                <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                  <ClipboardCheck className="size-6 text-accent" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                    Quote review
+                  </p>
+                  <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                    Quote change reviews
+                  </h1>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                    Review requests for a new empty draft. Prices, job details, payments, customer
+                    replies, and money records stay out.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            disabled={query.isFetching}
-            busy={query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            <RefreshCw aria-hidden="true" />
-            Refresh
-          </Button>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
+            </p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {model.approvals.length === 0
+                ? "No quote changes to review"
+                : `${model.approvals.length} ${model.approvals.length === 1 ? "quote change" : "quote changes"}`}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Open a request to see what will be made before you choose.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="compact"
+              className="mt-5"
+              disabled={query.isFetching}
+              busy={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              <RefreshCw aria-hidden="true" />
+              Load again
+            </Button>
+          </div>
+        </header>
+      </Card>
 
-      <QueueSignals approvals={model.approvals} />
+      <Card className="overflow-hidden">
+        <QueueSignals approvals={model.approvals} />
+      </Card>
 
       {query.isError ? (
-        <Notice tone="warning" title="Showing the last recorded queue read.">
-          Refresh before deciding if this connection warning remains.
+        <Notice tone="warning" title="This may be an old list">
+          Load the list again before you choose.
         </Notice>
       ) : null}
 
       {model.approvals.length === 0 ? (
-        <section className="border border-border bg-surface px-6 py-10 text-center sm:px-8">
+        <Card className="px-6 py-10 text-center sm:px-8">
           <FilePlus2 className="mx-auto size-7 text-muted" aria-hidden="true" />
           <h2 className="mt-4 text-xl font-bold tracking-[-0.025em]">
-            No draft revisions are waiting
+            No quote changes need review
           </h2>
           <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted">
-            A governed revision will appear here after an estimator requests a blank Draft shell
-            from the source quote.
+            A request will show here when someone asks for a new empty draft quote.
           </p>
-        </section>
+        </Card>
       ) : (
-        <ol className="border-y border-border" aria-label="Draft revision requests">
+        <ol
+          className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+          aria-label="Quote change requests"
+        >
           {model.approvals.map((approval) => (
             <li key={approval.id} className="border-b border-border last:border-b-0">
               <RevisionQueueRow approval={approval} />
@@ -237,14 +259,14 @@ function RevisionQueueRow({ approval }: { approval: QuoteRevisionApprovalRequest
     <Link
       to="/quote-revision-approvals/$approvalId"
       params={{ approvalId: approval.id }}
-      className="group block rounded-md px-4 py-5 transition-colors hover:bg-surface-muted focus-visible:outline-offset-[-3px] sm:px-5"
+      className="group block px-5 py-5 transition-colors hover:bg-surface-muted focus-visible:outline-offset-[-3px] sm:px-6 sm:py-6"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold text-foreground">
-            <span>Source {quoteVersion(approval.source.quote_version)}</span>
+            <span>Quote {quoteVersion(approval.source.quote_version)}</span>
             <ArrowRight className="size-4 text-muted" aria-hidden="true" />
-            <span>Blank Draft {quoteVersion(approval.target.quote_version)}</span>
+            <span>Empty draft {quoteVersion(approval.target.quote_version)}</span>
           </p>
           <p className="mt-1 break-all text-sm text-muted">
             {approval.source.customer_quote_id} · {approval.source.status}
@@ -261,9 +283,6 @@ function RevisionQueueRow({ approval }: { approval: QuoteRevisionApprovalRequest
           />
         </div>
       </div>
-      <p className="mt-3 break-all text-xs font-semibold text-muted">
-        Target {approval.target.customer_quote_id}
-      </p>
     </Link>
   );
 }
@@ -359,12 +378,12 @@ function QuoteRevisionApprovalDetailContent() {
       setRequiresFreshRead(false);
       setNotice(
         action.kind === "reconcile"
-          ? "Reconciliation was recorded. No second write was issued."
+          ? "The result check was saved. No new draft was made."
           : action.kind === "reject"
-            ? "The request was rejected. No Draft shell was created."
+            ? "The request was turned down. No draft was made."
             : result.approval.state === "executed"
-              ? "The Draft shell and Hermes Run are recorded."
-              : "The protected decision state changed. Review the current recorded outcome.",
+              ? "The empty draft and save record are ready."
+              : "The saved state changed. Check it before you do more.",
       );
     },
     onError: (error) => {
@@ -381,11 +400,11 @@ function QuoteRevisionApprovalDetailContent() {
   if (!approvalId) {
     return (
       <ErrorState
-        title="This draft revision link is incomplete"
-        message="No revision request was provided. Return to the queue and select a recorded request."
+        title="This quote review link is not complete"
+        message="No request was found in this link. Go back and open a saved request."
         action={
           <Button asChild variant="outline">
-            <Link to="/quote-revision-approvals">Open draft revision queue</Link>
+            <Link to="/quote-revision-approvals">Open quote change reviews</Link>
           </Button>
         }
       />
@@ -395,8 +414,8 @@ function QuoteRevisionApprovalDetailContent() {
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Draft revision unavailable"
-        message="No request was changed. Reconnect to inspect the current recorded state before deciding anything."
+        title="Quote review could not load"
+        message="Nothing changed. Check your link, then load the saved request again."
         onRetry={() => void query.refetch()}
       />
     );
@@ -419,6 +438,7 @@ function QuoteRevisionApprovalDetailContent() {
     !decisionReadStale &&
     model.allowed_actions.includes("quote_revision_approval.reconcile");
   const pendingAction = mutation.isPending;
+  const currentState = statePresentation[approval.state];
 
   function approve() {
     if (!canApprove || pendingAction || approval.state !== "pending") return;
@@ -453,69 +473,77 @@ function QuoteRevisionApprovalDetailContent() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
+    <section className="mx-auto max-w-6xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
             <Button asChild variant="ghost" size="compact" className="-ml-2">
               <Link to="/quote-revision-approvals">
                 <ArrowLeft aria-hidden="true" />
-                Draft revision queue
+                Quote change reviews
               </Link>
             </Button>
-            <div className="mt-4 flex min-w-0 items-start gap-3">
-              <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-                <FileText className="size-5 text-accent" aria-hidden="true" />
+            <div className="mt-5 flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <FileText className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Human decision
+                  Quote review
                 </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Blank Draft revision
+                  Review a new quote
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Decide only whether to create the bounded Draft shell shown below. The next
-                  commercial version is entered and reviewed separately.
+                  Choose if IronWrap can make the empty draft shown here. Prices and job details are
+                  added later.
                 </p>
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="compact"
-              busy={query.isFetching}
-              disabled={query.isFetching}
-              onClick={() => void refreshCurrentRequest()}
-            >
-              <RefreshCw aria-hidden="true" />
-              Refresh state
-            </Button>
-            <Button asChild variant="outline" size="compact">
-              <Link to="/estimator/jobs/$jobId" params={{ jobId: approval.roof_job_id }}>
-                Open source review
-                <ArrowRight aria-hidden="true" />
-              </Link>
-            </Button>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Current state
+            </p>
+            <div className="mt-3">
+              <StatusBadge status={approval.state} />
+            </div>
+            <p className="mt-3 text-sm leading-6 text-muted">{currentState.description}</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="compact"
+                busy={query.isFetching}
+                disabled={query.isFetching}
+                onClick={() => void refreshCurrentRequest()}
+              >
+                <RefreshCw aria-hidden="true" />
+                Load again
+              </Button>
+              <Button asChild variant="outline" size="compact">
+                <Link to="/estimator/jobs/$jobId" params={{ jobId: approval.roof_job_id }}>
+                  Open quote
+                  <ArrowRight aria-hidden="true" />
+                </Link>
+              </Button>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      </Card>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect before deciding">
-          Draft-shell decisions are never queued offline or retried by this app. The last recorded
-          state remains visible.
+        <Notice tone="warning" title="Go online before you choose">
+          IronWrap will not save this choice while you are offline. The last saved state stays here.
         </Notice>
       ) : null}
       {query.isError ? (
-        <Notice tone="warning" title="Showing the last recorded review.">
-          Refresh this request before deciding if the connection warning remains.
+        <Notice tone="warning" title="This may be an old view">
+          Load this request again before you choose.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="The decision was not confirmed">
+        <Notice tone="danger" title="Your choice was not saved">
           {actionError}
         </Notice>
       ) : null}
@@ -528,6 +556,7 @@ function QuoteRevisionApprovalDetailContent() {
       <RevisionDecisionRail approval={approval} />
       <CommercialFence />
       <RevisionRequestFacts approval={approval} />
+      <RevisionSystemDetails approval={approval} />
 
       {approval.state === "pending" ? (
         <PendingDecisionPanel
@@ -627,8 +656,8 @@ function QuoteRevisionApprovalPrepareContent() {
   if (!jobId) {
     return (
       <ErrorState
-        title="This revision request link is incomplete"
-        message="No roof-job record was provided. Return to the workbench and choose a source quote."
+        title="This new quote link is not complete"
+        message="No job was found in this link. Go back and open the quote again."
       />
     );
   }
@@ -636,8 +665,8 @@ function QuoteRevisionApprovalPrepareContent() {
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Source review unavailable"
-        message="No revision request was created. Reconnect and reopen the current workbench before preparing a Draft shell."
+        title="Quote could not load"
+        message="No request was made. Go online, then open the quote again."
         onRetry={() => void query.refetch()}
       />
     );
@@ -654,12 +683,12 @@ function QuoteRevisionApprovalPrepareContent() {
   ) {
     return (
       <ErrorState
-        title="Draft revision is not available"
-        message="IronWrap OS did not grant a revision request for this source. Return to the current workbench and review the source quote."
+        title="A new quote is not ready"
+        message="IronWrap did not allow a new quote from this one. Go back and check the quote."
         action={
           <Button asChild variant="outline">
             <Link to="/estimator/jobs/$jobId" params={{ jobId }}>
-              Back to measurement workbench
+              Back to roof and quote review
             </Link>
           </Button>
         }
@@ -685,40 +714,53 @@ function QuoteRevisionApprovalPrepareContent() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <Button asChild variant="ghost" size="compact" className="-ml-2">
-          <Link to="/estimator/jobs/$jobId" params={{ jobId: model.job.id }}>
-            <ArrowLeft aria-hidden="true" />
-            Back to measurement workbench
-          </Link>
-        </Button>
-        <div className="mt-4 flex min-w-0 items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-            <FilePlus2 className="size-5 text-accent" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Estimator request
+    <section className="mx-auto max-w-6xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <Button asChild variant="ghost" size="compact" className="-ml-2">
+              <Link to="/estimator/jobs/$jobId" params={{ jobId: model.job.id }}>
+                <ArrowLeft aria-hidden="true" />
+                Back to roof and quote review
+              </Link>
+            </Button>
+            <div className="mt-5 flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <FilePlus2 className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Quote change
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  Ask for a new quote
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Ask a person to review one new empty draft. This does not change a price, job, or
+                  customer message.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
             </p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-              Draft quote revision
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              Prepare a human-reviewed request for a blank Draft shell. This does not revise a
-              price, assemble a proposal, or contact a customer.
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">Tell us what is wrong</h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              A person will check the current quote and the empty draft before it is made.
             </p>
           </div>
-        </div>
-      </header>
+        </header>
+      </Card>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect to prepare this request">
-          The request will not be queued offline. Reopen this source when you are online.
+        <Notice tone="warning" title="Go online to send this request">
+          IronWrap will not save it while you are offline. Open the quote again when you are online.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Draft revision was not prepared">
+        <Notice tone="danger" title="The request was not sent">
           {actionError}
         </Notice>
       ) : null}
@@ -730,21 +772,21 @@ function QuoteRevisionApprovalPrepareContent() {
       />
       <CommercialFence />
 
-      <form className="border border-border bg-surface" onSubmit={submit}>
+      <form
+        className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+        onSubmit={submit}
+      >
         <div className="border-b border-border px-5 py-5 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">
-            Why does this source need correction?
-          </h2>
+          <h2 className="text-lg font-bold tracking-[-0.02em]">What needs to change?</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            State the correction that needs a new blank Draft shell. Entering commercial terms
-            happens later in the normal estimator review.
+            Say what is wrong with the current quote. Prices and job details are added later.
           </p>
         </div>
         <div className="p-5 sm:p-6">
           <label htmlFor="correction-reason" className="text-sm font-bold text-foreground">
-            Correction reason
+            What is wrong?
           </label>
-          <textarea
+          <Textarea
             id="correction-reason"
             value={correctionReason}
             onChange={(event) => setCorrectionReason(event.target.value.slice(0, 2_000))}
@@ -752,18 +794,17 @@ function QuoteRevisionApprovalPrepareContent() {
             maxLength={2_000}
             rows={5}
             required
-            placeholder="For example: Correct a verified measurement source before entering the next commercial version."
-            className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+            placeholder="For example: Use the new roof size before we set the next price."
+            className="mt-3"
           />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-            <span>Only the source identity and this reason are submitted.</span>
+            <span>Only the quote ID and this note are sent.</span>
             <span>{correctionReason.length}/2000</span>
           </div>
         </div>
         <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="max-w-xl text-sm leading-6 text-muted">
-            A designated human reviews the exact source and blank target before one append-only
-            write.
+            A person must review the current quote and empty draft before it is made.
           </p>
           <Button
             type="submit"
@@ -773,7 +814,7 @@ function QuoteRevisionApprovalPrepareContent() {
             disabled={!canPrepare || mutation.isPending || trimmedReason.length < 1}
           >
             <FilePlus2 aria-hidden="true" />
-            Prepare draft revision
+            Send for review
           </Button>
         </div>
       </form>
@@ -786,20 +827,11 @@ function QueueSignals({ approvals }: { approvals: QuoteRevisionApprovalRequest[]
   const recording = approvals.filter((approval) => approval.state === "executing").length;
   const uncertain = approvals.filter((approval) => approval.state === "execution_uncertain").length;
   return (
-    <dl
-      className="grid border-y border-border sm:grid-cols-3"
-      aria-label="Draft revision queue state"
-    >
+    <dl className="grid border-y border-border sm:grid-cols-3" aria-label="Quote review list state">
       <QueueSignal label="Needs review" value={pending} tone="text-warning" dot="bg-warning" />
+      <QueueSignal label="Being saved" value={recording} tone="text-info" dot="bg-info" bordered />
       <QueueSignal
-        label="Recording once"
-        value={recording}
-        tone="text-info"
-        dot="bg-info"
-        bordered
-      />
-      <QueueSignal
-        label="Reconcile"
+        label="Needs a check"
         value={uncertain}
         tone="text-danger"
         dot="bg-danger"
@@ -843,25 +875,32 @@ function QueueSignal({
 function RevisionDecisionRail({ approval }: { approval: QuoteRevisionApprovalRequest }) {
   const status = statePresentation[approval.state];
   return (
-    <section aria-labelledby="revision-decision-path">
-      <div className="flex items-center justify-between gap-3">
+    <section
+      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+      aria-labelledby="revision-decision-path"
+    >
+      <div className="flex items-center justify-between gap-3 px-5 py-5 sm:px-6">
         <h2
           id="revision-decision-path"
           className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
         >
-          Recorded decision path
+          How this works
         </h2>
         <StatusBadge status={approval.state} />
       </div>
-      <ol className="mt-3 grid border border-border sm:grid-cols-4">
-        <RailStep label="Source quote" detail={quoteVersion(approval.source.quote_version)} />
+      <ol className="grid border-t border-border sm:grid-cols-4">
+        <RailStep label="Current quote" detail={quoteVersion(approval.source.quote_version)} />
         <RailStep
-          label="Blank Draft"
+          label="Empty draft"
           detail={quoteVersion(approval.target.quote_version)}
           bordered
         />
-        <RailStep label="Human decision" detail={status.label} tone={status.tone} bordered />
-        <RailStep label="Hermes Run" detail={approval.hermes_run_id ?? "Pending record"} bordered />
+        <RailStep label="Review" detail={status.label} tone={status.tone} bordered />
+        <RailStep
+          label="Save record"
+          detail={approval.hermes_run_id ? "Saved" : "Not yet"}
+          bordered
+        />
       </ol>
     </section>
   );
@@ -877,26 +916,24 @@ function PrepareDecisionRail({
   sourceStatus: string;
 }) {
   return (
-    <section aria-labelledby="prepare-decision-path">
+    <section
+      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+      aria-labelledby="prepare-decision-path"
+    >
       <h2
         id="prepare-decision-path"
-        className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
+        className="px-5 py-5 text-sm font-extrabold uppercase tracking-[0.14em] text-muted sm:px-6"
       >
-        Controlled path
+        What happens
       </h2>
-      <ol className="mt-3 grid border border-border sm:grid-cols-4">
+      <ol className="grid border-t border-border sm:grid-cols-4">
         <RailStep
-          label="Source quote"
+          label="Current quote"
           detail={`${quoteVersion(sourceVersion)} · ${sourceStatus}`}
         />
-        <RailStep label="Blank Draft" detail={quoteVersion(targetVersion)} bordered />
-        <RailStep
-          label="Human decision"
-          detail="Required"
-          tone="bg-warning-soft text-warning"
-          bordered
-        />
-        <RailStep label="Hermes Run" detail="Recorded after approval" bordered />
+        <RailStep label="Empty draft" detail={quoteVersion(targetVersion)} bordered />
+        <RailStep label="Review" detail="Needed" tone="bg-warning-soft text-warning" bordered />
+        <RailStep label="Save record" detail="Made after review" bordered />
       </ol>
     </section>
   );
@@ -923,7 +960,7 @@ function RailStep({
       <p className="text-sm font-bold text-muted">{label}</p>
       <p
         className={cn(
-          "mt-2 break-all text-sm font-bold leading-5",
+          "mt-2 break-words text-sm font-bold leading-5",
           tone ? "inline-flex rounded-full px-2.5 py-1.5 text-xs" : "text-foreground",
           tone,
         )}
@@ -937,18 +974,18 @@ function RailStep({
 function CommercialFence() {
   return (
     <section
-      className="border border-border bg-surface-muted/65 px-5 py-5 sm:px-6"
+      className="rounded-lg border border-ok/25 bg-ok-soft/45 px-5 py-5 sm:px-6"
       aria-labelledby="commercial-fence-heading"
     >
       <div className="flex items-start gap-3">
         <ShieldCheck className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div>
           <h2 id="commercial-fence-heading" className="font-bold tracking-[-0.015em]">
-            Commercial terms stay blank
+            What stays out
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            Price, tax, scope, payment, approval, acceptance, and customer terms are not copied. No
-            customer message is sent and accounting remains unchanged.
+            Prices, tax, job details, payments, and customer replies are not copied. No message is
+            sent. Money records do not change.
           </p>
         </div>
       </div>
@@ -959,35 +996,74 @@ function CommercialFence() {
 function RevisionRequestFacts({ approval }: { approval: QuoteRevisionApprovalRequest }) {
   return (
     <section
-      className="grid border-y border-border sm:grid-cols-2"
-      aria-label="Draft revision facts"
+      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+      aria-labelledby="quote-review-facts"
     >
-      <div className="min-w-0 px-4 py-5 sm:px-5">
-        <p className="text-sm font-bold text-muted">Source</p>
-        <p className="mt-2 break-all font-bold text-foreground">
-          {approval.source.customer_quote_id}
-        </p>
-        <p className="mt-1 break-words text-sm text-muted">
-          {quoteVersion(approval.source.quote_version)} · {approval.source.status}
-        </p>
-      </div>
-      <div className="min-w-0 border-t border-border px-4 py-5 sm:border-t-0 sm:border-l sm:px-5">
-        <p className="text-sm font-bold text-muted">Proposed append-only target</p>
-        <p className="mt-2 break-all font-bold text-foreground">
-          {approval.target.customer_quote_id}
-        </p>
-        <p className="mt-1 break-all text-sm text-muted">
-          Blank Draft {quoteVersion(approval.target.quote_version)} · supersedes{" "}
-          {approval.source.customer_quote_id}
+      <div className="border-b border-border px-5 py-5 sm:px-6">
+        <h2 id="quote-review-facts" className="text-lg font-black tracking-[-0.02em]">
+          What you are reviewing
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          Check the current quote, the new version, and the reason for the change.
         </p>
       </div>
-      <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
-        <p className="text-sm font-bold text-muted">Correction reason</p>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground">
-          {approval.correction_reason}
-        </p>
+      <div className="grid sm:grid-cols-2">
+        <div className="min-w-0 px-5 py-5 sm:px-6">
+          <p className="text-sm font-bold text-muted">Current quote</p>
+          <p className="mt-2 font-bold text-foreground">
+            {quoteVersion(approval.source.quote_version)}
+          </p>
+          <p className="mt-1 break-words text-sm text-muted">{approval.source.status}</p>
+        </div>
+        <div className="min-w-0 border-t border-border px-5 py-5 sm:border-t-0 sm:border-l sm:px-6">
+          <p className="text-sm font-bold text-muted">New empty draft</p>
+          <p className="mt-2 font-bold text-foreground">
+            {quoteVersion(approval.target.quote_version)}
+          </p>
+          <p className="mt-1 text-sm text-muted">Starts with no prices or job details</p>
+        </div>
+        <div className="border-t border-border px-5 py-5 sm:col-span-2 sm:px-6">
+          <p className="text-sm font-bold text-muted">What needs to change</p>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground">
+            {approval.correction_reason}
+          </p>
+        </div>
       </div>
     </section>
+  );
+}
+
+function RevisionSystemDetails({ approval }: { approval: QuoteRevisionApprovalRequest }) {
+  return (
+    <details className="rounded-lg border border-border bg-surface-raised">
+      <summary className="min-h-14 cursor-pointer px-5 py-4 text-base font-bold sm:px-6">
+        System details
+      </summary>
+      <dl className="divide-y divide-border border-t border-border text-sm">
+        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
+          <dt className="font-bold text-muted">Current quote ID</dt>
+          <dd className="break-all">{approval.source.customer_quote_id}</dd>
+        </div>
+        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
+          <dt className="font-bold text-muted">New draft ID</dt>
+          <dd className="break-all">{approval.target.customer_quote_id}</dd>
+        </div>
+        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
+          <dt className="font-bold text-muted">Request ID</dt>
+          <dd className="break-all">{approval.id}</dd>
+        </div>
+        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
+          <dt className="font-bold text-muted">Save record</dt>
+          <dd className="break-all">{approval.hermes_run_id ?? approval.run_id}</dd>
+        </div>
+        {approval.error_code ? (
+          <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
+            <dt className="font-bold text-muted">Error code</dt>
+            <dd className="break-all">{approval.error_code}</dd>
+          </div>
+        ) : null}
+      </dl>
+    </details>
   );
 }
 
@@ -1025,49 +1101,50 @@ function PendingDecisionPanel({
       <section className="border border-border bg-surface px-5 py-6 sm:px-6" role="status">
         <p className="font-bold">
           {offline
-            ? "Reconnect before deciding"
+            ? "Go online before you choose"
             : requiresFreshRead
-              ? "Refresh before another decision"
-              : "Waiting for the designated approver"}
+              ? "Load this request again"
+              : "Waiting for the right person"}
         </p>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
           {offline
-            ? "This app never queues an approval decision offline. No Draft shell will be created until a current online decision is recorded."
+            ? "IronWrap will not save this choice while you are offline. No draft will be made."
             : requiresFreshRead
-              ? "The previous decision did not return a confirmed current state. Do not retry it. Refresh the recorded request before any further action."
-              : "The server did not grant you a decision capability for this exact request. You can continue to inspect the recorded source and target."}
+              ? "The last choice did not return a clear result. Do not try it again. Load the saved request first."
+              : "You can read this request, but you cannot choose for it."}
         </p>
       </section>
     );
   }
 
   return (
-    <section className="border border-border bg-surface" aria-labelledby="pending-decision-heading">
+    <section
+      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+      aria-labelledby="pending-decision-heading"
+    >
       <div className="border-b border-border px-5 py-5 sm:px-6">
         <h2 id="pending-decision-heading" className="text-lg font-bold tracking-[-0.02em]">
-          Decide the blank Draft shell
+          Make the empty draft?
         </h2>
         <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-          Approval creates only{" "}
-          <span className="break-all">{approval.target.customer_quote_id}</span> as{" "}
-          {quoteVersion(approval.target.quote_version)}. Commercial content stays blank for the next
-          estimator review.
+          Yes makes one empty draft, {quoteVersion(approval.target.quote_version)}. It has no
+          prices, job details, payments, or customer reply.
         </p>
       </div>
       {rejecting ? (
         <div className="p-5 sm:p-6">
           <label htmlFor="revision-rejection-reason" className="text-sm font-bold">
-            Why should this request be rejected?
+            Why should we stop this request?
           </label>
-          <textarea
+          <Textarea
             id="revision-rejection-reason"
             value={rejectionReason}
             onChange={(event) => onRejectionReasonChange(event.target.value.slice(0, 1_000))}
             disabled={!canReject || busy}
             rows={4}
             maxLength={1_000}
-            placeholder="State what must be corrected before a new request is prepared."
-            className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+            placeholder="Say what must be fixed before someone asks again."
+            className="mt-3"
           />
           <div className="mt-2 flex justify-between text-xs text-muted">
             <span>At least 3 characters.</span>
@@ -1085,32 +1162,40 @@ function PendingDecisionPanel({
               onClick={onReject}
             >
               <XCircle aria-hidden="true" />
-              Reject request
+              Turn down request
             </Button>
           </div>
         </div>
       ) : (
         <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="max-w-xl text-sm leading-6 text-muted">
-            The request is bound to the source version and exact target shown above. It expires if
-            the recorded state changes.
+            This choice only works for quote {quoteVersion(approval.source.quote_version)} and empty
+            draft {quoteVersion(approval.target.quote_version)}. If either changes, this request
+            stops.
           </p>
           <div className="flex flex-col-reverse gap-3 sm:flex-row">
             {canReject ? (
-              <Button type="button" variant="outline" disabled={busy} onClick={onStartReject}>
-                Reject
+              <Button
+                type="button"
+                variant="outline"
+                className="whitespace-nowrap"
+                disabled={busy}
+                onClick={onStartReject}
+              >
+                Turn down
               </Button>
             ) : null}
             {canApprove ? (
               <Button
                 type="button"
                 variant="accent"
+                className="whitespace-nowrap"
                 busy={busy}
                 disabled={busy}
                 onClick={onApprove}
               >
                 <CheckCircle2 aria-hidden="true" />
-                Approve Draft shell
+                Make empty draft
               </Button>
             ) : null}
           </div>
@@ -1122,14 +1207,16 @@ function PendingDecisionPanel({
 
 function ExecutingPanel() {
   return (
-    <section className="border border-info/35 bg-info-soft px-5 py-6 sm:px-6" role="status">
+    <section
+      className="rounded-lg border border-info/35 bg-info-soft px-5 py-6 sm:px-6"
+      role="status"
+    >
       <div className="flex items-start gap-3">
         <Hourglass className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
         <div>
-          <h2 className="font-bold">Recording once</h2>
+          <h2 className="font-bold">Saving the draft</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            The recorded approval is being finalized. This app will not send a second write or offer
-            a retry while the lease is active.
+            IronWrap is saving the approved draft. It will not send the same work again.
           </p>
         </div>
       </div>
@@ -1168,31 +1255,26 @@ function UncertainExecutionPanel({
 }) {
   return (
     <section
-      className="border border-danger/40 bg-danger-soft px-5 py-6 sm:px-6"
+      className="rounded-lg border border-danger/40 bg-danger-soft px-5 py-6 sm:px-6"
       aria-labelledby="uncertain-heading"
     >
       <div className="flex items-start gap-3">
         <TriangleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         <div className="min-w-0">
           <h2 id="uncertain-heading" className="font-bold">
-            Do not retry this request
+            Do not try this request again
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            The broker result is uncertain. A second write is never issued automatically. Inspect
-            the recorded Hermes Run and reconcile the outcome instead.
+            We could not tell if the draft was made. Check the saved record before you do anything
+            else.
           </p>
-          {approval.error_code ? (
-            <p className="mt-3 text-sm font-semibold text-danger">
-              Recorded boundary: {humanizeCode(approval.error_code)}
-            </p>
-          ) : null}
         </div>
       </div>
 
       {approval.reconciliation ? (
         <div className="mt-5 border-t border-danger/25 pt-5" role="status">
           <p className="font-bold">
-            Reconciliation recorded: {humanizeCode(approval.reconciliation.outcome)}
+            Result check saved: {resultLabel(approval.reconciliation.outcome)}
           </p>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
             {approval.reconciliation.evidence}
@@ -1201,39 +1283,39 @@ function UncertainExecutionPanel({
       ) : !canReconcile ? (
         <p className="mt-5 border-t border-danger/25 pt-5 text-sm leading-6 text-muted">
           {offline
-            ? "Reconnect before recording reconciliation evidence. This app will not queue it offline."
+            ? "Go online before you save what you checked. IronWrap will not queue it offline."
             : requiresFreshRead
-              ? "The prior action did not return a confirmed current state. Do not retry it. Refresh the recorded request before reconciliation."
-              : "The server did not grant reconciliation for this request. A designated approver must record the evidence."}
+              ? "The last action did not return a clear result. Do not try it again. Load the saved request first."
+              : "You cannot save this check. The right person must do it."}
         </p>
       ) : reconciling ? (
         <div className="mt-5 border-t border-danger/25 pt-5">
           <label htmlFor="reconciliation-outcome" className="text-sm font-bold">
-            Reconciliation outcome
+            What happened?
           </label>
-          <select
+          <Select
             id="reconciliation-outcome"
             value={outcome}
             disabled={busy}
             onChange={(event) => onOutcomeChange(event.target.value as ReconciliationOutcome)}
-            className="mt-2 min-h-12 w-full rounded-lg border bg-surface-raised px-3 text-sm shadow-sm outline-none focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+            className="mt-2 text-sm"
           >
-            <option value="inconclusive">Inconclusive</option>
-            <option value="executed">Draft shell was recorded</option>
-            <option value="not_executed">Draft shell was not recorded</option>
-          </select>
+            <option value="inconclusive">Not sure</option>
+            <option value="executed">Draft was made</option>
+            <option value="not_executed">Draft was not made</option>
+          </Select>
           <label htmlFor="reconciliation-evidence" className="mt-5 block text-sm font-bold">
-            Reconciliation evidence
+            What did you check?
           </label>
-          <textarea
+          <Textarea
             id="reconciliation-evidence"
             value={evidence}
             onChange={(event) => onEvidenceChange(event.target.value.slice(0, 1_000))}
             disabled={busy}
             maxLength={1_000}
             rows={4}
-            placeholder="Record the evidence checked and why no second write is needed."
-            className="mt-2 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+            placeholder="Say what you checked and why no new draft is needed."
+            className="mt-2"
           />
           <div className="mt-2 flex justify-between text-xs text-muted">
             <span>At least 3 characters.</span>
@@ -1251,7 +1333,7 @@ function UncertainExecutionPanel({
               onClick={onSubmit}
             >
               <ClipboardCheck aria-hidden="true" />
-              Record reconciliation
+              Save result check
             </Button>
           </div>
         </div>
@@ -1259,7 +1341,7 @@ function UncertainExecutionPanel({
         <div className="mt-5 border-t border-danger/25 pt-5">
           <Button type="button" variant="outline" disabled={busy} onClick={onStart}>
             <ClipboardCheck aria-hidden="true" />
-            Reconcile recorded outcome
+            Check saved result
           </Button>
         </div>
       )}
@@ -1271,24 +1353,24 @@ function ExecutedPanel({ approval }: { approval: QuoteRevisionApprovalRequest })
   const outcome = approval.outcome;
   return (
     <section
-      className="border border-ok/40 bg-ok-soft px-5 py-6 sm:px-6"
+      className="rounded-lg border border-ok/40 bg-ok-soft px-5 py-6 sm:px-6"
       aria-labelledby="executed-heading"
     >
       <div className="flex items-start gap-3">
         <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div>
           <h2 id="executed-heading" className="font-bold">
-            Draft shell recorded
+            Draft is ready
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            The protected write is audit-finalized. No commercial terms were copied and no customer
-            message or accounting change was made.
+            The empty draft was saved. No prices or job details were copied. No customer message or
+            money record changed.
           </p>
         </div>
       </div>
       <dl className="mt-5 grid border-y border-ok/25 sm:grid-cols-3">
         <ResultFact
-          label="Draft ID"
+          label="Draft quote"
           value={outcome?.customer_quote_id ?? approval.target.customer_quote_id}
         />
         <ResultFact
@@ -1296,7 +1378,11 @@ function ExecutedPanel({ approval }: { approval: QuoteRevisionApprovalRequest })
           value={quoteVersion(outcome?.quote_version ?? approval.target.quote_version)}
           bordered
         />
-        <ResultFact label="Hermes Run" value={approval.hermes_run_id ?? approval.run_id} bordered />
+        <ResultFact
+          label="Save record"
+          value={approval.hermes_run_id ?? approval.run_id}
+          bordered
+        />
       </dl>
     </section>
   );
@@ -1330,11 +1416,12 @@ function ClosedRequestPanel({ approval }: { approval: QuoteRevisionApprovalReque
   const explanation =
     approval.state === "denied" && approval.rejection_reason
       ? approval.rejection_reason
-      : approval.error_code
-        ? humanizeCode(approval.error_code)
-        : presentation.description;
+      : presentation.description;
   return (
-    <section className="border border-border bg-surface px-5 py-6 sm:px-6" role="status">
+    <section
+      className="rounded-lg border border-border bg-surface-raised px-5 py-6 sm:px-6"
+      role="status"
+    >
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 size-5 shrink-0 text-muted" aria-hidden="true" />
         <div>
@@ -1362,50 +1449,15 @@ function StatusBadge({ status }: { status: QuoteRevisionApprovalRequest["state"]
   );
 }
 
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger";
-  title: string;
-  children: string;
-}) {
-  const Icon = tone === "danger" ? TriangleAlert : CircleAlert;
-  return (
-    <section
-      className={cn(
-        "border px-5 py-4 text-sm leading-6",
-        tone === "danger" ? "border-danger/40 bg-danger-soft" : "border-warning/40 bg-warning-soft",
-      )}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <div className="flex items-start gap-3">
-        <Icon
-          className={cn(
-            "mt-0.5 size-5 shrink-0",
-            tone === "danger" ? "text-danger" : "text-warning",
-          )}
-          aria-hidden="true"
-        />
-        <div>
-          <p className="font-bold">{title}</p>
-          <p className="mt-1 text-muted">{children}</p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function QueueSkeleton() {
   return (
     <section
-      className="mx-auto max-w-6xl space-y-6"
+      className="mx-auto max-w-7xl space-y-6"
       aria-busy="true"
-      aria-label="Loading draft revision queue"
+      aria-label="Loading quote change reviews"
     >
-      <div className="h-28 border-b border-border bg-surface-muted/70" />
-      <div className="grid border-y border-border sm:grid-cols-3">
+      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
+      <div className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-3">
         {[0, 1, 2].map((index) => (
           <div
             key={index}
@@ -1416,7 +1468,7 @@ function QueueSkeleton() {
           />
         ))}
       </div>
-      <div className="min-h-52 border border-border bg-surface-muted/50" />
+      <div className="min-h-52 rounded-lg border border-border bg-surface-muted/50" />
     </section>
   );
 }
@@ -1424,14 +1476,14 @@ function QueueSkeleton() {
 function DetailSkeleton() {
   return (
     <section
-      className="mx-auto max-w-5xl space-y-6"
+      className="mx-auto max-w-6xl space-y-6"
       aria-busy="true"
-      aria-label="Loading draft revision"
+      aria-label="Loading quote review"
     >
-      <div className="h-28 border-b border-border bg-surface-muted/70" />
-      <div className="grid min-h-28 border border-border bg-surface-muted/55 sm:grid-cols-4" />
-      <div className="min-h-28 border border-border bg-surface-muted/55" />
-      <LoadingState label="Loading the recorded revision decision" />
+      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
+      <div className="grid min-h-28 rounded-lg border border-border bg-surface-muted/55 sm:grid-cols-4" />
+      <div className="min-h-28 rounded-lg border border-border bg-surface-muted/55" />
+      <LoadingState label="Loading the saved quote review" />
     </section>
   );
 }
@@ -1439,13 +1491,13 @@ function DetailSkeleton() {
 function PrepareSkeleton() {
   return (
     <section
-      className="mx-auto max-w-5xl space-y-6"
+      className="mx-auto max-w-6xl space-y-6"
       aria-busy="true"
-      aria-label="Loading revision source"
+      aria-label="Loading current quote"
     >
-      <div className="h-28 border-b border-border bg-surface-muted/70" />
-      <div className="grid min-h-28 border border-border bg-surface-muted/55 sm:grid-cols-4" />
-      <div className="min-h-72 border border-border bg-surface-muted/55" />
+      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
+      <div className="grid min-h-28 rounded-lg border border-border bg-surface-muted/55 sm:grid-cols-4" />
+      <div className="min-h-72 rounded-lg border border-border bg-surface-muted/55" />
     </section>
   );
 }
@@ -1454,30 +1506,28 @@ function quoteVersion(version: number): string {
   return `V${version}`;
 }
 
-function humanizeCode(value: string): string {
-  return value
-    .split("_")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
+function resultLabel(outcome: ReconciliationOutcome): string {
+  if (outcome === "executed") return "Draft was made";
+  if (outcome === "not_executed") return "Draft was not made";
+  return "Not sure";
 }
 
 function messageFor(error: unknown): string {
   if (!(error instanceof ApiError)) {
-    return "The protected request was not confirmed. Reopen the recorded state before trying another decision.";
+    return "We could not save this choice. Load the saved request before you choose again.";
   }
   switch (error.code) {
     case "quote_revision_broker_unavailable":
-      return "The private revision broker is unavailable. No Draft shell was recorded.";
+      return "IronWrap could not reach the quote service. No draft was confirmed.";
     case "quote_revision_approval_expired":
-      return "This review window expired before a decision. Prepare a current request from the source quote.";
+      return "This review ended before you chose. Start a new review from the quote.";
     case "quote_revision_approval_version_conflict":
-      return "This recorded request changed. Refresh before making another decision.";
+      return "This request changed. Load it again before you choose.";
     case "execution_uncertain":
-      return "The result is uncertain. Do not retry. Reconcile the recorded Hermes Run instead.";
+      return "We could not tell if the draft was made. Do not try again. Check the saved result.";
     case "quote_revision_approval_not_pending":
-      return "This request is no longer awaiting a decision. Refresh to inspect the recorded state.";
+      return "This request no longer needs a choice. Load it again to see the saved state.";
     default:
-      return "The protected request was not confirmed. Refresh the recorded state before deciding again.";
+      return "We could not save this choice. Load the saved request before you choose again.";
   }
 }

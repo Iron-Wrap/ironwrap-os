@@ -7,7 +7,10 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import {
@@ -31,7 +34,6 @@ import {
   type ServiceCaseDetailResponse,
   type ServiceRemedy,
 } from "./service-contracts";
-import { Notice } from "./service-notice";
 import { cadFromCents, codeLabel, severityLabel, stateLabel } from "./service-presentation";
 
 /**
@@ -70,21 +72,21 @@ function ServiceCaseContent() {
   if (!caseId) {
     return (
       <ErrorState
-        title="This callback link is incomplete"
-        message="No service case was named. Return to the callback desk and choose a case."
+        title="This call link is not ready"
+        message="Go back to Service calls and pick a call."
       />
     );
   }
-  if (!query.data && query.isPending) return <LoadingState label="Loading this callback…" />;
+  if (!query.data && query.isPending) return <LoadingState label="Loading this call…" />;
   if (!query.data) {
     return (
       <ErrorState
-        title="Callback unavailable"
-        message="Nothing about this case was changed. Reconnect and re-open the callback desk."
+        title="We could not load this call"
+        message="Nothing changed. Check your link and try again."
         onRetry={() => void query.refetch()}
         action={
           <Button asChild variant="outline">
-            <Link to="/service">Back to callback desk</Link>
+            <Link to="/service">Back to Service calls</Link>
           </Button>
         }
       />
@@ -97,55 +99,84 @@ function ServiceCaseContent() {
   const canRecoverCost = model.allowed_actions.includes("service_case.recover_cost");
 
   return (
-    <section className="mx-auto max-w-4xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <Button asChild variant="ghost" size="compact" className="-ml-2">
-          <Link to="/service">
-            <ArrowLeft aria-hidden="true" />
-            Back to callback desk
-          </Link>
-        </Button>
-        <div className="mt-4 flex min-w-0 items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-            <ClipboardList className="size-5 text-accent" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              {severityLabel(serviceCase.severity)} · {stateLabel(serviceCase.state)}
-            </p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-              {codeLabel(serviceCase.symptom_code)}
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              {serviceCase.roof_job_id} · response due {serviceCase.response_due_at} · version{" "}
-              {serviceCase.version}
-            </p>
+    <section className="mx-auto max-w-5xl space-y-6 pb-4">
+      <Button asChild variant="ghost" size="compact" className="-ml-2">
+        <Link to="/service">
+          <ArrowLeft aria-hidden="true" />
+          Back to Service calls
+        </Link>
+      </Button>
+
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <ClipboardList className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  {severityLabel(serviceCase.severity)} · {stateLabel(serviceCase.state)}
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance capitalize sm:text-4xl">
+                  {codeLabel(serviceCase.symptom_code)}
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Finish the next safe step. Each saved step stays in the call history.
+                </p>
+              </div>
+            </div>
           </div>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">Job ID</p>
+            <p className="mt-2 break-words text-lg font-black tracking-[-0.02em]">
+              {serviceCase.roof_job_id}
+            </p>
+            <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Call by
+            </p>
+            <p className="mt-2 text-sm font-semibold leading-6">
+              {formatDateTime(
+                serviceCase.response_due_at,
+                session.tenant.locale,
+                session.tenant.time_zone,
+              )}
+            </p>
+            <details className="mt-4 text-xs text-muted">
+              <summary className="cursor-pointer font-bold text-foreground">System details</summary>
+              <p className="mt-2 break-all leading-5">
+                Call ID {serviceCase.service_case_id} · Version {serviceCase.version}
+              </p>
+            </details>
+          </div>
+        </header>
+      </Card>
 
       {offline ? (
-        <Notice tone="warning" title="Reconnect to act on this callback">
-          Service decisions are not queued offline. Nothing on this page is recorded until it
-          reaches IronWrap OS.
+        <Notice tone="warning" title="Go online to save a step">
+          This page does not save work while you are offline.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="That step was refused">
-          {actionError}
+        <Notice tone="danger" title="We could not save this step">
+          <p>Check the call and try again.</p>
+          <details className="mt-2">
+            <summary className="cursor-pointer font-bold text-foreground">System details</summary>
+            <p className="mt-1 break-words">{actionError}</p>
+          </details>
         </Notice>
       ) : null}
       {serviceCase.duplicate_of_case_id ? (
-        <Notice tone="info" title="This report is a linked duplicate">
-          The live remedy is on{" "}
+        <Notice tone="info" title="This call was saved twice">
+          Work from{" "}
           <Link
             to="/service/$caseId"
             params={{ caseId: serviceCase.duplicate_of_case_id }}
             className="underline"
           >
-            the original case
+            the first call
           </Link>
-          . It is kept so the second call is never lost.
+          . This copy stays in the history.
         </Notice>
       ) : null}
 
@@ -167,22 +198,32 @@ function ServiceCaseContent() {
         onDone={refresh}
       />
 
-      <section className="border border-border bg-surface" aria-label="Case history">
+      <Card className="overflow-hidden" aria-label="Call history">
         <div className="border-b border-border px-5 py-4 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">History</h2>
+          <h2 className="text-lg font-bold tracking-[-0.02em]">Call history</h2>
+          <p className="mt-1 text-sm leading-6 text-muted">Saved steps, newest data kept safe.</p>
         </div>
         <ol className="divide-y divide-border">
           {model.events.map((event) => (
             <li key={event.event_id} className="px-5 py-3 text-sm leading-6 sm:px-6">
-              <span className="font-bold">{codeLabel(event.event_type)}</span>{" "}
-              <span className="text-muted">
-                · {stateLabel(event.case_state)} · v{event.case_version} · {event.created_at}
+              <p className="font-bold capitalize">{codeLabel(event.event_type)}</p>
+              <p className="mt-1 text-muted">
+                {stateLabel(event.case_state)} ·{" "}
+                {formatDateTime(event.created_at, session.tenant.locale, session.tenant.time_zone)}
                 {event.detail_code ? ` · ${codeLabel(event.detail_code)}` : ""}
-              </span>
+              </p>
+              <details className="mt-2 text-xs text-muted">
+                <summary className="cursor-pointer font-bold text-foreground">
+                  System details
+                </summary>
+                <p className="mt-1 break-all">
+                  Event {event.event_id} · Version {event.case_version}
+                </p>
+              </details>
             </li>
           ))}
         </ol>
-      </section>
+      </Card>
     </section>
   );
 }
@@ -234,41 +275,41 @@ function TriagePanel({ model, caseId, offline, onError, onDone }: StepProps) {
 
   return (
     <ActionCard
-      title="Triage this callback"
-      description="Triage is a human decision. A model may advise it, but the category and the responsibility recorded here carry your name."
-      submitLabel="Record triage"
+      title="Check this call"
+      description="Pick the problem type and who may need to fix it. Your choice is saved."
+      submitLabel="Save check"
       busy={mutation.isPending}
       disabled={offline || unknownBlame || !/^[0-9a-f]{64}$/.test(evidenceDigest.trim())}
       onSubmit={() => mutation.mutate()}
       footer={
         model.service_case.state === "reopened"
-          ? "A reopened case is triaged again; the closure that came before stays in the history."
+          ? "This call was opened again. The old work stays in the history."
           : undefined
       }
     >
       <Choice
         id="triage-category"
-        label="Category"
+        label="Problem type"
         value={finalCategory}
         options={serviceTriageCategories}
         onChange={setFinalCategory}
       />
       <Choice
         id="triage-responsibility"
-        label="Responsibility"
+        label="Who may need to fix it"
         value={responsibility}
         options={serviceResponsibilities}
         onChange={setResponsibility}
       />
       <Digest
         id="triage-evidence"
-        label="Triage evidence digest"
+        label="Proof code"
         value={evidenceDigest}
         onChange={setEvidenceDigest}
       />
       {unknownBlame ? (
         <p className="text-sm leading-6 text-danger sm:col-span-2">
-          An unknown category may not assign blame. Leave responsibility undetermined.
+          If the problem type is not known, pick Not known for who may need to fix it.
         </p>
       ) : null}
     </ActionCard>
@@ -300,9 +341,9 @@ function DiagnosisPanel({ caseId, offline, onError, onDone }: StepProps) {
 
   return (
     <ActionCard
-      title="Record the diagnosis"
-      description="A diagnosis names the root cause and issues the governed service work package that will carry the remedy. Physical work is never dispatched any other way."
-      submitLabel="Record diagnosis"
+      title="Save the cause"
+      description="Name what caused the problem and what work may fix it. This does not send a crew."
+      submitLabel="Save cause"
       busy={mutation.isPending}
       disabled={
         offline ||
@@ -317,31 +358,35 @@ function DiagnosisPanel({ caseId, offline, onError, onDone }: StepProps) {
     >
       <Field
         id="diagnosis-root-cause"
-        label="Root cause code"
+        label="Cause code"
         value={rootCauseCode}
         onChange={setRootCauseCode}
       />
       <Field
         id="diagnosis-corrective-action"
-        label="Corrective action code"
+        label="Fix code"
         value={correctiveActionCode}
         onChange={setCorrectiveActionCode}
       />
       <Field
         id="diagnosis-work-package"
-        label="Service work package"
+        label="Work plan ID"
         value={workPackageRef}
         onChange={setWorkPackageRef}
       />
       <Field
         id="diagnosis-reserve"
-        label="Warranty reserve (cents)"
+        label="Money set aside (cents)"
         value={warrantyReserve}
         onChange={setWarrantyReserve}
+        type="number"
+        inputMode="numeric"
+        min={0}
+        step={1}
       />
       <Digest
         id="diagnosis-evidence"
-        label="Diagnosis evidence digest"
+        label="Proof code"
         value={evidenceDigest}
         onChange={setEvidenceDigest}
       />
@@ -369,25 +414,23 @@ function RemedyPanel({ caseId, offline, onError, onDone }: StepProps) {
 
   return (
     <ActionCard
-      title="Issue the remedy"
-      description="Schedules the return visit and freezes the parts manifest it will carry."
-      submitLabel="Issue remedy"
+      title="Plan the fix"
+      description="Set the return visit and save the parts proof."
+      submitLabel="Save fix plan"
       busy={mutation.isPending}
       disabled={offline || !windowValid || !/^[0-9a-f]{64}$/.test(partsManifestDigest.trim())}
       onSubmit={() => mutation.mutate()}
     >
-      <DateTime id="remedy-start" label="Scheduled start" value={start} onChange={setStart} />
-      <DateTime id="remedy-end" label="Scheduled end" value={end} onChange={setEnd} />
+      <DateTime id="remedy-start" label="Start" value={start} onChange={setStart} />
+      <DateTime id="remedy-end" label="End" value={end} onChange={setEnd} />
       <Digest
         id="remedy-parts"
-        label="Parts manifest digest"
+        label="Parts proof code"
         value={partsManifestDigest}
         onChange={setPartsManifestDigest}
       />
       {start && end && !windowValid ? (
-        <p className="text-sm leading-6 text-danger sm:col-span-2">
-          The scheduled end must be after the scheduled start.
-        </p>
+        <p className="text-sm leading-6 text-danger sm:col-span-2">End must be after start.</p>
       ) : null}
     </ActionCard>
   );
@@ -415,9 +458,9 @@ function VerificationPanel({ caseId, remedy, offline, onError, onDone }: StepPro
 
   return (
     <ActionCard
-      title="Verify the remedy"
-      description="A supervisor's verification is a separate fact from the customer's acceptance. A failed verification keeps its evidence and returns the case to diagnosis for rework."
-      submitLabel="Record verification"
+      title="Check the fix"
+      description="A manager checks the work. Save the customer answer in the next step."
+      submitLabel="Save fix check"
       busy={mutation.isPending}
       disabled={
         offline ||
@@ -431,27 +474,31 @@ function VerificationPanel({ caseId, remedy, offline, onError, onDone }: StepPro
     >
       <Choice
         id="verification-outcome"
-        label="Outcome"
+        label="Did the fix pass?"
         value={outcome}
         options={["verified", "failed"] as const}
         onChange={(value) => setOutcome(value as "verified" | "failed")}
       />
       <Field
         id="verification-cost"
-        label="Actual cost (cents)"
+        label="Work cost (cents)"
         value={costActual}
         onChange={setCostActual}
+        type="number"
+        inputMode="numeric"
+        min={0}
+        step={1}
       />
       <Digest
         id="verification-evidence"
-        label="Field evidence digest"
+        label="Work proof code"
         value={fieldEvidenceDigest}
         onChange={setFieldEvidenceDigest}
       />
       {outcome === "failed" ? (
         <Field
           id="verification-failure"
-          label="Failure code"
+          label="Problem code"
           value={failureCode}
           onChange={setFailureCode}
         />
@@ -481,9 +528,9 @@ function CustomerDecisionPanel({ caseId, remedy, offline, onError, onDone }: Ste
 
   return (
     <ActionCard
-      title="Record the customer's decision"
-      description="A dispute is a first-class outcome, not an error. It keeps the verification evidence intact and sends the case back for rework or an honest non-remedied closure."
-      submitLabel="Record decision"
+      title="Save the customer answer"
+      description="Save yes or no. A no answer sends the call back for more work."
+      submitLabel="Save answer"
       busy={mutation.isPending}
       disabled={
         offline ||
@@ -495,7 +542,7 @@ function CustomerDecisionPanel({ caseId, remedy, offline, onError, onDone }: Ste
     >
       <Choice
         id="customer-decision"
-        label="Decision"
+        label="Customer answer"
         value={decision}
         options={["accepted", "disputed"] as const}
         onChange={(value) => setDecision(value as "accepted" | "disputed")}
@@ -503,21 +550,21 @@ function CustomerDecisionPanel({ caseId, remedy, offline, onError, onDone }: Ste
       {decision === "accepted" ? (
         <Field
           id="customer-acceptance"
-          label="Customer decision record"
+          label="Answer record ID"
           value={acceptanceRef}
           onChange={setAcceptanceRef}
         />
       ) : (
         <Field
           id="customer-dispute"
-          label="Dispute code"
+          label="Problem code"
           value={disputeCode}
           onChange={setDisputeCode}
         />
       )}
       <Digest
         id="customer-evidence"
-        label="Decision evidence digest"
+        label="Proof code"
         value={evidenceDigest}
         onChange={setEvidenceDigest}
       />
@@ -537,16 +584,16 @@ function ClosurePanel({ caseId, offline, onError, onDone }: StepProps) {
 
   return (
     <ActionCard
-      title="Close this callback"
-      description="Accepted work closes as remedied. Anything unresolved closes under an honest non-remedied reason, and the bus refuses a closure its state does not support."
-      submitLabel="Close case"
+      title="Mark this call done"
+      description="Pick the true reason. The old work stays in the history."
+      submitLabel="Mark done"
       busy={mutation.isPending}
       disabled={offline}
       onSubmit={() => mutation.mutate()}
     >
       <Choice
         id="closure-reason"
-        label="Closure reason"
+        label="Why is it done?"
         value={closureReason}
         options={serviceClosureReasons}
         onChange={setClosureReason}
@@ -568,19 +615,14 @@ function ReopenPanel({ model, caseId, offline, onError, onDone }: StepProps) {
 
   return (
     <ActionCard
-      title="Reopen this callback"
-      description="Reopening corrects the case forward with a raised reopen count. The closure that came before stays in the history and is never erased."
-      submitLabel="Reopen case"
+      title="Open this call again"
+      description="Add the reason. The old work stays in the history."
+      submitLabel="Open again"
       busy={mutation.isPending}
       disabled={offline || !reopenCode.trim()}
       onSubmit={() => mutation.mutate()}
     >
-      <Field
-        id="reopen-code"
-        label="Reopen reason code"
-        value={reopenCode}
-        onChange={setReopenCode}
-      />
+      <Field id="reopen-code" label="Reason code" value={reopenCode} onChange={setReopenCode} />
     </ActionCard>
   );
 }
@@ -602,24 +644,23 @@ function CostPanel({
 }) {
   const cost = model.cost;
   return (
-    <section className="border border-border bg-surface" aria-label="Cost and recovery">
+    <Card className="overflow-hidden" aria-label="Cost check">
       <div className="border-b border-border px-5 py-4 sm:px-6">
         <div className="flex items-start gap-3">
           <Coins className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
           <div>
-            <h2 className="text-lg font-bold tracking-[-0.02em]">Cost and recovery</h2>
+            <h2 className="text-lg font-bold tracking-[-0.02em]">Cost check</h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Measured cost, not an estimate of it: reserve, what the remedy actually cost, and what
-              settled recovery brought back.
+              See the saved work cost and any money paid back.
             </p>
           </div>
         </div>
       </div>
       <dl className="grid gap-4 p-5 sm:grid-cols-4 sm:p-6">
-        <Figure label="Warranty reserve" value={cadFromCents(cost.warranty_reserve_cents)} />
-        <Figure label="Actual cost" value={cadFromCents(cost.actual_cost_cents)} />
-        <Figure label="Recovered" value={cadFromCents(cost.recovered_cents)} />
-        <Figure label="Net cost carried" value={cadFromCents(cost.net_cost_cents)} />
+        <Figure label="Money set aside" value={cadFromCents(cost.warranty_reserve_cents)} />
+        <Figure label="Work cost" value={cadFromCents(cost.actual_cost_cents)} />
+        <Figure label="Money paid back" value={cadFromCents(cost.recovered_cents)} />
+        <Figure label="Cost left" value={cadFromCents(cost.net_cost_cents)} />
       </dl>
 
       {model.cost_recovery_claims.length > 0 ? (
@@ -630,8 +671,8 @@ function CostPanel({
                 {claim.counterparty_ref} · {claim.counterparty_kind}
               </p>
               <p className="mt-1 text-sm leading-6 text-muted">
-                {cadFromCents(claim.claimed_amount_cents)} claimed ·{" "}
-                {codeLabel(claim.claim_basis_code)} · {claim.state} · one attempt permitted
+                {cadFromCents(claim.claimed_amount_cents)} asked for ·{" "}
+                {codeLabel(claim.claim_basis_code)} · {codeLabel(claim.state)} · one send try
               </p>
               {claim.state === "uncertain" && canRecoverCost ? (
                 <ReconcilePanel
@@ -657,10 +698,10 @@ function CostPanel({
         />
       ) : (
         <p className="border-t border-border px-5 py-4 text-sm leading-6 text-muted sm:px-6">
-          Claiming money back from a supplier, manufacturer, or insurer is the owner's decision.
+          Only the owner can ask a supplier, maker, or insurance company to pay this cost.
         </p>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -703,9 +744,9 @@ function ClaimPanel({
 
   return (
     <ActionCard
-      title="Claim this cost back"
-      description="Records the intent to claim; no supplier, manufacturer, or insurer is contacted from here. Exactly one submission attempt is ever permitted, and the bus refuses recovery where triage kept responsibility inside IronWrap's own crews."
-      submitLabel="Record claim intent"
+      title="Ask for money back"
+      description="This saves a request. It does not contact anyone. Only one send try is allowed."
+      submitLabel="Save request"
       busy={mutation.isPending}
       disabled={
         offline ||
@@ -718,42 +759,41 @@ function ClaimPanel({
         !deadline
       }
       onSubmit={() => mutation.mutate()}
-      footer={diagnosed ? undefined : "A claim needs a diagnosis first."}
+      footer={diagnosed ? undefined : "Save the cause first."}
     >
       <Choice
         id="claim-counterparty-kind"
-        label="Counterparty"
+        label="Who may pay"
         value={counterpartyKind}
         options={serviceCounterpartyKinds}
         onChange={setCounterpartyKind}
       />
       <Field
         id="claim-counterparty"
-        label="Counterparty record"
+        label="Company ID"
         value={counterpartyRef}
         onChange={setCounterpartyRef}
       />
       <Field
         id="claim-basis"
-        label="Claim basis code"
+        label="Reason code"
         value={claimBasisCode}
         onChange={setClaimBasisCode}
       />
       <Field
         id="claim-amount"
-        label="Claimed amount (cents)"
+        label="Amount (cents)"
         value={claimedAmount}
         onChange={setClaimedAmount}
+        type="number"
+        inputMode="numeric"
+        min={1}
+        step={1}
       />
-      <DateTime
-        id="claim-deadline"
-        label="Counterparty claim deadline"
-        value={deadline}
-        onChange={setDeadline}
-      />
+      <DateTime id="claim-deadline" label="Send by" value={deadline} onChange={setDeadline} />
       <Digest
         id="claim-evidence"
-        label="Claim evidence digest"
+        label="Proof code"
         value={evidenceDigest}
         onChange={setEvidenceDigest}
       />
@@ -793,9 +833,9 @@ function ReconcilePanel({
 
   return (
     <ActionCard
-      title="Reconcile this uncertain claim"
-      description="An uncertain attempt has exactly one way out, and it is an independently observed outcome. It is never retried behind your back."
-      submitLabel="Record reconciliation"
+      title="Check a send result"
+      description="The first result is not known. Save what another source shows. Do not send it again."
+      submitLabel="Save result"
       busy={mutation.isPending}
       disabled={
         offline ||
@@ -806,23 +846,27 @@ function ReconcilePanel({
     >
       <Choice
         id={`reconcile-outcome-${claim.claim_id}`}
-        label="Observed outcome"
+        label="What happened?"
         value={outcome}
         options={["executed", "not_executed", "inconclusive"] as const}
         onChange={setOutcome}
       />
       <Field
         id={`reconcile-ref-${claim.claim_id}`}
-        label="Reconciliation evidence"
+        label="Result proof"
         value={reconciliationRef}
         onChange={setReconciliationRef}
       />
       {outcome === "executed" ? (
         <Field
           id={`reconcile-amount-${claim.claim_id}`}
-          label="Recovered amount (cents)"
+          label="Money paid back (cents)"
           value={recoveredAmount}
           onChange={setRecoveredAmount}
+          type="number"
+          inputMode="numeric"
+          min={0}
+          step={1}
         />
       ) : null}
     </ActionCard>
@@ -853,25 +897,29 @@ function ActionCard({
     if (!disabled && !busy) onSubmit();
   }
   return (
-    <form className="border border-border bg-surface" onSubmit={handle} aria-label={title}>
-      <div className="border-b border-border px-5 py-5 sm:px-6">
-        <h2 className="text-lg font-bold tracking-[-0.02em]">{title}</h2>
-        <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
-      </div>
-      <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">{children}</div>
-      <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <p className="max-w-xl text-sm leading-6 text-muted">{footer ?? ""}</p>
-        <Button
-          type="submit"
-          variant="accent"
-          className="shrink-0"
-          busy={busy}
-          disabled={disabled || busy}
-        >
-          {submitLabel}
-        </Button>
-      </div>
-    </form>
+    <Card className="overflow-hidden">
+      <form onSubmit={handle} aria-label={title}>
+        <div className="border-b border-border px-5 py-5 sm:px-6">
+          <h2 className="text-lg font-bold tracking-[-0.02em]">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
+        </div>
+        <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">{children}</div>
+        <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <p className="max-w-xl text-sm leading-6 text-muted">
+            {footer ?? (disabled ? "Fill each needed box to save." : "Ready to save.")}
+          </p>
+          <Button
+            type="submit"
+            variant="accent"
+            className="shrink-0"
+            busy={busy}
+            disabled={disabled || busy}
+          >
+            {submitLabel}
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }
 
@@ -889,11 +937,19 @@ function Field({
   label,
   value,
   onChange,
+  type = "text",
+  inputMode,
+  min,
+  step,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
+  type?: "text" | "number";
+  inputMode?: "numeric";
+  min?: number;
+  step?: number;
 }) {
   return (
     <div>
@@ -902,6 +958,11 @@ function Field({
       </label>
       <Input
         id={id}
+        type={type}
+        inputMode={inputMode}
+        min={min}
+        step={step}
+        required
         value={value}
         onChange={(event) => onChange(event.target.value)}
         autoComplete="off"
@@ -929,13 +990,18 @@ function Digest({
       </label>
       <Input
         id={id}
+        required
+        minLength={64}
+        maxLength={64}
+        pattern="[0-9a-f]{64}"
+        title="Enter the 64-letter proof code. Use only a to f and 0 to 9."
         value={value}
         onChange={(event) => onChange(event.target.value)}
         autoComplete="off"
         className="mt-3"
       />
       <p className="mt-2 text-xs leading-5 text-muted">
-        The 64-character digest of the evidence already stored for this step.
+        Paste the 64-letter proof code for the saved file. Use a to f and 0 to 9.
       </p>
     </div>
   );
@@ -960,6 +1026,7 @@ function DateTime({
       <Input
         id={id}
         type="datetime-local"
+        required
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="mt-3"
@@ -987,23 +1054,35 @@ function Choice({
       <label htmlFor={id} className="text-sm font-bold text-foreground">
         {label}
       </label>
-      <select
+      <Select
+        field
         id={id}
+        required
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-3 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base shadow-inner shadow-black/3 outline-none focus:border-info focus:outline-info disabled:cursor-not-allowed disabled:opacity-55"
+        className="mt-3"
       >
         {options.map((option) => (
           <option key={option} value={option}>
             {codeLabel(option)}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }
 
 function messageFor(error: unknown): string {
   if (error instanceof ApiError) return error.message;
-  return "That step was not recorded. Re-open this callback before trying again.";
+  return "This step was not saved. Open the call again and try once more.";
+}
+
+function formatDateTime(value: string, locale: string, timeZone: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time not found";
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone,
+  }).format(date);
 }

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -174,14 +175,14 @@ describe("ProductionRunwayPage", () => {
   it("admits the dedicated production role and rejects other least-privilege roles", async () => {
     const productionView = renderRunway(productionSession);
 
-    expect(await screen.findByRole("heading", { name: "Production runway" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Production plan" })).toBeVisible();
     expect(loadProductionRunway).toHaveBeenCalledOnce();
     expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
     expect(
-      screen.queryByRole("link", { name: "Prepare schedule request for IW-1004" }),
+      screen.queryByRole("link", { name: "Start schedule check for IW-1004" }),
     ).not.toBeInTheDocument();
 
     productionView.unmount();
@@ -198,29 +199,33 @@ describe("ProductionRunwayPage", () => {
   it("keeps the runway read-only and links only eligible jobs to a schedule request", async () => {
     renderRunway();
 
-    await screen.findByRole("heading", { name: "Production runway" });
-    expect(screen.getByText(/does not schedule, dispatch, or alter a job/i)).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Blocked" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Ready to review" })).toBeVisible();
-    expect(screen.getByText("Material attention")).toBeVisible();
-    expect(
-      screen.getByText("Shortage · Requested delivery: Delivery date unavailable"),
-    ).toBeVisible();
-    expect(screen.getAllByText("Scheduling locks").length).toBeGreaterThan(0);
+    await screen.findByRole("heading", { name: "Production plan" });
+    expect(screen.getByText(/This page does not change a job/i)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ready to check" })).toBeVisible();
+    expect(screen.getByText("Material issue")).toBeVisible();
+    expect(screen.getByText("Shortage · Asked for: date not found")).toBeVisible();
+    expect(screen.getAllByText("Start steps").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("Deposit: Ready").length).toBeGreaterThan(0);
     expect(screen.queryByLabelText(/Completion:/)).not.toBeInTheDocument();
-    expect(screen.getAllByText(/Completion is reviewed at closeout/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Final work is checked when the job is done/i).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
+    expect(screen.getByRole("link", { name: "Start schedule check for IW-1004" })).toHaveAttribute(
+      "href",
+      "/production/schedule/JOB-D",
+    );
     expect(
-      screen.getByRole("link", { name: "Prepare schedule request for IW-1004" }),
-    ).toHaveAttribute("href", "/production/schedule/JOB-D");
-    expect(
-      screen.queryByRole("link", { name: "Prepare schedule request for IW-1001" }),
+      screen.queryByRole("link", { name: "Start schedule check for IW-1001" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /schedule|dispatch/i })).not.toBeInTheDocument();
+    expect(screen.getByText("JOB-A")).not.toBeVisible();
+    await userEvent.setup().click(screen.getAllByText("System details")[0]!);
+    expect(screen.getByText("JOB-A")).toBeVisible();
   });
 
   it("makes incomplete source coverage explicit", async () => {
@@ -232,16 +237,16 @@ describe("ProductionRunwayPage", () => {
     );
     renderRunway();
 
-    await screen.findByRole("heading", { name: "Production runway" });
-    expect(screen.getByRole("heading", { name: "Source boundary needs review" })).toBeVisible();
-    expect(screen.getByText(/Limited source: gate states/i)).toBeVisible();
-    expect(screen.getByText(/does not infer missing gates/i)).toBeVisible();
+    await screen.findByRole("heading", { name: "Production plan" });
+    expect(screen.getByRole("heading", { name: "Some job data is missing" })).toBeVisible();
+    expect(screen.getByText(/Missing from: gate states/i)).toBeVisible();
+    expect(screen.getByText(/Do not send a crew until you check the job/i)).toBeVisible();
   });
 
   it("only offers to clear a lock when the read model says this session may", async () => {
     const readOnly = renderRunway();
 
-    await screen.findByRole("heading", { name: "Production runway" });
+    await screen.findByRole("heading", { name: "Production plan" });
     // The default model does not grant `production_gate.clear`, so a blocked job
     // shows its locks and no way to touch them.
     expect(screen.getByLabelText("Materials: Blocked")).toBeVisible();
@@ -276,7 +281,7 @@ describe("ProductionRunwayPage", () => {
     );
     renderRunway();
 
-    await screen.findByRole("heading", { name: "Production runway" });
-    expect(screen.getByText("Shortage · Requested delivery: Jul 22, 2026")).toBeVisible();
+    await screen.findByRole("heading", { name: "Production plan" });
+    expect(screen.getByText("Shortage · Asked for: Jul 22, 2026")).toBeVisible();
   });
 });

@@ -446,9 +446,9 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
     expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
-    expect(screen.getAllByRole("link", { name: /Capture evidence/ })[0]).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: /Add proof/ })[0]).toHaveAttribute(
       "href",
       expect.stringContaining(
         "work_object_type=Shop+Order&work_object_id=SHOP-001&physical_context_type=Shop+Floor&physical_context_id=SHOP-FLOOR-1",
@@ -485,12 +485,12 @@ describe("JobPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Complete work package" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Complete from current ledger" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Finish this work plan" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Finish work" })).toBeVisible();
 
     const user = userEvent.setup();
     vi.mocked(apiCommand).mockResolvedValue(undefined);
-    await user.click(screen.getByRole("button", { name: "Complete from current ledger" }));
+    await user.click(screen.getByRole("button", { name: "Finish work" }));
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
     expect(vi.mocked(apiCommand).mock.calls[0]?.[0]).toMatchObject({
       path: "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/complete",
@@ -545,11 +545,9 @@ describe("JobPage", () => {
         }),
       ).toBeVisible();
       expect(
-        screen.queryByRole("heading", { name: "Complete work package" }),
+        screen.queryByRole("heading", { name: "Finish this work plan" }),
       ).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "Complete from current ledger" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Finish work" })).not.toBeInTheDocument();
       rendered.unmount();
     }
     expect(apiCommand).not.toHaveBeenCalled();
@@ -574,7 +572,7 @@ describe("JobPage", () => {
     renderWorkObject();
 
     await user.click(await screen.findByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: "Acknowledge this package" }));
+    await user.click(screen.getByRole("button", { name: "I reviewed this plan" }));
     await waitFor(() => {
       expect(saveOutboxAction).toHaveBeenNthCalledWith(
         1,
@@ -657,7 +655,7 @@ describe("JobPage", () => {
       fieldSession,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Start work from current packet" }));
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
     expect(vi.mocked(apiCommand).mock.calls[0]?.[0]).toMatchObject({
       path: "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/start",
@@ -678,15 +676,15 @@ describe("JobPage", () => {
   it("turns a blocked gate into a work lock while preserving the permitted blocker-capture path", async () => {
     renderJob();
 
-    expect(await screen.findByRole("heading", { name: "Work status" })).toBeVisible();
-    expect(screen.getByText("1 gate blocks scheduled work")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Work checks" })).toBeVisible();
+    expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Capture blocker proof" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Add blocker proof" })).toHaveAttribute(
       "href",
       "/check-in/JOB-1",
     );
-    expect(screen.getByRole("link", { name: "Capture blocker proof" })).toHaveClass("min-h-16");
-    expect(screen.getByRole("link", { name: "Capture blocker proof" })).toHaveClass("fixed");
+    expect(screen.getByRole("link", { name: "Add blocker proof" })).toHaveClass("min-h-16");
+    expect(screen.getByRole("link", { name: "Add blocker proof" })).not.toHaveClass("fixed");
     expect(screen.queryByText("Gate owner: Production dispatch")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Proof obligations" })).not.toBeInTheDocument();
   });
@@ -697,7 +695,7 @@ describe("JobPage", () => {
     expect(await screen.findByText("Safety plan · v2")).toBeVisible();
     expect(screen.getByText("Steep-slope fall exposure")).toBeVisible();
     expect(screen.getByText("Use roof anchors and harnesses")).toBeVisible();
-    expect(screen.getByText(/field_checkin · Internal/i)).toBeVisible();
+    expect(screen.getByText(/field_checkin · Team only/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /acknowledge|clear work|override/i }),
     ).not.toBeInTheDocument();
@@ -716,14 +714,10 @@ describe("JobPage", () => {
       await screen.findByRole("heading", { name: "123 Example Avenue, Calgary, AB" }),
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Production" })).toHaveAttribute("href", "/production");
-    expect(screen.getByRole("heading", { name: "Read-only job packet" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: /Capture .*proof/i })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Acknowledge this package" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Start work from current packet" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "View only" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "I reviewed this plan" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Stop Work and save report" }),
     ).not.toBeInTheDocument();
@@ -733,17 +727,15 @@ describe("JobPage", () => {
     const noAssignment = jobModel({ assignment: null, allowed_actions: [] });
     renderJob(noAssignment);
 
-    expect(
-      await screen.findByRole("heading", { name: "Active assignment required" }),
-    ).toBeVisible();
-    expect(screen.queryByRole("link", { name: /Capture .*proof/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Current job needed" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
   });
 
   it("labels cached data as an offline packet and suppresses older-proof loading", async () => {
     renderJob(jobModel({ stale_fields: ["offline.cached_packet"] }));
 
-    expect(await screen.findByText(/Offline packet from/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Load older proof" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/This is a saved copy from/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Show older proof" })).not.toBeInTheDocument();
   });
 
   it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
@@ -752,24 +744,20 @@ describe("JobPage", () => {
     expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
     expect(screen.getByText("v3 · Released")).toBeVisible();
     expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
-    expect(screen.getByText(/Pending independent release by Production manager/i)).toBeVisible();
-    expect(screen.getByText(/may be expired or superseded/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    expect(screen.getByText(/Waiting for Production manager/i)).toBeVisible();
+    expect(screen.getByText(/saved plan may be old/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "I reviewed this plan" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: "Start work from current packet" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(/never resumes work itself/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Start work button will show/i)).toBeVisible();
   });
 
   it("binds field evidence controls to the exact package version and declared slots", async () => {
     renderJob(workPackageModel());
 
-    expect(await screen.findByRole("heading", { name: "Evidence slots" })).toBeVisible();
-    expect(
-      screen.getByText(/Awaiting acknowledgement of this exact package version/i),
-    ).toBeVisible();
-    const captureLinks = screen.getAllByRole("link", { name: /Capture evidence/ });
+    expect(await screen.findByRole("heading", { name: "Proof needed" })).toBeVisible();
+    expect(screen.getByText(/still needs to review this plan/i)).toBeVisible();
+    const captureLinks = screen.getAllByRole("link", { name: /Add proof/ });
     expect(captureLinks).toHaveLength(2);
     expect(captureLinks[0]).toHaveAttribute(
       "href",
@@ -818,7 +806,7 @@ describe("JobPage", () => {
       },
     });
 
-    const correction = await screen.findByRole("link", { name: "Correct evidence for step 1" });
+    const correction = await screen.findByRole("link", { name: "Fix proof for step 1" });
     expect(correction).toHaveAttribute(
       "href",
       expect.stringContaining("evidence_correction_of=WPE-EVIDENCE-001"),
@@ -841,11 +829,9 @@ describe("JobPage", () => {
       },
     });
 
-    expect(await screen.findByRole("heading", { name: "Evidence slots" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Acknowledge this package" }),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Proof needed" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Add proof/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "I reviewed this plan" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
   });
 
@@ -863,7 +849,7 @@ describe("JobPage", () => {
     renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
 
     await user.click(await screen.findByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: "Acknowledge this package" }));
+    await user.click(screen.getByRole("button", { name: "I reviewed this plan" }));
     await waitFor(() => {
       expect(saveOutboxAction).toHaveBeenNthCalledWith(
         1,
@@ -884,7 +870,7 @@ describe("JobPage", () => {
       "Wind exceeds the plan limit.",
     );
     await user.click(screen.getByRole("button", { name: "Stop Work and save report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop work now/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop now/i);
     await waitFor(() => {
       expect(saveOutboxAction).toHaveBeenNthCalledWith(
         2,
@@ -900,7 +886,7 @@ describe("JobPage", () => {
       );
     });
     expect(flushOutbox).not.toHaveBeenCalled();
-    expect(screen.getByText(/does not change package status or unlock work/i)).toBeVisible();
+    expect(screen.getByText(/does not change the plan or unlock work/i)).toBeVisible();
   });
 
   it("removes Start after Stop Work until a fresh worker packet restores a server capability", async () => {
@@ -910,20 +896,16 @@ describe("JobPage", () => {
     vi.mocked(queueOutboxAction).mockResolvedValue(stopWork);
     renderJob(startableWorkPackageModel());
 
-    expect(
-      await screen.findByRole("button", { name: "Start work from current packet" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Start work" })).toBeVisible();
     await user.type(
       screen.getByLabelText("What requires work to stop?"),
       "Wind exceeds the plan limit.",
     );
     await user.click(screen.getByRole("button", { name: "Stop Work and save report" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop work now/i);
-    expect(
-      screen.queryByRole("button", { name: "Start work from current packet" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(/never resumes work itself/i)).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop now/i);
+    expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Start work button will show/i)).toBeVisible();
   });
 
   it("does not advertise Start while any server packet hold remains pending", async () => {
@@ -944,12 +926,8 @@ describe("JobPage", () => {
       },
     });
 
-    expect(
-      await screen.findByText(/Pending independent release by Production manager/i),
-    ).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: "Start work from current packet" }),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/Waiting for Production manager/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start work" })).not.toBeInTheDocument();
   });
 
   it("offers Start only from a fresh server capability and sends it directly online", async () => {
@@ -957,7 +935,7 @@ describe("JobPage", () => {
     vi.mocked(apiCommand).mockResolvedValue(undefined);
     renderJob(startableWorkPackageModel());
 
-    await user.click(await screen.findByRole("button", { name: "Start work from current packet" }));
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
 
     await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
     const options = vi.mocked(apiCommand).mock.calls[0]?.[0];

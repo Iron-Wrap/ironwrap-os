@@ -125,13 +125,19 @@ describe("FacetDesignPage", () => {
   });
 
   it("shows signed OIDC evidence and the exact reconciled blank Draft receipt", async () => {
+    const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByRole("heading", { name: "Customer design evidence" })).toBeVisible();
-    expect(screen.getByText("Draft projected")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Customer designs" })).toBeVisible();
+    expect(screen.getByText("Quote draft ready")).toBeVisible();
     expect(screen.getByText("facet-quote-revision:draft-1")).toBeVisible();
-    expect(screen.getByText("Version 3")).toBeVisible();
-    expect(screen.getByText("Google OIDC · exact project link")).toBeVisible();
+    expect(screen.getByText("Customer and job matched")).toBeVisible();
+    expect(screen.getByText("facet-project-1")).not.toBeVisible();
+
+    await user.click(screen.getByText("System details"));
+
+    expect(screen.getByText("facet-project-1")).toBeVisible();
+    expect(screen.getByText("Quote draft version")).toBeVisible();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /connect|prepare/i })).not.toBeInTheDocument();
@@ -145,6 +151,7 @@ describe("FacetDesignPage", () => {
             ...projected,
             event_id: "facet-awaiting",
             facet_project_id: "facet-project-awaiting",
+            decision_kind: "corrected",
             projection_state: "awaiting_projection",
             status_code: "awaiting_blank_draft_projection",
             projection: null,
@@ -197,21 +204,22 @@ describe("FacetDesignPage", () => {
 
     renderPage();
 
-    expect((await screen.findAllByText("Awaiting projection")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Lifecycle hold")).toBeVisible();
-    expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0);
-    expect(screen.getByText(/failed closed before claiming a Draft projection/i)).toBeVisible();
-    expect(screen.getByText("Waiting for the exact project link")).toBeVisible();
-    expect(screen.getByText("Signed delivery rejected")).toBeVisible();
-    expect(screen.getAllByRole("link", { name: "Open the governed sales path" })).toHaveLength(2);
+    expect((await screen.findAllByText("Waiting to start")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Customer changed this in Facet")).toBeVisible();
+    expect(screen.getByText("Customer removed it")).toBeVisible();
+    expect(screen.getAllByText("Needs help").length).toBeGreaterThan(0);
+    expect(screen.getByText(/stopped before making a quote draft/i)).toBeVisible();
+    expect(screen.getByText("Waiting for the right job")).toBeVisible();
+    expect(screen.getByText("Design could not be linked")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "Open sales" })).toHaveLength(2);
   });
 
   it("refreshes the complete evidence read model without a mutation route", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText("Draft projected");
+    await screen.findByText("Quote draft ready");
 
-    await user.click(screen.getByRole("button", { name: "Refresh evidence" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => expect(loadFacetDesignEvidence).toHaveBeenCalledTimes(2));
   });
@@ -220,8 +228,8 @@ describe("FacetDesignPage", () => {
     vi.mocked(loadFacetDesignEvidence).mockResolvedValueOnce(model([]));
     renderPage();
 
-    expect(await screen.findByText("No signed Facet decisions yet")).toBeVisible();
-    expect(screen.getByText(/signed producer delivery is accepted/i)).toBeVisible();
+    expect(await screen.findByText("No Facet design choices yet")).toBeVisible();
+    expect(screen.getByText(/customer choice will show/i)).toBeVisible();
   });
 
   it("fails closed for field roles without loading office evidence", () => {

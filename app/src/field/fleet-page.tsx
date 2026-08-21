@@ -7,7 +7,9 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
 import { apiRequest, ApiError, isRetryableApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { queueOutboxAction, saveOutboxAction } from "../storage/outbox";
@@ -119,9 +121,10 @@ export function FleetPage() {
           {assets.length > 1 ? (
             <label htmlFor={selectId} className="block text-sm font-bold">
               Which one
-              <select
+              <Select
+                field
                 id={selectId}
-                className="mt-1 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base"
+                className="mt-1"
                 value={asset.id}
                 onChange={(event) => {
                   setSelectedAssetId(event.target.value);
@@ -134,7 +137,7 @@ export function FleetPage() {
                     {row.unit_number ? ` · ${row.unit_number}` : ""}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : null}
 
@@ -189,8 +192,9 @@ export function FleetPage() {
               <h2 className="text-xl font-black tracking-[-0.025em]">Report a fault</h2>
               <label className="block text-sm font-bold">
                 How bad is it
-                <select
-                  className="mt-1 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base"
+                <Select
+                  field
+                  className="mt-1"
                   value={draft.severity}
                   onChange={(event) =>
                     setDraft({ ...draft, severity: event.target.value as FleetDefectSeverity })
@@ -201,14 +205,14 @@ export function FleetPage() {
                       {fleetDefectSeverityLabels[severity]}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <OutOfServiceWarning active={draft.severity === "Out of Service"} />
               <label htmlFor={descriptionId} className="block text-sm font-bold">
                 What is wrong
-                <textarea
+                <Textarea
                   id={descriptionId}
-                  className="mt-1 min-h-32 w-full rounded-lg border bg-surface-raised p-4 text-base"
+                  className="mt-1 min-h-32"
                   maxLength={DESCRIPTION_MAX_LENGTH}
                   required
                   value={draft.description}
@@ -571,8 +575,9 @@ function ChecklistItem({
           <div className="mt-4 space-y-3">
             <label className="block text-sm font-bold">
               How bad is it
-              <select
-                className="mt-1 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base"
+              <Select
+                field
+                className="mt-1"
                 value={row.severity}
                 onChange={(event) =>
                   onChange({ ...row, severity: event.target.value as FleetDefectSeverity })
@@ -583,12 +588,12 @@ function ChecklistItem({
                     {fleetDefectSeverityLabels[severity]}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="block text-sm font-bold">
               What you found
-              <textarea
-                className="mt-1 min-h-24 w-full rounded-lg border bg-surface-raised p-4 text-base"
+              <Textarea
+                className="mt-1"
                 maxLength={OBSERVATION_MAX_LENGTH}
                 required
                 value={row.observation}

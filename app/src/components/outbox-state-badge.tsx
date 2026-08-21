@@ -17,12 +17,12 @@ const visualByState: Record<
   saved_locally: {
     icon: HardDrive,
     className: "border-info/30 bg-info-soft text-info",
-    description: "Saved on this device and not queued yet.",
+    description: "Saved on this device. Not waiting to send yet.",
   },
   queued: {
     icon: CloudUpload,
     className: "border-info/30 bg-info-soft text-info",
-    description: "Waiting for a connection while the app is open.",
+    description: "Waiting to send. Keep the app open.",
   },
   uploading: {
     icon: LoaderCircle,
@@ -32,12 +32,12 @@ const visualByState: Record<
   verified: {
     icon: Check,
     className: "border-ok/30 bg-ok-soft text-ok",
-    description: "The server verified this exact saved item.",
+    description: "The office has this exact saved item.",
   },
   needs_attention: {
     icon: AlertTriangle,
     className: "border-danger/30 bg-danger-soft text-danger",
-    description: "Nothing was discarded. Review is needed before retrying.",
+    description: "Nothing was thrown away. Check this before you try again.",
   },
 };
 

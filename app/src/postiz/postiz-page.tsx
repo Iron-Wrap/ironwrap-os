@@ -1,13 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, CheckCircle2, RefreshCw, ShieldAlert } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ChevronRight,
+  Megaphone,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react";
+import { useRef, useState } from "react";
 
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { ReturnToNow } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import {
   approvePostizIntent,
@@ -40,14 +48,14 @@ const providerLabel: Record<PostizProvider, string> = {
 
 const stateLabel: Record<PostizIntentResponse["intent"]["state"], string> = {
   pending_review: "Needs review",
-  submission_pending: "Submission pending",
-  submitted: "Submitted",
-  published: "Published",
-  reconciliation_required: "Reconciliation required",
-  stop_submitted: "Stop submitted",
-  stop_reconciliation_required: "Stop reconciliation required",
-  connection_required: "Connection required",
-  rejected: "Rejected",
+  submission_pending: "Waiting to send",
+  submitted: "Sent",
+  published: "Posted",
+  reconciliation_required: "Needs a check",
+  stop_submitted: "Stop sent",
+  stop_reconciliation_required: "Stop needs a check",
+  connection_required: "Sign-in needed",
+  rejected: "Turned down",
 };
 
 export function PostizPage() {
@@ -56,7 +64,7 @@ export function PostizPage() {
     return (
       <ErrorState
         title="This work belongs to another role"
-        message="Only the owner can review or decide public marketing intent."
+        message="Only the owner can review or decide a public marketing post."
         action={<ReturnToNow />}
       />
     );
@@ -137,22 +145,22 @@ function PostizContent() {
   if (!intentId) {
     return (
       <ErrorState
-        title="This marketing review link is incomplete"
-        message="No intent record was provided. Return to Now and open the current exception."
+        title="This marketing link is not complete"
+        message="No post was found in this link. Go back to Now and open the current item."
       />
     );
   }
-  if (!query.data && query.isPending) return <LoadingState label="Loading marketing review…" />;
+  if (!query.data && query.isPending) return <PostizSkeleton />;
   if (!query.data && query.isError) {
     return (
       <ErrorState
-        title="Marketing review unavailable"
-        message="No intent was changed. Reconnect and load the current recorded state before deciding."
+        title="This marketing post could not load"
+        message="Nothing was changed. Go online and load the saved post before you choose."
         onRetry={() => void refresh()}
       />
     );
   }
-  if (!query.data) return <LoadingState label="Loading marketing review…" />;
+  if (!query.data) return <PostizSkeleton />;
 
   const model = query.data;
   const intent = model.intent;
@@ -168,58 +176,78 @@ function PostizContent() {
   }
 
   return (
-    <section className="mx-auto max-w-4xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
+    <section className="mx-auto max-w-6xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
             <Button asChild variant="ghost" size="compact" className="-ml-2">
               <Link to="/now">
                 <ArrowLeft aria-hidden="true" />
                 Back to Now
               </Link>
             </Button>
-            <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Marketing intent · {providerLabel[intent.provider]}
-            </p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-              {intent.title}
-            </h1>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              Review the bounded intent and use only the actions IronWrap OS currently permits.
-            </p>
+            <div className="mt-5 flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <Megaphone className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Marketing post · {providerLabel[intent.provider]}
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  {intent.title}
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Review this post. Use only the actions IronWrap currently allows.
+                </p>
+              </div>
+            </div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            busy={query.isFetching}
-            disabled={query.isFetching}
-            onClick={() => void refresh()}
-          >
-            <RefreshCw aria-hidden="true" />
-            Refresh state
-          </Button>
-        </div>
-      </header>
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
+            </p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {stateLabel[intent.state]}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {model.connected ? "This site is connected." : "This site is not connected yet."}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="compact"
+              className="mt-4"
+              busy={query.isFetching}
+              disabled={query.isFetching}
+              onClick={() => void refresh()}
+            >
+              <RefreshCw aria-hidden="true" />
+              Load again
+            </Button>
+          </div>
+        </header>
+      </Card>
 
       {offline ? (
-        <Notice title="Reconnect before acting">
-          Marketing actions are never queued offline. The last saved state remains read-only.
+        <Notice tone="warning" title="Go online before you choose">
+          Marketing choices are not saved while you are offline. The last saved post stays
+          read-only.
         </Notice>
       ) : null}
       {query.isError ? (
-        <Notice title="Showing the previous recorded state">
-          Refresh this intent before acting. No provider action was issued by the failed read.
+        <Notice tone="warning" title="Showing the last saved post">
+          Load this post again before you choose. The failed load did not change anything.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice title="The action was not confirmed" danger>
-          Refresh the recorded intent before deciding again. No provider error detail is shown.
+        <Notice tone="danger" title="The choice was not saved">
+          Load the saved post before you choose again. No extra error from the site is shown.
         </Notice>
       ) : null}
       {!model.enabled ? (
-        <Notice title="Postiz is disabled">
-          This intent remains visible, but the adapter has not been enabled for action.
+        <Notice tone="warning" title="Marketing posting is turned off">
+          You can still read this post, but sending is turned off.
         </Notice>
       ) : null}
 
@@ -230,15 +258,18 @@ function PostizContent() {
         <p className="mt-4 whitespace-pre-wrap break-words text-base leading-7">{intent.content}</p>
         <dl className="mt-6 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
           <Fact label="Scheduled" value={formatDate(intent.scheduled_at, session)} />
-          <Fact label="Authorization" value={intent.permission_scope} />
+          <Fact label="Site" value={providerLabel[intent.provider]} />
         </dl>
       </Card>
 
-      <section className="border-y border-border py-5" aria-labelledby="postiz-actions">
-        <h2 id="postiz-actions" className="text-xl font-black tracking-[-0.025em]">
-          Available actions
+      <section
+        className="overflow-hidden rounded-lg border border-border bg-surface-raised py-5 shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+        aria-labelledby="postiz-actions"
+      >
+        <h2 id="postiz-actions" className="px-5 text-xl font-black tracking-[-0.025em] sm:px-6">
+          What you can do
         </h2>
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+        <div className="mt-4 flex flex-col gap-3 px-5 sm:flex-row sm:flex-wrap sm:px-6">
           {model.allowed_actions.includes("postiz.intent.review") ? (
             <Button asChild variant="outline" className="w-full sm:w-auto">
               <a href="#postiz-content">Review content</a>
@@ -265,7 +296,7 @@ function PostizContent() {
               disabled={!canMutate("postiz.intent.approve") || busy}
               onClick={() => command("approve")}
             >
-              Approve intent
+              Approve post
             </Button>
           ) : null}
           {model.allowed_actions.includes("postiz.intent.reject") ? (
@@ -277,7 +308,7 @@ function PostizContent() {
               disabled={!canMutate("postiz.intent.reject") || busy}
               onClick={() => command("reject")}
             >
-              Reject intent
+              Turn down
             </Button>
           ) : null}
           {model.allowed_actions.includes("postiz.intent.stop") ? (
@@ -289,7 +320,7 @@ function PostizContent() {
               disabled={!canMutate("postiz.intent.stop") || busy}
               onClick={() => command("stop")}
             >
-              Stop intent
+              Stop post
             </Button>
           ) : null}
           {model.allowed_actions.includes("postiz.intent.reconcile") ? (
@@ -301,16 +332,19 @@ function PostizContent() {
               disabled={!canMutate("postiz.intent.reconcile") || busy}
               onClick={() => command("reconcile")}
             >
-              Reconcile state
+              Check saved state
             </Button>
           ) : null}
           {model.allowed_actions.length === 0 ? (
-            <p className="text-sm leading-6 text-muted">No action is permitted in this read.</p>
+            <p className="text-sm leading-6 text-muted">
+              Nothing can be done on this post right now.
+            </p>
           ) : null}
         </div>
       </section>
 
-      <Evidence model={model} />
+      <Proof model={model} />
+      <PostizSystemDetails model={model} />
     </section>
   );
 }
@@ -329,26 +363,22 @@ function StatusCard({ model }: { model: PostizIntentResponse }) {
         )}
         <div className="min-w-0">
           <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-            Recorded state
+            Saved state
           </p>
           <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
             {stateLabel[intent.state]}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            Adapter {model.adapter.expected_version} ·{" "}
-            {model.connected ? "Connected" : "Not connected"}
-            {model.reconciliation.remote_state
-              ? ` · Provider ${model.reconciliation.remote_state}`
-              : ""}
+            {providerLabel[intent.provider]} · {model.connected ? "Connected" : "Not connected"}
           </p>
           {publicationDrift ? (
             <p className="mt-2 text-sm font-semibold text-warning">
-              A previously observed publication no longer matches exact-ID readback. Reconcile
-              manually; public retraction is not automated.
+              The posted copy no longer matches what IronWrap saved. Check it by hand. IronWrap will
+              not take the post down for you.
             </p>
           ) : needsAttention ? (
             <p className="mt-2 text-sm font-semibold text-warning">
-              Provider confirmation needs attention. Refresh or reconcile when permitted.
+              The site still needs a check. Load again or check it when you can.
             </p>
           ) : null}
         </div>
@@ -357,27 +387,61 @@ function StatusCard({ model }: { model: PostizIntentResponse }) {
   );
 }
 
-function Evidence({ model }: { model: PostizIntentResponse }) {
-  if (model.intent.evidence_refs.length === 0 && model.intent.citations.length === 0) return null;
+function Proof({ model }: { model: PostizIntentResponse }) {
+  if (model.intent.citations.length === 0) return null;
   return (
-    <section aria-labelledby="postiz-evidence">
-      <h2 id="postiz-evidence" className="text-xl font-black tracking-[-0.025em]">
-        Evidence
+    <section aria-labelledby="postiz-proof">
+      <h2 id="postiz-proof" className="text-xl font-black tracking-[-0.025em]">
+        Proof
       </h2>
-      <ul className="mt-4 space-y-3 border-y border-border py-4 text-sm">
+      <ul className="mt-4 space-y-3 overflow-hidden rounded-lg border border-border bg-surface-raised py-4 text-sm">
         {model.intent.citations.map((citation) => (
-          <li key={citation.id}>
+          <li key={citation.id} className="px-5 sm:px-6">
             <p className="font-bold">{citation.label}</p>
-            <p className="mt-1 break-all text-muted">{citation.source_ref}</p>
-          </li>
-        ))}
-        {model.intent.evidence_refs.map((reference) => (
-          <li key={reference} className="break-all text-muted">
-            {reference}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+function PostizSystemDetails({ model }: { model: PostizIntentResponse }) {
+  const intent = model.intent;
+  return (
+    <details className="group rounded-lg border border-border bg-surface-raised">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold sm:min-h-14 sm:px-5 [&::-webkit-details-marker]:hidden">
+        <span>System details</span>
+        <ChevronRight
+          className="size-4 text-muted transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
+      </summary>
+      <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2 sm:px-5">
+        <MetadataLine label="Post ID" value={intent.id} />
+        <MetadataLine label="Connection" value={intent.integration_id ?? "Not found"} />
+        <MetadataLine
+          label="Adapter"
+          value={`${model.adapter.name} ${model.adapter.expected_version}`}
+        />
+        <MetadataLine label="Permission" value={intent.permission_scope} />
+        <MetadataLine label="Site state" value={model.reconciliation.remote_state ?? "Not found"} />
+        {intent.citations.map((citation) => (
+          <MetadataLine key={citation.id} label={citation.label} value={citation.source_ref} />
+        ))}
+        {intent.evidence_refs.map((reference) => (
+          <MetadataLine key={reference} label="Proof record" value={reference} />
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+function MetadataLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="font-semibold text-foreground">{label}</dt>
+      <dd className="mt-0.5 break-all">{value}</dd>
+    </div>
   );
 }
 
@@ -390,29 +454,23 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Notice({
-  title,
-  danger = false,
-  children,
-}: {
-  title: string;
-  danger?: boolean;
-  children: ReactNode;
-}) {
+function PostizSkeleton() {
   return (
-    <div
-      className={`border px-4 py-4 ${danger ? "border-danger/35 bg-danger-soft" : "border-warning/35 bg-warning-soft"}`}
-      role={danger ? "alert" : "status"}
+    <section
+      className="mx-auto max-w-6xl space-y-6"
+      aria-busy="true"
+      aria-label="Loading this marketing post"
     >
-      <p className="font-bold">{title}</p>
-      <p className="mt-1 text-sm leading-6 text-muted">{children}</p>
-    </div>
+      <div className="h-40 rounded-lg border border-border bg-surface-muted/70" />
+      <div className="min-h-28 rounded-lg border border-border bg-surface-muted/55" />
+      <LoadingState label="Loading this marketing post" />
+    </section>
   );
 }
 
 function formatDate(value: string, session: AuthenticatedSession): string {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Schedule unavailable";
+  if (Number.isNaN(date.getTime())) return "Time not found";
   return new Intl.DateTimeFormat(session.tenant.locale, {
     dateStyle: "medium",
     timeStyle: "short",

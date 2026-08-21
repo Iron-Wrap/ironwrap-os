@@ -10,8 +10,17 @@
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-chrome: var(--chrome);
+  --color-chrome-raised: var(--chrome-raised);
+  --color-chrome-foreground: var(--chrome-foreground);
+  --color-chrome-muted: var(--chrome-muted);
+  --color-chrome-border: var(--chrome-border);
   --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
   --color-accent-foreground: var(--accent-foreground);
+  --color-focus: var(--focus);
   --color-ok: var(--ok);
   --color-ok-soft: var(--ok-soft);
   --color-warning: var(--warning);
@@ -22,62 +31,75 @@
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
 
-  --radius-sm: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
 }
 
 :root {
   color-scheme: light;
-  --background: oklch(0.975 0.006 118);
-  --surface: oklch(0.995 0.002 118);
-  --surface-raised: oklch(1 0 0);
-  --surface-muted: oklch(0.944 0.008 118);
-  --foreground: oklch(0.19 0.018 118);
-  --muted: oklch(0.45 0.018 118);
-  --border: oklch(0.84 0.012 118);
-  --accent: oklch(0.77 0.17 82);
-  --accent-foreground: oklch(0.16 0.02 82);
-  --ok: oklch(0.43 0.12 145);
-  --ok-soft: oklch(0.93 0.045 145);
-  --warning: oklch(0.48 0.15 65);
-  --warning-soft: oklch(0.94 0.055 75);
-  --danger: oklch(0.49 0.18 27);
-  --danger-foreground: oklch(0.99 0 0);
-  --danger-soft: oklch(0.94 0.04 27);
-  --info: oklch(0.48 0.13 250);
-  --info-soft: oklch(0.93 0.035 250);
+  --background: #f2efe8;
+  --surface: #fffdf9;
+  --surface-raised: #fffefb;
+  --surface-muted: #e9e4db;
+  --foreground: #1a1d20;
+  --muted: #625e59;
+  --border: #cec7bd;
+  --border-strong: #716a63;
+  --chrome: #1c2024;
+  --chrome-raised: #292e33;
+  --chrome-foreground: #fffaf3;
+  --chrome-muted: #c8c2ba;
+  --chrome-border: #474c50;
+  --accent: #c81d25;
+  --accent-hover: #a9171e;
+  --accent-active: #821219;
+  --accent-foreground: #ffffff;
+  --focus: #e13b43;
+  --ok: #326548;
+  --ok-soft: color-mix(in srgb, var(--ok) 9%, var(--surface-raised));
+  --warning: #725d20;
+  --warning-soft: color-mix(in srgb, var(--warning) 9%, var(--surface-raised));
+  --danger: #a9171e;
+  --danger-foreground: #ffffff;
+  --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
+  --info: #1f4e66;
+  --info-soft: color-mix(in srgb, var(--info) 9%, var(--surface-raised));
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --background: oklch(0.15 0.012 118);
-    --surface: oklch(0.19 0.014 118);
-    --surface-raised: oklch(0.23 0.016 118);
-    --surface-muted: oklch(0.27 0.014 118);
-    --foreground: oklch(0.95 0.008 118);
-    --muted: oklch(0.73 0.015 118);
-    --border: oklch(0.34 0.015 118);
-    --accent: oklch(0.8 0.16 82);
-    --accent-foreground: oklch(0.18 0.02 82);
-    --ok: oklch(0.72 0.14 145);
-    --ok-soft: oklch(0.27 0.055 145);
-    --warning: oklch(0.79 0.15 75);
-    --warning-soft: oklch(0.29 0.055 75);
-    /* Dark mode lightens danger, so white text on it fails WCAG AA (2.64:1).
-       Pair it with a dark foreground, exactly as --accent does above. */
-    --danger: oklch(0.72 0.16 27);
-    --danger-foreground: oklch(0.18 0.02 27);
-    --danger-soft: oklch(0.28 0.07 27);
-    --info: oklch(0.73 0.12 250);
-    --info-soft: oklch(0.27 0.055 250);
+    --background: #101418;
+    --surface: #1c2024;
+    --surface-raised: #292e33;
+    --surface-muted: #292e33;
+    --foreground: #fffaf3;
+    --muted: #c8c2ba;
+    --border: #474c50;
+    --border-strong: #6b7178;
+    --accent: #c81d25;
+    --accent-hover: #a9171e;
+    --accent-active: #821219;
+    --accent-foreground: #ffffff;
+    --focus: #e13b43;
+    --ok: #6fb98c;
+    --ok-soft: color-mix(in srgb, var(--ok) 16%, var(--surface-raised));
+    --warning: #d9b45c;
+    --warning-soft: color-mix(in srgb, var(--warning) 16%, var(--surface-raised));
+    --danger: #f19499;
+    --danger-foreground: #1a1d20;
+    --danger-soft: color-mix(in srgb, var(--danger) 16%, var(--surface-raised));
+    --info: #7fb6ce;
+    --info-soft: color-mix(in srgb, var(--info) 16%, var(--surface-raised));
   }
 }
 
-* {
-  border-color: var(--border);
+@layer base {
+  * {
+    border-color: var(--border);
+  }
 }
 
 html {
@@ -86,7 +108,11 @@ html {
   background: var(--background);
   font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-synthesis: none;
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -94,6 +120,22 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+:is(h1, h2, h3) {
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+:is(p, li) {
+  text-wrap: pretty;
 }
 
 button,
@@ -112,12 +154,57 @@ select {
 }
 
 :focus-visible {
-  outline: 3px solid color-mix(in oklch, var(--info) 72%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--focus) 72%, transparent);
   outline-offset: 3px;
+}
+
+:target {
+  scroll-margin-block: 6rem;
+}
+
+[aria-busy="true"] {
+  cursor: progress;
 }
 
 ::selection {
   background: color-mix(in oklch, var(--accent) 48%, transparent);
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.375rem);
+  }
+}
+
+@keyframes skeleton-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.app-main > * {
+  animation: page-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ui-skeleton {
+  isolation: isolate;
+  overflow: hidden;
+  position: relative;
+}
+
+.ui-skeleton::after {
+  animation: skeleton-sheen 1.4s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklch, var(--foreground) 8%, transparent),
+    transparent
+  );
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -129,12 +216,35 @@ select {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  .app-main > *,
+  .ui-skeleton::after {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
 }
 
 .safe-bottom {
-  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  --safe-bottom-inset: max(1rem, env(safe-area-inset-bottom));
+
+  padding-bottom: var(--safe-bottom-inset);
+}
+
+.safety-action-drawer {
+  bottom: calc(4rem + var(--safe-bottom-inset));
 }
 
 .safe-top {
   padding-top: env(safe-area-inset-top);
+}
+
+@media (min-width: 64rem) {
+  .safe-bottom {
+    padding-bottom: 0;
+  }
 }

@@ -28,7 +28,7 @@ export function SystemStatus() {
     Boolean(storageWarning) &&
     (outbox.pending > 0 || outbox.uploading > 0 || outbox.needsAttention > 0);
   useAppOpenOutboxSync(outboxPrincipal, csrfToken, deviceProof);
-  const { offlineReady, needRefresh, setNeedRefresh, updateServiceWorker } =
+  const { needRefresh, setNeedRefresh, updateServiceWorker } =
     useDeferredServiceWorkerRegistration();
 
   const hasBanner =
@@ -41,9 +41,9 @@ export function SystemStatus() {
     needRefresh;
 
   return (
-    <>
+    <div className="contents">
       <div
-        className="mx-auto flex max-w-7xl flex-nowrap items-center gap-2 overflow-x-auto px-4 pb-3 text-xs font-bold sm:flex-wrap sm:overflow-visible sm:px-6"
+        className="col-span-2 col-start-1 row-start-2 flex min-h-9 flex-nowrap items-center gap-1.5 overflow-x-auto border-t border-border px-0 py-1.5 text-xs font-bold [scrollbar-width:none] sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:min-h-0 sm:border-t-0 sm:py-0 [&::-webkit-scrollbar]:hidden"
         aria-label="App status"
       >
         <StatusPill
@@ -52,7 +52,7 @@ export function SystemStatus() {
             online && csrfToken ? <Cloud aria-hidden="true" /> : <CloudOff aria-hidden="true" />
           }
         >
-          {online && csrfToken ? "Online" : online ? "Session offline" : "Offline"}
+          {online && csrfToken ? "Online" : online ? "Sign-in paused" : "Offline"}
         </StatusPill>
         {outbox.pending > 0 ? (
           <StatusPill tone="info" icon={<UploadCloud aria-hidden="true" />}>
@@ -61,22 +61,17 @@ export function SystemStatus() {
         ) : null}
         {outbox.needsAttention > 0 ? (
           <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-            {outbox.needsAttention} need attention
+            {outbox.needsAttention} need a check
           </StatusPill>
         ) : null}
         {outbox.unclaimed > 0 ? (
           <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-            {outbox.unclaimed} legacy {outbox.unclaimed === 1 ? "item" : "items"} isolated
+            {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device only
           </StatusPill>
         ) : null}
         {storageWarning ? (
           <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-            Device storage warning
-          </StatusPill>
-        ) : null}
-        {offlineReady ? (
-          <StatusPill tone="info" icon={<Cloud aria-hidden="true" />}>
-            Offline shell ready
+            Storage warning
           </StatusPill>
         ) : null}
         {install.canInstall ? (
@@ -90,7 +85,7 @@ export function SystemStatus() {
       {hasBanner ? (
         <div
           className={cn(
-            "border-b px-4 py-3 text-sm sm:px-6",
+            "col-span-full row-start-3 -mx-4 border-t px-4 py-3 text-sm sm:row-start-2 sm:-mx-6 sm:px-6",
             outbox.needsAttention > 0
               ? "border-danger/30 bg-danger-soft text-danger"
               : !online || outbox.uploading > 0 || storageNeedsEscalation
@@ -103,24 +98,24 @@ export function SystemStatus() {
           <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
             <p className="font-semibold">
               {outbox.needsAttention > 0
-                ? `${outbox.needsAttention} saved ${outbox.needsAttention === 1 ? "item needs" : "items need"} review. Nothing was discarded.`
+                ? `${outbox.needsAttention} saved ${outbox.needsAttention === 1 ? "item needs" : "items need"} a check. Nothing was thrown away.`
                 : outbox.unclaimed > 0
-                  ? `${outbox.unclaimed} older saved ${outbox.unclaimed === 1 ? "item predates" : "items predate"} account binding. They are isolated and will not sync under this user; keep this device for administrator recovery.`
+                  ? `${outbox.unclaimed} older saved ${outbox.unclaimed === 1 ? "item belongs" : "items belong"} to an older sign-in. ${outbox.unclaimed === 1 ? "It stays" : "They stay"} on this device and will not send with this sign-in. Keep this device for the office.`
                   : !online
-                    ? "Offline. New work stays on this device until you reconnect and keep the app open."
+                    ? "Offline. New work stays on this device until you go online and keep the app open."
                     : !csrfToken && outbox.pending > 0
-                      ? "Reconnect and verify this sign-in before syncing. Every saved item remains on this device."
+                      ? "Go online and confirm this sign-in before sending. Every saved item stays on this device."
                       : outbox.uploading > 0
-                        ? "Syncing now. Keep IronWrap OS open until the server verifies every item."
+                        ? "Sending now. Keep this app open until every item is saved."
                         : storageNeedsEscalation && storageWarning === "low_storage"
-                          ? "Device storage is low. Existing work stays intact; free space before a large photo run."
+                          ? "This device is low on space. Saved work is still here. Free space before you take many photos."
                           : storageNeedsEscalation && storageWarning === "persistence_denied"
-                            ? "This device did not grant durable storage. Capture still works, but sync saved work promptly."
+                            ? "This device did not lock storage in place. Capture still works. Send saved work soon."
                             : storageNeedsEscalation && storageWarning === "check_failed"
-                              ? "Device storage durability could not be verified. Capture still works; sync saved work promptly."
+                              ? "Could not check device storage. Capture still works. Send saved work soon."
                               : needRefresh
-                                ? "A safer, newer version of IronWrap OS is ready."
-                                : "Saved work needs attention before you continue."}
+                                ? "A newer version of this app is ready."
+                                : "Saved work needs a check before you continue."}
             </p>
             <div className="flex flex-wrap gap-2">
               {session.user.role === "field" && outbox.needsAttention > 0 ? (
@@ -138,7 +133,7 @@ export function SystemStatus() {
                   onClick={() => void flushOutbox({ ...outboxPrincipal, csrfToken, deviceProof })}
                 >
                   <UploadCloud aria-hidden="true" />
-                  Sync now
+                  Send now
                 </Button>
               ) : null}
               {needRefresh ? (
@@ -160,7 +155,7 @@ export function SystemStatus() {
           </div>
         </div>
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -206,15 +201,15 @@ function StatusPill({
   children: React.ReactNode;
 }) {
   const tones = {
-    ok: "border-ok/30 bg-ok-soft text-ok",
-    warning: "border-warning/30 bg-warning-soft text-warning",
-    danger: "border-danger/30 bg-danger-soft text-danger",
-    info: "border-info/30 bg-info-soft text-info",
+    ok: "border-border bg-surface text-muted [&_svg]:text-ok",
+    warning: "border-warning/25 bg-warning-soft/40 text-foreground [&_svg]:text-warning",
+    danger: "border-danger/25 bg-danger-soft/40 text-foreground [&_svg]:text-danger",
+    info: "border-border bg-surface text-muted [&_svg]:text-info",
   };
   return (
     <span
       className={cn(
-        "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border px-3",
+        "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5",
         tones[tone],
       )}
     >

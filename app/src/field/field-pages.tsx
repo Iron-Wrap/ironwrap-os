@@ -21,7 +21,9 @@ import { getDeviceSecret } from "../auth/device-credential";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
 import { apiCommand } from "../lib/api";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
@@ -84,7 +86,7 @@ export function JobPage() {
     queryFn: () => loadJob(session, jobId!),
   });
   if (!jobId) return <ErrorState message="This job link is incomplete." />;
-  if (query.isPending) return <LoadingState label="Loading field packet…" />;
+  if (query.isPending) return <LoadingState label="Loading job plan…" />;
   if (query.isError)
     return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
   return (
@@ -131,8 +133,8 @@ export function WorkObjectPage() {
     enabled: scope !== null,
     queryFn: () => loadWorkObject(session, scope!),
   });
-  if (!scope) return <ErrorState message="This typed work link is incomplete." />;
-  if (query.isPending) return <LoadingState label="Loading typed field packet…" />;
+  if (!scope) return <ErrorState message="This work link is incomplete." />;
+  if (query.isPending) return <LoadingState label="Loading work plan…" />;
   if (query.isError)
     return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
   return (
@@ -204,14 +206,14 @@ function WorkObjectPacketHeader({
           </p>
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
-          {offline ? "Offline packet" : "Typed packet read"}
+          {offline ? "Saved copy" : "Up to date"}
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
-        <JobFact label="Assignment" value={assignment || "Assignment detail unavailable"} />
+        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
-          label="Packet"
-          value={model.work_package ? `v${model.work_package.version}` : "Unavailable"}
+          label="Work plan"
+          value={model.work_package ? `Version ${model.work_package.version}` : "Not ready"}
         />
       </dl>
     </header>
@@ -283,12 +285,12 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
         <SafetyAndAccess model={model} dateOptions={dateOptions} />
         <section className="space-y-4" aria-labelledby="proof-stream-heading">
           <header className="border-b border-border pb-4">
-            <p className="text-sm font-semibold text-muted">Verified evidence only</p>
+            <p className="text-sm font-semibold text-muted">Sent job proof</p>
             <h2
               id="proof-stream-heading"
               className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
             >
-              Proof Stream
+              Job proof
             </h2>
           </header>
           <ProofStream
@@ -324,27 +326,27 @@ function JobPacketHeader({
             {model.job.job_number ?? "Assigned job"}
           </p>
           <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] text-pretty sm:text-4xl">
-            {model.job.address ?? "Job packet"}
+            {model.job.address ?? "Job plan"}
           </h1>
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
-          {offline ? "Offline packet" : "Packet read"}
+          {offline ? "Saved copy" : "Up to date"}
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
-        <JobFact label="Service" value={model.job.service_type ?? "Service unavailable"} />
-        <JobFact label="Assignment" value={assignment || "Assignment detail unavailable"} />
+        <JobFact label="Service" value={model.job.service_type ?? "Service details are missing"} />
+        <JobFact label="Assignment" value={assignment || "Assignment details are missing"} />
         <JobFact
           label="Scheduled"
           value={formatFieldSchedule(model.assignment?.scheduled_start ?? null, dateOptions)}
         />
       </dl>
       <p className="mt-4 text-sm leading-6 text-muted">
-        {offline ? "Saved packet generated" : "Packet read generated"}{" "}
+        {offline ? "Saved" : "Updated"}{" "}
         {formatFieldTimestamp(model.read_model_generated_at, dateOptions)} ·{" "}
         {model.source_updated_at
-          ? `Source updated ${formatFieldTimestamp(model.source_updated_at, dateOptions)}`
-          : "Source update time unavailable"}
+          ? `Office update ${formatFieldTimestamp(model.source_updated_at, dateOptions)}`
+          : "Office update time is missing"}
       </p>
     </header>
   );
@@ -364,8 +366,8 @@ function JobOfflineNotice({
     >
       <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
       <p className="font-bold leading-6">
-        Offline packet from {formatFieldTimestamp(generatedAt, dateOptions)}. Capture can remain
-        queued on this device; reconnect before relying on changed gates, scope, or safety detail.
+        This is a saved copy from {formatFieldTimestamp(generatedAt, dateOptions)}. You can save new
+        proof. Go online before you trust a changed work check, plan, or safety note.
       </p>
     </div>
   );
@@ -375,11 +377,11 @@ function JobDataLimits({ fields }: { fields: string[] }) {
   return (
     <details className="border border-border bg-surface-raised">
       <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
-        Some packet data may be limited
+        Some job details may be old
       </summary>
       <p className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        This read may be stale for {fields.map(humanizeFieldName).join(", ")}. Do not infer a
-        missing value or change a gate from this screen.
+        Check the job again before you use these details: {fields.map(humanizeFieldName).join(", ")}
+        . This screen cannot clear a work check.
       </p>
     </details>
   );
@@ -497,13 +499,12 @@ function WorkPackagePanel({
         className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
         aria-labelledby="work-package-heading"
       >
-        <p className="text-sm font-semibold text-warning">Physical work package</p>
+        <p className="text-sm font-semibold text-warning">Work plan</p>
         <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
-          No current released Work Package
+          No work plan is ready
         </h2>
         <p className="mt-2 leading-6 text-muted">
-          Do not start, resume, release a hold point, or change scope. Reconnect for a current
-          issued package or ask production to resolve the assignment.
+          Do not start or restart work. Go online for the latest plan, or call production.
         </p>
       </section>
     );
@@ -589,7 +590,7 @@ function WorkPackagePanel({
 
   function saveAcknowledgement() {
     if (!acknowledgementConfirmed) {
-      setActionError("Confirm that you reviewed this exact Work Package before acknowledging it.");
+      setActionError("Check the box to show that you read this work plan.");
       return;
     }
     void saveWorkPackageAction("work_package_acknowledgement");
@@ -597,7 +598,7 @@ function WorkPackagePanel({
 
   function saveStopWork() {
     if (!stopReason.trim()) {
-      setActionError("Describe the condition requiring work to stop.");
+      setActionError("Say why work must stop.");
       return;
     }
     setStopInstructionActive(true);
@@ -677,13 +678,14 @@ function WorkPackagePanel({
       <header className="border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-muted">Released physical work package</p>
+            <p className="text-sm font-semibold text-muted">Work plan</p>
             <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
               {workPackage.title}
             </h2>
           </div>
           <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
-            v{workPackage.version} · {workPackage.status}
+            v{workPackage.version} ·{" "}
+            {workPackage.status === "Acknowledged" ? "Reviewed" : workPackage.status}
           </p>
         </div>
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
@@ -706,7 +708,7 @@ function WorkPackagePanel({
             value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
           />
           <JobFact
-            label="Physical context"
+            label="Work area"
             value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
           />
         </dl>
@@ -719,21 +721,20 @@ function WorkPackagePanel({
         >
           <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
           <p className="font-bold leading-6">
-            This is a saved package copy. It may be expired or superseded. You may save an
-            acknowledgement or Stop Work report, but neither changes package status or authorizes
-            starting, resuming, releasing a hold point, or changing scope.
+            This saved plan may be old. You may save a review or a Stop Work report. Neither one
+            starts work, clears a stop, or changes the job plan.
           </p>
         </div>
       ) : null}
 
       <div className="space-y-5 p-4 sm:p-5">
         <dl className="grid gap-4 sm:grid-cols-2">
-          <JobFact label="Objective" value={workPackage.objective} />
-          <JobFact label="Expected result" value={workPackage.expected_result} />
-          <JobFact label="Boundaries" value={workPackage.boundaries} />
-          <JobFact label="Prerequisites" value={workPackage.prerequisites} />
-          <JobFact label="Stop conditions" value={workPackage.stop_conditions} />
-          <JobFact label="Make safe" value={workPackage.make_safe_procedure} />
+          <JobFact label="Goal" value={workPackage.objective} />
+          <JobFact label="Done looks like" value={workPackage.expected_result} />
+          <JobFact label="Limits" value={workPackage.boundaries} />
+          <JobFact label="Before you start" value={workPackage.prerequisites} />
+          <JobFact label="When to stop" value={workPackage.stop_conditions} />
+          <JobFact label="Make it safe" value={workPackage.make_safe_procedure} />
         </dl>
 
         {workPackage.supersession ? (
@@ -741,17 +742,17 @@ function WorkPackagePanel({
             className="border-2 border-warning/45 bg-warning-soft p-4"
             aria-labelledby="work-package-change-heading"
           >
-            <p className="text-sm font-semibold text-warning">Changed condition</p>
+            <p className="text-sm font-semibold text-warning">Plan changed</p>
             <h3 id="work-package-change-heading" className="mt-1 text-lg font-black">
-              This package supersedes {workPackage.supersession.prior_id}
+              This plan replaces {workPackage.supersession.prior_id}
             </h3>
             <p className="mt-2 leading-6">{workPackage.supersession.reason}</p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Changed steps:{" "}
+              Steps changed:{" "}
               {workPackage.supersession.changed_steps.length
                 ? workPackage.supersession.changed_steps.join(", ")
                 : "none"}{" "}
-              · Changed holds:{" "}
+              · Stops changed:{" "}
               {workPackage.supersession.changed_hold_points.length
                 ? workPackage.supersession.changed_hold_points.join(", ")
                 : "none"}
@@ -761,7 +762,7 @@ function WorkPackagePanel({
 
         <section aria-labelledby="work-package-steps-heading">
           <h3 id="work-package-steps-heading" className="font-black">
-            Ordered steps
+            Work steps
           </h3>
           <ol className="mt-3 space-y-3">
             {workPackage.steps.map((step) => (
@@ -769,11 +770,9 @@ function WorkPackagePanel({
                 <p className="font-black">
                   Step {step.sequence} · {step.instruction}
                 </p>
-                <p className="mt-2 text-sm leading-6 text-muted">
-                  Evidence: {step.required_evidence}
-                </p>
+                <p className="mt-2 text-sm leading-6 text-muted">Proof: {step.required_evidence}</p>
                 <p className="mt-1 text-sm leading-6 text-muted">
-                  Acceptance: {step.acceptance_criteria}
+                  Pass when: {step.acceptance_criteria}
                 </p>
               </li>
             ))}
@@ -782,7 +781,7 @@ function WorkPackagePanel({
 
         <section aria-labelledby="work-package-holds-heading">
           <h3 id="work-package-holds-heading" className="font-black">
-            Hold points
+            Stop and check
           </h3>
           <ol className="mt-3 space-y-3">
             {workPackage.hold_points.map((holdPoint) => (
@@ -797,16 +796,16 @@ function WorkPackagePanel({
                 <p
                   className={holdPoint.released ? "font-black text-ok" : "font-black text-warning"}
                 >
-                  Hold {holdPoint.sequence} · {holdPoint.hold_point}
+                  Check {holdPoint.sequence} · {holdPoint.hold_point}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-muted">
                   {holdPoint.released
-                    ? "Independently released in the server ledger. A current server capability is still required before starting work."
-                    : `Pending independent release by ${holdPoint.release_authority}. Field evidence can be captured, but this app cannot release the hold point.`}
+                    ? "The office cleared this check. You still need a live Start work button before you begin."
+                    : `Waiting for ${holdPoint.release_authority}. You can add proof, but this app cannot clear the stop.`}
                 </p>
                 <p className="mt-1 text-sm leading-6 text-muted">
-                  Phase: {holdPoint.release_phase} · Evidence: {holdPoint.required_evidence} ·
-                  Acceptance: {holdPoint.acceptance_criteria}
+                  When: {holdPoint.release_phase} · Proof: {holdPoint.required_evidence} · Pass
+                  when: {holdPoint.acceptance_criteria}
                 </p>
               </li>
             ))}
@@ -818,7 +817,7 @@ function WorkPackagePanel({
           aria-labelledby="work-package-workers-heading"
         >
           <h3 id="work-package-workers-heading" className="font-black">
-            Assigned workers
+            Crew
           </h3>
           {workPackage.acknowledgement.workers.length > 0 ? (
             <ul className="mt-3 space-y-2">
@@ -837,16 +836,15 @@ function WorkPackagePanel({
                   </p>
                   <p className="mt-1 text-sm leading-6 text-muted">
                     {worker.acknowledged
-                      ? `Acknowledged${worker.acknowledged_at ? ` at ${formatFieldTimestamp(worker.acknowledged_at, dateOptions)}` : ""}.`
-                      : "Awaiting acknowledgement of this exact package version."}
+                      ? `Reviewed${worker.acknowledged_at ? ` at ${formatFieldTimestamp(worker.acknowledged_at, dateOptions)}` : ""}.`
+                      : "This worker still needs to review this plan."}
                   </p>
                 </li>
               ))}
             </ul>
           ) : (
             <p className="mt-2 text-sm leading-6 text-warning">
-              The assigned-worker roster is unavailable in this packet. Starting work remains fail
-              closed.
+              The crew list is missing. You cannot start work.
             </p>
           )}
         </section>
@@ -857,16 +855,16 @@ function WorkPackagePanel({
         >
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <h3 id="work-package-evidence-heading" className="font-black">
-              Evidence slots
+              Proof needed
             </h3>
             <span className="text-sm font-semibold text-muted">
-              {workPackage.evidence_slots.length} captured event
+              {workPackage.evidence_slots.length} saved item
               {workPackage.evidence_slots.length === 1 ? "" : "s"}
             </span>
           </div>
           <p className="mt-2 text-sm leading-6 text-muted">
-            Captures are append-only and tied to this package version, slot, actor, device, and
-            capture time. Corrections add a linked event; they do not erase the prior fact.
+            Each photo or note is saved with this plan. A fix adds a new item. It does not delete
+            the old one.
           </p>
           <ul className="mt-3 space-y-2">
             {workPackage.steps.map((step) => {
@@ -886,14 +884,14 @@ function WorkPackagePanel({
                     <p className="mt-1 text-sm text-muted">
                       {latest
                         ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
-                        : "No capture recorded yet"}
+                        : "No proof added yet"}
                     </p>
                   </div>
                   {canCaptureEvidence ? (
                     <div className="flex flex-wrap gap-2">
                       <a
-                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
-                        aria-label={`Capture evidence for step ${step.sequence}`}
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                        aria-label={`Add proof for step ${step.sequence}`}
                         href={workPackageEvidenceHref(
                           model.job.id,
                           workPackage.id,
@@ -905,12 +903,12 @@ function WorkPackagePanel({
                           workObjectScopeForPackage(workPackage),
                         )}
                       >
-                        Capture evidence
+                        Add proof
                       </a>
                       {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
                         <a
-                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
-                          aria-label={`Correct evidence for step ${step.sequence}`}
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                          aria-label={`Fix proof for step ${step.sequence}`}
                           href={workPackageEvidenceHref(
                             model.job.id,
                             workPackage.id,
@@ -922,13 +920,13 @@ function WorkPackagePanel({
                             workObjectScopeForPackage(workPackage),
                           )}
                         >
-                          Correct evidence
+                          Fix proof
                         </a>
                       ) : null}
                     </div>
                   ) : (
                     <span className="text-sm font-semibold text-muted">
-                      Current field capture permission required
+                      You cannot add proof right now
                     </span>
                   )}
                 </li>
@@ -946,19 +944,19 @@ function WorkPackagePanel({
                 >
                   <div>
                     <p className="font-bold">
-                      Hold {holdPoint.sequence} · {holdPoint.required_evidence}
+                      Check {holdPoint.sequence} · {holdPoint.required_evidence}
                     </p>
                     <p className="mt-1 text-sm text-muted">
                       {latest
                         ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
-                        : "No capture recorded yet"}
+                        : "No proof added yet"}
                     </p>
                   </div>
                   {canCaptureEvidence ? (
                     <div className="flex flex-wrap gap-2">
                       <a
-                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
-                        aria-label={`Capture evidence for hold ${holdPoint.sequence}`}
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                        aria-label={`Add proof for stop ${holdPoint.sequence}`}
                         href={workPackageEvidenceHref(
                           model.job.id,
                           workPackage.id,
@@ -970,12 +968,12 @@ function WorkPackagePanel({
                           workObjectScopeForPackage(workPackage),
                         )}
                       >
-                        Capture evidence
+                        Add proof
                       </a>
                       {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
                         <a
-                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
-                          aria-label={`Correct evidence for hold ${holdPoint.sequence}`}
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                          aria-label={`Fix proof for stop ${holdPoint.sequence}`}
                           href={workPackageEvidenceHref(
                             model.job.id,
                             workPackage.id,
@@ -987,13 +985,13 @@ function WorkPackagePanel({
                             workObjectScopeForPackage(workPackage),
                           )}
                         >
-                          Correct evidence
+                          Fix proof
                         </a>
                       ) : null}
                     </div>
                   ) : (
                     <span className="text-sm font-semibold text-muted">
-                      Current field capture permission required
+                      You cannot add proof right now
                     </span>
                   )}
                 </li>
@@ -1007,11 +1005,11 @@ function WorkPackagePanel({
           aria-labelledby="work-package-acknowledgement-heading"
         >
           <h3 id="work-package-acknowledgement-heading" className="font-black">
-            Individual acknowledgement
+            Review and agree
           </h3>
           {workPackage.acknowledgement.current_user_acknowledged ? (
             <p className="mt-2 text-sm leading-6 text-ok">
-              You acknowledged this exact package
+              You reviewed this work plan
               {workPackage.acknowledgement.acknowledged_at
                 ? ` at ${formatFieldTimestamp(workPackage.acknowledgement.acknowledged_at, dateOptions)}`
                 : ""}
@@ -1026,8 +1024,7 @@ function WorkPackagePanel({
                   checked={acknowledgementConfirmed}
                   onChange={(event) => setAcknowledgementConfirmed(event.target.checked)}
                 />
-                I reviewed this exact version, its boundaries, stop conditions, make-safe procedure,
-                steps, and hold points.
+                I read this version. I know its limits, steps, stop rules, safety steps, and checks.
               </label>
               <Button
                 type="button"
@@ -1039,14 +1036,12 @@ function WorkPackagePanel({
                 busy={savingAction === "work_package_acknowledgement"}
                 onClick={saveAcknowledgement}
               >
-                <Check aria-hidden="true" />
-                Acknowledge this package
+                <Check aria-hidden="true" />I reviewed this plan
               </Button>
             </>
           ) : (
             <p className="mt-2 text-sm leading-6 text-muted">
-              Acknowledgement is unavailable until a current server packet grants it. It is never a
-              client-side work authorization.
+              You can agree only when the server sends a current plan. This does not start work.
             </p>
           )}
         </section>
@@ -1058,8 +1053,7 @@ function WorkPackagePanel({
           {canStart ? (
             <>
               <p className="mt-2 text-sm leading-6 text-muted">
-                This submits a fresh online request against the server's current released and
-                acknowledged package. It is not saved for offline replay.
+                This asks the server to start the current plan. It only works online.
               </p>
               <Button
                 type="button"
@@ -1070,13 +1064,13 @@ function WorkPackagePanel({
                 busy={startingWork}
                 onClick={() => void startWork()}
               >
-                Start work from current packet
+                Start work
               </Button>
             </>
           ) : (
             <p className="mt-2 text-sm leading-6 text-muted">
-              A fresh online packet and server capability are required to start work. This app never
-              resumes work itself.
+              Go online and open the latest plan. The Start work button will show when every check
+              is clear.
             </p>
           )}
         </section>
@@ -1087,13 +1081,12 @@ function WorkPackagePanel({
             aria-labelledby="work-package-completion-heading"
           >
             <h3 id="work-package-completion-heading" className="font-black text-ok">
-              Complete work package
+              Finish this work plan
             </h3>
             {canComplete ? (
               <>
                 <p className="mt-2 text-sm leading-6 text-muted">
-                  All current worker acknowledgements, hold releases, and independently accepted
-                  evidence gates are present. Completion is an online production-authority action.
+                  The crew checks, work stops, and proof checks are clear. This button works online.
                 </p>
                 <Button
                   type="button"
@@ -1105,13 +1098,12 @@ function WorkPackagePanel({
                   onClick={() => void completeWork()}
                 >
                   <Check aria-hidden="true" />
-                  Complete from current ledger
+                  Finish work
                 </Button>
               </>
             ) : (
               <p className="mt-2 text-sm leading-6 text-muted">
-                Completion stays unavailable until the current online packet proves every required
-                gate. No offline or client-only completion is allowed.
+                You can finish only when you are online and every required check is clear.
               </p>
             )}
           </section>
@@ -1125,13 +1117,12 @@ function WorkPackagePanel({
             Stop Work
           </h3>
           <p className="mt-2 text-sm leading-6 text-muted">
-            If a stop condition applies, stop work now and make the area safe before saving this
-            report. A saved report is not a server-verified status change.
+            If a stop rule applies, stop now and make the area safe. Saving this report does not
+            change the job until the server gets it.
           </p>
           {stopInstructionActive ? (
             <p className="mt-3 font-bold leading-6 text-danger" role="alert">
-              Stop work now. Follow the make-safe procedure while this report remains saved on the
-              device for server verification.
+              Stop now. Make the area safe. This report will send when the phone is online.
             </p>
           ) : null}
           {canStop ? (
@@ -1139,9 +1130,9 @@ function WorkPackagePanel({
               <label className="mt-4 block font-bold" htmlFor="work-package-stop-reason">
                 What requires work to stop?
               </label>
-              <textarea
+              <Textarea
                 id="work-package-stop-reason"
-                className="mt-2 min-h-28 w-full border bg-surface p-4"
+                className="mt-2 min-h-28 rounded-none bg-surface"
                 maxLength={1000}
                 value={stopReason}
                 onChange={(event) => setStopReason(event.target.value)}
@@ -1161,8 +1152,8 @@ function WorkPackagePanel({
             </>
           ) : (
             <p className="mt-3 text-sm leading-6 text-muted">
-              This packet cannot submit another Stop Work report. Stop physically if needed and
-              contact production immediately.
+              You cannot send another Stop Work report from this plan. Stop now if needed and call
+              production.
             </p>
           )}
         </section>
@@ -1175,8 +1166,7 @@ function WorkPackagePanel({
         {savedAction ? <WorkPackageActionState action={savedAction} /> : null}
         {!offline && !canAttemptSync ? (
           <p className="text-sm leading-6 text-warning" role="status">
-            This device needs a current verified sign-in before it can send a saved Work Package
-            action.
+            Sign in online before this phone can send the saved work plan update.
           </p>
         ) : null}
       </div>
@@ -1185,14 +1175,13 @@ function WorkPackagePanel({
 }
 
 function WorkPackageActionState({ action }: { action: OutboxAction }) {
-  const label =
-    action.kind === "work_package_acknowledgement" ? "Acknowledgement" : "Stop Work report";
+  const label = action.kind === "work_package_acknowledgement" ? "Plan review" : "Stop Work report";
   const detail =
     action.state === "verified"
-      ? "The server verified this intent. Reopen the packet for a current work state."
+      ? "The server got this update. Open the plan again to see the latest work state."
       : action.state === "needs_attention"
-        ? "This saved intent needs review. It did not change package status or unlock work."
-        : `${label} is saved on this device and awaits server verification. It does not change package status or unlock work.`;
+        ? "This saved update needs help. It did not change the plan or unlock work."
+        : `${label} is saved on this phone and is waiting to send. It does not change the plan or unlock work.`;
   return (
     <div
       className="flex flex-wrap items-start justify-between gap-3 border border-border bg-surface-muted p-4"
@@ -1220,9 +1209,9 @@ function WorkStatus({
       className="border border-border bg-surface-raised"
     >
       <header className="border-b border-border px-4 py-4 sm:px-5">
-        <p className="text-sm font-semibold text-muted">Physical production locks</p>
+        <p className="text-sm font-semibold text-muted">Before work starts</p>
         <h2 id="work-status-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
-          Work status
+          Work checks
         </h2>
       </header>
       <div
@@ -1239,15 +1228,15 @@ function WorkStatus({
           <div>
             <p className="text-lg font-black tracking-[-0.02em]">
               {blocked
-                ? `${blockedGates.length} ${blockedGates.length === 1 ? "gate blocks" : "gates block"} scheduled work`
+                ? `${blockedGates.length} ${blockedGates.length === 1 ? "check blocks" : "checks block"} work`
                 : model.job.current_gate_state
-                  ? `Reported gate state: ${model.job.current_gate_state}`
-                  : "No current gate state was returned"}
+                  ? `Work check: ${model.job.current_gate_state}`
+                  : "No work check was sent"}
             </p>
             <p className="mt-1 text-sm leading-6 text-muted">
               {blocked
-                ? "A proof capture can document the block; it cannot open, waive, or override a gate."
-                : "A reported gate state is not a safety clearance. Review the safety plan and packet detail before work."}
+                ? "You can add proof of the block. Only the office can clear this work check."
+                : "A clear work check is not a safety pass. Read the safety plan before work."}
             </p>
           </div>
         </div>
@@ -1257,7 +1246,7 @@ function WorkStatus({
           {model.gates.map((gate) => (
             <li key={gate.id} className="px-4 py-4 sm:px-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <GateChip name={gate.name ?? "Production gate"} state={gate.state ?? "Unknown"} />
+                <GateChip name={gate.name ?? "Work check"} state={gate.state ?? "Unknown"} />
                 {gate.due_at ? (
                   <p className="text-sm font-semibold text-muted">
                     Due {formatFieldSchedule(gate.due_at, dateOptions)}
@@ -1294,14 +1283,14 @@ function CaptureProofPanel({
         className="border border-border bg-surface-muted p-4 sm:p-5"
         aria-labelledby="capture-boundary-heading"
       >
-        <p className="text-sm font-semibold text-muted">Field evidence boundary</p>
+        <p className="text-sm font-semibold text-muted">Add job proof</p>
         <h2 id="capture-boundary-heading" className="mt-1 text-xl font-black tracking-[-0.025em]">
-          {fieldRole ? "Active assignment required" : "Read-only job packet"}
+          {fieldRole ? "Current job needed" : "View only"}
         </h2>
         <p className="mt-2 leading-6 text-muted">
           {fieldRole
-            ? "This account does not have an active assignment with field capture permission for this job."
-            : "Only an assigned field account can capture proof from this packet."}
+            ? "This job is not assigned to you, so you cannot add proof."
+            : "Only the assigned field crew can add proof from this plan."}
         </p>
       </section>
     );
@@ -1313,25 +1302,25 @@ function CaptureProofPanel({
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
-          <p className="text-sm font-semibold text-muted">Internal evidence only</p>
+          <p className="text-sm font-semibold text-muted">Job proof</p>
           <h2 id="capture-proof-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
-            {blocked ? "Document the blocked site" : "Document this site"}
+            {blocked ? "Show the blocked site" : "Show this site"}
           </h2>
           <p className="mt-2 leading-6 text-muted">
             {blocked
-              ? "Capture the actual site condition or blocker. This does not change the work lock."
-              : "Capture photos, a voice note, or a field note after reviewing this packet."}
+              ? "Add a photo or note that shows the block. This does not clear the work check."
+              : "Add photos, a voice note, or a short job note after you read this plan."}
           </p>
         </div>
         <Button
           asChild
           size="field"
           variant={blocked ? "outline" : "accent"}
-          className="fixed inset-x-4 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-40 lg:static lg:min-w-72"
+          className="sm:min-w-72"
         >
           <a href={fieldCheckInHref(jobId, workObjectScope)}>
             <Camera aria-hidden="true" />
-            {blocked ? "Capture blocker proof" : "Capture job proof"}
+            {blocked ? "Add blocker proof" : "Add job proof"}
           </a>
         </Button>
       </div>
@@ -1364,12 +1353,12 @@ function SafetyAndAccess({
   return (
     <section aria-labelledby="safety-access-heading" className="space-y-4">
       <header className="border-b border-border pb-4">
-        <p className="text-sm font-semibold text-muted">Packet detail before field capture</p>
+        <p className="text-sm font-semibold text-muted">Check before work</p>
         <h2
           id="safety-access-heading"
           className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
         >
-          Safety and access
+          Safety and site
         </h2>
       </header>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -1381,7 +1370,7 @@ function SafetyAndAccess({
                 Safety plan{safety?.version ? ` · v${safety.version}` : ""}
               </p>
               <p className="mt-1 text-sm leading-6 text-muted">
-                {safety?.status ?? "No safety plan was returned in this packet."}
+                {safety?.status ?? "No safety plan is in this job."}
               </p>
             </div>
           </div>
@@ -1393,7 +1382,7 @@ function SafetyAndAccess({
             </dl>
           ) : (
             <p className="mt-5 border-l-4 border-warning pl-3 text-sm font-semibold leading-6 text-warning">
-              No plan detail is available here. Its absence does not authorize field work.
+              The safety plan is missing. Do not start work.
             </p>
           )}
         </article>
@@ -1403,7 +1392,7 @@ function SafetyAndAccess({
             <div>
               <p className="font-black">Job contact and access</p>
               <p className="mt-1 text-sm leading-6 text-muted">
-                {contact?.display_name ?? "Contact name unavailable"}
+                {contact?.display_name ?? "Contact name is missing"}
               </p>
             </div>
           </div>
@@ -1415,15 +1404,14 @@ function SafetyAndAccess({
               </a>
             </Button>
           ) : (
-            <p className="mt-5 text-sm font-semibold text-muted">Phone unavailable</p>
+            <p className="mt-5 text-sm font-semibold text-muted">Phone number is missing</p>
           )}
           <div className="mt-5 border-t border-border pt-4">
             <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">
-              Access instructions
+              How to enter the site
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              {contact?.access_instructions ??
-                "Access instructions were not returned in this packet."}
+              {contact?.access_instructions ?? "Site entry steps are missing."}
             </p>
           </div>
         </article>
@@ -1444,12 +1432,12 @@ function PacketDetails({
   return (
     <section aria-labelledby="packet-details-heading" className="space-y-4">
       <header className="border-b border-border pb-4">
-        <p className="text-sm font-semibold text-muted">Supporting packet records</p>
+        <p className="text-sm font-semibold text-muted">More job details</p>
         <h2
           id="packet-details-heading"
           className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
         >
-          Packet detail
+          Job details
         </h2>
       </header>
       <div className="divide-y divide-border border-y border-border">
@@ -1535,14 +1523,14 @@ function PacketDetail({
       <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-1 py-4 font-black [&::-webkit-details-marker]:hidden">
         <span>{title}</span>
         <span className="text-sm font-semibold text-muted">
-          {count} {count === 1 ? "record" : "records"}
+          {count} {count === 1 ? "item" : "items"}
         </span>
       </summary>
       <div className="space-y-3 border-t border-border pb-5 pt-4">
         {count ? (
           children
         ) : (
-          <p className="text-sm leading-6 text-muted">No records were returned in this packet.</p>
+          <p className="text-sm leading-6 text-muted">No items are in this work plan.</p>
         )}
       </div>
     </details>
@@ -1667,7 +1655,7 @@ export function CheckInPage() {
       <RoleGuard surface="field">
         <EmptyState
           title="Choose an assigned job"
-          message="Open Today, then open the job packet. Check-ins are always bound to the active Job Assignment."
+          message="Open Today, then open a job. Each check-in is tied to that job."
           action={
             <Button asChild size="field" variant="accent">
               <Link to="/today">Open Today</Link>
@@ -1854,12 +1842,12 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     return (
       <ErrorState
         title="Assigned field account required"
-        message="Office roles can review job packets but cannot submit field capture actions."
+        message="Office users can read job plans but cannot add field proof."
       />
     );
   }
 
-  if (jobQuery.isPending) return <LoadingState label="Opening assigned packet…" />;
+  if (jobQuery.isPending) return <LoadingState label="Opening job…" />;
   if (jobQuery.isError)
     return (
       <ErrorState message={messageFor(jobQuery.error)} onRetry={() => void jobQuery.refetch()} />
@@ -1868,8 +1856,8 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   if (!model.allowed_actions.includes("field.checkin.create")) {
     return (
       <ErrorState
-        title="Field capture is not permitted"
-        message="This packet does not grant the current field account permission to create a check-in. Return to the job packet and refresh before trying again."
+        title="You cannot add a check-in"
+        message="Open the job again and refresh it. The job must be assigned to you."
       />
     );
   }
@@ -1942,15 +1930,13 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     if (files.length === 0 && !notes.trim() && !blocker)
       return setFormError("Add a photo, voice note, field note, or blocker before saving.");
     if (typedEvidence && files.length === 0)
-      return setFormError(
-        "A Work Package evidence slot requires at least one photo or voice attachment.",
-      );
+      return setFormError("This proof item needs at least one photo or voice note.");
     if (blocker && !blockerSummary.trim())
       return setFormError("Describe what is blocked so the office can act.");
     if (typedEvidence?.evidenceCorrectionOf && !correctionReason.trim())
-      return setFormError("Describe why this capture corrects the prior evidence.");
+      return setFormError("Say why this file fixes the old proof.");
     if (typedEvidence?.evidenceCorrectionOf && files.length !== 1)
-      return setFormError("A correction must contain exactly one attachment.");
+      return setFormError("Add one file only when you fix old proof.");
     setSaving(true);
     setFormError(null);
     try {
@@ -2060,7 +2046,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
             aria-labelledby="capture-evidence-heading"
           >
             <header className="border-b border-border px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold text-muted">Camera and voice before typing</p>
+              <p className="text-sm font-semibold text-muted">Start with a photo or voice note</p>
               <h2
                 ref={stepHeadingRef}
                 id="capture-evidence-heading"
@@ -2071,13 +2057,13 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
-              <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-info focus-within:outline-offset-3">
+              <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
                 <span className="flex items-center gap-2 text-lg font-black">
                   <Camera aria-hidden="true" />
                   Take photos
                 </span>
                 <span className="mt-1 text-sm font-semibold text-background/75">
-                  Up to 12 media files per check-in
+                  Up to 12 files
                 </span>
                 <input
                   className="sr-only"
@@ -2088,13 +2074,13 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   onChange={(event) => choosePhotos(event.target.files)}
                 />
               </label>
-              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-info focus-within:outline-offset-3">
+              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
                 <span className="flex items-center gap-2">
                   <Mic aria-hidden="true" />
                   Add voice note
                 </span>
                 <span className="mt-1 text-sm font-semibold text-muted">
-                  Optional internal audio attachment
+                  Optional voice note for your team
                 </span>
                 <input
                   className="sr-only"
@@ -2112,34 +2098,34 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               />
               <details className="border border-border">
                 <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
-                  <span>Evidence type</span>
+                  <span>Proof type</span>
                   <span className="text-sm text-muted">{proofSlot}</span>
                 </summary>
                 <div className="border-t border-border p-4">
                   <label className="block text-sm font-bold" htmlFor="proof-slot">
-                    Change evidence type
+                    Change proof type
                   </label>
-                  <select
+                  <Select
+                    field
                     id="proof-slot"
-                    className="mt-3 min-h-16 w-full border bg-surface px-4 text-lg font-bold"
+                    className="mt-3 rounded-none bg-surface text-lg font-bold"
                     value={proofSlot}
                     onChange={(event) => setProofSlot(event.target.value)}
                   >
                     {PROOF_SLOTS.map((slot) => (
                       <option key={slot}>{slot}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               </details>
               <p className="border-l-4 border-info pl-3 text-sm font-semibold leading-6 text-info">
-                Selected media remains internal. It is only in this form until device save; keep
-                this page open.
+                Your files stay in this form until you save them. Keep this page open.
               </p>
             </div>
             <CheckInActionBar
               message={
                 selectedMedia.length
-                  ? "Review selected evidence, then add any needed detail."
+                  ? "Check your files, then add a note if needed."
                   : "You can continue with a note or a blocker report instead of media."
               }
             >
@@ -2163,16 +2149,14 @@ function CheckInFlow({ jobId }: { jobId: string }) {
             aria-labelledby="capture-detail-heading"
           >
             <header className="border-b border-border px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold text-muted">
-                Only add what the packet does not already prove
-              </p>
+              <p className="text-sm font-semibold text-muted">Add only what is new</p>
               <h2
                 ref={stepHeadingRef}
                 id="capture-detail-heading"
                 tabIndex={-1}
                 className="mt-1 text-2xl font-black tracking-[-0.03em]"
               >
-                Record the condition
+                Add job details
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
@@ -2181,20 +2165,19 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   className="border-2 border-warning/45 bg-warning-soft p-4"
                   aria-labelledby="evidence-correction-heading"
                 >
-                  <p className="text-sm font-semibold text-warning">Correction of prior evidence</p>
+                  <p className="text-sm font-semibold text-warning">Fix an old proof item</p>
                   <h3 id="evidence-correction-heading" className="mt-1 font-black">
-                    This single attachment will supersede the linked capture.
+                    This one file will replace the old view.
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    The prior event and Evidence Item identities are preserved. Explain the changed
-                    condition before saving.
+                    The old item will stay in the log. Say what changed before you save.
                   </p>
                   <label className="mt-3 block font-bold" htmlFor="evidence-correction-reason">
                     Why is this a correction? <span aria-hidden="true">*</span>
                   </label>
-                  <textarea
+                  <Textarea
                     id="evidence-correction-reason"
-                    className="mt-2 min-h-28 w-full border bg-surface p-4"
+                    className="mt-2 min-h-28 rounded-none bg-surface"
                     maxLength={1000}
                     required
                     value={correctionReason}
@@ -2217,26 +2200,27 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               </Button>
               {blocker ? (
                 <div className="space-y-4 border border-danger/35 bg-danger-soft p-4">
-                  <p className="font-black text-danger">Describe what is holding work.</p>
+                  <p className="font-black text-danger">Tell the office what stops work.</p>
                   <label className="block font-bold" htmlFor="blocker-category">
                     Blocker type
                   </label>
-                  <select
+                  <Select
+                    field
                     id="blocker-category"
-                    className="min-h-16 w-full border bg-surface px-4 text-lg font-bold"
+                    className="rounded-none bg-surface text-lg font-bold"
                     value={blockerCategory}
                     onChange={(event) => setBlockerCategory(event.target.value)}
                   >
                     {BLOCKER_CATEGORIES.map((category) => (
                       <option key={category}>{category}</option>
                     ))}
-                  </select>
+                  </Select>
                   <label className="block font-bold" htmlFor="blocker-summary">
                     What must happen next?
                   </label>
-                  <textarea
+                  <Textarea
                     id="blocker-summary"
-                    className="min-h-28 w-full border bg-surface p-4"
+                    className="min-h-28 rounded-none bg-surface"
                     maxLength={1000}
                     value={blockerSummary}
                     onChange={(event) => setBlockerSummary(event.target.value)}
@@ -2245,15 +2229,15 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               ) : null}
               <details className="border border-border">
                 <summary className="min-h-16 cursor-pointer px-4 py-4 font-bold">
-                  Add field note (optional)
+                  Add a note (optional)
                 </summary>
                 <div className="border-t border-border p-4">
                   <label className="block font-bold" htmlFor="field-notes">
-                    What changed or was completed?
+                    What changed or what did you finish?
                   </label>
-                  <textarea
+                  <Textarea
                     id="field-notes"
-                    className="mt-3 min-h-32 w-full border bg-surface p-4 text-base"
+                    className="mt-3 min-h-32 rounded-none bg-surface"
                     maxLength={2000}
                     value={notes}
                     onChange={(event) => setNotes(event.target.value)}
@@ -2276,7 +2260,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   onClick={() => moveToStep(1)}
                 >
                   <ChevronLeft aria-hidden="true" />
-                  Back to capture
+                  Back to files
                 </Button>
                 <Button
                   type="button"
@@ -2307,12 +2291,12 @@ function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <p className="text-sm font-semibold text-muted">{model.job.job_number ?? "Assigned job"}</p>
-      <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Capture evidence</h1>
+      <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Add job proof</h1>
       <p className="mt-2 text-base leading-7 text-muted">
         {model.job.address ?? "Address unavailable"}
       </p>
       <p className="mt-4 text-sm font-semibold text-muted">
-        Step {step} of 3 · {step === 1 ? "Capture" : step === 2 ? "Record condition" : "Saved"}
+        Step {step} of 3 · {step === 1 ? "Files" : step === 2 ? "Add details" : "Saved"}
       </p>
     </header>
   );
@@ -2321,7 +2305,7 @@ function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
 function CheckInProgress({ step }: { step: number }) {
   return (
     <ol className="grid grid-cols-3 border-y border-border" aria-label="Check-in progress">
-      {["Capture", "Record", "Saved"].map((label, index) => {
+      {["Files", "Details", "Saved"].map((label, index) => {
         const active = index + 1 === step;
         const complete = index + 1 < step;
         return (
@@ -2375,7 +2359,7 @@ function CaptureReview({
     <section className="border border-border" aria-labelledby="selected-evidence-heading">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <h3 id="selected-evidence-heading" className="font-black">
-          Selected evidence
+          Files to save
         </h3>
         <p className="text-sm font-semibold text-muted">
           {items.length} of 12 items · {formatBytes(totalBytes)} of 24 MB
@@ -2383,7 +2367,7 @@ function CaptureReview({
       </header>
       {items.length === 0 ? (
         <p className="px-4 py-4 text-sm leading-6 text-muted">
-          No media selected. A field note or blocker report can still be saved in the next step.
+          No files added. You can still save a note or a blocker in the next step.
         </p>
       ) : (
         <ul className="divide-y divide-border">
@@ -2435,15 +2419,14 @@ function LocationCapture({
   return (
     <details className="border border-border">
       <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
-        <span>Add device location (optional)</span>
+        <span>Add this phone's location (optional)</span>
         <span className="text-sm text-muted">
           {permissionState === "granted" ? "Captured" : "Optional"}
         </span>
       </summary>
       <div className="border-t border-border p-4">
         <p className="text-sm leading-6 text-muted">
-          The app records this device's approximate coordinates and accuracy with this check-in. It
-          does not prove a crew was onsite.
+          Adds a rough location to this check-in. It does not prove who was at the site.
         </p>
         <Button
           type="button"
@@ -2477,7 +2460,7 @@ function CheckInSaved({
     <section className="border-2 border-foreground bg-surface-raised p-4 sm:p-5" aria-live="polite">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-muted">Device evidence state</p>
+          <p className="text-sm font-semibold text-muted">Saved on this phone</p>
           <h2
             ref={headingRef}
             tabIndex={-1}
@@ -2490,14 +2473,14 @@ function CheckInSaved({
       </div>
       <p className="mt-4 leading-7 text-muted">
         {action.state === "verified"
-          ? "R2 and Frappe verified this exact device action."
+          ? "The server got this check-in."
           : action.state === "needs_attention"
-            ? "Nothing was deleted. This preserved action and its media need review before another attempt."
-            : "This action is saved on this device. While the app stays open, it queues and retries safely when it can."}
+            ? "Nothing was deleted. This check-in and its files need help before they can send."
+            : "This check-in is safe on this phone. Keep the app open so it can send when it can."}
       </p>
       <Button asChild size="field" fullWidth variant="accent" className="mt-5">
         <Link to="/jobs/$jobId" params={{ jobId }}>
-          Return to job packet
+          Return to job
         </Link>
       </Button>
     </section>
@@ -2509,7 +2492,7 @@ function locationStatus(
   permissionState: "not_requested" | "granted" | "denied" | "unavailable" | "error",
 ): string {
   if (location && permissionState === "granted")
-    return `Location captured · approximate accuracy ${Math.round(location.accuracy)} m.`;
+    return `Location added · about ${Math.round(location.accuracy)} m accuracy.`;
   if (permissionState === "denied") return "Location was not shared because permission was denied.";
   if (permissionState === "unavailable") return "Location is not available on this device.";
   if (permissionState === "error")

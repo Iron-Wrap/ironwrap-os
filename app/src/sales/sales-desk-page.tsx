@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BriefcaseBusiness,
+  ChevronRight,
   CircleAlert,
   ClipboardCheck,
   Clock3,
@@ -19,6 +20,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
 import { loadSales } from "./sales-api";
@@ -31,17 +33,17 @@ const attentionCopy: Record<
   { label: string; tone: string; icon: LucideIcon }
 > = {
   triage_unresolved: {
-    label: "Triage unresolved",
+    label: "Lead check needed",
     tone: "bg-danger-soft text-danger",
     icon: TriangleAlert,
   },
   estimate_needs_review: {
-    label: "Estimate review",
+    label: "Check estimate",
     tone: "bg-warning-soft text-warning",
     icon: FileSearch,
   },
-  quote_needs_review: { label: "Quote review", tone: "bg-info-soft text-info", icon: FileText },
-  quote_expired: { label: "Quote expired", tone: "bg-danger-soft text-danger", icon: Clock3 },
+  quote_needs_review: { label: "Check quote", tone: "bg-info-soft text-info", icon: FileText },
+  quote_expired: { label: "Quote ended", tone: "bg-danger-soft text-danger", icon: Clock3 },
 };
 
 export function SalesDeskPage() {
@@ -109,40 +111,54 @@ function SalesDeskScreen({
   const canPrepareTriage = model.allowed_actions.includes("approval.prepare");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
   const proposalSourcePartial = model.partial_sources.includes("proposal_evidence_packs");
+  const attentionCount = model.leads.filter((lead) => lead.attention.length > 0).length;
 
   return (
-    <section className="mx-auto max-w-7xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <BriefcaseBusiness className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Sales desk
-              </h1>
-              <p className="mt-1 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Review the lead, estimate, quote, and communication record before any follow-up.
-                This surface does not send a message, issue a quote, or alter a customer record.
-              </p>
+    <section className="mx-auto max-w-7xl space-y-6 pb-6">
+      <Card className="overflow-hidden">
+        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+            <div className="flex min-w-0 items-start gap-4">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+                <BriefcaseBusiness className="size-6 text-accent" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                  Sales work
+                </p>
+                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  Sales desk
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                  Check each lead before you call or send anything. This page only reads saved sales
+                  data.
+                </p>
+              </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 xl:justify-end">
+          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+              Next step
+            </p>
+            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+              {attentionCount === 0
+                ? "No lead checks"
+                : `${attentionCount} ${attentionCount === 1 ? "lead" : "leads"} to check`}
+            </h2>
             {generatedAt ? (
-              <p className="text-sm text-muted">Read generated {generatedAt}</p>
+              <p className="mt-2 text-sm text-muted">List made {generatedAt}</p>
             ) : null}
             {canReviewApprovals ? (
-              <Button asChild variant="outline" size="compact">
+              <Button asChild variant="outline" size="compact" className="mt-5">
                 <Link to="/approvals">
                   <ShieldCheck aria-hidden="true" />
-                  Review approvals
+                  Open lead reviews
                 </Link>
               </Button>
             ) : null}
           </div>
-        </div>
-      </header>
+        </header>
+      </Card>
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -151,7 +167,7 @@ function SalesDeskScreen({
       {isBounded ? <DataBoundary model={model} /> : null}
 
       <div className="grid gap-7 xl:grid-cols-[13.5rem_minmax(0,1fr)] xl:items-start">
-        <aside className="xl:sticky xl:top-28">
+        <aside className="min-w-0 xl:sticky xl:top-28">
           <FilterRail filters={filters} selected={filter} onChange={onFilterChange} />
         </aside>
         <main className="min-w-0">
@@ -173,55 +189,50 @@ function SalesDeskScreen({
 function SalesSignals({ model }: { model: SalesResponse }) {
   const signals = [
     {
-      label: "Triage open",
+      label: "Lead checks",
       value: model.summary.triage_unresolved,
-      detail: "Lead classification still needs a human decision",
+      detail: "A person must check the lead",
       tone: "text-danger",
       dot: "bg-danger",
     },
     {
-      label: "Estimate review",
+      label: "Estimate checks",
       value: model.summary.estimate_needs_review,
-      detail: "Ranges remain non-binding until reviewed",
+      detail: "Price ranges that are not final",
       tone: "text-warning",
       dot: "bg-warning",
     },
     {
-      label: "Quote review",
+      label: "Quote checks",
       value: model.summary.quote_needs_review + model.summary.quote_expired,
-      detail: "Quote state is visible, not inferred",
+      detail: "Quotes to check or renew",
       tone: "text-info",
       dot: "bg-info",
     },
   ];
   return (
-    <dl className="grid grid-cols-3 border-y border-border" aria-label="Sales review signals">
-      {signals.map((signal, index) => (
-        <div
-          key={signal.label}
-          className={cn(
-            "min-h-20 px-3 py-3 sm:min-h-24 sm:px-5 sm:py-4",
-            index > 0 && "border-l border-border",
-          )}
-        >
-          <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
-            <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
-            {signal.label}
-          </dt>
-          <dd
+    <Card className="overflow-hidden">
+      <dl className="grid sm:grid-cols-3" aria-label="Sales work to check">
+        {signals.map((signal, index) => (
+          <div
+            key={signal.label}
             className={cn(
-              "mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl",
-              signal.tone,
+              "min-h-24 px-5 py-4",
+              index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
             )}
           >
-            {signal.value}
-          </dd>
-          <p className="mt-1 hidden max-w-56 text-sm leading-5 text-muted sm:block">
-            {signal.detail}
-          </p>
-        </div>
-      ))}
-    </dl>
+            <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
+              <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
+              {signal.label}
+            </dt>
+            <dd className={cn("mt-2 text-2xl font-black tracking-[-0.03em]", signal.tone)}>
+              {signal.value}
+            </dd>
+            <p className="mt-1 max-w-56 text-sm leading-5 text-muted">{signal.detail}</p>
+          </div>
+        ))}
+      </dl>
+    </Card>
   );
 }
 
@@ -235,10 +246,13 @@ function FilterRail({
   onChange: (filter: SalesFilter) => void;
 }) {
   return (
-    <div className="pb-1">
+    <Card className="overflow-hidden p-2">
+      <p className="px-3 pb-2 pt-1 text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
+        Show
+      </p>
       <div
-        className="flex flex-wrap gap-2 xl:flex-col xl:border-l xl:border-border xl:pl-3"
-        aria-label="Sales queue filters"
+        className="flex gap-1 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible"
+        aria-label="Sales filters"
       >
         {filters.map((filter) => (
           <button
@@ -247,7 +261,7 @@ function FilterRail({
             aria-pressed={selected === filter.id}
             onClick={() => onChange(filter.id)}
             className={cn(
-              "flex min-h-11 items-center justify-between gap-4 rounded-md px-3 text-sm font-bold transition-colors",
+              "flex min-h-11 shrink-0 items-center justify-between gap-4 rounded-md px-3 text-sm font-bold transition-colors xl:w-full",
               selected === filter.id
                 ? "bg-foreground text-background"
                 : "bg-surface text-muted hover:bg-surface-muted hover:text-foreground",
@@ -262,7 +276,7 @@ function FilterRail({
           </button>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -287,13 +301,13 @@ function LeadQueue({
     return (
       <EmptyState
         title={emptyQueueTitle(filter)}
-        message="No source-backed records match this view. Changing a filter does not create or hide a lead."
+        message="No saved leads match this view. Try another tab."
       />
     );
   }
   return (
-    <section aria-labelledby="sales-queue-heading">
-      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
+    <Card className="overflow-hidden" aria-labelledby="sales-queue-heading">
+      <header className="flex flex-wrap items-end justify-between gap-3 p-5 sm:p-6">
         <div>
           <h2
             id="sales-queue-heading"
@@ -302,15 +316,15 @@ function LeadQueue({
             {queueTitle(filter)}
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
-            Contact details are visible for office review only. Communication and proposal actions
-            remain governed elsewhere.
+            Use the saved phone, email, estimate, quote, and contact rules. This page does not
+            contact anyone.
           </p>
         </div>
         <p className="text-sm font-semibold text-muted">
           {leads.length} {leads.length === 1 ? "lead" : "leads"}
         </p>
       </header>
-      <ol className="border-y border-border divide-y divide-border">
+      <ol className="border-t border-border divide-y divide-border">
         {leads.map((lead) => (
           <li key={lead.id}>
             <LeadRow
@@ -324,7 +338,7 @@ function LeadQueue({
           </li>
         ))}
       </ol>
-    </section>
+    </Card>
   );
 }
 
@@ -349,14 +363,13 @@ function LeadRow({
   );
   const jobLabel = lead.job?.job_number ?? lead.job?.id ?? null;
   return (
-    <article className="bg-surface transition-colors hover:bg-surface-raised">
+    <article className="bg-surface transition-colors hover:bg-surface-muted/35">
       <div className="flex flex-col gap-4 px-4 py-5 sm:px-6 sm:py-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
-              <span>{humanize(lead.source) ?? "Source unavailable"}</span>
+              <span>{humanize(lead.source) ?? "Source not found"}</span>
               {receivedAt ? <span>{receivedAt}</span> : null}
-              {lead.intent_queue ? <span>{lead.intent_queue}</span> : null}
             </div>
             <h3 className="mt-1 text-xl font-black tracking-[-0.025em] text-balance">
               {lead.contact.display_name ?? "Unnamed lead"}
@@ -364,14 +377,12 @@ function LeadRow({
             {contact.length > 0 ? (
               <p className="mt-2 break-words text-sm leading-6 text-muted">{contact.join(" · ")}</p>
             ) : (
-              <p className="mt-2 text-sm leading-6 text-warning">
-                No phone or email was returned in the office read model.
-              </p>
+              <p className="mt-2 text-sm leading-6 text-warning">No phone or email was found.</p>
             )}
           </div>
           <div className="flex flex-wrap gap-2 lg:max-w-sm lg:justify-end">
             <StatusChip
-              label={`Triage: ${humanize(lead.triage.status) ?? "Unknown"}`}
+              label={`Lead check: ${leadCheckLabel(lead.triage.status)}`}
               tone={triageTone(lead.triage.status)}
             />
             {lead.attention.map((reason) => (
@@ -399,38 +410,57 @@ function LeadRow({
               defaultCurrency={defaultCurrency}
             />
           </ReviewCell>
-          <ReviewCell label="Communication record" last>
+          <ReviewCell label="Contact rule" last>
             <ConsentSummary consent={lead.consent} locale={locale} />
           </ReviewCell>
         </div>
 
-        <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
-          {jobLabel ? <span>Job {jobLabel}</span> : <span>No linked job record returned</span>}
-          {lead.job?.service_type ? <span>{lead.job.service_type}</span> : null}
-          {lead.job?.workflow_profile ? <span>{lead.job.workflow_profile}</span> : null}
-          <span className="font-mono text-xs text-muted/85">Lead {lead.envelope_id}</span>
-          {canOpenWorkbench && lead.job ? (
-            <Link
-              to="/estimator/jobs/$jobId"
-              params={{ jobId: lead.job.id }}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-2 font-bold text-foreground transition-colors hover:bg-surface-muted"
-            >
-              Open measurement workbench
-              <ArrowUpRight className="size-4" aria-hidden="true" />
-            </Link>
-          ) : null}
-          {canPrepareTriage &&
-          lead.triage.status === "Untriaged" &&
-          lead.attention.includes("triage_unresolved") ? (
-            <Link
-              to="/sales/leads/$leadId/triage"
-              params={{ leadId: lead.id }}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 font-bold text-foreground transition-colors hover:bg-surface-muted"
-            >
-              <ClipboardCheck className="size-4" aria-hidden="true" />
-              Prepare triage review
-            </Link>
-          ) : null}
+        <footer className="space-y-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
+            {jobLabel ? <span>Job {jobLabel}</span> : <span>No job was found</span>}
+            {lead.job?.service_type ? <span>{lead.job.service_type}</span> : null}
+            {canOpenWorkbench && lead.job ? (
+              <Link
+                to="/estimator/jobs/$jobId"
+                params={{ jobId: lead.job.id }}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 font-bold text-foreground transition-colors hover:bg-surface-muted"
+              >
+                Open roof work
+                <ArrowUpRight className="size-4" aria-hidden="true" />
+              </Link>
+            ) : null}
+            {canPrepareTriage &&
+            lead.triage.status === "Untriaged" &&
+            lead.attention.includes("triage_unresolved") ? (
+              <Link
+                to="/sales/leads/$leadId/triage"
+                params={{ leadId: lead.id }}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 font-bold text-foreground transition-colors hover:bg-surface-muted"
+              >
+                <ClipboardCheck className="size-4" aria-hidden="true" />
+                Start lead check
+              </Link>
+            ) : null}
+          </div>
+          <details className="group rounded-lg border border-border">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold [&::-webkit-details-marker]:hidden">
+              <span>System details</span>
+              <ChevronRight
+                className="size-4 text-muted transition-transform group-open:rotate-90"
+                aria-hidden="true"
+              />
+            </summary>
+            <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2">
+              <MetadataLine label="Lead ID" value={lead.envelope_id} />
+              {lead.intent_queue ? (
+                <MetadataLine label="Sales path" value={lead.intent_queue} />
+              ) : null}
+              {lead.job?.workflow_profile ? (
+                <MetadataLine label="Work type" value={lead.job.workflow_profile} />
+              ) : null}
+              {lead.job?.status ? <MetadataLine label="Job state" value={lead.job.status} /> : null}
+            </dl>
+          </details>
         </footer>
       </div>
     </article>
@@ -459,6 +489,15 @@ function ReviewCell({
   );
 }
 
+function MetadataLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="font-semibold text-foreground">{label}</dt>
+      <dd className="mt-0.5 break-words">{value}</dd>
+    </div>
+  );
+}
+
 function EstimateSummary({
   estimate,
   locale,
@@ -468,27 +507,26 @@ function EstimateSummary({
   locale: string;
   currency: string;
 }) {
-  if (!estimate)
-    return <p className="text-sm leading-6 text-muted">No estimate session returned.</p>;
+  if (!estimate) return <p className="text-sm leading-6 text-muted">No estimate was found.</p>;
   const value = estimateValue(estimate, locale, currency);
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
         <StatusChip
-          label={humanize(estimate.status) ?? "Status unavailable"}
+          label={estimateStatusLabel(estimate.status)}
           tone={estimateTone(estimate.status)}
         />
         {estimateIsNonBinding(estimate) ? (
-          <StatusChip label="Non-binding" tone="bg-warning-soft text-warning" />
+          <StatusChip label="Not final" tone="bg-warning-soft text-warning" />
         ) : null}
       </div>
       {value ? <p className="text-base font-black tracking-[-0.02em]">{value}</p> : null}
       <p className="text-sm leading-6 text-muted">
         {[estimate.service_type, estimate.confidence].filter(Boolean).join(" · ") ||
-          "Source detail unavailable"}
+          "Details not found"}
       </p>
       {estimate.assumptions ? (
-        <p className="text-sm leading-6 text-muted">Assumptions: {estimate.assumptions}</p>
+        <p className="text-sm leading-6 text-muted">Price notes: {estimate.assumptions}</p>
       ) : null}
     </div>
   );
@@ -507,7 +545,7 @@ function QuoteSummary({
   locale: string;
   defaultCurrency: string;
 }) {
-  if (!quote) return <p className="text-sm leading-6 text-muted">No quote record returned.</p>;
+  if (!quote) return <p className="text-sm leading-6 text-muted">No quote was found.</p>;
   const value =
     quote.quote_total === null
       ? null
@@ -516,27 +554,22 @@ function QuoteSummary({
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusChip
-          label={humanize(quote.status) ?? "Status unavailable"}
-          tone={quoteTone(quote.status)}
-        />
+        <StatusChip label={quoteStatusLabel(quote.status)} tone={quoteTone(quote.status)} />
         {quote.version !== null ? (
-          <span className="text-xs font-bold text-muted">v{quote.version}</span>
+          <span className="text-xs font-bold text-muted">Version {quote.version}</span>
         ) : null}
       </div>
       {value ? <p className="text-base font-black tracking-[-0.02em]">{value}</p> : null}
       <p className="text-sm leading-6 text-muted">
-        {[quote.payment_status, validUntil ? `Valid until ${validUntil}` : null]
+        {[quote.payment_status, validUntil ? `Good until ${validUntil}` : null]
           .filter(Boolean)
-          .join(" · ") || "Payment and validity unavailable"}
+          .join(" · ") || "Payment and end date not found"}
       </p>
       {quote.scope_summary ? (
         <p className="text-sm leading-6 text-muted">{quote.scope_summary}</p>
       ) : null}
       <div className="mt-3 border-t border-border pt-3">
-        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
-          Customer proposal
-        </p>
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Customer view</p>
         <ProposalPublicationSummary proposal={proposal} sourcePartial={proposalSourcePartial} />
       </div>
     </div>
@@ -555,13 +588,13 @@ function ProposalPublicationSummary({
       <div className="mt-2 space-y-1">
         {proposal ? (
           <StatusChip
-            label={humanize(proposal.status) ?? "State unavailable"}
+            label={proposalStatusLabel(proposal.status)}
             tone={proposalTone(proposal.status)}
           />
         ) : null}
-        <p className="text-sm font-bold text-warning">Publication state inconclusive</p>
+        <p className="text-sm font-bold text-warning">Customer view is not known</p>
         <p className="text-sm leading-6 text-warning">
-          Proposal evidence reached its safe read boundary. Do not infer customer publication.
+          Some quote-page data is missing. Do not say the customer can see it.
         </p>
       </div>
     );
@@ -570,8 +603,8 @@ function ProposalPublicationSummary({
     return (
       <p className="mt-2 text-sm leading-6 text-warning">
         {sourcePartial
-          ? "Proposal evidence reached its safe read boundary. Do not infer customer publication."
-          : "No proposal evidence links to this quote. Quote terms remain office-only."}
+          ? "Some quote-page data is missing. Do not say the customer can see it."
+          : "No customer view was found. Quote terms stay in the office."}
       </p>
     );
   }
@@ -580,18 +613,18 @@ function ProposalPublicationSummary({
   return (
     <div className="mt-2 space-y-1">
       <StatusChip
-        label={humanize(proposal.status) ?? "State unavailable"}
+        label={proposalStatusLabel(proposal.status)}
         tone={proposalTone(proposal.status)}
       />
       <p className={cn("text-sm font-bold", published ? "text-ok" : "text-warning")}>
-        {published ? "Publication recorded" : "Not published"}
+        {published ? "Customer view saved" : "Not shown to customer"}
       </p>
       <p className="text-sm leading-6 text-muted">
         {published
           ? newestIsPublished
-            ? "A valid customer link may show its safe summary when the portal capability is enabled."
-            : `The latest returned office pack is ${humanize(proposal.status) ?? "draft"}; a valid customer link may still show the last published safe summary when the portal capability is enabled.`
-          : "This pack cannot make quote terms customer-visible."}
+            ? "A safe quote page can show this saved version when the customer portal is on."
+            : `A safe quote page may still show the last saved version. The newest office version is ${proposalStatusLabel(proposal.status)}.`
+          : "This version cannot show quote terms to the customer."}
       </p>
     </div>
   );
@@ -601,14 +634,12 @@ function ConsentSummary({ consent, locale }: { consent: SalesLead["consent"]; lo
   if (consent.context === "partial") {
     return (
       <p className="text-sm leading-6 text-warning">
-        Communication records reached a source limit. Do not infer permission from this summary.
+        Contact rules are not clear. Do not call or send a message from this page.
       </p>
     );
   }
   if (consent.records.length === 0) {
-    return (
-      <p className="text-sm leading-6 text-warning">No linked communication record returned.</p>
-    );
+    return <p className="text-sm leading-6 text-warning">No contact rule was found.</p>;
   }
   return (
     <ul className="space-y-2">
@@ -621,14 +652,14 @@ function ConsentSummary({ consent, locale }: { consent: SalesLead["consent"]; lo
             </p>
             <p className="mt-0.5 text-muted">
               {[record.jurisdiction, record.basis, capturedAt].filter(Boolean).join(" · ") ||
-                "Record detail unavailable"}
+                "Rule details not found"}
             </p>
           </li>
         );
       })}
       {consent.records.length > 3 ? (
         <li className="text-xs font-semibold text-muted">
-          +{consent.records.length - 3} more linked records
+          +{consent.records.length - 3} more rules
         </li>
       ) : null}
     </ul>
@@ -666,49 +697,49 @@ function DataBoundary({ model }: { model: SalesResponse }) {
     .map(humanize)
     .filter((value): value is string => Boolean(value));
   return (
-    <div
-      className="flex gap-3 border border-warning/40 bg-warning-soft/55 p-4 text-sm leading-6"
+    <Card
+      className="flex gap-3 border-warning/40 bg-warning-soft/55 p-4 text-sm leading-6"
       role="status"
     >
       <CircleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
       <div>
-        <p className="font-bold text-foreground">This is a bounded review queue.</p>
+        <p className="font-bold text-foreground">Some sales data is missing</p>
         <p className="mt-1 text-muted">
           {sources.length > 0
-            ? `${sources.join(", ")} ${sources.length === 1 ? "source reached" : "sources reached"} the read limit. Counts may be lower bounds.`
-            : "One or more source fields are unavailable. Do not treat an empty value as proof that a record does not exist."}
+            ? `${sources.join(", ")} did not return a full list. Some totals may be low.`
+            : "Some saved fields are missing. A blank value does not prove that a record is gone."}
         </p>
       </div>
-    </div>
+    </Card>
   );
 }
 
 function RefreshWarning({ onRetry }: { onRetry: () => void }) {
   return (
-    <div
-      className="flex flex-col gap-3 border border-warning/40 bg-warning-soft/55 p-4 sm:flex-row sm:items-center sm:justify-between"
+    <Card
+      className="flex flex-col gap-3 border-warning/40 bg-warning-soft/55 p-4 sm:flex-row sm:items-center sm:justify-between"
       role="status"
     >
       <div className="flex gap-3 text-sm leading-6">
         <AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
         <p>
-          Showing the last verified sales read. The refresh did not complete, so do not assume newer
-          lead or quote state.
+          <span className="font-bold">This may be an old sales list.</span>{" "}
+          <span className="text-muted">The last load failed. Load again before you act.</span>
         </p>
       </div>
       <Button variant="outline" size="compact" onClick={onRetry}>
         <RefreshCw aria-hidden="true" />
-        Refresh read
+        Load again
       </Button>
-    </div>
+    </Card>
   );
 }
 
 function SalesDeskError({ onRetry }: { onRetry: () => void }) {
   return (
     <ErrorState
-      title="Sales review is unavailable"
-      message="No office sales records were loaded. This page will not substitute demo leads or assumed quote state."
+      title="Sales work could not load"
+      message="Nothing changed. Check your link, then load the list again."
       onRetry={onRetry}
     />
   );
@@ -719,20 +750,23 @@ function SalesDeskSkeleton() {
     <section
       className="mx-auto max-w-7xl space-y-6"
       aria-busy="true"
-      aria-label="Loading sales review queue"
+      aria-label="Loading sales work"
     >
-      <div className="h-20 border-b border-border bg-surface-muted/70" />
-      <div className="grid grid-cols-3 border-y border-border">
+      <Card className="h-44 bg-surface-muted/70" />
+      <Card className="grid overflow-hidden sm:grid-cols-3">
         {[0, 1, 2].map((index) => (
           <div
             key={index}
-            className={cn("min-h-24 bg-surface-muted/60", index > 0 && "border-l border-border")}
+            className={cn(
+              "min-h-24 bg-surface-muted/60",
+              index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
+            )}
           />
         ))}
-      </div>
+      </Card>
       <div className="grid gap-7 xl:grid-cols-[13.5rem_minmax(0,1fr)]">
-        <div className="h-48 bg-surface-muted/60" />
-        <div className="h-96 border-y border-border bg-surface-muted/50" />
+        <Card className="h-48 bg-surface-muted/60" />
+        <Card className="h-96 bg-surface-muted/50" />
       </div>
     </section>
   );
@@ -744,11 +778,11 @@ function salesFilters(
   return [
     {
       id: "attention",
-      label: "Attention",
+      label: "Needs a check",
       count: model.leads.filter((lead) => lead.attention.length > 0).length,
     },
     { id: "all", label: "All leads", count: model.summary.listed_leads },
-    { id: "triage", label: "Triage", count: model.summary.triage_unresolved },
+    { id: "triage", label: "Lead checks", count: model.summary.triage_unresolved },
     { id: "estimate", label: "Estimates", count: model.summary.estimate_needs_review },
     {
       id: "quote",
@@ -767,16 +801,41 @@ function matchesFilter(lead: SalesLead, filter: SalesFilter): boolean {
 }
 
 function queueTitle(filter: SalesFilter): string {
-  if (filter === "all") return "All lead records";
-  if (filter === "triage") return "Triage needs a decision";
-  if (filter === "estimate") return "Estimate review";
-  if (filter === "quote") return "Quote review";
-  return "Needs review";
+  if (filter === "all") return "All leads";
+  if (filter === "triage") return "Lead checks";
+  if (filter === "estimate") return "Estimate checks";
+  if (filter === "quote") return "Quote checks";
+  return "Needs a check";
 }
 
 function emptyQueueTitle(filter: SalesFilter): string {
-  if (filter === "all") return "No lead records returned";
-  return `No ${queueTitle(filter).toLowerCase()} records returned`;
+  if (filter === "all") return "No leads were found";
+  return `No ${queueTitle(filter).toLowerCase()} in this view`;
+}
+
+function leadCheckLabel(status: string | null): string {
+  if (status === "Triaged") return "Checked";
+  if (status === "Untriaged") return "Not checked";
+  if (status === "Unknown") return "Not known";
+  return humanize(status) ?? "Not known";
+}
+
+function estimateStatusLabel(status: string | null): string {
+  if (status === "Needs Review") return "Needs a check";
+  if (status === "Captured") return "Saved";
+  if (status === "Rejected") return "Turned down";
+  return humanize(status) ?? "Not known";
+}
+
+function quoteStatusLabel(status: string | null): string {
+  if (status === "Needs Review") return "Needs a check";
+  if (status === "Expired") return "Ended";
+  if (status === "Rejected") return "Turned down";
+  return humanize(status) ?? "Not known";
+}
+
+function proposalStatusLabel(status: string | null): string {
+  return humanize(status) ?? "Not known";
 }
 
 function triageTone(status: string | null): string {

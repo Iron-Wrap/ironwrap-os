@@ -315,33 +315,32 @@ describe("OwnerNowPage", () => {
     await screen.findByRole("heading", { name: "Work stopped" });
 
     expect(
-      Array.from(
-        container.querySelectorAll('section[aria-labelledby^="owner-decision-lane-"]'),
-      ).map((section) => section.getAttribute("aria-labelledby")),
+      Array.from(container.querySelectorAll('[aria-labelledby^="owner-decision-lane-"]')).map(
+        (section) => section.getAttribute("aria-labelledby"),
+      ),
     ).toEqual([
       "owner-decision-lane-work_stopped",
       "owner-decision-lane-operating_exceptions",
       "owner-decision-lane-lead_attention",
     ]);
     expect(screen.getAllByText("Work stopped").length).toBeGreaterThan(1);
-    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(1);
-    expect(screen.getAllByText("Lead attention").length).toBeGreaterThan(1);
-    expect(screen.getAllByText("Source update").length).toBeGreaterThan(1);
-    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Needs a check").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Lead checks").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Work data updated").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Not known").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("The next step is missing from this list.").length).toBeGreaterThan(
+      1,
+    );
+    expect(screen.getAllByText("Some due times are missing.").length).toBeGreaterThan(1);
     expect(
-      screen.getAllByText("Action guidance is unavailable in this read-only queue.").length,
+      screen.getAllByText(/Some counts may be low for Field Blockers, Material Exceptions/i).length,
     ).toBeGreaterThan(1);
-    expect(screen.getAllByText("Some due timing is unavailable.").length).toBeGreaterThan(1);
-    expect(
-      screen.getAllByText(/Counts are lower bounds for Field Blockers, Material Exceptions/i)
-        .length,
-    ).toBeGreaterThan(1);
-    expect(screen.getAllByText("Acknowledgement evidence").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Reply proof").length).toBeGreaterThan(1);
     expect(screen.queryByText("New leads")).not.toBeInTheDocument();
     expect(screen.queryByText(/sent|delivered|human follow-up/i)).not.toBeInTheDocument();
     expect(screen.queryByText("No verified next action was returned.")).not.toBeInTheDocument();
 
-    expect(screen.getAllByRole("link", { name: "Open job packet for JOB-A" })[0]!).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Open job JOB-A" })[0]!).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
@@ -361,15 +360,13 @@ describe("OwnerNowPage", () => {
   it("shows durable measurement exceptions without exposing raw receipt data or trusting arbitrary links", async () => {
     const { container } = renderOwner();
 
-    expect(
-      await screen.findByRole("heading", { name: "Measurement reports needing attention" }),
-    ).toBeVisible();
-    expect(screen.getByText("RoofRuler report needs a job match")).toBeVisible();
-    expect(screen.getByText("AppliCad report is retrying")).toBeVisible();
-    expect(screen.getByText(/No job number was supplied/i)).toBeVisible();
-    expect(screen.getByText(/report source could not be fetched/i)).toBeVisible();
-    expect(screen.getByText(/will retry automatically when due/i)).toBeVisible();
-    expect(screen.getByText("Attempts:")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Roof reports to check" })).toBeVisible();
+    expect(screen.getByText("RoofRuler report needs a job")).toBeVisible();
+    expect(screen.getByText("AppliCad report will try again")).toBeVisible();
+    expect(screen.getByText(/report has no job number/i)).toBeVisible();
+    expect(screen.getByText(/could not get the roof report/i)).toBeVisible();
+    expect(screen.getByText(/will try again at the saved time/i)).toBeVisible();
+    expect(screen.getByText("Tries:")).toBeVisible();
     expect(screen.getByRole("link", { name: "Open report" })).toHaveAttribute(
       "href",
       "https://drive.google.com/open?id=report-a",
@@ -406,14 +403,14 @@ describe("OwnerNowPage", () => {
 
     renderOwner();
 
-    expect(await screen.findByText("AppliCad report needs recovery")).toBeVisible();
-    expect(screen.getByText("RoofRuler report needs recovery")).toBeVisible();
-    expect(screen.getByText("Recovery blocked")).toBeVisible();
-    expect(screen.getByText("Retry limit reached")).toBeVisible();
-    expect(screen.getByText(/saved raw source is unavailable/i)).toBeVisible();
-    expect(screen.getByText(/Automatic recovery is blocked/i)).toBeVisible();
-    expect(screen.getByText(/automatic retry limit has been reached/i)).toBeVisible();
-    expect(screen.queryByText("Automatic retry")).not.toBeInTheDocument();
+    expect(await screen.findByText("AppliCad report needs help")).toBeVisible();
+    expect(screen.getByText("RoofRuler report needs help")).toBeVisible();
+    expect(screen.getByText("Help needed")).toBeVisible();
+    expect(screen.getByText("No more tries")).toBeVisible();
+    expect(screen.getByText(/saved roof report is missing/i)).toBeVisible();
+    expect(screen.getByText(/app cannot try again/i)).toBeVisible();
+    expect(screen.getByText(/app has used all tries/i)).toBeVisible();
+    expect(screen.queryByText("Will try again")).not.toBeInTheDocument();
   });
 
   it("distinguishes OCR review from job matching", async () => {
@@ -429,18 +426,16 @@ describe("OwnerNowPage", () => {
 
     renderOwner();
 
-    expect(await screen.findByText("RoofRuler report needs OCR review")).toBeVisible();
-    expect(screen.getByText(/compare them with the saved report/i)).toBeVisible();
-    expect(screen.queryByText(/needs a job match/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("RoofRuler report needs a text check")).toBeVisible();
+    expect(screen.getByText(/check them against the saved report/i)).toBeVisible();
+    expect(screen.queryByText(/needs a job$/i)).not.toBeInTheDocument();
   });
 
   it("keeps an empty measurement queue honest", async () => {
     vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValueOnce({ measurements: [] });
     renderOwner();
 
-    expect(
-      await screen.findByText("No unmatched or retryable measurement reports were returned."),
-    ).toBeVisible();
+    expect(await screen.findByText("No roof reports need a check.")).toBeVisible();
   });
 
   it("keeps a prior read visible when refresh fails", async () => {
@@ -450,9 +445,9 @@ describe("OwnerNowPage", () => {
 
     renderOwner({ client });
 
-    expect(await screen.findByText("Showing the previous read.")).toBeVisible();
+    expect(await screen.findByText("This may be an old list.")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Retry queue" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load again" })).toBeVisible();
   });
 
   it("uses an honest empty state when a bounded source returns no exception rows", async () => {
@@ -475,7 +470,7 @@ describe("OwnerNowPage", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "No exceptions were returned from available sources",
+        name: "No work was found in the data we have",
       }),
     ).toBeVisible();
   });
@@ -485,9 +480,11 @@ describe("OwnerNowPage", () => {
 
     renderOwner();
 
-    expect(await screen.findByRole("heading", { name: "Current queue unavailable" })).toBeVisible();
-    expect(screen.getByText(/Retrying does not change jobs or acknowledgements/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Retry queue" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Today's work could not load" }),
+    ).toBeVisible();
+    expect(screen.getByText(/Nothing changed. Check your link/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load again" })).toBeVisible();
   });
 
   it("keeps the existing owner/ops access semantics for operations", async () => {
@@ -506,14 +503,17 @@ describe("OwnerNowPage", () => {
     const user = userEvent.setup();
     renderOwner();
 
-    await screen.findByRole("button", { name: "Check runtime truth" });
+    await screen.findByRole("button", { name: "Run system check" });
     expect(loadOwnerRuntime).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Check runtime truth" }));
+    await user.click(screen.getByRole("button", { name: "Run system check" }));
 
-    expect(await screen.findByText("Open dead letters")).toBeVisible();
-    expect(screen.getByText("Audit failures observed (24h, max 20)")).toBeVisible();
-    expect(screen.getByText("Readiness attention: office bff.")).toBeVisible();
+    expect(await screen.findByText("Items to fix")).toBeVisible();
+    expect(screen.getByText("Messages not finished")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("Messages not finished")).toBeVisible();
+    expect(screen.getByText("Save record errors in 24 hours")).toBeVisible();
+    expect(screen.getByText("Checks to fix: Office app link.")).toBeVisible();
     expect(loadOwnerRuntime).toHaveBeenCalledOnce();
   });
 

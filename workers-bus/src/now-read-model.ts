@@ -28,11 +28,24 @@ import {
   type QuickBooksRejectionReason,
 } from "./quickbooks-final-invoice.ts";
 
-export type NowSourceId = "owner" | "postiz" | "quickbooks_final_invoices" | "facet" | "sales" | "production";
+export type NowSourceId =
+  | "owner"
+  | "postiz"
+  | "quickbooks_final_invoices"
+  | "facet"
+  | "sales"
+  | "production";
 export type NowHref =
-  "/owner" | "/facet-designs" | "/sales" | "/production" | "/approvals" | "/today" | "/settings" |
-  "/accounting/quickbooks" |
-  `/marketing/postiz/${string}` | `/accounting/quickbooks/final-invoices/${string}`;
+  | "/owner"
+  | "/facet-designs"
+  | "/sales"
+  | "/production"
+  | "/approvals"
+  | "/today"
+  | "/settings"
+  | "/accounting/quickbooks"
+  | `/marketing/postiz/${string}`
+  | `/accounting/quickbooks/final-invoices/${string}`;
 
 export interface NowAction {
   id: string;
@@ -72,7 +85,10 @@ export interface QuickBooksFinalInvoiceNowCard {
   blocker_code: QuickBooksBlockerCode | null;
   rejection_reason: QuickBooksRejectionReason | null;
   next_step: QuickBooksNextStep;
-  action: { label: "Review final invoice"; href: `/accounting/quickbooks/final-invoices/${string}` };
+  action: {
+    label: "Review final invoice";
+    href: `/accounting/quickbooks/final-invoices/${string}`;
+  };
   citations: StandardNowCard["citations"];
 }
 
@@ -158,18 +174,19 @@ export async function buildNowReadModel(
   if (auth.session.role !== "owner" && auth.session.role !== "ops")
     throw new Error("office_scope_required");
 
-  const [owner, facet, sales, production, postiz, quickbooks] = await Promise.allSettled([
-    buildOwnerNowReadModel(env, auth, now),
-    buildFacetNowReadModel(env, auth, now),
-    buildSalesReadModel(env, auth),
-    buildProductionRunwayReadModel(env, auth),
-    auth.session.role === "owner"
-      ? buildPostizNowReadModel(env, auth, now)
-      : Promise.resolve(null),
-    auth.session.role === "owner"
-      ? buildQuickBooksNowReadModel(env, auth, now)
-      : Promise.resolve(null),
-  ]);
+  const [owner, facet, sales, production, postiz, quickbooks] =
+    await Promise.allSettled([
+      buildOwnerNowReadModel(env, auth, now),
+      buildFacetNowReadModel(env, auth, now),
+      buildSalesReadModel(env, auth),
+      buildProductionRunwayReadModel(env, auth),
+      auth.session.role === "owner"
+        ? buildPostizNowReadModel(env, auth, now)
+        : Promise.resolve(null),
+      auth.session.role === "owner"
+        ? buildQuickBooksNowReadModel(env, auth, now)
+        : Promise.resolve(null),
+    ]);
 
   return projectNowReadModel(
     auth.session.role,
@@ -178,13 +195,22 @@ export async function buildNowReadModel(
       facet: settled(facet),
       sales: settled(sales),
       production: settled(production),
-      ...(auth.session.role === "owner" && postiz.status === "fulfilled" && postiz.value
+      ...(auth.session.role === "owner" &&
+      postiz.status === "fulfilled" &&
+      postiz.value
         ? { postiz: { ok: true as const, model: postiz.value } }
         : auth.session.role === "owner"
           ? { postiz: { ok: false as const } }
           : {}),
-      ...(auth.session.role === "owner" && quickbooks.status === "fulfilled" && quickbooks.value
-        ? { quickbooks_final_invoices: { ok: true as const, model: quickbooks.value } }
+      ...(auth.session.role === "owner" &&
+      quickbooks.status === "fulfilled" &&
+      quickbooks.value
+        ? {
+            quickbooks_final_invoices: {
+              ok: true as const,
+              model: quickbooks.value,
+            },
+          }
         : auth.session.role === "owner"
           ? { quickbooks_final_invoices: { ok: false as const } }
           : {}),
@@ -209,15 +235,15 @@ export function projectProductionNowReadModel(
   const primaryAction = unavailable
     ? refreshAction(
         "now:refresh-production",
-        "Refresh production records",
-        "The owned production source could not be checked, so IronWrap cannot safely rank the next job.",
+        "Check the job list again",
+        "The job list did not load, so IronWrap cannot pick the next job yet.",
       )
     : (cards[0]?.action ??
       navigateAction(
         "now:open-production",
-        "Open production",
+        "Open jobs",
         "/production",
-        "No production attention item was returned by the current bounded read.",
+        "No job needs a check in this list.",
         [],
       ));
 
@@ -233,30 +259,30 @@ export function projectProductionNowReadModel(
     ui: {
       schema_version: 1,
       state: limited ? "limited" : cards.length > 0 ? "ready" : "empty",
-      title: "What needs you now",
+      title: "Work to do now",
       explanation:
-        "IronWrap shows the next verified production blocker or readiness exception. Resolve it, record the evidence, then return for the next job.",
+        "Start with the first item. Fix it, save proof, then come back for the next one.",
       sync_label: limited
-        ? "Production records are limited or unavailable. Missing work is not treated as clear."
-        : "Production records are current for this view.",
+        ? "Some job data is missing. IronWrap will not mark it as done."
+        : "The job list is up to date.",
       primary_action: primaryAction,
       sections: [
         {
           id: "production",
-          title: "Keep work moving",
+          title: "Jobs to check",
           summary:
             cards.length > 0
-              ? `${cards.length} production job${cards.length === 1 ? "" : "s"} need attention`
-              : "No production attention item was returned.",
+              ? `${cards.length} job${cards.length === 1 ? "" : "s"} need a check`
+              : "No job needs a check.",
           cards,
         },
         ...(unavailable
           ? [
               {
                 id: "source-status",
-                title: "Could not verify",
+                title: "List not ready",
                 summary:
-                  "Production needs another read before its work can be treated as clear.",
+                  "Load the job list again before you mark work as done.",
                 cards: [unavailableSourceCard("production")],
               },
             ]
@@ -282,15 +308,15 @@ export function projectSalesNowReadModel(
   const primaryAction = unavailable
     ? refreshAction(
         "now:refresh-sales",
-        "Refresh sales records",
-        "The owned sales source could not be checked, so IronWrap cannot safely rank the next lead.",
+        "Check the sales list again",
+        "The sales list did not load, so IronWrap cannot pick the next customer yet.",
       )
     : (cards[0]?.action ??
       navigateAction(
         "now:open-sales",
         "Open sales",
         "/sales",
-        "No sales attention item was returned by the current bounded read.",
+        "No customer needs a check in this list.",
         [],
       ));
 
@@ -304,29 +330,30 @@ export function projectSalesNowReadModel(
     ui: {
       schema_version: 1,
       state: limited ? "limited" : cards.length > 0 ? "ready" : "empty",
-      title: "What needs you now",
+      title: "Work to do now",
       explanation:
-        "IronWrap shows the next verified sales or estimating exception. Open it, record the decision, then return for the next one.",
+        "Start with the first customer. Save your choice, then come back for the next one.",
       sync_label: limited
-        ? "Sales records are limited or unavailable. Missing work is not treated as clear."
-        : "Sales records are current for this view.",
+        ? "Some sales data is missing. IronWrap will not mark it as done."
+        : "The sales list is up to date.",
       primary_action: primaryAction,
       sections: [
         {
           id: "sales",
-          title: "Move the next customer",
+          title: "Customers to help",
           summary:
             cards.length > 0
-              ? `${cards.length} lead${cards.length === 1 ? "" : "s"} need attention`
-              : "No sales attention item was returned.",
+              ? `${cards.length} customer${cards.length === 1 ? "" : "s"} need a check`
+              : "No customer needs a check.",
           cards,
         },
         ...(unavailable
           ? [
               {
                 id: "source-status",
-                title: "Could not verify",
-                summary: "Sales needs another read before its work can be treated as clear.",
+                title: "List not ready",
+                summary:
+                  "Load the sales list again before you mark work as done.",
                 cards: [unavailableSourceCard("sales")],
               },
             ]
@@ -351,15 +378,19 @@ export function projectNowReadModel(
   const ownerCards = input.owner.ok
     ? input.owner.model.exceptions.slice(0, 6).map(ownerCard)
     : [];
-  const postizCards = role === "owner" && input.postiz?.ok
-    ? input.postiz.model.intents.slice(0, 6).map(postizCard)
-    : [];
-  const quickBooksCards = role === "owner" && input.quickbooks_final_invoices?.ok
-    ? [
-        ...input.quickbooks_final_invoices.model.holds.map(quickBooksHoldCard),
-        ...input.quickbooks_final_invoices.model.intents.map(quickBooksCard),
-      ].slice(0, 6)
-    : [];
+  const postizCards =
+    role === "owner" && input.postiz?.ok
+      ? input.postiz.model.intents.slice(0, 6).map(postizCard)
+      : [];
+  const quickBooksCards =
+    role === "owner" && input.quickbooks_final_invoices?.ok
+      ? [
+          ...input.quickbooks_final_invoices.model.holds.map(
+            quickBooksHoldCard,
+          ),
+          ...input.quickbooks_final_invoices.model.intents.map(quickBooksCard),
+        ].slice(0, 6)
+      : [];
   const productionCards = input.production.ok
     ? input.production.model.jobs
         .filter((job) => job.lane !== "scheduled")
@@ -368,9 +399,9 @@ export function projectNowReadModel(
     : [];
   const facetCards = input.facet.ok
     ? [
-      ...input.facet.model.intake_exceptions.map(facetIntakeExceptionCard),
-      ...input.facet.model.evidence.map(facetCard),
-    ].slice(0, 6)
+        ...input.facet.model.intake_exceptions.map(facetIntakeExceptionCard),
+        ...input.facet.model.evidence.map(facetCard),
+      ].slice(0, 6)
     : [];
   const salesCards = input.sales.ok
     ? input.sales.model.leads
@@ -378,21 +409,33 @@ export function projectNowReadModel(
         .slice(0, 5)
         .map(salesCard)
     : [];
-  const activeSourceOrder = role === "owner"
-    ? ([
-        "owner",
-        ...(input.quickbooks_final_invoices ? (["quickbooks_final_invoices"] as const) : []),
-        ...(input.postiz ? (["postiz"] as const) : []),
-        "facet",
-        "production",
-        "sales",
-      ] as const)
-    : sourceOrder;
+  const activeSourceOrder =
+    role === "owner"
+      ? ([
+          "owner",
+          ...(input.quickbooks_final_invoices
+            ? (["quickbooks_final_invoices"] as const)
+            : []),
+          ...(input.postiz ? (["postiz"] as const) : []),
+          "facet",
+          "production",
+          "sales",
+        ] as const)
+      : sourceOrder;
   const failedSourceCards = activeSourceOrder.flatMap((id) =>
     input[id]?.ok ? [] : [unavailableSourceCard(id)],
   );
-  const workCards = [...quickBooksCards, ...postizCards, ...ownerCards, ...facetCards, ...productionCards, ...salesCards];
-  const sources = activeSourceOrder.map((id) => sourceProjection(id, input[id]!));
+  const workCards = [
+    ...quickBooksCards,
+    ...postizCards,
+    ...ownerCards,
+    ...facetCards,
+    ...productionCards,
+    ...salesCards,
+  ];
+  const sources = activeSourceOrder.map((id) =>
+    sourceProjection(id, input[id]!),
+  );
   const limited = sources.some((source) => source.state !== "current");
   const unavailable = sources.some((source) => source.state === "unavailable");
   const quickBooksPrimaryAction = quickBooksCards[0]
@@ -401,16 +444,22 @@ export function projectNowReadModel(
   const primaryAction = unavailable
     ? refreshAction(
         "now:refresh",
-        "Refresh live records",
-        "One or more owned sources could not be checked, so IronWrap cannot safely rank the next action.",
+        "Check all lists again",
+        "One or more work lists did not load, so IronWrap cannot pick the next step yet.",
       )
     : (quickBooksPrimaryAction ??
-      [...postizCards, ...ownerCards, ...facetCards, ...productionCards, ...salesCards][0]?.action ??
+      [
+        ...postizCards,
+        ...ownerCards,
+        ...facetCards,
+        ...productionCards,
+        ...salesCards,
+      ][0]?.action ??
       navigateAction(
         "now:today",
         "Open today's work",
         "/today",
-        "There are no blocking exceptions in the current bounded read.",
+        "No item is blocking work right now.",
         [],
       ));
 
@@ -432,57 +481,56 @@ export function projectNowReadModel(
     ui: {
       schema_version: 1,
       state: limited ? "limited" : workCards.length > 0 ? "ready" : "empty",
-      title: "What needs you now",
+      title: "Work to do now",
       explanation:
-        "IronWrap combines current owner, marketing, Facet, sales, and production exceptions here. Open the first item, make the decision, then come back for the next one.",
+        "IronWrap puts the most important work here. Start with the first item, finish it, then come back.",
       sync_label: limited
-        ? "Some live records are limited or unavailable. They are not treated as clear."
-        : "Owner, Facet, sales, and production records are current for this view.",
+        ? "Some lists did not load or may be missing items. IronWrap will not mark them as done."
+        : "All work lists are up to date.",
       primary_action: primaryAction,
       sections: [
         {
           id: "exceptions",
-          title: "Decide first",
+          title: "Check first",
           summary:
             quickBooksCards.length + postizCards.length + ownerCards.length > 0
-              ? `${quickBooksCards.length + postizCards.length + ownerCards.length} highest-priority exception${quickBooksCards.length + postizCards.length + ownerCards.length === 1 ? "" : "s"}`
-              : "No owner exception was returned by the current bounded read.",
+              ? `${quickBooksCards.length + postizCards.length + ownerCards.length} item${quickBooksCards.length + postizCards.length + ownerCards.length === 1 ? "" : "s"} need a check`
+              : "No item needs a check.",
           cards: [...quickBooksCards, ...postizCards, ...ownerCards],
         },
         {
           id: "facet",
-          title: "Finish customer design reviews",
+          title: "Check Facet designs",
           summary:
             facetCards.length > 0
-              ? `${facetCards.length} Facet design${facetCards.length === 1 ? "" : "s"} need the next verified step`
-              : "No unfinished Facet design review was returned.",
+              ? `${facetCards.length} Facet design${facetCards.length === 1 ? "" : "s"} need a check`
+              : "No Facet design needs a check.",
           cards: facetCards,
         },
         {
           id: "production",
-          title: "Keep work moving",
+          title: "Keep jobs moving",
           summary:
             productionCards.length > 0
-              ? `${productionCards.length} production job${productionCards.length === 1 ? "" : "s"} need attention`
-              : "No production attention item was returned.",
+              ? `${productionCards.length} job${productionCards.length === 1 ? "" : "s"} need a check`
+              : "No job needs a check.",
           cards: productionCards,
         },
         {
           id: "sales",
-          title: "Move the next customer",
+          title: "Help the next customer",
           summary:
             salesCards.length > 0
-              ? `${salesCards.length} lead${salesCards.length === 1 ? "" : "s"} need attention`
-              : "No sales attention item was returned.",
+              ? `${salesCards.length} customer${salesCards.length === 1 ? "" : "s"} need a check`
+              : "No customer needs a check.",
           cards: salesCards,
         },
         ...(failedSourceCards.length > 0
           ? [
               {
                 id: "source-status",
-                title: "Could not verify",
-                summary:
-                  "These sources need another read before their work can be treated as clear.",
+                title: "Lists not ready",
+                summary: "Load these lists again before you mark work as done.",
                 cards: failedSourceCards,
               },
             ]
@@ -516,20 +564,30 @@ export function projectAccountingNowReadModel(
     ui: {
       schema_version: 1,
       state: unavailable ? "limited" : cards.length > 0 ? "ready" : "empty",
-      title: "QuickBooks final invoices",
-      explanation: "Review only immutable, accepted residential final-balance candidates and reconcile provider readback separately.",
+      title: "Final invoices",
+      explanation:
+        "Check each final invoice. Make sure the amount is right and QuickBooks has the same record.",
       sync_label: unavailable
-        ? "QuickBooks final-invoice state could not be checked and is not treated as clear."
-        : "QuickBooks final-invoice records are current for this bounded view.",
+        ? "The QuickBooks invoice list did not load. IronWrap will not mark any invoice as done."
+        : "The QuickBooks invoice list is up to date.",
       primary_action: unavailable
-        ? refreshAction("quickbooks-final-invoices:refresh", "Refresh final invoices", "The bounded accounting read is unavailable.")
+        ? refreshAction(
+            "quickbooks-final-invoices:refresh",
+            "Check invoices again",
+            "The invoice list did not load.",
+          )
         : null,
-      sections: [{
-        id: "quickbooks-final-invoices",
-        title: "Review and reconcile",
-        summary: cards.length > 0 ? `${cards.length} final invoice${cards.length === 1 ? "" : "s"} need attention` : "No final invoice needs attention.",
-        cards,
-      }],
+      sections: [
+        {
+          id: "quickbooks-final-invoices",
+          title: "Invoices to check",
+          summary:
+            cards.length > 0
+              ? `${cards.length} final invoice${cards.length === 1 ? "" : "s"} need a check`
+              : "No final invoice needs a check.",
+          cards,
+        },
+      ],
     },
   };
 }
@@ -539,16 +597,25 @@ async function buildQuickBooksNowReadModel(
   auth: AuthContext,
   now: Date,
 ): Promise<QuickBooksNowReadModel> {
-  if (!auth.permissions.includes("quickbooks:read")) throw new Error("quickbooks_read_required");
+  if (!auth.permissions.includes("quickbooks:read"))
+    throw new Error("quickbooks_read_required");
   const [intents, holds] = await Promise.all([
     listQuickBooksFinalInvoiceActionable(env, auth.session.tenant_id, 7),
     listQuickBooksCandidateHolds(env, auth.session.tenant_id, 7),
   ]);
   return {
     read_model_generated_at: now.toISOString(),
-    stale_fields: intents.length > 6 || holds.length > 6 ? ["partial.quickbooks_final_invoices"] : [],
-    permissions: auth.permissions.filter((permission) => permission.startsWith("quickbooks:")),
-    allowed_actions: intents.length > 0 || holds.length > 0 ? ["quickbooks.final_invoice.review"] : [],
+    stale_fields:
+      intents.length > 6 || holds.length > 6
+        ? ["partial.quickbooks_final_invoices"]
+        : [],
+    permissions: auth.permissions.filter((permission) =>
+      permission.startsWith("quickbooks:"),
+    ),
+    allowed_actions:
+      intents.length > 0 || holds.length > 0
+        ? ["quickbooks.final_invoice.review"]
+        : [],
     intents: intents.slice(0, 6),
     holds: holds.slice(0, 6),
   };
@@ -560,7 +627,11 @@ async function buildPostizNowReadModel(
   now: Date,
 ): Promise<PostizNowReadModel> {
   if (auth.session.role !== "owner") throw new Error("owner_role_required");
-  const intents = await listPostizActionableIntents(env, auth.session.tenant_id, 7);
+  const intents = await listPostizActionableIntents(
+    env,
+    auth.session.tenant_id,
+    7,
+  );
   return {
     read_model_generated_at: now.toISOString(),
     stale_fields: intents.length > 6 ? ["partial.postiz_intents"] : [],
@@ -575,7 +646,8 @@ async function buildFacetNowReadModel(
   auth: AuthContext,
   now: Date,
 ): Promise<FacetNowReadModel> {
-  if (!auth.permissions.includes("facet:read")) throw new Error("facet_read_required");
+  if (!auth.permissions.includes("facet:read"))
+    throw new Error("facet_read_required");
   const [evidenceResult, exceptionResult] = await Promise.all([
     listFacetV2WorkflowEvidence(env, auth.session.tenant_id, 51),
     listFacetV2IntakeExceptions(env, auth.session.tenant_id, 51),
@@ -584,11 +656,14 @@ async function buildFacetNowReadModel(
   const intakeExceptions = exceptionResult.slice(0, 50);
   return {
     read_model_generated_at: now.toISOString(),
-    stale_fields: evidenceResult.length > evidence.length ||
-        exceptionResult.length > intakeExceptions.length
-      ? ["partial.facet_design_workflow"]
-      : [],
-    permissions: auth.permissions.filter((permission) => permission.startsWith("facet:")),
+    stale_fields:
+      evidenceResult.length > evidence.length ||
+      exceptionResult.length > intakeExceptions.length
+        ? ["partial.facet_design_workflow"]
+        : [],
+    permissions: auth.permissions.filter((permission) =>
+      permission.startsWith("facet:"),
+    ),
     allowed_actions: ["facet_design.read"],
     evidence,
     intake_exceptions: intakeExceptions,
@@ -643,17 +718,18 @@ function ownerCard(
   const reason =
     exception.next_action ??
     exception.why ??
-    "Review the source record and decide the safe next step.";
+    "Open the work record and choose the next safe step.";
   return {
     id: citationId,
     tone: ownerTone(exception.severity),
-    eyebrow: exception.kind.replaceAll("_", " "),
+    eyebrow:
+      ownerTone(exception.severity) === "critical"
+        ? "Fix first"
+        : "Needs a check",
     title: exception.title,
     detail: exception.why ?? reason,
-    action: navigateAction(citationId, "Review exception", href, reason, [
-      citationId,
-    ]),
-    citations: [citation(citationId, "Owner exception record", href)],
+    action: navigateAction(citationId, "Open item", href, reason, [citationId]),
+    citations: [citation(citationId, "Work record", href)],
   };
 }
 
@@ -670,19 +746,22 @@ function productionCard(
         : job.lane === "ready_for_review"
           ? "positive"
           : "warning",
-    eyebrow: job.lane.replaceAll("_", " "),
+    eyebrow:
+      job.lane === "blocked"
+        ? "Job blocked"
+        : job.lane === "ready_for_review"
+          ? "Ready to check"
+          : "Job needs a check",
     title,
     detail: job.next_action,
     action: navigateAction(
       citationId,
-      "Open production",
+      "Open job",
       "/production",
       job.next_action,
       [citationId],
     ),
-    citations: [
-      citation(citationId, `${title} production record`, "/production"),
-    ],
+    citations: [citation(citationId, `${title} record`, "/production")],
   };
 }
 
@@ -690,124 +769,144 @@ function salesCard(lead: SalesReadModel["leads"][number]): StandardNowCard {
   const citationId = `sales:${lead.id}`;
   const title =
     lead.contact.display_name ?? lead.job?.job_number ?? "Sales lead";
-  const detail = lead.attention
-    .map((item) => item.replaceAll("_", " "))
-    .join("; ");
+  const detail = lead.attention.map(salesAttentionLabel).join(" ");
   return {
     id: citationId,
     tone: "warning",
-    eyebrow: "sales attention",
+    eyebrow: "Sales",
     title,
     detail,
-    action: navigateAction(citationId, "Open sales", "/sales", detail, [
+    action: navigateAction(citationId, "Open customer", "/sales", detail, [
       citationId,
     ]),
-    citations: [citation(citationId, `${title} sales record`, "/sales")],
+    citations: [citation(citationId, "Customer record", "/sales")],
   };
 }
 
 function facetCard(evidence: FacetV2WorkflowEvidence): StandardNowCard {
   const citationId = `facet:${evidence.event_id}`;
-  const next = evidence.projection_state === "awaiting_projection"
-    ? "The exact signed decision is waiting for its automatic blank Draft projection."
-    : evidence.projection_state === "projected"
-      ? "The signed decision is reconciled to its blank Draft Quote Revision."
-      : evidence.projection_state === "held"
-        ? "This customer decision is held by its correction lifecycle and will not project."
-        : "The signed identity, authority, or projection evidence needs operational review.";
+  const next =
+    evidence.projection_state === "awaiting_projection"
+      ? "The signed choice is waiting for a new draft."
+      : evidence.projection_state === "projected"
+        ? "A new draft was made from the signed choice."
+        : evidence.projection_state === "held"
+          ? "This signed choice is on hold and will not make a new draft."
+          : "The signed choice needs a check.";
   return {
     id: citationId,
-    tone: evidence.projection_state === "projected"
-      ? "positive"
-      : evidence.projection_state === "attention_required"
-        ? "critical"
-        : evidence.projection_state === "held"
-          ? "neutral"
-          : "warning",
-    eyebrow: "signed Facet v2 decision",
+    tone:
+      evidence.projection_state === "projected"
+        ? "positive"
+        : evidence.projection_state === "attention_required"
+          ? "critical"
+          : evidence.projection_state === "held"
+            ? "neutral"
+            : "warning",
+    eyebrow: "Signed Facet choice",
     title: `Facet project ${evidence.facet_project_id}`,
-    detail: `${next} The projection is always a blank Draft and never changes approved commercial truth.`,
-    action: navigateAction(citationId, "Review Facet evidence", "/facet-designs", next, [
+    detail: `${next} Any new quote starts blank. It cannot change the price the customer signed.`,
+    action: navigateAction(
       citationId,
-    ]),
-    citations: [
-      citation(citationId, "Signed Facet v2 decision evidence", "/facet-designs"),
-    ],
+      "Open Facet design",
+      "/facet-designs",
+      next,
+      [citationId],
+    ),
+    citations: [citation(citationId, "Signed Facet choice", "/facet-designs")],
   };
 }
 
-function facetIntakeExceptionCard(exception: FacetV2IntakeException): StandardNowCard {
+function facetIntakeExceptionCard(
+  exception: FacetV2IntakeException,
+): StandardNowCard {
   const citationId = `facet-intake:${exception.event_id}`;
   const awaiting = exception.state === "awaiting_association";
   return {
     id: citationId,
     tone: awaiting ? "warning" : "critical",
-    eyebrow: "Facet signed delivery",
-    title: awaiting ? "Waiting for the exact project link" : "Signed delivery rejected",
+    eyebrow: "Facet file",
+    title: awaiting
+      ? "Waiting for the right project link"
+      : "Signed file stopped",
     detail: awaiting
-      ? "IronWrap is retrying the immutable delivery. Use the governed Facet launch path if it remains unassociated."
-      : `IronWrap failed closed (${exception.status_code}); correct the source chain before reissue.`,
+      ? "IronWrap is trying again. If it still fails, open the Facet design from IronWrap."
+      : "IronWrap stopped this file to keep the wrong job from changing. Fix the link before you send it again.",
     action: navigateAction(
       `${citationId}:open`,
-      "Review Facet recovery",
+      "Fix Facet link",
       "/facet-designs",
-      "Inspect the signed intake state before a governed reissue.",
+      "Check why the signed choice did not reach the right job.",
       [citationId],
     ),
-    citations: [{
-      id: citationId,
-      label: "Signed Facet intake",
-      source: "owned_read_model",
-      href: "/facet-designs",
-    }],
+    citations: [
+      {
+        id: citationId,
+        label: "Facet file",
+        source: "owned_read_model",
+        href: "/facet-designs",
+      },
+    ],
   };
 }
 
 function postizCard(intent: PostizIntentProjection): StandardNowCard {
   const citationId = `postiz:${intent.id}`;
   const href = `/marketing/postiz/${encodeURIComponent(intent.id)}` as const;
-  const publicationDrift = intent.error_code?.startsWith("postiz_publication_drift_") ?? false;
+  const publicationDrift =
+    intent.error_code?.startsWith("postiz_publication_drift_") ?? false;
   const detail = publicationDrift
-    ? "A previously observed publication no longer matches exact-id readback. Reconcile manually; public retraction is not automated."
+    ? "A live post no longer matches our saved record. Check it by hand. IronWrap will not remove a public post on its own."
     : intent.state === "connection_required"
-    ? `Connect ${intent.provider} before this intent can be submitted.`
-    : intent.state === "pending_review"
-      ? "Review the bounded draft and approve or reject it before any public submission."
-      : intent.state === "stop_reconciliation_required"
-        ? "The stop request is not proof the publish workflow ended. Reconciliation is required."
-        : "Postiz submission or publication truth could not be verified. Reconcile by exact remote id.";
+      ? `Link ${intent.provider} before this post can be sent.`
+      : intent.state === "pending_review"
+        ? "Check the draft. Then choose to send it or stop it."
+        : intent.state === "stop_reconciliation_required"
+          ? "The stop request did not prove the post stopped. Check the live post."
+          : "IronWrap could not check if the post was sent. Check the live post by its ID.";
   return {
     id: citationId,
     tone: intent.state === "pending_review" ? "warning" : "critical",
-    eyebrow: intent.state.replaceAll("_", " "),
+    eyebrow: "Marketing",
     title: intent.title,
     detail,
-    action: navigateAction(citationId, "Review marketing intent", href, detail, [citationId]),
-    citations: [citation(citationId, "IronWrap marketing intent", href)],
+    action: navigateAction(citationId, "Open post", href, detail, [citationId]),
+    citations: [citation(citationId, "Marketing post", href)],
   };
 }
 
-function quickBooksCard(intent: QuickBooksFinalInvoiceProjection): QuickBooksFinalInvoiceNowCard {
+function quickBooksCard(
+  intent: QuickBooksFinalInvoiceProjection,
+): QuickBooksFinalInvoiceNowCard {
   const id = `qbo-final-invoice:${intent.intent_id}`;
-  const href = `/accounting/quickbooks/final-invoices/${encodeURIComponent(intent.intent_id)}` as const;
-  const nextStep = intent.blocker_next_step ??
-    (intent.state === "connection_required" ? "connect_quickbooks" :
-      intent.state === "blocked" || intent.state === "pending_review" || intent.state === "rejected" || intent.state === "failed"
+  const href =
+    `/accounting/quickbooks/final-invoices/${encodeURIComponent(intent.intent_id)}` as const;
+  const nextStep =
+    intent.blocker_next_step ??
+    (intent.state === "connection_required"
+      ? "connect_quickbooks"
+      : intent.state === "blocked" ||
+          intent.state === "pending_review" ||
+          intent.state === "rejected" ||
+          intent.state === "failed"
         ? "refresh_candidate"
         : "reconcile_provider_invoice");
-  const tone: QuickBooksFinalInvoiceNowCard["tone"] = intent.state === "failed" || intent.state === "reconciliation_required"
-    ? "critical"
-    : intent.state === "pending_review" || intent.state === "submission_pending" || intent.state === "submitted"
-      ? "attention"
-      : intent.state === "connection_required" || intent.state === "blocked"
-        ? "blocked"
-        : "muted";
+  const tone: QuickBooksFinalInvoiceNowCard["tone"] =
+    intent.state === "failed" || intent.state === "reconciliation_required"
+      ? "critical"
+      : intent.state === "pending_review" ||
+          intent.state === "submission_pending" ||
+          intent.state === "submitted"
+        ? "attention"
+        : intent.state === "connection_required" || intent.state === "blocked"
+          ? "blocked"
+          : "muted";
   return {
     kind: "quickbooks_final_invoice",
     id,
     tone,
     eyebrow: "QuickBooks final invoice",
-    title: `Final invoice ${intent.state.replaceAll("_", " ")}`,
+    title: "Final invoice needs a check",
     detail: `${intent.currency} ${intent.final_balance}`,
     job_id: intent.roof_job_id,
     currency: "CAD",
@@ -817,7 +916,9 @@ function quickBooksCard(intent: QuickBooksFinalInvoiceProjection): QuickBooksFin
     rejection_reason: intent.rejection_reason,
     next_step: nextStep,
     action: { label: "Review final invoice", href },
-    citations: [{ id, label: "Final invoice intent", source: "owned_read_model", href }],
+    citations: [
+      { id, label: "Final invoice record", source: "owned_read_model", href },
+    ],
   };
 }
 
@@ -829,23 +930,25 @@ function quickBooksPrimaryNowAction(
     card.id,
     card.action.label,
     card.action.href,
-    `Review this QuickBooks final-invoice ${card.invoice_state.replaceAll("_", " ")} exception before lower-priority work.`,
+    "Check this final invoice before other work.",
     card.citations.map((citation) => citation.id),
   );
 }
 
-function quickBooksHoldCard(hold: QuickBooksCandidateHoldProjection): StandardNowCard {
+function quickBooksHoldCard(
+  hold: QuickBooksCandidateHoldProjection,
+): StandardNowCard {
   const id = `qbo-final-invoice-hold:${hold.roof_job_id}:${hold.blocker_code}`;
   const href = "/accounting/quickbooks" as const;
-  const detail = `${hold.blocker_code.replaceAll("_", " ")}. Correct the governed Frappe source before retrying discovery.`;
+  const detail = "Fix the job record before you check for the invoice again.";
   return {
     id,
     tone: "critical",
-    eyebrow: "QuickBooks candidate blocked",
+    eyebrow: "Final invoice blocked",
     title: `Job ${hold.roof_job_id}`,
     detail,
-    action: navigateAction(id, "Review QuickBooks setup", href, detail, [id]),
-    citations: [citation(id, "QuickBooks candidate hold", href)],
+    action: navigateAction(id, "Open QuickBooks", href, detail, [id]),
+    citations: [citation(id, "Invoice check", href)],
   };
 }
 
@@ -853,14 +956,14 @@ function unavailableSourceCard(id: NowSourceId): StandardNowCard {
   return {
     id: `source:${id}`,
     tone: "critical",
-    eyebrow: "source unavailable",
+    eyebrow: "List not ready",
     title: `${sourceLabel(id)} could not be checked`,
     detail:
-      "IronWrap will not treat missing data as completed work. Refresh after the connection or source recovers.",
+      "IronWrap will not mark missing work as done. Try again when the list is back.",
     action: refreshAction(
       `source:${id}:refresh`,
-      "Try this read again",
-      `${sourceLabel(id)} is unavailable.`,
+      "Try again",
+      `${sourceLabel(id)} did not load.`,
     ),
     citations: [],
   };
@@ -868,16 +971,28 @@ function unavailableSourceCard(id: NowSourceId): StandardNowCard {
 
 function sourceLabel(id: NowSourceId): string {
   return id === "owner"
-    ? "Owner exceptions"
+    ? "Owner work"
     : id === "postiz"
-      ? "Marketing intent"
-    : id === "quickbooks_final_invoices"
-      ? "QuickBooks final invoices"
-    : id === "facet"
-      ? "Facet design reviews"
-    : id === "sales"
-      ? "Sales"
-      : "Production";
+      ? "Marketing"
+      : id === "quickbooks_final_invoices"
+        ? "Invoices"
+        : id === "facet"
+          ? "Facet designs"
+          : id === "sales"
+            ? "Sales"
+            : "Jobs";
+}
+
+function salesAttentionLabel(
+  value: SalesReadModel["leads"][number]["attention"][number],
+): string {
+  return value === "triage_unresolved"
+    ? "This new lead has not been checked."
+    : value === "estimate_needs_review"
+      ? "The estimate needs a check."
+      : value === "quote_needs_review"
+        ? "The quote needs a check."
+        : "The quote is out of date.";
 }
 
 function ownerTone(severity: string | null): StandardNowCard["tone"] {

@@ -43,7 +43,7 @@ implication.
       "latest": "0106_native_gate_clearance_and_option_packages.sql"
     },
     "tests": {
-      "pwa": 563,
+      "pwa": 565,
       "worker": 1183
     }
   },

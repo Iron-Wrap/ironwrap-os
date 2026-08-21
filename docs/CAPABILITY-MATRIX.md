@@ -3,7 +3,7 @@
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
 Last verified: 2026-08-21
-Latest phase delta verified: 2026-08-21 (IRO-44 Frappe safety projection declared obsolete under IRO-195; D1 9-ledger substrate is the operational safety system of record. Prior 2026-08-20 delta: IRO-2 Facet v2 chain and IRO-20 customer portal switched on in configuration and driven on a local stack. Repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
+Latest phase delta verified: 2026-08-21 (IRO-195 leftover Frappe required-path removal: default `/ready` is the D1 office plane; money/gate/portal writes persist on D1; Frappe CI/release/rollback is leftover projection only. Prior same-day delta: IRO-44 Frappe safety projection declared obsolete; D1 9-ledger substrate is the operational safety system of record. Repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 81,
-      "latest": "0105_facet_native_design_projection.sql"
+      "count": 82,
+      "latest": "0106_native_gate_clearance_and_option_packages.sql"
     },
     "tests": {
       "pwa": 563,
-      "worker": 1184
+      "worker": 1183
     }
   },
   "proof_state_policy": {
@@ -73,15 +73,15 @@ policy, audit, and reconciliation. R2 retains raw evidence. QuickBooks and genui
 remain authoritative only for their exact posted-accounting, legal, professional, customer, or
 physical scopes.
 
-Current implementation: Frappe is still required by office read models, business writes, customer
-and field flows, Facet and QuickBooks projections, readiness, release, and rollback. The 79 current
-DocTypes are therefore implementation evidence, not the target architecture. Frappe is now a
-temporary compatibility projection: no new DocType or required Frappe dependency may be added, and
-each existing workflow must move to a D1-native contract before its projection is removed.
+Current implementation: office sales/estimator/today/work-package/Facet/QuickBooks-final-invoice
+reads already use D1. Default `/ready` is the owned office plane and does not AND leftover
+Frappe/Newo credentials. Money-intent job lookup, production-gate clearance, and customer material
+decisions persist on D1. The 79 current DocTypes are leftover compatibility evidence, not the
+target architecture. Frappe remains an optional projection (apps tree, Hermes ERPNext MCP, local
+`--profile frappe` compose, optional CI unittest/wheel) and is not a merge or release blocker.
 
-The cutover is incomplete until required source has zero Frappe command paths, zero Frappe read
-dependencies, zero Frappe readiness checks, and no Frappe release or rollback artifact. Projection
-failure during migration creates reconciliation work; it cannot change authoritative D1 state.
+The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
+has been proven. Projection failure cannot change authoritative D1 state.
 
 ### Machine release admission
 
@@ -94,19 +94,21 @@ IRO-41 branch-local implementation:
   PR/head/base/merge tree and CI run/check IDs, publish exact-digest candidate artifacts to an
   independently permissioned issuer trigger, wait for the acknowledged issuer run's signed
   review/full-surface evidence, and reject unresolved P0/P1 findings;
-- one aggregate artifact binds Worker, PWA, and Frappe component identities; isolated staging must
-  prove config/secret-name readback, authenticated smoke, content-complete D1 restore, and the prior
-  Worker operating against migrated schema before a short-lived permit can be assembled;
+- one aggregate artifact binds Worker and PWA identities and may still carry a leftover Frappe wheel
+  digest; isolated staging must prove config/secret-name readback, authenticated smoke,
+  content-complete D1 restore, and the prior Worker operating against migrated schema before a
+  short-lived permit can be assembled;
 - the durable D1 ledger provides atomic policy genesis/CAS, single-use permit admission, and
   immutable success/rollback receipts; a migration failure after source merge records a distinct
   recovery-required outcome without claiming a D1 rollback; production promotion and rollback bind
-  exact Worker/PWA, Frappe adapter, provider, recovery, and post-smoke/post-rollback readbacks; and
+  exact Worker/PWA, provider, recovery, and post-smoke/post-rollback readbacks; leftover Frappe
+  adapter receipts are optional sentinels, not a release gate; and
 - release policy hashing includes the executable CI/deploy/permit/promotion boundary, so candidate
   source cannot approve weakening that boundary for its own release.
 
 External proof remains required for the installed predecessor enforcer, protected-branch behavior,
 independent HTTPS review/evidence issuer and publication authority, GitHub secret inventory,
-authenticated Frappe release adapter, isolated
+isolated
 staging credentials/readiness, production DNS/readiness, provider mutations, genuine IRO-7 actor
 and business receipts, automatic merge, durable provider readback, and a complete rollback-capable
 production run. Repository tests do not satisfy any of those live states.
@@ -120,7 +122,7 @@ capabilities or treat a red `/ready` result as acceptable.
 The governed workflow also treats a provider command with a lost or nonzero response as unknown
 until active-deployment readback resolves it. Failed post-deploy staging runs restore the captured
 previous revision and emit a cleanup-only receipt; production recovery attempts rollback whenever
-production promotion ran, then requires exact Worker, PWA, Frappe, health, and readiness proof.
+production promotion ran, then requires exact Worker, PWA, health, and readiness proof.
 
 ### Fleet/equipment delta (2026-08-18, IRO-54 merged over the reviewed assembly)
 
@@ -313,10 +315,10 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
 - Frappe-side authority is a dedicated `IronWrap Customer Decision Service` role that may create a
   `Customer Decision` and its receipt `Evidence Item` and read the three anchors it binds — it can
   never sign a contract or write a quote, unlike the acceptance service identity.
-- Fail-closed by default. `APP_CUSTOMER_PORTAL_DECISION_ENABLED` mirrors the acceptance flag, and
-  the route additionally requires its own HMAC secret and Frappe service credentials, so a
-  deployed environment stays dark until an operator provisions them. The read half degrades to a
-  read-only comparison rather than disappearing.
+-   Fail-closed by default. `APP_CUSTOMER_PORTAL_DECISION_ENABLED` mirrors the acceptance flag, and
+  the route additionally requires its own HMAC secret. IRO-195 removed leftover Frappe service
+  credentials from this required path; the native commit records the choice on D1 after the R2
+  receipt. The read half degrades to a read-only comparison rather than disappearing.
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.

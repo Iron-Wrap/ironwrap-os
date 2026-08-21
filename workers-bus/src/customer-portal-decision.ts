@@ -2,7 +2,6 @@ import {
   appPublicOrigin,
   authRequestContext,
   configuredTenantId,
-  randomToken,
   sha256Hex,
   validateAppOrigin,
 } from "./app-auth.ts";
@@ -13,9 +12,6 @@ import {
 import {
   customerDecisionBackendConfigured,
   customerDecisionBackendEnabled,
-  customerDecisionFrappeApiKey,
-  customerDecisionFrappeApiSecret,
-  customerDecisionHmacKey,
 } from "./customer-decision-config.ts";
 import {
   claimCustomerPortalAccessThrottle,
@@ -23,11 +19,6 @@ import {
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
 import { r2ObjectStore } from "./field-actions.ts";
-import {
-  frappeBaseUrl,
-  frappeRequestTimeout,
-  listCustomerPortalFrappeResource,
-} from "./frappe-read.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -37,9 +28,6 @@ const FRAPPE_ATTEMPT_LEASE_MS = 90 * 1_000;
 const DECISION_ACCESS_WINDOW_MS = 15 * 60 * 1_000;
 const DECISION_ACCESS_IP_LIMIT = 120;
 const DECISION_RECEIPT_CONTENT_TYPE = "application/json";
-
-const RECORD_METHOD =
-  "ironwrap_roofing.customer_decision_api.record_customer_portal_material_decision";
 
 type DecisionState =
   | "receipt_pending"
@@ -417,29 +405,28 @@ async function selectableOption(
   link: CustomerPortalLinkRecord,
   optionPackageId: string,
 ): Promise<SelectedOption | null> {
-  const rows = await listCustomerPortalFrappeResource(
-    env,
-    "Option Package",
-    [
-      ["Option Package", "roof_job", "=", link.roof_job_id],
-      ["Option Package", "status", "=", "Approved"],
-    ],
-    10,
-  );
-  const row = rows.find(
-    (candidate) =>
-      (boundedText(candidate.option_package_id, 3, 140) ??
-        boundedText(candidate.name, 3, 140)) === optionPackageId,
-  );
+  const row = await env.DB.prepare(
+    `SELECT option_id, job_id, title, tier, status
+       FROM operating_option_packages
+      WHERE tenant_id = ? AND job_id = ? AND option_id = ? AND status = 'approved'
+      LIMIT 1`,
+  ).bind(link.tenant_id, link.roof_job_id, optionPackageId).first<{
+    option_id: string;
+    job_id: string;
+    title: string;
+    tier: string | null;
+    status: string;
+  }>();
   if (
     !row ||
-    boundedText(row.roof_job, 3, 140) !== link.roof_job_id ||
-    boundedText(row.status, 1, 80) !== "Approved"
+    row.option_id !== optionPackageId ||
+    row.job_id !== link.roof_job_id ||
+    row.status !== "approved"
   ) {
     return null;
   }
   const tier = boundedText(row.tier, 1, 40);
-  const label = boundedText(row.package_name, 1, 200) ?? tier ?? optionPackageId;
+  const label = boundedText(row.title, 1, 200) ?? tier ?? optionPackageId;
   return {
     optionPackageId,
     tier: tier && OPTION_TIERS.includes(tier) ? tier : null,
@@ -458,103 +445,9 @@ async function commitDecision(
   ) {
     throw new FrappeDecisionTransportError("decision_receipt_ledger_mismatch");
   }
-  const response = await frappeCustomerDecisionCall(env, RECORD_METHOD, {
-    decision_id: intent.decision_id,
-    portal_link_id: intent.portal_link_id,
-    tenant_id: intent.tenant_id,
-    roof_job_id: intent.roof_job_id,
-    customer_id: intent.customer_id,
-    option_package_id: intent.option_package_id,
-    option_label: intent.option_label,
-    selected_at: intent.selected_at,
-    receipt_key: intent.receipt_key,
-    receipt_hash: receipt.hash,
-    receipt_content_type: DECISION_RECEIPT_CONTENT_TYPE,
-    receipt_content_length: receipt.length,
-    receipt_captured_at: intent.selected_at,
-  });
-  if (
-    boundedText(responseMessage(response).decision_id, 16, 100) !==
-      intent.decision_id
-  ) {
-    throw new FrappeDecisionTransportError("frappe_record_invalid_shape");
-  }
-}
-
-async function frappeCustomerDecisionCall(
-  env: AppEnv,
-  method: string,
-  claim: Record<string, unknown>,
-): Promise<unknown> {
-  const secret = customerDecisionHmacKey(env);
-  const frappeApiKey = customerDecisionFrappeApiKey(env);
-  const frappeApiSecret = customerDecisionFrappeApiSecret(env);
-  if (!secret || !frappeApiKey || !frappeApiSecret) {
-    throw new FrappeDecisionTransportError("frappe_decision_not_configured");
-  }
-  const claimJson = canonicalJson(claim);
-  const path = `/api/method/${method}`;
-  const timestamp = String(Math.floor(Date.now() / 1_000));
-  const nonce = randomToken();
-  const signature = await hmacBase64Url(
-    secret,
-    `POST\n${path}\n${timestamp}\n${nonce}\n${await sha256Hex(claimJson)}`,
-  );
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS),
-  );
-  try {
-    const response = await fetch(`${frappeBaseUrl(env)}${path}`, {
-      method: "POST",
-      redirect: "manual",
-      signal: controller.signal,
-      headers: {
-        accept: "application/json",
-        authorization: `token ${frappeApiKey}:${frappeApiSecret}`,
-        "content-type": "application/json",
-        "user-agent": "ironwrap-customer-decision/1.0",
-        "x-ironwrap-decision-timestamp": timestamp,
-        "x-ironwrap-decision-nonce": nonce,
-        "x-ironwrap-decision-signature": signature,
-      },
-      body: JSON.stringify({ customer_claim_json: claimJson }),
-    });
-    if (!response.ok) {
-      // Read the body before discarding it: it carries the only statement of why Frappe refused.
-      const body = await response.text().catch(() => "");
-      throw new FrappeDecisionHttpError(
-        response.status,
-        frappeErrorDetail(body.slice(0, MAX_FRAPPE_RESPONSE_BYTES)),
-      );
-    }
-    const declared = Number(response.headers.get("content-length") ?? "0");
-    if (Number.isFinite(declared) && declared > MAX_FRAPPE_RESPONSE_BYTES) {
-      throw new FrappeDecisionTransportError("frappe_response_too_large");
-    }
-    const raw = await response.text();
-    if (raw.length > MAX_FRAPPE_RESPONSE_BYTES) {
-      throw new FrappeDecisionTransportError("frappe_response_too_large");
-    }
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw new FrappeDecisionTransportError("frappe_response_invalid_json");
-    }
-  } catch (error) {
-    if (
-      error instanceof FrappeDecisionHttpError ||
-      error instanceof FrappeDecisionTransportError
-    ) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new FrappeDecisionTransportError("frappe_request_timeout");
-    }
-    throw new FrappeDecisionTransportError("frappe_request_network_error");
-  } finally {
-    clearTimeout(timer);
+  const stored = await env.RAW.head(intent.receipt_key);
+  if (!stored) {
+    throw new FrappeDecisionTransportError("decision_receipt_unavailable");
   }
 }
 

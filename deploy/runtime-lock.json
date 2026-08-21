@@ -2,7 +2,7 @@
   "schema_version": 1,
   "locked_at": "2026-07-10",
   "policy": {
-    "architecture": "frappe-only",
+    "architecture": "d1-worker",
     "erpnext": "forbidden",
     "floating_references": "forbidden"
   },

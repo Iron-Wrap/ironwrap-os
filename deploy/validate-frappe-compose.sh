@@ -48,7 +48,7 @@ const fs = require("node:fs");
 try {
   const lock = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
   const commit = lock.components?.frappe_docker?.git_commit;
-  if (lock.schema_version !== 1 || lock.policy?.architecture !== "frappe-only" ||
+  if (lock.schema_version !== 1 || lock.policy?.architecture !== "d1-worker" ||
       lock.policy?.erpnext !== "forbidden" || !/^[0-9a-f]{40}$/.test(commit ?? "")) {
     process.exit(1);
   }

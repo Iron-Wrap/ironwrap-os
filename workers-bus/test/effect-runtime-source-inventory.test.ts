@@ -33,11 +33,6 @@ type InventoryEntry =
   | { kind: "worker-entry" };
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
-  "customer-portal-decision.ts": {
-    kind: "governed-unrouted",
-    discipline:
-      "one-attempt lease with a durable R2 receipt written before the single Frappe effect attempt; terminal result replayed verbatim",
-  },
   "erpnext.ts": { kind: "runtime-routed" },
   "frappe-read.ts": { kind: "read-only" },
   "google.ts": { kind: "runtime-routed" },
@@ -57,7 +52,7 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "production-gate-clearance.ts": {
     kind: "governed-unrouted",
     discipline:
-      "caller idempotency key plus an immutable, canonical-JSON, checksummed R2 receipt written before the single Frappe clearance attempt; the command converges on replay and refuses a differing clearance of an already-cleared gate",
+      "required path writes clearance to D1 after an immutable R2 receipt; leftover frappeProductionGateWriter still holds one unused outbound POST and is not on the live command path",
   },
   "solar.ts": { kind: "read-only" },
 };
@@ -177,15 +172,11 @@ test("governed-unrouted mutation adapters are exactly the recorded debt, each wi
   // runtime means moving it to runtime-routed, not editing its discipline.
   assert.deepEqual(
     unrouted.map(([file]) => file).sort(),
-    // ELEC-122/ELEC-125: `production-gate-clearance.ts` joins the recorded debt as a
-    // reviewed IRO-38 decision, not a default. It is the same shape as the two Frappe
-    // command adapters already here - evidence minted and stored immutably BEFORE the
-    // single provider attempt, replay convergence on the Frappe side - and re-seating
-    // all three onto the canonical runtime is one piece of work, not three. It leaves
-    // this list entirely at the IRO-195 cutover, when the clearance becomes a D1 write
-    // with no outbound call at all.
+    // IRO-195 moved customer-portal-decision off outbound fetch (D1 commit after R2
+    // receipt). production-gate-clearance's required path is also a D1 write; the
+    // leftover Frappe writer still contains one unused fetch, so the file stays here
+    // until that leftover function is deleted.
     [
-      "customer-portal-decision.ts",
       "measurements.ts",
       "production-gate-clearance.ts",
     ],

@@ -265,11 +265,10 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
       nonEmpty(env.GOOGLE_SERVICE_ACCOUNT_JSON) && nonEmpty(env.FROM_EMAIL) &&
       nonEmpty(env.OWNER_ALERT_EMAIL) && nonEmpty(env.BACKUP_ALERT_EMAIL),
     jobnimbus_configuration: env.JOBNIMBUS_ENABLED !== "true" || nonEmpty(env.JOBNIMBUS_API_KEY),
-    frappe_configuration: (
-      String(extended.ERPNEXT_ENABLED ?? "false") !== "true" &&
-      String(extended.APP_BFF_ENABLED ?? "false") !== "true" &&
-      String(extended.APP_CUSTOMER_PORTAL_ENABLED ?? "false") !== "true"
-    ) || (
+    // Frappe is leftover projection. Default readiness must not require it just
+    // because the office BFF or portal is on. Creds are required only when an
+    // operator explicitly switches the leftover rail on.
+    frappe_configuration: String(extended.ERPNEXT_ENABLED ?? "false") !== "true" || (
       nonEmpty(extended.ERPNEXT_BASE_URL) &&
       nonEmpty(extended.ERPNEXT_API_KEY) &&
       nonEmpty(extended.ERPNEXT_API_SECRET)
@@ -319,24 +318,29 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   checks.newo_jobnimbus_bridge = !newo.required || newo.jobnimbus_bridge_ready;
   checks.newo_booking_mode = !newo.required || newo.booking_mode_ready;
 
-  const verdicts = readinessVerdicts(checks);
+  const frappeProjectionReady = nonEmpty(extended.ERPNEXT_BASE_URL) &&
+    nonEmpty(extended.ERPNEXT_API_KEY) &&
+    nonEmpty(extended.ERPNEXT_API_SECRET);
+  const verdicts = readinessVerdicts(checks, { frappe_projection_ready: frappeProjectionReady });
   return { ...verdicts, status: verdicts.ok ? "ready" : "not_ready", checks, newo };
 }
 
-/** Full readiness stays strict while named planes expose the actual failure boundary. */
+/** Named planes stay isolated. Default `ok` is the office operating plane, not every leftover rail. */
 export function readinessVerdicts(
   checks: ReadinessReport["checks"],
+  extras: { frappe_projection_ready?: boolean } = {},
 ): Pick<ReadinessReport,
   "ok" | "core_ok" | "owned_core_ok" | "office_operating_plane_ok" | "projection_rails_ok"> {
-  const entries = Object.entries(checks);
   const allReady = (names: readonly ReadinessCheckName[]) => names.every((name) => checks[name]);
   const ownedCoreOk = allReady(OWNED_CORE_CHECKS);
+  const officeOperatingPlaneOk = allReady(OFFICE_OPERATING_PLANE_CHECKS);
+  const frappeProjectionReady = extras.frappe_projection_ready ?? checks.frappe_configuration;
   return {
-    ok: entries.every(([, value]) => value),
+    ok: officeOperatingPlaneOk,
     core_ok: ownedCoreOk,
     owned_core_ok: ownedCoreOk,
-    office_operating_plane_ok: allReady(OFFICE_OPERATING_PLANE_CHECKS),
-    projection_rails_ok: allReady(PROJECTION_RAIL_CHECKS),
+    office_operating_plane_ok: officeOperatingPlaneOk,
+    projection_rails_ok: ownedCoreOk && frappeProjectionReady && checks.newo_frappe_readiness,
   };
 }
 
@@ -443,8 +447,7 @@ export async function buildOwnerRuntimeReadModel(
       // this bucket rather than a new public check id: an owner reading "office BFF: ok"
       // must not be told that while a driver's fleet capture is refusing every request.
       id: "office_bff",
-      ok: readiness.checks.frappe_configuration && readiness.checks.app_bff_configuration &&
-        readiness.checks.rail_credential_isolation,
+      ok: readiness.checks.app_bff_configuration && readiness.checks.rail_credential_isolation,
     },
     { id: "customer_portal", ok: readiness.checks.customer_portal_configuration },
     { id: "production_schedule", ok: readiness.checks.production_schedule_configuration },
@@ -459,7 +462,6 @@ export async function buildOwnerRuntimeReadModel(
         readiness.checks.newo_configuration_drift &&
         readiness.checks.newo_queue_binding &&
         readiness.checks.newo_dlq_state &&
-        readiness.checks.newo_frappe_readiness &&
         readiness.checks.newo_jobnimbus_bridge &&
         readiness.checks.newo_booking_mode,
     },

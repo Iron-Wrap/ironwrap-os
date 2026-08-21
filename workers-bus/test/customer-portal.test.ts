@@ -417,6 +417,8 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
     assert.equal(model.warranty, null);
     assert.equal(model.brand, "IronWrap Exteriors");
     assert.equal(model.contract_acceptance_available, true);
+    assert.equal(model.material_decision_available, false);
+    assert.deepEqual(model.option_packages, []);
     const serialised = JSON.stringify(model);
     for (const forbidden of [
       "never-customer-visible",

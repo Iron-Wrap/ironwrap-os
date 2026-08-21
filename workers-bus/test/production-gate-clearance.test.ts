@@ -415,13 +415,12 @@ test("an ops session may read the runway but never clear a gate", async () => {
     );
     assert.equal(result.status, 403);
     assert.equal(result.body.error, "production_gate_clearance_forbidden");
-    assert.equal(harness.frappeCalls.length, 0);
   } finally {
     harness.restore();
   }
 });
 
-test("an owner with no Frappe identity has nobody to attribute the clearance to", async () => {
+test("an owner with no leftover Frappe identity still clears a gate on D1", async () => {
   const harness = setup();
   try {
     const result = await post(
@@ -430,8 +429,16 @@ test("an owner with no Frappe identity has nobody to attribute the clearance to"
       { basis: "office_waiver", reason: "Forecast clear through the install window." },
       auth("owner", "appu_owner_0002"),
     );
-    assert.equal(result.status, 403);
-    assert.equal(result.body.error, "production_gate_clearance_forbidden");
+    assert.equal(result.status, 200);
+    assert.equal(result.body.clearance, "waived");
+    const row = harness.db.raw.prepare(
+      `SELECT state, cleared_by_user_id, clearance_basis
+         FROM operating_production_gates
+        WHERE gate = 'Weather'`,
+    ).get() as { state: string; cleared_by_user_id: string; clearance_basis: string };
+    assert.equal(row.state, "waived");
+    assert.equal(row.cleared_by_user_id, "appu_owner_0002");
+    assert.equal(row.clearance_basis, "office_waiver");
   } finally {
     harness.restore();
   }
@@ -458,7 +465,6 @@ test("a clearance without CSRF or an idempotency key is refused before any read"
     );
     assert.equal(noKey.status, 400);
     assert.equal(noKey.body.error, "idempotency_key_required");
-    assert.equal(harness.frappeCalls.length, 0);
   } finally {
     harness.restore();
   }
@@ -487,13 +493,12 @@ test("a job the caller's own runway cannot see has no gate to clear", async () =
     });
     assert.equal(result.status, 409);
     assert.equal(result.body.error, "production_gate_job_not_on_runway");
-    assert.equal(harness.frappeCalls.length, 0);
   } finally {
     harness.restore();
   }
 });
 
-test("an office waiver reaches Frappe as a Waived clearance attributed to the session's Frappe user", async () => {
+test("an office waiver persists on D1 as a waived gate attributed to the app user", async () => {
   const harness = setup();
   try {
     const reason = "No deposit on this insurance restoration file; carrier pays on completion.";
@@ -505,16 +510,23 @@ test("an office waiver reaches Frappe as a Waived clearance attributed to the se
     assert.equal(result.body.clearance, "waived");
     assert.equal(result.body.basis, "office_waiver");
     assert.equal(result.body.evidence_item, null);
-    assert.equal(harness.frappeCalls.length, 1);
-    assert.deepEqual(harness.frappeCalls[0].body, {
-      roof_job_id: JOB_ID,
-      gate: "Deposit",
-      clearance: "waived",
-      actor_user: OWNER,
-      decision_id: KEY,
-      reason,
-    });
-    // A waiver stores no receipt: there is nothing observed to store.
+    assert.equal(result.body.actor_role, "owner");
+    const row = harness.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id, cleared_by_user_id
+         FROM operating_production_gates
+        WHERE gate = 'Deposit'`,
+    ).get() as {
+      state: string;
+      version: number;
+      clearance_basis: string;
+      clearance_decision_id: string;
+      cleared_by_user_id: string;
+    };
+    assert.equal(row.state, "waived");
+    assert.equal(row.version, 2);
+    assert.equal(row.clearance_basis, "office_waiver");
+    assert.equal(row.clearance_decision_id, KEY);
+    assert.equal(row.cleared_by_user_id, "appu_owner_0001");
     assert.equal(harness.raw.objects.size, 0);
   } finally {
     harness.restore();
@@ -532,7 +544,6 @@ test("a waiver with no real reason is refused", async () => {
       assert.equal(result.status, 400);
       assert.equal(result.body.error, "invalid_production_gate_clearance");
     }
-    assert.equal(harness.frappeCalls.length, 0);
   } finally {
     harness.restore();
   }
@@ -546,7 +557,6 @@ test("the Deposit gate refuses a settlement clearance the money lane has not set
     });
     assert.equal(result.status, 409);
     assert.equal(result.body.error, "deposit_settlement_not_observed");
-    assert.equal(harness.frappeCalls.length, 0);
     assert.equal(harness.raw.objects.size, 0);
   } finally {
     harness.restore();
@@ -585,12 +595,21 @@ test("a settled deposit invoice clears the gate on a stored, hashed receipt", as
       provider_reconciled_at: "2026-08-20T12:10:00.000Z",
     });
 
-    const call = harness.frappeCalls[0].body;
-    assert.equal(call.clearance, "verified");
-    const evidence = call.evidence as Record<string, unknown>;
+    const row = harness.db.raw.prepare(
+      `SELECT state, clearance_basis, clearance_decision_id, evidence_refs_json
+         FROM operating_production_gates
+        WHERE gate = 'Deposit'`,
+    ).get() as {
+      state: string;
+      clearance_basis: string;
+      clearance_decision_id: string;
+      evidence_refs_json: string;
+    };
+    assert.equal(row.state, "complete");
+    assert.equal(row.clearance_basis, "deposit_settlement");
+    assert.equal(row.clearance_decision_id, KEY);
+    const evidence = JSON.parse(row.evidence_refs_json) as Record<string, unknown>;
     assert.equal(evidence.r2_key, `production-gate-clearance/v1/${KEY}.json`);
-    // The hash Frappe is asked to bind is the hash of the object that was stored,
-    // so a Verified Evidence Item can never point at something else.
     assert.equal(
       evidence.content_checksum,
       createHash("sha256").update(stored[1].body).digest("hex"),
@@ -599,7 +618,6 @@ test("a settled deposit invoice clears the gate on a stored, hashed receipt", as
       evidence.content_length,
       new TextEncoder().encode(stored[1].body).byteLength,
     );
-    assert.match(String(call.reason), /acct-intent-deposit-0000001 settled 5250\.00 CAD/);
   } finally {
     harness.restore();
   }
@@ -637,7 +655,10 @@ test("a receipt that could not be stored never becomes a cleared gate", async ()
     });
     assert.equal(result.status, 503);
     assert.equal(result.body.error, "production_gate_receipt_unavailable");
-    assert.equal(harness.frappeCalls.length, 0);
+    const row = harness.db.raw.prepare(
+      `SELECT state FROM operating_production_gates WHERE gate = 'Deposit'`,
+    ).get() as { state: string };
+    assert.equal(row.state, "blocked");
   } finally {
     harness.restore();
   }
@@ -656,41 +677,51 @@ test("settlement is a Deposit-only basis and takes no caller prose", async () =>
       reason: "The customer told me they paid.",
     });
     assert.equal(withReason.status, 400);
-    assert.equal(harness.frappeCalls.length, 0);
   } finally {
     harness.restore();
   }
 });
 
-test("Frappe's own refusal reaches the office instead of an anonymous 502", async () => {
-  const harness = setup({
-    frappeStatus: 403,
-    frappeBody: '{"exception":"production_gate_actor_role_denied: needs Production"}',
-  });
+test("a second clearance with a different decision is refused as already cleared", async () => {
+  const harness = setup();
   try {
-    const result = await post(harness, CLEARANCE_PATH("Access"), {
+    const first = await post(harness, CLEARANCE_PATH("Access"), {
       basis: "office_waiver",
       reason: "Homeowner confirmed the side-yard gate stays unlocked.",
     });
-    assert.equal(result.status, 403);
-    assert.equal(result.body.error, "production_gate_actor_role_denied");
+    assert.equal(first.status, 200);
+    const result = await post(
+      harness,
+      CLEARANCE_PATH("Access"),
+      { basis: "office_waiver", reason: "Homeowner confirmed the side-yard gate stays unlocked." },
+      auth("owner"),
+      { idempotency: "gate-clearance-key-0000000002" },
+    );
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error, "production_gate_already_cleared");
   } finally {
     harness.restore();
   }
 });
 
-test("a Frappe validation refusal is a conflict, not a bad gateway", async () => {
-  const harness = setup({
-    frappeStatus: 417,
-    frappeBody: '{"exception":"production_gate_already_cleared: differs"}',
-  });
+test("the same waiver decision id replays the stored D1 clearance", async () => {
+  const harness = setup();
   try {
-    const result = await post(harness, CLEARANCE_PATH("Weather"), {
+    const first = await post(harness, CLEARANCE_PATH("Weather"), {
       basis: "office_waiver",
       reason: "Environment Canada shows a dry three-day window from Monday.",
     });
-    assert.equal(result.status, 409);
-    assert.equal(result.body.error, "production_gate_already_cleared");
+    const second = await post(harness, CLEARANCE_PATH("Weather"), {
+      basis: "office_waiver",
+      reason: "Environment Canada shows a dry three-day window from Monday.",
+    });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.replayed, true);
+    const row = harness.db.raw.prepare(
+      `SELECT version FROM operating_production_gates WHERE gate = 'Weather'`,
+    ).get() as { version: number };
+    assert.equal(row.version, 2);
   } finally {
     harness.restore();
   }
@@ -764,7 +795,7 @@ test("the receipt is canonical, so the same observation always hashes the same",
     tenantId: TENANT,
     roofJobId: JOB_ID,
     decisionId: KEY,
-    clearedByFrappeUser: OWNER,
+    clearedByUserId: "appu_owner_0001",
     intent,
   };
   assert.equal(depositSettlementReceipt(input), depositSettlementReceipt({ ...input }));

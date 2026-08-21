@@ -187,10 +187,8 @@ function validateWorkflow(workflow) {
     "Consume the permit once through the durable D1 replay and policy boundary",
     "Auto-merge the exact admitted PR and verify the resulting main tree",
     "Apply admitted migrations only after exact source admission",
-    "Promote the prepared Frappe artifact through the authenticated adapter",
     "Promote the pre-verified immutable production version",
     "Verify production identity, health, readiness, and authenticated smoke",
-    "Re-read the Frappe provider identity after production smoke",
     "Bind production active revision, readiness, and exact smoke to immutable receipt",
     "Advance the durable generation only after production proof",
   ]);
@@ -226,10 +224,8 @@ function validateWorkflow(workflow) {
   assert.match(production, /environment-preflight[\s\S]*production-environment-preflight\.json/);
   assert.match(production, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN/);
   assert.doesNotMatch(production, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.match(
-    production,
-    /service-adapter[\s\S]*--operation promote[\s\S]*--operation readback[\s\S]*production-receipt[\s\S]*--service-promotion-receipt[\s\S]*--service-readback-receipt/,
-  );
+  assert.doesNotMatch(production, /--operation promote|--operation readback|--service-promotion-receipt|--service-readback-receipt/);
+  assert.doesNotMatch(production, /id: promote_frappe|Promote the prepared Frappe artifact|Re-read the Frappe provider identity/);
   assert.match(
     production,
     /production-post-smoke\.json[\s\S]*deployment-revision[\s\S]*production-receipt/,
@@ -241,15 +237,16 @@ function validateWorkflow(workflow) {
   );
   assert.match(
     production,
-    /if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.promote_frappe\.outcome != 'skipped' \}\}/,
+    /if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.promote_production\.outcome != 'skipped' \}\}/,
   );
   assert.match(
     production,
-    /id: migrate_production[\s\S]*if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.migrate_production\.outcome == 'failure' && steps\.promote_frappe\.outcome == 'skipped' && steps\.promote_production\.outcome == 'skipped' \}\}[\s\S]*persist-recovery-required[\s\S]*--failure-stage d1_migration_failed/,
+    /id: migrate_production[\s\S]*if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.migrate_production\.outcome == 'failure' && steps\.promote_production\.outcome == 'skipped' \}\}[\s\S]*persist-recovery-required[\s\S]*--failure-stage d1_migration_failed/,
   );
+  assert.doesNotMatch(production, /promote_frappe|frappe-release-adapter/);
   assert.match(
     production,
-    /"\$WRANGLER_BIN" rollback[\s\S]*--operation rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*persist-rollback/,
+    /"\$WRANGLER_BIN" rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*persist-rollback/,
   );
   assert.match(
     production,
@@ -275,9 +272,6 @@ function validateWorkflow(workflow) {
     "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",
     "RELEASE_INDEPENDENT_ISSUER_URL",
     "RELEASE_INDEPENDENT_ISSUER_TOKEN",
-    "RELEASE_SERVICE_ADAPTER_URL",
-    "RELEASE_SERVICE_ADAPTER_TOKEN",
-    "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
   ])
     assert.match(workflow, new RegExp(required));
   assert.match(workflow, /release_admission_missing_external_secret/);
@@ -456,7 +450,10 @@ test("workflow validation rejects missing durable success or rollback outcomes",
   );
   assert.throws(() =>
     validateWorkflow(
-      workflow.replace("--operation readback", "--operation unchecked"),
+      workflow.replace(
+        '"$WRANGLER_BIN" rollback',
+        '"$WRANGLER_BIN" omit-rollback',
+      ),
     ),
   );
   assert.throws(() =>

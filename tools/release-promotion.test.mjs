@@ -1221,6 +1221,22 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
   ];
   await main(productionRollbackArgs);
   assert.equal(JSON.parse(await readFile(rollbackOutput, "utf8")).restored_revision, STAGING);
+  const leftoverRollbackOutput = path.join(root, "rollback-leftover.json");
+  const leftoverRollbackArgs = productionRollbackArgs.filter((_, index, list) => {
+    const flag = list[index - 1];
+    return ![
+      "--service-receipt",
+      "--service-public-key",
+      "--service-issuer-identity",
+      "--service-issuer-task-id",
+      "--service-issuer-run-id",
+      "--service-key-version",
+    ].includes(flag) && !["--service-receipt", "--service-public-key", "--service-issuer-identity", "--service-issuer-task-id", "--service-issuer-run-id", "--service-key-version"].includes(_);
+  }).map((value) => (value === rollbackOutput ? leftoverRollbackOutput : value));
+  await main(leftoverRollbackArgs);
+  const leftoverRollback = JSON.parse(await readFile(leftoverRollbackOutput, "utf8"));
+  assert.equal(leftoverRollback.restored_revision, STAGING);
+  assert.equal(leftoverRollback.frappe_restored_revision, "leftover-not-promoted");
   await writeFile(
     deployments,
     JSON.stringify([

@@ -27,6 +27,7 @@ import {
 } from "./native-job-packet-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
+import { customerDecisionBackendConfigured } from "./customer-decision-config.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
@@ -38,6 +39,7 @@ export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
   contract_acceptance_available: boolean;
+  material_decision_available: boolean;
   source_updated_at: string | null;
   read_model_generated_at: string;
   job: {
@@ -71,6 +73,16 @@ export interface CustomerPortalReadModel {
     title: string | null;
     text: string | null;
     version: string | null;
+  }>;
+  option_packages: Array<{
+    id: string;
+    package_name: string | null;
+    tier: string | null;
+    material_system: string | null;
+    price_delta: number | null;
+    currency: string | null;
+    options: Record<string, unknown> | null;
+    warranty_summary: string | null;
   }>;
   progress: Array<{
     id: string;
@@ -361,19 +373,22 @@ export async function buildCustomerPortalReadModel(
     if (published.acceptance)
       sourceTimestamps.push(published.acceptance.accepted_at);
   }
-  const contractAcceptanceAvailable = await customerContractAcceptanceAvailable(
-    env,
-    {
+  const [contractAcceptanceAvailable, optionPackages] = await Promise.all([
+    customerContractAcceptanceAvailable(env, {
       tenant_id: link.tenant_id,
       roof_job_id: link.roof_job_id,
       customer_id: link.customer_id,
-    },
-  );
+    }),
+    listNativeOptionPackages(env, link.tenant_id, link.roof_job_id),
+  ]);
 
   return {
     version: 1,
     brand: customerPortalBrand(job, env),
     contract_acceptance_available: contractAcceptanceAvailable,
+    material_decision_available: customerDecisionBackendConfigured(env) &&
+      optionPackages.length > 0,
+    option_packages: optionPackages,
     source_updated_at: latestTimestamp(sourceTimestamps),
     read_model_generated_at: new Date().toISOString(),
     job: {
@@ -414,6 +429,40 @@ export async function buildCustomerPortalReadModel(
     closeout: null,
     warranty: null,
   };
+}
+
+async function listNativeOptionPackages(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+): Promise<CustomerPortalReadModel["option_packages"]> {
+  if (!env.DB) return [];
+  try {
+    const result = await env.DB.prepare(
+      `SELECT option_id, title, tier, material_system
+         FROM operating_option_packages
+        WHERE tenant_id = ? AND job_id = ? AND status = 'approved'
+        ORDER BY option_id`,
+    ).bind(tenantId, roofJobId).all<{
+      option_id: string;
+      title: string;
+      tier: string | null;
+      material_system: string | null;
+    }>();
+    return (result.results ?? []).map((row) => ({
+      id: row.option_id,
+      package_name: text(row.title, 200),
+      tier: text(row.tier, 40),
+      material_system: text(row.material_system, 200),
+      price_delta: null,
+      currency: null,
+      options: null,
+      warranty_summary: null,
+    }));
+  } catch (error) {
+    if (String(error).includes("no such table")) return [];
+    throw error;
+  }
 }
 
 async function customerJobBinding(

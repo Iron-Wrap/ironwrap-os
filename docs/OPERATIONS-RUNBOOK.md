@@ -432,17 +432,40 @@ Substitute `fleet_capture` / `ironwrap_fleet_capture_issuer_user` / `IronWrap Fl
 / `FLEET_CAPTURE_FRAPPE_API_*` with the work-package equivalents for that rail.
 
 1. **Mint the replacement identity.** On the site, create (or reuse) a non-interactive user
-   holding ONLY the rail's role, then issue its API pair:
+   holding ONLY the rail's role, then issue its API pair. `generate_keys` mints keys for a user
+   that already exists — on a fresh replacement email it raises `DoesNotExistError`, so the
+   `insert()` and the role assignment are part of the step, not setup someone did earlier. This is
+   the same block `provision_rail_issuer` runs in `deploy/local/frappe-init.sh`:
 
    ```
    bench --site <site> console
+   >>> import frappe
    >>> from frappe.core.doctype.user.user import generate_keys
-   >>> generate_keys("<new-fleet-capture-issuer-email>")
+   >>> email = "<new-fleet-capture-issuer-email>"
+   >>> role = "IronWrap Fleet Capture Issuer"
+   >>> if not frappe.db.exists("User", email):
+   ...     u = frappe.get_doc({"doctype": "User", "email": email,
+   ...                         "first_name": "Fleet Capture Issuer",
+   ...                         "send_welcome_email": 0, "roles": [{"role": role}]})
+   ...     u.insert(ignore_permissions=True)
+   ... else:
+   ...     u = frappe.get_doc("User", email)
+   ...     if role not in {entry.role for entry in u.roles}:
+   ...         u.append("roles", {"role": role})
+   ...         u.save(ignore_permissions=True)
+   ...
+   >>> generate_keys(email)
+   >>> frappe.db.commit()
    ```
+
+   `generate_keys` returns `{"api_secret": ...}` and leaves `u.api_key` on the user; read the pair
+   from that return value plus `frappe.get_doc("User", email).api_key`. Paste both straight into
+   step 2 — unlike the local stack, a production rotation writes no credential file.
 
    Grant no other role. `IronWrap Fleet Capture Issuer` is create-only on Asset Inspection and
    Asset Defect plus read on Fleet Asset; `IronWrap Work Package Issuer` is read on Work Package
-   plus create on Work Package Event. Anything wider defeats the split.
+   plus create on Work Package Event. Anything wider defeats the split. Reusing an existing user
+   that already holds another role is not "reuse" — mint a fresh one.
 
 2. **Load the Worker secrets first, while the old pin is still live.** The rail keeps working on
    the old identity until step 3, so this step is not a cutover:

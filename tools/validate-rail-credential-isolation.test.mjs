@@ -20,6 +20,60 @@ const RAIL = {
 
 const BINDINGS = `${RAIL.keyBinding} ${RAIL.secretBinding}`;
 
+// A rail whose issuing module also serves a still-shared rail, the way `frappe-field.ts` issues
+// both `work_package_api` (isolated) and `field_evidence_api` (shared bus pair). The exclusive
+// "must never name the shared pair" rule cannot apply here, so the contract is the routing order.
+const SHARED_WRITER = {
+  path: "workers-bus/src/frappe-field.ts",
+  sharedWith: "field_evidence",
+  authorizingFunction: "frappeFieldAuthorization",
+  railDiscriminator: "work_package_api",
+};
+
+const SHARED_WRITER_RAIL = {
+  ...RAIL,
+  rail: "work_package",
+  keyBinding: "WORK_PACKAGE_FRAPPE_API_KEY",
+  secretBinding: "WORK_PACKAGE_FRAPPE_API_SECRET",
+  siteConfigKey: "ironwrap_work_package_issuer_user",
+  issuerUser: "ironwrap-work-package@ironwrap.local",
+  role: "IronWrap Work Package Issuer",
+  credentialFile: ".work_package_issuer_credentials",
+  sources: [SHARED_WRITER],
+};
+
+/** The shipped shape: the rail branch resolves before the shared fallback is reachable. */
+function sharedWriterSource(body) {
+  return `function frappeFieldAuthorization(env: AppEnv, path: string): string {\n${body}\n}\n`;
+}
+
+const HEALTHY_WRITER_BODY = [
+  '  if (path.includes("work_package_api"))',
+  '    return railAuthorizationHeader(env, "work_package");',
+  "  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)",
+  '    throw new Error("frappe_field_not_configured");',
+  "  return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;",
+].join("\n");
+
+function sharedWriterFiles(body = HEALTHY_WRITER_BODY) {
+  const rail = SHARED_WRITER_RAIL;
+  return {
+    secretBindings: `${rail.keyBinding} ${rail.secretBinding}`,
+    appTypes: `${rail.keyBinding} ${rail.secretBinding}`,
+    railCredentials: `${rail.keyBinding} ${rail.secretBinding}`,
+    devVarsExample: `${rail.keyBinding} ${rail.secretBinding}`,
+    predev: `${rail.keyBinding} ${rail.secretBinding} ${rail.credentialFile}`,
+    frappeInit: [
+      rail.issuerUser,
+      rail.credentialFile,
+      `set-config ${rail.siteConfigKey} ${rail.issuerUser}`,
+    ].join("\n"),
+    accessControl: rail.role,
+    playbook: rail.role,
+    railSources: { [rail.rail]: { [SHARED_WRITER.path]: sharedWriterSource(body) } },
+  };
+}
+
 function healthyFiles(overrides = {}) {
   return {
     secretBindings: BINDINGS,
@@ -143,5 +197,123 @@ test("two rails sharing one credential binding are rejected", () => {
   assert.throws(
     () => validateRailCredentialIsolation({ rails: [RAIL, twin], files }),
     /two rails share a credential binding/,
+  );
+});
+
+test("a shared writer whose healthy routing is intact is accepted", () => {
+  // Guards the negatives below: they must fail for their own reason, not because the fixture is
+  // broken to begin with.
+  assert.deepEqual(
+    validateRailCredentialIsolation({ rails: [SHARED_WRITER_RAIL], files: sharedWriterFiles() }),
+    { rails: ["work_package"] },
+  );
+});
+
+test("a shared writer that loses the rail's routing branch is rejected", () => {
+  // ELEC-140 review finding 1: the exact regression that shipped green while `frappe-field.ts`
+  // was untracked. Deleting the branch leaves the work-package rail on the shared bus pair.
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [SHARED_WRITER_RAIL],
+        files: sharedWriterFiles(
+          [
+            "  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)",
+            '    throw new Error("frappe_field_not_configured");',
+            "  return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;",
+          ].join("\n"),
+        ),
+      }),
+    /no longer distinguishes work_package_api/,
+  );
+});
+
+test("a shared writer that answers the rail with the shared pair is rejected", () => {
+  // The discriminator survives, the credential does not: the split is over and nothing else in
+  // the repo changed, which is precisely why a plain diff review misses it.
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [SHARED_WRITER_RAIL],
+        files: sharedWriterFiles(
+          [
+            '  if (path.includes("work_package_api"))',
+            "    return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;",
+            "  return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;",
+          ].join("\n"),
+        ),
+      }),
+    /never calls railAuthorizationHeader\(env, "work_package"\)/,
+  );
+});
+
+test("a shared writer whose shared fallback shadows the rail branch is rejected", () => {
+  // Both halves are present, but the fallback returns first, so no work-package call ever
+  // reaches its own issuer. Presence checks pass; only statement order tells the truth.
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [SHARED_WRITER_RAIL],
+        files: sharedWriterFiles(
+          [
+            "  if (!path.startsWith(`/api/method/ironwrap_roofing.work_package_api`))",
+            "    return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;",
+            '  return railAuthorizationHeader(env, "work_package");',
+          ].join("\n"),
+        ),
+      }),
+    /reaches the shared bus pair before it routes work_package_api/,
+  );
+});
+
+test("a shared writer that stopped sharing must be re-declared as an exclusive source", () => {
+  // Not a leak — the opposite. The looser shared-writer rule is no longer the right contract, so
+  // the entry must move to a plain path and pick up the stricter "never names the pair" check.
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [SHARED_WRITER_RAIL],
+        files: sharedWriterFiles(
+          [
+            '  if (path.includes("work_package_api"))',
+            '    return railAuthorizationHeader(env, "work_package");',
+            '  return railAuthorizationHeader(env, "field_evidence");',
+          ].join("\n"),
+        ),
+      }),
+    /no longer names the shared pair at all/,
+  );
+});
+
+test("a shared writer whose authorizing function was renamed away is rejected", () => {
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [SHARED_WRITER_RAIL],
+        files: {
+          ...sharedWriterFiles(),
+          railSources: {
+            work_package: {
+              [SHARED_WRITER.path]:
+                'function frappeAuthorization(env: AppEnv, path: string): string {\n' +
+                `${HEALTHY_WRITER_BODY}\n}\n`,
+            },
+          },
+        },
+      }),
+    /no longer defines frappeFieldAuthorization\(\)/,
+  );
+});
+
+test("a declared rail source whose text nobody read is rejected", () => {
+  // The omission class itself, at the harness level: before this, a source could be listed and
+  // never actually loaded, and the loop over whatever WAS loaded still reported success.
+  assert.throws(
+    () =>
+      validateRailCredentialIsolation({
+        rails: [RAIL],
+        files: healthyFiles({ railSources: { [RAIL.rail]: {} } }),
+      }),
+    /is declared a fleet_capture source but its text was never read/,
   );
 });

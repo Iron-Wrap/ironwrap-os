@@ -7,6 +7,9 @@
 // change, and every one of those files can silently regress on its own:
 //
 //   * a rail's fetch quietly goes back to `env.ERPNEXT_API_KEY` (isolation gone, tests still green)
+//   * a writer that serves TWO rails loses the branch that routes this one to its own issuer, so
+//     the rail falls through to the other rail's shared pair (ELEC-140 review finding 1: the
+//     `frappe-field.ts` work-package branch was never tracked, so breaking it shipped green)
 //   * `frappe-init.sh` never creates the issuer user (rail dead on every fresh site — the ELEC-40
 //     class the site-config-pin validator was built for, one level down: the PIN is present, the
 //     IDENTITY behind it is not)
@@ -25,8 +28,17 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * One entry per isolated rail. `sources` are the Worker modules that issue the rail: none of them
- * may name the shared pair, because the whole point is that a leaked bus key cannot reach here.
+ * One entry per isolated rail. `sources` are the Worker modules that issue the rail, in one of
+ * two shapes:
+ *
+ *   * a plain path — an EXCLUSIVE issuer. It may not name the shared pair at all, because the
+ *     whole point is that a leaked bus key cannot reach here.
+ *   * `{ path, sharedWith, authorizingFunction, railDiscriminator }` — a SHARED writer: one
+ *     module that issues this rail and some other, still-shared rail, so the shared pair is
+ *     legitimately present in the file and "must not mention it" would be the wrong contract.
+ *     What must hold instead is that the rail is routed to its own issuer BEFORE the shared
+ *     fallback is reachable. ELEC-140 found this class open: `frappe-field.ts` issues the
+ *     work-package rail and was not tracked at all, so deleting its routing branch shipped green.
  */
 export const ISOLATED_RAILS = [
   {
@@ -47,11 +59,79 @@ export const ISOLATED_RAILS = [
     issuerUser: "ironwrap-work-package@ironwrap.local",
     role: "IronWrap Work Package Issuer",
     credentialFile: ".work_package_issuer_credentials",
-    sources: ["workers-bus/src/work-package-actions.ts"],
+    sources: [
+      "workers-bus/src/work-package-actions.ts",
+      {
+        // The field writer serves two rails: `work_package_api` (isolated, this rail) and
+        // `field_evidence_api` / the Field Check-in resource (still the shared bus pair). One
+        // fetch, two identities, chosen by method path — so the contract is the routing itself.
+        path: "workers-bus/src/frappe-field.ts",
+        sharedWith: "field_evidence",
+        authorizingFunction: "frappeFieldAuthorization",
+        railDiscriminator: "work_package_api",
+      },
+    ],
   },
 ];
 
 const SHARED_CREDENTIAL_BINDINGS = ["ERPNEXT_API_KEY", "ERPNEXT_API_SECRET"];
+
+/** Both source shapes read the same way from here on. */
+function normalizeSource(source) {
+  return typeof source === "string" ? { path: source, sharedWith: null } : source;
+}
+
+function railSourcePaths(rail) {
+  return rail.sources.map((source) => normalizeSource(source).path);
+}
+
+/**
+ * The body of one top-level function, whitespace-collapsed so the assertions below survive
+ * reformatting but still see statement order. Sliced to the next `}` in column 0, which is where
+ * a top-level function closes in this repo's formatting; a mis-slice cannot pass silently,
+ * because the shared-fallback assertion requires the slice to still contain the shared pair.
+ */
+function authorizingFunctionBody(text, name) {
+  const start = text.indexOf(`function ${name}(`);
+  if (start === -1) return null;
+  const end = text.indexOf("\n}", start);
+  return text.slice(start, end === -1 ? undefined : end).replace(/\s+/g, " ");
+}
+
+/**
+ * A module that issues an isolated rail alongside a still-shared one. Presence of the shared pair
+ * is expected here; what may never regress is that the rail's own branch resolves first.
+ */
+function assertSharedWriterRoutesRail(rail, source, text) {
+  const { path, authorizingFunction, railDiscriminator } = source;
+  const railCall = `railAuthorizationHeader(env, "${rail.rail}")`;
+
+  const body = authorizingFunctionBody(text, authorizingFunction);
+  assert.ok(
+    body !== null,
+    `${path} no longer defines ${authorizingFunction}(): the ${rail.rail} rail's credential routing was tracked in that function, so this rename or removal must be re-pointed here rather than left unchecked.`,
+  );
+  assert.ok(
+    body.includes(railDiscriminator),
+    `${authorizingFunction}() in ${path} no longer distinguishes ${railDiscriminator}: without that discriminator every call in this writer authenticates as one identity, and the ${rail.rail} split is over.`,
+  );
+  assert.ok(
+    body.includes(railCall),
+    `${authorizingFunction}() in ${path} never calls ${railCall}: this writer issues ${railDiscriminator} on whatever credential it falls through to, which is exactly the ELEC-48 defect wearing a green validator.`,
+  );
+
+  const sharedAt = SHARED_CREDENTIAL_BINDINGS.map((binding) => body.indexOf(binding)).filter(
+    (index) => index !== -1,
+  );
+  assert.ok(
+    sharedAt.length > 0,
+    `${authorizingFunction}() in ${path} no longer names the shared pair at all: it is now an exclusive ${rail.rail} issuer, so declare it as a plain path in that rail's \`sources\` and get the stricter check.`,
+  );
+  assert.ok(
+    body.indexOf(railCall) < Math.min(...sharedAt),
+    `${authorizingFunction}() in ${path} reaches the shared bus pair before it routes ${railDiscriminator} to ${railCall}: the fallback shadows the rail, so ${rail.rail} calls go out as a System Manager again.`,
+  );
+}
 
 export function validateRailCredentialIsolation({ rails, files }) {
   assert.ok(rails.length > 0, "no isolated rails declared");
@@ -105,11 +185,24 @@ export function validateRailCredentialIsolation({ rails, files }) {
       `docs/WHITE-LABEL-CLONE-PLAYBOOK.md never mentions ${rail.role}: every new tenant site would issue this rail with the broad bus pair again.`,
     );
 
-    for (const [path, text] of Object.entries(files.railSources[rail.rail])) {
+    // Driven by the rail's declared `sources`, not by whatever the caller happened to read: a
+    // source the rail claims but nobody supplied must fail rather than be silently skipped.
+    for (const source of rail.sources.map(normalizeSource)) {
+      const text = files.railSources[rail.rail]?.[source.path];
+      assert.ok(
+        typeof text === "string",
+        `${source.path} is declared a ${rail.rail} source but its text was never read, so none of its isolation is actually checked.`,
+      );
+
+      if (source.sharedWith) {
+        assertSharedWriterRoutesRail(rail, source, text);
+        continue;
+      }
+
       for (const shared of SHARED_CREDENTIAL_BINDINGS) {
         assert.ok(
           !text.includes(shared),
-          `${path} references ${shared}: the ${rail.rail} rail must authenticate with ${rail.keyBinding}/${rail.secretBinding} only, otherwise a leaked bus key reaches it again.`,
+          `${source.path} references ${shared}: the ${rail.rail} rail must authenticate with ${rail.keyBinding}/${rail.secretBinding} only, otherwise a leaked bus key reaches it again.`,
         );
       }
     }
@@ -148,7 +241,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     railSources: Object.fromEntries(
       ISOLATED_RAILS.map((rail) => [
         rail.rail,
-        Object.fromEntries(rail.sources.map((path) => [path, read(path)])),
+        Object.fromEntries(railSourcePaths(rail).map((path) => [path, read(path)])),
       ]),
     ),
   };

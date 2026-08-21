@@ -2003,12 +2003,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0082 binds envelopes.tenant_id so a synthetic lead is readable only under the Worker
     // tenant that ingested it (IRO-189 D1-native proof). Additive column only — inventory
     // counts stay at 146 / 209 / 343. It took 0082 because `main` already ships 0079–0081
-    // and IRO-195 stack PRs #92–#97 still own 0070–0078.
-    assert.equal(migrations.length, 65);
+    // and IRO-195 stack PRs #92–#97 still own 0070–0078. 0090 extracts #122's operating-core
+    // graph without renaming shipped 0069 or reusing 0070–0078: nine tables, nine idx_*
+    // indexes, and eighteen guards. Inventory becomes 155 / 218 / 361 (idx_* count) and
+    // backup/restore 155 / 224 / 361.
+    assert.equal(migrations.length, 66);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0082_envelope_operating_tenant.sql",
+      "0090_operating_core.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2070,7 +2073,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // one state where it means anything. 0080 adds no table and no trigger: one index on the
     // shipped replay_requests ledger, so the ELEC-52 dead-letter sweep can read a single
     // envelope's attempt count and backoff clock without scanning the whole ledger per tick.
-    assert.deepEqual({ ...counts }, { tables: 146, indexes: 209, triggers: 343 });
+    // 0090 adds the operating-core fact tables (lead/customer/property/job/gates/estimate/
+    // consent/events/audit), nine tenant indexes, and eighteen identity/version/append-only
+    // guards. idx_* count moves 209 → 218; backup inventory counts every index (215 → 224).
+    assert.deepEqual({ ...counts }, { tables: 155, indexes: 218, triggers: 361 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

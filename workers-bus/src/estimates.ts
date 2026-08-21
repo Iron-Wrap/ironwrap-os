@@ -9,6 +9,7 @@ import {
   type EnvelopeRecord,
 } from "./core.ts";
 import { pushToErpNext } from "./erpnext.ts";
+import { materializeOperatingCore } from "./operating-core.ts";
 import * as store from "./store.ts";
 
 const ESTIMATE_ERP_RETRY_BATCH_SIZE = 25;
@@ -77,6 +78,31 @@ export async function handleEstimateIngest(
   });
 
   if (!valid.ok) return json({ envelope_id: id, error: valid.reason }, 400);
+
+  try {
+    const operating = await materializeOperatingCore(env, rec);
+    await store.recordAudit(env, {
+      automation: "estimate_operating_core",
+      trigger: "estimator",
+      envelope_id: id,
+      target_ids: [
+        `lead:${operating.leadId}`,
+        `customer:${operating.customerId}`,
+        `roof_job:${operating.roofJobId}`,
+      ].join(","),
+      action: operating.reused ? "readback" : "materialize",
+      result: "ok",
+    });
+  } catch (err) {
+    await store.recordAudit(env, {
+      automation: "estimate_operating_core",
+      trigger: "estimator",
+      envelope_id: id,
+      action: "materialize",
+      result: "error",
+      error: String(err),
+    }).catch(() => {});
+  }
 
   try {
     const erp = await pushToErpNext(env, rec);

@@ -1013,6 +1013,8 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
   const { env, queueMessages } = testEnv(db, rawWrites, {
     MEASUREMENT_OCR_ENABLED: "true",
     MEASUREMENT_OCR_API_KEY: "anthropic-test-key",
+    OMNIROUTE_URL: "https://omniroute.test",
+    OMNIROUTE_API_KEY: "omni-test-key",
   });
   const fetches: string[] = [];
   let anthropicCalls = 0;
@@ -1157,6 +1159,8 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
   assert.equal(postQueueReceipt.ocr_model, "claude-opus-5");
   assert.equal(postQueueReceipt.ocr_review_required, 1);
   assert.equal(anthropicCalls, 1);
+  assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
+  assert.equal(fetches.some((url) => url.startsWith("https://omniroute.test/")), false);
   const resultSlot = await sha256Hex(
     `measurement-ocr/v1\n${receipt.receipt_id}\n${postQueueReceipt.report_sha256}\nclaude-opus-5`,
   );
@@ -1502,6 +1506,182 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
     `raw/measurement-ocr/${receipt.receipt_id}/${resultSlot}.json`,
   );
   assert.equal(fetches[0], "https://reports.example.com/ocr-job.pdf");
+});
+
+function ocrToolUseResponse(squares = 21.4): Response {
+  return json({
+    content: [
+      {
+        type: "tool_use",
+        name: "extract_measurement_report_fields",
+        input: {
+          job_number: null,
+          measurements: [
+            {
+              metric: "squares",
+              value: squares,
+              page: 1,
+              region: "Roof summary",
+              label: "Total squares",
+              confidence: "medium",
+            },
+          ],
+        },
+      },
+    ],
+  });
+}
+
+test("measurement OCR retries through OmniRoute when Anthropic returns a billing refusal", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites, {
+    MEASUREMENT_OCR_ENABLED: "true",
+    MEASUREMENT_OCR_API_KEY: "anthropic-test-key",
+    OMNIROUTE_URL: "https://omniroute.test",
+    OMNIROUTE_API_KEY: "omni-test-key",
+  });
+  const fetches: string[] = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      fetches.push(url);
+      if (url === "https://reports.example.com/ocr-credit.pdf") {
+        return new Response(Buffer.from("%PDF-1.7 credit fallback"), {
+          headers: { "content-type": "application/pdf" },
+        });
+      }
+      if (url === "https://api.anthropic.com/v1/messages") {
+        return new Response(JSON.stringify({ error: { type: "billing_error", message: "credit balance is too low" } }), {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url === "https://omniroute.test/v1/messages") {
+        const headers = new Headers(init?.headers);
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string; tool_choice?: { name?: string } };
+        assert.equal(headers.get("authorization"), "Bearer omni-test-key");
+        assert.equal(headers.get("anthropic-version"), "2023-06-01");
+        assert.equal(body.model, "auto");
+        assert.equal(body.tool_choice?.name, "extract_measurement_report_fields");
+        return ocrToolUseResponse(18.5);
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    },
+  );
+
+  await worker.fetch(
+    intakeRequest(
+      { report_url: "https://reports.example.com/ocr-credit.pdf" },
+      "measurement-ocr-credit-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const receipt = db.raw.prepare(
+    "SELECT status, last_error, ocr_status, ocr_model FROM measurement_intake_receipts LIMIT 1",
+  ).get() as {
+    status: string;
+    last_error: string | null;
+    ocr_status: string;
+    ocr_model: string | null;
+  };
+  assert.equal(receipt.ocr_status, "completed");
+  assert.equal(receipt.ocr_model, "claude-opus-5");
+  assert.equal(receipt.last_error, "ocr_review_required");
+  assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
+  assert.equal(fetches.filter((url) => url === "https://omniroute.test/v1/messages").length, 1);
+});
+
+test("measurement OCR uses OmniRoute when the Anthropic key is absent", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites, {
+    MEASUREMENT_OCR_ENABLED: "true",
+    OMNIROUTE_URL: "https://omniroute.test",
+    OMNIROUTE_API_KEY: "omni-test-key",
+  });
+  const fetches: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    fetches.push(url);
+    if (url === "https://reports.example.com/ocr-omni-only.pdf") {
+      return new Response(Buffer.from("%PDF-1.7 omni only"), {
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    if (url === "https://omniroute.test/v1/messages") return ocrToolUseResponse(19);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await worker.fetch(
+    intakeRequest(
+      { report_url: "https://reports.example.com/ocr-omni-only.pdf" },
+      "measurement-ocr-omni-only-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const receipt = db.raw.prepare(
+    "SELECT ocr_status, last_error FROM measurement_intake_receipts LIMIT 1",
+  ).get() as { ocr_status: string; last_error: string | null };
+  assert.equal(receipt.ocr_status, "completed");
+  assert.equal(receipt.last_error, "ocr_review_required");
+  assert.equal(fetches.includes("https://api.anthropic.com/v1/messages"), false);
+  assert.equal(fetches.filter((url) => url === "https://omniroute.test/v1/messages").length, 1);
+});
+
+test("measurement OCR fails closed when Anthropic is out of credit and OmniRoute is also down", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const { env, queueMessages } = testEnv(db, rawWrites, {
+    MEASUREMENT_OCR_ENABLED: "true",
+    MEASUREMENT_OCR_API_KEY: "anthropic-test-key",
+    OMNIROUTE_URL: "https://omniroute.test",
+    OMNIROUTE_API_KEY: "omni-test-key",
+  });
+  const fetches: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    fetches.push(url);
+    if (url === "https://reports.example.com/ocr-both-down.pdf") {
+      return new Response(Buffer.from("%PDF-1.7 both down"), {
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+    if (url === "https://api.anthropic.com/v1/messages") {
+      return new Response(JSON.stringify({ error: { type: "insufficient_quota" } }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url === "https://omniroute.test/v1/messages") {
+      return new Response("gateway unavailable", { status: 503 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await worker.fetch(
+    intakeRequest(
+      { report_url: "https://reports.example.com/ocr-both-down.pdf" },
+      "measurement-ocr-both-down-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  await flushMeasurementQueue(env, queueMessages);
+  const receipt = db.raw.prepare(
+    "SELECT status, ocr_status, last_error FROM measurement_intake_receipts LIMIT 1",
+  ).get() as { status: string; ocr_status: string; last_error: string | null };
+  assert.equal(receipt.status, "retryable_error");
+  assert.equal(receipt.ocr_status, "failed");
+  assert.equal(receipt.last_error, "measurement_ocr_http_429");
+  assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
+  assert.equal(fetches.filter((url) => url === "https://omniroute.test/v1/messages").length, 1);
 });
 
 test("measurement intake: Solar cross-check flags divergence and passes agreement", async (t) => {

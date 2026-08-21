@@ -216,6 +216,11 @@ test("Wrangler gives measurement processing an isolated queue and DLQ in every e
       "claude-opus-5",
       `${name} measurement OCR model`,
     );
+    assert.equal(
+      environment.vars.OMNIROUTE_URL,
+      "",
+      `${name} OmniRoute origin stays opt-in`,
+    );
     assert.deepEqual(
       environment.queues.producers.find(
         (queue: { binding: string }) => queue.binding === "MEASUREMENT_QUEUE",

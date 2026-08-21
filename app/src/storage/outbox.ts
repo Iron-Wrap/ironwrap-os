@@ -12,9 +12,10 @@ import type {
   SaveOutboxActionInput,
 } from "./outbox-types";
 
-// The browser outbox is intentionally limited to field evidence, durable
-// acknowledgement/stop intents, and physical fleet observations. Lifecycle
-// changes must use a fresh online read.
+// The browser outbox carries field evidence, durable acknowledgement/stop
+// intents, duplicate-safe inventory intents/scans, and physical fleet
+// observations. Inventory payloads stay business intents; the Worker derives
+// ledger movements on replay. Lifecycle changes must use a fresh online read.
 const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
   field_checkin:
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/check-ins|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/check-ins)$/,
@@ -22,6 +23,8 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/acknowledgements|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/acknowledgements)$/,
   work_package_stop:
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/stop-work|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/stop-work)$/,
+  inventory_command: /^\/api\/v1\/inventory\/commands$/,
+  inventory_scan: /^\/api\/v1\/inventory\/scans$/,
   // One global endpoint on purpose: the safety rail must not require a job, an
   // assignment, or a current work package.
   safety_action: /^\/api\/v1\/safety\/actions$/,

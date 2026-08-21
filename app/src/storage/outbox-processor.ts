@@ -188,7 +188,13 @@ async function uploadAction(
   });
   if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
   let body: BodyInit;
-  if (action.attachments.length === 0 && action.kind !== "field_checkin") {
+  if (action.kind === "inventory_command" || action.kind === "inventory_scan") {
+    headers.set("Content-Type", "application/json");
+    // Inventory routes accept the durable business-intent body directly.
+    // Wrapping it in the generic field-action envelope would hide the
+    // transition and make replay unverifiable.
+    body = JSON.stringify(action.payload);
+  } else if (action.attachments.length === 0 && action.kind !== "field_checkin") {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify({ device_action_id: action.deviceActionId, payload: action.payload });
   } else {

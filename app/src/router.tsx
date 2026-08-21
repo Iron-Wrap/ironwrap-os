@@ -121,6 +121,9 @@ const loadFleetPage = () => import("./field/fleet-page");
 const FleetPage = lazy(async () => ({
   default: (await loadFleetPage()).FleetPage,
 }));
+const InventoryPage = lazy(async () => ({
+  default: (await import("./inventory/inventory-page")).InventoryPage,
+}));
 
 // Field Companion is the PWA's default entry point. Start loading its module while the
 // session boundary verifies the device instead of serializing the authenticated read
@@ -322,6 +325,12 @@ const fleetRoute = createRoute({
   component: FleetRoute,
 });
 
+const inventoryRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/inventory",
+  component: InventoryRoute,
+});
+
 function TodayRoute() {
   return (
     <RoleGuard surface="field">
@@ -367,6 +376,16 @@ function FleetRoute() {
     <RoleGuard surface="fleet">
       <Suspense fallback={<FieldRouteSkeleton label="Loading your vehicle" />}>
         <FleetPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function InventoryRoute() {
+  return (
+    <RoleGuard surface="inventory">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading inventory" />}>
+        <InventoryPage />
       </Suspense>
     </RoleGuard>
   );
@@ -738,6 +757,7 @@ const routeTree = rootRoute.addChildren([
     checkInRoute,
     jobCheckInRoute,
     fleetRoute,
+    inventoryRoute,
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,

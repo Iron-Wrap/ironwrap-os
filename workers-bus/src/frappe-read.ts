@@ -2118,8 +2118,16 @@ export function frappeBaseUrl(env: AppEnv): string {
   } catch {
     throw new Error("frappe_read_bad_base_url");
   }
+  // `*.localhost` counts as loopback here, not just the bare name. Frappe resolves a site
+  // strictly from the Host header, so a second tenant on the local stack is reached at
+  // http://<tenant>.localhost:8000 - and RFC 6761 reserves the whole .localhost TLD to
+  // loopback, so this is the same boundary, not a wider one. Without it the BFF's
+  // `appBffConfigured` check failed on a cloned tenant and every /api/v1 route answered 404
+  // while the tenant's ingest and admin rails worked: a tenant that boots and cannot be used
+  // (found standing up the second tenant for ELEC-57).
   const local =
     url.hostname === "localhost" ||
+    url.hostname.endsWith(".localhost") ||
     url.hostname === "127.0.0.1" ||
     url.hostname === "[::1]";
   if (

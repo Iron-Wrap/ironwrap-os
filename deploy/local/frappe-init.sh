@@ -12,13 +12,30 @@ fi
 set -euo pipefail
 
 BENCH_DIR=/home/frappe/frappe-bench
-SITE="${SITE_NAME:-ironwrap.localhost}"
+DEFAULT_SITE=ironwrap.localhost
+SITE="${SITE_NAME:-$DEFAULT_SITE}"
 ADMIN_PW="${ADMIN_PASSWORD:-ironwrap-local-admin}"
 DB_ROOT_PW="${DB_ROOT_PASSWORD:-ironwrap-local-dbroot}"
 FRAPPE_BRANCH="${FRAPPE_VERSION:-v15.114.0}"
 APP_SRC=/opt/ironwrap_roofing
 APP_DEST="$BENCH_DIR/apps/ironwrap_roofing"
-STAMP="$BENCH_DIR/sites/.ironwrap_init_done"
+# Local stand-in domain for this site's non-interactive identities.  One Frappe site per
+# contractor is the isolation unit (docs/WHITE-LABEL-CLONE-PLAYBOOK.md), so a cloned tenant
+# provisions its OWN users on its own domain: the playbook forbids a tenant's Worker vars
+# from naming another tenant's issuer identity, and ERPNEXT_INTEGRATION_USER /
+# QB_RECONCILIATION_ISSUER_USER are exactly those names.  Default unchanged, so the single
+# documented stack provisions byte-identical identities to before.
+IDENTITY_DOMAIN="${IRONWRAP_LOCAL_IDENTITY_DOMAIN:-ironwrap.local}"
+# Per SITE, not per bench.  A second tenant site shares this bench (one Frappe install, one
+# app copy) but has its own database, its own users and its own provisioning run, so a
+# bench-wide "done" marker would send the second site straight down the already-provisioned
+# fast path and it would never be created at all.
+STAMP="$BENCH_DIR/sites/.ironwrap_init_done.$SITE"
+# A bench provisioned before the marker was per-site carries the old bench-wide one.
+LEGACY_STAMP="$BENCH_DIR/sites/.ironwrap_init_done"
+# Which local domain a site's identities live on, recorded so a bench-wide resync can
+# re-provision every site without being told again.
+IDENTITY_DOMAIN_FILE="$BENCH_DIR/sites/$SITE/.ironwrap_identity_domain"
 # Written by a resync so `predev.mjs` knows the running bench is serving code it
 # loaded before the resync and has to be restarted.  The marker lives in the
 # volume, not in this process, because the restart happens outside it.
@@ -53,15 +70,15 @@ loud() {
 # what REVOKES the old access - the app compares the session user against the pin,
 # so the bus pair now fails these two rails closed with `*_issuer_auth_mismatch`.
 pin_service_identities() {
-  log "pinning Worker BFF and service issuer site config"
-  bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-fleet-capture@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-work-package@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_production_gate_issuer_user ironwrap-bus@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_customer_decision_service_user ironwrap-customer-decision@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user ironwrap-facet-projection@ironwrap.local
+  log "pinning Worker BFF and service issuer site config on $SITE ($IDENTITY_DOMAIN)"
+  bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user "ironwrap-bus@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user "ironwrap-fleet-capture@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_work_package_issuer_user "ironwrap-work-package@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_production_gate_issuer_user "ironwrap-bus@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user "ironwrap-customer-acceptance@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_customer_decision_service_user "ironwrap-customer-decision@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user "ironwrap-quickbooks-issuer@$IDENTITY_DOMAIN"
+  bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user "ironwrap-facet-projection@$IDENTITY_DOMAIN"
   pin_tenant_constants
 }
 
@@ -178,11 +195,11 @@ PYEOF
 # a volume provisioned before this line heals itself.
 provision_operator_users() {
   log "ensuring owner-approver and crew operator users and their IronWrap roles"
-  bench --site "$SITE" console >/dev/null <<'PYEOF'
+  bench --site "$SITE" console >/dev/null <<PYEOF
 import frappe
 for email, first_name, ironwrap_role in [
-    ("owner@ironwrap.local", "Owner Approver", "IronWrap Owner"),
-    ("crew@ironwrap.local", "Field Crew", "IronWrap Field"),
+    ("owner@$IDENTITY_DOMAIN", "Owner Approver", "IronWrap Owner"),
+    ("crew@$IDENTITY_DOMAIN", "Field Crew", "IronWrap Field"),
 ]:
     if not frappe.db.exists("User", email):
         frappe.get_doc({"doctype": "User", "email": email, "first_name": first_name,
@@ -243,10 +260,24 @@ PYEOF
 # before this shipped would otherwise be pinned to identities that do not exist - a dead rail
 # wearing a green pin, the exact ELEC-40 shape this split exists to close.
 provision_rail_issuer_identities() {
-  provision_rail_issuer ironwrap-fleet-capture@ironwrap.local \
+  provision_rail_issuer "ironwrap-fleet-capture@$IDENTITY_DOMAIN" \
     "Fleet Capture Issuer" "IronWrap Fleet Capture Issuer" .fleet_capture_issuer_credentials
-  provision_rail_issuer ironwrap-work-package@ironwrap.local \
+  provision_rail_issuer "ironwrap-work-package@$IDENTITY_DOMAIN" \
     "Work Package Issuer" "IronWrap Work Package Issuer" .work_package_issuer_credentials
+  # The other four bounded rails have the same shape: one non-interactive user, one
+  # least-privilege role, one key pair, one site-config pin.  They used to be four
+  # copies of the same console heredoc with the identity spelled out in each, which is
+  # why they could not follow a tenant's own domain.
+  provision_rail_issuer "ironwrap-customer-acceptance@$IDENTITY_DOMAIN" \
+    "Customer Acceptance Service" "IronWrap Customer Acceptance Service" .customer_acceptance_credentials
+  provision_rail_issuer "ironwrap-customer-decision@$IDENTITY_DOMAIN" \
+    "Customer Decision Service" "IronWrap Customer Decision Service" .customer_decision_credentials
+  provision_rail_issuer "ironwrap-quickbooks-issuer@$IDENTITY_DOMAIN" \
+    "QuickBooks Reconciliation Issuer" "IronWrap QuickBooks Reconciliation Issuer" \
+    .quickbooks_reconciliation_issuer_credentials
+  provision_rail_issuer "ironwrap-facet-projection@$IDENTITY_DOMAIN" \
+    "Facet Design Projection Service" "IronWrap Facet Design Projection Service" \
+    .facet_design_projection_credentials
 }
 
 provision_broker_identities() {
@@ -258,22 +289,58 @@ provision_broker_identities() {
   # Before this, the only way to act as the owner over REST was to mint a key by hand
   # in a bench console (ELEC-128 run notes). Same file pattern as the broker actors, so
   # `predev`/runbook readers find it where they already look.
-  provision_broker_identity owner@ironwrap.local "Owner Approver" .owner_operator_credentials
-  provision_broker_identity lead-concierge@ironwrap.local "Lead Concierge" .lead_triage_broker_credentials
-  provision_broker_identity estimator-assistant@ironwrap.local "Estimator Assistant" .quote_revision_broker_credentials
-  provision_broker_identity production-controller@ironwrap.local "Production Controller" .production_schedule_broker_credentials
-  provision_broker_identity owner-operator@ironwrap.local "Owner Operator" .proposal_publication_broker_credentials
+  provision_broker_identity "owner@$IDENTITY_DOMAIN" "Owner Approver" .owner_operator_credentials
+  provision_broker_identity "lead-concierge@$IDENTITY_DOMAIN" "Lead Concierge" .lead_triage_broker_credentials
+  provision_broker_identity "estimator-assistant@$IDENTITY_DOMAIN" "Estimator Assistant" .quote_revision_broker_credentials
+  provision_broker_identity "production-controller@$IDENTITY_DOMAIN" "Production Controller" .production_schedule_broker_credentials
+  provision_broker_identity "owner-operator@$IDENTITY_DOMAIN" "Owner Operator" .proposal_publication_broker_credentials
+  # The Worker BFF's own integration identity.  A System Manager on purpose: it is the
+  # single pair the field-evidence and production-gate rails authenticate with, which is
+  # exactly why the six rails above hold their own narrower ones instead.
+  provision_broker_identity "ironwrap-bus@$IDENTITY_DOMAIN" "IronWrap Bus" .integration_credentials
 }
 
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
+
+# A bench provisioned before the marker became per-site has the bench-wide one and only the
+# default site.  Adopt it once rather than re-running the whole fresh path on a working bench.
+if [ -f "$LEGACY_STAMP" ] && [ "$SITE" = "$DEFAULT_SITE" ] && [ ! -f "$STAMP" ]; then
+  log "adopting the pre-per-site marker for $SITE"
+  mv "$LEGACY_STAMP" "$STAMP"
+  [ -f "$IDENTITY_DOMAIN_FILE" ] || printf '%s\n' "$IDENTITY_DOMAIN" > "$IDENTITY_DOMAIN_FILE"
+fi
+
+# Every site this bench has already provisioned, newest marker last.  The app copy is
+# bench-wide, so a resync changes the code under ALL of them, not just the one that
+# triggered it.
+provisioned_sites() {
+  local marker
+  for marker in "$BENCH_DIR/sites/".ironwrap_init_done.*; do
+    [ -e "$marker" ] || continue
+    printf '%s\n' "${marker##*.ironwrap_init_done.}"
+  done
+}
+
+# Re-run one site's identity provisioning and pins on the domain that site was built with.
+# `IDENTITY_DOMAIN` is global by design (every helper reads it), so this saves and restores it.
+reprovision_site() {
+  local site="$1" saved_site="$SITE" saved_domain="$IDENTITY_DOMAIN"
+  SITE="$site"
+  if [ -s "$BENCH_DIR/sites/$site/.ironwrap_identity_domain" ]; then
+    IDENTITY_DOMAIN="$(cat "$BENCH_DIR/sites/$site/.ironwrap_identity_domain")"
+  fi
+  provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities on $site"
+  provision_broker_identities || log "WARNING - could not provision broker actor identities on $site"
+  pin_service_identities || log "WARNING - could not re-apply service identity pins on $site"
+  SITE="$saved_site"
+  IDENTITY_DOMAIN="$saved_domain"
+}
 
 if [ -f "$STAMP" ]; then
   log "already provisioned ($STAMP present) - re-applying service identity pins"
   # A pin failure here must not take down a bench that was already serving:
   # report it loudly and leave the stack up.
-  provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities"
-  pin_service_identities || log "WARNING - could not re-apply service identity pins"
-  provision_broker_identities || log "WARNING - could not provision broker actor identities"
+  reprovision_site "$SITE"
 
   source_hash="$(app_tree_hash "$APP_SRC")"
   installed_hash="$(app_tree_hash "$APP_DEST")"
@@ -298,14 +365,20 @@ if [ -f "$STAMP" ]; then
     echo "  bench ${installed_hash:0:12}  ($APP_DEST)"
   fi
   sync_app_source
-  log "bench migrate (applies DocType, Role and permission changes the resync brought in)"
-  bench --site "$SITE" migrate
+  # Every provisioned site, not just this run's: the app copy is bench-wide, so a site that
+  # did not trigger the resync would otherwise keep serving DocType metadata for code that no
+  # longer exists on disk - stale in the one way the hash comparison above cannot see.
+  for site in $(provisioned_sites); do
+    log "bench migrate on $site (applies DocType, Role and permission changes the resync brought in)"
+    bench --site "$site" migrate
+  done
   # Only now can a rail issuer be given a role the resync just brought in: the pre-resync
   # attempt above runs against the STALE app copy, whose ensure_roles has never heard of the
   # new role. Without this second call a stale volume needs a second start before its rails
   # work, and "heals on the next boot" is indistinguishable from "dead" to whoever boots it once.
-  provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities after resync"
-  pin_service_identities || log "WARNING - could not re-apply service identity pins after resync"
+  for site in $(provisioned_sites); do
+    reprovision_site "$site"
+  done
   touch "$RESYNC_MARKER"
   resynced_hash="$(app_tree_hash "$APP_DEST")"
   if [ "$resynced_hash" != "$source_hash" ]; then
@@ -362,6 +435,12 @@ if [ ! -d "sites/$SITE" ]; then
     --mariadb-root-password "$DB_ROOT_PW" \
     --admin-password "$ADMIN_PW" \
     --no-mariadb-socket
+  # `bench new-site` makes the new site current.  Every script here passes --site
+  # explicitly, but a hand-run `bench <command>` in this container would otherwise land on
+  # the tenant clone instead of the site the operator is standing in front of.
+  if [ "$SITE" != "$DEFAULT_SITE" ] && [ -d "sites/$DEFAULT_SITE" ]; then
+    printf '%s\n' "$DEFAULT_SITE" > sites/currentsite.txt
+  fi
 fi
 
 # 5. install the app on the site (runs install.py hooks + DocType sync) -------
@@ -398,143 +477,26 @@ fi
 
 # 7. localhost site alias (Frappe v15 resolves sites strictly by Host header;
 # local callers reach http://localhost:8000, which must map to the one site) ----
-ln -sfn "$SITE" "sites/localhost"
-
-# 8. integration user + API keys for the Worker BFF ---------------------------
-if [ ! -s "sites/$SITE/.integration_credentials" ] || ! grep -q '^{' "sites/$SITE/.integration_credentials"; then
-  log "creating Worker integration user with API keys"
-  bench --site "$SITE" console > /tmp/integration_raw.json <<'PYEOF'
-import frappe, json
-from frappe.core.doctype.user.user import generate_keys
-email = "ironwrap-bus@ironwrap.local"
-if not frappe.db.exists("User", email):
-    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "IronWrap Bus",
-                        "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
-    u.insert(ignore_permissions=True)
-generate_keys(email)
-u = frappe.get_doc("User", email)
-frappe.db.commit()
-print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
-PYEOF
-  grep -o 'CREDS:{.*}' /tmp/integration_raw.json | sed 's/^CREDS://' > "sites/$SITE/.integration_credentials"
+# Only the default site owns the bare `localhost` alias.  A second tenant site is reached
+# on its own name (http://<site>:8000, which macOS and Linux both resolve to loopback for
+# any *.localhost); repointing the alias here would silently move the FIRST tenant's Worker
+# onto the second tenant's Frappe, which is the ELEC-112 finding-4 failure one layer down.
+if [ "$SITE" = "$DEFAULT_SITE" ]; then
+  ln -sfn "$SITE" "sites/localhost"
 fi
 
-# 9. dedicated customer-acceptance service identity ----------------------------
-if [ ! -s "sites/$SITE/.customer_acceptance_credentials" ] || ! grep -q '^{' "sites/$SITE/.customer_acceptance_credentials"; then
-  log "creating scoped customer-acceptance service user with API keys"
-  bench --site "$SITE" console > /tmp/customer_acceptance_raw.json <<'PYEOF'
-import frappe, json
-from frappe.core.doctype.user.user import generate_keys
-email = "ironwrap-customer-acceptance@ironwrap.local"
-role = "IronWrap Customer Acceptance Service"
-if not frappe.db.exists("User", email):
-    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Customer Acceptance Service",
-                        "send_welcome_email": 0, "roles": [{"role": role}]})
-    u.insert(ignore_permissions=True)
-else:
-    u = frappe.get_doc("User", email)
-    if role not in {entry.role for entry in u.roles}:
-        u.append("roles", {"role": role})
-        u.save(ignore_permissions=True)
-generate_keys(email)
-u = frappe.get_doc("User", email)
-frappe.db.commit()
-print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
-PYEOF
-  grep -o 'CREDS:{.*}' /tmp/customer_acceptance_raw.json | sed 's/^CREDS://' > "sites/$SITE/.customer_acceptance_credentials"
-fi
-
-# 9b. dedicated customer material-decision service identity --------------------
-# Separate from the acceptance identity above: this one may record a provisional
-# customer preference and its receipt evidence, and can never sign a contract.
-if [ ! -s "sites/$SITE/.customer_decision_credentials" ] || ! grep -q '^{' "sites/$SITE/.customer_decision_credentials"; then
-  log "creating scoped customer-decision service user with API keys"
-  bench --site "$SITE" console > /tmp/customer_decision_raw.json <<'PYEOF'
-import frappe, json
-from frappe.core.doctype.user.user import generate_keys
-email = "ironwrap-customer-decision@ironwrap.local"
-role = "IronWrap Customer Decision Service"
-if not frappe.db.exists("User", email):
-    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Customer Decision Service",
-                        "send_welcome_email": 0, "roles": [{"role": role}]})
-    u.insert(ignore_permissions=True)
-else:
-    u = frappe.get_doc("User", email)
-    if role not in {entry.role for entry in u.roles}:
-        u.append("roles", {"role": role})
-        u.save(ignore_permissions=True)
-generate_keys(email)
-u = frappe.get_doc("User", email)
-frappe.db.commit()
-print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
-PYEOF
-  grep -o 'CREDS:{.*}' /tmp/customer_decision_raw.json | sed 's/^CREDS://' > "sites/$SITE/.customer_decision_credentials"
-fi
-
-# 10. dedicated QuickBooks reconciliation issuer ------------------------------
-if [ ! -s "sites/$SITE/.quickbooks_reconciliation_issuer_credentials" ] || ! grep -q '^{' "sites/$SITE/.quickbooks_reconciliation_issuer_credentials"; then
-  log "creating least-privilege QuickBooks reconciliation issuer with API keys"
-  bench --site "$SITE" console > /tmp/quickbooks_reconciliation_issuer_raw.json <<'PYEOF'
-import frappe, json
-from frappe.core.doctype.user.user import generate_keys
-email = "ironwrap-quickbooks-issuer@ironwrap.local"
-role = "IronWrap QuickBooks Reconciliation Issuer"
-if not frappe.db.exists("User", email):
-    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "QuickBooks Reconciliation Issuer",
-                        "send_welcome_email": 0, "roles": [{"role": role}]})
-    u.insert(ignore_permissions=True)
-else:
-    u = frappe.get_doc("User", email)
-    if role not in {entry.role for entry in u.roles}:
-        u.append("roles", {"role": role})
-        u.save(ignore_permissions=True)
-generate_keys(email)
-u = frappe.get_doc("User", email)
-frappe.db.commit()
-print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
-PYEOF
-  grep -o 'CREDS:{.*}' /tmp/quickbooks_reconciliation_issuer_raw.json | sed 's/^CREDS://' > "sites/$SITE/.quickbooks_reconciliation_issuer_credentials"
-fi
-
-# 10b. dedicated Facet design projection service identity ----------------------
-# The Worker projects an approved Facet v2 design decision into a blank Draft
-# Customer Quote through ironwrap_roofing.facet_design_projection_api, which
-# refuses any actor that is not the pinned service user holding the
-# `IronWrap Facet Design Projection Service` role.  Without this identity the
-# whole Facet ingest -> projection chain is unreachable on a local stack.
-if [ ! -s "sites/$SITE/.facet_design_projection_credentials" ] || ! grep -q '^{' "sites/$SITE/.facet_design_projection_credentials"; then
-  log "creating scoped Facet design projection service user with API keys"
-  bench --site "$SITE" console > /tmp/facet_design_projection_raw.json <<'PYEOF'
-import frappe, json
-from frappe.core.doctype.user.user import generate_keys
-email = "ironwrap-facet-projection@ironwrap.local"
-role = "IronWrap Facet Design Projection Service"
-if not frappe.db.exists("User", email):
-    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Facet Design Projection Service",
-                        "send_welcome_email": 0, "roles": [{"role": role}]})
-    u.insert(ignore_permissions=True)
-else:
-    u = frappe.get_doc("User", email)
-    if role not in {entry.role for entry in u.roles}:
-        u.append("roles", {"role": role})
-        u.save(ignore_permissions=True)
-generate_keys(email)
-u = frappe.get_doc("User", email)
-frappe.db.commit()
-print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
-PYEOF
-  grep -o 'CREDS:{.*}' /tmp/facet_design_projection_raw.json | sed 's/^CREDS://' > "sites/$SITE/.facet_design_projection_credentials"
-fi
-
-# 10c. broker actor identities --------------------------------------------------
+# 8. every non-interactive identity this site needs ---------------------------
+# Six bounded rails with their own least-privilege role and key pair, five broker actor
+# logins, and the Worker BFF's System Manager pair.  Each writes its credentials into
+# sites/$SITE/, so a second tenant site on this bench mints its own keys rather than
+# sharing the first site's.
 provision_broker_identities
-
-# 10d. dedicated fleet-capture and work-package issuers --------------------------
 provision_rail_issuer_identities
 
-# 11. pinned service identities -------------------------------------------------
+# 9. pinned service identities --------------------------------------------------
 pin_service_identities
 
+printf '%s\n' "$IDENTITY_DOMAIN" > "$IDENTITY_DOMAIN_FILE"
 touch "$STAMP"
 log "DONE - site '$SITE' ready (admin: Administrator / $ADMIN_PW)"
 cat "sites/$SITE/.integration_credentials" 2>/dev/null || true

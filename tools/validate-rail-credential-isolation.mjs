@@ -46,7 +46,7 @@ export const ISOLATED_RAILS = [
     keyBinding: "FLEET_CAPTURE_FRAPPE_API_KEY",
     secretBinding: "FLEET_CAPTURE_FRAPPE_API_SECRET",
     siteConfigKey: "ironwrap_fleet_capture_issuer_user",
-    issuerUser: "ironwrap-fleet-capture@ironwrap.local",
+    issuerUser: "ironwrap-fleet-capture@$IDENTITY_DOMAIN",
     role: "IronWrap Fleet Capture Issuer",
     credentialFile: ".fleet_capture_issuer_credentials",
     sources: ["workers-bus/src/fleet-actions.ts", "workers-bus/src/fleet-panel.ts"],
@@ -56,7 +56,7 @@ export const ISOLATED_RAILS = [
     keyBinding: "WORK_PACKAGE_FRAPPE_API_KEY",
     secretBinding: "WORK_PACKAGE_FRAPPE_API_SECRET",
     siteConfigKey: "ironwrap_work_package_issuer_user",
-    issuerUser: "ironwrap-work-package@ironwrap.local",
+    issuerUser: "ironwrap-work-package@$IDENTITY_DOMAIN",
     role: "IronWrap Work Package Issuer",
     credentialFile: ".work_package_issuer_credentials",
     sources: [
@@ -75,6 +75,12 @@ export const ISOLATED_RAILS = [
 ];
 
 const SHARED_CREDENTIAL_BINDINGS = ["ERPNEXT_API_KEY", "ERPNEXT_API_SECRET"];
+
+// A cloned tenant provisions its identities on its OWN local domain, so the provisioner names
+// them through `$IDENTITY_DOMAIN` rather than as literals - that variable is what stops a
+// tenant's ERPNEXT_INTEGRATION_USER naming the first tenant's bus user. Its default is still
+// pinned here so "parameterised" cannot quietly become "unset on the documented stack".
+export const IDENTITY_DOMAIN_DECLARATION = 'IDENTITY_DOMAIN="${IRONWRAP_LOCAL_IDENTITY_DOMAIN:-ironwrap.local}"';
 
 /** Both source shapes read the same way from here on. */
 function normalizeSource(source) {
@@ -135,6 +141,10 @@ function assertSharedWriterRoutesRail(rail, source, text) {
 
 export function validateRailCredentialIsolation({ rails, files }) {
   assert.ok(rails.length > 0, "no isolated rails declared");
+  assert.ok(
+    files.frappeInit.includes(IDENTITY_DOMAIN_DECLARATION),
+    `deploy/local/frappe-init.sh must declare ${IDENTITY_DOMAIN_DECLARATION}: the rail issuer identities are named through it, and without the default the documented single stack would provision them on an empty domain.`,
+  );
 
   for (const rail of rails) {
     for (const binding of [rail.keyBinding, rail.secretBinding]) {
@@ -173,7 +183,7 @@ export function validateRailCredentialIsolation({ rails, files }) {
       `deploy/local/predev.mjs never reads ${rail.credentialFile}.`,
     );
     assert.ok(
-      files.frappeInit.includes(`set-config ${rail.siteConfigKey} ${rail.issuerUser}`),
+      files.frappeInit.includes(`set-config ${rail.siteConfigKey} "${rail.issuerUser}"`),
       `deploy/local/frappe-init.sh must pin ${rail.siteConfigKey} to ${rail.issuerUser}; pinning it to the shared bus user re-opens the blast radius this rail was split to close.`,
     );
     assert.ok(

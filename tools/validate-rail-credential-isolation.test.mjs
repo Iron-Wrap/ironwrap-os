@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { validateRailCredentialIsolation } from "./validate-rail-credential-isolation.mjs";
+import {
+  IDENTITY_DOMAIN_DECLARATION,
+  validateRailCredentialIsolation,
+} from "./validate-rail-credential-isolation.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,7 +15,7 @@ const RAIL = {
   keyBinding: "FLEET_CAPTURE_FRAPPE_API_KEY",
   secretBinding: "FLEET_CAPTURE_FRAPPE_API_SECRET",
   siteConfigKey: "ironwrap_fleet_capture_issuer_user",
-  issuerUser: "ironwrap-fleet-capture@ironwrap.local",
+  issuerUser: "ironwrap-fleet-capture@$IDENTITY_DOMAIN",
   role: "IronWrap Fleet Capture Issuer",
   credentialFile: ".fleet_capture_issuer_credentials",
   sources: ["workers-bus/src/fleet-actions.ts"],
@@ -36,7 +39,7 @@ const SHARED_WRITER_RAIL = {
   keyBinding: "WORK_PACKAGE_FRAPPE_API_KEY",
   secretBinding: "WORK_PACKAGE_FRAPPE_API_SECRET",
   siteConfigKey: "ironwrap_work_package_issuer_user",
-  issuerUser: "ironwrap-work-package@ironwrap.local",
+  issuerUser: "ironwrap-work-package@$IDENTITY_DOMAIN",
   role: "IronWrap Work Package Issuer",
   credentialFile: ".work_package_issuer_credentials",
   sources: [SHARED_WRITER],
@@ -64,9 +67,10 @@ function sharedWriterFiles(body = HEALTHY_WRITER_BODY) {
     devVarsExample: `${rail.keyBinding} ${rail.secretBinding}`,
     predev: `${rail.keyBinding} ${rail.secretBinding} ${rail.credentialFile}`,
     frappeInit: [
+      IDENTITY_DOMAIN_DECLARATION,
       rail.issuerUser,
       rail.credentialFile,
-      `set-config ${rail.siteConfigKey} ${rail.issuerUser}`,
+      `set-config ${rail.siteConfigKey} "${rail.issuerUser}"`,
     ].join("\n"),
     accessControl: rail.role,
     playbook: rail.role,
@@ -82,9 +86,10 @@ function healthyFiles(overrides = {}) {
     devVarsExample: BINDINGS,
     predev: `${BINDINGS} ${RAIL.credentialFile}`,
     frappeInit: [
+      IDENTITY_DOMAIN_DECLARATION,
       RAIL.issuerUser,
       RAIL.credentialFile,
-      `set-config ${RAIL.siteConfigKey} ${RAIL.issuerUser}`,
+      `set-config ${RAIL.siteConfigKey} "${RAIL.issuerUser}"`,
     ].join("\n"),
     accessControl: RAIL.role,
     playbook: RAIL.role,
@@ -125,9 +130,14 @@ test("a rail whose issuer user no provisioner creates is rejected", () => {
     () =>
       validateRailCredentialIsolation({
         rails: [RAIL],
-        files: healthyFiles({ frappeInit: `set-config ${RAIL.siteConfigKey} someone-else@example.invalid` }),
+        files: healthyFiles({
+          frappeInit: [
+            IDENTITY_DOMAIN_DECLARATION,
+            `set-config ${RAIL.siteConfigKey} "someone-else@example.invalid"`,
+          ].join("\n"),
+        }),
       }),
-    /never creates ironwrap-fleet-capture@ironwrap\.local/,
+    /never creates ironwrap-fleet-capture@\$IDENTITY_DOMAIN/,
   );
 });
 
@@ -138,13 +148,14 @@ test("a rail still pinned to the shared bus user is rejected", () => {
         rails: [RAIL],
         files: healthyFiles({
           frappeInit: [
+            IDENTITY_DOMAIN_DECLARATION,
             RAIL.issuerUser,
             RAIL.credentialFile,
-            `set-config ${RAIL.siteConfigKey} ironwrap-bus@ironwrap.local`,
+            `set-config ${RAIL.siteConfigKey} "ironwrap-bus@$IDENTITY_DOMAIN"`,
           ].join("\n"),
         }),
       }),
-    /must pin ironwrap_fleet_capture_issuer_user to ironwrap-fleet-capture@ironwrap\.local/,
+    /must pin ironwrap_fleet_capture_issuer_user to ironwrap-fleet-capture@\$IDENTITY_DOMAIN/,
   );
 });
 
@@ -178,16 +189,17 @@ test("two rails sharing one credential binding are rejected", () => {
   const twin = {
     ...RAIL,
     rail: "work_package",
-    issuerUser: "ironwrap-work-package@ironwrap.local",
+    issuerUser: "ironwrap-work-package@$IDENTITY_DOMAIN",
     siteConfigKey: "ironwrap_work_package_issuer_user",
   };
   const files = healthyFiles({
     frappeInit: [
+      IDENTITY_DOMAIN_DECLARATION,
       RAIL.issuerUser,
       twin.issuerUser,
       RAIL.credentialFile,
-      `set-config ${RAIL.siteConfigKey} ${RAIL.issuerUser}`,
-      `set-config ${twin.siteConfigKey} ${twin.issuerUser}`,
+      `set-config ${RAIL.siteConfigKey} "${RAIL.issuerUser}"`,
+      `set-config ${twin.siteConfigKey} "${twin.issuerUser}"`,
     ].join("\n"),
     railSources: {
       [RAIL.rail]: { "workers-bus/src/fleet-actions.ts": "ok" },

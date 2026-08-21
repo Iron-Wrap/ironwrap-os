@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Hubot Sans Variable", "Hubot Sans", ui-sans-serif, system-ui, sans-serif;
 
   --color-background: var(--background);
   --color-surface: var(--surface);
@@ -39,19 +39,19 @@
 
 :root {
   color-scheme: light;
-  --background: #f2efe8;
-  --surface: #fffdf9;
-  --surface-raised: #fffefb;
-  --surface-muted: #e9e4db;
-  --foreground: #1a1d20;
-  --muted: #625e59;
-  --border: #cec7bd;
-  --border-strong: #716a63;
-  --chrome: #1c2024;
-  --chrome-raised: #292e33;
-  --chrome-foreground: #fffaf3;
-  --chrome-muted: #c8c2ba;
-  --chrome-border: #474c50;
+  --background: #e6e8eb;
+  --surface: #f5f6f7;
+  --surface-raised: #f2f3f5;
+  --surface-muted: #d8dce0;
+  --foreground: #14181c;
+  --muted: #5a626b;
+  --border: #b0b7be;
+  --border-strong: #5a626b;
+  --chrome: #161b21;
+  --chrome-raised: #222830;
+  --chrome-foreground: #eef1f3;
+  --chrome-muted: #c5cbd1;
+  --chrome-border: #4a525b;
   --accent: #c81d25;
   --accent-hover: #a9171e;
   --accent-active: #821219;
@@ -72,13 +72,13 @@
   :root {
     color-scheme: dark;
     --background: #101418;
-    --surface: #1c2024;
-    --surface-raised: #292e33;
-    --surface-muted: #292e33;
-    --foreground: #fffaf3;
-    --muted: #c8c2ba;
-    --border: #474c50;
-    --border-strong: #6b7178;
+    --surface: #161b21;
+    --surface-raised: #222830;
+    --surface-muted: #222830;
+    --foreground: #eef1f3;
+    --muted: #c5cbd1;
+    --border: #4a525b;
+    --border-strong: #6d767f;
     --accent: #c81d25;
     --accent-hover: #a9171e;
     --accent-active: #821219;
@@ -106,7 +106,7 @@ html {
   min-width: 320px;
   min-height: 100%;
   background: var(--background);
-  font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: "Hubot Sans Variable", "Hubot Sans", ui-sans-serif, system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

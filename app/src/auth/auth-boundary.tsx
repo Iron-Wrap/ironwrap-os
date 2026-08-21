@@ -53,7 +53,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   const { session, today } = sessionQuery.data;
   if (!session.authenticated) {
     return (
-      <main className="flex min-h-dvh items-center justify-center p-4 sm:p-8">
+      <main className="flex min-h-dvh items-center justify-center bg-chrome p-4 sm:p-8">
         {session.stale_fields.includes("field_device_repair_required") ? (
           <ErrorState
             title="Pair this crew phone again"

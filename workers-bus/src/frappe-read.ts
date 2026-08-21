@@ -10,6 +10,7 @@ export type OfficeEstimatorDetailDocType =
   keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
 export type ReceptionLookupDocType = keyof typeof RECEPTION_LOOKUP_READ_FIELDS;
+export type AccountingJobDocType = keyof typeof ACCOUNTING_JOB_READ_FIELDS;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
   field: string,
@@ -48,6 +49,12 @@ export type CustomerPortalFrappeFilter = readonly [
 ];
 export type ReceptionLookupFrappeFilter = readonly [
   doctype: ReceptionLookupDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type AccountingJobFrappeFilter = readonly [
+  doctype: AccountingJobDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -898,6 +905,20 @@ export const RECEPTION_LOOKUP_READ_FIELDS = {
 } as const;
 
 /**
+ * The narrowest Roof Job projection in this file, and deliberately so.
+ *
+ * The money desk asks the operating core exactly one question before it derives an intent - "is
+ * this job real, and what state is it in?" - so this contract answers that and nothing else. It is
+ * not a filtered view of the office contracts: no customer, no property, no gate state, no
+ * quotation. ELEC-112 finding 3 found the derive route taking a raw `roof_job_id` on trust; the
+ * fix is a lookup, not a widening, and keeping the projection this small is what stops the money
+ * plane from quietly acquiring a read surface it was never granted.
+ */
+export const ACCOUNTING_JOB_READ_FIELDS = {
+  "Roof Job": ["name", "roof_job_id", "job_status", "modified"],
+} as const;
+
+/**
  * Frappe's direct-document endpoint returns complete records, including child tables. Only these
  * fixed records need detail reads, and every parent/child field is projected before the
  * result is returned to an app read model.
@@ -1299,6 +1320,12 @@ const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<
   "Roofing Property": new Set(["name"]),
 };
 
+const ACCOUNTING_JOB_FILTER_FIELDS: Readonly<
+  Record<AccountingJobDocType, ReadonlySet<string>>
+> = {
+  "Roof Job": new Set(["name"]),
+};
+
 const FIELD_WORK_PACKAGE_FILTER_FIELDS: Readonly<
   Record<keyof typeof FIELD_WORK_PACKAGE_LIST_READ, ReadonlySet<string>>
 > = {
@@ -1521,6 +1548,27 @@ export async function listReceptionLookupFrappeResource(
     0,
     RECEPTION_LOOKUP_READ_FIELDS,
     RECEPTION_LOOKUP_FILTER_FIELDS,
+  );
+}
+
+/**
+ * Dedicated money-desk job lookup: one Roof Job by its exact name, four fields, one filter field.
+ * A caller cannot reach another DocType, another field, or another filter through this function.
+ */
+export async function listAccountingJobFrappeResource(
+  env: AppEnv,
+  doctype: AccountingJobDocType,
+  filters: readonly AccountingJobFrappeFilter[],
+  limit = 1,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    ACCOUNTING_JOB_READ_FIELDS,
+    ACCOUNTING_JOB_FILTER_FIELDS,
   );
 }
 

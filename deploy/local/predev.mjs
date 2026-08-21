@@ -6,7 +6,9 @@
  *   1. ../app/dist exists (builds the PWA once when missing)
  *   2. the deploy/local Frappe stack (mariadb, redis, frappe) is up and answering
  *   3. .dev.vars carries the Frappe integration, customer-acceptance and Facet
- *      design-projection API key/secret pairs plus the throwaway Facet chain keys
+ *      design-projection API key/secret pairs, the throwaway Facet chain keys, and
+ *      every host-port-bearing local value (Frappe base URL, Worker origin, broker
+ *      URLs) so a second isolated stack never inherits the first one's ports
  *   4. every D1 migration is applied to the local (Miniflare) database
  *
  * It never touches production: the Frappe stack is the throwaway deploy/local one and
@@ -29,6 +31,25 @@ const keysDir = path.join(here, "keys");
 // COMPOSE_PROJECT_NAME so it never touches the first one's containers or volumes.
 const frappePort = process.env.IRONWRAP_LOCAL_FRAPPE_PORT ?? "8000";
 const frappeUrl = `http://localhost:${frappePort}`;
+// The same treatment for the two host ports the Worker side owns. wrangler.jsonc is static JSON
+// and cannot read the environment, so every port-bearing value it pins for the `local` env is
+// re-declared into .dev.vars below, which wrangler dev loads over the config's `vars`. Without
+// this a second stack's Worker silently talked to the FIRST stack's Frappe (ELEC-112 process risk
+// 4) and could not bind its own port at all (risk 5).
+const workerPort = process.env.IRONWRAP_LOCAL_WORKER_PORT ?? "7100";
+const workerOrigin = `http://localhost:${workerPort}`;
+// One base for the four approval brokers, keeping their existing 9101-9104 layout.
+const brokerPortBase = Number(process.env.IRONWRAP_LOCAL_BROKER_PORT_BASE ?? "9100");
+if (!Number.isInteger(brokerPortBase) || brokerPortBase < 1024 || brokerPortBase > 65_000) {
+  console.error("[predev] ERROR: IRONWRAP_LOCAL_BROKER_PORT_BASE must be an integer in 1024-65000");
+  process.exit(1);
+}
+const brokerPort = {
+  approval: brokerPortBase + 1,
+  quoteRevision: brokerPortBase + 2,
+  productionSchedule: brokerPortBase + 3,
+  proposalPublication: brokerPortBase + 4,
+};
 
 const log = (msg) => console.log(`[predev] ${msg}`);
 const fail = (msg) => {
@@ -357,6 +378,16 @@ const setVar = (src, key, value) => {
 };
 let next = vars;
 for (const [key, value] of [
+  // Every value below that carries a host port overrides the port wrangler.jsonc's `local` env
+  // hard-codes, so one exported IRONWRAP_LOCAL_* variable is enough to move a whole stack.
+  ["ERPNEXT_BASE_URL", frappeUrl],
+  ["APP_PUBLIC_ORIGIN", workerOrigin],
+  ["APP_ALLOWED_ORIGINS", workerOrigin],
+  ["PUBLIC_ESTIMATE_ALLOWED_ORIGINS", workerOrigin],
+  ["APP_APPROVAL_BROKER_URL", `http://127.0.0.1:${brokerPort.approval}`],
+  ["APP_QUOTE_REVISION_BROKER_URL", `http://127.0.0.1:${brokerPort.quoteRevision}`],
+  ["APP_PRODUCTION_SCHEDULE_BROKER_URL", `http://127.0.0.1:${brokerPort.productionSchedule}`],
+  ["APP_PROPOSAL_PUBLICATION_BROKER_URL", `http://127.0.0.1:${brokerPort.proposalPublication}`],
   ["ERPNEXT_API_KEY", creds.api_key],
   ["ERPNEXT_API_SECRET", creds.api_secret],
   ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
@@ -410,7 +441,7 @@ const brokerCommonEnv = [
   "ERPNEXT_REQUEST_TIMEOUT_MS=10000",
   "ERPNEXT_WRITE_ENABLED=true",
   "IRONWRAP_EFFECT_RUNTIME_ENABLED=true",
-  "IRONWRAP_EFFECT_RUNTIME_URL=http://localhost:7100",
+  `IRONWRAP_EFFECT_RUNTIME_URL=${workerOrigin}`,
   `IRONWRAP_EFFECT_RUNTIME_TOKEN=${effectRuntimeToken}`,
   `HERMES_ROLE_POLICY_PATH=${path.join(repoRoot, "hermes/agents/roles.json")}`,
   `HERMES_DRY_RUN_SIGNING_KEY=${readFileSync(dryRunKeyPath, "utf8").trim()}`,
@@ -431,7 +462,7 @@ const brokerEnvFiles = [
       "PROPOSAL_PUBLICATION_BROKER_KEY_ID=local-proposal-publication-broker",
       `PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=${proposalPublicationBrokerSecret}`,
       "PROPOSAL_PUBLICATION_BROKER_LISTEN_HOST=127.0.0.1",
-      "PROPOSAL_PUBLICATION_BROKER_PORT=9104",
+      `PROPOSAL_PUBLICATION_BROKER_PORT=${brokerPort.proposalPublication}`,
     ],
   },
   {
@@ -445,7 +476,7 @@ const brokerEnvFiles = [
       "PRODUCTION_SCHEDULE_BROKER_KEY_ID=local-production-schedule-broker",
       `PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET=${productionScheduleBrokerSecret}`,
       "PRODUCTION_SCHEDULE_BROKER_LISTEN_HOST=127.0.0.1",
-      "PRODUCTION_SCHEDULE_BROKER_PORT=9103",
+      `PRODUCTION_SCHEDULE_BROKER_PORT=${brokerPort.productionSchedule}`,
     ],
   },
 ];
@@ -470,4 +501,4 @@ try {
   fail("local D1 migration apply failed");
 }
 
-log("OK - local stack ready. Starting wrangler dev on http://localhost:7100");
+log(`OK - local stack ready (Frappe ${frappeUrl}). Starting wrangler dev on ${workerOrigin}`);

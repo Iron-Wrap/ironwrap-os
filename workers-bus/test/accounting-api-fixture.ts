@@ -16,6 +16,8 @@
 
 import { DatabaseSync } from "node:sqlite";
 
+import type { AccountingRouteDeps } from "../src/accounting-api.ts";
+import type { MoneyIntentJobDirectory } from "../src/accounting-job-reference.ts";
 import { handleAuthenticatedRoute, type AppRouteDeps } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { ACCOUNTING_MIGRATIONS, NOW, TENANT, readAccountingMigration } from "./accounting-fixture.ts";
@@ -186,6 +188,37 @@ export function auth(
   } as AuthContext;
 }
 
+/**
+ * The operating core `call()` puts behind the derive route unless a test says otherwise.
+ *
+ * ELEC-116 added a job gate to `POST /api/v1/accounting/intents`: the referenced job must resolve
+ * in the caller's tenant. Every money-lane route test that derives an intent needs *some* job
+ * directory behind it, and standing up a Frappe for each is not the point of any of them - so the
+ * default is "the job the test named exists", in the `Proposal` status ELEC-112 derived against.
+ * A test that is about the gate hands in `knownJobs`, `unreachableJobDirectory`, or an explicit
+ * `jobDirectory: undefined` (which asks for the real Frappe-backed resolution).
+ */
+export const anyJobExists: MoneyIntentJobDirectory = async (_env, name) => ({
+  name,
+  roofJobId: name,
+  jobStatus: "Proposal",
+});
+
+/** A directory that knows exactly these jobs (name to `job_status`) and no others. */
+export function knownJobs(
+  jobs: Readonly<Record<string, string>>,
+): MoneyIntentJobDirectory {
+  return async (_env, name) => {
+    const jobStatus = Object.prototype.hasOwnProperty.call(jobs, name) ? jobs[name]! : null;
+    return jobStatus === null ? null : { name, roofJobId: name, jobStatus };
+  };
+}
+
+/** An operating core the Worker cannot reach - the shape `frappe-read.ts` throws in. */
+export const unreachableJobDirectory: MoneyIntentJobDirectory = async () => {
+  throw new Error("frappe_read_http_502");
+};
+
 export interface CallOptions {
   body?: Record<string, unknown>;
   csrf?: boolean;
@@ -224,6 +257,13 @@ export async function call(
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  // The default job directory is a default, not an override: a test that hands in its own
+  // `accounting` seams keeps them, and one that only sets `observation` still gets a job
+  // directory behind the derive route.
+  const accounting: AccountingRouteDeps = {
+    jobDirectory: anyJobExists,
+    ...options.deps?.accounting,
+  };
   const response = await handleAuthenticatedRoute(
     request,
     env,
@@ -231,7 +271,7 @@ export async function call(
       ...(options.userId === undefined ? {} : { userId: options.userId }),
       ...(options.tenantId === undefined ? {} : { tenantId: options.tenantId }),
     }),
-    options.deps ?? {},
+    { ...options.deps, accounting },
   );
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }

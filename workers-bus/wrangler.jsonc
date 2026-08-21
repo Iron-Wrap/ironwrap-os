@@ -360,6 +360,11 @@
         "JN_JOB_RECORD_TYPE": "Retail",
         "JN_JOB_STATUS": "Lead",
         "ERPNEXT_ENABLED": "true",
+        // Default single-stack ports only. This file is static JSON and cannot read the
+        // environment, so predev.mjs re-declares every port-bearing local value into
+        // .dev.vars from IRONWRAP_LOCAL_FRAPPE_PORT / IRONWRAP_LOCAL_WORKER_PORT /
+        // IRONWRAP_LOCAL_BROKER_PORT_BASE, and wrangler dev loads those over these.
+        // Editing a port here moves only the default; see deploy/local/README.md.
         "ERPNEXT_BASE_URL": "http://localhost:8000",
         "QB_EXPECTED_REALM_ID": "",
         "QB_RECONCILIATION_ISSUER_USER": "ironwrap-quickbooks-issuer@ironwrap.local",

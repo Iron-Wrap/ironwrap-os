@@ -10,7 +10,7 @@
     "test": "node --test",
     "typecheck": "tsc --noEmit",
     "typegen": "wrangler types",
-    "dev": "node ../deploy/local/predev.mjs && wrangler dev --env local --port 7100 --test-scheduled",
+    "dev": "node ../deploy/local/predev.mjs && wrangler dev --env local --port ${IRONWRAP_LOCAL_WORKER_PORT:-7100} --test-scheduled",
     "deploy": "wrangler deploy --env=\"\"",
     "deploy:staging": "wrangler deploy --env staging",
     "db:migrate:local": "wrangler d1 migrations apply ironwrap-bus --local",

@@ -33,7 +33,14 @@
 // tenant - and `reconcile` now performs the authenticated re-read it only ever pretended to
 // trigger, which is what makes `reconciled` reachable and the drift exception raisable at all.
 
-import { validAppCsrf } from "./app-auth.ts";
+import { configuredTenantId, validAppCsrf } from "./app-auth.ts";
+import {
+  moneyIntentJobEligible,
+  readMoneyIntentJobReference,
+  type MoneyIntentJobDirectory,
+  type MoneyIntentJobEligibility,
+  type MoneyIntentJobReference,
+} from "./accounting-job-reference.ts";
 import {
   compensationAuthorityLevel,
   offeredRemedies,
@@ -131,16 +138,32 @@ const ACTION_PERMISSION: Readonly<Record<(typeof ACCOUNTING_ALLOWED_ACTIONS)[num
  * a fall-through into somebody else's router.
  */
 /**
- * The one seam the money desk's routes take from outside `env`.
+ * The seams the money desk's routes take from outside `env`. Production sets none of them.
  *
- * Only the re-observation binding, and only because a route that reaches QuickBooks has to be
- * provable without one: production leaves it unset and the reconcile route resolves the tenant's
- * own connection, while a test hands in the same binding shape built over a synthetic Intuit
- * double. `undefined` means "resolve it"; an explicit `null` means "there is none", which is the
- * unbound answer an unconnected tenant gets and must keep getting.
+ * The first is the re-observation binding, and it exists because a route that reaches QuickBooks
+ * has to be provable without one: production leaves it unset and the reconcile route resolves the
+ * tenant's own connection, while a test hands in the same binding shape built over a synthetic
+ * Intuit double. `undefined` means "resolve it"; an explicit `null` means "there is none", which
+ * is the unbound answer an unconnected tenant gets and must keep getting.
+ *
+ * The other two are the derive route's job gate, for the same reason in a different plane: the
+ * gate reads the tenant's operating core, and a money-plane route test has no Frappe behind it.
  */
 export interface AccountingRouteDeps {
   observation?: AccountingObservationBinding | null;
+  /**
+   * How the derive route resolves the job it is asked to bill against (ELEC-112 finding 3).
+   * Unset in production, where the reference is read from the tenant's own operating core; a
+   * route test hands in a double so the gate is provable without a Frappe behind the Worker.
+   */
+  jobDirectory?: MoneyIntentJobDirectory;
+  /**
+   * The eligibility predicate the job gate applies, and a test seam rather than a policy switch:
+   * production never sets it, and the ruling on the eligibility semantics is a change to
+   * `moneyIntentJobEligible` itself. It exists so `accounting_intent_roof_job_not_eligible` is a
+   * proven wire today instead of a branch that has never been reached.
+   */
+  jobEligibility?: MoneyIntentJobEligibility;
 }
 
 export async function handleAccountingRoute(
@@ -225,7 +248,8 @@ async function intentRoute(
   deps: AccountingRouteDeps,
 ): Promise<Response> {
   if (req.method === "GET" && parts.length === 1) return await listIntents(env, auth, url);
-  if (req.method === "POST" && parts.length === 1) return await deriveIntent(req, env, auth);
+  if (req.method === "POST" && parts.length === 1)
+    return await deriveIntent(req, env, auth, deps);
 
   const intentId = parts[1];
   if (!intentId) return json({ error: "not_found" }, 404);
@@ -264,8 +288,20 @@ async function intentRoute(
  * below - attribution comes from the session like every other actor in this file (rule 1 at the top
  * of the module), and the key is enforced through `0065`'s derivation receipts exactly as
  * approve/reject/compensate are enforced through the command receipts.
+ *
+ * ELEC-112 finding 3 found the third thing missing, and of the same kind: `roof_job_id` was taken
+ * on trust. A job that had never existed derived a real, approvable deposit invoice, because the
+ * only thing standing between the body and the engine was a text pattern. `gateDerivationJob`
+ * below closes that - the job must resolve in the caller's own tenant, and it must be eligible -
+ * and it runs before the tax lookup so a reference nobody can honour is refused before anything is
+ * computed from it.
  */
-async function deriveIntent(req: Request, env: AppEnv, auth: AuthContext): Promise<Response> {
+async function deriveIntent(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  deps: AccountingRouteDeps,
+): Promise<Response> {
   const denied = denyUnless(auth, "accounting:review");
   if (denied) return denied;
   if (!validAppCsrf(req, auth)) return json({ error: "csrf_failed" }, 403);
@@ -312,6 +348,11 @@ async function deriveIntent(req: Request, env: AppEnv, auth: AuthContext): Promi
   if (sourceDocuments === null) {
     return json({ error: "invalid_accounting_intent_derivation" }, 400);
   }
+
+  // The job reference is checked before anything is derived from it: a refusal here has written
+  // nothing, so - like `tax_mapping_missing` - it does not burn the idempotency key either.
+  const jobRefusal = await gateDerivationJob(env, auth, deps, roofJobId, kind);
+  if (jobRefusal) return jobRefusal;
 
   const totalCents = centsOf(subtotal) + centsOf(taxAmount);
   const totalAmount = decimalOf(totalCents);
@@ -434,6 +475,49 @@ async function deriveIntent(req: Request, env: AppEnv, auth: AuthContext): Promi
   } catch (error) {
     return engineError(error);
   }
+}
+
+/**
+ * The job gate for a derivation: exists, is this tenant's, and is eligible (ELEC-112 finding 3).
+ *
+ * Three refusals, and the split between them is the point:
+ *
+ *  - `accounting_intent_roof_job_not_found` (404) covers both "no such job" and "not yours". Rule
+ *    2 at the top of this module already says an id from another tenant reads as `not_found`, and
+ *    that has to hold here too: a distinct cross-tenant refusal would confirm that the job exists
+ *    somewhere, which is a disclosure the money desk has no business making. The operating core
+ *    behind `ERPNEXT_BASE_URL` belongs to the configured tenant, so a session from any other
+ *    tenant can have no readable job in it at all and is refused without a lookup.
+ *  - `accounting_job_directory_unavailable` (503) is what an unreachable operating core gets. It
+ *    is deliberately not a pass: "we could not check" must never be worth more than "we checked".
+ *  - `accounting_intent_roof_job_not_eligible` (409) is the eligibility seam's refusal. It is
+ *    unreachable today by construction - `moneyIntentJobEligible` accepts every existing job -
+ *    and it is wired, tested and named now so the pending ruling on the eligibility semantics is
+ *    a one-line change in `accounting-job-reference.ts` rather than a route change.
+ */
+async function gateDerivationJob(
+  env: AppEnv,
+  auth: AuthContext,
+  deps: AccountingRouteDeps,
+  roofJobId: string,
+  kind: AccountingIntentKind,
+): Promise<Response | null> {
+  if (auth.session.tenant_id !== configuredTenantId(env)) {
+    return json({ error: "accounting_intent_roof_job_not_found" }, 404);
+  }
+  const resolve = deps.jobDirectory ?? readMoneyIntentJobReference;
+  let job: MoneyIntentJobReference | null;
+  try {
+    job = await resolve(env, roofJobId);
+  } catch {
+    return json({ error: "accounting_job_directory_unavailable" }, 503);
+  }
+  if (!job) return json({ error: "accounting_intent_roof_job_not_found" }, 404);
+  const eligible = deps.jobEligibility ?? moneyIntentJobEligible;
+  if (!eligible(job, kind)) {
+    return json({ error: "accounting_intent_roof_job_not_eligible" }, 409);
+  }
+  return null;
 }
 
 /**

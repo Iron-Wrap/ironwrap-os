@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 66,
-      "latest": "0090_operating_core.sql"
+      "count": 67,
+      "latest": "0091_authority_readback_subject_scope.sql"
     },
     "tests": {
-      "pwa": 542,
-      "worker": 1091
+      "pwa": 554,
+      "worker": 1107
     }
   },
   "proof_state_policy": {

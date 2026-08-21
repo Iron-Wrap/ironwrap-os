@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Boxes, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -10,7 +10,7 @@ import { sessionQueryKey } from "../auth/session-query";
 import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { cn } from "../lib/cn";
-import { navigationForRole, roleLabel, type NavigationItem } from "../lib/roles";
+import { navigationForRole, roleCanAccess, roleLabel, type NavigationItem } from "../lib/roles";
 import { SafetyActionPanel } from "../field/safety-action-panel";
 import { Button } from "./ui/button";
 import { SystemStatus } from "./system-status";
@@ -76,6 +76,16 @@ export function AppShell() {
               </span>
             </span>
           </Link>
+          {roleCanAccess(session.user.role, "inventory") ? (
+            <Link
+              to="/inventory"
+              className="inline-flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-bold text-muted transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              aria-label="Open inventory"
+            >
+              <Boxes className="size-5" aria-hidden="true" />
+              <span className="hidden sm:inline">Inventory</span>
+            </Link>
+          ) : null}
           <SystemStatus />
           <Button
             className="col-start-2 row-start-1 sm:col-start-3"

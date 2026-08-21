@@ -145,6 +145,8 @@ const actionNames: Record<OutboxAction["kind"], string> = {
   field_checkin: "Field check-in",
   work_package_acknowledgement: "Work plan review",
   work_package_stop: "Stop Work report",
+  inventory_command: "Inventory action",
+  inventory_scan: "Inventory scan",
   safety_action: "Safety report",
   fleet_pre_trip_inspection: "Pre-trip inspection",
   fleet_post_trip_inspection: "Post-trip inspection",

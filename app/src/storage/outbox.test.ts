@@ -117,6 +117,62 @@ describe("offline outbox", () => {
     expect(JSON.stringify(saved)).not.toContain("current-device-proof");
   });
 
+  it("replays inventory intent and scan bodies unchanged with durable identities", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "inventory-command-action",
+      kind: "inventory_command",
+      endpoint: "/api/v1/inventory/commands",
+      payload: {
+        command_id: "inventory-command-1",
+        idempotency_key: "inventory-command-action",
+        transition: "issue_use",
+        authority_ref: "authority-readback-1",
+        policy_ref: "policy:inventory-command",
+        policy_version: "1",
+        evidence_refs: [
+          { ref: "r2://inventory-evidence/tenant-a/receipt", sha256: "a".repeat(64) },
+        ],
+      },
+    });
+    await queueOutboxAction("inventory-command-action", 2_000);
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "inventory-scan-action",
+      kind: "inventory_scan",
+      endpoint: "/api/v1/inventory/scans",
+      payload: {
+        scan_id: "inventory-scan-1",
+        device_id: "device-1",
+        device_action_id: "inventory-scan-action",
+        barcode: "LOT-1",
+        scan_intent: "lookup",
+        observed_at: "2026-08-20T09:00:00.000Z",
+        captured_offline: true,
+        request_fingerprint_sha256: "b".repeat(64),
+        payload: {},
+      },
+    });
+    await queueOutboxAction("inventory-scan-action", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const actionId = new Headers(init?.headers).get("X-Device-Action-Id");
+      expect(JSON.parse(String(init?.body))).toMatchObject(
+        actionId === "inventory-command-action"
+          ? { command_id: "inventory-command-1", transition: "issue_use" }
+          : { scan_id: "inventory-scan-1", device_action_id: "inventory-scan-action" },
+      );
+      return Response.json({ device_action_id: actionId, status: "verified" });
+    });
+    const result = await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "current-csrf-only",
+      now: () => 2_000,
+    });
+    expect(result.verified).toBe(2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("caches and replays a typed Shop Order acknowledgement without a Roof Job endpoint", async () => {
     const payload = {
       work_package_id: "WP-SHOP-1",

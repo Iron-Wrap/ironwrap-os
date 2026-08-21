@@ -2006,12 +2006,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // and IRO-195 stack PRs #92–#97 still own 0070–0078. 0090 extracts #122's operating-core
     // graph without renaming shipped 0069 or reusing 0070–0078: nine tables, nine idx_*
     // indexes, and eighteen guards. Inventory becomes 155 / 218 / 361 (idx_* count) and
-    // backup/restore 155 / 224 / 361.
-    assert.equal(migrations.length, 66);
+    // backup/restore 155 / 224 / 361. 0091 adds nullable authority-readback subject/scope
+    // columns for inventory command binding; it defines no table, index, or trigger, so
+    // those counts stay put.
+    assert.equal(migrations.length, 67);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0090_operating_core.sql",
+      "0091_authority_readback_subject_scope.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {

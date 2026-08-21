@@ -16,7 +16,15 @@ import {
 export const appRoles = ["owner", "ops", "sales", "production", "accounting", "field"] as const;
 export type AppRole = (typeof appRoles)[number];
 export type RoleSurface =
-  "owner" | "sales" | "production" | "accounting" | "newo" | "job" | "field" | "fleet";
+  | "owner"
+  | "sales"
+  | "production"
+  | "accounting"
+  | "newo"
+  | "job"
+  | "field"
+  | "fleet"
+  | "inventory";
 
 export interface NavigationItem {
   label: string;
@@ -179,6 +187,7 @@ export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
   if (role === "sales") return surface === "sales";
   if (role === "production") return surface === "production";
   if (surface === "field") return role === "field" || role === "ops" || role === "owner";
+  if (surface === "inventory") return role === "owner" || role === "ops" || role === "field";
   return role === "owner" || role === "ops";
 }
 

@@ -79,14 +79,14 @@ describe("role-shaped navigation", () => {
 
   it("allows every role only onto its intended work surfaces", () => {
     const expected = {
-      owner: ["owner", "sales", "production", "accounting", "newo", "job", "field"],
-      ops: ["owner", "sales", "production", "newo", "job", "field"],
+      owner: ["owner", "sales", "production", "accounting", "newo", "job", "field", "inventory"],
+      ops: ["owner", "sales", "production", "newo", "job", "field", "inventory"],
       sales: ["sales"],
       production: ["production", "job"],
       accounting: ["accounting"],
       // The fleet capture routes refuse every role but `field`, so only the
       // field role may reach the screen that calls them.
-      field: ["job", "field", "fleet"],
+      field: ["job", "field", "fleet", "inventory"],
     } as const;
     const surfaces = [
       "owner",
@@ -97,6 +97,7 @@ describe("role-shaped navigation", () => {
       "job",
       "field",
       "fleet",
+      "inventory",
     ] as const;
 
     for (const role of appRoles) {
@@ -131,5 +132,11 @@ describe("role-shaped navigation", () => {
     expect(roleCanAccess("owner", "field")).toBe(true);
     expect(roleCanAccess("owner", "production")).toBe(true);
     expect(roleCanAccess("ops", "production")).toBe(true);
+    expect(roleCanAccess("owner", "inventory")).toBe(true);
+    expect(roleCanAccess("ops", "inventory")).toBe(true);
+    expect(roleCanAccess("field", "inventory")).toBe(true);
+    expect(roleCanAccess("sales", "inventory")).toBe(false);
+    expect(roleCanAccess("production", "inventory")).toBe(false);
+    expect(roleCanAccess("accounting", "inventory")).toBe(false);
   });
 });

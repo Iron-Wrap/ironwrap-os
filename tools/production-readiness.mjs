@@ -725,7 +725,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       JSON.stringify(restoreIndexes) === JSON.stringify(migrationInventory.indexBindings) &&
       JSON.stringify(backupTriggers) === JSON.stringify(migrationInventory.triggerBindings) &&
       JSON.stringify(restoreTriggers) === JSON.stringify(migrationInventory.triggerBindings),
-    "D1 backup and restore inventories match all 146 migration-defined tables, 214 indexes, and 341 triggers",
+    "D1 backup and restore inventories match all 146 migration-defined tables, 214 indexes, and 343 triggers",
     "D1 backup and restore inventories must exactly match the migration-defined table, index, and trigger schema",
   ));
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
@@ -737,7 +737,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("facet_design_evidence_associations") &&
       d1Backup.includes("newo_reconciliation_runs") && d1Backup.includes("customer_portal_acceptance_events") &&
       d1Backup.includes("hermes_desktop_results") && d1Backup.includes("REQUIRED_TABLE_COUNT=146") &&
-      d1Backup.includes("REQUIRED_INDEX_COUNT=214") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=341") &&
+      d1Backup.includes("REQUIRED_INDEX_COUNT=214") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=343") &&
       d1Backup.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Backup.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Backup.includes("idx_dead_letter_open_measurement=dead_letter") &&
@@ -758,7 +758,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Backup.includes("verify_hermes_semantics") && d1Backup.includes("type='index'") && d1Backup.includes("type='trigger'") &&
       d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256=") &&
       d1Backup.includes("required_indexes=") && d1Backup.includes("required_triggers="),
-    "D1 backup proves all 146 tables, 214 indexes, 341 triggers, Hermes, access-role, and measurement-evidence semantics, and a hashed manifest",
+    "D1 backup proves all 146 tables, 214 indexes, 343 triggers, Hermes, access-role, and measurement-evidence semantics, and a hashed manifest",
     "D1 backup must validate all 146 migration-defined tables, 214 indexes, and 341 trigger bindings before encryption",
   ));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
@@ -774,7 +774,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("facet_design_evidence_associations") &&
       d1Restore.includes("newo_reconciliation_runs") && d1Restore.includes("customer_portal_acceptance_events") &&
       d1Restore.includes("hermes_desktop_results") && d1Restore.includes("REQUIRED_TABLE_COUNT=146") &&
-      d1Restore.includes("REQUIRED_INDEX_COUNT=214") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=341") &&
+      d1Restore.includes("REQUIRED_INDEX_COUNT=214") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=343") &&
       d1Restore.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Restore.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Restore.includes("idx_dead_letter_open_measurement=dead_letter") &&
@@ -793,7 +793,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") &&
       d1Restore.includes("verify_hermes_semantics") && d1Restore.includes("required_indexes") &&
       d1Restore.includes("required_triggers") && d1Restore.includes("no remote mutation performed"),
-    "D1 restore verifies all 146 tables, 214 indexes, 341 triggers, and Hermes, access-role, and measurement-evidence semantics before remote mutation",
+    "D1 restore verifies all 146 tables, 214 indexes, 343 triggers, and Hermes, access-role, and measurement-evidence semantics before remote mutation",
     "D1 restore must verify ciphertext, manifest, SQL import, integrity, every migration-defined table, index, and trigger locally first",
   ));
   checks.push(check(

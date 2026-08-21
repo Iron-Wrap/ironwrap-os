@@ -2665,6 +2665,7 @@ async function approveProductionScheduleApproval(
       hermesRunId: outcome.hermesRunId,
       resultJson: outcome.resultJson,
       errorCode: outcome.errorCode,
+      refusalMessage: outcome.refusal?.message ?? null,
       now: new Date().toISOString(),
     });
     if (finalized.kind === "lost_claim") {

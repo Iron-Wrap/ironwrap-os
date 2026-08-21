@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 61,
-      "latest": "0069_customer_portal_decision_intents.sql"
+      "count": 62,
+      "latest": "0079_production_schedule_approval_refusal.sql"
     },
     "tests": {
-      "pwa": 519,
-      "worker": 1020
+      "pwa": 520,
+      "worker": 1028
     }
   },
   "proof_state_policy": {
@@ -293,6 +293,43 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
+
+ELEC-133 legible authority refusals and a clean first boot (2026-08-21):
+
+- **A refusal a crew's certification triggers now reaches the approver as a reason.** The gate
+  itself was already correct and fail-closed; what it could not do was say what it refused. Frappe
+  answered `417` with `[authority_missing_current_authority] ...`, `erpRequestDirect` read the
+  response body and dropped it, the surviving `erpnext_http_417: EXPECTATION FAILED` was not JSON,
+  so `parseToolPayload` threw `mcp_tool_payload_invalid` and the broker could only report
+  `execution_uncertain` / `broker_mcp_call_ambiguous`. The approving office user saw a `502` and
+  "something went wrong" about a decision the system had made deliberately (ELEC-132 defect B).
+- Only a refusal the domain authored travels. The carried text must arrive on `417` (the single
+  status `validate_business_document` uses), in the `[code] field: message` shape a `PolicyViolation`
+  formats, and from `_server_messages`/`exception` — never from `exc`, where Frappe puts the Python
+  traceback. A `LinkValidationError` on the same status stays opaque, and both classifications are
+  pinned by verbatim captures from a live local stack.
+- `require_authority_gate` names the requirement that failed, so the message says which crew member
+  and which certificate rather than restating that requirements are unsatisfied. It names only the
+  caller's own declared requirement, never the records that were searched or the locked tenant.
+- A proven refusal is `failed`, not `execution_uncertain`. Frappe rolled back before writing and the
+  Hermes Run records `mutation_applied: 0` for the same attempt, so the approver gets `422` and no
+  reconciliation work is queued for a write that never happened. Only a refusal carrying its own
+  proof of non-application qualifies; every other failure keeps the ambiguity it had.
+- Migration `0079_production_schedule_approval_refusal.sql` adds one nullable column so the reason
+  survives the response an approver happened to be looking at. It is bounded, single-line,
+  write-once, and permitted only on `failed`, enforced independently at the storage boundary, in the
+  Worker's re-derivation of the broker outcome, and in the PWA contract.
+- `parseToolPayload` no longer reads an errored tool result as a payload. It survived only by
+  failing `JSON.parse`, so a well-formed error body would have been read back as a successful write.
+- **Not delivered here:** the PWA has no production-schedule *approve* surface at all
+  (`approveProductionScheduleApproval` has no caller outside its own module), so the approving
+  office user is still an API client. That is a separate wiring gap, recorded rather than fixed.
+- **First boot on a fresh checkout works again.** `deploy/local/frappe-init.sh` reached for
+  `frappe.core.doctype.user.user.generate_keys`, which only resolves once something has imported the
+  User controller in that interpreter. Every caller created its user first, so the attribute was
+  there by accident until PR #106 added `owner@ironwrap.local` — already created by
+  `provision_operator_users` in a separate `bench console` — and the create branch was skipped. All
+  six key-minting blocks now import `generate_keys` by name (ELEC-132 defect A).
 
 ELEC-92 owner-facing proposal publication (2026-08-20):
 

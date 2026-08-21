@@ -2072,9 +2072,17 @@ def _require_canonical_authorities(
         # says what actually happened instead of blaming the record.
         if not isinstance(exc, AuthorityPolicyViolation):
             raise
+        # Carry the authority policy's own sentence, not just its code.  The generic
+        # line that used to stand alone here told an approving office user only that
+        # "requirements are not satisfied" - true of a missing certificate, an expired
+        # one, and a revoked one alike - so the one person who can fix it could not
+        # tell which crew member or which certificate to go and look at (ELEC-132
+        # defect B).  `require_authority_gate` names the failing requirement, and both
+        # messages are domain-authored refusals meant for an operator, so neither
+        # exposes anything about the records that were searched.
         raise PolicyViolation(
             f"authority_{exc.code}",
-            "the exact tenant-scoped Authority Record requirements are not satisfied",
+            f"the exact tenant-scoped Authority Record requirements are not satisfied: {exc.detail}",
             field,
         ) from exc
     return True

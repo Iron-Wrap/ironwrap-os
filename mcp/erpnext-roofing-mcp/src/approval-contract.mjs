@@ -111,6 +111,11 @@ export function signApprovalReceipt(privateKey, payload) {
 }
 
 export function parseToolPayload(result) {
+  // An errored tool result is never a payload. It used to reach the JSON.parse below and
+  // survive only by failing it, which meant a well-formed error body would have been
+  // read back as a successful write - and made every real failure indistinguishable from
+  // malformed output (ELEC-132 defect B).
+  if (result?.isError === true) throw toolCallError(result);
   const raw = result?.content?.[0]?.text;
   if (typeof raw !== "string") throw new Error("mcp_tool_payload_missing");
   try {
@@ -118,6 +123,31 @@ export function parseToolPayload(result) {
   } catch {
     throw new Error("mcp_tool_payload_invalid");
   }
+}
+
+/**
+ * The refusal a caller may act on, or the opaque failure it stays otherwise.
+ *
+ * `domain_refusal` is emitted only for a write whose audit trail proved the mutation did
+ * not apply, so a broker that sees one may report a definite refusal rather than an
+ * uncertain execution. Everything else keeps `mcp_tool_call_failed`.
+ */
+function toolCallError(result) {
+  const raw = result?.content?.[0]?.text;
+  let body;
+  try {
+    body = JSON.parse(typeof raw === "string" ? raw : "");
+  } catch {
+    body = null;
+  }
+  const refusal = body?.error === "domain_refusal" ? body.refusal : null;
+  if (!refusal || typeof refusal.code !== "string" || typeof refusal.message !== "string" ||
+      refusal.mutation_applied !== false) {
+    return new Error("mcp_tool_call_failed");
+  }
+  const error = new Error(`mcp_tool_domain_refusal:${refusal.code}`);
+  error.domainRefusal = { code: refusal.code, message: refusal.message, mutation_applied: false };
+  return error;
 }
 
 function canonicalize(value) {

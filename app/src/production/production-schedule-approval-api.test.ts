@@ -52,6 +52,7 @@ function payload() {
       hermes_run_id: null,
       outcome: null,
       error_code: null,
+      refusal_message: null,
       reconciliation: null,
       created_at: "2026-07-19T12:00:00.000Z",
       updated_at: "2026-07-19T12:00:00.000Z",

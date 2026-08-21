@@ -46,6 +46,8 @@ export const PRODUCTION_SCHEDULE_EXECUTE_PATH = "/v1/production-schedule/execute
 export const PRODUCTION_SCHEDULE_WRITE_TOOL = "request_create_job_assignment";
 export const PRODUCTION_SCHEDULE_DRY_RUN_TOOL = "dry_run_job_assignment";
 export const PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL = "get_crew_authority_roster";
+/** One code for "the domain refused this schedule"; the reason travels beside it. */
+export const PRODUCTION_SCHEDULE_REFUSAL_ERROR_CODE = "broker_production_schedule_refused";
 const PRODUCTION_SCHEDULE_AGENT_ROLE = "production-controller";
 const PRODUCTION_SCHEDULING_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"];
 const SCHEDULABLE_GATE_STATES = ["Ready", "Done", "Waived"];
@@ -353,14 +355,33 @@ async function executeProductionSchedule(body, config, invokeMcp, now) {
         },
       };
     }
-    // Hermes Run is the durable idempotency fence. Once a write starts, return
-    // uncertainty instead of risking a second physical assignment creation. The
-    // uncertainty is real and stays; what changes is that the operator can now read
-    // WHY without intercepting the child process (ELEC-128).
     logBrokerFailure("write", error, {
       hermes_run_id: record.runId,
       target: record.targetName,
     });
+    // A domain refusal is not an ambiguous execution. Frappe validated the assignment,
+    // decided against it, and rolled back before anything was written; the Hermes Run
+    // records `mutation_applied: 0` for the same attempt. Reporting that as
+    // `execution_uncertain` told the approver "something went wrong, and we do not know
+    // whether a crew got scheduled" about a decision the system made deliberately - and
+    // queued reconciliation work for a write that provably never happened (ELEC-132
+    // defect B). Only a refusal that carried its own proof of non-application gets here.
+    const refusal = error?.domainRefusal;
+    if (refusal) {
+      return {
+        outcome: {
+          state: "failed",
+          hermes_run_id: record.runId,
+          result_json: null,
+          error_code: PRODUCTION_SCHEDULE_REFUSAL_ERROR_CODE,
+          refusal: { code: refusal.code, message: refusal.message },
+        },
+      };
+    }
+    // Hermes Run is the durable idempotency fence. Once a write starts, return
+    // uncertainty instead of risking a second physical assignment creation. The
+    // uncertainty is real and stays; what changes is that the operator can now read
+    // WHY without intercepting the child process (ELEC-128).
     return {
       outcome: {
         state: "execution_uncertain",

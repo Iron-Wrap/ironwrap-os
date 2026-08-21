@@ -17,6 +17,14 @@ import {
   parseSolarBuildingInsightsResult,
   solarConfigured,
 } from "./solar.ts";
+import {
+  isCreditOrAuthExhausted,
+  omnirouteAuthHeaders,
+  omnirouteConfigFrom,
+  omnirouteMessagesUrl,
+  OMNIROUTE_FALLBACK_MODEL,
+  type OmniRouteConfig,
+} from "./omniroute-fallback.ts";
 import { recordMeasurementDeltas, type MeasurementDeltaRow } from "./measurement-deltas-store.ts";
 import { deriveRoofGraph, type RoofGraphV1 } from "./roof-graph.ts";
 import {
@@ -71,6 +79,8 @@ type MeasurementOcrEnv = Env & {
   MEASUREMENT_OCR_ENABLED?: string;
   MEASUREMENT_OCR_API_KEY?: string;
   MEASUREMENT_OCR_MODEL?: string;
+  OMNIROUTE_URL?: string;
+  OMNIROUTE_API_KEY?: string;
 };
 
 type MeasurementPdfOcrResult = {
@@ -98,7 +108,11 @@ type MeasurementReportArtifact = {
   sha256: string;
 };
 
-type MeasurementOcrConfig = { apiKey: string; model: string };
+type MeasurementOcrConfig = {
+  apiKey: string;
+  model: string;
+  omniroute: OmniRouteConfig | null;
+};
 
 export type MeasurementQueueMessage = {
   measurement_receipt_id: string;
@@ -717,21 +731,22 @@ export async function geometryFromReportBytes(bytes: ArrayBuffer | Uint8Array): 
 function measurementPdfOcrConfig(env: Env): MeasurementOcrConfig | null {
   const cfg = env as MeasurementOcrEnv;
   if (String(cfg.MEASUREMENT_OCR_ENABLED) !== "true") return null;
-  const apiKey = cfg.MEASUREMENT_OCR_API_KEY?.trim() ?? "";
-  if (!apiKey) throw new MeasurementIntakeFailure("measurement_ocr_not_configured");
   const model = cfg.MEASUREMENT_OCR_MODEL?.trim() || DEFAULT_MEASUREMENT_OCR_MODEL;
   if (!ALLOWED_MEASUREMENT_OCR_MODELS.has(model)) {
     throw new MeasurementIntakeFailure("measurement_ocr_model_not_allowed");
   }
-  return { apiKey, model };
+  const apiKey = cfg.MEASUREMENT_OCR_API_KEY?.trim() ?? "";
+  const omniroute = omnirouteConfigFrom(cfg);
+  if (!apiKey && !omniroute) throw new MeasurementIntakeFailure("measurement_ocr_not_configured");
+  return { apiKey, model, omniroute };
 }
 
 export function measurementPdfOcrConfigured(env: Env): boolean {
   const cfg = env as MeasurementOcrEnv;
   if (String(cfg.MEASUREMENT_OCR_ENABLED) !== "true") return true;
   const model = cfg.MEASUREMENT_OCR_MODEL?.trim() || DEFAULT_MEASUREMENT_OCR_MODEL;
-  return Boolean(cfg.MEASUREMENT_OCR_API_KEY?.trim()) &&
-    ALLOWED_MEASUREMENT_OCR_MODELS.has(model);
+  if (!ALLOWED_MEASUREMENT_OCR_MODELS.has(model)) return false;
+  return Boolean(cfg.MEASUREMENT_OCR_API_KEY?.trim()) || omnirouteConfigFrom(cfg) !== null;
 }
 
 async function getOrStoreMeasurementReport(
@@ -929,14 +944,14 @@ async function requestMeasurementPdfOcr(
   config: MeasurementOcrConfig,
   report: MeasurementReportArtifact,
 ): Promise<MeasurementPdfOcrResult> {
-  const requestBody = JSON.stringify({
+  const requestPayload = {
     model: config.model,
     max_tokens: 1_600,
     tools: [MEASUREMENT_OCR_TOOL_SCHEMA],
-    tool_choice: { type: "tool", name: MEASUREMENT_OCR_TOOL_SCHEMA.name },
+    tool_choice: { type: "tool" as const, name: MEASUREMENT_OCR_TOOL_SCHEMA.name },
     messages: [
       {
-        role: "user",
+        role: "user" as const,
         content: [
           {
             type: "document",
@@ -957,51 +972,59 @@ async function requestMeasurementPdfOcr(
         ],
       },
     ],
-  });
+  };
+  const requestBody = JSON.stringify(requestPayload);
+  const omnirouteBody = JSON.stringify({ ...requestPayload, model: OMNIROUTE_FALLBACK_MODEL });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MEASUREMENT_OCR_TIMEOUT_MS);
   try {
-    const response = await fetch(ANTHROPIC_API_URL, {
+    let primaryErrorStatus: number | null = null;
+    if (config.apiKey) {
+      const response = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": ANTHROPIC_VERSION,
+          "x-api-key": config.apiKey,
+        },
+        body: requestBody,
+      });
+      if (response.ok) {
+        return await parseMeasurementOcrMessages(response, config.model, report.sha256, requestBody);
+      }
+      const errorText = await readProviderErrorText(response);
+      primaryErrorStatus = response.status;
+      if (!config.omniroute || !isCreditOrAuthExhausted(response.status, errorText)) {
+        throw new MeasurementIntakeFailure(`measurement_ocr_http_${response.status}`);
+      }
+    } else if (!config.omniroute) {
+      throw new MeasurementIntakeFailure("measurement_ocr_not_configured");
+    }
+
+    const omniroute = config.omniroute;
+    if (!omniroute) {
+      throw new MeasurementIntakeFailure(`measurement_ocr_http_${primaryErrorStatus ?? 401}`);
+    }
+    const omniResponse = await fetch(omnirouteMessagesUrl(omniroute.baseUrl), {
       method: "POST",
       signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "x-api-key": config.apiKey,
-      },
-      body: requestBody,
+      headers: omnirouteAuthHeaders(omniroute.apiKey),
+      body: omnirouteBody,
     });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new MeasurementIntakeFailure(`measurement_ocr_http_${response.status}`);
+    if (!omniResponse.ok) {
+      await omniResponse.body?.cancel();
+      throw new MeasurementIntakeFailure(
+        `measurement_ocr_http_${primaryErrorStatus ?? omniResponse.status}`,
+      );
     }
-    const responseBytes = await readBoundedResponse(
-      response,
-      2 * 1024 * 1024,
-      "measurement_ocr_response_too_large",
-      "measurement_ocr_response_missing",
+    return await parseMeasurementOcrMessages(
+      omniResponse,
+      config.model,
+      report.sha256,
+      omnirouteBody,
     );
-    const responseText = new TextDecoder().decode(responseBytes);
-    let payload: {
-      content?: Array<Record<string, unknown>>;
-    };
-    try {
-      payload = JSON.parse(responseText) as typeof payload;
-    } catch {
-      throw new MeasurementIntakeFailure("measurement_ocr_response_invalid");
-    }
-    const toolUse = payload.content?.find((block) =>
-      block.type === "tool_use" && block.name === MEASUREMENT_OCR_TOOL_SCHEMA.name
-    );
-    if (!toolUse) throw new MeasurementIntakeFailure("measurement_ocr_tool_result_missing");
-    return normalizeMeasurementPdfOcr(toolUse.input, {
-      model: config.model,
-      reportSha256: report.sha256,
-      requestSha256: await sha256Hex(requestBody),
-      responseSha256: await sha256Hex(responseText),
-      providerResponse: payload,
-    });
   } catch (error) {
     if (error instanceof MeasurementIntakeFailure) throw error;
     throw new MeasurementIntakeFailure(
@@ -1010,6 +1033,54 @@ async function requestMeasurementPdfOcr(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function readProviderErrorText(response: Response): Promise<string> {
+  try {
+    const bytes = await readBoundedResponse(
+      response,
+      64 * 1024,
+      "measurement_ocr_error_too_large",
+      "measurement_ocr_error_missing",
+    );
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+async function parseMeasurementOcrMessages(
+  response: Response,
+  model: string,
+  reportSha256: string,
+  requestBody: string,
+): Promise<MeasurementPdfOcrResult> {
+  const responseBytes = await readBoundedResponse(
+    response,
+    2 * 1024 * 1024,
+    "measurement_ocr_response_too_large",
+    "measurement_ocr_response_missing",
+  );
+  const responseText = new TextDecoder().decode(responseBytes);
+  let payload: {
+    content?: Array<Record<string, unknown>>;
+  };
+  try {
+    payload = JSON.parse(responseText) as typeof payload;
+  } catch {
+    throw new MeasurementIntakeFailure("measurement_ocr_response_invalid");
+  }
+  const toolUse = payload.content?.find((block) =>
+    block.type === "tool_use" && block.name === MEASUREMENT_OCR_TOOL_SCHEMA.name
+  );
+  if (!toolUse) throw new MeasurementIntakeFailure("measurement_ocr_tool_result_missing");
+  return normalizeMeasurementPdfOcr(toolUse.input, {
+    model,
+    reportSha256,
+    requestSha256: await sha256Hex(requestBody),
+    responseSha256: await sha256Hex(responseText),
+    providerResponse: payload,
+  });
 }
 
 function normalizeMeasurementPdfOcr(

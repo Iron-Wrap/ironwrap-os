@@ -656,6 +656,17 @@ test("readiness fails closed when measurement OCR is enabled without its secret"
   assert.equal(ready.status, 200);
   assert.equal(readyBody.checks.measurement_ocr_configuration, true);
   assert.equal(JSON.stringify(readyBody).includes("not-returned"), false);
+
+  delete (env as { MEASUREMENT_OCR_API_KEY?: string }).MEASUREMENT_OCR_API_KEY;
+  Object.assign(env, {
+    OMNIROUTE_URL: "https://omniroute.test",
+    OMNIROUTE_API_KEY: "omni-secret-not-returned",
+  });
+  const omniReady = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
+  const omniBody = await omniReady.json() as { checks: Record<string, boolean> };
+  assert.equal(omniReady.status, 200);
+  assert.equal(omniBody.checks.measurement_ocr_configuration, true);
+  assert.equal(JSON.stringify(omniBody).includes("not-returned"), false);
 });
 
 test("readiness accepts a complete enabled production-schedule approval rail", async () => {

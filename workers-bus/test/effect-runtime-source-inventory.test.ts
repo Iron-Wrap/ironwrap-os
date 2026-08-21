@@ -58,7 +58,7 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "measurements.ts": {
     kind: "governed-unrouted",
     discipline:
-      "queue-leased, idempotent Anthropic OCR inference bounded by MEASUREMENT_OCR_* config; mutates no provider business state, plus a redirect-bounded report download",
+      "queue-leased, idempotent Anthropic OCR inference with optional OmniRoute credit-exhausted fallback, bounded by MEASUREMENT_OCR_* and optional OMNIROUTE_* config; mutates no provider business state, plus a redirect-bounded report download",
   },
   "newo-client.ts": {
     kind: "transport-library",

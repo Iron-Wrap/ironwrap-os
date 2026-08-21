@@ -28,8 +28,19 @@ QB_WEBHOOK_TOKEN=""
 
 # Anthropic key for measurement-report OCR. Required whenever MEASUREMENT_OCR_ENABLED is
 # "true" — which wrangler.jsonc sets in every environment, including local — otherwise
-# `/ready` reports measurement_ocr_configuration false on a fresh checkout.
+# `/ready` reports measurement_ocr_configuration false on a fresh checkout. A placeholder
+# value still satisfies the release-permit secret name; an empty value is enough to skip
+# Anthropic at runtime if OmniRoute below is configured.
 MEASUREMENT_OCR_API_KEY=""
+
+# Optional OmniRoute fallback (https://github.com/diegosouzapw/OmniRoute) used when the
+# Anthropic key is missing or Anthropic returns 401/402/403 / 429 insufficient_quota.
+# OMNIROUTE_URL is the gateway origin only (no /v1 path), HTTPS in production. Local
+# wrangler may use http://127.0.0.1:20128. Cloudflare Workers cannot reach localhost.
+# OMNIROUTE_API_KEY is the dashboard key (OmniRoute's OMNIROUTE_KEY). Optional: omit both
+# to keep today's fail-closed OCR path. Do not add this name to the required secret inventory.
+# OMNIROUTE_URL="https://omniroute.example"
+# OMNIROUTE_API_KEY=""
 
 # ERPNext/Frappe API token pair (optional; only used when ERPNEXT_ENABLED=true)
 ERPNEXT_API_KEY=""

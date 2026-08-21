@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { API_PATHS } from "../lib/api-paths";
-import { prepareProductionScheduleApproval } from "./production-schedule-approval-api";
+import {
+  approveProductionScheduleApproval,
+  prepareProductionScheduleApproval,
+  reconcileProductionScheduleApproval,
+  rejectProductionScheduleApproval,
+} from "./production-schedule-approval-api";
 
 const session = {
   csrf_token: "csrf-token",
@@ -98,5 +103,62 @@ describe("production schedule approval API client", () => {
     const headers = init?.headers as Headers;
     expect(headers.get("X-CSRF-Token")).toBe("csrf-token");
     expect(headers.get("Idempotency-Key")).toBe("production-schedule-approval:prepare:test");
+  });
+
+  it("posts approve, reject, and reconcile to the bounded decision paths", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(payload()));
+
+    await approveProductionScheduleApproval(
+      session,
+      "production-schedule-approval:api-001",
+      1,
+      "production-schedule-approval:approve:test",
+      fetcher,
+    );
+    await rejectProductionScheduleApproval(
+      session,
+      "production-schedule-approval:api-001",
+      2,
+      "Crew window conflicts with weather hold.",
+      "production-schedule-approval:reject:test",
+      fetcher,
+    );
+    await reconcileProductionScheduleApproval(
+      session,
+      "production-schedule-approval:api-001",
+      3,
+      "inconclusive",
+      "The Hermes Run was unavailable; no second assignment was issued.",
+      fetcher,
+    );
+
+    const approveCall = fetcher.mock.calls[0];
+    const rejectCall = fetcher.mock.calls[1];
+    const reconcileCall = fetcher.mock.calls[2];
+    expect(approveCall?.[0]).toBe(
+      "/api/v1/production-schedule-approvals/production-schedule-approval%3Aapi-001/approve",
+    );
+    expect(rejectCall?.[0]).toBe(
+      "/api/v1/production-schedule-approvals/production-schedule-approval%3Aapi-001/reject",
+    );
+    expect(reconcileCall?.[0]).toBe(
+      "/api/v1/production-schedule-approvals/production-schedule-approval%3Aapi-001/reconcile",
+    );
+    expect(JSON.parse(String(approveCall?.[1]?.body))).toEqual({ version: 1 });
+    expect(JSON.parse(String(rejectCall?.[1]?.body))).toEqual({
+      version: 2,
+      reason: "Crew window conflicts with weather hold.",
+    });
+    expect(JSON.parse(String(reconcileCall?.[1]?.body))).toEqual({
+      version: 3,
+      outcome: "inconclusive",
+      evidence: "The Hermes Run was unavailable; no second assignment was issued.",
+    });
+    expect(new Headers(approveCall?.[1]?.headers).get("Idempotency-Key")).toBe(
+      "production-schedule-approval:approve:test",
+    );
+    expect(new Headers(rejectCall?.[1]?.headers).get("Idempotency-Key")).toBe(
+      "production-schedule-approval:reject:test",
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, CalendarClock, CheckCircle2, ChevronRight, ShieldCheck } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 
@@ -32,6 +32,7 @@ export function ProductionScheduleApprovalPreparePage() {
 function ProductionScheduleApprovalPrepareContent() {
   const { jobId } = useParams({ strict: false }) as { jobId?: string };
   const session = useSession();
+  const navigate = useNavigate();
   const offline = isOfflineSession(session);
   const query = useQuery({
     queryKey: ["production-runway", session.tenant.id, session.user.id],
@@ -52,7 +53,13 @@ function ProductionScheduleApprovalPrepareContent() {
       prepareKey.current ??= newProductionScheduleApprovalPrepareKey();
       return await prepareProductionScheduleApproval(session, input, prepareKey.current);
     },
-    onSuccess: () => setActionError(undefined),
+    onSuccess: async (result) => {
+      setActionError(undefined);
+      await navigate({
+        to: "/production/schedule-approvals/$approvalId",
+        params: { approvalId: result.approval.id },
+      });
+    },
     onError: (error) => setActionError(messageFor(error)),
   });
 

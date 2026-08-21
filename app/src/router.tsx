@@ -77,6 +77,14 @@ const ProductionScheduleApprovalPreparePage = lazy(async () => ({
   default: (await import("./production/production-schedule-approval-page"))
     .ProductionScheduleApprovalPreparePage,
 }));
+const ProductionScheduleApprovalQueuePage = lazy(async () => ({
+  default: (await import("./production/production-schedule-approval-decision-page"))
+    .ProductionScheduleApprovalQueuePage,
+}));
+const ProductionScheduleApprovalDetailPage = lazy(async () => ({
+  default: (await import("./production/production-schedule-approval-decision-page"))
+    .ProductionScheduleApprovalDetailPage,
+}));
 const LeadTriagePreparePage = lazy(async () => ({
   default: (await import("./sales/lead-triage-prepare-page")).LeadTriagePreparePage,
 }));
@@ -507,6 +515,18 @@ const productionScheduleApprovalPrepareRoute = createRoute({
   component: ProductionScheduleApprovalPrepareRoute,
 });
 
+const productionScheduleApprovalQueueRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/production/schedule-approvals",
+  component: ProductionScheduleApprovalQueueRoute,
+});
+
+const productionScheduleApprovalDetailRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/production/schedule-approvals/$approvalId",
+  component: ProductionScheduleApprovalDetailRoute,
+});
+
 const estimatorWorkbenchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/estimator/jobs/$jobId",
@@ -641,6 +661,22 @@ function ProductionScheduleApprovalPrepareRoute() {
   );
 }
 
+function ProductionScheduleApprovalQueueRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ProductionScheduleApprovalQueuePage />
+    </Suspense>
+  );
+}
+
+function ProductionScheduleApprovalDetailRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ProductionScheduleApprovalDetailPage />
+    </Suspense>
+  );
+}
+
 function EstimatorWorkbenchRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -716,6 +752,8 @@ const routeTree = rootRoute.addChildren([
     facetDesignsRoute,
     productionRoute,
     productionScheduleApprovalPrepareRoute,
+    productionScheduleApprovalQueueRoute,
+    productionScheduleApprovalDetailRoute,
     salesRoute,
     leadTriagePrepareRoute,
     estimatorWorkbenchRoute,

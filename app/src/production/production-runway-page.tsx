@@ -177,6 +177,11 @@ function ProductionRunwayScreen({
                 : "List time not found"}
             </p>
             <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
+            {roleCanAccess(role, "owner") ? (
+              <Button asChild variant="outline" size="compact" className="mt-4">
+                <Link to="/production/schedule-approvals">Schedule requests</Link>
+              </Button>
+            ) : null}
           </div>
         </header>
       </Card>
@@ -333,7 +338,6 @@ function RunwayLane({
                   job={job}
                   locale={locale}
                   timeZone={timeZone}
-                  tone={copy.tone}
                   canOpenJob={canOpenJob}
                   canPrepareSchedule={canPrepareSchedule}
                   canClearGates={canClearGates}
@@ -353,7 +357,6 @@ function RunwayJobCard({
   job,
   locale,
   timeZone,
-  tone,
   canOpenJob,
   canPrepareSchedule,
   canClearGates,
@@ -361,7 +364,6 @@ function RunwayJobCard({
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
-  tone: string;
   canOpenJob: boolean;
   canPrepareSchedule: boolean;
   canClearGates: boolean;
@@ -375,9 +377,7 @@ function RunwayJobCard({
         : "Start steps are not known";
 
   return (
-    <article
-      className={cn("rounded-lg border border-border border-l-2 bg-surface p-4 sm:p-5", tone)}
-    >
+    <article className="rounded-lg border border-border bg-surface p-4 sm:p-5">
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
@@ -451,7 +451,10 @@ function RunwayJobCard({
       </div>
 
       {job.material_attention.length > 0 ? (
-        <section className="mt-3 border-l-2 border-danger pl-3" aria-label="Material issue">
+        <section
+          className="mt-3 rounded-md bg-danger-soft/40 px-3 py-2"
+          aria-label="Material issue"
+        >
           <p className="text-sm font-semibold text-danger">Material issue</p>
           <ul className="mt-1 space-y-1 text-sm leading-6 text-danger">
             {job.material_attention.map((item, index) => (

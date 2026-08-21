@@ -15,7 +15,10 @@ import {
 } from "./production-schedule-approval-api";
 import { ProductionScheduleApprovalPreparePage } from "./production-schedule-approval-page";
 
-const router = vi.hoisted(() => ({ params: { jobId: "JOB-A" } as { jobId?: string } }));
+const router = vi.hoisted(() => ({
+  params: { jobId: "JOB-A" } as { jobId?: string },
+  navigate: vi.fn(),
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -33,6 +36,7 @@ vi.mock("@tanstack/react-router", () => ({
     </a>
   ),
   useParams: () => router.params,
+  useNavigate: () => router.navigate,
 }));
 vi.mock("./production-api", () => ({ loadProductionRunway: vi.fn() }));
 vi.mock("./production-schedule-approval-api", () => ({
@@ -151,7 +155,9 @@ describe("ProductionScheduleApprovalPreparePage", () => {
 
   it("stages only the bounded schedule request for owner approval", async () => {
     const user = userEvent.setup();
-    vi.mocked(prepareProductionScheduleApproval).mockResolvedValue({ approval: {} } as never);
+    vi.mocked(prepareProductionScheduleApproval).mockResolvedValue({
+      approval: { id: "production-schedule-approval:ui-001" },
+    } as never);
     renderPage();
 
     await screen.findByRole("heading", { name: "Ask to set a start date" });
@@ -182,7 +188,10 @@ describe("ProductionScheduleApprovalPreparePage", () => {
         "production-schedule-approval:prepare-ui-001",
       );
     });
-    expect(screen.getByRole("status")).toHaveTextContent(/ready for a check/i);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/production/schedule-approvals/$approvalId",
+      params: { approvalId: "production-schedule-approval:ui-001" },
+    });
     expect(document.body.textContent).not.toMatch(
       /dry_run_receipt|approval_receipt|write_args_json|tool_name|site_id|append-only|production runway/i,
     );

@@ -184,6 +184,7 @@ describe("ProductionRunwayPage", () => {
     expect(
       screen.queryByRole("link", { name: "Start schedule check for IW-1004" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Schedule requests" })).not.toBeInTheDocument();
 
     productionView.unmount();
     vi.clearAllMocks();
@@ -201,6 +202,10 @@ describe("ProductionRunwayPage", () => {
 
     await screen.findByRole("heading", { name: "Production plan" });
     expect(screen.getByText(/This page does not change a job/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Schedule requests" })).toHaveAttribute(
+      "href",
+      "/production/schedule-approvals",
+    );
     expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ready to check" })).toBeVisible();
     expect(screen.getByText("Material issue")).toBeVisible();

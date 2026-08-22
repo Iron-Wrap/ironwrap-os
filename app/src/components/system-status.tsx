@@ -1,4 +1,4 @@
-import { Cloud, CloudOff, Download, RefreshCw, ShieldAlert, UploadCloud } from "lucide-react";
+import { CloudOff, Download, RefreshCw, ShieldAlert, UploadCloud } from "lucide-react";
 import { registerSW } from "virtual:pwa-register";
 import { useEffect, useRef, useState } from "react";
 
@@ -39,53 +39,61 @@ export function SystemStatus() {
     outbox.unclaimed > 0 ||
     storageNeedsEscalation ||
     needRefresh;
+  const hasCompactStatus =
+    !online ||
+    !csrfToken ||
+    outbox.pending > 0 ||
+    outbox.needsAttention > 0 ||
+    outbox.unclaimed > 0 ||
+    Boolean(storageWarning) ||
+    install.canInstall;
 
   return (
     <div className="contents">
-      <div
-        className="col-span-2 col-start-1 row-start-2 flex min-h-9 flex-nowrap items-center gap-1.5 overflow-x-auto border-t border-border px-0 py-1.5 text-xs font-bold [scrollbar-width:none] sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:min-h-0 sm:border-t-0 sm:py-0 [&::-webkit-scrollbar]:hidden"
-        aria-label="App status"
-      >
-        <StatusPill
-          tone={online && csrfToken ? "ok" : "warning"}
-          icon={
-            online && csrfToken ? <Cloud aria-hidden="true" /> : <CloudOff aria-hidden="true" />
-          }
+      {hasCompactStatus ? (
+        <div
+          className="col-start-2 row-start-1 flex max-w-[7.5rem] flex-nowrap items-center gap-1 overflow-x-auto text-xs font-bold [scrollbar-width:none] sm:max-w-none sm:gap-1.5 [&::-webkit-scrollbar]:hidden"
+          aria-label="App status"
         >
-          {online && csrfToken ? "Online" : online ? "Sign-in paused" : "Offline"}
-        </StatusPill>
-        {outbox.pending > 0 ? (
-          <StatusPill tone="info" icon={<UploadCloud aria-hidden="true" />}>
-            {outbox.pending} waiting
-          </StatusPill>
-        ) : null}
-        {outbox.needsAttention > 0 ? (
-          <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-            {outbox.needsAttention} need a check
-          </StatusPill>
-        ) : null}
-        {outbox.unclaimed > 0 ? (
-          <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-            {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device only
-          </StatusPill>
-        ) : null}
-        {storageWarning ? (
-          <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-            Storage warning
-          </StatusPill>
-        ) : null}
-        {install.canInstall ? (
-          <Button size="compact" variant="outline" onClick={() => void install.promptInstall()}>
-            <Download aria-hidden="true" />
-            Install
-          </Button>
-        ) : null}
-      </div>
+          {!online || !csrfToken ? (
+            <StatusPill tone="warning" icon={<CloudOff aria-hidden="true" />}>
+              {online ? "Sign-in paused" : "Offline"}
+            </StatusPill>
+          ) : null}
+          {outbox.pending > 0 ? (
+            <StatusPill tone="info" icon={<UploadCloud aria-hidden="true" />}>
+              {outbox.pending} waiting
+            </StatusPill>
+          ) : null}
+          {outbox.needsAttention > 0 ? (
+            <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
+              {outbox.needsAttention} need a check
+            </StatusPill>
+          ) : null}
+          {outbox.unclaimed > 0 ? (
+            <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
+              {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device only
+            </StatusPill>
+          ) : null}
+          {storageWarning ? (
+            <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
+              Storage warning
+            </StatusPill>
+          ) : null}
+          {install.canInstall ? (
+            <Button size="compact" variant="outline" onClick={() => void install.promptInstall()}>
+              <Download aria-hidden="true" />
+              <span className="sr-only sm:not-sr-only">Install</span>
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {hasBanner ? (
         <div
           className={cn(
-            "col-span-full row-start-3 -mx-4 border-t px-4 py-3 text-sm sm:row-start-2 sm:-mx-6 sm:px-6",
+            "col-span-full -mx-4 border-t px-4 py-3 text-sm sm:row-start-2 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8",
+            hasCompactStatus ? "row-start-3" : "row-start-2",
             outbox.needsAttention > 0
               ? "border-danger/30 bg-danger-soft text-danger"
               : !online || outbox.uploading > 0 || storageNeedsEscalation
@@ -209,12 +217,12 @@ function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5",
+        "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border px-2 sm:px-2.5",
         tones[tone],
       )}
     >
       <span className="[&_svg]:size-3.5">{icon}</span>
-      {children}
+      <span className="sr-only sm:not-sr-only">{children}</span>
     </span>
   );
 }

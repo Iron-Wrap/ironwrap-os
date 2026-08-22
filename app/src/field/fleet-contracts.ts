@@ -69,9 +69,9 @@ export const fleetItemResultLabels: Record<FleetItemResult, string> = {
 };
 
 export const fleetDefectSeverityLabels: Record<FleetDefectSeverity, string> = {
-  Minor: "Minor — note it for the shop",
-  Major: "Major — needs repair soon",
-  "Out of Service": "Out of service — park it now",
+  Minor: "Minor. Note it for the shop",
+  Major: "Major. Needs repair soon",
+  "Out of Service": "Out of service. Park it now",
 };
 
 /**
@@ -173,9 +173,9 @@ export function fleetBlockerMessage(blocker: FleetPanelBlocker): string {
  */
 export const fleetRefusalText: Record<string, string> = {
   not_found:
-    "This one is not yours to report on right now. Custody or your load may have changed — check with dispatch.",
+    "This one is not yours to report on right now. Custody or your load may have changed. Check with dispatch.",
   fleet_asset_not_found:
-    "This one is not yours to report on right now. Custody or your load may have changed — check with dispatch.",
+    "This one is not yours to report on right now. Custody or your load may have changed. Check with dispatch.",
   fleet_asset_retired: "This one has been retired. Nothing more can be recorded against it.",
   fleet_actor_not_enabled:
     "Your account is not active for fleet work. Ask the office to enable it.",

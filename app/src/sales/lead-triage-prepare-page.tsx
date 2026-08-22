@@ -1,12 +1,13 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ClipboardCheck, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { ArrowLeft, ChevronRight, ClipboardCheck, RefreshCw, ShieldCheck } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
 import { ErrorState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -156,9 +157,6 @@ function LeadTriagePrepareContent() {
                 <ClipboardCheck className="size-5 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Commercial authority
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Record native triage
                 </h1>
@@ -337,14 +335,11 @@ function LeadTriagePrepareContent() {
 function TriageDecisionRail({ lead }: { lead: SalesLead }) {
   return (
     <section aria-labelledby="triage-decision-path">
-      <h2
-        id="triage-decision-path"
-        className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
-      >
+      <h2 id="triage-decision-path" className="text-sm font-bold text-muted">
         Controlled path
       </h2>
       <ol className="mt-3 grid border border-border sm:grid-cols-3">
-        <RailStep label="Native lead" detail={`${lead.id} · v${lead.triage.version}`} />
+        <RailStep label="Native lead" detail={`Current record · v${lead.triage.version}`} />
         <RailStep
           label="Policy permit"
           detail="Short-lived"
@@ -431,7 +426,6 @@ function LeadContext({
         <p className="mt-2 break-words font-bold text-foreground">
           {lead.contact.display_name ?? "Name unavailable"}
         </p>
-        <p className="mt-1 break-all text-sm text-muted">{lead.id}</p>
       </div>
       <div className="border-t border-border px-4 py-5 sm:border-t-0 sm:border-l sm:px-5">
         <p className="text-sm font-bold text-muted">Received context</p>
@@ -455,41 +449,25 @@ function LeadContext({
           </p>
         )}
       </div>
-    </section>
-  );
-}
-
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger";
-  title: string;
-  children: ReactNode;
-}) {
-  const Icon = tone === "danger" ? TriangleAlert : RefreshCw;
-  return (
-    <section
-      className={cn(
-        "border px-5 py-4 text-sm leading-6",
-        tone === "danger" ? "border-danger/40 bg-danger-soft" : "border-warning/40 bg-warning-soft",
-      )}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <div className="flex items-start gap-3">
-        <Icon
-          className={cn(
-            "mt-0.5 size-5 shrink-0",
-            tone === "danger" ? "text-danger" : "text-warning",
-          )}
-          aria-hidden="true"
-        />
-        <div>
-          <p className="font-bold">{title}</p>
-          <div className="mt-1 text-muted">{children}</div>
-        </div>
-      </div>
+      <details className="group border-t border-border sm:col-span-2">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold text-muted sm:px-5 [&::-webkit-details-marker]:hidden">
+          <span>System details</span>
+          <ChevronRight
+            className="size-4 transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <dl className="grid gap-4 border-t border-border px-4 py-4 text-sm sm:grid-cols-2 sm:px-5">
+          <div className="min-w-0">
+            <dt className="font-bold text-muted">Lead record</dt>
+            <dd className="mt-1 break-all text-foreground">{lead.id}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="font-bold text-muted">Source envelope</dt>
+            <dd className="mt-1 break-all text-foreground">{lead.envelope_id}</dd>
+          </div>
+        </dl>
+      </details>
     </section>
   );
 }

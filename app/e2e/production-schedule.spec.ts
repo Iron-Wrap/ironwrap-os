@@ -33,7 +33,7 @@ const productionModel = {
   },
   jobs: [
     {
-      id: "JOB-D",
+      id: "JOB-0004",
       job_number: "IW-1004",
       brand: "IronWrap Exteriors",
       service_type: "Roofing",
@@ -80,7 +80,7 @@ test.describe("Production schedule check acceptance", () => {
       }),
     );
 
-    await page.goto("/production/schedule/JOB-D");
+    await page.goto("/production/schedule/JOB-0004");
 
     await expect(page.getByRole("heading", { name: "Schedule production job" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "IW-1004" })).toBeVisible();
@@ -130,7 +130,7 @@ test.describe("Production schedule check acceptance", () => {
       return route.fallback();
     });
 
-    await page.goto("/production/schedule/JOB-D");
+    await page.goto("/production/schedule/JOB-0004");
     await expect(page.getByRole("heading", { name: "Schedule production job" })).toBeVisible();
     await page.getByLabel("Crew").selectOption("crew:install");
     await page.getByLabel("Scheduled start").fill("2026-07-20T09:30");
@@ -251,14 +251,21 @@ test.describe("Production schedule check acceptance", () => {
 
     await page.goto(`/production/schedule-approvals/${encodeURIComponent(approvalId)}`);
     await expect(page.getByRole("heading", { name: "Crew assignment request" })).toBeVisible();
-    await expect(page.getByText("IW-1004")).toBeVisible();
-    await expect(page.getByText("Install team")).toBeVisible();
+    await expect(
+      page.getByLabel("Schedule request facts").getByText("This job", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("Schedule request facts").getByText("Install team", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("Hermes")).toHaveCount(0);
     await expect(page.getByText("JOB-D", { exact: true })).toBeHidden();
     await expect(page.getByText("assignment:JOB-D")).toBeHidden();
     await expect(page.getByText("crew:install")).toBeHidden();
     await expect(page.getByText("2026-07-20T14:00:00.000Z")).toBeHidden();
-    await expect(page.getByText("run:production-schedule:e2e-001")).toBeHidden();
+    const runIds = page.getByText("run:production-schedule:e2e-001");
+    for (let index = 0; index < (await runIds.count()); index += 1) {
+      await expect(runIds.nth(index)).toBeHidden();
+    }
     await expect(page.getByText("create_job_assignment")).toHaveCount(0);
   }
 
@@ -306,7 +313,7 @@ test.describe("Production schedule check acceptance", () => {
     );
 
     await page.getByRole("button", { name: "Approve crew assignment" }).click();
-    await expect(page.getByText("The crew assignment is saved.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Assignment recorded" })).toBeVisible();
     await expect(page.getByText("Hermes")).toHaveCount(0);
     await expect(page.getByText("JOB-D", { exact: true })).toBeHidden();
 
@@ -351,7 +358,7 @@ test.describe("Production schedule check acceptance", () => {
     await page.getByRole("button", { name: "Reject request" }).click();
 
     await expect(page.getByText("The request was rejected.")).toBeVisible();
-    await expect(page.getByText("Not approved")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Not approved" })).toBeVisible();
     await expect(page.getByText("Weather window is wrong.")).toBeVisible();
     expect(rejectBody).toEqual({ version: 1, reason: "Weather window is wrong." });
     await expect(page.getByText("Hermes")).toHaveCount(0);

@@ -3,14 +3,17 @@
 Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
-This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **131 tools: 75 reads, 28 dry-runs, and 28
-approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
-inventory; deployed runtime proof remains a launch gate.
+This server is the Hermes command surface over the Frappe compatibility projection, not native
+IronWrap business authority. It uses Frappe token auth. The manifest in
+`hermes/mcp-servers.json`, `hermes/agents/roles.json`, and the implemented registrations are the
+machine-validated tool inventory; [`hermes/README.md`](../../hermes/README.md) records the current
+derived totals once. Deployed runtime proof remains a separate launch gate. Canonical authority is
+defined in [`docs/AI-NATIVE-ARCHITECTURE.md`](../../docs/AI-NATIVE-ARCHITECTURE.md).
 
-These approved writes implement the current human-receipt control. They remain binding until a
-routine digital action is deliberately migrated to the canonical machine-authority contract with
-equivalent policy, evidence, idempotency, reconciliation, rollback, and audit tests.
+These approved writes implement the current human-receipt compatibility control. They remain
+binding for each enabled legacy command until that action is deliberately migrated to the native
+machine-authority contract with equivalent policy, evidence, idempotency, readback, reconciliation,
+rollback, and audit tests. A successful Frappe write cannot override native D1 state.
 
 Baseline reads and command pairs:
 
@@ -85,7 +88,7 @@ Baseline reads and command pairs:
 - `dry_run_market_watch_item`
 - `request_add_market_watch_item`
 
-Current operating-model additions:
+Current compatibility-model additions:
 
 - `get_crew_profile` / `list_crew_profiles` (strictly read-only)
 - `get_job_assignment` / `list_job_assignments_for_job`
@@ -118,7 +121,7 @@ basis, raw evidence manifest, document identity, and storage location; it record
 and human handoff state, never coverage or a carrier decision.
 
 Estimator intake enters IronWrap OS through the Worker `POST /ingest/estimate` route first. This MCP
-server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal
+server reads any resulting projected `Instant Estimate Session` rows and can draft legacy downstream takeoff/proposal
 work, but it does not accept raw public estimator submissions itself.
 
 Frappe write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true`. A writable
@@ -142,7 +145,7 @@ reconcile/retry for operator evidence. A provider timeout or missing readback re
 `unknown`; the MCP never calls the provider again until an operator reconciles the
 effect and explicitly permits a new attempt.
 
-Current approved-write tools:
+Current compatibility approved-write tools:
 
 - `request_update_gate` updates one `Production Gate State`.
 - `request_create_material_takeoff` creates or deterministically no-op replays one review-gated

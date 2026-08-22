@@ -163,7 +163,10 @@ describe("LeadTriagePreparePage", () => {
     const { container } = renderPage();
 
     await screen.findByRole("heading", { name: "Record native triage" });
-    expect(screen.getAllByText("LEAD-A").length).toBeGreaterThan(0);
+    expect(screen.getByText("LEAD-A")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("LEAD-A")).toBeVisible();
+    expect(screen.getByText("bus-external-reference")).toBeVisible();
     expect(container.textContent).not.toMatch(
       /\+14035559999|pat@example\.com|15000|Never show this/i,
     );

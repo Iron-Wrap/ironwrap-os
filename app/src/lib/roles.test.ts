@@ -8,6 +8,7 @@ describe("role-shaped navigation", () => {
       "/now",
       "/check-in",
       "/vehicle",
+      "/inventory",
       "/settings",
     ]);
     expect(navigationForRole("owner")[0]?.to).toBe("/now");
@@ -63,18 +64,35 @@ describe("role-shaped navigation", () => {
     expect(roleLabel("accounting")).toBe("Accounting");
   });
 
-  // Mobile-first is a gating product rule. The shared office bar already carries nine items, which
-  // on a 360 px viewport is about 38 px each; a tenth would put every office role under the
-  // touch-target floor. The money desk therefore lives in the accounting role's own navigation.
-  it("does not widen the shared office navigation past what a phone can carry", () => {
-    expect(navigationForRole("owner")).toHaveLength(9);
-    expect(navigationForRole("ops")).toHaveLength(9);
-    // ELEC-87 added the vehicle rail to the field bar, not this one. Four items
-    // on a 360 px bar is ~90 px each; the office bar stays where it is, and no
-    // office role gets a tab to a route its role is refused at.
-    expect(navigationForRole("field")).toHaveLength(4);
+  it("keeps the complete role map while marking only daily phone destinations as primary", () => {
+    expect(navigationForRole("owner")).toHaveLength(10);
+    expect(navigationForRole("ops")).toHaveLength(10);
+    expect(navigationForRole("field")).toHaveLength(5);
+    expect(
+      navigationForRole("owner")
+        .filter((item) => item.mobilePrimary)
+        .map((item) => item.to),
+    ).toEqual(["/now", "/sales", "/production"]);
+    expect(
+      navigationForRole("field")
+        .filter((item) => item.mobilePrimary)
+        .map((item) => item.to),
+    ).toEqual(["/now", "/check-in", "/vehicle"]);
     expect(navigationForRole("owner").map((item) => item.to)).not.toContain("/vehicle");
     expect(navigationForRole("ops").map((item) => item.to)).not.toContain("/vehicle");
+  });
+
+  it("organizes office work around the operating flow instead of one flat list", () => {
+    const ownerNavigation = navigationForRole("owner");
+    expect([...new Set(ownerNavigation.map((item) => item.workspace))]).toEqual([
+      "Command",
+      "Revenue",
+      "Delivery",
+      "Resources",
+      "Control",
+    ]);
+    expect(ownerNavigation.find((item) => item.to === "/inventory")?.workspace).toBe("Resources");
+    expect(navigationForRole("accounting")[0]?.workspace).toBe("Finance");
   });
 
   it("allows every role only onto its intended work surfaces", () => {

@@ -179,8 +179,8 @@ describe("QuickBooks final-invoice page", () => {
       expect(await screen.findByRole("heading", { name: "CAD 1050.00" })).toBeVisible();
       expect(screen.getByText("JOB-0001", { exact: false })).toBeVisible();
       expect(screen.getByText("Residential roofing contract")).toBeVisible();
-      expect(screen.getByText("2026-08-13")).toBeVisible();
-      expect(screen.getByText("2026-09-12")).toBeVisible();
+      expect(screen.getByText("Aug 13, 2026")).toBeVisible();
+      expect(screen.getByText("Sep 12, 2026")).toBeVisible();
       expect(screen.getByText(/Approval authorizes submission/i)).toBeVisible();
       expect(screen.getByRole("button", { name: "Approve external invoice" })).toBeVisible();
       expect(screen.getByRole("button", { name: "Reject" })).toBeVisible();
@@ -514,6 +514,9 @@ describe("QuickBooks connection settings", () => {
     });
     renderPage("settings", ownerSession);
 
+    await user.click(
+      await screen.findByText("Job-specific QuickBooks mapping", { selector: "span" }),
+    );
     await user.type(await screen.findByLabelText("Roof job ID"), "JOB-0001");
     await user.type(screen.getByLabelText("QuickBooks customer ID"), "501");
     await user.type(screen.getByLabelText("QuickBooks item ID"), "601");

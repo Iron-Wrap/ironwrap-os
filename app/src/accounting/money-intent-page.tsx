@@ -159,9 +159,7 @@ function MoneyIntentContent() {
       <header className="border-b border-border pb-5 sm:pb-6">
         <div className="flex flex-wrap items-center gap-2">
           <MoneyBadge badge={intent.badge} />
-          <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-            {ageLabel(intent.age_seconds)} old
-          </span>
+          <span className="text-sm font-bold text-muted">{ageLabel(intent.age_seconds)} old</span>
         </div>
         <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
           {kindLabel(intent.kind)}
@@ -173,7 +171,7 @@ function MoneyIntentContent() {
           {intent.customer_ref ? `${intent.customer_ref} · ` : ""}
           {intent.roof_job_id}
         </p>
-        <p className="mt-3 border-l-4 border-accent bg-surface-muted/60 px-4 py-3 text-sm leading-6">
+        <p className="mt-3 border border-border bg-surface-muted/60 px-4 py-3 text-sm leading-6">
           {intent.next_step}
         </p>
       </header>
@@ -378,9 +376,7 @@ function ComparisonSection({ detail }: { detail: AccountingIntentDetailResponse 
       <dl className="divide-y divide-border">
         {comparison.fields.map((field) => (
           <div key={field.field} className="px-4 py-3 sm:px-6">
-            <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              {fieldLabel(field.field)}
-            </dt>
+            <dt className="text-sm font-bold text-muted">{fieldLabel(field.field)}</dt>
             <dd className="mt-1 grid gap-1 text-sm leading-6 sm:grid-cols-2">
               <span>
                 <span className="text-muted">Ours: </span>
@@ -401,7 +397,7 @@ function ComparisonSection({ detail }: { detail: AccountingIntentDetailResponse 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="px-4 py-3 sm:px-6">
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className="mt-1 text-sm leading-6">{children}</dd>
     </div>
   );
@@ -420,7 +416,7 @@ function BackToDesk() {
 }
 
 function renderValue(value: unknown): string {
-  if (value === null || value === undefined) return "—";
+  if (value === null || value === undefined) return "Not recorded";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
 }

@@ -2,14 +2,16 @@
 
 Status: canonical target
 Owner: IronWrap OS product owner
-Last verified: 2026-08-20
+Last verified: 2026-08-22
 Review trigger: service, geography, physical workflow, authority, or business-model change
 
 ## Mission
 
-IronWrap OS operates an Edmonton-based exterior-construction and metal-fabrication company with
-reliable AI agents performing routine cognitive and digital work while trained humans perform
-physical work, relationship-sensitive interactions, and legally required signoffs.
+IronWrap OS operates an Edmonton-based exterior-construction and metal-fabrication company with AI
+interpreting and proposing routine cognitive and digital work through deterministic policy,
+permits, controlled tools, readback, and reconciliation. Trained humans perform physical work and
+retain customer-choice, safety-release, relationship-sensitive, legally required, and exceptional
+business authority.
 
 The system must:
 
@@ -27,9 +29,12 @@ This is the company target. Implementation status is exclusively maintained in
 
 ## Binding operating assumption
 
-AI agents are assumed to be 100% reliable under
-[`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./AUTHORITY-AND-EVIDENCE-CONTRACT.md). External data and the
-physical world remain fallible. Unknown or conflicting facts stop the affected transition.
+AI models, prompts, connector context, and tool suggestions are fallible and non-authoritative.
+Reliability comes from the complete governed loop in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md): versioned facts, exact schemas,
+deterministic policy, bounded permits, controlled execution, provider readback, reconciliation,
+evidence, ceilings, and safe stops. External data and the physical world remain independently
+fallible. Unknown, stale, or conflicting facts stop the affected transition.
 
 ## Owned operating authority
 
@@ -44,6 +49,11 @@ The compatibility projection is retired only after each consumer has replacement
 export, rollback, and acceptance proof. QuickBooks remains authoritative only for posted accounting
 facts, and genuine external actors remain authoritative only for their legal, professional,
 customer, physical, or issuer scopes.
+
+The complete repository and cross-product authority map is maintained in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md). No AI plan, Frappe projection, Facet
+artifact, provider acknowledgement, message, or calendar entry can silently replace the authority
+defined there.
 
 ## Business scope
 
@@ -623,33 +633,46 @@ Measure:
 
 Never optimize a metric in a way that degrades a protected right or hidden outcome.
 
-## Job state machine
+## Orthogonal lifecycles and derived job phase
 
-| State | Required release evidence | Typical stop |
+The company is not one writable job-state machine. Lead, commercial, gate, assignment, work,
+safety, accounting, and closeout facts have different actors, evidence, correction rules, and
+failure modes. They remain separate authoritative state machines:
+
+1. lead `captured -> triaged -> qualified | disqualified -> converted`;
+2. measurement, design, quote, proposal, publication, and acceptance revision chains;
+3. independent production gates and evidence freshness;
+4. append-only crew assignment and supersession;
+5. work package `Draft -> Released -> Acknowledged -> In Progress -> Blocked | Completed | Superseded`;
+6. safety report/stop/rescue/make-safe/corrective-action/independent-release;
+7. accounting intent/approval/execution/readback/reconciliation/exception; and
+8. completion/closeout/warranty/service.
+
+The product exposes one read-only `job_phase` derived from those facts:
+
+| Phase | Required authoritative predicate | Typical stop |
 |---|---|---|
-| `captured` | Raw event, identity keys, source, consent context | duplicate/spam/invalid source |
-| `qualified` | Service fit, requester role, urgency, next action | outside scope, no authority |
-| `survey_ready` | Access, hazard precheck, assignment, equipment | access/hazard/weather |
-| `surveyed` | Measurements, photos, condition, uncertainty | incomplete/conflicting evidence |
-| `designed` | Controlled assembly and design basis | code/manufacturer/engineering conflict |
-| `estimated` | Reproducible cost, price, capacity, risk | margin/quantity/availability block |
-| `proposed` | Exact version delivered and decision window | identity/communication block |
-| `contracted` | Executed terms, authority, cancellation state | invalid signature/cancellation |
-| `preconstruction_ready` | Payment, permit, material, people, site, safety | any missing hard gate |
-| `fabricating_procuring` | Released POs/routes and accepted inputs | damage, shortage, NCR |
-| `production_ready` | Complete work packages, schedule, weather, access | stale evidence or stop |
-| `in_progress` | Daily physical evidence and released hold points | hazard, hidden condition, dispute |
-| `installed` | Independent physical inspection and punch | deficiency/unreleased work |
-| `commercially_complete` | Completion, inspection, invoice/holdback basis | dispute/authority outstanding |
-| `closed` | Payment/reconciliation/archive/warranty handoff | bad debt, claim, open credit |
-| `warranty_service` | Authenticated case, diagnosis, responsibility | emergency or disputed responsibility |
+| `qualified` | Qualified lead/job; no commercial work started | scope, identity, authority |
+| `commercial_in_progress` | Measurement/design/quote/proposal exists; no binding acceptance | missing/conflicting evidence |
+| `contracted` | Exact current publication has binding customer acceptance | drift, cancellation, invalid authority |
+| `deposit_pending` | Accepted contract; required deposit not reconciled | provider uncertainty or mismatch |
+| `production_ready` | Every required gate currently cleared | stale permit, safety, material, crew, access |
+| `scheduled` | Current valid append-only assignment exists | version, roster, capacity, predecessor |
+| `in_progress` | Current work package started | stop, hidden condition, dispute |
+| `substantially_complete` | Required completion packet accepted | deficiency or unreleased hold point |
+| `financially_closed` | Final invoice and balance reconciled | mismatch, dispute, open credit |
+| `warranty_active` | Closeout and warranty activation complete | missing registration or evidence |
+| `cancelled` | Authoritative cancellation supersedes active work | containment/compensation incomplete |
 
-States are forward-only except through explicit correction/compensation transitions. No actor edits
-history to make a job appear complete.
+The phase is a deterministic projector, never an independently writable truth. Corrections and
+compensation append/supersede history; no actor edits history to make a job appear complete.
 
 ## Agent organization
 
-| Agent domain | Owns | Hard boundary |
+The table describes target coordination responsibilities. An AI plan itself owns no business fact
+and cannot activate policy or execute a side effect.
+
+| Agent domain | Coordinates or proposes | Hard boundary |
 |---|---|---|
 | Corporate governor | policy, delegated budgets, objectives | cannot activate its own policy |
 | Demand and claims | campaigns, content, substantiation | cannot publish unsupported claim |
@@ -673,7 +696,8 @@ history to make a job appear complete.
 | Security/privacy | access, retention, incident | cannot approve own privilege change |
 | Independent audit | transitions, reconciliation, anomalies | cannot execute audited action |
 
-Agents communicate through canonical objects and events, not unbounded peer chat.
+Agents communicate through canonical objects and events, not unbounded peer chat. Every
+consequential proposal crosses the policy/permit/effect/readback loop before it can become truth.
 
 ## Owner operating cadence
 
@@ -763,13 +787,24 @@ Critical human work remains safe when cloud systems fail:
 - until Frappe is retired, its compatibility projection can be rebuilt from D1 or restored from a
   cutover export without treating the projection as authority.
 
-## End-to-end autonomous acceptance
+## End-to-end acceptance
 
-The target is not complete until a real, reconciled job proves:
+### Technical production reference proof
+
+Before real customers, an isolated, visibly synthetic reference tenant must complete the same
+production artifact, APIs, queues, policy, storage, scheduled work, provider adapters, readback,
+reconciliation, backup, restore, and rollback path without direct business-state seeding. It must
+also prove duplicate, stale, malicious, lost-response, offline, safety-stop, payment-mismatch, and
+recovery failures. This establishes technical reference proof only.
+
+### Customer and business proof
+
+The customer-validated target is not complete until a real, reconciled job proves:
 
 1. Lead capture and consent without loss or duplication.
 2. Evidence-backed survey and uncertainty handling.
-3. Valid design, estimate, price, proposal, and contract without routine human digital review.
+3. Valid design, estimate, price, proposal, and contract with the required customer and human
+   authority and no unnecessary duplicate review.
 4. Permit, WCB, trade, safety, material, customer, and capacity gates.
 5. Supplier order, receiving, inventory, and shop routing with lot/yield/NCR evidence.
 6. Exact offline-capable human work packages and protected stop-work.
@@ -779,5 +814,5 @@ The target is not complete until a real, reconciled job proves:
 10. Safe operation under missing, conflicting, duplicate, malicious, expired, and offline inputs.
 11. Complete audit reconstruction with no hidden manual spreadsheet, chat, or status.
 
-Until all eleven are proven in the named environment, the company is partially automated, not
-autonomous.
+Until all eleven are proven with real customers and workers in the named environment, the company
+may be technically reference-proven but is not customer-validated or operationally autonomous.

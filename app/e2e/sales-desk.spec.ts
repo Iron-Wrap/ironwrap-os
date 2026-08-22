@@ -11,7 +11,13 @@ const salesModel = {
   read_model_generated_at: "2026-07-11T12:00:01.000Z",
   stale_fields: [],
   permissions: ["sales:read"],
-  allowed_actions: ["sales.read", "approval.read", "approval.prepare", "estimator.read"],
+  allowed_actions: [
+    "sales.read",
+    "approval.read",
+    "approval.prepare",
+    "estimator.read",
+    "commercial.lead_triage.record",
+  ],
   partial_sources: [],
   summary: {
     listed_leads: 1,
@@ -37,6 +43,7 @@ const salesModel = {
       triage: {
         status: "Untriaged",
         summary: "Confirm the visit time before a final scope.",
+        version: 1,
       },
       job: {
         id: "JOB-A",
@@ -98,6 +105,7 @@ const salesModel = {
           },
         ],
       },
+      partial_fields: [],
       attention: ["triage_unresolved", "estimate_needs_review", "quote_needs_review"],
     },
   ],

@@ -261,7 +261,7 @@ export function FleetPage() {
                 </p>
               ) : (
                 <p className="text-sm leading-6 text-muted">
-                  Photos are optional. They never ride the offline outbox — only JSON references do.
+                  Photos are optional. They never ride the offline outbox. Only JSON references do.
                 </p>
               )}
               <FormActions busy={busy} onCancel={resetDraft} label="Save and send fault" />
@@ -814,7 +814,7 @@ function OutOfServiceWarning({ active }: { active: boolean }) {
       <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
       <span>
         <strong className="font-bold">This parks it straight away.</strong> Nothing on this device
-        can put it back on the road — that takes a repair and a return-to-service inspection.
+        can put it back on the road. That takes a repair and a return-to-service inspection.
       </span>
     </p>
   );

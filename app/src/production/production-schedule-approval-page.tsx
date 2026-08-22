@@ -1,13 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { ArrowLeft, CalendarClock, CheckCircle2, ShieldCheck } from "lucide-react";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Notice } from "../components/ui/notice";
+import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import {
@@ -152,31 +154,53 @@ function ProductionScheduleApprovalPrepareContent() {
   }
 
   return (
-    <section className="mx-auto max-w-4xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <Button asChild variant="ghost" size="compact" className="-ml-2">
-          <Link to="/production">
-            <ArrowLeft aria-hidden="true" />
-            Back to production runway
-          </Link>
-        </Button>
-        <div className="mt-4 flex min-w-0 items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-            <CalendarClock className="size-5 text-accent" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Governed operation
-            </p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-              Schedule production job
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              Record an append-only crew schedule after IronWrap OS rechecks the current job, gate,
-              crew, roster, and version authority.
-            </p>
+    <section className="mx-auto max-w-6xl space-y-6 pb-4">
+      <header className="overflow-hidden rounded-xl border border-border bg-surface lg:grid lg:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="p-5 sm:p-7">
+          <Button asChild variant="ghost" size="compact" className="-ml-2">
+            <Link to="/production">
+              <ArrowLeft aria-hidden="true" />
+              Back to production runway
+            </Link>
+          </Button>
+          <div className="mt-5 flex min-w-0 items-start gap-4">
+            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+              <CalendarClock className="size-5 text-accent" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-3xl font-black tracking-[-0.04em] text-balance sm:text-4xl">
+                Schedule production job
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                Set the crew and install window. IronWrap rechecks the current job, roster, and
+                production gates before it records anything.
+              </p>
+            </div>
           </div>
         </div>
+
+        <aside className="border-t border-border bg-surface-muted/55 p-5 lg:border-l lg:border-t-0 lg:p-7">
+          <p className="text-sm font-bold text-muted">Current job</p>
+          <h2 className="mt-2 text-2xl font-black tracking-[-0.03em]">
+            {job.job_number ?? job.id}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            {[job.brand, job.service_type, job.status].filter(Boolean).join(" · ") ||
+              "Current production job"}
+          </p>
+          <div className="mt-5 border-t border-border pt-5">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
+              <div>
+                <p className="font-bold">Atomic authority check</p>
+                <p className="mt-1 text-sm leading-6 text-muted">
+                  All {job.gate_summary.expected} production gates and the chosen crew are rechecked
+                  together.
+                </p>
+              </div>
+            </div>
+          </div>
+        </aside>
       </header>
 
       {offline ? (
@@ -197,43 +221,35 @@ function ProductionScheduleApprovalPrepareContent() {
         </Notice>
       ) : null}
 
-      <aside
-        className="border border-info/35 bg-info-soft px-4 py-4"
-        aria-label="Scheduling boundary"
+      <form
+        className="overflow-hidden rounded-xl border border-border bg-surface"
+        onSubmit={submit}
       >
-        <div className="flex items-start gap-3">
-          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
+        <div className="flex flex-col gap-3 border-b border-border px-5 py-5 sm:flex-row sm:items-end sm:justify-between sm:px-6">
           <div>
-            <h2 className="font-bold tracking-[-0.01em]">Atomic authority check</h2>
+            <h2 className="text-xl font-black tracking-[-0.025em]">Crew and timing</h2>
             <p className="mt-1 text-sm leading-6 text-muted">
-              The command succeeds only if this exact job version, crew version, complete roster,
-              and all six production gates are still current. It sends no customer or crew message.
+              Choose one active crew and the exact local install window.
             </p>
           </div>
-        </div>
-      </aside>
-
-      <form className="border border-border bg-surface" onSubmit={submit}>
-        <div className="border-b border-border px-5 py-5 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">{job.job_number ?? job.id}</h2>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            {[job.brand, job.service_type, job.status].filter(Boolean).join(" · ") ||
-              "Current production job"}
-          </p>
+          <span className="w-fit rounded-md border border-border bg-surface-muted px-2.5 py-1.5 text-xs font-bold text-muted">
+            {hasSupersede ? "Schedule correction" : "New assignment"}
+          </span>
         </div>
 
-        <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+        <div className="grid gap-6 p-5 sm:grid-cols-2 sm:p-6 lg:p-7">
           <div className="sm:col-span-2">
             <label htmlFor="schedule-crew-profile" className="text-sm font-bold text-foreground">
               Crew
             </label>
-            <select
+            <Select
               id="schedule-crew-profile"
               value={selectedCrewId}
               onChange={(event) => setCrewId(event.target.value)}
               disabled={offline || requestPrepared || mutation.isPending}
               required
-              className="mt-3 min-h-16 w-full rounded-lg border bg-surface-raised px-4 text-base shadow-inner shadow-black/3 outline-none focus:border-info focus:outline-info disabled:cursor-not-allowed disabled:opacity-55"
+              field
+              className="mt-3"
             >
               <option value="">Choose an active crew</option>
               {crews.map((crew) => (
@@ -241,7 +257,7 @@ function ProductionScheduleApprovalPrepareContent() {
                   {crew.name} · v{crew.version}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
@@ -292,7 +308,7 @@ function ProductionScheduleApprovalPrepareContent() {
                 maxLength={1_200}
                 rows={4}
                 placeholder="For example: Weather moved the install window."
-                className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+                className="mt-3 w-full resize-y rounded-md border bg-surface-raised px-4 py-3 text-base leading-6 transition-[border-color,box-shadow,background-color] placeholder:text-muted/75 hover:border-border-strong focus-visible:border-focus focus-visible:outline-focus focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--focus)_15%,transparent)] disabled:cursor-not-allowed disabled:bg-surface-muted disabled:opacity-55"
               />
               <p className="mt-2 text-xs leading-5 text-muted">
                 Replaces {job.assignment?.id} with a new append-only version.{" "}
@@ -302,10 +318,10 @@ function ProductionScheduleApprovalPrepareContent() {
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div className="flex flex-col gap-4 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-7">
           <p className="max-w-xl text-sm leading-6 text-muted">
-            This records the selected crew and time only. Work Package release and notifications
-            remain separate governed operations.
+            Records the selected crew and time only. It does not release a Work Package or send a
+            customer or crew message.
           </p>
           <Button
             type="submit"
@@ -328,31 +344,6 @@ function ProductionScheduleApprovalPrepareContent() {
           </Link>
         </Button>
       ) : null}
-    </section>
-  );
-}
-
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger" | "success";
-  title: string;
-  children: ReactNode;
-}) {
-  const toneClasses = {
-    warning: "border-warning/35 bg-warning-soft",
-    danger: "border-danger/35 bg-danger-soft",
-    success: "border-ok/35 bg-ok-soft",
-  }[tone];
-  return (
-    <section
-      className={`border px-4 py-4 ${toneClasses}`}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <p className="font-bold">{title}</p>
-      <p className="mt-1 text-sm leading-6 text-muted">{children}</p>
     </section>
   );
 }

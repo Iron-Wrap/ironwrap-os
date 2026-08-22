@@ -1,13 +1,17 @@
 # Accounting Reconciliation Contract (IRO-52)
 
-Status: proposed target contract — awaiting product-owner ratification
+Status: historical implementation/design snapshot; non-authoritative for current capability,
+migration numbering, configuration, or delivery status.
 Owner: IronWrap OS product owner
-Last verified: 2026-08-20
-Review trigger: any new money transition, provider entity, tax rule, holdback statute, payroll
-provider, or accounting authority change
+Snapshot verified: 2026-08-20 against the commits and branches named below.
+Review trigger: none; create a new current domain contract for a material accounting redesign.
 
-Every behaviour below is **Target** unless a paragraph explicitly says **Implemented** and cites a
-path and line. Nothing in this document is Deployed, Runtime-verified, or Business-accepted.
+This file is preserved for reconciliation invariants, design rationale, and rejected alternatives.
+Its branch inventory and migration reservations have been overtaken by later native accounting and
+final-invoice work. Current authority, implementation reachability, configuration, and proof state
+live in [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md) and
+[`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md). Nothing in this snapshot is evidence of deployment,
+runtime operation, technical-reference completion, business acceptance, or customer validation.
 
 ## 0. Implementation status
 
@@ -961,10 +965,9 @@ parallel once the envelope shapes in section 8.1 are fixed.
 
 ## 12. Open questions for the product owner
 
-1. **Document class.** `docs/DOCUMENTATION-CONTRACT.md` permits only `canonical` documents to state
-   target behaviour, and adding a canonical document is listed as a product-owner decision. This file
-   is registered `canonical` with a `proposed` status so CI passes and no false authority is claimed.
-   Confirm the class, or direct a different home.
+1. **Document class (resolved 2026-08-22).** This file is a developer/historical design reference.
+   It does not state current target authority; the canonical AI-native architecture and capability
+   matrix own that role.
 2. **Payroll posting target.** QuickBooks Online's public Accounting API exposes `TimeActivity`,
    `JournalEntry`, `Employee` and `Purchase`, but no payroll run or paycheque write. "Payroll
    posting" must therefore mean either an accountant-approved summary `JournalEntry` plus

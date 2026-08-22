@@ -2,13 +2,19 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-21
-Latest phase delta verified: 2026-08-21 (IRO-195 leftover Frappe required-path removal: default `/ready` is the D1 office plane; money/gate/portal writes persist on D1; Frappe CI/release/rollback is leftover projection only. Prior same-day delta: IRO-44 Frappe safety projection declared obsolete; D1 9-ledger substrate is the operational safety system of record. Repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
+Last verified: 2026-08-22
+Latest phase delta verified: 2026-08-22 (code-grounded AI-native architecture and commercial-reachability audit at the current checkout: D1/Worker authority and effect/safety/accounting controls remain strong; native approved-quote and publication-settlement writers have test callers only; acceptance is production-reachable; acceptance-to-deposit derivation is not wired; configured capability and production/customer proof remain incomplete. Repository checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
 
 - **Implemented**: code/configuration exists in the repository.
+- **Built**: the implementation passes its required repository build and focused checks.
+- **Configured**: required non-secret values and secret identities exist for one named environment.
+- **Provider-reachable**: authenticated reachability and exact provider readback are freshly proven.
+- **Technically proven**: the capability completed its production reference path and failure drills.
+- **Customer-validated**: real customers independently used and accepted the defined workflow or
+  outcome; synthetic/reference operation can never establish this state.
 - **Repository-verified**: a fresh deterministic check passed against the named commit.
 - **Partial**: useful implementation exists but a material target boundary is missing.
 - **Target-only**: required by the autonomous operating system but not implemented.
@@ -17,6 +23,21 @@ Review trigger: merged capability, changed proof, deployment, or production acce
 
 This file does not claim current deployment or production state. Fresh live evidence must come from
 the launch/readiness tooling and the named external authority.
+
+## Seven-area maturity snapshot
+
+| Area | Current state | Next gate |
+|---|---|---|
+| Core technical design | Strong | keep one authority per fact and remove remaining compatibility dependencies |
+| Lead/job/field foundation | Strong with lifecycle projection gaps | close lead conversion/customer activation and derive job phase from authoritative sub-states |
+| Safety/evidence/accounting controls | Unusually strong in source | deployed provider/device/failure and recovery proof |
+| Repository/migration coherence | Mixed | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
+| Configured capability | Partial | minimum-provider readiness profiles with readback and proof TTLs |
+| End-to-end commercial closure | Incomplete | native quote writer, publication settlement, acceptance-driven deposit, configured accounting path |
+| Production/customer proof | Not established | controlled production reference journey; real-customer validation remains a separate later gate |
+
+The architecture, authority map, user journeys, AI loop, derived lifecycle, and reference-tenant
+rules are canonical in [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
 
 ## Repository evidence contract
 
@@ -43,7 +64,7 @@ implication.
       "latest": "0106_native_gate_clearance_and_option_packages.sql"
     },
     "tests": {
-      "pwa": 568,
+      "pwa": 575,
       "worker": 1183
     }
   },
@@ -55,7 +76,9 @@ implication.
     "deploy": "never_infer",
     "runtime": "never_infer",
     "business_acceptance": "never_infer",
-    "production_proof": "never_infer"
+    "production_proof": "never_infer",
+    "technical_reference_proof": "never_infer",
+    "customer_validation": "never_infer"
   }
 }
 ```
@@ -82,6 +105,29 @@ target architecture. Frappe remains an optional projection (apps tree, Hermes ER
 
 The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
 has been proven. Projection failure cannot change authoritative D1 state.
+
+### Commercial, lifecycle, and AI reachability
+
+Current source tracing distinguishes implemented modules from reachable production flows:
+
+- `recordCommercialQuoteRevision` has only test seed callers; there is no native production writer
+  for an approved quote revision.
+- `recordCommercialProposalRevision` is reachable through the app API.
+- `recordCommercialProposalPublication` has only test callers; there is no native production
+  settlement path binding a successful delivery effect and readback to publication.
+- native customer acceptance is production-reachable and atomically binds the exact quote,
+  proposal, publication, terms, challenge, and customer decision.
+- deposit intent can be created through accounting controls and reconciled deposit can clear its
+  gate, but acceptance does not yet deterministically derive that intent.
+- native assignment, work-package, safety, completion, and final-invoice derivation exist.
+- lead `converted`, customer activation, and a coherent current job phase are not projected from
+  all authoritative sub-states.
+- measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
+  `lead_follow_up_draft` pilot. No resident context -> plan -> policy -> permit -> action ->
+  readback -> reconciliation coordinator exists.
+
+The control kernel is therefore stronger than the reachable commercial chain. Close the missing
+deterministic transitions before expanding AI autonomy.
 
 ### Machine release admission
 
@@ -626,25 +672,25 @@ Target gaps:
 | Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution | real site and conflicting source test |
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
-| Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
+| Contract | Partial: native acceptance is production-reachable and atomically pins an approved quote, proposal publication, terms snapshot, challenge, and decision; the approved-quote writer and publication settlement are not production-reachable, and acceptance does not derive the deposit intent | native approved-quote writer, delivery-readback publication settlement, acceptance-driven deposit intent, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
-| Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
+| Scheduling | Partial: D1 owns append-only assignment revisions, conflict checks, and an approval ledger; the older Frappe approval broker is compatibility residue | constraint solver, authoritative lifecycle projection, weather/material/crew inputs, and policy-bounded reschedule proposals | conflict/weather/material reference test and real dispatcher acceptance |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | D1 system of record (IRO-44, #59): nine ledgers for equipment, occurrences, notifications, corrective actions, readiness snapshots, and offline device actions, plus the PWA safety panel; Frappe Safety Plan/acknowledgement remains the preconstruction plan object only — no Frappe projection of the D1 ledgers will be built (IRO-195, 2026-08-21). Crew Profile competence, WCB, and active-stop release fences still consume readiness. | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, evidence-bound supplier/manufacturer/insurer recovery on the one-attempt effect shape, history-preserving reopen, and an office BFF surface (`/api/v1/service-cases`) reachable from the PWA at `/service` | dispatch/scheduling integration, customer portal and mobile service surfaces, re-seat onto the IRO-38 canonical effect runtime, and live recovery settlement | callback end to end |
-| Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
+| Finance | Partial: D1 derives native final-invoice intent from completion and controls deposit/final-invoice effects and reconciliation; QuickBooks final-invoice execution is disabled and required accounting configuration/readback is incomplete; webhook identity alone never establishes payment, posting, or reconciliation truth | configured authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, acceptance-driven deposit intent, and accountant-approved reconciliation | configured reference journey, provider sandbox/readback, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
 | Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, a driver-scoped read (`/api/v1/fleet/panel`) that reports the release fence's own verdict per asset, a mobile-first field surface at `/vehicle` that files all three captures and states a refusal in plain language, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | photo evidence on a fleet capture (the envelope is JSON-only and `Asset Defect.evidence_item` is never written), telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |
 | Insurance/risk | generic compliance | policy/claim/notification/recovery | claim tabletop |
-| Audit | Hermes/audit/reconcile records | independent cross-domain audit and anomaly closure | reconstruct full job |
+| Audit | Strong append-only audit, effect, gate, evidence, and reconciliation records; Hermes is a disabled narrow draft pilot, not the operating authority or a resident coordinator | independent cross-domain audit, anomaly closure, and a thin context/plan/policy/permit/readback coordinator | deterministic full-job reconstruction before model-assisted anomaly trials |
 | White label | tenant config/export/isolation | complete operating-domain isolation and managed ops | second real tenant proof |
 
 ## Gap audit of the previous operating model
@@ -656,8 +702,8 @@ insufficient as an implementation contract in these areas:
 2. It did not specify a canonical transition envelope or aggregate version precondition.
 3. It did not define evidence freshness, revocation, correction, and source conflict.
 4. It treated human evidence capture as a concept rather than an exact work-package schema.
-5. It did not separate AI reliability from device, sensor, provider, customer, or physical
-   reliability.
+5. It did not define AI as an untrusted proposal source behind deterministic policy, permits,
+   side-effect readback, reconciliation, and human/physical authority boundaries.
 6. It did not define offline/degraded physical execution.
 7. It did not define shop work centres, routes, tooling, first-piece inspection, NCR, or yield
    objects.
@@ -709,47 +755,62 @@ Why first: every physical domain consumes this contract.
 - first-piece/in-process/final inspection, NCR, quarantine, disposition;
 - labels, bundles, loading, delivery, and yield.
 
-### Gate 4: end-to-end commercial autonomy
+### Gate 4: deterministic commercial closure
 
-- design/estimate/quote/contract machine authority;
-- procurement transmit/ack/reconcile;
-- schedule/reschedule;
+- production-reachable approved-quote revision writer;
+- proposal delivery effect plus provider readback before publication settlement;
+- acceptance-driven deposit intent with idempotent accounting effect and reconciliation;
+- deterministic lead conversion, customer activation, and lifecycle projection.
+
+Why before AI: a coordinator cannot safely operate a commercial transition that no production
+command can perform.
+
+### Gate 5: complete physical and service operating loops
+
+- procurement transmit/ack/reconcile and schedule/reschedule;
+- workforce, vehicle/equipment/facility, complaint/warranty/service, and insurance/continuity;
 - customer communication send/suppression;
 - accounting invoice/payment/refund/holdback/tax reconciliation.
 
-### Gate 5: workforce, fleet, facility, and service
+### Gate 6: thin governed AI coordinator
 
-- HR/time/payroll interfaces;
-- vehicle/equipment/facility operations;
-- complaint/warranty/service;
-- insurance/claim/continuity.
+- event-fed company/job ContextSnapshots with provenance and freshness;
+- typed PlanProposals with assumptions, confidence, evidence requirements, and expiry;
+- deterministic policy evaluation and scoped permit issuance outside the model;
+- effect submission, provider readback, reconciliation, and bounded human escalation;
+- evals for abstention, stale/conflicting evidence, prompt injection, and replay safety.
 
-### Gate 6: independent autonomous audit
+### Gate 7: configured reference environment
 
-- cross-domain invariants;
-- anomaly and fraud controls;
-- recovery/compensation;
-- complete job reconstruction;
-- autonomous policy proposals with separate owner activation.
+- named providers, non-secret configuration, secret identities, and authenticated readback;
+- fail-closed readiness profiles for the exact reference journey;
+- recovery/rollback drills and proof expiry.
 
-### Gate 7: production proof
+### Gate 8: technical production-reference proof
 
-- one real job through every applicable state;
-- one supply-only shop order;
-- one warranty/service case;
-- one outage/offline recovery;
-- one safety stop and one quality NCR drill;
-- one second-tenant isolation/export/restore proof.
+- one controlled synthetic/reference job through every applicable state;
+- one supply-only shop order and one warranty/service case;
+- one outage/offline recovery, one safety stop, and one quality NCR drill;
+- one second-tenant isolation/export/restore proof;
+- exact source, deployment, provider, runtime, evidence, and reconciliation receipts.
+
+### Gate 9: customer validation
+
+- a real customer independently completes and accepts the defined journey;
+- operator/accountant/field/customer usability and exception evidence is captured;
+- commercial outcome, support load, and repeatability are measured without promoting reference
+  proof into customer proof.
 
 ## Completion definition
 
-The repository supports the complete reliable-agent/human-physical model only when:
+The repository supports the complete governed-AI/human-physical model only when:
 
 - every target gap above is implemented or explicitly excluded by owner policy;
 - every row has fresh repository evidence;
 - live external dependencies pass their own gates;
-- a real business-accepted workflow proves the eleven end-to-end criteria in
+- a controlled technical reference journey proves the eleven end-to-end criteria in
   [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md);
+- real-customer validation is separately established and never inferred from the reference tenant;
 - no current operation depends on a hidden spreadsheet, private chat, untracked checklist, or
   historical document.
 - no required operation, read model, readiness verdict, release artifact, or rollback path depends

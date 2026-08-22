@@ -5,14 +5,12 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
-  ClipboardList,
   FileSearch,
   FileText,
   Layers3,
   Palette,
   RefreshCw,
   Ruler,
-  ScrollText,
   ShieldAlert,
   TriangleAlert,
   type LucideIcon,
@@ -93,72 +91,74 @@ function EstimatorWorkbenchScreen({
   onRetry: () => void;
 }) {
   const selectedMeasurement = model.measurements.selected;
-  const quote = model.quote;
-  const proposal = model.proposal;
   const bounded =
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
 
   return (
-    <section className="mx-auto max-w-[90rem] space-y-8 overflow-x-hidden pb-8">
+    <section className="mx-auto max-w-[86rem] space-y-8 overflow-x-hidden pb-8">
       <WorkbenchHeader model={model} locale={locale} />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
       {bounded ? <DataBoundary model={model} /> : null}
 
-      <div className="grid min-w-0 items-start gap-8 2xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.72fr)]">
-        <section className="min-w-0 space-y-8" aria-label="Estimate review">
-          <CommercialDecisionRail model={model} locale={locale} />
-          <CommercialSnapshot model={model} locale={locale} tenantCurrency={tenantCurrency} />
+      <CommercialSnapshot model={model} locale={locale} tenantCurrency={tenantCurrency} />
 
-          <EvidencePath
-            measurement={selectedMeasurement}
-            takeoff={model.takeoffs.selected}
-            quote={quote}
-            proposal={proposal}
-            lineage={model.lineage}
-          />
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-8">
+        <section
+          className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface"
+          aria-labelledby="review-workspace-heading"
+        >
+          <header className="border-b border-border px-5 py-5 sm:px-6">
+            <h2 id="review-workspace-heading" className="text-lg font-extrabold tracking-[-0.02em]">
+              What needs review
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              Open a section only when you need its evidence.
+            </p>
+          </header>
+          <div className="divide-y divide-border">
+            <ReviewGroup
+              title="Roof details"
+              description="Property drawing, roof graph, checks, and saved measurements."
+              status={
+                selectedMeasurement
+                  ? (humanize(selectedMeasurement.review_status) ?? "Check needed")
+                  : "No roof data"
+              }
+              tone={
+                selectedMeasurement
+                  ? reviewTone(selectedMeasurement.review_status)
+                  : "bg-surface-muted text-muted"
+              }
+            >
+              <VisualEvidence visual={model.visual_model} locale={locale} />
+              <RoofGraphEvidence
+                roofGraph={selectedMeasurement?.roof_graph ?? null}
+                locale={locale}
+              />
+              <MeasurementSource model={model} locale={locale} />
+            </ReviewGroup>
 
-          <ReviewGroup
-            title="Roof details"
-            description="Open the property drawing, roof graph, checks, and saved measurements."
-            status={
-              selectedMeasurement
-                ? (humanize(selectedMeasurement.review_status) ?? "Check needed")
-                : "No roof data"
-            }
-            tone={
-              selectedMeasurement
-                ? reviewTone(selectedMeasurement.review_status)
-                : "bg-surface-muted text-muted"
-            }
-          >
-            <VisualEvidence visual={model.visual_model} locale={locale} />
-            <RoofGraphEvidence
-              roofGraph={selectedMeasurement?.roof_graph ?? null}
-              locale={locale}
-            />
-            <MeasurementSource model={model} locale={locale} />
-          </ReviewGroup>
-
-          <ReviewGroup
-            title="Materials and insurance"
-            description="Open the material list and any insurance proof for this job."
-            status={
-              model.takeoffs.selected
-                ? (humanize(model.takeoffs.selected.status) ?? "Check needed")
-                : "No material list"
-            }
-            tone={
-              model.takeoffs.selected
-                ? reviewTone(model.takeoffs.selected.status)
-                : "bg-surface-muted text-muted"
-            }
-          >
-            <TakeoffReview model={model} locale={locale} />
-            <InsuranceEvidenceRail supplements={model.insurance_supplements} />
-          </ReviewGroup>
+            <ReviewGroup
+              title="Materials and insurance"
+              description="Material list and any insurance proof for this job."
+              status={
+                model.takeoffs.selected
+                  ? (humanize(model.takeoffs.selected.status) ?? "Check needed")
+                  : "No material list"
+              }
+              tone={
+                model.takeoffs.selected
+                  ? reviewTone(model.takeoffs.selected.status)
+                  : "bg-surface-muted text-muted"
+              }
+            >
+              <TakeoffReview model={model} locale={locale} />
+              <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+            </ReviewGroup>
+          </div>
         </section>
         <CommercialRecord model={model} locale={locale} tenantCurrency={tenantCurrency} />
       </div>
@@ -170,72 +170,56 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
   const decision = nextSafeStep(model);
   const jobIdentity = model.job.job_number ?? model.job.id;
   return (
-    <header className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-      <div className="grid min-w-0 lg:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-        <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-          <Button asChild variant="ghost" size="compact" className="-ml-2">
-            <Link to="/sales">
-              <ArrowLeft aria-hidden="true" />
-              Back to sales
-            </Link>
-          </Button>
-          <div className="mt-6 flex min-w-0 items-start gap-4">
-            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-              <Ruler className="size-6 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-muted">{jobIdentity}</p>
-              <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] text-balance sm:text-4xl">
-                Roof and quote review
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                Check the roof data, materials, and quote. This page does not change the price, job,
-                proposal, or customer messages.
-              </p>
-            </div>
-          </div>
-          <dl className="mt-7 grid border-t border-border sm:grid-cols-3">
-            <HeaderFact label="Service" value={model.job.service_type ?? "Not recorded"} />
-            <HeaderFact label="Job plan" value={model.job.workflow_profile ?? "Not recorded"} />
-            <HeaderFact
-              label="Last checked"
-              value={formatDate(model.read_model_generated_at, locale) ?? "Unavailable"}
-            />
-          </dl>
+    <header className="grid min-w-0 gap-6 border-b border-border pb-8 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
+      <div className="min-w-0">
+        <Button asChild variant="ghost" size="compact" className="-ml-2">
+          <Link to="/sales">
+            <ArrowLeft aria-hidden="true" />
+            Back to sales
+          </Link>
+        </Button>
+        <div className="mt-6 min-w-0">
+          <p className="text-sm font-bold text-muted">{jobIdentity}</p>
+          <h1 className="mt-1 text-3xl font-extrabold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
+            Roof and quote review
+          </h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+            Check the roof data, materials, and quote. Nothing on this page changes customer or job
+            records.
+          </p>
         </div>
-        <section
-          className={cn(
-            "border-t border-border p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8",
-            decision.surface,
-          )}
-          aria-labelledby="next-safe-step-heading"
-        >
-          <h2
-            id="next-safe-step-heading"
-            className="text-xs font-bold uppercase tracking-[0.12em] text-muted"
-          >
-            Next step
-          </h2>
-          <p className={cn("mt-3 text-2xl font-black tracking-[-0.035em]", decision.titleTone)}>
-            {decision.title}
-          </p>
-          <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
-          <div className="mt-6 flex flex-wrap gap-2">
-            <StatusChip label={decision.label} tone={decision.tone} />
-            <StatusChip label="View only" tone="bg-surface-muted text-muted" />
-          </div>
-          <p className="mt-6 border-t border-border/70 pt-4 text-xs leading-5 text-muted">
-            This page shows what to check. It does not take the next step.
-          </p>
-        </section>
+        <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+          <HeaderFact label="Service" value={model.job.service_type ?? "Not recorded"} />
+          <HeaderFact label="Job plan" value={model.job.workflow_profile ?? "Not recorded"} />
+          <HeaderFact
+            label="Last checked"
+            value={formatDate(model.read_model_generated_at, locale) ?? "Unavailable"}
+          />
+        </dl>
       </div>
+      <section
+        className={cn("self-end rounded-xl border border-border/80 p-5 sm:p-6", decision.surface)}
+        aria-labelledby="next-safe-step-heading"
+      >
+        <h2 id="next-safe-step-heading" className="text-sm font-bold text-muted">
+          Next step
+        </h2>
+        <p className={cn("mt-2 text-xl font-extrabold tracking-[-0.03em]", decision.titleTone)}>
+          {decision.title}
+        </p>
+        <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <StatusChip label={decision.label} tone={decision.tone} />
+          <span className="text-xs font-semibold text-muted">View only</span>
+        </div>
+      </section>
     </header>
   );
 }
 
 function HeaderFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 py-4 first:pr-4 sm:px-4 sm:first:pl-0 sm:[&:not(:first-child)]:border-l sm:[&:not(:first-child)]:border-border">
+    <div className="min-w-0">
       <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
     </div>
@@ -304,10 +288,10 @@ function CommercialSnapshot({
   if (!quote) {
     return (
       <section
-        className="rounded-xl border border-border bg-surface"
+        className="border-y border-border py-5"
         aria-labelledby="commercial-snapshot-heading"
       >
-        <div className="px-5 py-5 sm:px-6">
+        <div>
           <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
             Quote at a glance
           </h2>
@@ -318,11 +302,8 @@ function CommercialSnapshot({
   }
   const currency = quote.currency ?? tenantCurrency;
   return (
-    <section
-      className="rounded-xl border border-border bg-surface"
-      aria-labelledby="commercial-snapshot-heading"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 sm:px-6 sm:pt-6">
+    <section className="border-y border-border py-5" aria-labelledby="commercial-snapshot-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
             Quote at a glance
@@ -336,7 +317,7 @@ function CommercialSnapshot({
           tone={quoteTone(quote.status)}
         />
       </div>
-      <dl className="mt-5 grid overflow-hidden border-y border-border sm:grid-cols-4">
+      <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4 sm:gap-x-8">
         <CommercialFact
           label="Quote total"
           value={formatMoney(quote.quote_total, locale, currency) ?? "Not recorded"}
@@ -354,7 +335,7 @@ function CommercialSnapshot({
           }
         />
       </dl>
-      <p className="px-5 py-4 text-xs leading-5 text-muted sm:px-6">
+      <p className="mt-4 text-xs leading-5 text-muted">
         These values were saved with this quote. They are not a live supplier or payment check.
       </p>
     </section>
@@ -371,7 +352,7 @@ function CommercialFact({
   prominent?: boolean;
 }) {
   return (
-    <div className="min-w-0 px-5 py-4 first:bg-surface-raised sm:px-6 sm:[&:not(:first-child)]:border-l sm:[&:not(:first-child)]:border-border">
+    <div className="min-w-0">
       <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
         className={cn(
@@ -382,200 +363,6 @@ function CommercialFact({
         {value}
       </dd>
     </div>
-  );
-}
-
-function EvidencePath({
-  measurement,
-  takeoff,
-  quote,
-  proposal,
-  lineage,
-}: {
-  measurement: EstimatorWorkbenchResponse["measurements"]["selected"];
-  takeoff: EstimatorWorkbenchResponse["takeoffs"]["selected"];
-  quote: EstimatorWorkbenchResponse["quote"];
-  proposal: EstimatorWorkbenchResponse["proposal"];
-  lineage: EstimatorWorkbenchResponse["lineage"];
-}) {
-  const steps = [
-    {
-      label: "Roof data",
-      detail: measurement
-        ? `${humanize(measurement.provider) ?? "Provider unavailable"} · ${humanize(measurement.review_status) ?? "Review state unavailable"}`
-        : "No report returned",
-      tone: measurement
-        ? measurementTone(measurement.geometry.state)
-        : "bg-surface-muted text-muted",
-    },
-    {
-      label: "Materials",
-      ...takeoffEvidenceStep(takeoff, lineage.measurement_to_takeoff),
-    },
-    {
-      label: "Proposal",
-      ...proposalEvidenceStep(quote, proposal, lineage.quote_to_proposal),
-    },
-  ];
-  return (
-    <section
-      className="overflow-hidden rounded-xl border border-border bg-surface"
-      aria-labelledby="evidence-path-heading"
-    >
-      <div className="border-b border-border px-5 py-4 sm:px-6">
-        <h2
-          id="evidence-path-heading"
-          className="text-lg font-black tracking-[-0.025em] text-foreground"
-        >
-          What this quote uses
-        </h2>
-        <p className="mt-1 text-sm leading-6 text-muted">
-          Roof data leads to materials. The quote leads to the proposal.
-        </p>
-      </div>
-      <ol className="grid sm:grid-cols-3" aria-label="Evidence path stages">
-        {steps.map((step, index) => (
-          <li
-            key={step.label}
-            className={cn(
-              "min-h-28 px-5 py-5 sm:px-6",
-              index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
-            )}
-          >
-            <p className="text-sm font-bold text-muted">{step.label}</p>
-            <span
-              className={cn(
-                "mt-3 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
-                step.tone,
-              )}
-            >
-              {step.detail}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-function takeoffEvidenceStep(
-  takeoff: EstimatorWorkbenchResponse["takeoffs"]["selected"],
-  lineage: EstimatorWorkbenchResponse["lineage"]["measurement_to_takeoff"],
-) {
-  if (lineage === "linked" && takeoff) {
-    return {
-      detail: humanize(takeoff.status) ?? "Linked record",
-      tone: reviewTone(takeoff.status),
-    };
-  }
-  if (lineage === "mismatch") {
-    return { detail: "No material list uses this roof data", tone: "bg-warning-soft text-warning" };
-  }
-  if (lineage === "unknown") {
-    return { detail: "Material link is missing", tone: "bg-warning-soft text-warning" };
-  }
-  if (lineage === "no_measurement") {
-    return { detail: "No measurement returned", tone: "bg-surface-muted text-muted" };
-  }
-  return { detail: "No material list found", tone: "bg-surface-muted text-muted" };
-}
-
-function proposalEvidenceStep(
-  quote: EstimatorWorkbenchResponse["quote"],
-  proposal: EstimatorWorkbenchResponse["proposal"],
-  lineage: EstimatorWorkbenchResponse["lineage"]["quote_to_proposal"],
-) {
-  if (lineage === "linked" && proposal) {
-    return {
-      detail: humanize(proposal.status) ?? "Linked record",
-      tone: proposalTone(proposal.status),
-    };
-  }
-  if (lineage === "mismatch") {
-    return { detail: "No proposal links to this quote", tone: "bg-warning-soft text-warning" };
-  }
-  if (lineage === "unknown") {
-    return { detail: "Proposal linkage incomplete", tone: "bg-warning-soft text-warning" };
-  }
-  if (lineage === "no_quote") {
-    return { detail: "No quote returned", tone: "bg-surface-muted text-muted" };
-  }
-  return {
-    detail: quote
-      ? `Quote ${humanize(quote.status) ?? "state unavailable"}`
-      : "No proposal returned",
-    tone: quote ? quoteTone(quote.status) : "bg-surface-muted text-muted",
-  };
-}
-
-function CommercialDecisionRail({
-  model,
-  locale,
-}: {
-  model: EstimatorWorkbenchResponse;
-  locale: string;
-}) {
-  const selectedMeasurement = model.measurements.selected;
-  const sourceMath = selectedMeasurement
-    ? selectedMeasurement.geometry.state === "recomputed"
-      ? { detail: "Roof math checked", tone: "bg-ok-soft text-ok" }
-      : selectedMeasurement.geometry.state === "needs_review"
-        ? { detail: "Roof math needs review", tone: "bg-warning-soft text-warning" }
-        : { detail: "Roof math is missing", tone: "bg-surface-muted text-muted" }
-    : { detail: "No measurement returned", tone: "bg-surface-muted text-muted" };
-  const takeoff = takeoffDecisionStep(model);
-  const pricing = pricingDecisionStep(model.pricing_snapshot);
-  const proposal = proposalDecisionStep(model.proposal_readiness);
-  const steps = [
-    { label: "Roof data", ...sourceMath },
-    { label: "Materials", ...takeoff },
-    { label: "Saved price", ...pricing },
-    { label: "Proposal", ...proposal },
-  ];
-  return (
-    <section
-      className="rounded-xl border border-border bg-surface"
-      aria-labelledby="decision-rail-heading"
-    >
-      <div className="px-5 py-5 sm:px-6 sm:py-6">
-        <SectionHeading
-          id="decision-rail-heading"
-          icon={ShieldAlert}
-          title="What needs review"
-          description="Check the four parts of this quote. This page does not change the price, job, or customer message."
-        />
-        <ol
-          className="mt-5 grid overflow-hidden rounded-lg border border-border sm:grid-cols-4"
-          aria-label="Quote review steps"
-        >
-          {steps.map((step, index) => (
-            <li
-              key={step.label}
-              className={cn(
-                "min-h-28 bg-surface-raised px-4 py-4",
-                index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
-              )}
-            >
-              <p className="text-xs font-bold uppercase tracking-[0.09em] text-muted">
-                {step.label}
-              </p>
-              <span
-                className={cn(
-                  "mt-3 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
-                  step.tone,
-                )}
-              >
-                {step.detail}
-              </span>
-            </li>
-          ))}
-        </ol>
-        <p className="mt-4 text-xs leading-5 text-muted">
-          Price checked {formatDate(model.read_model_generated_at, locale) ?? "at an unknown time"}.
-          This is the price saved with this quote. It may not match today's supplier price.
-        </p>
-      </div>
-    </section>
   );
 }
 
@@ -754,34 +541,6 @@ function insuranceRequirementCopy(
     string
   >;
   return copy[requirement];
-}
-
-function takeoffDecisionStep(model: EstimatorWorkbenchResponse) {
-  if (model.lineage.measurement_to_takeoff !== "linked" || !model.takeoffs.selected) {
-    return model.lineage.measurement_to_takeoff === "unknown"
-      ? { detail: "Material link is missing", tone: "bg-warning-soft text-warning" }
-      : { detail: "No linked materials", tone: "bg-warning-soft text-warning" };
-  }
-  return model.takeoffs.selected.status === "Approved"
-    ? { detail: "Materials approved", tone: "bg-ok-soft text-ok" }
-    : { detail: "Materials need review", tone: "bg-warning-soft text-warning" };
-}
-
-function pricingDecisionStep(snapshot: EstimatorWorkbenchResponse["pricing_snapshot"]) {
-  const version =
-    snapshot.quote_version === null ? "Quote version unavailable" : `V${snapshot.quote_version}`;
-  if (snapshot.state === "recorded") {
-    return { detail: `${version} saved price checked`, tone: "bg-ok-soft text-ok" };
-  }
-  if (snapshot.state === "expired")
-    return { detail: `${version} expired`, tone: "bg-warning-soft text-warning" };
-  if (snapshot.state === "incomplete") {
-    return { detail: "Saved price is incomplete", tone: "bg-warning-soft text-warning" };
-  }
-  if (snapshot.state === "review_required") {
-    return { detail: `${version} needs review`, tone: "bg-warning-soft text-warning" };
-  }
-  return { detail: "No saved quote price", tone: "bg-surface-muted text-muted" };
 }
 
 function proposalDecisionStep(readiness: EstimatorWorkbenchResponse["proposal_readiness"]) {
@@ -1533,27 +1292,51 @@ function CommercialRecord({
   const quote = model.quote;
   const proposal = model.proposal;
   const proposalLineage = model.lineage.quote_to_proposal;
+  const quoteCurrency = quote?.currency ?? tenantCurrency;
   return (
-    <aside className="min-w-0 space-y-5 2xl:sticky 2xl:top-8" aria-label="Commercial record">
-      <section
-        className="rounded-xl border border-border bg-surface py-6"
-        aria-labelledby="quote-heading"
-      >
-        <div className="px-4 sm:px-5">
-          <div className="flex items-start justify-between gap-3">
-            <SectionHeading
-              id="quote-heading"
-              icon={FileText}
-              title="Customer quote"
-              description="This is a saved quote, not a live price tool."
-            />
+    <aside
+      className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface xl:sticky xl:top-20"
+      aria-labelledby="commercial-record-heading"
+    >
+      <div className="px-5 py-5">
+        <h2 id="commercial-record-heading" className="text-lg font-extrabold tracking-[-0.02em]">
+          Commercial outcome
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          Quote, document, delivery, and job boundaries.
+        </p>
+      </div>
+      <details className="group border-t border-border" aria-labelledby="quote-heading">
+        <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <h3 id="quote-heading" className="text-base font-extrabold tracking-[-0.02em]">
+              Customer quote
+            </h3>
+            <span className="mt-1 block text-xl font-extrabold tracking-[-0.03em] tabular-nums">
+              {quote
+                ? (formatMoney(quote.quote_total, locale, quoteCurrency) ?? "Total not recorded")
+                : "No quote returned"}
+            </span>
             {quote ? (
-              <StatusChip
-                label={humanize(quote.status) ?? "State unavailable"}
-                tone={quoteTone(quote.status)}
-              />
+              <span className="mt-2 flex flex-wrap gap-2">
+                <StatusChip
+                  label={humanize(quote.status) ?? "State unavailable"}
+                  tone={quoteTone(quote.status)}
+                />
+                {quote.status === "Draft" || quote.status === "Needs Review" ? (
+                  <StatusChip label="Not customer-ready" tone="bg-warning-soft text-warning" />
+                ) : null}
+              </span>
             ) : null}
-          </div>
+          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
+            <ChevronDown
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </span>
+        </summary>
+        <div className="border-t border-border px-5 pb-5">
           {!quote ? (
             <EmptyInline message="No customer quote was returned." />
           ) : (
@@ -1566,31 +1349,53 @@ function CommercialRecord({
                 locale={locale}
                 tenantCurrency={tenantCurrency}
               />
-              <QuoteRevisionEntry model={model} quote={quote} />
             </>
           )}
         </div>
-      </section>
+      </details>
 
-      <section
-        className="rounded-xl border border-border bg-surface py-6"
-        aria-labelledby="proposal-heading"
-      >
-        <div className="px-4 sm:px-5">
-          <div className="flex items-start justify-between gap-3">
-            <SectionHeading
-              id="proposal-heading"
-              icon={ScrollText}
-              title="Proposal"
-              description="The proposal stays separate from the quote and payment."
-            />
-            {proposal ? (
+      {quote ? <QuoteRevisionEntry model={model} quote={quote} /> : null}
+
+      <details className="group border-t border-border" aria-labelledby="proposal-heading">
+        <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <h3 id="proposal-heading" className="text-base font-extrabold tracking-[-0.02em]">
+              Proposal
+            </h3>
+            <span className="mt-2 flex flex-wrap gap-2">
+              {proposal ? (
+                <StatusChip
+                  label={humanize(proposal.status) ?? "State unavailable"}
+                  tone={proposalTone(proposal.status)}
+                />
+              ) : (
+                <StatusChip
+                  label={
+                    proposalLineage === "mismatch"
+                      ? "No proposal links to this quote"
+                      : "No proposal"
+                  }
+                  tone={
+                    proposalLineage === "mismatch"
+                      ? "bg-warning-soft text-warning"
+                      : "bg-surface-muted text-muted"
+                  }
+                />
+              )}
               <StatusChip
-                label={humanize(proposal.status) ?? "State unavailable"}
-                tone={proposalTone(proposal.status)}
+                label={humanize(model.proposal_readiness.state) ?? "Readiness unavailable"}
+                tone={proposalDecisionStep(model.proposal_readiness).tone}
               />
-            ) : null}
-          </div>
+            </span>
+          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
+            <ChevronDown
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </span>
+        </summary>
+        <div className="border-t border-border px-5 pb-5">
           {!proposal ? (
             <EmptyInline message={proposalEmptyMessage(quote, model.proposal, proposalLineage)} />
           ) : (
@@ -1618,28 +1423,61 @@ function CommercialRecord({
           )}
           <ProposalReadiness readiness={model.proposal_readiness} />
         </div>
-      </section>
+      </details>
 
-      <ProposalPublicationAction
-        roofJobId={model.job.id}
-        proposalEvidencePackId={proposal?.id ?? null}
-        proposalStatus={proposal?.status ?? null}
-        locale={locale}
-      />
-
-      <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
-
-      <section
-        className="rounded-xl border border-border bg-surface py-6"
-        aria-labelledby="scope-heading"
-      >
-        <div className="px-4 sm:px-5">
-          <SectionHeading
-            id="scope-heading"
-            icon={ClipboardList}
-            title="Scope and risks"
-            description="See what is in the job, what is out, and what may go wrong."
+      <details className="group border-t border-border">
+        <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <span className="block text-base font-extrabold tracking-[-0.02em]">
+              Customer delivery
+            </span>
+            <span
+              className={cn(
+                "mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold",
+                proposalDecisionStep(model.proposal_readiness).tone,
+              )}
+            >
+              {model.proposal_readiness.state === "ready"
+                ? "Ready for delivery review"
+                : "Finish review first"}
+            </span>
+          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
+            <ChevronDown
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </span>
+        </summary>
+        <div className="border-t border-border bg-surface-raised/35">
+          <ProposalPublicationAction
+            roofJobId={model.job.id}
+            proposalEvidencePackId={proposal?.id ?? null}
+            proposalStatus={proposal?.status ?? null}
+            locale={locale}
           />
+          <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
+        </div>
+      </details>
+
+      <details className="group border-t border-border" aria-labelledby="scope-heading">
+        <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <h3 id="scope-heading" className="text-base font-extrabold tracking-[-0.02em]">
+              Scope and risks
+            </h3>
+            <span className="mt-1 block text-xs text-muted">
+              {model.scope_clauses.length} clauses · {model.scope_changes.length} changes
+            </span>
+          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
+            <ChevronDown
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </span>
+        </summary>
+        <div className="border-t border-border px-5 pb-5">
           <ScopeClauses clauses={model.scope_clauses} locale={locale} />
           <ScopeChangeLedger
             changes={model.scope_changes}
@@ -1647,7 +1485,7 @@ function CommercialRecord({
             tenantCurrency={tenantCurrency}
           />
         </div>
-      </section>
+      </details>
     </aside>
   );
 }
@@ -1697,15 +1535,11 @@ function QuoteLedger({
   tenantCurrency: string;
 }) {
   const currency = quote.currency ?? tenantCurrency;
-  const nonBinding = quote.status === "Draft" || quote.status === "Needs Review";
   return (
     <div className="mt-5">
       <div className="flex flex-wrap items-center gap-2">
         {quote.version !== null ? (
           <p className="text-sm font-bold text-muted">Version {quote.version}</p>
-        ) : null}
-        {nonBinding ? (
-          <StatusChip label="Not customer-ready" tone="bg-warning-soft text-warning" />
         ) : null}
       </div>
       <p className="mt-3 text-3xl font-black tracking-[-0.035em] tabular-nums">
@@ -1773,7 +1607,7 @@ function QuoteRevisionEntry({
   const launchDisabled = !online || isOfflineSession(session) || launch.isPending;
   return (
     <section
-      className="mt-6 border-y border-border py-4"
+      className="border-t border-border bg-surface-raised/35 p-5"
       aria-labelledby="revision-request-heading"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2245,15 +2079,15 @@ function ReviewGroup({
   children: ReactNode;
 }) {
   return (
-    <details className="group overflow-hidden rounded-xl border border-border bg-surface">
-      <summary className="flex min-h-24 cursor-pointer list-none items-center justify-between gap-4 px-5 py-5 focus-visible:outline-offset-[-3px] [&::-webkit-details-marker]:hidden sm:px-6">
+    <details className="group overflow-hidden bg-surface">
+      <summary className="flex min-h-20 cursor-pointer list-none flex-col items-stretch gap-3 px-5 py-4 transition-colors hover:bg-surface-raised focus-visible:outline-offset-[-3px] [&::-webkit-details-marker]:hidden sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <span className="min-w-0">
-          <span className="block text-xl font-black tracking-[-0.025em] text-foreground">
+          <span className="block text-lg font-extrabold tracking-[-0.02em] text-foreground">
             {title}
           </span>
           <span className="mt-1 block max-w-2xl text-sm leading-6 text-muted">{description}</span>
         </span>
-        <span className="flex shrink-0 items-center gap-3">
+        <span className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
           <StatusChip label={status} tone={tone} />
           <ChevronDown
             className="size-5 text-muted transition-transform group-open:rotate-180"
@@ -2261,7 +2095,7 @@ function ReviewGroup({
           />
         </span>
       </summary>
-      <div className="space-y-6 border-t border-border bg-surface-muted/35 p-3 sm:p-4">
+      <div className="space-y-6 border-t border-border bg-surface-muted/30 p-3 sm:p-4">
         {children}
       </div>
     </details>
@@ -2499,12 +2333,6 @@ function geometryUnavailableCopy(reason: string | null): string {
   if (reason === "measurement_detail_mismatch")
     return "The chosen roof details no longer match this job.";
   return "No roof file was found for this check.";
-}
-
-function measurementTone(state: EstimatorGeometry["state"]): string {
-  if (state === "recomputed") return "bg-ok-soft text-ok";
-  if (state === "needs_review") return "bg-warning-soft text-warning";
-  return "bg-surface-muted text-muted";
 }
 
 function reviewTone(status: string | null): string {

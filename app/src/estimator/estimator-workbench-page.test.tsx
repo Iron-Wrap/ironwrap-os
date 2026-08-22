@@ -282,6 +282,10 @@ function openReviewGroup(name: "Roof details" | "Materials and insurance") {
   fireEvent.click(screen.getByText(name));
 }
 
+function openCommercialGroup(name: "Customer quote" | "Proposal" | "Scope and risks") {
+  fireEvent.click(screen.getByRole("heading", { name }).closest("summary")!);
+}
+
 describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -307,7 +311,8 @@ describe("EstimatorWorkbenchPage", () => {
     await screen.findByRole("heading", { name: "Roof and quote review" });
     openReviewGroup("Roof details");
     openReviewGroup("Materials and insurance");
-    expect(screen.getAllByText("Roof math needs review")[1]!).toBeVisible();
+    openCommercialGroup("Scope and risks");
+    expect(screen.getByText("Roof math needs review")).toBeVisible();
     expect(
       screen.getByText(/do not confirm hidden damage, deck condition, access, or site size/i),
     ).toBeVisible();
@@ -355,7 +360,7 @@ describe("EstimatorWorkbenchPage", () => {
     expect(
       within(takeoffTable).getByRole("rowheader", { name: /architectural shingles/i }),
     ).toBeVisible();
-    expect(screen.getAllByText("Roof math needs review")[1]!.closest("[role=status]")).toBeNull();
+    expect(screen.getByText("Roof math needs review").closest("[role=status]")).toBeNull();
   });
 
   it("collapses secondary audit detail when the returned evidence has no review signal", async () => {
@@ -623,7 +628,7 @@ describe("EstimatorWorkbenchPage", () => {
 
     await screen.findByRole("heading", { name: "Roof and quote review" });
     openReviewGroup("Materials and insurance");
-    expect(screen.getByText("No material list uses this roof data")).toBeVisible();
+    openCommercialGroup("Proposal");
     expect(screen.getByText("No proposal links to this quote")).toBeVisible();
     expect(
       screen.getByText(/1 material list was found, but none use this roof report/i),
@@ -729,12 +734,15 @@ describe("EstimatorWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "What needs review" });
+    openCommercialGroup("Customer quote");
+    openCommercialGroup("Proposal");
+    openCommercialGroup("Scope and risks");
     expect(screen.getByText("Quote changes")).toBeVisible();
     expect(screen.getByText(/Linked V3 → V4/i)).toBeVisible();
     expect(screen.getByText("Job changes")).toBeVisible();
     expect(screen.getByText("Ridge ventilation addition")).toBeVisible();
     expect(screen.getByText(/still needs the customer's written choice/i)).toBeVisible();
-    expect(screen.getByText("Blocked")).toBeVisible();
+    expect(screen.getAllByText("Blocked")[0]).toBeVisible();
     expect(screen.getByText(/not a live supplier price/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /reprice|refresh price|create quote|send proposal/i }),

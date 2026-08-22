@@ -631,7 +631,7 @@ function EstimateResult({
           </p>
         </div>
         <CardContent className="p-5 sm:p-8">
-          <div className="flex gap-3 border-l-4 border-info bg-info-soft px-5 py-5 text-sm leading-6">
+          <div className="flex gap-3 border border-info/35 bg-info-soft px-5 py-5 text-sm leading-6">
             <ClipboardCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
             <p>We set a price only after we check the site and its size.</p>
           </div>

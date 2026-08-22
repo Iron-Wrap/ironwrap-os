@@ -1,7 +1,8 @@
 # ironwrap-bus
 
 The IronWrap integration bus on Cloudflare Workers. It implements the owned D1/R2 first-write
-intake and evidence spine described by `docs/AUTONOMOUS-OPERATING-SYSTEM.md`. One deployment
+intake, normalized operating plane, control kernel, and evidence spine described by
+[`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md). One deployment
 serves the built PWA, its authenticated `/api/v1/*` BFF,
 ingest/admin routes, queue consumers, and scheduled recovery. Static app navigation falls back
 to `app/dist/index.html`; dynamic routes are explicitly Worker-first in `wrangler.jsonc`.
@@ -17,13 +18,13 @@ inbound (website/phone/gbp/ad/referral/manual)
   │  POST /ingest/:source   (Bearer INGEST_TOKEN)
   ▼
 [1] raw body → R2  ............... FIRST, nothing is ever lost
-[2] canonical envelope → D1 ...... system of record (`envelopes.tenant_id` + status=pending_jn_push)
+[2] canonical envelope → D1 ...... authoritative intake record (`envelopes.tenant_id` + status=pending_jn_push)
 [3] instant-ack (ctx.waitUntil) .. prospect email + owner alert — OFF the owned-store write
 [4] enqueue → JN_QUEUE
         │
         ▼  queue consumer (idempotent, auto-retried)
      push to JobNimbus
-     optional push to ERPNext Lead Envelope + Roof Job → status=pushed
+     optional Frappe compatibility projection → status=pushed
         │ fail ×5 → DLQ → dead_letter table + owner email
         ▼
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
@@ -35,23 +36,23 @@ estimator/configurator
 [0] idempotency check ............ project id, Idempotency-Key, or project URL
 [1] raw estimator payload → R2  ... FIRST for the accepted submission
 [2] canonical envelope → D1 ...... status=received, no JobNimbus/GHL queue
-[3] ERPNext Lead Envelope + Roof Job + Instant Estimate Session when enabled
-[4] response returns ERPNext ids/errors to the estimator frontend; retries return the original ids
+[3] native D1 estimate/lead/job records; optional Frappe compatibility projection when enabled
+[4] response returns native identities plus any projection outcome; retries return original identities
 
 Facet approved design
   │  POST /ingest/facet-design  (dedicated HMAC; never INGEST_TOKEN)
   ▼
 [1] signed raw event + source→local allowlist → immutable R2 ........... FIRST
 [2] design receipt + hashed nonce → D1 ........ no quote/contract/Frappe mutation
-[3] scheduled projection uses an exact anchor allowlist → review-only Frappe evidence + pending reconciliation
+[3] optional scheduled projection uses an exact anchor allowlist → review-only Frappe evidence + pending reconciliation
 
 IronWrap PWA
   │  passwordless session cookie + exact-origin CORS + CSRF on authenticated mutations
   ▼
 [1] tenant-bound active app user → one-time emailed magic link (hash only in D1)
 [2] one-time consume → fixed 12h __Host session (hash only in D1)
-[3] /api/v1/today, /jobs/:id, /owner/now, /sales, /estimator/jobs/:id → permission-shaped Frappe reads
-[4] field users are filtered and rechecked against Frappe _assign before a job is returned
+[3] /api/v1/today, /jobs/:id, /owner/now, /sales, /estimator/jobs/:id → permission-shaped native D1 reads
+[4] remaining explicitly named compatibility reads fail closed and cannot promote Frappe state into authority
 ```
 
 ## Implemented mappings to canonical intake requirements
@@ -71,12 +72,12 @@ IronWrap PWA
 | Safe dead-letter recovery | targeted replay by `envelope_id`; confirmed bulk replay; recovery is marked only after that envelope completes |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing | `core.ts:classifyIntent` |
-| Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
-| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
+| Optional Frappe compatibility projection | `erpnext.ts` creates/updates bounded legacy records when enabled; failures do not rewrite authoritative D1 state |
+| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + native D1 records plus any enabled compatibility projection, without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
 | Facet review projection | `facet-design-projection.ts` reads only v2 receipts with an exact append-only, office-authored job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
-| Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
+| Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; any remaining `frappe-read.ts` compatibility access uses hard-coded DocType/field/filter allowlists and fails closed |
 
 ## Files
 
@@ -84,7 +85,7 @@ IronWrap PWA
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   Config-gated JobNimbus push adapter
-src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
+src/erpnext.ts     Optional Frappe compatibility projection for bounded legacy records
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
 src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe or commercial mutation
 src/facet-design-projection.ts Scheduled review-only D1-anchor projection through a separately authenticated Frappe command
@@ -94,8 +95,8 @@ src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementati
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
 src/app-auth.ts    one-time magic-link/session/CSRF/origin contract; no raw token persistence
 src/app-auth-store.ts D1 app-user/auth/throttle/audit adapter and retention cleanup
-src/frappe-read.ts strict default, office-Sales, and office-Estimator Frappe GET allowlists plus credential-safe upstream adapter
-src/app-read-models.ts screen-shaped Today, Job, Owner Now, bounded office Sales, and source-derived Estimator projections
+src/frappe-read.ts strict compatibility-only Frappe GET allowlists plus credential-safe upstream adapter
+src/app-read-models.ts screen-shaped Today, Job, Owner Now, bounded office Sales, and source-derived Estimator projections assembled from authoritative/native stores plus named compatibility seams
 src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning and governed approval routes
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
 src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
@@ -171,15 +172,15 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual); response includes `envelope_id`, `canonical_envelope_id`, and `tenant_id` |
 | POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
-| POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
+| POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest estimator/configurator payloads into owned R2/D1 and any enabled Frappe compatibility projection without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/facet-design` | dedicated HMAC + exact source-tenant map | receive only `facet.design.approved.v1` design-decision evidence; raw R2 first, immutable local-tenant D1 receipt/nonce second, no quote/contract/Frappe side effect |
 | GET | `/public/instant-estimate/config` | exact configured `Origin` when supplied | public Turnstile/site availability envelope; an Origin-less same-origin GET is allowed without CORS headers |
 | POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public review intake; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and no price is returned before measurement and approved pricing evidence |
-| POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
+| POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to owned evidence storage/Google Drive, and optionally project Frappe Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |
 | GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
 | GET | `/ready` | — | detailed public readiness booleans; never returns secret values |
-| GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/Frappe/replay-ledger counts, 24h audit failures, and latest QB receipt freshness |
+| GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/provider/projection/replay-ledger counts, 24h audit failures, and latest QB receipt freshness |
 | POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record `{day?,channel,count}`; day is a real UTC `YYYY-MM-DD`, channel is an ingest source, count is an integer from 0–1,000,000 |
 | POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | targeted or explicitly confirmed bulk dead-letter replay; both require non-secret human-approval evidence (below) |
 | GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |
@@ -187,7 +188,7 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users/bootstrap` | `Bearer ADMIN_TOKEN` + `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` | one-time bootstrap that creates the first owner only when this tenant has zero app users |
-| POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist receipt plus durable projection row, and issue only Pending Frappe reconciliation work |
+| POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist raw/D1 receipt and durable reconciliation work, and optionally project a Pending Frappe record; webhook identity is not posted-accounting truth |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
@@ -220,11 +221,11 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 
 ### PWA auth and tenant boundary
 
-This slice is intentionally **one tenant + one Frappe site + one Worker deployment**. Frappe
-business records do not yet carry a tenant discriminator, so `APP_TENANT_ID` is the isolation
-boundary: provisioning rejects any other tenant, every session joins back to an active user on
-that tenant, and the BFF rejects a session whose tenant differs. A reseller tenant gets a separate
-deployment/site/credential set until record-level tenant isolation exists and is proven.
+This slice is intentionally **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
+deployment/session isolation boundary: provisioning rejects any other tenant, every session joins
+back to an active user on that tenant, and the BFF rejects a session whose tenant differs. If a
+Frappe compatibility site is enabled, it is dedicated to that same tenant. A reseller tenant gets a
+separate deployment and credential set until record-level tenant isolation is proven.
 The magic-link request body is `{ "email": "…" }`; the Worker infers its configured tenant. A
 legacy caller may also send `tenant_id`, but a mismatch still receives the same generic `202` and
 never selects another tenant.
@@ -254,13 +255,16 @@ Bootstrap only the first owner with `POST /admin/app-users/bootstrap` when
 ```
 
 Every later provisioning change uses `POST /api/v1/admin/app-users` from an authenticated
-office session with `X-CSRF-Token`. That steady-state body accepts `role`, `frappe_user_id`,
-and `active`; field users still require a Frappe user id for exact assignment checks. Re-send
+office session with `X-CSRF-Token`. That steady-state body accepts `role`, compatibility
+`frappe_user_id`, and `active`; only a still-enabled Frappe assignment seam requires that legacy
+identity. Re-send
 the record with `active:false` to revoke that user's sessions and open link. The bearer bootstrap
 route never upserts, never accepts a client actor field, and returns a stable denial after the
-first tenant user exists. Keep `APP_BFF_ENABLED=false` until migration `0011`, the app build,
-Frappe read credentials, Gmail delegation, `APP_AUTH_PEPPER`, and the origin metadata are
-present; `/ready` fails closed when any enabled-BFF dependency is missing or malformed.
+first tenant user exists. The checked-in top-level/staging configuration enables the BFF, but that
+is configured intent only. A named environment must have its required migration state, app build,
+Gmail delegation, `APP_AUTH_PEPPER`, origin metadata, and any enabled compatibility credentials;
+otherwise override the flag to false or block deployment. `/ready` fails closed on missing or
+malformed enabled dependencies.
 
 `APP_AUTH_PEPPER` is a Worker secret with at least 32 random characters. Production accepts only
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local
@@ -538,10 +542,10 @@ shapes are:
 
 The examples show known values; if a source does not provide one, the value is explicitly `null`
 and its path is named in `stale_fields`. The BFF does not fabricate schedule, money, gate-owner,
-due-date, next-action, or required-proof data. Frappe requests are GET-only and limited to the
-hard-coded DocType, field, filter, and row allowlists in `frappe-read.ts`. Field users must have a
-`frappe_user_id` and may see only jobs whose standard Frappe `_assign` JSON contains that exact id;
-the Worker rechecks the returned row instead of trusting only the upstream filter.
+due-date, next-action, or required-proof data. Remaining Frappe compatibility requests are GET-only
+and limited to the hard-coded DocType, field, filter, and row allowlists in `frappe-read.ts`. Where
+the legacy assignment seam is still used, the Worker rechecks the returned row instead of trusting
+only the upstream filter. Native D1 read models remain authoritative.
 
 Point website forms, GBP, and approved voice/voicemail handoffs at `/ingest/:source`
 (website → `/ingest/website`, voice/voicemail → `/ingest/phone`, etc.). Feed the daily
@@ -555,8 +559,10 @@ the Worker generates one.
 
 ### Facet design-event receipt contract
 
-Leave `FACET_DESIGN_INGEST_ENABLED=false` until `FACET_DESIGN_INGEST_HMAC_KEY` and an exact
-`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist are independently configured.
+The checked-in top-level/staging configuration enables `FACET_DESIGN_INGEST_ENABLED`; this is
+configured intent only. Override it to false or block deployment until
+`FACET_DESIGN_INGEST_HMAC_KEY` and an exact `FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local
+allowlist are independently configured and read back in the named environment.
 V2 bindings must also list the allowed local brands, for example
 `{"facet-production":{"tenant_id":"ironwrap","brand_ids":["ironwrap","iroof"]}}`. HMAC proves
 the Facet deployment; it does not authorize arbitrary Facet tenants or brands.
@@ -647,7 +653,9 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    remain leased/retryable with capped backoff and escalate after five attempts; only the documented
    immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
    posting, and reconciliation facts require authenticated QuickBooks read-back.
-5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
+5. **Frappe compatibility projection** — configured true in the checked-in top-level/staging
+   profiles and false in development; none of those values is live proof. Before treating
+   `ERPNEXT_ENABLED=true` as ready, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
    Material Takeoff, Supplier Order, Production Gate State, Evidence Item, Field Check-in, and
@@ -667,7 +675,8 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    sync creates only Pending reconciliation work and may create immutable Payment Milestone
    event rows when `qb_invoice_ref` matches; it never asserts provider accounting truth.
    Roof Job sync also creates missing initial production gate rows without resetting
-   existing gate state. ERPNext is still a consumer, not the raw intake source.
+   existing gate state. Frappe is a compatibility consumer/projection, not raw intake or native
+   operating authority.
 
 ## Operating authority
 
@@ -676,3 +685,5 @@ This is owned product code. Monitoring, incident response, recovery, and rotatio
 owned replacement is implemented, reconciled, accepted, and proven with rollback evidence. The
 binding intake, evidence, and side-effect rules are in
 [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](../docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md).
+The system boundary and current/target status are in
+[`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md).

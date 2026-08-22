@@ -79,6 +79,14 @@
     },
     {
       "path": "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
+      "class": "developer",
+      "authority": [
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
+      "path": "docs/AI-NATIVE-ARCHITECTURE.md",
       "class": "canonical",
       "authority": []
     },
@@ -168,8 +176,11 @@
     },
     {
       "path": "docs/PRODUCTION-SCHEDULING-CONTRACT.md",
-      "class": "canonical",
-      "authority": []
+      "class": "developer",
+      "authority": [
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/WEBSITE-INTEGRATION.md",

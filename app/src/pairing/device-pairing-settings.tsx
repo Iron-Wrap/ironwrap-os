@@ -154,9 +154,6 @@ function OfficeDevicePairingSettings() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-surface-muted text-foreground">
           <Smartphone className="size-6" aria-hidden="true" />
         </div>
-        <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-          Office controls
-        </p>
         <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Crew devices</h1>
         <p className="mt-3 max-w-2xl text-base leading-7 text-muted">
           Pair one field browser under supervision. The code is short-lived, device-bound, and never

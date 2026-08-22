@@ -126,14 +126,23 @@ test.describe("Vehicle rail mobile acceptance", () => {
     await expect(page.getByRole("heading", { name: "Today", exact: true })).toBeVisible();
 
     const nav = page.getByRole("navigation", { name: "Main navigation" }).last();
-    const vehicle = nav.getByRole("link", { name: "Vehicle" });
+    const vehicle = nav.getByRole("link", { name: "Vehicle", exact: true }).first();
     await expect(vehicle).toBeVisible();
-    // The bar gained a fourth item; every item must still be a real thumb target.
-    for (const label of ["Now", "Check-in", "Vehicle", "Settings"]) {
-      const box = await nav.getByRole("link", { name: label }).boundingBox();
+    // Daily work stays in the thumb rail; resources and setup live in the complete workspace map.
+    for (const label of ["Now", "Check-in", "Vehicle"]) {
+      const box = await nav.getByRole("link", { name: label, exact: true }).boundingBox();
       expect(box?.height, `${label} tab is only ${box?.height}px tall`).toBeGreaterThanOrEqual(44);
       expect(box?.width, `${label} tab is only ${box?.width}px wide`).toBeGreaterThanOrEqual(44);
     }
+    const more = nav.getByLabel("Open all workspaces");
+    const moreBox = await more.boundingBox();
+    expect(moreBox?.height, `More tab is only ${moreBox?.height}px tall`).toBeGreaterThanOrEqual(
+      44,
+    );
+    await more.click();
+    await expect(nav.getByRole("link", { name: "Inventory", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
+    await more.click();
 
     await vehicle.click();
     await expect(page.getByRole("heading", { name: "Vehicle", level: 1 })).toBeVisible();

@@ -36,10 +36,15 @@ const productionModel = {
       brand: "IronWrap Exteriors",
       service_type: "Roofing",
       status: "In Production",
+      version: 1,
       assignment: {
         id: "assignment:JOB-A",
         type: "Production",
         status: "Blocked",
+        assignment_version: 1,
+        roof_job_version: 1,
+        crew_id: "crew:install",
+        crew_version: 1,
         scheduled_start: null,
         scheduled_end: null,
       },
@@ -57,10 +62,15 @@ const productionModel = {
       brand: "IronWrap Exteriors",
       service_type: "Roofing",
       status: "Ready",
+      version: 1,
       assignment: {
         id: "assignment:JOB-D",
         type: "Production",
         status: "Assigned",
+        assignment_version: 1,
+        roof_job_version: 1,
+        crew_id: "crew:install",
+        crew_version: 1,
         scheduled_start: null,
         scheduled_end: null,
       },
@@ -73,7 +83,7 @@ const productionModel = {
       material_attention: [],
     },
   ],
-  crews: [{ id: "crew:install", name: "Install team" }],
+  crews: [{ id: "crew:install", name: "Install team", version: 1 }],
 };
 
 test.describe("Production plan acceptance", () => {

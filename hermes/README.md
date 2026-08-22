@@ -25,18 +25,22 @@ The rest of this file describes the Hermes layer the configuration here defines.
 
 ## Layer role in the system
 
-Hermes is the operating brain for IronWrap OS, not the database. It reads broadly across
-system truth and writes only through narrow, review-gated command tools. The proprietary
-IronWrap OS Frappe app (roofing operating core) and the IronWrap bus stay the record of truth; Hermes never holds primary
-state and never mutates a system of record with a free-form write.
+Hermes is a bounded coordination and compatibility surface, not the operating brain or an
+authority. The checked-in desktop capability is a disabled narrow draft pilot; the broader role
+packs configure legacy MCP workflows. D1/Worker owns normalized operating state and controls, R2
+owns raw evidence, QuickBooks owns its exact posted-accounting facts, and Frappe is an optional
+compatibility projection. Hermes never holds primary state or receives free-form mutation authority.
+See the canonical boundary in
+[`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md).
 
 - Hermes plans, drafts, and proposes. It composes MCP tool calls to read job/lead/evidence
   state and to draft mutations.
 - Every mutation is a `request_*` command tool behind a reviewed preview. Frappe commands draft
   records or set review-gated status; Newo customer sends exist only on the owner surface and fail
   closed unless exact receipts and the separate outbound gate are both present. No tool mutates accounting.
-- Truth lives downstream: IronWrap OS (Frappe) for the roofing operating core, the bus for envelope and
-  dead-letter truth, QuickBooks for accounting. Hermes reflects them; it does not replace them.
+- Truth lives downstream at the authority named for each fact. Hermes may read D1/Worker, optional
+  Frappe projections, and bounded provider views; it does not promote a projection or model output
+  into authority.
 
 ## MCP servers
 
@@ -47,7 +51,7 @@ Four MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, p
   (`get_bus_readiness`, `get_operational_status`), envelope/dead-letter and measurement-exception
   reads, and approved, envelope-scoped recovery (`dry_run_replay` / `request_replay`). Bulk replay
   is not exposed.
-- `mcp/erpnext-roofing-mcp/src/server.mjs`: IronWrap OS Frappe operating core with reads,
+- `mcp/erpnext-roofing-mcp/src/server.mjs`: legacy-named Frappe compatibility surface with reads,
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 - `mcp/newo-mcp/src/server.mjs`: bounded Worker-backed session, conversation, actor, webhook,
@@ -105,8 +109,8 @@ deferred. The canonical boundary is
 
 ## Mutation contract
 
-This section describes the current implemented control. It remains binding until a routine digital
-action is replaced by the machine-authority contract defined in
+This section describes the current implemented compatibility control. It remains binding for each
+enabled legacy command until that action is replaced by the native machine-authority contract defined in
 `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`; legal, customer-consent, physical, relationship, and
 safety human gates remain human.
 
@@ -164,9 +168,9 @@ Additional hard boundaries in the committed DocType model, whose current size is
 
 ## Memory boundary
 
-Do NOT use Hermes memory as a CRM or system of record. Hermes memory is working context only.
-IronWrap OS (Frappe) and the bus are truth; if a fact matters, it belongs in a record there, reached
-through a read tool, not in agent memory.
+Do NOT use Hermes memory as a CRM or system of record. Hermes memory is untrusted working context
+only. If a fact matters, it belongs in the authoritative D1/Worker, R2, or exact external-authority
+record and is reached through a bounded read tool; a Frappe copy remains a compatibility projection.
 
 ## Cron / background usage
 

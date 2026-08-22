@@ -98,9 +98,6 @@ function NewoOperationsScreen({
                 <Headphones className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Calls and booking
-                </p>
                 <div className="mt-1 flex flex-wrap items-center gap-3">
                   <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                     Reception
@@ -115,9 +112,7 @@ function NewoOperationsScreen({
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Saved calls
-            </p>
+            <p className="text-sm font-bold text-muted">Saved calls</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.counts.sessions} {model.counts.sessions === 1 ? "call" : "calls"}
             </h2>

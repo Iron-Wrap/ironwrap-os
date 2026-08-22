@@ -2,7 +2,7 @@
 
 Status: binding repository policy
 Owner: IronWrap OS product owner
-Last verified: 2026-08-10
+Last verified: 2026-08-22
 Review trigger: architecture, authority, legal, deployment, or operating-model change
 
 ## Purpose
@@ -20,19 +20,22 @@ When sources disagree, use this order:
 
 1. Applicable law, permit, regulator direction, executed contract, manufacturer instruction, and
    authenticated external-system record for the exact job.
-2. [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md) for the company target and
+2. [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md) for the current executable map,
+   repository boundaries, AI control loop, role journeys, derived lifecycle, and technical
+   production-reference target.
+3. [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md) for the company target and
    human/agent boundary.
-3. [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./AUTHORITY-AND-EVIDENCE-CONTRACT.md) for authority,
+4. [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./AUTHORITY-AND-EVIDENCE-CONTRACT.md) for authority,
    evidence, transitions, stops, and side effects.
-4. [`HERMES-DESKTOP-TEXT-PILOT.md`](./HERMES-DESKTOP-TEXT-PILOT.md) for the accepted owner/ops
+5. [`HERMES-DESKTOP-TEXT-PILOT.md`](./HERMES-DESKTOP-TEXT-PILOT.md) for the accepted owner/ops
    desktop text pilot and its pairing, task, connector-context, draft, and handoff boundary.
-5. [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md) for researched regulatory triggers. It is a
+6. [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md) for researched regulatory triggers. It is a
    control index, not legal advice.
-6. [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) for implemented versus missing capability.
-7. Current component contracts and runbooks for behavior that exists in this repository.
-8. Runtime agent profiles, skills, tenant configuration, and provider knowledge bases, bounded by
-   items 1 through 7.
-9. Tests, release evidence, and live probes for proof of a particular build or environment.
+7. [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) for implemented versus missing capability.
+8. Current component contracts and runbooks for behavior that exists in this repository.
+9. Runtime agent profiles, skills, tenant configuration, and provider knowledge bases, bounded by
+   items 1 through 8.
+10. Tests, release evidence, and live probes for proof of a particular build or environment.
 
 Git history is the only archive. A deleted plan remains recoverable there but has no current
 authority.
@@ -60,6 +63,10 @@ Use these exact meanings:
 - **Runtime-verified**: a fresh authenticated probe passed in that environment.
 - **Business-accepted**: an authorized owner/customer/worker completed the defined acceptance.
 - **Production-proven**: the real workflow completed with reconciled evidence.
+- **Technical reference-proven**: a synthetic, isolated reference tenant completed the exact
+  production path with provider readback and recovery evidence; this is not customer proof.
+- **Customer-validated**: real customers independently used and accepted the defined workflow or
+  outcome. Synthetic/reference actors can never establish this label.
 - **Blocked**: a named prerequisite prevents the next transition.
 
 Never translate one label into another. In particular:
@@ -67,6 +74,7 @@ Never translate one label into another. In particular:
 - Repository-verified does not mean deployed.
 - Deployed does not mean runtime-ready.
 - Runtime-ready does not mean customer-accepted.
+- Technical reference-proven does not mean customer-validated.
 - A target specification does not mean implemented.
 - A checkbox in Markdown is not live evidence.
 
@@ -124,6 +132,8 @@ access, checksum, and legal-hold controls. They do not belong in the source repo
 - workstation-absolute links are absent;
 - canonical files carry current review metadata;
 - runtime and component documents point back to canonical authority where required.
+- the AI-native architecture snapshot matches checkable code/configuration reachability;
+- forbidden legacy authority claims do not reappear in current Markdown.
 
 The validator prevents structural drift. It cannot prove that a legal interpretation, live
 provider setting, or business assertion is substantively correct; those require their named

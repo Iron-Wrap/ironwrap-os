@@ -5,17 +5,21 @@ Canonical contributor guide for IronWrap OS. `CLAUDE.md` points here.
 ## Product boundary
 
 IronWrap OS is the owned operating system for IronWrap Exteriors and iRoof Alberta: Alberta
-roofing, metal exteriors, service, and shop fabrication. The target assumes reliable agents for
-digital work while people retain physical, legal, and relationship-sensitive work.
+roofing, metal exteriors, service, and shop fabrication. AI output is always an untrusted proposal;
+deterministic policy, permits, tools, provider readback, and reconciliation make digital work
+reliable while people retain physical, legal, customer-choice, safety-release, and
+relationship-sensitive authority.
 
 Read these in order:
 
 1. `docs/DOCUMENTATION-CONTRACT.md` — which documents may claim authority.
-2. `docs/AUTONOMOUS-OPERATING-SYSTEM.md` — complete target company and workflow.
-3. `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md` — transition, work-package, evidence, safety,
+2. `docs/AI-NATIVE-ARCHITECTURE.md` — current system map, target AI control loop, repository
+   boundaries, user journeys, closure gaps, and proof path.
+3. `docs/AUTONOMOUS-OPERATING-SYSTEM.md` — complete target company and workflow.
+4. `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md` — transition, work-package, evidence, safety,
    side-effect, and reconciliation rules.
-4. `docs/CAPABILITY-MATRIX.md` — implemented capabilities and gaps.
-5. `docs/COMPLIANCE-REGISTER.md` — current external obligations and review cadence.
+5. `docs/CAPABILITY-MATRIX.md` — implemented capabilities and gaps.
+6. `docs/COMPLIANCE-REGISTER.md` — current external obligations and review cadence.
 
 Do not treat target prose as implementation evidence. Do not treat a passing local check as
 deployment, runtime verification, business acceptance, or production proof.
@@ -45,7 +49,9 @@ deployment, runtime verification, business acceptance, or production proof.
 - Do not add a new Frappe DocType, direct Worker dependency, readiness dependency, or release
   dependency. Retire existing dependencies workflow by workflow after reconciliation and rollback
   proof.
-- Hermes coordinates role-scoped agents; it is not a database.
+- Hermes currently supplies role/tool configuration and one default-off drafting pilot. The target
+  coordinator is the bounded loop in `docs/AI-NATIVE-ARCHITECTURE.md`; neither is a database or
+  grant of authority.
 - The PWA is the owned human work, customer, estimator, and supervisory surface.
 - QuickBooks remains posted accounting truth; the OS prepares, validates, submits, and reconciles
   accounting side effects through explicit adapters.
@@ -58,11 +64,12 @@ deployment, runtime verification, business acceptance, or production proof.
 The implementation may lag this target. Retire a bridge only after equivalent owned capability is
 implemented, reconciled, accepted, and proven in rollback-capable operation.
 
-## Reliable-agent rule
+## Governed-AI rule
 
-“Reliable” means an agent follows policy, preserves provenance, never invents evidence, and stops
-on unknown or contradictory state. It does not make suppliers, weather, networks, customers,
-payments, machinery, or physical observations reliable.
+AI is probabilistic and untrusted. Reliability is a property of the complete control loop: exact
+context, schema validation, deterministic policy, bounded permits, controlled execution, provider
+readback, reconciliation, evidence, and safe stop. Suppliers, weather, networks, customers,
+payments, machinery, and physical observations remain independently fallible.
 
 Routine digital actions may become machine-authorized only after the policy, adapter, idempotency,
 evidence, reconciliation, and rollback contracts are implemented. Until then, preserve the current

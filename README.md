@@ -1,8 +1,10 @@
 # IronWrap OS
 
 IronWrap OS is the owned operating system for IronWrap Exteriors and iRoof Alberta. Its target is
-an agent-operated Alberta roofing, metal-exteriors, and metal-fabrication company in which reliable
-agents run digital work and people retain physical, legal, and relationship-sensitive work.
+an AI-native Alberta roofing, metal-exteriors, and metal-fabrication company in which AI proposes,
+deterministic policy authorizes, controlled tools execute, providers are read back, and evidence
+closes each loop. People retain physical, legal, customer-choice, safety-release, and
+relationship-sensitive authority.
 
 The repository contains both the target contract and the implementation. Those are intentionally
 different truth classes: a documented target is not evidence that a capability is deployed or
@@ -12,6 +14,7 @@ production-proven.
 
 | Authority | Purpose |
 |---|---|
+| [`docs/AI-NATIVE-ARCHITECTURE.md`](./docs/AI-NATIVE-ARCHITECTURE.md) | Current executable architecture, authority map, AI control loop, role journeys, repository boundaries, and production reference path |
 | [`docs/AUTONOMOUS-OPERATING-SYSTEM.md`](./docs/AUTONOMOUS-OPERATING-SYSTEM.md) | Complete company model, workflows, agent responsibilities, human work, exceptions, and target state machine |
 | [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md) | Decision authority, work-package, evidence, safety, side-effect, and reconciliation contracts |
 | [`docs/CAPABILITY-MATRIX.md`](./docs/CAPABILITY-MATRIX.md) | Target-to-code gap register and implementation order |
@@ -42,14 +45,14 @@ margin, or customer promise can override a safety stop.
 |---|---|
 | `workers-bus/` | Cloudflare Worker integration bus and owned D1/R2 intake spine |
 | `app/` | React PWA for field, estimating, customer, sales, production, and owner surfaces |
-| `frappe-apps/ironwrap_roofing/` | Proprietary Frappe operating records and server policy |
-| `mcp/` | Bounded tools connecting agents to the bus, Frappe, and Newo |
-| `hermes/` | Agent roles, runtime configuration, and operational procedures |
+| `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection and legacy command policy; no new operating authority |
+| `mcp/` | Bounded read, preview, compatibility, and recovery adapters |
+| `hermes/` | Role/tool configuration and a narrow default-off drafting pilot; not a system of record or resident coordinator |
 | `config/` | Tenant and integration release contracts; secret names only |
 | `deploy/` | Local and production deployment assets |
 | `docs/` | Canonical contracts and current runbooks only |
 | `tools/` | Validators, readiness checks, and synthetic fixtures |
-| `Facet/` | Ignored nested product repository with its own authority and Git lifecycle |
+| `Facet/` | Ignored nested product checkout; Facet has a separate repository, authority, and Git lifecycle |
 
 Generated reports belong outside Git under `output/`. Customer files and production exports belong
 in approved operational storage, never in this repository. Committed fixtures must be synthetic.

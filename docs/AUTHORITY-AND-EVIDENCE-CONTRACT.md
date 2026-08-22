@@ -2,27 +2,32 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-20
+Last verified: 2026-08-22
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
 
-IronWrap may use AI agents that are 100% reliable in the following precise sense:
+AI models are fallible interpreters and planners. Their output is untrusted input to the operating
+system and cannot itself establish a fact, policy result, approval, permit, side effect, readback,
+or completed transition.
 
-- they do not fabricate facts;
-- they follow their authority and policy exactly;
-- they preserve provenance;
-- they handle retries and failures deterministically;
-- they stop when required evidence or authority is absent;
-- they expose uncertainty instead of converting it into confidence.
+IronWrap makes the overall loop reliable by requiring:
 
-Reliability does not make external facts perfect. Customers, suppliers, weather feeds, sensors,
-documents, machines, credentials, laws, and physical conditions may still be wrong, unavailable,
-malicious, or changed.
+- source-bound facts with identity, version, hash, trust, and freshness;
+- exact schemas and registered actions;
+- deterministic policy evaluated again immediately before action;
+- human authority where required and a bound, expiring permit otherwise;
+- idempotent controlled execution without model-held credentials;
+- authoritative readback, reconciliation, evidence, and durable exceptions; and
+- step, time, cost, retry, and no-progress ceilings.
+
+Customers, suppliers, weather feeds, sensors, documents, machines, credentials, laws, physical
+conditions, models, prompts, and connector data may be wrong, unavailable, malicious, stale, or
+changed.
 
 ## Human and agent boundary
 
-Agents own routine cognitive and digital execution:
+AI may interpret, summarize, prioritize, draft, and propose routine cognitive and digital work:
 
 - intake, qualification, planning, estimation, purchasing, scheduling, compliance evaluation;
 - customer and internal communications within recorded consent and authority;
@@ -30,7 +35,8 @@ Agents own routine cognitive and digital execution:
   triage;
 - monitoring, exception detection, audit, and continuous improvement.
 
-Humans own:
+Deterministic automation may commit a routine digital transition only through the exact policy,
+permit, tool, readback, and reconciliation contract. Humans own:
 
 - access-sensitive physical inspection until a validated machine can perform it;
 - material handling, fabrication exceptions, installation, repair, and emergency stabilization;
@@ -39,9 +45,9 @@ Humans own:
 - physical stop-work and emergency decisions at the point of danger;
 - ownership, capital allocation, risk appetite, ethics, and existential company decisions.
 
-Routine human review is not a permanent target control. A human remains in a transition only when
-the physical act, legal duty, customer choice, relationship need, or unresolved exception requires
-one.
+Routine duplicate review is not a permanent target control. A human remains in a transition when
+policy requires approval or when the physical act, safety release, legal duty, customer choice,
+relationship need, money/risk ceiling, or unresolved exception requires one.
 
 ## Non-negotiable rights
 
@@ -59,7 +65,7 @@ Every action has exactly one authenticated actor:
 
 | Actor class | Examples | Authority source |
 |---|---|---|
-| `agent` | concierge, estimator, scheduler, procurement, finance | versioned role and policy |
+| `agent` | scoped AI proposal or deterministic coordinator acting through a named role | versioned role, policy, and permit; AI output alone has no commit authority |
 | `worker` | inspector, fabricator, installer, driver, supervisor | employment/contract, competency, assignment |
 | `customer` | owner, tenant contact, property manager, GC | verified identity and decision authority |
 | `external_authority` | City, WCB, CRA, engineer, manufacturer, insurer | authenticated external record |
@@ -82,6 +88,10 @@ Shared accounts and unattributed side effects are forbidden.
 
 Each role receives only the levels needed for its function. Authority is scoped by tenant, job,
 customer, amount, geography, time, device, data class, and operation.
+
+AI models receive at most `observe`, `derive`, and `propose`. A deterministic coordinator may
+invoke `commit_internal` or `commit_external` only with an exact permit and may never infer the
+permit from model confidence.
 
 ## Canonical transition envelope
 
@@ -129,6 +139,27 @@ A transition commits only when:
 
 An agent may not infer completion from a message, calendar entry, payment screenshot, uploaded
 file, or another system's mutable status alone.
+
+## AI context and proposal contract
+
+Every AI run receives a bounded `ContextSnapshot` whose facts carry stable id, aggregate version,
+source/evidence hash, trust class, observed/effective time, freshness deadline, and tenant/job
+scope. Untrusted document, connector, calendar, and message text is labelled data, never
+instruction.
+
+Every `PlanProposal` must contain:
+
+- one declared goal and bounded step list;
+- a registered action kind for each step;
+- exact fact citations and required versions/hashes;
+- preconditions, freshness, risk, expected result, and stop condition;
+- required human role or machine-policy class;
+- readback/reconciliation verifier; and
+- step, time, cost, retry, and no-progress ceilings.
+
+Unknown fields, absent citations, stale/conflicting facts, an unregistered action, missing policy,
+or exhausted ceilings produce abstention and a durable exception. A model never receives provider
+credentials or a generic database/provider mutation tool.
 
 ## Evidence classes
 
@@ -245,9 +276,10 @@ Examples include customer messages, appointments, supplier orders, permit submis
 payments, refunds, payroll, filings, access changes, machine release, and dispatch.
 
 The current repository uses reviewed dry-run and signed approval receipts for many writes. That is
-the safe implemented baseline. The autonomous target may replace routine human approval with a
+the safe implemented baseline. The target may replace routine duplicate human approval with a
 policy-issued machine authority receipt only after the corresponding capability is implemented and
-independently proven. Legal/customer/physical signoffs remain human where required.
+independently proven. Legal, customer-choice, safety-release, physical, and exceptional financial
+signoffs remain human where required.
 
 An owned business transition commits in D1 before any compatibility projection. Projection failure
 creates reconciliation work; it never rolls back, replaces, or becomes evidence for the committed
@@ -264,7 +296,7 @@ not be described as rollback.
 
 ## Segregation of duties
 
-Reliability does not eliminate separation:
+Governed automation does not eliminate separation:
 
 - an estimator may not independently alter source measurements;
 - procurement may not create a vendor and release payment to it;
@@ -291,8 +323,8 @@ and institutional error.
 | `customer` | cancellation, dispute, access withdrawn, person requested | stop affected work, route to authorized human |
 | `external` | supplier failure, permit rejection, outage | replan without falsifying readiness |
 
-Stops may be cleared only by the actor and evidence defined in policy. “AI is reliable” is not a
-clearance reason.
+Stops may be cleared only by the actor and evidence defined in policy. Model confidence, a plan,
+or an AI explanation is never a clearance reason.
 
 ## Degraded operation
 
@@ -345,5 +377,8 @@ This contract is implemented only when tests demonstrate:
 - all customer/vendor/accounting/machine side effects are idempotent and reconciled;
 - legal, safety, customer, and relationship-sensitive human gates remain intact;
 - an outage can recover without lost, duplicated, or falsely completed work;
-- the evidence bundle can reconstruct who did what, under which authority, from which facts.
-- no required operating transition, readiness verdict, or release artifact depends on Frappe.
+- the evidence bundle can reconstruct who did what, under which authority, from which facts;
+- no required operating transition, readiness verdict, or release artifact depends on Frappe;
+- an isolated technical reference tenant completes the exact production loop and required
+  failure/recovery drills without being described as customer validation; and
+- `customer_validated` remains false until independent real-customer evidence exists.

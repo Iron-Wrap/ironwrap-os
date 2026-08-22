@@ -1,14 +1,19 @@
 ## Production Scheduling Contract (IRO-50)
 
-Status: Target — architecture spec only, no code shipped yet.
+Status: historical target-design snapshot; non-authoritative for current implementation, migration
+numbers, repository state, or delivery status.
 Owner: ironwrap-architect (design), production-controller domain (build).
-Last verified: 2026-08-21 — full §2.1 inventory against `ironwrap-os@2c2a1d6`; the §7.1 migration
-reservation, the "no `reschedule` in code" claim and the `SCHEDULING_PRODUCTION_GATES` citation
-re-confirmed against `main@1f36c29`; the §2.1 gate-clearing entry added against `main@249c214`
-plus the ELEC-122 branch.
-Review trigger: re-verify before implementation starts, and again whenever IRO-45 (inventory) or a workforce/time lane merges to `main`.
+Snapshot verified: 2026-08-21 against the commits named below. Preserved for design rationale and
+rejected alternatives; do not execute its migration reservations or treat its branch inventory as
+current. Current authority, implementation, and next gates live in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md) and
+[`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md).
+Review trigger: none; create a new current contract if the scheduling domain is re-designed.
 
-Everything in this document is **Target** unless a paragraph says **Implemented** and cites a `path:line`. No implementation code accompanies this spec; short type/schema sketches below are illustrative, not shippable.
+Everything below describes that dated snapshot unless a paragraph explicitly names a then-current
+implementation. Native D1 assignment revisions now exist, so the snapshot's “no code shipped” and
+migration-number claims are intentionally retained only as history. Short type/schema sketches are
+illustrative, not shippable.
 
 ---
 
@@ -24,7 +29,11 @@ Nothing described in §4–§9 exists yet. What already exists and this spec bui
 
 ### 1. Requirement
 
-Linear IRO-50 (source of truth — its acceptance criteria outrank this summary): replace approval-led schedule snapshots with a constraint-aware plan/replan engine that can safely execute routine digital scheduling. Proven gap, quoting the issue: "Production schedule approval requests, broker execution and runway UI exist. There is no complete solver for competency, crew, material, shop, equipment, permit, weather, site/access, customer and predecessor constraints; `reschedule` has no execution path."
+At the time of this snapshot, Linear IRO-50 supplied the planning requirement. Linear is delivery
+context, not operating or documentation authority. The recorded requirement was to replace
+approval-led schedule snapshots with a constraint-aware plan/replan engine that can safely execute
+routine digital scheduling; the historical issue text described the missing complete solver and
+`reschedule` execution path.
 
 Acceptance criteria (verbatim from Linear, condensed):
 - Deterministic constraint model consumes exact versioned authority/material/equipment/job facts and explains every conflict.

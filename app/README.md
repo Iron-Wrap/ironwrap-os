@@ -151,6 +151,23 @@ An online authenticated session is cached without its CSRF token until its serve
 already-provisioned crew device can reopen the offline shell. The offline marker cannot sign out
 or upload. Every mutation is re-authorized by the Worker when connectivity returns.
 
+## Interaction contract
+
+Each role gets a focused surface with one primary next action, progressive disclosure, plain-language
+blockers, visible evidence provenance, authority, and sync state, plus a reachable human escalation.
+A workflow board is a read model: its lanes are versioned predicates over authoritative state. A
+drag/drop gesture requests a typed Worker command with aggregate-version and idempotency
+preconditions; it never edits a generic status in the browser.
+
+Operational forms follow versioned domain schemas with typed fields, field-level read/write
+authority, provenance, conditional evidence, offline rules, and correction audit. This is a target
+composition contract, not a claim that the PWA currently contains a generic form builder.
+
+The planned conversational owner surface is another client of the same BFF read models and action
+catalog. It may query, explain, draft, request governed action, present required approval, and show
+readback/reconciliation. It is not a global chatbot, does not receive credentials or ambient
+authority, and cannot replace role screens, exception queues, audit, or recovery controls.
+
 ## Offline outbox contract
 
 Every field mutation follows this visible state machine:
@@ -200,6 +217,20 @@ iOS does not provide Background Sync for this PWA. The UI therefore says **keep 
 while queued work is uploading. Reconnecting or backgrounding the app is never shown as
 `Verified`; only the server acknowledgement changes that state.
 
+### Offline capability matrix
+
+This matrix is the current product boundary. Future routes must declare and test their own row before
+being described as offline-capable.
+
+| Capability                                                           | Offline behavior                                                   | Reconnect behavior                                               | Authority rule                                                         |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Application shell                                                    | Precached shell only; no live business truth                       | Refetch session and route data                                   | Cached UI grants nothing                                               |
+| Cached field work packet                                             | Read the explicitly saved packet with stale/saved state visible    | Refresh version and blockers                                     | Never implies gate, safety, or completion clearance                    |
+| Field check-in/evidence                                              | Save Blob/JSON intent and stable action ID in the durable outbox   | Re-authorize, upload, and require exact server verification      | Queueing is not delivery or onsite proof                               |
+| Protected field report/stop/make-safe                                | Retain the granted action intent without treating it as a release  | Re-authorize, reconcile duplicate/conflict, show terminal result | Stop/report rights remain protected; release is never inferred offline |
+| Owner/ops/sales/production/accounting reads                          | Shell may open; uncached API facts are unavailable, not fabricated | Refetch authoritative read model                                 | Stale or absent data cannot authorize a decision                       |
+| Approval, customer acceptance, commercial/accounting/provider commit | Disabled; never enters the field outbox or auto-retries            | Reload durable ledger and require a fresh explicit action        | Online Worker policy, permit, effect, and readback rules apply         |
+
 The deployment target is one Cloudflare Worker with static assets configured for SPA fallback and
 `run_worker_first = ["/api/*"]`. Those Worker deployment settings live with the server/deploy
 slice, not in this standalone frontend package.
@@ -213,7 +244,7 @@ required PNG icon exist in `dist` with the expected manifest purposes.
 ## Product rules
 
 The shell follows the canonical AI-native, operating, and evidence contracts: evidence before claims,
-camera/voice before keyboard,
-physical gate locks, exception-first owner work, one clear next action, undoable interaction design,
-trade-language errors, and visible sync truth. New routes must preserve these laws and may
-not add fake production data to make an unfinished screen look populated.
+camera/voice before keyboard, physical gate locks, exception-first owner work, one clear next action,
+progressive disclosure, undoable interaction design, trade-language errors, visible authority and
+sync truth, and an accessible human handoff. New routes must preserve these laws and may not add fake
+production data to make an unfinished screen look populated.

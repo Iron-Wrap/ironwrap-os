@@ -106,6 +106,18 @@ target architecture. Frappe remains an optional projection (apps tree, Hermes ER
 The cutover is incomplete until leftover projection consumers are gone and a live issuer/rollback
 has been proven. Projection failure cannot change authoritative D1 state.
 
+### Job vocabulary and portability target
+
+`Job` is the canonical IronWrap operating/commercial aggregate. Existing `roof_job_id` values are
+stable identities and remain valid evidence references. The target is a Job kernel with a versioned
+`job_kind`/operating profile and domain-specific extensions, not a generic Project record containing
+every trade and workflow.
+
+Portability starts only after deterministic commercial closure. Use expand -> dual-read comparison
+-> writer switch -> compatibility projection -> parity proof; do not mass-rename D1 tables, routes,
+events, or evidence. A `Facet Project` remains a separate design aggregate and is associated to an
+IronWrap Job only through the governed evidence contract.
+
 ### Commercial, lifecycle, and AI reachability
 
 Current source tracing distinguishes implemented modules from reachable production flows:
@@ -603,7 +615,11 @@ Target changes:
 - add procurement, inventory, shop, safety, quality, workforce, fleet/facility, tax, customer
   success, security/privacy, and independent-audit roles;
 - separate policy authoring, activation, execution, and audit;
-- make all side effects idempotent and provider-reconciled.
+- make all side effects idempotent and provider-reconciled;
+- expose an owner conversational surface that can query, explain, draft, request a registered
+  action, present required approval, and show readback/reconciliation without becoming an authority;
+- keep MCP and skills as intent/action-catalog adapters with no provider credentials, direct D1
+  writes, or bypass around policy, permits, effects, and human-only decisions.
 
 ### PWA
 
@@ -622,6 +638,12 @@ Target gaps:
 
 - real-device acceptance of versioned multi-worker packages, offline completion, evidence-slot
   capture, and independent hold release;
+- a role-by-role offline capability matrix that distinguishes cached shell/read models, queueable
+  field evidence, reconnection reconciliation, and online-only commercial/accounting decisions;
+- governed workflow boards whose lanes are versioned predicates and whose drag/drop gestures submit
+  typed commands with aggregate-version preconditions rather than editing a generic status;
+- schema-driven operational forms with typed fields, field-level authority, provenance,
+  conditional evidence, versioning, offline policy, and correction audit;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
 - employee/competency/training and subcontractor clearance;
 - fleet incident/collision lifecycle and shop-machine work-centre tooling;
@@ -650,7 +672,13 @@ Implemented or represented:
 Target gaps:
 
 - proof-backed retirement of temporary CRM/automation bridges;
+- a versioned integration manifest per provider/tenant/action covering direction, auth scopes, data
+  class, authority, idempotency/retry, readback/reconciliation, fallback, readiness, and proof TTL;
+- an Integrations surface over reviewed manifests rather than a tenant-executable plugin/hook engine;
 - direct customer send with consent/delivery/suppression reconciliation;
+- versioned supplier catalog snapshots with external material identity, unit/currency, price/freight,
+  effective/expiry dates, availability/lead time, source hash, and estimate/takeoff consumption
+  lineage;
 - direct supplier transmission/acknowledgement and provider reconciliation;
 - permit/regulator submission/status;
 - WCB clearance retrieval/status;
@@ -665,19 +693,20 @@ Target gaps:
 |---|---|---|---|
 | Governance | Target prose and owner role | corporate/delegation/policy objects and activation separation | policy change audit |
 | Legal/licence | tenant-scoped, individually versioned Authority Records for Person/Organization Worker/Subcontractor subjects, issuer/jurisdiction/evidence hashes, effective/expiry, verification, revocation, contradiction, and supersession; schedule, Work Package, and shop release consumers resolve exact current versions | complete jurisdiction rules and live issuer integration/readback reconciliation | issuer recheck and blocked release |
-| Marketing | lead source + market watch | claims ledger, campaign side effects, suppression | unsupported claim rejected |
+| Marketing | lead source + market watch; source-implemented but default-off Postiz intent/review/effect/readback path | claims ledger, governed campaign release, suppression, and configured provider proof | unsupported claim rejected; approval/readback reconciled |
 | Lead intake | Strong implemented spine | all real sources cut over and bridge retirement | real dual-brand lead, reconcile |
 | Consent/comms | consent/event records and policy checks | autonomous provider send and response/suppression loop | opt-in/send/reply/STOP/reconcile |
 | Qualification | lead triage + estimate session | complete service/authority/risk policy | adversarial lead suite |
-| Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution | real site and conflicting source test |
+| Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution, and Facet-owned CV candidate extraction with uncertainty and human review | real site, frozen evaluation set, tolerance/calibration, and conflicting source test |
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
 | Contract | Partial: native acceptance is production-reachable and atomically pins an approved quote, proposal publication, terms snapshot, challenge, and decision; the approved-quote writer and publication settlement are not production-reachable, and acceptance does not derive the deposit intent | native approved-quote writer, delivery-readback publication settlement, acceptance-driven deposit intent, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
-| Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
+| Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | versioned catalog sync, vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, and provider reconciliation | catalog drift/unit mismatch plus duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | Partial: D1 owns append-only assignment revisions, conflict checks, and an approval ledger; the older Frappe approval broker is compatibility residue | constraint solver, authoritative lifecycle projection, weather/material/crew inputs, and policy-bounded reschedule proposals | conflict/weather/material reference test and real dispatcher acceptance |
+| Workflow composition | Read-only owner/production/sales surfaces plus a read-only Frappe pipeline projection; no native configurable drag/drop authority | versioned role/work-type views over orthogonal state machines, typed command gestures, committed-event automations, and schema-driven forms | stale-version drop rejected, gate blocker preserved, event replay idempotent, and form authority enforced |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | D1 system of record (IRO-44, #59): nine ledgers for equipment, occurrences, notifications, corrective actions, readiness snapshots, and offline device actions, plus the PWA safety panel; Frappe Safety Plan/acknowledgement remains the preconstruction plan object only — no Frappe projection of the D1 ledgers will be built (IRO-195, 2026-08-21). Crew Profile competence, WCB, and active-stop release fences still consume readiness. | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
@@ -691,7 +720,7 @@ Target gaps:
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |
 | Insurance/risk | generic compliance | policy/claim/notification/recovery | claim tabletop |
 | Audit | Strong append-only audit, effect, gate, evidence, and reconciliation records; Hermes is a disabled narrow draft pilot, not the operating authority or a resident coordinator | independent cross-domain audit, anomaly closure, and a thin context/plan/policy/permit/readback coordinator | deterministic full-job reconstruction before model-assisted anomaly trials |
-| White label | tenant config/export/isolation | complete operating-domain isolation and managed ops | second real tenant proof |
+| White label | tenant config/export/isolation | complete operating-domain isolation and managed ops; versioned Operating Packs only after repeated configurations, with marketplace deferred until upgrade/rollback/isolation proof | second real tenant proof plus pack compatibility/rollback |
 
 ## Gap audit of the previous operating model
 
@@ -716,6 +745,11 @@ insufficient as an implementation contract in these areas:
 14. It did not define side-effect ambiguous-result and compensation behavior.
 15. It did not distinguish repository, deployment, runtime, business acceptance, and production
     proof in a machine-enforced documentation policy.
+16. It did not define pipeline lanes as read models or drag/drop as a versioned typed command.
+17. It did not define schema-driven forms, field-level authority, or offline collection policy.
+18. It did not define provider integration manifests or supplier-catalog consumption lineage.
+19. It did not separate the IronWrap Job kernel from the Facet Project design aggregate or define a
+    safe `roof_job_id` portability path.
 
 The canonical operating and authority contracts now close the specification gaps. The
 implementation gaps in this matrix remain real.
@@ -729,7 +763,10 @@ Build in dependency order. Do not create all agents first.
 - canonical contracts and documentation validator;
 - no legacy/generated/customer documents in Git;
 - implementation versus live proof vocabulary;
-- policy, transition, evidence, and human work-package schemas.
+- policy, transition, evidence, and human work-package schemas;
+- canonical Job/Facet Project vocabulary and a staged portability contract;
+- one canonical implementation owner for shared Facet/Home Capture, geometry, rendering, catalog,
+  and computer-vision work before a new shared change starts.
 
 ### Gate 1: work package and evidence
 
@@ -767,7 +804,9 @@ command can perform.
 
 ### Gate 5: complete physical and service operating loops
 
-- procurement transmit/ack/reconcile and schedule/reschedule;
+- governed role/work-type boards, typed-command drag/drop, committed-event automations, and
+  schema-driven operational forms;
+- supplier catalog snapshot/sync plus procurement transmit/ack/reconcile and schedule/reschedule;
 - workforce, vehicle/equipment/facility, complaint/warranty/service, and insurance/continuity;
 - customer communication send/suppression;
 - accounting invoice/payment/refund/holdback/tax reconciliation.
@@ -778,11 +817,15 @@ command can perform.
 - typed PlanProposals with assumptions, confidence, evidence requirements, and expiry;
 - deterministic policy evaluation and scoped permit issuance outside the model;
 - effect submission, provider readback, reconciliation, and bounded human escalation;
+- owner conversational query/explain/draft/request/approve/readback experience over the same action
+  catalog, with role screens and exception queues retained as fallback;
 - evals for abstention, stale/conflicting evidence, prompt injection, and replay safety.
 
 ### Gate 7: configured reference environment
 
 - named providers, non-secret configuration, secret identities, and authenticated readback;
+- versioned integration manifests and readiness/proof TTL per provider action;
+- role-by-role offline profiles and reconciliation behavior;
 - fail-closed readiness profiles for the exact reference journey;
 - recovery/rollback drills and proof expiry.
 
@@ -790,7 +833,9 @@ command can perform.
 
 - one controlled synthetic/reference job through every applicable state;
 - one supply-only shop order and one warranty/service case;
-- one outage/offline recovery, one safety stop, and one quality NCR drill;
+- email/magic-link and edge/ingress outages, PWA/Worker/projection version skew, partial rollout
+  recovery, supplier-catalog drift, provider realm/readback mismatch, and offline conflict drills;
+- one safety stop and one quality NCR drill;
 - one second-tenant isolation/export/restore proof;
 - exact source, deployment, provider, runtime, evidence, and reconciliation receipts.
 

@@ -45,8 +45,8 @@ non-empty `GOOGLE_SERVICE_ACCOUNT_JSON`; then a staging deploy and an `--execute
   `ERPNEXT_ENABLED=true`, `ERPNEXT_BASE_URL=http://localhost:8000`) with Miniflare-local D1/R2/
   queues. All 33 D1 migrations applied locally by `deploy/local/predev.mjs`.
 - Frappe: the `deploy/local` stack (Frappe `v15.114.0`, site `ironwrap.localhost`, only `frappe` +
-  `ironwrap_roofing` installed), provisioned as recorded in
-  [`LOCAL-FRAPPE-STAND-UP-DEFECTS.md`](./LOCAL-FRAPPE-STAND-UP-DEFECTS.md).
+  `ironwrap_roofing` installed), provisioned through the checked-in local-stack tooling and
+  [`deploy/local/README.md`](../deploy/local/README.md).
 - Reader identity: `launch-proof-reader@ironwrap.local`, holding only
   `IronWrap Launch Proof Reader`, API pair generated in-site, pinned via
   `bench --site ironwrap.localhost set-config ironwrap_launch_proof_reader_user …` (the manual

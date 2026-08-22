@@ -176,9 +176,6 @@ function QuoteRevisionApprovalQueueContent() {
                   <ClipboardCheck className="size-6 text-accent" aria-hidden="true" />
                 </span>
                 <div className="min-w-0">
-                  <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                    Quote review
-                  </p>
                   <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                     Quote change reviews
                   </h1>
@@ -191,9 +188,7 @@ function QuoteRevisionApprovalQueueContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.approvals.length === 0
                 ? "No quote changes to review"
@@ -488,9 +483,6 @@ function QuoteRevisionApprovalDetailContent() {
                 <FileText className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Quote review
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Review a new quote
                 </h1>
@@ -502,9 +494,7 @@ function QuoteRevisionApprovalDetailContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Current state
-            </p>
+            <p className="text-sm font-bold text-muted">Current state</p>
             <div className="mt-3">
               <StatusBadge status={approval.state} />
             </div>
@@ -729,9 +719,6 @@ function QuoteRevisionApprovalPrepareContent() {
                 <FilePlus2 className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Quote change
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Ask for a new quote
                 </h1>
@@ -743,9 +730,7 @@ function QuoteRevisionApprovalPrepareContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">Tell us what is wrong</h2>
             <p className="mt-2 text-sm leading-6 text-muted">
               A person will check the current quote and the empty draft before it is made.
@@ -880,10 +865,7 @@ function RevisionDecisionRail({ approval }: { approval: QuoteRevisionApprovalReq
       aria-labelledby="revision-decision-path"
     >
       <div className="flex items-center justify-between gap-3 px-5 py-5 sm:px-6">
-        <h2
-          id="revision-decision-path"
-          className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
-        >
+        <h2 id="revision-decision-path" className="text-sm font-bold text-muted">
           How this works
         </h2>
         <StatusBadge status={approval.state} />
@@ -920,10 +902,7 @@ function PrepareDecisionRail({
       className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
       aria-labelledby="prepare-decision-path"
     >
-      <h2
-        id="prepare-decision-path"
-        className="px-5 py-5 text-sm font-extrabold uppercase tracking-[0.14em] text-muted sm:px-6"
-      >
+      <h2 id="prepare-decision-path" className="px-5 py-5 text-sm font-bold text-muted sm:px-6">
         What happens
       </h2>
       <ol className="grid border-t border-border sm:grid-cols-4">
@@ -1404,7 +1383,7 @@ function ResultFact({
         bordered && "border-t border-ok/25 sm:border-t-0 sm:border-l",
       )}
     >
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className="mt-2 break-all text-sm font-bold text-foreground">{value}</dd>
     </div>
   );

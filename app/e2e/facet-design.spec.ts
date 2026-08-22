@@ -44,11 +44,17 @@ test.describe("Facet design acceptance", () => {
               projection_state: "projected",
               status_code: "blank_draft_projected",
               projection: {
-                outcome: "projected_blank_draft",
-                evidence_id: "facet-design:evidence-acceptance",
-                reconciliation_id: "facet-design-projection:receipt-acceptance",
-                draft_customer_quote_id: "facet-quote-revision:draft-1042",
-                draft_quote_version: 3,
+                outcome: "projected_native_design",
+                projection_id: "facet-native-design-v2:projection-acceptance",
+                projection_sha256: "e".repeat(64),
+                source_quote_revision_id: "quote-revision:accepted-1042",
+                source_quote_version: 3,
+                source_proposal_revision_id: "proposal-revision:accepted-1042",
+                source_publication_event_id: "publication-event:accepted-1042",
+                source_acceptance_binding_id: "acceptance-binding:accepted-1042",
+                launch_intent_sha256: "f".repeat(64),
+                design_sequence: 1,
+                design_state: "active",
                 error_code: null,
                 attempted_at: "2026-08-21T10:02:00.000Z",
               },
@@ -68,10 +74,12 @@ test.describe("Facet design acceptance", () => {
     });
 
     await page.goto("/facet-designs");
-    await expect(page.getByRole("heading", { name: "Customer designs" })).toBeVisible();
-    await expect(page.getByText("Quote draft ready")).toBeVisible();
-    await expect(page.getByText("Customer and job matched")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Fix a design link" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Customer design evidence" })).toBeVisible();
+    await expect(page.getByText("Native design ready")).toBeVisible();
+    await expect(page.getByText("Google OIDC · exact project link")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Recover without a manual association" }),
+    ).toBeVisible();
     await expect(page.getByText("facet-project-acceptance")).toBeHidden();
 
     const width = await page.evaluate(() => ({
@@ -91,7 +99,7 @@ test.describe("Facet design acceptance", () => {
       fullPage: true,
     });
 
-    await page.getByText("System details").last().click();
+    await page.getByText("Immutable evidence anchors").click();
     await expect(page.getByText("facet-project-acceptance")).toBeVisible();
     await expect(page.getByRole("button", { name: /connect|prepare/i })).toHaveCount(0);
   });

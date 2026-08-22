@@ -138,9 +138,6 @@ function MoneyExceptionsContent() {
               <TriangleAlert className="size-5 text-warning" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                Accounting
-              </p>
               <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                 Money issues
               </h1>
@@ -261,19 +258,19 @@ function ExceptionCard({
         </summary>
         <dl className="divide-y divide-border border-t border-border">
           <div className="px-4 py-3 sm:px-6">
-            <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              Our check code
-            </dt>
+            <dt className="text-sm font-bold text-muted">Our check code</dt>
             <dd className="mt-1">
-              <code className="break-all text-xs">{exception.expected_sha256 ?? "—"}</code>
+              <code className="break-all text-xs">
+                {exception.expected_sha256 ?? "Not recorded"}
+              </code>
             </dd>
           </div>
           <div className="px-4 py-3 sm:px-6">
-            <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              QuickBooks check code
-            </dt>
+            <dt className="text-sm font-bold text-muted">QuickBooks check code</dt>
             <dd className="mt-1">
-              <code className="break-all text-xs">{exception.observed_sha256 ?? "—"}</code>
+              <code className="break-all text-xs">
+                {exception.observed_sha256 ?? "Not recorded"}
+              </code>
             </dd>
           </div>
         </dl>

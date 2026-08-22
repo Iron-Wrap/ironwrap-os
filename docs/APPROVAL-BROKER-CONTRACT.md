@@ -4,9 +4,10 @@ The approval rail turns one bounded Hermes preview into one human-approved,
 audited mutation. It is deliberately not a generic remote-control API.
 
 This is the current implemented transitional control, not the final human boundary. Under the
-reliable-agent target, a routine digital action may move to machine-issued policy authority only
-after the canonical side-effect, idempotency, reconciliation, rollback, and audit contracts are
-implemented and tested. Existing approval gates remain binding until that replacement lands.
+governed-AI target, a routine digital action may move to machine-issued policy authority only after
+the deterministic policy, scoped permit, canonical side-effect, idempotency, readback,
+reconciliation, rollback, and audit contracts are implemented and tested. Model confidence is
+never authority. Existing approval gates remain binding until that replacement lands.
 Legal, customer-consent, physical-acceptance, relationship-sensitive, and safety-critical human
 authority is never removed by this transition.
 
@@ -54,8 +55,9 @@ flowchart LR
   It accepts only HMAC-authenticated Worker requests over HTTPS and only its
   two bounded endpoints. It is a constrained policy enforcement point, not a
   generic MCP proxy.
-- Frappe remains the executed business audit: the existing MCP request creates
-  and finalizes the immutable `Hermes Run` only after receipt verification.
+- D1 remains the approval-request authority. Frappe records the executed compatibility audit: the
+  existing MCP request creates and finalizes the immutable `Hermes Run` only after receipt
+  verification. That audit cannot override native D1 state.
 
 ## Durable request state
 

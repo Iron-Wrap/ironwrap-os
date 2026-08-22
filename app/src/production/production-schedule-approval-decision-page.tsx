@@ -182,9 +182,6 @@ function ProductionScheduleApprovalQueueContent() {
                 <CalendarClock className="size-5 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Owner review
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Schedule requests
                 </h1>
@@ -506,9 +503,6 @@ function ProductionScheduleApprovalDetailContent() {
                 <CalendarClock className="size-5 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Human decision
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Crew assignment request
                 </h1>
@@ -693,10 +687,7 @@ function ScheduleDecisionRail({
   return (
     <section aria-labelledby="schedule-decision-path">
       <div className="flex items-center justify-between gap-3">
-        <h2
-          id="schedule-decision-path"
-          className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted"
-        >
+        <h2 id="schedule-decision-path" className="text-sm font-bold text-muted">
           Recorded decision path
         </h2>
         <StatusBadge status={approval.state} />
@@ -1128,7 +1119,7 @@ function ResultFact({
         bordered && "border-t border-ok/25 sm:border-t-0 sm:border-l",
       )}
     >
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className="mt-2 break-all text-sm font-bold text-foreground">{value}</dd>
     </div>
   );

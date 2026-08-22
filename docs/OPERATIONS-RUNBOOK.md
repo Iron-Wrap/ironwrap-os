@@ -1,8 +1,13 @@
 # IronWrap OS Operations Runbook
 
+Status: current runbook for the D1/Worker operating plane; Frappe and Hermes steps are conditional
+compatibility procedures, not operating authority.
+
 Day-2 monitoring, incident recovery, replay, secret rotation, backup, and restore procedure for
-the Worker-owned bus and Frappe consumer. Tenant creation is in
+the Worker-owned operating plane and any explicitly enabled compatibility projections. Tenant creation is in
 `docs/WHITE-LABEL-CLONE-PLAYBOOK.md`; initial deployment is in `docs/LAUNCH-RUNBOOK.md`.
+The canonical authority and proof boundaries are in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
 
 Admin routes require `Authorization: Bearer <ADMIN_TOKEN>`. Never put the token in a URL,
 request body, log line, incident ticket, or command history.
@@ -12,23 +17,23 @@ request body, log line, incident ticket, or command history.
 | Surface | Auth | Meaning | Healthy state |
 | --- | --- | --- | --- |
 | `GET /health` | none | Worker isolate liveness only | HTTP 200; does not prove dependencies |
-| `GET /ready` | none for `{ok}`; admin for diagnostic checks | D1 schema query plus R2/Queue binding and auth/notification/JobNimbus/enabled-Frappe config presence | HTTP 200 and every authenticated check true; HTTP 503 blocks traffic cutover |
-| `GET /admin/status` | admin | Heartbeat freshness, pending/stuck/dead counts, Frappe errors, audit failures, latest QB receipt | `status: ok`; investigate every degraded reason |
+| `GET /ready` | none for `{ok}`; admin for diagnostic checks | D1 schema query plus R2/Queue binding and required native configuration; enabled provider/compatibility checks apply only to their configured scopes | HTTP 200 and every authenticated required check true; HTTP 503 blocks traffic cutover |
+| `GET /admin/status` | admin | Heartbeat freshness, pending/stuck/dead counts, provider/projection errors, audit failures, latest QB receipt | `status: ok`; investigate every degraded reason |
 | `GET /admin/dead-letter` | admin | Open forensic dead-letter rows | Empty |
 | `GET /admin/envelopes` | admin | Recent canonical envelopes and status | No unexplained pending/dead records |
 | `POST /admin/reconcile` | admin | Source-vs-landed reconcile and heartbeat | No unexplained gap; new heartbeat written |
 | Worker structured logs | Cloudflare account | Request, queue, retry, reconcile, and recovery errors | No repeated error signature |
 
 `/admin/status` treats a missing/stale/non-reconciled heartbeat, open dead letters, stuck
-envelopes, Frappe sync errors, failed/stuck replay requests, or recent audit failures as degraded.
+envelopes, enabled projection errors, failed/stuck replay requests, or recent audit failures as degraded.
 Its heartbeat freshness window is 36 hours and recent-audit window is 24 hours. It reports the
 latest QuickBooks receipt and 24-hour freshness separately; lack of recent QB activity is not by
 itself a system outage.
 
 `/ready` does not contact every configured downstream API or perform an R2/Queue mutation. Its
 unauthenticated response is deliberately limited to `{ok}`; send `ADMIN_TOKEN` to receive the
-diagnostic check map. Pair it with targeted Frappe/JobNimbus/Google/QuickBooks smoke evidence
-during launch and incidents.
+diagnostic check map. Pair it with targeted smoke evidence for every provider or compatibility
+projection enabled during launch and incidents.
 
 The scheduled `0 14 * * *` reconcile email is also a heartbeat. If no digest arrives, check
 `/admin/status`, the D1 heartbeat row, cron execution, and email delivery before assuming the
@@ -76,7 +81,7 @@ between first-owner bootstrap and authenticated office administration:
 
 1. List open rows with `GET /admin/dead-letter`.
 2. Read the selected canonical record with `GET /admin/envelope/<envelope_id>`.
-3. Inspect `last_error`, attempts, timestamps, Frappe/JobNimbus status, and the raw R2 object by
+3. Inspect `last_error`, attempts, timestamps, enabled provider/projection status, and the raw R2 object by
    its key. Dead-letter copies are redacted; R2 remains the raw source.
 4. Prove the dependency fix before creating an approval.
 
@@ -136,7 +141,7 @@ If candidates have different causes, replay them individually.
 
 - Selected envelopes progress from `dead` to `pending_jn_push` to the intended landed status.
 - Corresponding dead-letter rows become recovered; unrelated rows remain untouched.
-- `/admin/status` no longer reports the recovered dead/stuck/Frappe condition.
+- `/admin/status` no longer reports the recovered dead/stuck provider or projection condition.
 - The downstream record is not duplicated and its external/idempotency key is unchanged.
 - The replay audit carries `run_id`, approver, reason, counts, result, and any recovery owner.
 - The replay ledger has no unexplained failed or stale-running row; `/admin/status` reports
@@ -149,22 +154,23 @@ The five-minute retry sweep re-enqueues envelopes left in `pending_jn_push` long
 failure, not a missing queue message. Inspect the envelope and structured logs, repair the target,
 and allow the retry path to run. Do not force the row directly in D1.
 
-## Frappe Site Failure
+## Frappe Compatibility Projection Failure
 
-Frappe is the operating core; D1/R2 preserve canonical/raw intake while it is unavailable.
-Queue retry and DLQ preserve the mirror path. When Frappe returns:
+D1/Worker remains the operating authority while an enabled Frappe compatibility projection is
+unavailable. Queue retry and DLQ preserve the projection path; projection failure must not rewrite,
+promote, or invalidate authoritative D1 state. When the compatibility site returns:
 
 1. Prove site HTTPS and API authentication.
 2. Confirm `/ready` passes its enabled-Frappe configuration check.
 3. Confirm schema/migrations and installed app versions match the release record.
-4. Replay only affected dead envelopes using the procedure above.
-5. Reconcile D1 envelopes against Frappe records and close the Automation Incident.
+4. Replay only affected projection envelopes using the procedure above.
+5. Reconcile Frappe records back to their D1 source identities and close the Automation Incident.
 
 Do not describe Frappe as live merely because the repository app tests pass.
 
-## Hermes / MCP Mutation Failure
+## Hermes / MCP Compatibility Mutation Failure
 
-All approved Frappe mutations require HTTPS (except explicitly enabled localhost development),
+All approved compatibility mutations require HTTPS (except explicitly enabled localhost development),
 a bounded request timeout, a stable required `run_id`, human approval, and the matching dry-run.
 
 - A completed `run_id` is idempotent: retry returns the stored result without repeating the target
@@ -217,8 +223,9 @@ was contacted or that a lead was triaged. The operating state is separate:
 
 1. New Worker-created leads are `Untriaged`; migrated legacy rows are `Unknown` and require
    explicit review rather than being counted as new.
-2. Mark a lead `Triaged` only through the receipt-bound Hermes dry-run/approval/write path, with
-   a concise disposition. That patch must not alter transport status or a Communication Event.
+2. While the legacy triage command remains enabled, mark a lead `Triaged` only through its
+   receipt-bound Hermes dry-run/approval/write compatibility path, with a concise disposition.
+   That patch must not alter transport status or a Communication Event.
 3. `lead_ack_receipts` is append-only and records only a Gmail provider-acceptance identifier,
    failed attempt, or no eligible channel. It is not delivery, read, consent, or human-follow-up
    proof.
@@ -233,9 +240,9 @@ was contacted or that a lead was triaged. The operating state is separate:
 
 | Store | Role | Recovery property |
 | --- | --- | --- |
-| Cloudflare D1 | Canonical envelope/audit/dead-letter/heartbeat/dedup/replay/auth/QB receipt and projection-outbox ledgers | Daily exact-account remote SQL export, encrypted in R2; isolated SQLite plus D1 drill restore |
+| Cloudflare D1 | Authoritative normalized operating state plus envelope/audit/effect/gate/evidence/reconciliation ledgers | Daily exact-account remote SQL export, encrypted in R2; isolated SQLite plus D1 drill restore |
 | Cloudflare R2 raw bucket | Raw inbound payload/file source stored before downstream work | Re-derive an envelope or evidence record from its immutable key |
-| Frappe site | Deterministic business records, roles, policy gates, and audit objects | Rebuild consumer state from D1/R2 plus reconciliation; back up for faster/complete operational restore |
+| Frappe site | Optional compatibility projection and legacy role/tool surface; never authority for native operating facts | Rebuild projections from D1/R2 plus reconciliation; back up only while the compatibility track is enabled |
 | R2 backup bucket | Encrypted complete Frappe and D1 generations | Restore only exact prefixes bearing the matching Frappe or D1 completion marker; live bucket-lock proof required |
 | Google Shared Drives | Human-facing job evidence/archive | Drive versioning/trash; ids remain in owned configuration |
 | QuickBooks | Invoice/payment/accounting truth | Reconcile through Intuit records; no Hermes accounting mutation |
@@ -262,8 +269,8 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 58 production tables, 95 indexes,
-and 86 named trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
+isolated SQLite file, runs integrity checks, and requires the complete migration-derived table,
+index, and invariant-trigger inventories before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
 a script, infer a prefix, or restore a generation without `IRONWRAP-D1-BACKUP-COMPLETE`.
@@ -278,14 +285,14 @@ The D1 script applies the same commit protocol with its D1-specific marker. Rete
 expired marker first and keeps its encrypted archive/checksum for one additional hour, so a
 restore cannot observe a committed marker after its data was deleted.
 
-The D1 required-table allowlist is release state, not a static assumption. Its current 58 tables
-include the QuickBooks, customer-acceptance, Newo, measurement, Facet evidence/association, approval,
-governed-transition, and field Work Package ledgers. The readiness checker derives the complete
+The D1 required-table allowlist is release state, not a static prose assumption. It includes the
+QuickBooks, customer-acceptance, Newo, measurement, Facet evidence/association, approval,
+governed-transition, field Work Package, safety, effect, and accounting ledgers. The readiness checker derives the complete
 table and trigger inventory from the migration chain and requires both recovery scripts to match it
 exactly. Every migration that adds persistent state therefore fails the deployment contract until
 both scripts and executable recovery tests advance with it.
 
-The 86 required trigger bindings include source-count validation, immutable lead-ack receipts,
+The required trigger bindings include source-count validation, immutable lead-ack receipts,
 customer acceptance, Facet identity/nonce/evidence ledgers, all three approval ledgers, and the
 governed-transition outbox. In particular,
 the approval-request binding trigger must reject `UPDATE` with
@@ -313,7 +320,7 @@ deploy/restore-d1-from-r2.sh
 
 The script verifies ciphertext checksum before decryption, validates the exact source manifest,
 imports into isolated SQLite, checks integrity, and records a local row count for every required
-table plus the exact 95-index inventory and 86 trigger-to-table bindings. It also checks the receipt trigger SQL for
+table plus the exact migration-derived index and trigger-to-table inventories. It also checks the receipt trigger SQL for
 the required `BEFORE UPDATE` / `BEFORE DELETE` abort semantics. It deletes its plaintext
 workspace on success, failure, or signal.
 
@@ -517,25 +524,29 @@ until `/admin/status`, D1 heartbeat, and delivery logs prove otherwise.
 
 Daily:
 
-- Open the `IronWrap Control Center`; reconcile every red/amber item with its source record and
-  use standard Frappe lists/forms if the cockpit cannot load.
+- Open the native PWA operating surfaces; reconcile every red/amber item with its authoritative
+  D1 record. Use the `IronWrap Control Center` and Frappe lists/forms only for an explicitly enabled
+  compatibility projection.
 - Check reconcile digest and `/admin/status`; investigate every degraded reason.
 - Inspect pending/escalated QuickBooks projections and their audit references; no recent QuickBooks
   receipt is not an outage by itself.
 - Confirm external monitors for `/health` and `/ready` disagree only during known dependency work.
-- Confirm both encrypted D1 and Frappe backups completed and published their distinct markers.
+- Confirm the encrypted D1 backup completed; if Frappe compatibility is enabled, confirm its
+  separate backup marker too.
 
 Weekly:
 
-- Review dead letters, pending/stuck envelopes, pending/escalated QuickBooks projections, Frappe
-  errors, and recent audit failures.
-- Sample one raw R2 object through envelope and Frappe evidence linkage.
+- Review dead letters, pending/stuck envelopes, pending/escalated QuickBooks effects/projections,
+  enabled compatibility errors, and recent audit failures.
+- Sample one raw R2 object through its D1 envelope/evidence linkage and any enabled projection.
 - Review open Automation Incidents and close only with recovery evidence.
 - Review write flags; default them to false when no approved operation is active.
 
 Monthly:
 
-- Run the exact-prefix D1 remote table-row-count, trigger-inventory, and receipt-semantics parity drill and isolated Frappe restore; record both RTO results and the current R2 denied-delete evidence.
+- Run the exact-prefix D1 remote table-row-count, trigger-inventory, and receipt-semantics parity
+  drill. If Frappe compatibility is enabled, also run its isolated restore; record applicable RTO
+  results and current R2 denied-delete evidence.
 - Audit secret age and purpose separation; complete pending rotations.
 - Run all repository validators and `node tools/production-readiness.mjs contract` on the intended
   next release commit.

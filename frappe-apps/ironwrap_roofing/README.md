@@ -1,13 +1,16 @@
 # ironwrap_roofing
 
-Proprietary Frappe operating core for IronWrap OS.
+Proprietary Frappe compatibility projection for IronWrap OS. It is not the native operating
+authority: D1/Worker owns normalized operating state and controls. This app remains for bounded
+legacy workflows, projections, reconciliation, and rollback while retirement is in progress.
+See the canonical boundary in
+[`docs/AI-NATIVE-ARCHITECTURE.md`](../../docs/AI-NATIVE-ARCHITECTURE.md).
 
 This is not an ERPNext app or fork; it installs on a plain Frappe site, never
 install the erpnext app. The app is proprietary IronWrap IP (`hooks.py`
 `app_license = "Proprietary"`) built on the MIT Frappe framework; the only
 non-custom Link target is Frappe core `User`. It adds app-level DocTypes that
-receive canonical events from the Cloudflare bus and model the IronWrap OS
-operating core:
+receive bounded events/projections from the Cloudflare bus and model the compatibility surface:
 
 - `Lead Envelope`
 - `Roofing Customer`
@@ -44,7 +47,7 @@ operating core:
 - `White-Label Tenant`
 - `Hermes Run`
 
-The standard `IronWrap OS` Workspace exposes the owned record graph. Its
+The standard `IronWrap OS` Workspace exposes the compatibility record graph. Its
 `IronWrap Control Center` Page is a permission-scoped, read-only operator cockpit:
 blocked gates, reviews, incidents, stale jobs, pipeline state, one focused job
 runway, gate state, and recent evidence. It can also show the Worker's public
@@ -54,8 +57,9 @@ readiness result when the non-secret site configuration is present:
 bench --site <site> set-config ironwrap_bus_base_url https://<worker-host>
 ```
 
-The Page never holds an admin token and contains no mutation call. Record changes
-stay in normal Frappe forms or the Hermes dry-run, approval, write, and audit path.
+The Page never holds an admin token and contains no mutation call. Legacy record changes stay in
+normal Frappe forms or the Hermes dry-run, approval, write, and audit path; neither path can bypass
+native D1 authority for a migrated fact.
 
 Install path on a plain Frappe dev site (do not install erpnext):
 
@@ -80,10 +84,10 @@ defaulted: `before_migrate` aborts before any repair or metadata synchronization
 The complete deterministic plan is applied only when the whole site is clean,
 and the same preflight is a no-op after successful application.
 
-Validate the committed DocType contract without a bench. The app contains 64
-DocType JSON contracts (48 top-level records and 16 child tables). The root
-validator keeps its historical `erpnext` filename; the app-local unittest suite
-enforces the current 64-DocType contract:
+Validate the committed DocType contract without a bench. The root validator derives the current
+top-level/child totals from the JSON contracts and compares them with the canonical capability
+matrix, so this component page does not copy a volatile count. The validator keeps its historical
+`erpnext` filename; the app-local unittest suite enforces the current contract:
 
 ```bash
 node tools/validate-erpnext-doctypes.mjs

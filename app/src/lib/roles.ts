@@ -1,5 +1,6 @@
 import {
   Banknote,
+  Boxes,
   BriefcaseBusiness,
   CalendarClock,
   CircleGauge,
@@ -15,6 +16,8 @@ import {
 
 export const appRoles = ["owner", "ops", "sales", "production", "accounting", "field"] as const;
 export type AppRole = (typeof appRoles)[number];
+export type NavigationWorkspace =
+  "Command" | "Revenue" | "Delivery" | "Resources" | "Finance" | "Control";
 export type RoleSurface =
   | "owner"
   | "sales"
@@ -29,6 +32,8 @@ export type RoleSurface =
 export interface NavigationItem {
   label: string;
   mobileLabel?: string;
+  mobilePrimary?: boolean;
+  workspace: NavigationWorkspace;
   to:
     | "/now"
     | "/today"
@@ -44,24 +49,45 @@ export interface NavigationItem {
     | "/accounting"
     | "/accounting/exceptions"
     | "/accounting/quickbooks"
+    | "/inventory"
     | "/settings";
   icon: LucideIcon;
   activeColor: "accent" | "ok" | "warning";
 }
 
-// Deliberately unchanged by IRO-52 slice S9. The mobile bar already carries nine items, which on a
-// 360 px viewport is about 38 px each - under the touch-target floor before anything is added. The
-// money desk is the accounting role's surface and lives in that role's navigation below; owner and
-// ops reach it the same way they already reach `/accounting/quickbooks`, by link. Widening this bar
-// to ten would degrade the mobile experience for every office role, which the product rule forbids.
 const officeNavigation = [
-  { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
+  {
+    label: "Now",
+    to: "/now",
+    icon: CircleGauge,
+    activeColor: "warning",
+    workspace: "Command",
+    mobilePrimary: true,
+  },
   {
     label: "Reception",
     mobileLabel: "Calls",
     to: "/newo",
     icon: Headphones,
     activeColor: "warning",
+    workspace: "Revenue",
+  },
+  {
+    label: "Sales",
+    mobileLabel: "Leads",
+    to: "/sales",
+    icon: BriefcaseBusiness,
+    activeColor: "ok",
+    workspace: "Revenue",
+    mobilePrimary: true,
+  },
+  {
+    label: "Designs",
+    mobileLabel: "Designs",
+    to: "/facet-designs",
+    icon: Palette,
+    activeColor: "accent",
+    workspace: "Revenue",
   },
   {
     label: "Production",
@@ -69,13 +95,8 @@ const officeNavigation = [
     to: "/production",
     icon: CalendarClock,
     activeColor: "ok",
-  },
-  {
-    label: "Approvals",
-    mobileLabel: "Approve",
-    to: "/approvals",
-    icon: ShieldCheck,
-    activeColor: "warning",
+    workspace: "Delivery",
+    mobilePrimary: true,
   },
   {
     label: "Service",
@@ -83,15 +104,29 @@ const officeNavigation = [
     to: "/service",
     icon: LifeBuoy,
     activeColor: "warning",
+    workspace: "Delivery",
   },
-  { label: "Today", to: "/today", icon: ClipboardCheck, activeColor: "accent" },
-  { label: "Sales", to: "/sales", icon: BriefcaseBusiness, activeColor: "ok" },
   {
-    label: "Designs",
-    mobileLabel: "Designs",
-    to: "/facet-designs",
-    icon: Palette,
+    label: "Today",
+    to: "/today",
+    icon: ClipboardCheck,
     activeColor: "accent",
+    workspace: "Delivery",
+  },
+  {
+    label: "Inventory",
+    to: "/inventory",
+    icon: Boxes,
+    activeColor: "ok",
+    workspace: "Resources",
+  },
+  {
+    label: "Approvals",
+    mobileLabel: "Approve",
+    to: "/approvals",
+    icon: ShieldCheck,
+    activeColor: "warning",
+    workspace: "Control",
   },
   {
     label: "Settings",
@@ -99,6 +134,7 @@ const officeNavigation = [
     to: "/settings",
     icon: Settings,
     activeColor: "accent",
+    workspace: "Control",
   },
 ] as const satisfies readonly NavigationItem[];
 
@@ -106,24 +142,44 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   owner: officeNavigation,
   ops: officeNavigation,
   sales: [
-    { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
-    { label: "Sales", to: "/sales", icon: BriefcaseBusiness, activeColor: "ok" },
+    {
+      label: "Now",
+      to: "/now",
+      icon: CircleGauge,
+      activeColor: "warning",
+      workspace: "Command",
+    },
+    {
+      label: "Sales",
+      to: "/sales",
+      icon: BriefcaseBusiness,
+      activeColor: "ok",
+      workspace: "Revenue",
+    },
     {
       label: "Settings",
       mobileLabel: "Setup",
       to: "/settings",
       icon: Settings,
       activeColor: "accent",
+      workspace: "Control",
     },
   ],
   production: [
-    { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
+    {
+      label: "Now",
+      to: "/now",
+      icon: CircleGauge,
+      activeColor: "warning",
+      workspace: "Command",
+    },
     {
       label: "Production",
       mobileLabel: "Jobs",
       to: "/production",
       icon: CalendarClock,
       activeColor: "ok",
+      workspace: "Delivery",
     },
     {
       label: "Settings",
@@ -131,6 +187,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/settings",
       icon: Settings,
       activeColor: "accent",
+      workspace: "Control",
     },
   ],
   // The money desk leads, because it is the accounting role's landing page (contract section 8.2)
@@ -142,6 +199,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/accounting",
       icon: Banknote,
       activeColor: "ok",
+      workspace: "Finance",
     },
     {
       label: "Exceptions",
@@ -149,25 +207,63 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/accounting/exceptions",
       icon: ShieldCheck,
       activeColor: "warning",
+      workspace: "Finance",
     },
-    { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
+    {
+      label: "Now",
+      to: "/now",
+      icon: CircleGauge,
+      activeColor: "warning",
+      workspace: "Command",
+    },
     {
       label: "Settings",
       mobileLabel: "Setup",
       to: "/accounting/quickbooks",
       icon: Settings,
       activeColor: "accent",
+      workspace: "Control",
     },
   ],
-  // Four items on a 360 px bar is ~90 px each, well clear of the touch-target
-  // floor the office bar is already sitting on (see the note above it). The
-  // vehicle rail belongs here and not in the office navigation: only a field
-  // role may capture against an asset, so an office tab would lead to a refusal.
   field: [
-    { label: "Now", to: "/now", icon: CircleGauge, activeColor: "accent" },
-    { label: "Check-in", to: "/check-in", icon: BriefcaseBusiness, activeColor: "ok" },
-    { label: "Vehicle", to: "/vehicle", icon: Truck, activeColor: "ok" },
-    { label: "Settings", to: "/settings", icon: Settings, activeColor: "accent" },
+    {
+      label: "Now",
+      to: "/now",
+      icon: CircleGauge,
+      activeColor: "accent",
+      workspace: "Command",
+      mobilePrimary: true,
+    },
+    {
+      label: "Check-in",
+      to: "/check-in",
+      icon: BriefcaseBusiness,
+      activeColor: "ok",
+      workspace: "Delivery",
+      mobilePrimary: true,
+    },
+    {
+      label: "Vehicle",
+      to: "/vehicle",
+      icon: Truck,
+      activeColor: "ok",
+      workspace: "Resources",
+      mobilePrimary: true,
+    },
+    {
+      label: "Inventory",
+      to: "/inventory",
+      icon: Boxes,
+      activeColor: "ok",
+      workspace: "Resources",
+    },
+    {
+      label: "Settings",
+      to: "/settings",
+      icon: Settings,
+      activeColor: "accent",
+      workspace: "Control",
+    },
   ],
 };
 

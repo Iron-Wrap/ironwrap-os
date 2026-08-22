@@ -5,7 +5,17 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import globals from "globals";
 
 export default [
-  { ignores: ["dist", "coverage"] },
+  {
+    ignores: [
+      "dist",
+      "coverage",
+      ".acceptance-tls",
+      ".lighthouseci",
+      ".playwright-mobile",
+      "playwright-report",
+      "test-results",
+    ],
+  },
   eslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],

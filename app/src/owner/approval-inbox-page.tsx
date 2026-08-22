@@ -179,9 +179,6 @@ function ApprovalInboxContent() {
                 <ShieldCheck className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Owner review
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Lead reviews
                 </h1>
@@ -193,16 +190,14 @@ function ApprovalInboxContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.approvals.length === 0
                 ? "No lead reviews"
                 : `${model.approvals.length} ${model.approvals.length === 1 ? "lead review" : "lead reviews"}`}
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Open each card and check the note before you choose.
+              Open each row and check the note before you choose.
             </p>
             <Button
               type="button"
@@ -256,7 +251,10 @@ function ApprovalInboxContent() {
           </p>
         </Card>
       ) : (
-        <ol className="space-y-5" aria-label="Lead review requests">
+        <ol
+          className="divide-y divide-border overflow-hidden border border-border bg-surface"
+          aria-label="Lead review requests"
+        >
           {model.approvals.map((approval) => (
             <li key={approval.id}>
               <ApprovalCard
@@ -640,9 +638,7 @@ function TriageDiff({ preview }: { preview: NonNullable<ApprovalRequest["preview
   return (
     <section aria-label="What will change">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-extrabold uppercase tracking-[0.14em] text-muted">
-          What will change
-        </h3>
+        <h3 className="text-sm font-bold text-muted">What will change</h3>
         <span className="text-sm font-semibold text-muted">Check only · not saved yet</span>
       </div>
       <div className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-2">
@@ -698,7 +694,7 @@ function DiffColumn({
 function PreviewUnavailable() {
   return (
     <section
-      className="border-l-4 border-warning bg-warning-soft px-4 py-3 text-sm leading-6"
+      className="border border-warning/35 bg-warning-soft px-4 py-3 text-sm leading-6"
       role="status"
     >
       <p className="font-bold">The change could not load</p>

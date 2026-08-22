@@ -1,5 +1,10 @@
 # Local Frappe stand-up: defect log
 
+Status: historical local-compatibility defect snapshot. Counts, branches, and manual gaps below
+describe the dated run and are not current implementation or launch authority. Current status lives
+in [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md); Frappe's boundary lives in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
+
 Defects and required manual steps discovered by actually provisioning
 `deploy/local/docker-compose.yml` (colima/Docker on Apple-silicon macOS, `linux/arm64`) and
 running the `ironwrap_roofing` Python suite. Every claim below is reproducible with the quoted
@@ -20,7 +25,8 @@ up -d` completes end to end:
 - `curl http://localhost:8000/api/method/ping` answers `{"message":"pong"}`; a REST read of
   `Lead Envelope` with the generated integration API pair returns `{"data":[]}` (DocTypes present,
   zero business rows); `web`, `schedule`, and `worker` processes run under `bench start`.
-- The app model carries **64 DocTypes (48 top-level + 16 child)**, matching
+- At the time of this run, the app model carried **64 DocTypes (48 top-level + 16 child)**. The
+  current total is derived by the documentation validator and recorded once in
   [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md).
 
 ## Defect 1 — provisioner dies on transient DNS and stays dead
@@ -65,15 +71,14 @@ at 159/159; the green run must happen from the checkout. Repair candidates (not 
 here): skip the two parity tests with an explicit reason when the `mcp/` tree is absent, or mount
 `mcp/erpnext-roofing-mcp` read-only into the init/runtime containers.
 
-## Defect 3 — stale test-count and DocType claims in canonical docs
+## Defect 3 — stale test-count and DocType claims found in that snapshot
 
 - [`CAPABILITY-MATRIX.md`](./CAPABILITY-MATRIX.md) repository baseline says "Frappe | 102 unit
   tests passed"; the suite is now 159 tests in 16 files (both container and checkout runs execute
   159). The matrix figure is a dated snapshot, not wrong-by-design, but anyone sizing the suite
   from the matrix is off by a third.
-- [`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md) §13 claimed "50 DocTypes (42 top-level + 8 child)"
-  in the operating-core gate row while the app and the matrix both carry 64 (48 + 16). Corrected
-  to 64 in the same commit that adds this log.
+- [`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md) then copied a lower DocType total into its Frappe gate.
+  Current runbooks no longer duplicate volatile totals; the validator derives them from source.
 
 ## Defect 4 — launch-proof reader identity is not provisioned by any script
 
@@ -123,7 +128,7 @@ the broker journeys.
 Related naming trap, same era: the standalone `ironwrap/ironwrap_roofing` GitHub repository is a
 superseded 2026-07-09 snapshot — the canonical Frappe app is the embedded
 `frappe-apps/ironwrap_roofing` tree here. The `ERPNEXT_*` Worker vars are legacy names addressing
-the Frappe-only core; the ERPNext dependency itself was removed in July 2026
+the Frappe compatibility projection; the ERPNext dependency itself was removed in July 2026
 ([`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md) §7).
 
 ## Accepted-by-design residuals (recorded, not defects to fix)

@@ -12,7 +12,6 @@ const DevicePairingSettings = lazy(async () => ({
 }));
 
 function PlaceholderSurface({
-  eyebrow,
   title,
   description,
   emptyTitle,
@@ -20,7 +19,6 @@ function PlaceholderSurface({
   icon,
   action,
 }: {
-  eyebrow: string;
   title: string;
   description: string;
   emptyTitle: string;
@@ -37,9 +35,6 @@ function PlaceholderSurface({
               {icon}
             </span>
             <div className="min-w-0">
-              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                {eyebrow}
-              </p>
               <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                 {title}
               </h1>
@@ -58,7 +53,6 @@ function PlaceholderSurface({
 export function TodayPage() {
   return (
     <PlaceholderSurface
-      eyebrow="Your work"
       title="Today"
       description="Work assigned to you shows here. Stopped jobs come first, then what to do next."
       emptyTitle="No work assigned yet"
@@ -72,7 +66,6 @@ export function JobPage() {
   return (
     <RoleGuard surface="field">
       <PlaceholderSurface
-        eyebrow="Job"
         title="Job"
         description="This screen will show the plan, proof, and next step for one job."
         emptyTitle="This job did not load"
@@ -92,7 +85,6 @@ export function CheckInPage() {
   return (
     <RoleGuard surface="field">
       <PlaceholderSurface
-        eyebrow="Check-in"
         title="Check-in"
         description="Photos and voice come before typing. Each save stays on this phone until it can send."
         emptyTitle="Choose a job first"
@@ -118,12 +110,14 @@ export function SettingsPage() {
 
 export function NotFoundPage() {
   return (
-    <main className="grid min-h-dvh place-items-center p-4">
-      <ErrorState
-        title="That screen was not found"
-        message="The link may be old or incomplete. Go back to your work list."
-        onRetry={() => window.location.assign("/now")}
-      />
+    <main className="grid min-h-dvh place-items-center bg-chrome p-4">
+      <div className="w-full max-w-lg border border-chrome-border bg-surface p-6 text-foreground">
+        <ErrorState
+          title="That screen was not found"
+          message="The link may be old or incomplete. Go back to your work list."
+          onRetry={() => window.location.assign("/now")}
+        />
+      </div>
     </main>
   );
 }

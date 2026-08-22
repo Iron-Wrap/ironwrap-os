@@ -132,9 +132,6 @@ function ServiceDeskContent() {
                 <LifeBuoy className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Customer care
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   Service calls
                 </h1>
@@ -145,9 +142,7 @@ function ServiceDeskContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Open now
-            </p>
+            <p className="text-sm font-bold text-muted">Open now</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {cases.length} {cases.length === 1 ? "call" : "calls"}
             </h2>
@@ -222,7 +217,7 @@ function ServiceDeskContent() {
                         <span className="font-black tracking-[-0.01em]">
                           {codeLabel(serviceCase.symptom_code)}
                         </span>
-                        <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+                        <span className="text-sm font-bold text-muted">
                           {severityLabel(serviceCase.severity)} · {stateLabel(serviceCase.state)}
                         </span>
                       </span>

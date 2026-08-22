@@ -1,8 +1,13 @@
 # IronWrap OS Launch Runbook
 
-Production-candidate deployment guide for the owned Worker + Frappe + Hermes path.
-Companion files live in `deploy/`; steady-state recovery is in
+Status: current launch runbook for the D1/Worker/PWA operating plane. Frappe and broad Hermes
+sections are a conditional compatibility track and never replace native operating authority.
+
+Production-candidate deployment guide for the owned D1/Worker/PWA path and any explicitly enabled
+compatibility projections. Companion files live in `deploy/`; steady-state recovery is in
 `docs/OPERATIONS-RUNBOOK.md`.
+The canonical architecture, authority map, maturity state, and proof ladder are in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md).
 
 ## Truth Boundary
 
@@ -14,25 +19,30 @@ currently live. Keep these evidence classes separate:
 | --- | --- |
 | Repository | CI, `production-readiness.mjs contract`, source tests, pinned runtime lock |
 | Deployment | Image digest, site/app install output, Worker migration/deploy output |
-| Runtime | `/ready`, `/admin/status`, Frappe login, Hermes read/write smoke tests |
+| Runtime | `/ready`, `/admin/status`, native journey smoke; Frappe/Hermes smoke only when their compatibility scope is enabled |
 | Admin/source | Account ownership, rotated secrets, and each enabled source/provider cutover |
+| Technical reference | Controlled end-to-end journey plus failure/recovery receipts bound to the deployed source |
+| Customer validation | Independent real-customer use and acceptance; never inferred from any row above |
 
 Never mark launch complete from repository checks alone.
 
 ## 0. Required Access And Inputs
 
+The Cloudflare and native-provider inputs are baseline. Host, Frappe, registry image, and broad
+Hermes inputs are required only when the compatibility track is deliberately enabled.
+
 | Item | Why |
 | --- | --- |
-| Linux host meeting `deploy/runtime-lock.json` minimums | Runs Frappe and Hermes |
-| Private app repository and release tag | Supplies the proprietary app without embedding credentials in the image definition |
-| Container registry | Publishes the release image and yields an immutable digest |
+| Linux host meeting `deploy/runtime-lock.json` minimums | Conditional: runs Frappe and broad Hermes compatibility services |
+| Private app repository and release tag | Conditional: supplies the Frappe compatibility app without embedding credentials in the image definition |
+| Container registry | Conditional: publishes the compatibility image and yields an immutable digest |
 | Cloudflare account for the configured Worker, D1, R2, Queues, DNS, and Tunnel | Owns intake, storage, recovery, and ingress |
-| Frappe hostname and DNS authority | Serves the operating core over HTTPS |
+| Frappe hostname and DNS authority | Conditional: serves the compatibility projection over HTTPS |
 | Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
 | Enabled website/provider/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
-| Dedicated Frappe, QuickBooks issuer, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
+| Dedicated native/provider credentials; conditional Frappe and Hermes credentials | Keeps privileges separated by purpose and prevents compatibility identities from gaining native authority |
 
-The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
+When that compatibility track is enabled, its host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
 Node.js 22.12.0+, and `x86_64`. The pinned upstream frappe_docker compose topology is
 `linux/amd64`; do not represent `aarch64` as a native supported deployment until a separate
 multi-architecture build and compose proof is recorded. Capacity is a floor, not a sizing promise.
@@ -51,7 +61,11 @@ The contract checks the exact Frappe, frappe_docker, and Hermes tags/commits; di
 base images; Frappe-only policy; credential-free app manifest; strict deploy scripts;
 encrypted backup protocol; and the environment-name inventory. A failure blocks image build.
 
-## 2. Prepare And Prove The Host
+## 2. Compatibility Track: Prepare And Prove The Host
+
+Skip Sections 2-6 when Frappe/broad-Hermes compatibility is disabled. Skipping this conditional
+track cannot skip D1 migration, Worker/PWA deployment, native readiness, provider gates, recovery,
+or reference-journey proof.
 
 Install Docker with Compose v2, Git, Node.js 22.12.0+, `age`, `cloudflared`, `curl`, `jq`, `openssl`,
 `rclone`, `sha256sum`, `sqlite3`, and `tar`. Install `cloudflared` from an approved Cloudflare package
@@ -67,7 +81,7 @@ and does not print the environment. Do not continue until every host check passe
 The distribution `nodejs` package may be older than the lock; install an approved Node.js 22.12.0+
 runtime before running the preflight.
 
-## 3. Publish A Tagged App Release
+## 3. Compatibility Track: Publish A Tagged Frappe App Release
 
 The application repository must be private, credential-free in `apps.json`, and addressed by
 an immutable release tag. Split the monorepo app, inspect the resulting commit, test it, and tag
@@ -82,7 +96,7 @@ Copy `deploy/apps.example.json` to a secret file outside the checkout and replac
 `https://github.com/ironwrap/ironwrap_roofing.git`; private-repository credentials belong in
 an optional BuildKit credential file, never in the URL or Git history.
 
-## 4. Build And Publish The Locked Frappe-Only Image
+## 4. Compatibility Track: Build And Publish The Locked Frappe-Only Image
 
 Check out frappe_docker at the exact commit in `deploy/runtime-lock.json` and leave that checkout
 pristine. The build script refuses a dirty or mismatched checkout and rejects ERPNext:
@@ -101,7 +115,7 @@ Record the pushed image as a registry digest such as
 `registry.example.com/ironwrap/os@sha256:...`. Deployment and backup evidence must use this
 digest, never `latest` or an unqualified tag.
 
-## 5. Create The Frappe Site
+## 5. Compatibility Track: Create The Frappe Projection Site
 
 Use the exact pinned frappe_docker compose topology plus the checked-in IronWrap overlay. It replaces
 the image for configurator, backend, frontend, websocket, both queues, and scheduler; replacing only
@@ -127,15 +141,16 @@ docker exec <backend> bench --site os.ironwrapexteriors.com install-app ironwrap
 docker exec <backend> bench --site os.ironwrapexteriors.com list-apps
 ```
 
-Log in with each IronWrap role, open the `IronWrap OS` Workspace and `IronWrap Control Center`,
+Log in with each compatibility role, open the `IronWrap OS` Workspace and `IronWrap Control Center`,
 and prove the role sees only permitted records. Exercise a populated job, no-job empty state,
 unreachable Worker readiness state, and source-record navigation. The cockpit is read-only; a
 button or network call that mutates a business record blocks launch.
 
 `list-apps` must contain `frappe` and `ironwrap_roofing` and must not contain `erpnext`.
-Create a dedicated non-interactive API user for the Worker/MCP path with the minimum IronWrap
-roles required by its tools. Do not reuse the Administrator account. Store its API key and secret
-only in the Worker and MCP secret stores.
+Create a dedicated non-interactive API user for each enabled projection/MCP path with the minimum
+compatibility roles required by its tools. Do not reuse the Administrator account. Store its API
+key and secret only in the applicable Worker or MCP secret store. This identity cannot authorize a
+native D1 commercial, safety, evidence, scheduling, or accounting transition.
 
 For QuickBooks projection, create a second non-interactive Frappe user with only the IronWrap
 QuickBooks Reconciliation Issuer role and its own API key/secret. It must not hold the general
@@ -151,7 +166,7 @@ docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
   ironwrap_field_evidence_issuer_user '<worker-api-user-email>'
 ```
 
-## 6. Configure HTTPS Ingress
+## 6. Compatibility Track: Configure Frappe HTTPS Ingress
 
 Create a Cloudflare Tunnel, route the production hostname, and install a filled copy of
 `deploy/cloudflared-config.example.yml` outside the repository. The template routes only the
@@ -167,10 +182,11 @@ sudo systemctl enable --now cloudflared
 
 Prove HTTPS from outside the host before storing the URL in Worker or MCP configuration.
 
-## 7. Migrate And Deploy The Worker
+## 7. Migrate And Deploy The Native D1/Worker/PWA Plane
 
-Set Frappe credentials with `wrangler secret put`, enable the Frappe consumer, and apply every
-D1 migration from the release commit. The normal production path is the automatic
+Apply every D1 migration from the release commit and deploy the Worker/PWA through the governed
+release lane. Set Frappe credentials and enable its consumer only for an explicitly approved
+compatibility projection. The normal production path is the automatic
 `.github/workflows/deploy.yml` `workflow_run` lane; it does not require a routine release click
 and it does not invoke the direct `npm run deploy` path. The commands below are local preflight
 and migration preparation only:
@@ -240,8 +256,9 @@ and accepts cleanup only after exact active-deployment readback; that cleanup re
 successful compatibility drill. A production deploy that returns failure after changing traffic is
 also treated as attempted: recovery forces the captured previous version and trusts only readback.
 
-CI creates one deterministic aggregate containing the Worker bundle, PWA assets, and Frappe wheel,
-records each component digest, and uploads the aggregate once. Wrangler uploads
+CI creates one deterministic aggregate containing the Worker bundle and PWA assets; it may carry a
+leftover Frappe wheel only for an enabled compatibility release. It records each included component
+digest and uploads the aggregate once. Wrangler uploads
 the same bytes separately to the distinct staging and production Worker services; their provider
 version IDs are therefore different and both IDs, version readbacks, environment config digests,
 and secret-name inventory digests are bound into the permit. Staging must first prove active
@@ -250,12 +267,13 @@ explicit nonempty export plus structured `d1 execute --json` schema/row-count/se
 restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
 against the migrated schema with health/readiness/smoke proof. Only then is the short-lived permit
 assembled and consumed once through D1; the exact admitted PR is machine-merged and read back
-before production migrations or traffic promotion. Production promotes the prepared Frappe
-artifact through the authenticated adapter, promotes the pre-uploaded Worker/PWA version, re-reads
-both identities after smoke, and advances the durable generation only after the exact authenticated
-launch-proof step set is bound into an immutable production-promotion receipt. Failure after a
-Frappe promotion attempt invokes idempotent Frappe/Worker rollback, then verifies the restored
-Worker/PWA/Frappe identities and health/readiness before atomically persisting the rollback outcome.
+before production migrations or traffic promotion. Production promotes any enabled compatibility
+artifact through its authenticated adapter, promotes the pre-uploaded Worker/PWA version, re-reads
+every applicable identity after smoke, and advances the durable generation only after the exact
+authenticated launch-proof step set is bound into an immutable production-promotion receipt.
+Failure after a compatibility promotion attempt invokes its idempotent rollback plus Worker
+rollback, then verifies the restored Worker/PWA and applicable compatibility identities and
+health/readiness before atomically persisting the rollback outcome.
 An expired permit may record that emergency rollback only when its original durable single-use
 admission claim is read back exactly. If an admitted D1 migration fails before Frappe or Worker/PWA
 promotion, no down migration or false rollback is attempted: the durable ledger records an exact
@@ -266,7 +284,7 @@ Repository tests prove the source contract only. A successful workflow is not li
 DNS, readiness, credential, business acceptance, or production proof until its redacted receipts
 are independently read back.
 
-### Facet-to-Frappe Review-Projection Gate
+### Optional Facet-to-Frappe Compatibility Projection Gate
 
 Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0035` D1 migration is applied in
 the named environment and all of the following are proven there:
@@ -337,10 +355,12 @@ Newo production uses the managed federation and full governed control plane. Sto
 Follow [`NEWO-PRODUCTION-RUNBOOK.md`](./NEWO-PRODUCTION-RUNBOOK.md); do not substitute
 `INGEST_TOKEN`, expose a provider key to an MCP process, or enable customer outbound at launch.
 
-Set the reviewed non-secret Worker vars `ERPNEXT_ENABLED="true"` and
-`ERPNEXT_BASE_URL="https://<frappe-host>"` in the production configuration before deployment.
-The legacy `ERPNEXT_*` names address the Frappe-only core; only the API key and secret are Worker
-secrets. Then prove both health surfaces:
+Only when the Frappe compatibility projection is intentionally enabled, set the reviewed
+non-secret Worker vars `ERPNEXT_ENABLED="true"` and
+`ERPNEXT_BASE_URL="https://<frappe-host>"` in that environment before deployment. The legacy
+`ERPNEXT_*` names address the Frappe compatibility site; only the API key and secret are Worker
+secrets. The native target is to remove this dependency after projection/rollback retirement
+proof. Then prove all applicable health surfaces:
 
 The Worker pair is a dedicated integration credential. Do not mount it in Hermes: every Hermes
 MCP process needs its own Frappe API pair issued to exactly its `HERMES_ACTOR_USER`, so the
@@ -365,19 +385,21 @@ docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
 ```
 
 `/health` proves isolate liveness only. `/ready` queries the D1 operational schema and checks that
-R2/Queue bindings plus auth, notification, JobNimbus, and enabled-Frappe configuration are
+R2/Queue bindings plus auth, notification, JobNimbus, and any enabled compatibility configuration are
 present; it returns only `{ok}` without auth and the diagnostic map only with `ADMIN_TOKEN`.
 It does not contact every downstream service. `/admin/status` is the authenticated
-operating view for heartbeat freshness, queue/dead-letter counts, Frappe
+operating view for heartbeat freshness, queue/dead-letter counts, enabled provider/projection
 errors, failed/stuck replay requests, audit failures, and QuickBooks receipt freshness.
 The non-secret site config lets the Control Center show the public `{ok}` result; it never
 stores or uses the Worker admin token.
 
-### QuickBooks Projection Gate
+### QuickBooks Provider And Optional Frappe Projection Gate
 
-The expected realm and Frappe issuer values are deployment configuration, not proof that Intuit,
-the Frappe user, or its role is live. Run the live-environment readiness check to reject missing,
-malformed, reused, or mismatched values; then prove the following against the intended accounts:
+The expected realm and any compatibility-projection issuer values are deployment configuration,
+not proof that Intuit, the Frappe user, or its role is live. Run the live-environment readiness
+check to reject missing, malformed, reused, or mismatched values; then prove the applicable path
+against the intended accounts. D1 accounting intent/effect/reconciliation remains authoritative;
+the Frappe record, if enabled, is a projection only:
 
 1. The configured QuickBooks company sends one signed supported finance event to the intended
    Worker URL, while a different realm is retained only as rejected audit evidence.
@@ -420,29 +442,33 @@ Before setting `PUBLIC_ESTIMATE_ENABLED=true` in the intended Cloudflare account
 5. Set bounded rate controls and keep `PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]`. Public intake never
    returns a price before measurement evidence and an approved pricing policy. Any non-empty value
    fails readiness; do not deploy illustrative or static ranges.
-6. Set `ERPNEXT_INTEGRATION_USER` to the exact dedicated Worker Frappe user. When Frappe is
-   enabled, the public route stays disabled until this identity is present: explicit follow-up
-   consent is mirrored as append-only channel records linked to the raw R2 evidence.
+6. When the Frappe compatibility projection is enabled, set `ERPNEXT_INTEGRATION_USER` to its exact
+   dedicated Worker user. The projection stays disabled until this identity is present; explicit
+   follow-up consent remains authoritative in D1 and may be mirrored as append-only channel records.
 7. Build the PWA and deploy the Worker, then verify `/ready` is green. A failed configuration
    returns a disabled form rather than accepting unauditable browser intake.
 
 Use a real Turnstile test submission from the live `/estimate` route to prove the full path:
 the public response must contain only acceptance, an opaque envelope id, `range=null`, the fixed
-no-online-price disclaimer, and `review_required=true`. In D1/R2 and Frappe, prove the corresponding raw record,
-Lead Envelope, Roof Job, Instant Estimate Session, source Evidence Item, and one
-`Communication Consent` record per supplied follow-up channel. Also prove a rejected challenge,
+no-online-price disclaimer, and `review_required=true`. In D1/R2, prove the corresponding raw record
+and authoritative lead/estimate/consent identities. If the Frappe projection is enabled, separately
+prove its Lead Envelope, Roof Job, Instant Estimate Session, source Evidence Item, and
+`Communication Consent` projections. Also prove a rejected challenge,
 wrong Origin, mismatched idempotency key, and rate-limited request create no accepted estimate.
 Archive only redacted request ids and the release evidence.
 
-## 8. Configure Hermes And MCP
+## 8. Configure The Optional Hermes And MCP Compatibility Surface
 
-Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register the four entries in
+If the broad compatibility surface is enabled, install Hermes at the tag and commit in
+`deploy/runtime-lock.json`. Register the four entries in
 `hermes/mcp-servers.json`. The bus, Frappe, and Newo tool filters come from
 `hermes/agents/roles.json`; the separate desktop pilot server is outside that inventory and must
 remain fixed at `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. MCP base
 URLs must be production HTTPS URLs. Plain HTTP is accepted only for explicit localhost development.
 
-Keep `APP_HERMES_DESKTOP_ENABLED=false` during the broad role smoke test. For first pairing, issue
+Keep `APP_HERMES_DESKTOP_ENABLED=false` during the broad role smoke test. The checked-in desktop
+surface is a narrow `lead_follow_up_draft` pilot, not a resident company coordinator or operating
+authority. For first pairing, issue
 the one-time fragment link from PWA Settings and pass it only as
 `IRONWRAP_HERMES_DESKTOP_PAIRING_URL` to the local desktop MCP child process; it removes the link
 after parsing and retains the 15-minute credentials only in memory. A native launcher may instead
@@ -484,15 +510,16 @@ live services; the HTTP and application smoke tests in this runbook remain manda
 
 ### Field Companion BFF Enablement Gate
 
-The checked-in Worker baseline deliberately leaves `APP_BFF_ENABLED=false` and both app origins
-blank. A successful `wrangler deploy --dry-run` proves the bundle/config shape only; it is not a
-Field Companion deployment and must not be described as one.
+The checked-in top-level/staging configuration enables `APP_BFF_ENABLED` and supplies app origins;
+development remains disabled. This is configured repository intent only. A successful
+`wrangler deploy --dry-run` proves the bundle/config shape, not a Field Companion deployment,
+runtime path, real-device result, or customer proof.
 
-Before enabling the BFF in the intended Cloudflare account:
+Before treating the configured BFF as launch-ready in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The migration-derived 58-table/95-index/86-trigger
+   Verify `/ready` against the intended database. The complete migration-derived table/index/trigger
    backup-and-restore inventory must be deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -538,11 +565,13 @@ Before enabling the BFF in the intended Cloudflare account:
    “sent” result. For an intentionally rejected staging send, wait past the 60-second deadline
    and prove the queue shows an unproven exception.
 
-### Production Schedule Approval Enablement Gate
+### Legacy Frappe Schedule-Broker Compatibility Gate
 
-The Production Runway remains a read surface until this gate closes. A local
-broker test, a Worker bundle, or a populated schedule card is not permission to
-dispatch a crew or call a production assignment live.
+Native D1 append-only assignment revisions, conflicts, and approval records are the current
+operating authority. Prove that native path for the technical reference journey. The steps below
+apply only while the older Frappe schedule broker remains enabled; passing them cannot make the
+broker authoritative. A local broker test, Worker bundle, or populated schedule card is not
+permission to dispatch a crew or call an assignment live.
 
 1. Apply the remote D1 migration through `0028_work_package_actions.sql` and
    the matching Frappe migration. Confirm the Frappe document policy is installed before the
@@ -570,12 +599,13 @@ dispatch a crew or call a production assignment live.
 Remote migration, broker reachability, authenticated owner acceptance, and this live proof remain
 open until those exact checks are captured.
 
-### Customer Portal and Contract-Acceptance Enablement Gate
+### Customer Portal and Contract-Acceptance Availability Gate
 
-The checked-in customer portal is a disabled, read-only capability foundation. A separate,
-also-disabled, email-bound click-to-accept route may move one approved quote to `Accepted` only
-after it pins the current quote, approved proposal pack, and canonical terms snapshot. The portal
-bearer itself remains read-only and is never customer authentication or acceptance evidence.
+The checked-in top-level/staging configuration sets the portal and contract-acceptance flags true;
+development remains false. Those values are configured repository intent only. The portal bearer
+is read-only and is never customer authentication or acceptance evidence. The separate
+email-bound route may commit native acceptance only after it pins the current quote, published
+proposal, canonical terms snapshot, challenge, and customer decision.
 
 Neither route is a public estimate widget, customer session, document-download service, payment
 flow, generic commercial e-sign service, deposit collection, or delivery proof. They show only
@@ -587,12 +617,12 @@ falls back to the tenant presentation brand only when that job record lacks a re
 Do not treat the marketing hostname, attachment notes, or a global deployment label as the
 customer-facing portal brand source of truth.
 
-Before enabling it in the intended Cloudflare account:
+Before treating either configured route as available in the intended Cloudflare account:
 
 1. Apply the migration sequence through `0029_customer_contract_acceptance.sql` with the same
-   release and prove `/ready` against the migrated D1 database. Keep both
-   `APP_CUSTOMER_PORTAL_ENABLED=false` and `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=false` until
-   their respective gates below are complete.
+   release and prove `/ready` against the migrated D1 database. If either respective gate below is
+   incomplete, override its flag to false or block the deployment; a checked-in true value cannot
+   waive runtime proof.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
    `APP_AUTH_PEPPER` secret. Then set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
@@ -681,13 +711,13 @@ not Git fixtures, and not proof that a later deployment still runs the same exac
 
 | Source | Runtime proof |
 | --- | --- |
-| Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, provider-acceptance receipt (not delivery proof), and temporary JobNimbus bridge |
+| Website | Real consented submission reaches `/ingest/website`, raw R2, authoritative D1, provider-acceptance receipt (not delivery proof), temporary JobNimbus bridge, and any enabled compatibility projection |
 | Public estimator | Live `/estimate` Turnstile challenge and exact-origin POST create a raw-first, idempotent, review-gated session; the response leaks no submitted PII and explicit follow-up consent is mirrored with source evidence |
 | 3D estimator handoff | Repeated private `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
-| QuickBooks | Expected-realm signed event produces raw R2, a D1 receipt plus durable projection row, and one Pending Frappe reconciliation; invalid signatures and other realms are rejected, and provider facts remain unproven until read-back |
-| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, lead envelope when applicable, Frappe landing, downstream result, and operator status; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
+| QuickBooks | Expected-realm signed event produces raw R2, a D1 receipt plus durable reconciliation/effect state, and any enabled Pending Frappe projection; invalid signatures and other realms are rejected, and provider facts remain unproven until authenticated readback |
+| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, native lead/envelope state when applicable, downstream result, and operator status; any Frappe landing is a projection; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
 record-only until A2P/carrier approval. QuickBooks remains accounting truth.
@@ -715,9 +745,9 @@ deploy/backup-d1-to-r2.sh
 deploy/backup-to-r2.sh
 ```
 
-The first manual run must succeed in that order. Schedule the canonical D1 export first and the
-Frappe operational backup 20 minutes later. They are independent jobs so a D1 failure cannot
-silently suppress the Frappe attempt:
+The D1 manual run must succeed. When Frappe compatibility is enabled, its manual run must also
+succeed and its scheduled backup follows the canonical D1 export by 20 minutes. They are
+independent jobs so a D1 failure cannot silently suppress the compatibility attempt:
 
 ```bash
 CRON_TZ=UTC
@@ -728,8 +758,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 58 release-state tables, 95 indexes,
-plus the 86 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and the complete migration-derived table, index,
+and invariant-trigger inventories, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -756,8 +786,8 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 58 required tables, the exact 95-index inventory, and the exact
-86 trigger-to-table bindings
+table-to-row-count map for every required table and the exact migration-derived index and
+trigger-to-table inventories
 with the locally verified SQLite export:
 
 ```bash
@@ -773,8 +803,8 @@ export D1_RESTORE_MODE=verify
 ```
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
-both D1 scripts and their recovery tests before deployment; the readiness checker derives all
-58 tables, 95 indexes, and 86 trigger bindings from the migration chain and rejects any drift. The inventory
+both D1 scripts and their recovery tests before deployment; the readiness checker derives the
+complete inventories from the migration chain and rejects any drift. The inventory
 includes QuickBooks, customer acceptance, Newo, measurement, Facet evidence/association, approval,
 governed-transition, and field Work Package ledgers. Approval binding rewrites must raise
 `ABORT, 'approval_request_binding_immutable'`; approval event updates/deletes must raise
@@ -787,8 +817,9 @@ at least 24 hours before scripted retention deletion. Prove the raw intake bucke
 retention/delete-protection policy too. Repository configuration, `--immutable`, or a dashboard
 screenshot without the denied-delete result is not this gate.
 
-Before launch, restore one explicitly selected completed Frappe prefix to a labelled container using the recorded
-image digest. Its Docker network must be internal and its ports must not be published. The target
+When Frappe compatibility is enabled for launch, restore one explicitly selected completed Frappe
+prefix to a labelled container using the recorded image digest. Its Docker network must be
+internal and its ports must not be published. The target
 keeps its own database configuration and credentials; `deploy/restore-from-r2.sh` merges only the
 source Frappe encryption key and never installs the source `site_config_backup.json`. Verify the
 database/public/private files, log in, open sample jobs/evidence, and record restore duration and
@@ -798,15 +829,16 @@ artifact checksums. A successful upload without this restore drill is not backup
 
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
-| Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 79 DocTypes (60 top-level + 19 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
-| Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
-| Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
-| Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |
+| Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, authoritative D1, provider acknowledgement, bridge/projection where enabled, and reconciliation |
+| Native operating plane | D1 migrations, Worker/PWA tests, authority/effect/gate/evidence controls | Exact D1/Worker/PWA deployment, identity, readiness, reference journey, readback, and recovery receipts |
+| Frappe compatibility | DocType/policy/RBAC and projection tests | Only when enabled: app/projection identity, per-role surface, reconciliation, and rollback proof; never native authority |
+| Hermes compatibility | Role/manifest and MCP tests | Only when enabled: bounded live read/draft or human-approved compatibility mutation with complete audit; never resident coordinator proof |
+| Recovery | Readiness/status/replay plus encrypted D1 and conditional Frappe backup tests | Targeted replay, alerts, exact-prefix D1 verification/restore, migration-derived parity, live R2 denied-delete proof, and conditional isolated Frappe restore |
 | Real sources | Intake contracts | Website, estimator, field, measurement, QB, and every enabled voice/provider-source admin proof |
 
-Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,
-Hermes version, proof outputs, approver, rollback evidence, and any failed/skipped checks. Record
+Record commit, Worker/PWA deployment identity, migration state, applicable compatibility versions,
+proof outputs, approver, rollback evidence, and any failed/skipped checks. Record
 the exact deployed source head and rerun live proof after every production-affecting secret,
-config, migration, image, or Worker-version change. Launch is blocked while a required live
-artifact is absent.
+config, migration, image, or Worker-version change. Technical launch is blocked while a required
+live artifact is absent. Even a complete technical launch record does not establish customer
+validation or production business outcomes.

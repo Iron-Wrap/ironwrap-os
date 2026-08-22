@@ -2,7 +2,8 @@
 
 Read [`AGENTS.md`](./AGENTS.md) before working in this repository.
 
-The operating target is
+The current architecture and AI-native target are
+[`docs/AI-NATIVE-ARCHITECTURE.md`](./docs/AI-NATIVE-ARCHITECTURE.md). The operating target is
 [`docs/AUTONOMOUS-OPERATING-SYSTEM.md`](./docs/AUTONOMOUS-OPERATING-SYSTEM.md); authority and
 evidence rules are in
 [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md); actual

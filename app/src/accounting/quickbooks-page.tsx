@@ -3,19 +3,21 @@ import { Link, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   ExternalLink,
   FileCheck2,
   RefreshCw,
   ShieldAlert,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -225,23 +227,32 @@ function ReconciliationHealthCard() {
         <HealthTile label="Not re-read recently" value={health.stale_observation_count} />
         <HealthTile label="Never read back" value={health.unobserved_intent_count} />
       </dl>
-      <p className="mt-4 text-sm leading-6">
+      <div className="mt-4 border-t border-border pt-4 text-sm leading-6">
         {health.oldest_unreconciled_intent_id ? (
           <>
-            Oldest unfinished money movement:{" "}
+            <p className="font-semibold text-muted">Oldest unfinished money movement</p>
             <Link
               to="/accounting/intents/$intentId"
               params={{ intentId: health.oldest_unreconciled_intent_id }}
-              className="font-bold underline underline-offset-4"
+              className="mt-1 inline-flex min-h-10 items-center font-bold underline decoration-accent decoration-2 underline-offset-4"
             >
-              {health.oldest_unreconciled_intent_id}
+              Review the oldest unfinished item
             </Link>
-            .
+            <details className="group mt-2 text-xs text-muted">
+              <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 font-bold [&::-webkit-details-marker]:hidden">
+                System reference
+                <ChevronDown
+                  className="size-4 transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <p className="mt-1 break-all font-mono">{health.oldest_unreconciled_intent_id}</p>
+            </details>
           </>
         ) : (
-          "Nothing is outstanding. Every money movement has reached a settled state."
+          <p>Nothing is outstanding. Every money movement has reached a settled state.</p>
         )}
-      </p>
+      </div>
       <Link
         to="/accounting"
         className="mt-4 inline-flex min-h-12 items-center font-bold underline underline-offset-4"
@@ -255,7 +266,7 @@ function ReconciliationHealthCard() {
 function HealthTile({ label, value }: { label: string; value: number }) {
   return (
     <div className="border border-border bg-surface px-4 py-3">
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className="mt-1 text-2xl font-black tabular-nums">{value}</dd>
     </div>
   );
@@ -397,13 +408,10 @@ function QuickBooksSettingsContent() {
     session.user.role === "owner" && connectionModel.state === "connected" && !offline;
 
   return (
-    <section className="mx-auto max-w-3xl space-y-6 pb-4">
+    <section className="mx-auto max-w-6xl space-y-6 pb-4">
       <header className="border-b border-border pb-5 sm:pb-6">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Finance settings
-            </p>
             <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
               QuickBooks connection
             </h1>
@@ -456,165 +464,189 @@ function QuickBooksSettingsContent() {
         </p>
       ) : null}
 
-      <Card className="p-5 sm:p-6">
-        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-          Recorded state
-        </p>
-        <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
-          {connectionModel.state === "connected"
-            ? "Connected"
-            : connectionModel.state === "revoked"
-              ? "Removed from IronWrap"
-              : connectionModel.state === "reconciliation_required"
-                ? "Connection needs reconciliation"
-                : "Connection required"}
-        </h2>
-        {connectionModel.realm_id ? (
-          <p className="mt-2 break-all text-sm text-muted">
-            QuickBooks company ID {connectionModel.realm_id}
+      <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
+        <Card className="relative overflow-hidden p-5 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-accent sm:p-6">
+          <p className="text-sm font-bold text-muted">Recorded state</p>
+          <h2 className="mt-1 text-2xl font-black tracking-[-0.035em]">
+            {connectionModel.state === "connected"
+              ? "Connected"
+              : connectionModel.state === "revoked"
+                ? "Removed from IronWrap"
+                : connectionModel.state === "reconciliation_required"
+                  ? "Connection needs reconciliation"
+                  : "Connection required"}
+          </h2>
+          {connectionModel.realm_id ? (
+            <details className="group mt-5 border-t border-border pt-4 text-sm">
+              <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 font-bold text-muted [&::-webkit-details-marker]:hidden">
+                Company record
+                <ChevronDown
+                  className="size-4 shrink-0 transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <p className="mt-2 break-all font-mono text-xs text-muted">
+                QuickBooks company ID {connectionModel.realm_id}
+              </p>
+            </details>
+          ) : null}
+        </Card>
+
+        <ReconciliationHealthCard />
+      </div>
+
+      <details className="group overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+        <summary className="flex min-h-24 cursor-pointer list-none items-center justify-between gap-5 px-5 py-5 transition-colors hover:bg-surface-raised sm:px-6 [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <span className="block text-sm font-bold text-muted">Advanced recovery</span>
+            <span className="mt-1 block text-xl font-black tracking-[-0.025em]">
+              Job-specific QuickBooks mapping
+            </span>
+            <span className="mt-2 block max-w-3xl text-sm leading-6 text-muted">
+              Open only when a finance exception identifies a missing or incorrect customer, item,
+              tax, or terms mapping.
+            </span>
+          </span>
+          <span className="grid size-10 shrink-0 place-items-center rounded-full border border-border bg-surface-raised">
+            <ChevronDown
+              className="size-5 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </span>
+        </summary>
+        <div className="border-t border-border bg-surface-raised/45 p-5 sm:p-6">
+          <h2 className="text-lg font-black tracking-[-0.025em]">
+            Record job-specific QuickBooks IDs
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
+            The server binds this correction to the currently connected QuickBooks company.
           </p>
-        ) : null}
-      </Card>
-
-      <ReconciliationHealthCard />
-
-      <Card className="p-5 sm:p-6">
-        <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-          Native final-invoice mapping
-        </p>
-        <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
-          Record job-specific QuickBooks IDs
-        </h2>
-        <p className="mt-2 text-sm leading-6 text-muted">
-          Use this when a finance exception says customer, item, tax, or terms mapping is missing or
-          needs correction. The server binds the entry to the currently connected QuickBooks
-          company.
-        </p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <label className="grid gap-2 text-sm font-bold">
-            Roof job ID
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.roof_job_id}
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="grid gap-2 text-sm font-bold">
+              Roof job ID
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.roof_job_id}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, roof_job_id: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              QuickBooks customer ID
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.qbo_customer_id}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, qbo_customer_id: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              QuickBooks item ID
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.qbo_item_id}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, qbo_item_id: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              QuickBooks tax code ID
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.qbo_tax_code_id}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, qbo_tax_code_id: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              QuickBooks terms ID
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.qbo_terms_id}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, qbo_terms_id: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              Jurisdiction
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.jurisdiction}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, jurisdiction: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              Tax code
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                value={mapping.tax_code}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, tax_code: event.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold">
+              Payment terms days
+              <input
+                className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
+                inputMode="numeric"
+                value={mapping.payment_terms_days}
+                onChange={(event) =>
+                  setMapping((current) => ({ ...current, payment_terms_days: event.target.value }))
+                }
+              />
+            </label>
+          </div>
+          <label className="mt-4 grid gap-2 text-sm font-bold">
+            Correction reason
+            <textarea
+              className="min-h-24 border border-border bg-surface px-3 py-2 font-medium"
+              value={mapping.correction_reason}
               onChange={(event) =>
-                setMapping((current) => ({ ...current, roof_job_id: event.target.value }))
+                setMapping((current) => ({ ...current, correction_reason: event.target.value }))
               }
             />
           </label>
-          <label className="grid gap-2 text-sm font-bold">
-            QuickBooks customer ID
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.qbo_customer_id}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, qbo_customer_id: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            QuickBooks item ID
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.qbo_item_id}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, qbo_item_id: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            QuickBooks tax code ID
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.qbo_tax_code_id}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, qbo_tax_code_id: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            QuickBooks terms ID
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.qbo_terms_id}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, qbo_terms_id: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            Jurisdiction
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.jurisdiction}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, jurisdiction: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            Tax code
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              value={mapping.tax_code}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, tax_code: event.target.value }))
-              }
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-bold">
-            Payment terms days
-            <input
-              className="min-h-12 border border-border bg-surface px-3 py-2 font-medium"
-              inputMode="numeric"
-              value={mapping.payment_terms_days}
-              onChange={(event) =>
-                setMapping((current) => ({ ...current, payment_terms_days: event.target.value }))
-              }
-            />
-          </label>
-        </div>
-        <label className="mt-4 grid gap-2 text-sm font-bold">
-          Correction reason
-          <textarea
-            className="min-h-24 border border-border bg-surface px-3 py-2 font-medium"
-            value={mapping.correction_reason}
-            onChange={(event) =>
-              setMapping((current) => ({ ...current, correction_reason: event.target.value }))
+          {!canSaveMapping ? (
+            <p className="mt-4 text-sm leading-6 text-muted">
+              {offline
+                ? "Reconnect before recording a mapping. Offline settings stay read-only."
+                : "Connect QuickBooks as the owner before recording a native final-invoice mapping."}
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            className="mt-4"
+            busy={mutation.isPending && mutation.variables?.kind === "save_mapping"}
+            disabled={!canSaveMapping || mutation.isPending}
+            onClick={() =>
+              void mutation.mutate({
+                kind: "save_mapping",
+                input: {
+                  roof_job_id: mapping.roof_job_id,
+                  qbo_customer_id: mapping.qbo_customer_id,
+                  qbo_item_id: mapping.qbo_item_id,
+                  qbo_tax_code_id: mapping.qbo_tax_code_id,
+                  qbo_terms_id: mapping.qbo_terms_id,
+                  jurisdiction: mapping.jurisdiction,
+                  tax_code: mapping.tax_code,
+                  payment_terms_days: Number(mapping.payment_terms_days),
+                  correction_reason: mapping.correction_reason.trim() || null,
+                },
+              })
             }
-          />
-        </label>
-        {!canSaveMapping ? (
-          <p className="mt-4 text-sm leading-6 text-muted">
-            {offline
-              ? "Reconnect before recording a mapping. Offline settings stay read-only."
-              : "Connect QuickBooks as the owner before recording a native final-invoice mapping."}
-          </p>
-        ) : null}
-        <Button
-          type="button"
-          className="mt-4"
-          busy={mutation.isPending && mutation.variables?.kind === "save_mapping"}
-          disabled={!canSaveMapping || mutation.isPending}
-          onClick={() =>
-            void mutation.mutate({
-              kind: "save_mapping",
-              input: {
-                roof_job_id: mapping.roof_job_id,
-                qbo_customer_id: mapping.qbo_customer_id,
-                qbo_item_id: mapping.qbo_item_id,
-                qbo_tax_code_id: mapping.qbo_tax_code_id,
-                qbo_terms_id: mapping.qbo_terms_id,
-                jurisdiction: mapping.jurisdiction,
-                tax_code: mapping.tax_code,
-                payment_terms_days: Number(mapping.payment_terms_days),
-                correction_reason: mapping.correction_reason.trim() || null,
-              },
-            })
-          }
-        >
-          Save native mapping
-        </Button>
-      </Card>
+          >
+            Save native mapping
+          </Button>
+        </div>
+      </details>
 
       {connectionModel.state === "reconciliation_required" ? (
         <Notice tone="danger" title="QuickBooks connection state is uncertain">
@@ -851,8 +883,8 @@ function QuickBooksFinalInvoiceContent() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
+    <section className="mx-auto max-w-[86rem] space-y-6 pb-4">
+      <header className="relative overflow-hidden rounded-2xl border border-border bg-surface-raised p-5 shadow-sm before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-accent sm:p-7 lg:p-8">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
             <Button asChild variant="ghost" size="compact" className="-ml-2">
@@ -861,7 +893,7 @@ function QuickBooksFinalInvoiceContent() {
                 Back to Now
               </Link>
             </Button>
-            <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+            <p className="mt-4 text-sm font-bold text-muted">
               QuickBooks final invoice · job {intent.job_id}
             </p>
             <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
@@ -908,77 +940,84 @@ function QuickBooksFinalInvoiceContent() {
         </p>
       ) : null}
 
-      <IntentStatus model={model} />
-      <CandidateAmounts model={model} />
-      <CandidateLines model={model} />
-      <ReviewBasis model={model} />
-      <Evidence model={model} />
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_23rem] xl:gap-8">
+        <aside className="space-y-4 xl:sticky xl:top-24 xl:col-start-2 xl:row-start-1">
+          <IntentStatus model={model} />
 
-      {intent.state === "connection_required" ? (
-        <section className="border border-warning/40 bg-warning-soft p-5 sm:p-6">
-          <h2 className="text-lg font-bold">Connect QuickBooks before review</h2>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            {session.user.role === "owner"
-              ? "Connect the intended QuickBooks company, then return to this exact candidate."
-              : "Ask the owner to connect the intended QuickBooks company. Accounting cannot change the OAuth connection."}
-          </p>
-          {canConnect ? (
-            <Button
-              type="button"
-              variant="accent"
-              className="mt-5 w-full sm:w-auto"
-              busy={busy}
-              disabled={busy}
-              onClick={() => mutation.mutate({ kind: "connect" })}
-            >
-              <ExternalLink aria-hidden="true" />
-              Connect QuickBooks
-            </Button>
+          {intent.state === "connection_required" ? (
+            <section className="rounded-xl border border-warning/40 bg-warning-soft p-5 sm:p-6">
+              <h2 className="text-lg font-bold">Connect QuickBooks before review</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                {session.user.role === "owner"
+                  ? "Connect the intended QuickBooks company, then return to this exact candidate."
+                  : "Ask the owner to connect the intended QuickBooks company. Accounting cannot change the OAuth connection."}
+              </p>
+              {canConnect ? (
+                <Button
+                  type="button"
+                  variant="accent"
+                  className="mt-5 w-full"
+                  busy={busy}
+                  disabled={busy}
+                  onClick={() => mutation.mutate({ kind: "connect" })}
+                >
+                  <ExternalLink aria-hidden="true" />
+                  Connect QuickBooks
+                </Button>
+              ) : null}
+            </section>
           ) : null}
-        </section>
-      ) : null}
 
-      {intent.state === "pending_review" ? (
-        <PendingDecision
-          model={model}
-          canApprove={canApprove}
-          canReject={canReject}
-          busy={busy}
-          offline={offline}
-          stale={stale}
-          rejecting={rejecting}
-          rejectionReason={rejectionReason}
-          onApprove={() => decide("approve")}
-          onStartReject={() => setRejecting(true)}
-          onCancelReject={() => {
-            setRejecting(false);
-            setRejectionReason("");
-          }}
-          onReasonChange={setRejectionReason}
-          onReject={reject}
-        />
-      ) : null}
+          {intent.state === "pending_review" ? (
+            <PendingDecision
+              model={model}
+              canApprove={canApprove}
+              canReject={canReject}
+              busy={busy}
+              offline={offline}
+              stale={stale}
+              rejecting={rejecting}
+              rejectionReason={rejectionReason}
+              onApprove={() => decide("approve")}
+              onStartReject={() => setRejecting(true)}
+              onCancelReject={() => {
+                setRejecting(false);
+                setRejectionReason("");
+              }}
+              onReasonChange={setRejectionReason}
+              onReject={reject}
+            />
+          ) : null}
 
-      {canReconcile && intent.state !== "pending_review" ? (
-        <section className="border border-danger/40 bg-danger-soft p-5 sm:p-6">
-          <h2 className="text-lg font-bold">Reconcile the recorded provider state</h2>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            This checks the exact recorded invoice. It does not submit a replacement, record a
-            payment, or promise a match.
-          </p>
-          <Button
-            type="button"
-            variant="accent"
-            className="mt-5 w-full sm:w-auto"
-            busy={busy}
-            disabled={busy}
-            onClick={() => decide("reconcile")}
-          >
-            <RefreshCw aria-hidden="true" />
-            Reconcile exact invoice
-          </Button>
-        </section>
-      ) : null}
+          {canReconcile && intent.state !== "pending_review" ? (
+            <section className="rounded-xl border border-danger/40 bg-danger-soft p-5 sm:p-6">
+              <h2 className="text-lg font-bold">Reconcile the recorded provider state</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                This checks the exact recorded invoice. It does not submit a replacement, record a
+                payment, or promise a match.
+              </p>
+              <Button
+                type="button"
+                variant="accent"
+                className="mt-5 w-full"
+                busy={busy}
+                disabled={busy}
+                onClick={() => decide("reconcile")}
+              >
+                <RefreshCw aria-hidden="true" />
+                Reconcile exact invoice
+              </Button>
+            </section>
+          ) : null}
+        </aside>
+
+        <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-1">
+          <CandidateAmounts model={model} />
+          <CandidateLines model={model} />
+          <ReviewBasis model={model} locale={session.tenant.locale} />
+          <Evidence model={model} />
+        </div>
+      </div>
     </section>
   );
 }
@@ -1013,10 +1052,19 @@ function IntentStatus({ model }: { model: QuickBooksFinalInvoiceResponse }) {
             </p>
           ) : null}
           {intent.provider ? (
-            <p className="mt-4 break-all text-xs text-muted">
-              Provider invoice {intent.provider.invoice_id}
-              {intent.provider.matched_at ? " · authenticated match recorded" : ""}
-            </p>
+            <details className="group mt-4 border-t border-current/15 pt-3 text-xs text-muted">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-bold [&::-webkit-details-marker]:hidden">
+                Provider readback recorded
+                <ChevronDown
+                  className="size-4 transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <p className="mt-2 break-all font-mono">
+                QuickBooks invoice {intent.provider.invoice_id}
+                {intent.provider.matched_at ? " · authenticated match recorded" : ""}
+              </p>
+            </details>
           ) : null}
         </div>
       </div>
@@ -1027,8 +1075,14 @@ function IntentStatus({ model }: { model: QuickBooksFinalInvoiceResponse }) {
 function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   const { intent } = model;
   return (
-    <section aria-labelledby="candidate-amounts">
-      <h2 id="candidate-amounts" className="text-xl font-black tracking-[-0.025em]">
+    <section
+      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+      aria-labelledby="candidate-amounts"
+    >
+      <h2
+        id="candidate-amounts"
+        className="px-5 pt-5 text-xl font-black tracking-[-0.025em] sm:px-6 sm:pt-6"
+      >
         Immutable candidate
       </h2>
       <dl className="mt-4 grid border-y border-border sm:grid-cols-2 lg:grid-cols-4">
@@ -1053,7 +1107,7 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
           emphasis
         />
       </dl>
-      <p className="mt-3 text-sm leading-6 text-muted">
+      <p className="px-5 py-4 text-sm leading-6 text-muted sm:px-6">
         This flow accepts only a zero-prior-billing candidate. Deposits or prior invoices block the
         server candidate instead of being subtracted in this browser.
       </p>
@@ -1063,17 +1117,23 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
 
 function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
-    <section aria-labelledby="candidate-lines">
-      <h2 id="candidate-lines" className="text-xl font-black tracking-[-0.025em]">
+    <section
+      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+      aria-labelledby="candidate-lines"
+    >
+      <h2
+        id="candidate-lines"
+        className="px-5 pt-5 text-xl font-black tracking-[-0.025em] sm:px-6 sm:pt-6"
+      >
         Immutable pre-tax lines
       </h2>
-      <ul className="mt-4 border-y border-border">
+      <ul className="mt-4 border-t border-border">
         {model.intent.lines.map((line, index) => (
           <li
             key={`${line.description_code}:${index}`}
-            className="flex min-h-14 items-center justify-between gap-4 border-b border-border px-3 py-3 last:border-b-0"
+            className="flex min-h-14 items-center justify-between gap-4 border-b border-border px-5 py-3 last:border-b-0 sm:px-6"
           >
-            <span className="break-all text-sm font-bold">
+            <span className="text-sm font-bold">
               {lineCodeLabels[line.description_code] ?? line.description_code}
             </span>
             <span className="shrink-0 font-black">
@@ -1086,10 +1146,17 @@ function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   );
 }
 
-function ReviewBasis({ model }: { model: QuickBooksFinalInvoiceResponse }) {
+function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse; locale: string }) {
   const { intent } = model;
+  const dateFormatter = new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  });
   return (
-    <section className="border border-border bg-surface p-5 sm:p-6" aria-labelledby="qbo-basis">
+    <section
+      className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
+      aria-labelledby="qbo-basis"
+    >
       <div className="flex items-start gap-3">
         <FileCheck2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div className="min-w-0">
@@ -1106,38 +1173,83 @@ function ReviewBasis({ model }: { model: QuickBooksFinalInvoiceResponse }) {
       <dl className="mt-5 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
         <Fact
           label="Completion"
-          value={`${intent.basis.completion_id} · version ${intent.basis.completion_version}`}
+          value={`Verified record · version ${intent.basis.completion_version}`}
         />
         <Fact
           label="Accepted quote"
-          value={`${intent.basis.quote_id} · version ${intent.basis.quote_version}`}
+          value={`Accepted record · version ${intent.basis.quote_version}`}
         />
-        <Fact label="Invoice date" value={intent.invoice_date} />
-        <Fact label="Due date" value={intent.due_date} />
-        <Fact label="Candidate version" value={String(intent.version)} />
-        <HashFact label="Basis hash" value={intent.basis.basis_hash} />
-        <HashFact label="Completion hash" value={intent.basis.completion_hash} />
-        <HashFact label="Quote hash" value={intent.basis.quote_hash} />
-        <HashFact label="Accepted changes hash" value={intent.basis.changes_hash} />
+        <Fact
+          label="Invoice date"
+          value={dateFormatter.format(new Date(`${intent.invoice_date}T00:00:00.000Z`))}
+        />
+        <Fact
+          label="Due date"
+          value={dateFormatter.format(new Date(`${intent.due_date}T00:00:00.000Z`))}
+        />
       </dl>
+      <details className="group mt-5 border-t border-border pt-3">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 text-sm font-bold text-muted [&::-webkit-details-marker]:hidden">
+          System evidence anchors
+          <ChevronDown
+            className="size-4 shrink-0 transition-transform group-open:rotate-180"
+            aria-hidden="true"
+          />
+        </summary>
+        <dl className="mt-3 grid gap-4 rounded-lg bg-surface-raised p-4 text-sm sm:grid-cols-2">
+          <HashFact label="Completion record" value={intent.basis.completion_id} />
+          <HashFact label="Quote record" value={intent.basis.quote_id} />
+          <HashFact label="Candidate version" value={String(intent.version)} />
+          <HashFact label="Basis hash" value={intent.basis.basis_hash} />
+          <HashFact label="Completion hash" value={intent.basis.completion_hash} />
+          <HashFact label="Quote hash" value={intent.basis.quote_hash} />
+          <HashFact label="Accepted changes hash" value={intent.basis.changes_hash} />
+        </dl>
+      </details>
     </section>
   );
 }
 
 function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
-    <section aria-labelledby="qbo-evidence">
-      <h2 id="qbo-evidence" className="text-xl font-black tracking-[-0.025em]">
-        Evidence citations
-      </h2>
-      <ul className="mt-4 border-y border-border">
+    <section
+      className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
+      aria-labelledby="qbo-evidence"
+    >
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 id="qbo-evidence" className="text-xl font-black tracking-[-0.025em]">
+            Evidence citations
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Human-readable proof is listed first. Open a record only when you need its source
+            anchor.
+          </p>
+        </div>
+        <span className="rounded-full bg-ok-soft px-3 py-1 text-xs font-bold text-ok">
+          {model.intent.citations.length} linked
+        </span>
+      </div>
+      <ul className="mt-5 divide-y divide-border border-y border-border">
         {model.intent.citations.map((citation) => (
-          <li key={citation.id} className="border-b border-border px-3 py-4 last:border-b-0">
-            <p className="font-bold">{citation.label.replaceAll("_", " ")}</p>
-            <p className="mt-1 break-all text-sm text-muted">
-              {citation.source} · {citation.source_ref}
-            </p>
-            <p className="mt-1 break-all font-mono text-xs text-muted">SHA-256 {citation.sha256}</p>
+          <li key={citation.id}>
+            <details className="group">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 py-3 font-bold capitalize [&::-webkit-details-marker]:hidden">
+                {citation.label.replaceAll("_", " ")}
+                <ChevronDown
+                  className="size-4 shrink-0 text-muted transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="mb-4 rounded-lg bg-surface-raised p-4">
+                <p className="break-all text-sm text-muted">
+                  {citation.source} · {citation.source_ref}
+                </p>
+                <p className="mt-2 break-all font-mono text-xs text-muted">
+                  SHA-256 {citation.sha256}
+                </p>
+              </div>
+            </details>
           </li>
         ))}
       </ul>
@@ -1176,7 +1288,10 @@ function PendingDecision({
 }) {
   if (!canApprove && !canReject) {
     return (
-      <section className="border border-border bg-surface p-5 sm:p-6" role="status">
+      <section
+        className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
+        role="status"
+      >
         <h2 className="font-bold">
           {offline
             ? "Reconnect before deciding"
@@ -1196,7 +1311,10 @@ function PendingDecision({
   }
 
   return (
-    <section className="border border-border bg-surface" aria-labelledby="qbo-decision">
+    <section
+      className="overflow-hidden rounded-xl border border-border bg-surface shadow-md"
+      aria-labelledby="qbo-decision"
+    >
       <div className="border-b border-border p-5 sm:p-6">
         <h2 id="qbo-decision" className="text-lg font-bold">
           Decide this exact external invoice
@@ -1228,7 +1346,7 @@ function PendingDecision({
               </option>
             ))}
           </select>
-          <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <div className="mt-5 flex flex-col-reverse gap-3">
             <Button type="button" variant="outline" disabled={busy} onClick={onCancelReject}>
               Cancel
             </Button>
@@ -1244,14 +1362,20 @@ function PendingDecision({
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="flex flex-col gap-4 p-5 sm:p-6">
           <p className="max-w-xl text-sm leading-6 text-muted">
             The server will re-check this candidate version. This browser cannot change its
             customer, item, tax, terms, lines, or amount.
           </p>
-          <div className="flex flex-col-reverse gap-3 sm:flex-row">
+          <div className="flex flex-col-reverse gap-3">
             {canReject ? (
-              <Button type="button" variant="outline" disabled={busy} onClick={onStartReject}>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={busy}
+                onClick={onStartReject}
+              >
                 Reject
               </Button>
             ) : null}
@@ -1259,6 +1383,7 @@ function PendingDecision({
               <Button
                 type="button"
                 variant="accent"
+                className="w-full"
                 busy={busy}
                 disabled={busy}
                 onClick={onApprove}
@@ -1287,7 +1412,7 @@ function AmountFact({
 }) {
   return (
     <div className={cn("p-4", bordered && "border-t border-border sm:border-t-0 sm:border-l")}>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className={cn("mt-2 font-bold", emphasis && "text-xl font-black")}>{value}</dd>
     </div>
   );
@@ -1308,33 +1433,6 @@ function HashFact({ label, value }: { label: string; value: string }) {
       <dt className="font-semibold text-muted">{label}</dt>
       <dd className="mt-1 break-all font-mono text-xs">{value}</dd>
     </div>
-  );
-}
-
-function Notice({
-  tone,
-  title,
-  children,
-}: {
-  tone: "warning" | "danger" | "success";
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      className={cn(
-        "border px-4 py-4",
-        tone === "danger"
-          ? "border-danger/40 bg-danger-soft"
-          : tone === "success"
-            ? "border-ok/40 bg-ok-soft"
-            : "border-warning/40 bg-warning-soft",
-      )}
-      role={tone === "danger" ? "alert" : "status"}
-    >
-      <p className="font-bold">{title}</p>
-      <p className="mt-1 text-sm leading-6 text-muted">{children}</p>
-    </section>
   );
 }
 

@@ -34,7 +34,7 @@ import {
   type ServiceCaseDetailResponse,
   type ServiceRemedy,
 } from "./service-contracts";
-import { cadFromCents, codeLabel, severityLabel, stateLabel } from "./service-presentation";
+import { cadFromCents, codeLabel, stateLabel } from "./service-presentation";
 
 /**
  * One callback, end to end. The panel offered here is the single step the case's current state
@@ -115,9 +115,6 @@ function ServiceCaseContent() {
                 <ClipboardList className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  {severityLabel(serviceCase.severity)} · {stateLabel(serviceCase.state)}
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance capitalize sm:text-4xl">
                   {codeLabel(serviceCase.symptom_code)}
                 </h1>
@@ -128,13 +125,11 @@ function ServiceCaseContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">Job ID</p>
+            <p className="text-sm font-bold text-muted">Job ID</p>
             <p className="mt-2 break-words text-lg font-black tracking-[-0.02em]">
               {serviceCase.roof_job_id}
             </p>
-            <p className="mt-4 text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Call by
-            </p>
+            <p className="mt-4 text-sm font-bold text-muted">Call by</p>
             <p className="mt-2 text-sm font-semibold leading-6">
               {formatDateTime(
                 serviceCase.response_due_at,
@@ -926,7 +921,7 @@ function ActionCard({
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">{label}</dt>
+      <dt className="text-sm font-bold text-muted">{label}</dt>
       <dd className="mt-1 text-xl font-black tracking-[-0.03em]">{value}</dd>
     </div>
   );

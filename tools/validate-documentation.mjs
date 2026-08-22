@@ -43,6 +43,33 @@ const forbiddenPaths = [
 ];
 const absoluteWorkstationPath =
   /(?:file:\/\/\/|\/Users\/[^/\s]+\/|[A-Za-z]:\\Users\\)/;
+const forbiddenAuthorityClaims = [
+  /Hermes is the operating brain for IronWrap OS/i,
+  /Frappe is the operating core/i,
+  /Proprietary Frappe operating core/i,
+  /Frappe operating core with reads/i,
+  /\breliable-agent\b/i,
+  /AI agents (?:are assumed to be|that are) 100% reliable/i,
+  /Linear [^\n]*source of truth/i,
+  /implemented source contract is \*\*131 tools/i,
+  /checked-in Worker baseline deliberately leaves `APP_BFF_ENABLED=false`/i,
+  /checked-in customer portal is a disabled/i,
+  /one tenant \+ one Frappe site \+ one Worker deployment/i,
+];
+const architectureNavigationDocuments = new Set([
+  "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "app/README.md",
+  "workers-bus/README.md",
+  "frappe-apps/ironwrap_roofing/README.md",
+  "hermes/README.md",
+  "mcp/erpnext-roofing-mcp/README.md",
+]);
+const historicalDesignDocuments = new Set([
+  "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
+  "docs/PRODUCTION-SCHEDULING-CONTRACT.md",
+]);
 
 const failures = [];
 const fail = (message) => failures.push(message);
@@ -74,28 +101,22 @@ const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root })
 const trackedSet = new Set(tracked);
 const trackedDocuments = tracked.filter((path) => documentExtensions.has(extname(path).toLowerCase()));
 
-function loadCapabilityContract(path) {
+function loadEmbeddedJsonContract(path, label, startMarker, endMarker) {
   if (!existsSync(path)) {
-    fail(`capability matrix not found: ${path}`);
+    fail(`${label} not found: ${path}`);
     return null;
   }
   const content = readFileSync(path, "utf8");
-  const startMarker = "<!-- capability-evidence-contract:start -->";
-  const endMarker = "<!-- capability-evidence-contract:end -->";
   const start = content.indexOf(startMarker);
   const end = content.indexOf(endMarker);
   if (start === -1 || end === -1 || end <= start) {
-    fail(
-      "docs/CAPABILITY-MATRIX.md: missing capability evidence contract markers",
-    );
+    fail(`${label}: missing embedded JSON contract markers`);
     return null;
   }
   const fenced = content.slice(start + startMarker.length, end);
   const json = fenced.match(/```json\s*([\s\S]*?)\s*```/)?.[1];
   if (!json) {
-    fail(
-      "docs/CAPABILITY-MATRIX.md: capability evidence contract must contain one JSON fence",
-    );
+    fail(`${label}: embedded contract must contain one JSON fence`);
     return null;
   }
   try {
@@ -104,11 +125,27 @@ function loadCapabilityContract(path) {
       sha256: createHash("sha256").update(json).digest("hex"),
     };
   } catch (error) {
-    fail(
-      `docs/CAPABILITY-MATRIX.md: invalid capability evidence JSON: ${error.message}`,
-    );
+    fail(`${label}: invalid embedded JSON: ${error.message}`);
     return null;
   }
+}
+
+function loadCapabilityContract(path) {
+  return loadEmbeddedJsonContract(
+    path,
+    "docs/CAPABILITY-MATRIX.md",
+    "<!-- capability-evidence-contract:start -->",
+    "<!-- capability-evidence-contract:end -->",
+  );
+}
+
+function loadArchitectureContract(path) {
+  return loadEmbeddedJsonContract(
+    path,
+    "docs/AI-NATIVE-ARCHITECTURE.md",
+    "<!-- ai-native-architecture-contract:start -->",
+    "<!-- ai-native-architecture-contract:end -->",
+  );
 }
 
 function repositoryCapabilityFacts() {
@@ -168,11 +205,138 @@ function repositoryCapabilityFacts() {
   };
 }
 
+function textFilesUnder(directory, extension) {
+  const files = [];
+  const pending = [directory];
+  while (pending.length) {
+    const current = pending.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = resolve(current, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.name.endsWith(extension)) {
+        files.push({ path, content: readFileSync(path, "utf8") });
+      }
+    }
+  }
+  return files;
+}
+
+function repositoryArchitectureFacts() {
+  const sourceRoot = resolve(root, "workers-bus/src");
+  const testRoot = resolve(root, "workers-bus/test");
+  const sourceFiles = textFilesUnder(sourceRoot, ".ts");
+  const testFiles = textFilesUnder(testRoot, ".ts");
+  const commercialStorePath = resolve(sourceRoot, "commercial-store.ts");
+  const calledOutsideCommercialStore = (symbol) => {
+    const pattern = new RegExp(`\\b${symbol}\\s*\\(`);
+    return sourceFiles.some(
+      (file) => file.path !== commercialStorePath && pattern.test(file.content),
+    );
+  };
+  const calledInTests = (symbol) => {
+    const pattern = new RegExp(`\\b${symbol}\\s*\\(`);
+    return testFiles.some((file) => pattern.test(file.content));
+  };
+  const reachability = (symbol) =>
+    calledOutsideCommercialStore(symbol)
+      ? "production"
+      : calledInTests(symbol)
+        ? "test_only"
+        : "unreachable";
+
+  const acceptance = readFileSync(
+    resolve(sourceRoot, "customer-contract-acceptance.ts"),
+    "utf8",
+  );
+  const wrangler = readFileSync(resolve(root, "workers-bus/wrangler.jsonc"), "utf8");
+  const configString = (name) => {
+    const literal = wrangler.match(
+      new RegExp(`"${name}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`),
+    )?.[1];
+    if (!literal) {
+      fail(`workers-bus/wrangler.jsonc: missing top-level ${name}`);
+      return "";
+    }
+    return JSON.parse(literal);
+  };
+  const configBoolean = (name) => configString(name) === "true";
+  let facetRoutesConfigured = false;
+  try {
+    const routes = JSON.parse(configString("FACET_V2_ROUTES_JSON"));
+    facetRoutesConfigured = Array.isArray(routes) && routes.length > 0;
+  } catch (error) {
+    fail(`workers-bus/wrangler.jsonc: invalid FACET_V2_ROUTES_JSON: ${error.message}`);
+  }
+
+  return {
+    authority: {
+      operating_state: "d1_worker",
+      raw_evidence: "r2",
+      frappe: "compatibility_projection",
+      facet: "design_evidence_producer",
+      quickbooks: "posted_accounting_facts",
+      ai: "non_authoritative_proposal",
+    },
+    maturity: {
+      core_technical_design: "strong",
+      lead_job_field_foundation: "strong_with_projection_gaps",
+      safety_evidence_accounting_controls: "unusually_strong_in_source",
+      repository_migration_coherence: "mixed",
+      configured_capability: "partial",
+      end_to_end_commercial_closure: "incomplete",
+      production_customer_proof: "not_established",
+    },
+    commercial_reachability: {
+      approved_quote_revision_writer: reachability("recordCommercialQuoteRevision"),
+      proposal_revision_writer: reachability("recordCommercialProposalRevision"),
+      proposal_publication_settlement_writer: reachability(
+        "recordCommercialProposalPublication",
+      ),
+      customer_acceptance_writer:
+        /return await commitNativeAcceptance\s*\(/.test(acceptance)
+          ? "production"
+          : "unreachable",
+      acceptance_to_deposit_derivation:
+        /\bderiveAccountingIntent\s*\(|["']deposit_invoice["']/.test(acceptance)
+          ? "wired"
+          : "not_wired",
+    },
+    configuration: {
+      effect_runtime_enabled: configBoolean("EFFECT_RUNTIME_ENABLED"),
+      quickbooks_oauth_enabled: configBoolean("QB_OAUTH_ENABLED"),
+      quickbooks_final_invoice_enabled: configBoolean("QB_FINAL_INVOICE_ENABLED"),
+      hermes_desktop_enabled: configBoolean("APP_HERMES_DESKTOP_ENABLED"),
+      public_estimator_enabled: configBoolean("PUBLIC_ESTIMATE_ENABLED"),
+      newo_enabled: configBoolean("NEWO_ENABLED"),
+      postiz_enabled: configBoolean("POSTIZ_ENABLED"),
+      facet_routes_configured: facetRoutesConfigured,
+      proposal_template_configured:
+        configString("PROPOSAL_TEMPLATE_DOC_ID").trim().length > 0,
+    },
+    proof: {
+      repository_verified_for_this_audit: true,
+      deployed_exact_source_verified: false,
+      provider_readback_journey_verified: false,
+      production_reference_journey_verified: false,
+      customer_validated: false,
+    },
+  };
+}
+
 function compareCapabilityFact(label, expected, actual) {
   if (expected !== actual) {
     fail(
       `docs/CAPABILITY-MATRIX.md: stale ${label}; contract ${JSON.stringify(expected)}, repository ${JSON.stringify(actual)}`,
     );
+  }
+}
+
+function compareContractSection(label, expected, actual) {
+  for (const [field, value] of Object.entries(expected)) {
+    compareCapabilityFact(`${label}.${field}`, value, actual?.[field]);
+  }
+  for (const field of Object.keys(actual ?? {})) {
+    if (!(field in expected)) fail(`${label}: unknown field ${field}`);
   }
 }
 
@@ -362,6 +526,10 @@ const capabilityMatrixPath = resolve(
 );
 const capabilityContract = loadCapabilityContract(capabilityMatrixPath);
 const capabilityFacts = repositoryCapabilityFacts();
+const architectureContract = loadArchitectureContract(
+  resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md"),
+);
+const architectureFacts = repositoryArchitectureFacts();
 validateRestatedCounts(capabilityFacts);
 const observedAppTests = appTestCount(options.get("--app-test-output"));
 const observedWorkerTests = workerTestCount(
@@ -419,12 +587,36 @@ if (capabilityContract) {
     runtime: "never_infer",
     business_acceptance: "never_infer",
     production_proof: "never_infer",
+    technical_reference_proof: "never_infer",
+    customer_validation: "never_infer",
   };
   for (const [field, value] of Object.entries(proofPolicy)) {
     compareCapabilityFact(
       `proof_state_policy.${field}`,
       value,
       contract.proof_state_policy?.[field],
+    );
+  }
+}
+
+if (architectureContract) {
+  const contract = architectureContract.value;
+  if (contract.schema !== "ironwrap_ai_native_architecture_contract_v1") {
+    fail(
+      "docs/AI-NATIVE-ARCHITECTURE.md: architecture schema must be ironwrap_ai_native_architecture_contract_v1",
+    );
+  }
+  for (const section of [
+    "authority",
+    "maturity",
+    "commercial_reachability",
+    "configuration",
+    "proof",
+  ]) {
+    compareContractSection(
+      `docs/AI-NATIVE-ARCHITECTURE.md:${section}`,
+      architectureFacts[section],
+      contract[section],
     );
   }
 }
@@ -495,6 +687,24 @@ for (const entry of entries) {
 
   if (absoluteWorkstationPath.test(content)) {
     fail(`${entry.path}: contains an absolute workstation path`);
+  }
+
+  for (const pattern of forbiddenAuthorityClaims) {
+    if (pattern.test(content)) {
+      fail(`${entry.path}: contains forbidden legacy authority claim ${pattern}`);
+    }
+  }
+  if (
+    architectureNavigationDocuments.has(entry.path) &&
+    !content.includes("AI-NATIVE-ARCHITECTURE.md")
+  ) {
+    fail(`${entry.path}: must link to docs/AI-NATIVE-ARCHITECTURE.md`);
+  }
+  if (
+    historicalDesignDocuments.has(entry.path) &&
+    !/^Status:\s+historical\b/m.test(content)
+  ) {
+    fail(`${entry.path}: historical design document must declare historical status`);
   }
 
   if (entry.class === "canonical") {
@@ -580,6 +790,8 @@ if (evidencePath) {
       runtime: false,
       business_acceptance: false,
       production_proof: false,
+      technical_reference_proof: false,
+      customer_validation: false,
     },
   };
   const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
@@ -596,5 +808,5 @@ if (evidencePath) {
 console.log(
   `ok ${trackedDocuments.length} registered documents validated; ` +
     `${capabilityFacts.frappe_doctypes.total} DocTypes and ${capabilityFacts.d1_migrations.count} migrations match the capability contract ` +
-    `and every count restated by ${restatedCountDocuments.map((document) => document.path).join(", ")}`,
+    `and AI-native authority/reachability/configuration claims match source`,
 );

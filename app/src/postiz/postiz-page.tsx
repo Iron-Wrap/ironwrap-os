@@ -191,9 +191,6 @@ function PostizContent() {
                 <Megaphone className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Marketing post · {providerLabel[intent.provider]}
-                </p>
                 <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   {intent.title}
                 </h1>
@@ -204,9 +201,7 @@ function PostizContent() {
             </div>
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-              Next step
-            </p>
+            <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {stateLabel[intent.state]}
             </h2>
@@ -362,9 +357,7 @@ function StatusCard({ model }: { model: PostizIntentResponse }) {
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         )}
         <div className="min-w-0">
-          <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-muted">
-            Saved state
-          </p>
+          <p className="text-sm font-bold text-muted">Saved state</p>
           <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
             {stateLabel[intent.state]}
           </h2>

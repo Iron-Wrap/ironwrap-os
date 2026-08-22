@@ -1,16 +1,18 @@
 # IronWrap OS PWA
 
-Production foundation for the installable IronWrap OS product surface. This directory is an
+Repository-built foundation for the installable IronWrap OS product surface; build success is not
+deployment, real-device, technical-reference, or customer proof. This directory is an
 independent Vite application that talks only to the same-origin Worker BFF under `/api/v1/*`.
 It never calls Frappe directly and it ships no demo jobs, leads, customers, or fallback business
-data.
+data. The Worker, not the browser, enforces authority. See the canonical boundary in
+[`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md).
 
 ## Implemented surface
 
 - Vite 8, React 19, TypeScript 7, Tailwind 4, local Radix/CVA UI primitives, TanStack Router and
   Query, Workbox through `vite-plugin-pwa`, and IndexedDB through `idb`.
 - Exact session-contract validation, magic-link sign-in, a fail-closed auth boundary, and role
-  navigation for `owner`, `ops`, and `field`.
+  navigation for `owner`, `ops`, `sales`, `production`, `accounting`, and `field`.
 - Responsive desktop/sidebar and thumb-first bottom navigation. Field controls use a 64 px target;
   general primary targets use at least 56 px.
 - Semantic light/dark tokens and accessible loading, error, and teaching empty states.
@@ -70,7 +72,8 @@ data.
   Measurement Workbench, Draft Revision review, and Settings implement the canonical interaction
   and evidence
   foundations. The inbox and production runway remain review surfaces, not generic editors or
-  dispatch controls; live broker/Frappe/operator proof remains a deployment gate.
+  dispatch controls; live native-Worker/provider/operator proof and any enabled compatibility
+  projection proof remain separate launch gates.
 
 ## Run it
 
@@ -209,7 +212,7 @@ required PNG icon exist in `dist` with the expected manifest purposes.
 
 ## Product rules
 
-The shell follows the canonical operating and evidence contracts: evidence before claims,
+The shell follows the canonical AI-native, operating, and evidence contracts: evidence before claims,
 camera/voice before keyboard,
 physical gate locks, exception-first owner work, one clear next action, undoable interaction design,
 trade-language errors, and visible sync truth. New routes must preserve these laws and may

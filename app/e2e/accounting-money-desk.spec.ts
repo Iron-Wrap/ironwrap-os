@@ -139,11 +139,11 @@ test.describe("Money desk mobile acceptance", () => {
     await page.screenshot({ path: `${SHOT_DIR}/money-exceptions.png`, fullPage: true });
   });
 
-  test("the settings page carries QuickBooks checks on a phone", async ({ page }) => {
+  test("the settings page carries reconciliation health on a phone", async ({ page }) => {
     await page.goto("/accounting/quickbooks");
     await expect(page.getByRole("heading", { name: "QuickBooks connection" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "QuickBooks checks" })).toBeVisible();
-    await expect(page.getByText("Not checked lately")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Reconciliation health" })).toBeVisible();
+    await expect(page.getByText("Not re-read recently")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the money desk" })).toBeVisible();
 
     await assertNoHorizontalScroll(page, "quickbooks settings");
@@ -158,14 +158,14 @@ test.describe("Money desk mobile acceptance", () => {
 
     await page.goto("/accounting/quickbooks/final-invoices/qbo_final_01JEXAMPLE0001");
     await expect(page.getByRole("heading", { name: "CAD 1050.00" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Invoice totals" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Invoice lines before tax" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Source records" })).toBeVisible();
-    await expect(page.getByText("System check codes")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Immutable candidate" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Immutable pre-tax lines" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Why this review is required" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Evidence citations" })).toBeVisible();
     await expect(page.getByText("Aug 13, 2026")).toBeVisible();
     await expect(page.getByText(/Frappe:/).first()).toBeHidden();
-    await expect(page.getByRole("button", { name: "Approve invoice" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Do not approve" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Approve external invoice" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reject" })).toBeVisible();
 
     await assertNoHorizontalScroll(page, "final invoice");
     await assertActionsAreReachable(page, "final invoice");

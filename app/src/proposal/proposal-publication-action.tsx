@@ -282,7 +282,7 @@ export function ProposalPublicationAction({
         {uncertain ? (
           <PublicationNotice tone="danger" title="A publication attempt is unresolved.">
             The publication command may already have run. Reconcile the recorded run before trying
-            again — do not publish a second time.
+            again. Do not publish a second time.
           </PublicationNotice>
         ) : null}
 

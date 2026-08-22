@@ -316,6 +316,44 @@ The phase is a projector/read model. It is never a second writable truth.
 AI appears inside these scoped journeys as proposals and explanations. It is not a global chatbot
 with ambient authority.
 
+## Interaction and workflow composition contract
+
+Boards, pipelines, and Kanban lanes are read models over the orthogonal lifecycle facts above. A
+versioned workflow view defines ordered lanes as deterministic predicates and declares which typed
+commands may be requested from each lane. It does not own a second mutable status field.
+
+A drag-and-drop gesture is therefore a command request, not a direct record update. It carries the
+tenant, aggregate ID and version, workflow-view version, requested transition, actor, and stable
+idempotency key. The Worker reloads current facts and rechecks role, policy, evidence, gates, and
+preconditions. A stale, unauthorized, or blocked drop leaves authoritative state unchanged and
+returns the exact blocker and recovery path.
+
+Automations consume committed domain events through versioned rules. A rule may request an existing
+typed internal transition or submit an external action through permit -> effect -> provider readback
+-> reconciliation. Rule version, matched inputs, policy result, action reference, and terminal
+outcome are auditable. Tenant-supplied arbitrary hooks or scripts may not mutate operating state,
+send externally, or manufacture authority.
+
+Operational forms are schema-driven collection surfaces, not generic document editors. A versioned
+form definition declares typed fields, per-field read/write authority, provenance, conditional
+evidence requirements, validation, retention, offline behavior, and correction audit. Form
+configuration may change the collection experience; it cannot create a new business fact, bypass a
+domain transition, or weaken evidence and approval rules.
+
+## Conversational owner control surface
+
+The owner-facing AI surface is an additional client of the same read models and action catalog. It
+may answer source-linked questions, explain blockers and exceptions, draft bounded artifacts,
+request a governed action, present approval when policy requires it, and show effect readback and
+reconciliation. It must expose uncertainty, missing evidence, and the exact human or system needed
+to continue.
+
+An MCP server or skill interprets intent and transports typed requests only. It receives neither
+ambient authority nor provider credentials, and it cannot bypass Worker policy or write directly to
+D1, Frappe, Facet, QuickBooks, or another provider. Consequential actions retain their existing
+approval, permit, effect, and readback contracts. Role screens, exception queues, audit history, and
+recovery controls remain mandatory fallbacks; conversational control does not eliminate the UI.
+
 ## Production reference journey without customers
 
 The technical production bar uses an isolated `reference` tenant and company-controlled actors.
@@ -335,7 +373,9 @@ The reference journey must prove:
 
 Required injected failures include duplicate/replay, stale facts, prompt injection, proposal drift,
 lost provider response, provider refusal, permission denial, offline conflict, safety stop, gate
-staleness, payment mismatch, and backup/rollback failure.
+staleness, payment mismatch, email or magic-link provider outage, Cloudflare edge/ingress outage,
+PWA/Worker/compatibility-projection version skew, partial rollout recovery, supplier catalog
+staleness or unit mismatch, QuickBooks realm/token/readback mismatch, and backup/rollback failure.
 
 The permitted conclusion is **technical production reference journey established for exact source
 and configuration**. Customer adoption, usability, conversion, willingness to pay, field
@@ -361,10 +401,26 @@ blocker, and safe fallback. Readiness profiles are `core`, `commercial_closure`,
 `accounting_closure`, and `reference_journey`. Optional Newo, Postiz, and public-estimator paths do
 not block the core journey unless product policy explicitly adds them.
 
+Every provider integration also has a versioned manifest: provider and tenant identity, supported
+direction and actions, authentication scopes, data classification, authority boundary,
+idempotency/retry policy, required readback and reconciliation, failure fallback, readiness state,
+and proof TTL. The Integrations surface is a view over reviewed manifests and configuration; it is
+not a runtime marketplace for arbitrary hooks or plugins.
+
 ## Repository and migration coherence
 
 - IronWrap is the company operating authority.
-- Facet remains a separate active product and signed design-evidence producer.
+- `Job` is the canonical IronWrap operating and commercial aggregate. `Facet Project` is a separate
+  design aggregate. The target is a stable Job kernel plus a versioned `job_kind`/operating profile
+  and domain-specific extensions, not one generic Project monolith.
+- Existing `roof_job_id` identities remain stable while portability is introduced through expand,
+  dual-read comparison, writer switch, and explicit compatibility projection. Do not mass-rename
+  tables, routes, events, or evidence references before commercial closure and migration proof.
+- Facet remains a separate active customer-facing design/measurement product boundary and signed
+  design-evidence producer. IronWrap owns operating association and every commercial transition.
+- Before new shared Capture, parser, geometry, rendering, catalog, or computer-vision work, assign
+  one canonical implementation owner across Facet and Home Config 3D; changes are otherwise ported
+  explicitly with parity tests.
 - Home Config 3D is not an IronWrap runtime dependency; archive/freeze requires a separate owner
   decision after unique-code and shared-lineage inventory.
 - Frappe is compatibility only. While its wheel ships, its required tests must be release-blocking;
@@ -375,6 +431,11 @@ not block the core journey unless product policy explicitly adds them.
   machine-readable migration manifest.
 - Migrate with expand -> dual-read comparison -> writer switch -> read-only projection -> parity
   proof -> deletion.
+- An `Operating Pack` is a future versioned configuration bundle for proven combinations of roles,
+  views, forms, policies, workflows, integrations, and job kinds. A pack can reference existing
+  authority contracts but cannot mint authority or executable tenant code. Build packs only after
+  the same configuration has been proven repeatedly; defer a template marketplace until independent
+  packs have upgrade, rollback, isolation, and compatibility proof.
 
 ## Delivery order and gates
 
@@ -382,11 +443,14 @@ not block the core journey unless product policy explicitly adds them.
    writer per fact.
 2. **Commercial closure:** production quote writer, publication settlement, acceptance-driven
    deposit derivation, configured accounting readback.
-3. **Lifecycle projection:** lead conversion, customer activation, derived phase and invariants.
+3. **Lifecycle and role workflow:** lead conversion, customer activation, derived phase and
+   invariants, governed workflow views, schema-driven forms, and a role-by-role offline matrix.
 4. **Thin AI coordinator:** context snapshot, action catalog, one coordination aggregate, bounded
-   lead/exception use cases first.
-5. **Configuration:** minimum provider set and readiness profiles.
-6. **Reference proof:** exact-source journey plus failure/recovery drills and EvidencePack.
+   lead/exception use cases and the owner conversational surface first.
+5. **Configuration:** minimum provider set, versioned integration manifests, readiness profiles,
+   supplier-catalog snapshots, and provider readback/reconciliation.
+6. **Reference proof:** exact-source journey plus the required edge, email, version-skew, offline,
+   catalog, provider, and recovery drills and EvidencePack.
 7. **Retirement:** Frappe brokers/wheel and duplicate predecessor paths after parity proof.
 8. **Customer validation:** only real users may change `customer_validated` from false.
 

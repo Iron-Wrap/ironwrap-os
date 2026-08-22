@@ -78,14 +78,6 @@
       ]
     },
     {
-      "path": "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
-      "class": "developer",
-      "authority": [
-        "docs/AI-NATIVE-ARCHITECTURE.md",
-        "docs/CAPABILITY-MATRIX.md"
-      ]
-    },
-    {
       "path": "docs/AI-NATIVE-ARCHITECTURE.md",
       "class": "canonical",
       "authority": []
@@ -152,11 +144,6 @@
       ]
     },
     {
-      "path": "docs/LOCAL-FRAPPE-STAND-UP-DEFECTS.md",
-      "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
-    },
-    {
       "path": "docs/NEWO-INTEGRATION.md",
       "class": "runbook",
       "authority": [
@@ -175,14 +162,6 @@
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
-      "path": "docs/PRODUCTION-SCHEDULING-CONTRACT.md",
-      "class": "developer",
-      "authority": [
-        "docs/AI-NATIVE-ARCHITECTURE.md",
-        "docs/CAPABILITY-MATRIX.md"
-      ]
-    },
-    {
       "path": "docs/WEBSITE-INTEGRATION.md",
       "class": "runbook",
       "authority": [
@@ -197,11 +176,6 @@
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
         "docs/CAPABILITY-MATRIX.md"
       ]
-    },
-    {
-      "path": "docs/ui-uplift-plan-2026-08-22.md",
-      "class": "developer",
-      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
       "path": "frappe-apps/ironwrap_roofing/README.md",

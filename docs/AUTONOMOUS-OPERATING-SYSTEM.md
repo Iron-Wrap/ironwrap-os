@@ -334,6 +334,12 @@ Manage:
 - certificates, bulletins, recalls, technical changes, and warranty requirements;
 - concentration, alternate source, and business-continuity risk.
 
+Every consumed supplier price comes from an immutable catalog snapshot carrying supplier/material
+external identity, unit and currency, price/freight/minimum, effective and expiry time, availability
+and lead time, catalog version/source hash, and authenticated provider readback. The estimate,
+takeoff, substitution, and purchase order retain the exact snapshot revision they consumed; a later
+catalog refresh cannot silently change an approved commercial artifact.
+
 Vendor creation, bank-detail change, order release, receiving, and payment remain separated.
 
 ### 12. Inventory and warehouse
@@ -593,6 +599,12 @@ Control:
 - domain, email, phone, website, cloud, provider, accounting, and automation continuity;
 - versioned agents, prompts, tools, policy, models, evaluations, and rollback.
 
+Structured operational forms are versioned domain schemas, not uploaded PDF/Word documents or a
+generic low-code database. Each field has a type, read/write authority, provenance, validation,
+conditional evidence requirement, retention class, offline policy, and correction trail. A form may
+collect facts and request an existing command; it cannot define new authority or mutate lifecycle
+state directly.
+
 Customer/job evidence belongs in approved D1/R2/Drive/accounting/provider systems, not the
 source repository.
 
@@ -745,7 +757,7 @@ The complete target requires at least:
 - lead, opportunity, appointment, survey, measurement, digital twin, hazard;
 - controlled product, assembly, manufacturer document, design, option, claim;
 - price rule, estimate, quote, contract, acceptance, cancellation, change;
-- supplier, quote, purchase order, receipt, credit, recall;
+- supplier, catalog snapshot, quote, purchase order, receipt, credit, recall;
 - item, lot, coil/sheet, location, reservation, remnant, scrap, count;
 - work centre, machine, tooling, calibration, route, operation, first piece, NCR;
 - employee, subcontractor, competency, credential, apprenticeship, training, WCB, assignment;
@@ -753,6 +765,7 @@ The complete target requires at least:
 - job, gate, schedule, work package, field event, hold point, evidence;
 - invoice, holdback, payment, refund, payroll, tax filing, reconciliation;
 - completion, warranty, service case, complaint, review request;
+- workflow view, form definition, integration manifest, operating profile, operating pack;
 - audit finding, risk, exception, corrective action, recovery test.
 
 Each aggregate has a stable owned ID, tenant boundary, version, state machine, immutable events, and
@@ -770,6 +783,11 @@ External services are bounded authorities or side-effect providers, not universa
 - Email/SMS/voice providers: delivery/interaction evidence.
 - City, WCB, CRA, insurer, engineer, manufacturer, and lender: authoritative only for their scope.
 - Temporary CRM/automation bridges: consumers scheduled for retirement after replacement proof.
+
+Each integration is declared by a versioned manifest defining provider/tenant identity, supported
+directions and actions, auth scopes, data class, authority boundary, retry/idempotency, required
+readback/reconciliation, safe fallback, readiness, and proof TTL. An integration listing or webhook
+success is not proof that the business outcome occurred.
 
 No provider-specific identifier replaces the owned tenant/job/property/customer identity.
 

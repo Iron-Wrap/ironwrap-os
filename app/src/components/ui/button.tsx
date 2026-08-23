@@ -16,7 +16,8 @@ const buttonVariants = cva(
           "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-muted active:bg-border",
         ghost:
           "border-transparent bg-transparent text-foreground hover:bg-surface-muted active:bg-border",
-        danger: "bg-danger text-danger-foreground hover:bg-danger/88 active:bg-danger/78",
+        danger:
+          "bg-danger-strong text-danger-strong-foreground hover:bg-danger-strong/88 active:bg-danger-strong/78",
       },
       size: {
         default: "min-h-12",

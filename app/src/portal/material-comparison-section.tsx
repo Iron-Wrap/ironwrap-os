@@ -81,7 +81,7 @@ export function MaterialComparisonSection({
           ))}
         </ul>
         {state.kind === "chosen" ? (
-          <p className="mt-5 text-sm font-semibold leading-6 text-success" role="status">
+          <p className="mt-5 text-sm font-semibold leading-6 text-ok" role="status">
             You picked {state.label}. Your project team will call you. This does not order or bill
             anything.
           </p>
@@ -110,7 +110,7 @@ function OptionCard({
   return (
     <section
       aria-label={title}
-      className={`rounded-xl border p-4 ${chosen ? "border-success bg-success/5" : "border-border"}`}
+      className={`rounded-xl border p-4 ${chosen ? "border-ok/40 bg-ok-soft shadow-[inset_0_2px_0_var(--ok)]" : "border-border"}`}
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="text-lg font-black tracking-[-0.02em]">{title}</h3>

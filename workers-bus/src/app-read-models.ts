@@ -2511,7 +2511,7 @@ export async function buildEstimatorWorkbenchReadModel(
   const readModelGeneratedAt = asOf.toISOString();
   const configuredPriceList = estimatorPriceList(env, readModelGeneratedAt);
   const [nativeSources, nativeCommercial] = await Promise.all([
-    readNativeEstimatorSources(env, auth.session.tenant_id, jobName),
+    readNativeEstimatorSources(env, auth.session.tenant_id, jobName, asOf),
     readNativeCommercialJobPacket(
       env,
       auth.session.tenant_id,

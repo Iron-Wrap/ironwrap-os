@@ -286,6 +286,7 @@ export async function resolveNativeEstimatorAuthority(
   env: AppEnv,
   tenantId: string,
   roofJobId: string,
+  asOf = new Date(),
 ): Promise<NativeEstimatorAuthority> {
   const head = await readEstimatorEvidenceHead(env, tenantId, roofJobId);
   if (head.state === "missing")
@@ -394,6 +395,7 @@ export async function resolveNativeEstimatorAuthority(
       tenantId,
       roofJobId,
       revision.commercial_quote_revision_id,
+      asOf,
     );
     if (!quote) reasons.push("estimator_evidence.commercial_quote_drift");
   }
@@ -445,6 +447,7 @@ export async function readNativeEstimatorSources(
   env: AppEnv,
   tenantId: string,
   roofJobId: string,
+  asOf = new Date(),
 ): Promise<NativeEstimatorSources | null> {
   const [core, economics] = await Promise.all([
     readNativeJobCore(env, tenantId, roofJobId),
@@ -455,6 +458,7 @@ export async function readNativeEstimatorSources(
     env,
     tenantId,
     roofJobId,
+    asOf,
   );
   const job: NativeRow = {
     name: core.job.roof_job_id,

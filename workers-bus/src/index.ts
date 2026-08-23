@@ -131,6 +131,7 @@ import {
   type NewoQueueMessage,
 } from "./newo.ts";
 import { handleNewoAdmin } from "./newo-admin.ts";
+import { handleCrmImport } from "./crm-import-api.ts";
 import {
   newoOperationalCounts,
   recordNewoReconciliationRun,
@@ -666,6 +667,10 @@ async function routeRequest(
       return json({ error: "unauthorized" }, 401);
     if (url.pathname === "/admin/newo" || url.pathname.startsWith("/admin/newo/"))
       return await handleNewoAdmin(req, env, url);
+    // Existing-CRM import (ELEC-166). Dry-run plans and writes nothing; execute materializes the
+    // same plan through the ordinary operating-core path. Contacts no provider.
+    if (url.pathname.startsWith("/admin/crm-import/"))
+      return await handleCrmImport(req, env, url);
     if (req.method === "GET" && url.pathname === "/admin/envelopes")
       return json(await handleListEnvelopes(env, url));
     if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/"))

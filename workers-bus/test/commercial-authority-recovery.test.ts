@@ -167,8 +167,8 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 187],
-    ["REQUIRED_INDEX_COUNT", 284],
+    ["REQUIRED_TABLE_COUNT", 190],
+    ["REQUIRED_INDEX_COUNT", 288],
     ["REQUIRED_TRIGGER_COUNT", 469],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
@@ -224,7 +224,7 @@ test("the full schema matches the recovery frontier through 0106", () => {
       .get() as { tables: number; indexes: number; triggers: number };
     assert.deepEqual(
       { ...counts },
-      { tables: 187, indexes: 284, triggers: 469 },
+      { tables: 190, indexes: 288, triggers: 469 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

@@ -1,0 +1,12 @@
+Opportunity ID,Contact Name,Email,Phone,Address,City,State,Postal Code,Services Needed,Opportunity Value,Stage,Lead Number,Job Number,Notes,Tasks,Owner
+opp-001,Ada Synthetic,ada@example.invalid,(587) 555-0101,1 Test Way,Edmonton,AB,T5A 0A1,Roofing,,New Lead,26-201-NL,,2,0,Sam Rep
+opp-002,Ben Synthetic,ben@example.invalid,(587) 555-0102,2 Test Way,Calgary,AB,T2P 0A2,Roofing; Gutters,"C$4,500.00",New Lead,26-202-NL,,1,1,Sam Rep
+opp-003,Cy Synthetic,cy@example.invalid,(587) 555-0103,3 Test Way,Edmonton,AB,T5A 0A3,Roofing,,Visit Booked,26-203-VB,,4,2,Sam Rep
+opp-004,Dee Synthetic,dee@example.invalid,(587) 555-0104,4 Test Way,Red Deer,AB,T4N 0A4,Metal Roofing,"$12,750.50",Need Quote,26-204-NQ,,3,1,Pat Rep
+opp-005,Eli Synthetic,eli@example.invalid,(587) 555-0105,5 Test Way,Edmonton,AB,T5A 0A5,Siding,"C$6,400.00",Quote Sent,26-205-QS,,6,2,Pat Rep
+opp-006,Fay Synthetic,fay@example.invalid,(587) 555-0106,6 Test Way,Calgary,AB,T2P 0A6,Roofing,22000,Contract signed,26-206-CS,ER26-012,8,3,Pat Rep
+opp-007,Gus Synthetic,gus@example.invalid,(587) 555-0107,7 Test Way,Edmonton,AB,T5A 0A7,Roofing,18000,Deposit,26-207-DP,ER26-013,9,4,Pat Rep
+opp-008,Hana Synthetic,hana@example.invalid,(587) 555-0108,8 Test Way,Leduc,AB,T9E 0A8,Roofing; Soffit/Fascia,31000,Materials in prod,26-208-MP,ER26-014,11,5,Pat Rep
+opp-009,Ivy Synthetic,ivy@example.invalid,(587) 555-0109,9 Test Way,Edmonton,AB,T5A 0A9,Roofing,5000,Nurture,26-209-XX,,1,0,Sam Rep
+,Jo Synthetic,jo@example.invalid,(587) 555-0110,10 Test Way,Spruce Grove,AB,T7X 0B0,Roofing,9000,Quote Sent,,,2,1,Sam Rep
+opp-011,Ken Synthetic,,,11 Test Way,Edmonton,AB,T5A 0B1,Roofing,1000,New Lead,,,0,0,Sam Rep

@@ -390,11 +390,13 @@ test("an intent still waiting on the dispatcher is surfaced, not re-read", async
     },
   );
 
+  const waiting = await readAccountingIntent(env, TENANT, intentId);
+  const stuckFor = new Date(Date.parse(waiting!.updated_at) + 45 * 60 * 1000);
   const provider = observationBinding([entityRoute("Invoice", "invoice-paid-linked.json")]);
   const swept = await runAccountingSweeps(env, {
     tenantId: TENANT,
     reobserve: accountingIntentReobserver(env, provider),
-    now: NEXT_DAY,
+    now: stuckFor,
   });
   assert.equal(swept.due_observations.scanned, 0);
   assert.equal(provider.calls(), 0, "nothing was asked of the provider");
@@ -413,8 +415,6 @@ test("an intent still waiting on the dispatcher is surfaced, not re-read", async
   // ...and stops being calm once it has been waiting as long as the stuck sweep's own window,
   // which is the copy defect ELEC-77 photographed: the cron was already logging a stalled
   // dispatcher while the screen said there was nothing to do.
-  const waiting = await readAccountingIntent(env, TENANT, intentId);
-  const stuckFor = new Date(Date.parse(waiting!.updated_at) + 45 * 60 * 1000);
   assert.equal(
     projectAccountingIntent(waiting!, stuckFor).next_step,
     "This has been waiting to reach QuickBooks longer than it should. "

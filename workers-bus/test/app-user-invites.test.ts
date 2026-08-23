@@ -25,6 +25,16 @@ const ACCEPT = "/api/v1/auth/invites/accept";
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
+  private runInterception: {
+    matches: (sql: string) => boolean;
+    mutate: () => void;
+  } | null = null;
+  private afterRunInterception: {
+    matches: (sql: string) => boolean;
+    mutate: () => void | Promise<void>;
+  } | null = null;
+  private insideBatch = false;
+  private deferredAfterBatch: (() => void | Promise<void>) | null = null;
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
@@ -47,7 +57,22 @@ class SqliteD1 {
           first: async <T>() => (statement.get(...(args as never[])) ?? null) as T | null,
           all: async <T>() => ({ results: statement.all(...(args as never[])) as T[] }),
           run: async () => {
+            const interception = this.runInterception;
+            if (interception?.matches(sql)) {
+              this.runInterception = null;
+              interception.mutate();
+            }
             const result = statement.run(...(args as never[]));
+            const after = this.afterRunInterception;
+            if (after?.matches(sql)) {
+              this.afterRunInterception = null;
+              if (this.insideBatch) {
+                assert.equal(this.deferredAfterBatch, null);
+                this.deferredAfterBatch = after.mutate;
+              } else {
+                await after.mutate();
+              }
+            }
             return { success: true as const, meta: { changes: Number(result.changes) } };
           },
         };
@@ -58,15 +83,41 @@ class SqliteD1 {
   /** D1 batches are transactional and sequential; so is this. */
   async batch(statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>) {
     this.raw.exec("BEGIN");
+    this.insideBatch = true;
+    let results: Array<{ success: true; meta: { changes: number } }>;
     try {
-      const results = [];
+      results = [];
       for (const statement of statements) results.push(await statement.run());
       this.raw.exec("COMMIT");
-      return results;
     } catch (error) {
       this.raw.exec("ROLLBACK");
+      this.deferredAfterBatch = null;
       throw error;
+    } finally {
+      this.insideBatch = false;
     }
+    const deferred = this.deferredAfterBatch;
+    this.deferredAfterBatch = null;
+    if (deferred) await deferred();
+    return results;
+  }
+
+  /** Inject one committed concurrent write immediately before a selected D1 mutation executes. */
+  beforeNextMatchingRun(matches: (sql: string) => boolean, mutate: () => void): void {
+    assert.equal(this.runInterception, null, "one deterministic write race at a time");
+    this.runInterception = { matches, mutate };
+  }
+
+  /**
+   * Model a concurrent writer that starts after one selected statement. If that statement belongs
+   * to a D1 batch, SQLite makes the other writer wait until commit, so the callback waits too.
+   */
+  afterNextMatchingRun(
+    matches: (sql: string) => boolean,
+    mutate: () => void | Promise<void>,
+  ): void {
+    assert.equal(this.afterRunInterception, null, "one deterministic write race at a time");
+    this.afterRunInterception = { matches, mutate };
   }
 }
 
@@ -917,6 +968,261 @@ test("removing access ends the session, the sign-in link, the paired device, and
   });
   assert.equal(restored.status, 200);
   assert.equal((restored.body.user as Record<string, unknown>).active, true);
+});
+
+test("legacy deactivation revokes a pending invitation so it cannot restore access", async () => {
+  const h = harness();
+  const { user: actor, session } = await owner(h);
+  const mate = await addUser(h.env, "legacy-remove@example.invalid", "ops", "Legacy Remove");
+  const pending = await invite(h, session, {
+    email: mate.email_normalized,
+    display_name: mate.display_name,
+    role: "ops",
+  });
+  const token = capturedToken(h, "user_invite", mate.email_normalized);
+
+  const removed = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: mate.email_normalized,
+      display_name: mate.display_name,
+      role: mate.role,
+      frappe_user_id: null,
+      active: false,
+    },
+  });
+  assert.equal(removed.status, 200);
+  assert.equal(userRow(h, mate.email_normalized)!.active, 0);
+  const revoked = inviteRow(h, String(pending.invite.invite_id));
+  assert.equal(revoked.revoked_reason, "office_revoked");
+  assert.equal(revoked.revoked_by_user_id, actor.user_id);
+
+  const refused = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "invite_revoked");
+  assert.equal(
+    userRow(h, mate.email_normalized)!.active,
+    0,
+    "the spent removal credential cannot reactivate the account",
+  );
+});
+
+test("deactivation atomically wins against stale invite acceptance on both access routes", async () => {
+  for (const route of ["id", "legacy"] as const) {
+    const h = harness();
+    const { session } = await owner(h);
+    const mate = await addUser(
+      h.env,
+      `${route}-atomic-remove@example.invalid`,
+      "ops",
+      `${route} Atomic Remove`,
+    );
+    await invite(h, session, {
+      email: mate.email_normalized,
+      display_name: mate.display_name,
+      role: "ops",
+    });
+    const token = capturedToken(h, "user_invite", mate.email_normalized);
+    let raced = false;
+
+    h.db.afterNextMatchingRun(
+      (sql) => route === "id"
+        ? sql.includes("UPDATE app_users SET active")
+        : sql.includes("UPDATE app_users") && sql.includes("display_name"),
+      async () => {
+        raced = true;
+        const acceptance = await call(h, "POST", ACCEPT, { body: { token } });
+        await h.flush();
+        assert.equal(acceptance.status, 409, `${route}: a stale invite is no longer a key`);
+        assert.equal(acceptance.body.error, "invite_revoked");
+      },
+    );
+
+    const removed = route === "id"
+      ? await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+        session,
+        body: { active: false },
+      })
+      : await call(h, "POST", APP_USERS, {
+        session,
+        body: {
+          tenant_id: TENANT,
+          email: mate.email_normalized,
+          display_name: mate.display_name,
+          role: mate.role,
+          frappe_user_id: null,
+          active: false,
+        },
+      });
+    assert.equal(removed.status, 200, `${route}: the removal itself succeeds`);
+    assert.equal(raced, true, `${route}: the deterministic claimant reached the write boundary`);
+    assert.equal(
+      userRow(h, mate.email_normalized)!.active,
+      0,
+      `${route}: successful removal cannot finish with the account active`,
+    );
+  }
+});
+
+test("a failed authority CAS has zero deactivation cleanup side effects", async () => {
+  const h = harness();
+  const actor = await addUser(h.env, "cleanup-race-ops@example.invalid", "ops", "Cleanup Ops");
+  const session = await signIn(h, actor, "c".repeat(43));
+  const mate = await addUser(h.env, "cleanup-race-target@example.invalid", "sales", "Cleanup Target");
+  const mateSession = await signIn(h, mate, "t".repeat(43));
+  const pending = await invite(h, session, {
+    email: mate.email_normalized,
+    display_name: mate.display_name,
+    role: "sales",
+  });
+  h.db.raw.prepare(
+    `INSERT INTO app_magic_links
+       (token_hash, user_id, tenant_id, created_at, expires_at, consumed_at,
+        request_ip_hash, request_user_agent_hash)
+     VALUES (?,?,?,?,?,NULL,?,?)`,
+  ).run(
+    "d".repeat(64),
+    mate.user_id,
+    TENANT,
+    "2026-08-24T00:00:00.000Z",
+    "2030-01-01T00:00:00.000Z",
+    "a".repeat(64),
+    "b".repeat(64),
+  );
+  h.db.raw.prepare(
+    `INSERT INTO app_devices
+       (device_id, tenant_id, user_id, device_proof_hash, paired_at, last_seen_at,
+        revoked_at, revoked_by_user_id, created_ip_hash, created_user_agent_hash)
+     VALUES (?,?,?,?,?,?,NULL,NULL,?,?)`,
+  ).run(
+    "appd_cleanup_race_0001",
+    TENANT,
+    mate.user_id,
+    "e".repeat(64),
+    "2026-08-24T00:00:00.000Z",
+    "2026-08-24T00:00:00.000Z",
+    "a".repeat(64),
+    "b".repeat(64),
+  );
+  h.db.beforeNextMatchingRun(
+    (sql) => sql.includes("UPDATE app_users") && sql.includes("display_name"),
+    () => {
+      h.db.raw.prepare(
+        `UPDATE app_users SET active = 0, updated_at = ?
+          WHERE tenant_id = ? AND user_id = ?`,
+      ).run("2026-08-24T12:02:00.000Z", TENANT, actor.user_id);
+    },
+  );
+
+  const refused = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: mate.email_normalized,
+      display_name: mate.display_name,
+      role: mate.role,
+      frappe_user_id: null,
+      active: false,
+    },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "app_user_state_changed");
+  assert.equal(userRow(h, mate.email_normalized)!.active, 1);
+  assert.equal(
+    scalar(h, `SELECT COUNT(*) AS value FROM app_sessions WHERE user_id = ? AND revoked_at IS NULL`, mate.user_id),
+    1,
+    "the target session remains live",
+  );
+  assert.equal(
+    scalar(h, `SELECT COUNT(*) AS value FROM app_magic_links WHERE user_id = ? AND consumed_at IS NULL`, mate.user_id),
+    1,
+    "the target magic link remains open",
+  );
+  assert.equal(
+    scalar(h, `SELECT COUNT(*) AS value FROM app_devices WHERE user_id = ? AND revoked_at IS NULL`, mate.user_id),
+    1,
+    "the target device remains paired",
+  );
+  assert.equal(inviteRow(h, String(pending.invite.invite_id)).revoked_at, null);
+  const stillAlive = await call(h, "GET", "/api/v1/session", { session: mateSession });
+  assert.equal(stillAlive.body.authenticated, true);
+});
+
+test("legacy provisioning refuses a target role that changes after authorization", async () => {
+  const h = harness();
+  const ops = await addUser(h.env, "race-ops@example.invalid", "ops", "Race Ops");
+  const session = await signIn(h, ops, "r".repeat(43));
+  const mate = await addUser(h.env, "race-target@example.invalid", "sales", "Race Target");
+  h.db.beforeNextMatchingRun(
+    (sql) => sql.includes("INSERT INTO app_users") ||
+      (sql.includes("UPDATE app_users") && sql.includes("display_name")),
+    () => {
+      h.db.raw.prepare(
+        `UPDATE app_users
+            SET role = 'owner', access_role = 'owner', updated_at = ?
+          WHERE tenant_id = ? AND user_id = ?`,
+      ).run("2026-08-24T12:00:00.000Z", TENANT, mate.user_id);
+    },
+  );
+
+  const refused = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: mate.email_normalized,
+      display_name: mate.display_name,
+      role: "sales",
+      frappe_user_id: null,
+      active: true,
+    },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "app_user_state_changed");
+  assert.equal(userRow(h, mate.email_normalized)!.access_role, "owner");
+});
+
+test("legacy provisioning refuses an actor whose owner authority changes before the write", async () => {
+  const h = harness();
+  const { user: actor, session } = await owner(h);
+  const lastOwner = await addUser(h.env, "race-owner@example.invalid", "owner", "Race Owner");
+  h.db.beforeNextMatchingRun(
+    (sql) => sql.includes("INSERT INTO app_users") ||
+      (sql.includes("UPDATE app_users") && sql.includes("display_name")),
+    () => {
+      h.db.raw.prepare(
+        `UPDATE app_users
+            SET role = 'ops', access_role = 'ops', updated_at = ?
+          WHERE tenant_id = ? AND user_id = ?`,
+      ).run("2026-08-24T12:01:00.000Z", TENANT, actor.user_id);
+    },
+  );
+
+  const refused = await call(h, "POST", APP_USERS, {
+    session,
+    body: {
+      tenant_id: TENANT,
+      email: lastOwner.email_normalized,
+      display_name: lastOwner.display_name,
+      role: "ops",
+      frappe_user_id: null,
+      active: true,
+    },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "app_user_state_changed");
+  assert.equal(userRow(h, lastOwner.email_normalized)!.access_role, "owner");
+  assert.equal(
+    scalar(
+      h,
+      `SELECT COUNT(*) AS value FROM app_users
+        WHERE tenant_id = ? AND active = 1 AND access_role = 'owner'`,
+      TENANT,
+    ),
+    1,
+    "the concurrent demotion cannot consume the final owner",
+  );
 });
 
 // --------------------------------------------------------------------------- retention

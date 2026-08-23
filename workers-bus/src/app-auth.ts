@@ -185,9 +185,13 @@ export async function provisionAppUser(
   env: AppEnv,
   input: ProvisionAppUserInput,
   req: Request,
-): Promise<AppUserRecord> {
+  authority?: authStore.AppUserMutationAuthority,
+): Promise<AppUserRecord | null> {
   const request = await authRequestContext(req, env);
-  const user = await authStore.upsertAppUser(env, input);
+  const user = authority
+    ? await authStore.upsertAppUserWithAuthority(env, input, authority)
+    : await authStore.upsertAppUser(env, input);
+  if (!user) return null;
   await authStore.recordAuthAudit(env, {
     tenantId: user.tenant_id,
     userId: user.user_id,

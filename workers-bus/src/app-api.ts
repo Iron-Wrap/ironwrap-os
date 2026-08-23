@@ -42,6 +42,7 @@ import {
 } from "./app-auth.ts";
 import {
   acceptUserInvite,
+  authorizeAppUserMutation,
   changeAppUserAccess,
   changeAppUserRole,
   createUserInvite,
@@ -378,10 +379,22 @@ export async function handleAdminAppUserProvision(
   if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
   const validated = parseProvisionAppUser(parsed.value, appEnv);
   if (!validated.ok) return appJson({ error: validated.error }, 400);
+  const target = await appAuthStore.findAppUserByEmail(
+    appEnv,
+    validated.value.tenant_id,
+    validated.value.email_normalized,
+  );
+  const authority = authorizeAppUserMutation(auth, target, validated.value.role);
+  if (authority) return appJson({ error: authority.error }, authority.status);
   const user = await provisionAppUser(appEnv, {
     ...validated.value,
     provisioned_by: auth.session.email_normalized,
-  }, req);
+  }, req, {
+    actorUserId: auth.session.user_id,
+    actorRole: auth.session.role,
+    expectedTarget: target,
+  });
+  if (!user) return appJson({ error: "app_user_state_changed" }, 409);
   return appJson({
     user: {
       user_id: user.user_id,

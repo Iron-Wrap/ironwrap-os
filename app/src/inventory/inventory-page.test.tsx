@@ -417,7 +417,10 @@ describe("InventoryPage", () => {
     await user.type(screen.getByLabelText("Barcode"), "LOT-0001-BARCODE");
     await user.click(screen.getByRole("button", { name: "Look up" }));
     expect(await screen.findByText("Barcode resolved")).toBeVisible();
-    expect(lookupInventoryBarcode).toHaveBeenCalledWith("LOT-0001-BARCODE");
+    expect(lookupInventoryBarcode).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticated: true }),
+      "LOT-0001-BARCODE",
+    );
 
     await user.click(screen.getByRole("button", { name: "Record scan" }));
     expect(await screen.findByText("Scan complete")).toBeVisible();

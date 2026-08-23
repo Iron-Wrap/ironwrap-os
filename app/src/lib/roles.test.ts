@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { appRoles, navigationForRole, roleCanAccess, roleLabel } from "./roles";
+import {
+  appRoles,
+  navigationForRole,
+  roleCanAccess,
+  roleLabel,
+  type NavigationItem,
+  type RoleSurface,
+} from "./roles";
 
 describe("role-shaped navigation", () => {
   it("keeps every role anchored on Now and field devices focused on execution", () => {
@@ -9,7 +16,6 @@ describe("role-shaped navigation", () => {
       "/check-in",
       "/vehicle",
       "/inventory",
-      "/settings",
     ]);
     expect(navigationForRole("owner")[0]?.to).toBe("/now");
     expect(navigationForRole("ops")[0]?.to).toBe("/now");
@@ -22,11 +28,7 @@ describe("role-shaped navigation", () => {
 
   it("gives sales only its own daily surfaces", () => {
     expect(appRoles).toContain("sales");
-    expect(navigationForRole("sales").map((item) => item.to)).toEqual([
-      "/now",
-      "/sales",
-      "/settings",
-    ]);
+    expect(navigationForRole("sales").map((item) => item.to)).toEqual(["/now", "/sales"]);
     expect(roleCanAccess("sales", "sales")).toBe(true);
     expect(roleCanAccess("sales", "owner")).toBe(false);
     expect(roleCanAccess("sales", "newo")).toBe(false);
@@ -36,11 +38,7 @@ describe("role-shaped navigation", () => {
 
   it("gives production only its own daily surfaces", () => {
     expect(appRoles).toContain("production");
-    expect(navigationForRole("production").map((item) => item.to)).toEqual([
-      "/now",
-      "/production",
-      "/settings",
-    ]);
+    expect(navigationForRole("production").map((item) => item.to)).toEqual(["/now", "/production"]);
     expect(roleCanAccess("production", "production")).toBe(true);
     expect(roleCanAccess("production", "owner")).toBe(false);
     expect(roleCanAccess("production", "sales")).toBe(false);
@@ -67,7 +65,7 @@ describe("role-shaped navigation", () => {
   it("keeps the complete role map while marking only daily phone destinations as primary", () => {
     expect(navigationForRole("owner")).toHaveLength(10);
     expect(navigationForRole("ops")).toHaveLength(10);
-    expect(navigationForRole("field")).toHaveLength(5);
+    expect(navigationForRole("field")).toHaveLength(4);
     expect(
       navigationForRole("owner")
         .filter((item) => item.mobilePrimary)
@@ -80,6 +78,38 @@ describe("role-shaped navigation", () => {
     ).toEqual(["/now", "/check-in", "/vehicle"]);
     expect(navigationForRole("owner").map((item) => item.to)).not.toContain("/vehicle");
     expect(navigationForRole("ops").map((item) => item.to)).not.toContain("/vehicle");
+  });
+
+  // ELEC-157: every role's own menu offered "/settings", but the crew-device pairing desk
+  // behind it is guarded to owner/ops — so sales, production and field each had a menu
+  // item that answered "this work belongs to another role". Navigation and roleCanAccess
+  // are two lists that must agree; this is the test that keeps them agreeing.
+  it("advertises only destinations the role can actually open", () => {
+    const guardedSurfaces: Partial<Record<NavigationItem["to"], RoleSurface>> = {
+      "/settings": "owner",
+      "/owner": "owner",
+      "/approvals": "owner",
+      "/newo": "newo",
+      "/facet-designs": "owner",
+      "/service": "owner",
+      "/sales": "sales",
+      "/production": "production",
+      "/accounting": "accounting",
+      "/accounting/exceptions": "accounting",
+      "/accounting/quickbooks": "accounting",
+      "/today": "field",
+      "/check-in": "field",
+      "/vehicle": "fleet",
+      "/inventory": "inventory",
+    };
+
+    for (const role of appRoles) {
+      for (const item of navigationForRole(role)) {
+        const surface = guardedSurfaces[item.to];
+        if (!surface) continue;
+        expect(roleCanAccess(role, surface), `${role} navigation offers ${item.to}`).toBe(true);
+      }
+    }
   });
 
   it("organizes office work around the operating flow instead of one flat list", () => {

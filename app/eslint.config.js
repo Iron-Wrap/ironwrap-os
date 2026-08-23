@@ -8,6 +8,9 @@ export default [
   {
     ignores: [
       "dist",
+      // Disposable evidence from `scripts/role-app-audit.mjs` and friends; git-ignored by
+      // the repository data policy, so it is never source to lint.
+      "output",
       "coverage",
       ".acceptance-tls",
       ".lighthouseci",

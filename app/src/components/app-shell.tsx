@@ -101,9 +101,11 @@ export function AppShell() {
         <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface/95 backdrop-blur-lg">
           <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-3">
+              {/* The only "go home" control a phone has, so it carries the 44 px thumb
+                  floor the mobile suite enforces; the mark inside stays 20 px. */}
               <Link
                 to="/now"
-                className="grid size-9 shrink-0 place-items-center rounded-lg border border-foreground/10 bg-foreground text-background lg:hidden"
+                className="grid size-11 shrink-0 place-items-center rounded-lg border border-foreground/10 bg-foreground text-background lg:hidden"
                 aria-label={`${session.tenant.brand} home`}
               >
                 <ShieldCheck className="size-5 text-accent" aria-hidden="true" />

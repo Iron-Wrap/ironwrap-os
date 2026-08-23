@@ -1,3 +1,4 @@
+import { getDeviceSecret } from "../auth/device-credential";
 import type { AuthenticatedSession } from "../auth/session";
 import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
@@ -16,17 +17,30 @@ import {
   type InventoryScanResponse,
 } from "./inventory-contracts";
 
+/**
+ * Inventory is one of the four surfaces a crew phone carries, and a field session is
+ * only authenticated when the request also presents its device proof. Without it the
+ * Worker answers 401 AND expires the session cookie, so opening Inventory used to sign
+ * the paired phone out (ELEC-157). Office sessions carry no proof and send none.
+ */
+function proofFor(session: AuthenticatedSession) {
+  return session.user.role === "field" ? getDeviceSecret : undefined;
+}
+
 export async function loadInventoryOverview(
+  session: AuthenticatedSession,
   fetcher: typeof fetch = fetch,
 ): Promise<InventoryOverviewResponse> {
   return await apiRequest({
     path: API_PATHS.inventoryOverview,
     schema: inventoryOverviewResponseSchema,
     fetcher,
+    deviceProof: proofFor(session),
   });
 }
 
 export async function lookupInventoryBarcode(
+  session: AuthenticatedSession,
   barcode: string,
   fetcher: typeof fetch = fetch,
 ): Promise<InventoryLookupResponse> {
@@ -34,6 +48,7 @@ export async function lookupInventoryBarcode(
     path: `${API_PATHS.inventoryLookup}?barcode=${encodeURIComponent(barcode)}`,
     schema: inventoryLookupResponseSchema,
     fetcher,
+    deviceProof: proofFor(session),
   });
 }
 
@@ -64,6 +79,7 @@ export async function recordInventoryScan(
     csrfToken: session.csrf_token,
     deviceActionId: input.device_action_id,
     fetcher,
+    deviceProof: proofFor(session),
   });
 }
 
@@ -116,6 +132,7 @@ export async function submitInventoryCommand(
     csrfToken: session.csrf_token,
     idempotencyKey,
     fetcher,
+    deviceProof: proofFor(session),
   });
 }
 

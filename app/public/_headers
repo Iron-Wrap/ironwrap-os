@@ -1,5 +1,11 @@
+# style-src carries a build-substituted hash, not a literal. index.html ships one inline
+# <style> block - the boot shell every user sees before the app mounts - and under a bare
+# `style-src 'self'` the browser blocked it: the shell rendered as unstyled text on a white
+# page on every cold start (ELEC-157). `bootStyleCspHash()` in vite.config.ts replaces the
+# placeholder with the sha256 of the block actually emitted, and scripts/verify-dist.mjs
+# fails the build if any inline style in dist/index.html is left without a matching hash.
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self';
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' __IRONWRAP_BOOT_STYLE_HASH__; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self';
   Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), payment=(), usb=(), serial=(), bluetooth=(), browsing-topics=()
   Referrer-Policy: no-referrer
   Strict-Transport-Security: max-age=63072000; includeSubDomains
@@ -12,4 +18,4 @@
 /estimate
   ! Content-Security-Policy
   ! X-Frame-Options
-  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors https://ironwrapexteriors.com https://www.ironwrapexteriors.com https://iroofalberta.ca https://www.iroofalberta.ca; form-action 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; manifest-src 'self';
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors https://ironwrapexteriors.com https://www.ironwrapexteriors.com https://iroofalberta.ca https://www.iroofalberta.ca; form-action 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' __IRONWRAP_BOOT_STYLE_HASH__; font-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; manifest-src 'self';

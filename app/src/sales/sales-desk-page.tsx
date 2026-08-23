@@ -815,9 +815,19 @@ function queueTitle(filter: SalesFilter): string {
   return "Needs a check";
 }
 
+// `queueTitle` is a heading, not a noun phrase: "Needs a check" interpolated into
+// "No … in this view" read as "No needs a check in this view" on the default tab — the
+// first sentence a new sales user meets on a fresh tenant (ELEC-157).
 function emptyQueueTitle(filter: SalesFilter): string {
   if (filter === "all") return "No leads were found";
-  return `No ${queueTitle(filter).toLowerCase()} in this view`;
+  if (filter === "attention") return "No lead needs a check";
+  return `No lead is waiting on ${emptyQueueSubject(filter)}`;
+}
+
+function emptyQueueSubject(filter: SalesFilter): string {
+  if (filter === "triage") return "a lead check";
+  if (filter === "estimate") return "an estimate check";
+  return "a quote check";
 }
 
 function leadCheckLabel(status: string | null): string {

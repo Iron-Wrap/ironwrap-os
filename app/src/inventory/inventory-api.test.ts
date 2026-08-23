@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { accountingSession } from "../accounting/money-fixtures";
+import type { AuthenticatedSession } from "../auth/session";
+import { getDeviceSecret } from "../auth/device-credential";
 import {
   loadInventoryOverview,
   lookupInventoryBarcode,
@@ -9,6 +11,10 @@ import {
   submitInventoryCommand,
 } from "./inventory-api";
 import { inventoryOverviewResponseSchema } from "./inventory-contracts";
+
+vi.mock("../auth/device-credential", () => ({
+  getDeviceSecret: vi.fn(async () => "d".repeat(43)),
+}));
 
 function recordingFetch(body: unknown): {
   fetcher: typeof fetch;
@@ -106,7 +112,7 @@ const command = {
 describe("inventory API client", () => {
   it("loads the tenant-scoped overview and preserves the server authority contract", async () => {
     const { fetcher, calls } = recordingFetch(overview);
-    const response = await loadInventoryOverview(fetcher);
+    const response = await loadInventoryOverview(accountingSession("ops"), fetcher);
     expect(calls[0]?.url).toBe("/api/v1/inventory/overview");
     expect(response.authority_ref).toBe("Authority-Inventory-Readback-01");
     expect(response.policy_ref).toBe("policy:inventory-command");
@@ -119,7 +125,7 @@ describe("inventory API client", () => {
       barcode: "LOT A/1",
       result: null,
     });
-    await lookupInventoryBarcode("LOT A/1", fetcher);
+    await lookupInventoryBarcode(accountingSession("ops"), "LOT A/1", fetcher);
     expect(calls[0]?.url).toBe("/api/v1/inventory/lookup?barcode=LOT%20A%2F1");
   });
 
@@ -210,4 +216,34 @@ describe("inventory API client", () => {
     expect(calls[0]?.headers.get("X-Device-Action-Id")).toBe("inventory-scan-action-1");
     expect(calls[0]?.body?.request_fingerprint_sha256).toMatch(/^[0-9a-f]{64}$/u);
   });
+
+  // Inventory is one of the four surfaces a crew phone carries. A field session is only
+  // authenticated when the request presents its device proof; without it the Worker
+  // answers 401 AND expires the session cookie, so opening Inventory signed the paired
+  // phone out and the next cold start demanded re-pairing (ELEC-157).
+  it("sends the paired-device proof on a field session's inventory read", async () => {
+    const { fetcher, calls } = recordingFetch(overview);
+    await loadInventoryOverview(fieldSession(), fetcher);
+    expect(getDeviceSecret).toHaveBeenCalled();
+    expect(calls[0]?.headers.get("X-IronWrap-Device-Proof")).toBe("d".repeat(43));
+  });
+
+  it("sends no device proof on an office session, which has none to send", async () => {
+    const { fetcher, calls } = recordingFetch(overview);
+    await loadInventoryOverview(accountingSession("ops"), fetcher);
+    expect(calls[0]?.headers.get("X-IronWrap-Device-Proof")).toBeNull();
+  });
 });
+
+function fieldSession(): AuthenticatedSession {
+  return {
+    ...accountingSession("ops"),
+    user: {
+      id: "appu_field",
+      email: "crew@example.invalid",
+      display_name: "Cody Crew",
+      role: "field",
+      frappe_user_id: "crew@example.invalid",
+    },
+  };
+}

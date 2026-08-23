@@ -1,6 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -84,6 +85,52 @@ function criticalPathOrdering(): Plugin {
   };
 }
 
+/**
+ * `index.html` carries one inline `<style>`: the boot shell shown from first byte until
+ * React mounts. `_headers` pins `style-src 'self'`, so the browser blocked that block on
+ * every cold start and the shell painted as unstyled text on a white page — the first
+ * screen a paired crew phone shows (ELEC-157).
+ *
+ * Hashing it is the surgical fix: the CSP keeps refusing every inline style except the
+ * exact bytes this build emitted, and no extra render-blocking request lands in front of
+ * the boot. The placeholder lives in `public/_headers`, which is copied verbatim, so the
+ * substitution happens on the built copy. `scripts/verify-dist.mjs` fails the build if an
+ * inline style ever ships without a matching hash.
+ */
+function bootStyleCspHash(): Plugin {
+  const PLACEHOLDER = "__IRONWRAP_BOOT_STYLE_HASH__";
+  let writesToDisk = true;
+  return {
+    name: "ironwrap-boot-style-csp-hash",
+    enforce: "post",
+    apply: "build",
+    configResolved(config) {
+      writesToDisk = config.build.write !== false;
+    },
+    async closeBundle() {
+      if (!writesToDisk) return;
+      const indexHtml = await readFile(resolve("dist/index.html"), "utf8");
+      const hashes = inlineStyleHashes(indexHtml);
+      if (hashes.length === 0) throw new Error("index.html no longer carries the boot shell style");
+
+      const headersPath = resolve("dist/_headers");
+      const headers = await readFile(headersPath, "utf8");
+      if (!headers.includes(PLACEHOLDER))
+        throw new Error(`dist/_headers no longer carries ${PLACEHOLDER}`);
+      await writeFile(headersPath, headers.replaceAll(PLACEHOLDER, hashes.join(" ")));
+    },
+  };
+}
+
+export function inlineStyleHashes(html: string): string[] {
+  return [...html.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)].map(
+    (match) =>
+      `'sha256-${createHash("sha256")
+        .update(match[1] ?? "", "utf8")
+        .digest("base64")}'`,
+  );
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -150,6 +197,7 @@ export default defineConfig({
       },
     }),
     criticalPathOrdering(),
+    bootStyleCspHash(),
   ],
   build: {
     rollupOptions: {

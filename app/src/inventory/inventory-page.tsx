@@ -168,7 +168,7 @@ function InventoryContent() {
   const offline = isOfflineSession(session);
   const query = useQuery({
     queryKey: ["inventory-overview", session.tenant.id, session.user.id],
-    queryFn: () => loadInventoryOverview(),
+    queryFn: () => loadInventoryOverview(session),
     retry: false,
   });
 
@@ -295,7 +295,7 @@ function InventoryDesk({
     }
     setLookupState({ phase: "pending" });
     try {
-      const response = await lookupInventoryBarcode(value);
+      const response = await lookupInventoryBarcode(session, value);
       setLookupState({ phase: response.result ? "success" : "not_found", response });
       chooseLookupPosition(response.result);
     } catch (error) {

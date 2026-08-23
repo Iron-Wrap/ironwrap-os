@@ -210,7 +210,12 @@ export function TodayPage() {
           ) : null}
         </section>
       )}
-      <OperatingIntakePanel />
+      {/* Website intake is office work and `/api/v1/operating-intake` refuses a field
+          session outright. Worse than useless on a crew phone: the request carries no
+          device proof, so the Worker answers 401 and expires the session cookie with it —
+          the run sheet was signing the paired phone out on every visit and the next cold
+          start showed "Pair this crew phone again" (ELEC-157). */}
+      {session.user.role === "field" ? null : <OperatingIntakePanel />}
     </section>
   );
 }

@@ -100,7 +100,7 @@ test("0084 native measurement authority is complete in backup and restore contra
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 194);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 293);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 300);
     assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 469);
   }
 

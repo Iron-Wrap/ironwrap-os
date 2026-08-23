@@ -130,6 +130,10 @@ import {
 } from "./estimator-native.ts";
 import { EstimatorNativeStoreError } from "./estimator-native-store.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
+import {
+  SEARCH_MAX_RAW_QUERY_LENGTH,
+  buildOperatorSearchReadModel,
+} from "./app-search.ts";
 import { buildOperatingIntakeReadModel } from "./operating-intake.ts";
 import { handleCompanySetupRoute } from "./company-setup-api.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
@@ -736,6 +740,21 @@ export async function handleAuthenticatedRoute(
     if (!hasPermission(auth, "now:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     return privateAppJson(await buildNowReadModel(env, auth));
+  }
+  // Search-and-jump for the command palette. Every authenticated role may call it; the role is
+  // enforced by what the payload contains, not by refusing the route, because every role has at
+  // least its own navigable destinations to jump to.
+  if (req.method === "GET" && url.pathname === "/api/v1/search") {
+    const rawQuery = url.searchParams.get("q") ?? "";
+    if (rawQuery.length > SEARCH_MAX_RAW_QUERY_LENGTH)
+      return privateAppJson({ error: "search_query_too_long" }, 400);
+    try {
+      return privateAppJson(
+        await buildOperatorSearchReadModel(env, auth, rawQuery),
+      );
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/operating-intake") {
     const model = await buildOperatingIntakeReadModel(env, auth);

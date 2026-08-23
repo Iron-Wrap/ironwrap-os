@@ -83,8 +83,13 @@ else
   step "2/6 Frappe site $SITE on the local compose stack (own database, own identities on $IDENTITY_DOMAIN)"
   # The shared bench, MariaDB and Redis are the same containers the IronWrap site runs on;
   # only the SITE (its database, its users, its keys) is new.
-  docker compose -f "$COMPOSE_FILE" up -d
-  docker compose -f "$COMPOSE_FILE" run --rm \
+  #
+  # --profile frappe is not optional: every service in deploy/local/docker-compose.yml is
+  # gated behind that profile, so a bare "up -d" selects nothing and exits with
+  # "no service selected" before a single container starts. deploy/local/predev.mjs takes
+  # the same shape; the two entry points into this stack have to agree.
+  docker compose -f "$COMPOSE_FILE" --profile frappe up -d
+  docker compose -f "$COMPOSE_FILE" --profile frappe run --rm \
     -e SITE_NAME="$SITE" \
     -e IRONWRAP_LOCAL_IDENTITY_DOMAIN="$IDENTITY_DOMAIN" \
     frappe-init

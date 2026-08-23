@@ -38,6 +38,7 @@ import {
   unauthenticatedSessionPayload,
   validateAppOrigin,
   validAppCsrf,
+  type AppAuthRefusal,
 } from "./app-auth.ts";
 import {
   approvalProjection,
@@ -77,16 +78,6 @@ import {
   proposalPublicationApprovalBrokerConfig,
 } from "./proposal-publication-approval-broker-client.ts";
 import {
-  ProductionScheduleApprovalBrokerError,
-  executeProductionScheduleApproval,
-  previewProductionScheduleApproval,
-  productionScheduleApprovalBrokerConfig,
-} from "./production-schedule-approval-broker-client.ts";
-import {
-  productionScheduleApprovalDecisionConfig,
-  sessionIsRecentForProductionScheduleApproval,
-} from "./production-schedule-approval-authority.ts";
-import {
   claimQuoteRevisionApprovalExecution,
   createQuoteRevisionApprovalRequest,
   denyQuoteRevisionApprovalRequest,
@@ -110,19 +101,6 @@ import {
   proposalPublicationApprovalProjection,
   reconcileProposalPublicationApprovalUncertainty,
 } from "./proposal-publication-approval-store.ts";
-import {
-  claimProductionScheduleApprovalExecution,
-  createProductionScheduleApprovalRequest,
-  denyProductionScheduleApprovalRequest,
-  finalizeProductionScheduleApprovalExecution,
-  getCurrentProductionScheduleApprovalRequest,
-  getProductionScheduleApprovalRequest,
-  getProductionScheduleApprovalRequestByPrepareKey,
-  listProductionScheduleApprovalRequests,
-  matchesProductionScheduleApprovalPreparation,
-  productionScheduleApprovalProjection,
-  reconcileProductionScheduleApprovalUncertainty,
-} from "./production-schedule-approval-store.ts";
 import {
   activeAssignmentForJob,
   activeAssignmentForWorkObject,
@@ -187,7 +165,6 @@ import {
 } from "./work-package-store.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
-import { safetyReleaseGate } from "./safety-release-gate.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import { handleProductionGateClearance } from "./production-gate-clearance.ts";
@@ -303,29 +280,55 @@ export async function handleAppApi(
   ) {
     response = await consumeDevicePairing(req, appEnv);
   } else {
-    const auth = await authenticateAppRequest(req, appEnv);
-    if (!auth) {
-      if (
-        req.method === "GET" &&
-        (url.pathname === "/api/v1/session" ||
-          url.pathname === "/api/v1/field/bootstrap")
-      ) {
-        response = url.pathname === "/api/v1/field/bootstrap"
-          ? privateAppJson({
-              version: APP_API_VERSION,
-              session: unauthenticatedSessionPayload(appEnv),
-            })
-          : privateAppJson(unauthenticatedSessionPayload(appEnv));
-        response.headers.set("set-cookie", expiredSessionCookie());
-      } else {
-        response = appJson({ error: "unauthorized" }, 401);
-        response.headers.set("set-cookie", expiredSessionCookie());
-      }
+    const outcome = await authenticateAppRequest(req, appEnv);
+    if (!outcome.ok) {
+      response = unauthenticatedAppResponse(req, url, appEnv, outcome.refusal);
     } else {
-      response = await handleAuthenticatedRoute(req, appEnv, auth, { ctx });
+      response = await handleAuthenticatedRoute(req, appEnv, outcome.auth, { ctx });
     }
   }
   return withCors(response, origin.origin);
+}
+
+/**
+ * The response for a request that could not be authenticated.
+ *
+ * The session cookie is expired for exactly ONE reason: the cookie names nothing live, so the
+ * browser is holding something dead. A live field session that did not carry its device proof
+ * keeps its cookie and gets a plain refusal - expiring it made a single proofless call from a
+ * field surface look identical to a sign-out, and the PWA then dropped the device secret and
+ * demanded re-pairing on the next cold load (ELEC-167 item 18).
+ *
+ * `/session` and `/field/bootstrap` answer 200 with the unauthenticated payload so a signed-out
+ * browser can paint its sign-in screen. That friendly payload is exactly what a proofless field
+ * request must NOT get: reading `authenticated: false` is itself what clears the device secret,
+ * so a proof failure is a refusal on every path.
+ */
+function unauthenticatedAppResponse(
+  req: Request,
+  url: URL,
+  appEnv: AppEnv,
+  refusal: AppAuthRefusal,
+): Response {
+  if (refusal === "device_proof_required")
+    return privateAppJson({ error: "device_proof_required" }, 401);
+  let response: Response;
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/api/v1/session" ||
+      url.pathname === "/api/v1/field/bootstrap")
+  ) {
+    response = url.pathname === "/api/v1/field/bootstrap"
+      ? privateAppJson({
+          version: APP_API_VERSION,
+          session: unauthenticatedSessionPayload(appEnv),
+        })
+      : privateAppJson(unauthenticatedSessionPayload(appEnv));
+  } else {
+    response = appJson({ error: "unauthorized" }, 401);
+  }
+  response.headers.set("set-cookie", expiredSessionCookie());
+  return response;
 }
 
 export async function handleAdminAppUserProvision(
@@ -591,6 +594,11 @@ export async function handleAuthenticatedRoute(
   deps: AppRouteDeps = {},
 ): Promise<Response> {
   const url = new URL(req.url);
+  // Retired rail, not a stub over a working one. The scheduling write moved to the native
+  // `POST /api/v1/jobs/{job}/schedule` in the IRO-195 D1 cutover (#132) and this whole family
+  // has answered 404 ever since. Its handlers used to live 350 lines below, unreachable behind
+  // this refusal and readable as if they still served traffic; ELEC-167 deleted them, so a
+  // reader now sees only the refusal that is actually the behaviour.
   if (
     url.pathname === "/api/v1/production-schedule-approvals" ||
     url.pathname.startsWith("/api/v1/production-schedule-approvals/")
@@ -954,31 +962,6 @@ export async function handleAuthenticatedRoute(
       );
     }
   }
-  if (
-    req.method === "GET" &&
-    url.pathname === "/api/v1/production-schedule-approvals"
-  ) {
-    if (auth.session.role !== "owner")
-      return privateAppJson({ error: "owner_role_required" }, 403);
-    try {
-      const approvals = await listProductionScheduleApprovalRequests(
-        env,
-        auth.session.tenant_id,
-        new Date().toISOString(),
-        parsedListLimit(url.searchParams.get("limit")),
-      );
-      return privateAppJson(
-        productionScheduleApprovalReadEnvelope(env, auth, {
-          approvals: approvals.map(productionScheduleApprovalProjection),
-        }),
-      );
-    } catch {
-      return privateAppJson(
-        { error: "production_schedule_approval_store_unavailable" },
-        502,
-      );
-    }
-  }
   const operatingScheduleMatch = url.pathname.match(
     /^\/api\/v1\/jobs\/([^/]+)\/schedule$/,
   );
@@ -989,59 +972,6 @@ export async function handleAuthenticatedRoute(
       auth,
       operatingScheduleMatch[1],
     );
-  }
-  if (
-    req.method === "POST" &&
-    url.pathname === "/api/v1/production-schedule-approvals"
-  ) {
-    return await prepareProductionScheduleApproval(req, env, auth);
-  }
-  const productionScheduleDecisionMatch = url.pathname.match(
-    /^\/api\/v1\/production-schedule-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
-  );
-  if (req.method === "POST" && productionScheduleDecisionMatch) {
-    const requestId = decodedProductionScheduleApprovalId(
-      productionScheduleDecisionMatch[1],
-    );
-    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
-    if (productionScheduleDecisionMatch[2] === "approve") {
-      return await approveProductionScheduleApproval(req, env, auth, requestId);
-    }
-    if (productionScheduleDecisionMatch[2] === "reject") {
-      return await rejectProductionScheduleApproval(req, env, auth, requestId);
-    }
-    return await reconcileProductionScheduleApproval(req, env, auth, requestId);
-  }
-  const productionScheduleDetailMatch = url.pathname.match(
-    /^\/api\/v1\/production-schedule-approvals\/([^/]+)$/,
-  );
-  if (req.method === "GET" && productionScheduleDetailMatch) {
-    if (auth.session.role !== "owner")
-      return privateAppJson({ error: "owner_role_required" }, 403);
-    const requestId = decodedProductionScheduleApprovalId(
-      productionScheduleDetailMatch[1],
-    );
-    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
-    try {
-      const approval = await getCurrentProductionScheduleApprovalRequest(
-        env,
-        auth.session.tenant_id,
-        requestId,
-        new Date().toISOString(),
-      );
-      return approval
-        ? privateAppJson(
-            productionScheduleApprovalReadEnvelope(env, auth, {
-              approval: productionScheduleApprovalProjection(approval),
-            }),
-          )
-        : privateAppJson({ error: "not_found" }, 404);
-    } catch {
-      return privateAppJson(
-        { error: "production_schedule_approval_store_unavailable" },
-        502,
-      );
-    }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/approvals") {
     if (!hasPermission(auth, "approvals:read"))
@@ -3433,151 +3363,6 @@ async function reconcileProposalPublicationApproval(
   }
 }
 
-async function prepareProductionScheduleApproval(
-  req: Request,
-  env: AppEnv,
-  auth: AuthContext,
-): Promise<Response> {
-  const identity = productionScheduleApprovalBrokerDecisionIdentity(env, auth);
-  if (!identity.ok)
-    return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const prepareIdempotencyKey = idempotencyKey(req);
-  if (!prepareIdempotencyKey)
-    return privateAppJson({ error: "idempotency_key_required" }, 400);
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const input = parseProductionScheduleApprovalPreparation(parsed.value);
-  if (!input)
-    return privateAppJson(
-      { error: "invalid_production_schedule_approval_request" },
-      400,
-    );
-  const requestText = productionScheduleRequestText(input);
-
-  try {
-    const existing = await getProductionScheduleApprovalRequestByPrepareKey(
-      env,
-      auth.session.tenant_id,
-      prepareIdempotencyKey,
-    );
-    if (existing) {
-      return matchesProductionScheduleApprovalPreparation(existing, {
-        requestedByUserId: auth.session.user_id,
-        roofJobId: input.roofJobId,
-        targetAssignmentId: existing.target_assignment_id,
-        crewProfileId: input.crewProfileId,
-        scheduledStart: input.scheduledStart,
-        scheduledEnd: input.scheduledEnd,
-        supersedesAssignmentId: input.supersedesAssignmentId,
-        correctionReason: input.correctionReason,
-        requestText,
-      })
-        ? privateAppJson({
-            approval: productionScheduleApprovalProjection(existing),
-            replayed: true,
-          })
-        : privateAppJson(
-            {
-              error: "idempotency_conflict",
-              approval: productionScheduleApprovalProjection(existing),
-            },
-            409,
-          );
-    }
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_approval_store_unavailable" },
-      502,
-    );
-  }
-
-  const eligibility = await validateProductionSchedulePreparation(
-    env,
-    auth,
-    input,
-  );
-  if (!eligibility.ok)
-    return privateAppJson({ error: eligibility.error }, eligibility.status);
-
-  const approvalRequestId = `production-schedule-approval:${randomToken()}`;
-  const runId = `run:production-schedule:${randomToken()}`;
-  let packet;
-  try {
-    packet = await previewProductionScheduleApproval(env, {
-      approvalRequestId,
-      tenantId: auth.session.tenant_id,
-      runId,
-      roofJobId: input.roofJobId,
-      crewProfileId: input.crewProfileId,
-      scheduledStart: input.scheduledStart,
-      scheduledEnd: input.scheduledEnd,
-      supersedesAssignmentId: input.supersedesAssignmentId,
-      correctionReason: input.correctionReason,
-      requestText,
-      requestedByUserId: auth.session.user_id,
-      requestedByFrappeUser: identity.frappeUserId,
-    });
-  } catch (error) {
-    return privateAppJson(
-      { error: productionScheduleBrokerPrepareError(error) },
-      productionScheduleBrokerPrepareStatus(error),
-    );
-  }
-
-  try {
-    const created = await createProductionScheduleApprovalRequest(env, {
-      id: approvalRequestId,
-      tenantId: auth.session.tenant_id,
-      prepareIdempotencyKey,
-      intentFingerprint: packet.intentFingerprint,
-      actorUser: packet.actorUser,
-      siteId: packet.siteId,
-      roofJobId: packet.roofJobId,
-      targetAssignmentId: packet.targetName,
-      crewProfileId: packet.crewProfileId,
-      scheduledStart: packet.scheduledStart,
-      scheduledEnd: packet.scheduledEnd,
-      supersedesAssignmentId: packet.supersedesAssignmentId,
-      correctionReason: packet.correctionReason,
-      requestText: packet.requestText,
-      writeArgsJson: packet.writeArgsJson,
-      previewJson: packet.previewJson,
-      argsDigest: packet.argsDigest,
-      previewDigest: packet.previewDigest,
-      receiptPreviewDigest: packet.receiptPreviewDigest,
-      dryRunReceipt: packet.dryRunReceipt,
-      expiresAt: packet.expiresAt,
-      requestedByUserId: auth.session.user_id,
-      requestedByFrappeUser: identity.frappeUserId,
-      runId: packet.runId,
-      now: new Date().toISOString(),
-    });
-    if (created.kind === "conflict") {
-      return privateAppJson(
-        {
-          error: "idempotency_conflict",
-          approval: productionScheduleApprovalProjection(created.request),
-        },
-        409,
-      );
-    }
-    return privateAppJson(
-      {
-        approval: productionScheduleApprovalProjection(created.request),
-        replayed: created.kind === "replayed",
-      },
-      created.kind === "created" ? 201 : 200,
-    );
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_approval_store_unavailable" },
-      502,
-    );
-  }
-}
-
 async function createOperatingJobAssignment(
   req: Request,
   env: AppEnv,
@@ -3972,300 +3757,6 @@ async function createCommercialProposalRevision(
       );
     }
     throw error;
-  }
-}
-
-async function approveProductionScheduleApproval(
-  req: Request,
-  env: AppEnv,
-  auth: AuthContext,
-  requestId: string,
-): Promise<Response> {
-  const identity = productionScheduleApprovalBrokerDecisionIdentity(env, auth);
-  if (!identity.ok)
-    return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey)
-    return privateAppJson({ error: "idempotency_key_required" }, 400);
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const expectedVersion = parseExpectedVersion(parsed.value);
-  if (expectedVersion === null)
-    return privateAppJson(
-      { error: "invalid_production_schedule_approval_decision" },
-      400,
-    );
-
-  const now = new Date();
-  // Releasing a crew to a job is a release decision, so it consumes current
-  // safety readiness for that job before the execution lease is claimed. The
-  // verdict — including a refusal — is recorded as an immutable snapshot.
-  const scheduleRequest = await getProductionScheduleApprovalRequest(
-    env,
-    auth.session.tenant_id,
-    requestId,
-  ).catch(() => null);
-  if (scheduleRequest?.roof_job_id) {
-    const gate = await safetyReleaseGate(env, {
-      tenantId: auth.session.tenant_id,
-      scope: { type: "roof_job", id: scheduleRequest.roof_job_id },
-      jobId: scheduleRequest.roof_job_id,
-      subjectUserIds: [],
-      consumer: "schedule_release",
-      evaluatedByUserId: auth.session.user_id,
-      decisionRef: `${requestId}:${decisionIdempotencyKey}`,
-      now: now.toISOString(),
-    });
-    if (!gate.readiness.ready) {
-      return privateAppJson(
-        {
-          error: "safety_release_blocked",
-          blockers: gate.readiness.blockers,
-          snapshot_id: gate.snapshot_id,
-        },
-        409,
-      );
-    }
-  }
-  let claimed;
-  try {
-    claimed = await claimProductionScheduleApprovalExecution(env, {
-      tenantId: auth.session.tenant_id,
-      requestId,
-      expectedVersion,
-      decisionIdempotencyKey,
-      approvedByUserId: auth.session.user_id,
-      approvedByFrappeUser: identity.frappeUserId,
-      now: now.toISOString(),
-      leaseExpiresAt: new Date(
-        now.getTime() + identity.broker.executionLeaseSeconds * 1000,
-      ).toISOString(),
-    });
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_approval_store_unavailable" },
-      502,
-    );
-  }
-  if (claimed.kind !== "claimed")
-    return productionScheduleDecisionResultResponse(claimed);
-
-  let outcome;
-  try {
-    outcome = await executeProductionScheduleApproval(env, claimed.request);
-  } catch (error) {
-    return await finalizeProductionScheduleBrokerFailure(
-      env,
-      auth,
-      claimed.request,
-      decisionIdempotencyKey,
-      error,
-    );
-  }
-  try {
-    const finalized = await finalizeProductionScheduleApprovalExecution(env, {
-      tenantId: auth.session.tenant_id,
-      requestId,
-      decisionIdempotencyKey,
-      state: outcome.state,
-      hermesRunId: outcome.hermesRunId,
-      resultJson: outcome.resultJson,
-      errorCode: outcome.errorCode,
-      refusalMessage: outcome.refusal?.message ?? null,
-      now: new Date().toISOString(),
-    });
-    if (finalized.kind === "lost_claim") {
-      return finalized.request
-        ? privateAppJson(
-            {
-              error: "production_schedule_approval_state_changed",
-              approval: productionScheduleApprovalProjection(finalized.request),
-            },
-            409,
-          )
-        : privateAppJson({ error: "not_found" }, 404);
-    }
-    const status =
-      outcome.state === "executed"
-        ? 200
-        : outcome.state === "execution_uncertain"
-          ? 502
-          : 422;
-    return privateAppJson(
-      { approval: productionScheduleApprovalProjection(finalized.request) },
-      status,
-    );
-  } catch {
-    // A verified private broker may already have created the assignment. Leave
-    // the claim intact so the cron sweep makes it reconciliation work instead
-    // of inviting a second append-only write.
-    return privateAppJson(
-      { error: "production_schedule_execution_finalization_unavailable" },
-      502,
-    );
-  }
-}
-
-async function finalizeProductionScheduleBrokerFailure(
-  env: AppEnv,
-  auth: AuthContext,
-  request: Parameters<typeof executeProductionScheduleApproval>[1],
-  decisionIdempotencyKey: string,
-  error: unknown,
-): Promise<Response> {
-  const errorCode = brokerFailureErrorCode(
-    error,
-    ProductionScheduleApprovalBrokerError,
-    "production_schedule_broker_unavailable",
-    "production_schedule_broker_response_unverified",
-  );
-  try {
-    const finalized = await finalizeProductionScheduleApprovalExecution(env, {
-      tenantId: auth.session.tenant_id,
-      requestId: request.production_schedule_approval_id,
-      decisionIdempotencyKey,
-      state: "execution_uncertain",
-      hermesRunId: request.run_id,
-      errorCode,
-      now: new Date().toISOString(),
-    });
-    if (finalized.kind === "finalized") {
-      return privateAppJson(
-        {
-          error: "execution_uncertain",
-          approval: productionScheduleApprovalProjection(finalized.request),
-        },
-        502,
-      );
-    }
-    return finalized.request
-      ? privateAppJson(
-          {
-            error: "production_schedule_approval_state_changed",
-            approval: productionScheduleApprovalProjection(finalized.request),
-          },
-          409,
-        )
-      : privateAppJson({ error: "not_found" }, 404);
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_execution_finalization_unavailable" },
-      502,
-    );
-  }
-}
-
-async function rejectProductionScheduleApproval(
-  req: Request,
-  env: AppEnv,
-  auth: AuthContext,
-  requestId: string,
-): Promise<Response> {
-  const identity = productionScheduleApprovalDecisionIdentity(env, auth);
-  if (!identity.ok)
-    return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey)
-    return privateAppJson({ error: "idempotency_key_required" }, 400);
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const decision = parseRejectionDecision(parsed.value);
-  if (!decision)
-    return privateAppJson(
-      { error: "invalid_production_schedule_approval_decision" },
-      400,
-    );
-  try {
-    const denied = await denyProductionScheduleApprovalRequest(env, {
-      tenantId: auth.session.tenant_id,
-      requestId,
-      expectedVersion: decision.version,
-      decisionIdempotencyKey,
-      approvedByUserId: auth.session.user_id,
-      approvedByFrappeUser: identity.frappeUserId,
-      rejectionReason: decision.reason,
-      now: new Date().toISOString(),
-    });
-    if (denied.kind === "denied")
-      return privateAppJson({
-        approval: productionScheduleApprovalProjection(denied.request),
-      });
-    return productionScheduleDecisionResultResponse(denied);
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_approval_store_unavailable" },
-      502,
-    );
-  }
-}
-
-async function reconcileProductionScheduleApproval(
-  req: Request,
-  env: AppEnv,
-  auth: AuthContext,
-  requestId: string,
-): Promise<Response> {
-  const identity = productionScheduleApprovalDecisionIdentity(env, auth);
-  if (!identity.ok)
-    return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const reconciliation = parseReconciliation(parsed.value);
-  if (!reconciliation)
-    return privateAppJson(
-      { error: "invalid_production_schedule_reconciliation" },
-      400,
-    );
-  try {
-    const result = await reconcileProductionScheduleApprovalUncertainty(env, {
-      tenantId: auth.session.tenant_id,
-      requestId,
-      expectedVersion: reconciliation.version,
-      reconciledByUserId: auth.session.user_id,
-      reconciledByFrappeUser: identity.frappeUserId,
-      outcome: reconciliation.outcome,
-      evidence: reconciliation.evidence,
-      now: new Date().toISOString(),
-    });
-    if (result.kind === "reconciled")
-      return privateAppJson({
-        approval: productionScheduleApprovalProjection(result.request),
-      });
-    if (result.kind === "already_reconciled") {
-      return privateAppJson({
-        approval: productionScheduleApprovalProjection(result.request),
-        replayed: true,
-      });
-    }
-    if (result.kind === "missing")
-      return privateAppJson({ error: "not_found" }, 404);
-    if (result.kind === "not_uncertain") {
-      return privateAppJson(
-        {
-          error: "production_schedule_approval_not_uncertain",
-          approval: productionScheduleApprovalProjection(result.request),
-        },
-        409,
-      );
-    }
-    return privateAppJson(
-      {
-        error: "production_schedule_approval_version_conflict",
-        approval: productionScheduleApprovalProjection(result.request),
-      },
-      409,
-    );
-  } catch {
-    return privateAppJson(
-      { error: "production_schedule_approval_store_unavailable" },
-      502,
-    );
   }
 }
 
@@ -4785,69 +4276,6 @@ async function validateProductionSchedulePreparation(
   }
 }
 
-function productionScheduleApprovalDecisionIdentity(
-  env: AppEnv,
-  auth: AuthContext,
-):
-  | {
-      ok: true;
-      config: NonNullable<
-        ReturnType<typeof productionScheduleApprovalDecisionConfig>
-      >;
-      frappeUserId: string;
-    }
-  | { ok: false; error: string; status: number } {
-  if (auth.session.role !== "owner")
-    return { ok: false, error: "owner_role_required", status: 403 };
-  const config = productionScheduleApprovalDecisionConfig(env);
-  if (!config) {
-    return {
-      ok: false,
-      error: "production_schedule_approver_not_configured",
-      status: 503,
-    };
-  }
-  const frappeUserId = auth.session.frappe_user_id?.trim() ?? "";
-  if (!frappeUserId || frappeUserId !== config.approverId) {
-    return { ok: false, error: "configured_approver_required", status: 403 };
-  }
-  if (!sessionIsRecentForProductionScheduleApproval(
-    auth.session.session_created_at,
-    config,
-  )) {
-    return { ok: false, error: "recent_session_required", status: 403 };
-  }
-  return { ok: true, config, frappeUserId };
-}
-
-function productionScheduleApprovalBrokerDecisionIdentity(
-  env: AppEnv,
-  auth: AuthContext,
-):
-  | {
-      ok: true;
-      decision: NonNullable<
-        ReturnType<typeof productionScheduleApprovalDecisionConfig>
-      >;
-      broker: NonNullable<
-        ReturnType<typeof productionScheduleApprovalBrokerConfig>
-      >;
-      frappeUserId: string;
-    }
-  | { ok: false; error: string; status: number } {
-  const decision = productionScheduleApprovalDecisionIdentity(env, auth);
-  if (!decision.ok) return decision;
-  const broker = productionScheduleApprovalBrokerConfig(env);
-  if (!broker) {
-    return {
-      ok: false,
-      error: "production_schedule_broker_not_configured",
-      status: 503,
-    };
-  }
-  return { ok: true, decision: decision.config, broker, frappeUserId: decision.frappeUserId };
-}
-
 function quoteRevisionApprovalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
@@ -5063,56 +4491,6 @@ function proposalPublicationDecisionResultResponse(
   );
 }
 
-function productionScheduleDecisionResultResponse(
-  result:
-    | Exclude<
-        Awaited<ReturnType<typeof claimProductionScheduleApprovalExecution>>,
-        { kind: "claimed" }
-      >
-    | Exclude<
-        Awaited<ReturnType<typeof denyProductionScheduleApprovalRequest>>,
-        { kind: "denied" }
-      >,
-): Response {
-  if (result.kind === "missing")
-    return privateAppJson({ error: "not_found" }, 404);
-  if (result.kind === "expired") {
-    return privateAppJson(
-      {
-        error: "production_schedule_approval_expired",
-        approval: productionScheduleApprovalProjection(result.request),
-      },
-      410,
-    );
-  }
-  if (result.kind === "version_conflict") {
-    return privateAppJson(
-      {
-        error: "production_schedule_approval_version_conflict",
-        approval: productionScheduleApprovalProjection(result.request),
-      },
-      409,
-    );
-  }
-  if (result.kind === "replayed") {
-    const status = result.request.state === "executing" ? 202 : 200;
-    return privateAppJson(
-      {
-        approval: productionScheduleApprovalProjection(result.request),
-        replayed: true,
-      },
-      status,
-    );
-  }
-  return privateAppJson(
-    {
-      error: "production_schedule_approval_already_decided",
-      approval: productionScheduleApprovalProjection(result.request),
-    },
-    409,
-  );
-}
-
 function approvalReadEnvelope(
   env: AppEnv,
   auth: AuthContext,
@@ -5151,20 +4529,6 @@ function proposalPublicationApprovalReadEnvelope(
     read_model_generated_at: new Date().toISOString(),
     permissions: auth.permissions,
     allowed_actions: proposalPublicationApprovalAllowedActions(env, auth),
-    ...body,
-  };
-}
-
-function productionScheduleApprovalReadEnvelope(
-  env: AppEnv,
-  auth: AuthContext,
-  body: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    version: 1,
-    read_model_generated_at: new Date().toISOString(),
-    permissions: auth.permissions,
-    allowed_actions: productionScheduleApprovalAllowedActions(env, auth),
     ...body,
   };
 }
@@ -5233,27 +4597,6 @@ function proposalPublicationApprovalAllowedActions(
     actions.push("proposal_publication_approval.reconcile");
   if (proposalPublicationApprovalBrokerDecisionIdentity(env, auth).ok)
     actions.push("proposal_publication_approval.approve");
-  return actions;
-}
-
-function productionScheduleApprovalAllowedActions(
-  env: AppEnv,
-  auth: AuthContext,
-): string[] {
-  if (auth.session.role !== "owner") return [];
-  const actions = ["production_schedule_approval.read"];
-  if (productionScheduleApprovalDecisionIdentity(env, auth).ok) {
-    actions.push(
-      "production_schedule_approval.reject",
-      "production_schedule_approval.reconcile",
-    );
-  }
-  if (productionScheduleApprovalBrokerDecisionIdentity(env, auth).ok) {
-    actions.push(
-      "production_schedule_approval.prepare",
-      "production_schedule_approval.approve",
-    );
-  }
   return actions;
 }
 
@@ -6436,14 +5779,6 @@ function decodedProposalPublicationApprovalId(value: string): string | null {
     : null;
 }
 
-function decodedProductionScheduleApprovalId(value: string): string | null {
-  const decoded = decodedPathSegment(value);
-  return decoded &&
-    /^production-schedule-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded)
-    ? decoded
-    : null;
-}
-
 function parsedListLimit(value: string | null): number {
   if (value === null || value === "") return 50;
   const parsed = Number(value);
@@ -6535,11 +5870,11 @@ function proposalPublicationApprovalBrokerDecisionIdentity(
   return { ok: true, config, frappeUserId: decision.frappeUserId };
 }
 
-// Shared by both execute rails: classify a broker call that threw into the code the
-// approval ledger records for it.
+// Classifies a broker call that threw into the code the approval ledger records for it.
+// It was shared with the production-schedule rail until that rail was retired (ELEC-167).
 function brokerFailureErrorCode(
   error: unknown,
-  errorClass: typeof ProposalPublicationApprovalBrokerError | typeof ProductionScheduleApprovalBrokerError,
+  errorClass: typeof ProposalPublicationApprovalBrokerError,
   unavailableCode: string,
   unverifiedCode: string,
 ): string {
@@ -6665,24 +6000,6 @@ function commercialEvidence(
   return new Set(normalized.map((entry) => entry.ref)).size === normalized.length
     ? normalized
     : null;
-}
-
-function productionScheduleBrokerPrepareError(error: unknown): string {
-  if (!(error instanceof ProductionScheduleApprovalBrokerError)) {
-    return "production_schedule_broker_unavailable";
-  }
-  if (error.code === "production_schedule_broker_not_configured") return error.code;
-  if (error.code === "production_schedule_broker_rejected") {
-    return error.brokerErrorCode ?? error.code;
-  }
-  return "production_schedule_broker_unavailable";
-}
-
-function productionScheduleBrokerPrepareStatus(error: unknown): number {
-  if (!(error instanceof ProductionScheduleApprovalBrokerError)) return 502;
-  if (error.code === "production_schedule_broker_not_configured") return 503;
-  if (error.code === "production_schedule_broker_rejected" && error.brokerStatus === 422) return 422;
-  return 502;
 }
 
 function operatingJobAssignmentErrorResponse(error: unknown): Response {

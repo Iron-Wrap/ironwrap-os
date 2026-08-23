@@ -84,6 +84,9 @@ function validateWorkflow(workflow) {
     admission,
     /pr-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*issuer-request[\s\S]*review-wait[\s\S]*policy-genesis[\s\S]*admission-context/,
   );
+  assert.match(workflow, /explicit \/v2\/independent-issuer route/);
+  assert.match(workflow, /issuer-request emits a canonical five-minute freshness window/);
+  assert.match(workflow, /signing\/publication stay external/);
   assert.match(admission, /id: publish_review_candidate[\s\S]*--artifact-digest "\$\{\{ steps\.publish_review_candidate\.outputs\.artifact-digest \}\}"/);
   assert.match(admission, /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/);
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);

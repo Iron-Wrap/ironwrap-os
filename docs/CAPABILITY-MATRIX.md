@@ -194,6 +194,13 @@ or any live stage/promote/readback/rollback receipt.
   protected credential by implication;
 - the issuer runs in a separately controlled Cloudflare account outside the product account, while
   the Frappe adapter runs on the Frappe VPS under a dedicated OS/service identity; and
+- IRO-219's implemented v2 trigger accepts only the exact canonical request freshness window
+  (`issuer-request` creates five minutes; the trigger caps lifetime at ten minutes and rejects
+  expired replays). It only queues the independently controlled issuer work: it has no findings,
+  provider evidence, or receipt-signing/publication authority. The existing `review-sign`,
+  `review-publish`, `release-evidence-sign`, and `release-evidence-publish` primitives remain
+  the independent custodian's separate boundary; this repository does not claim their external
+  credentials or runtime provisioning; and
 - recovery is a dormant, logged 2-of-3 ceremony among non-primary custodians. Ivan may hold one
   share but cannot recover authority alone. Every path fails closed and rollback may select only a
   previously admitted durable claim.

@@ -34,6 +34,10 @@ const ARTIFACT = "c".repeat(64);
 const CONFIG = "d".repeat(64);
 const STAGING = "11111111-1111-4111-8111-111111111111";
 const PRODUCTION = "22222222-2222-4222-8222-222222222222";
+const ISSUER_NOW = Date.parse("2026-08-23T00:00:00.000Z");
+const ISSUER_REQUESTED_AT = "2026-08-22T23:59:00.000Z";
+const ISSUER_EXPIRES_AT = "2026-08-23T00:04:00.000Z";
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const V4_SMOKE_STEPS = [
   "admin_envelopes",
@@ -315,9 +319,9 @@ test("service adapter client posts an exact authenticated request and rejects dr
   );
 });
 
-test("independent issuer trigger binds exact artifact, principal, and eventual receipt run", async () => {
-  const request = {
-    schema: "ironwrap_independent_issuer_request_v1",
+function independentIssuerRequestFixture(overrides = {}) {
+  return {
+    schema: "ironwrap_independent_issuer_request_v2",
     phase: "review",
     repository: "Iron-Wrap/ironwrap-os",
     pr_number: 43,
@@ -328,12 +332,33 @@ test("independent issuer trigger binds exact artifact, principal, and eventual r
     source_tree_sha256: TREE,
     diff_sha256: sha("diff"),
     ci_run_id: "31970000001",
-    candidate_artifact: { actions_run_id: "31970000002", actions_run_attempt: "1", name: "iro41-review-candidate", content_digest: ARTIFACT },
-    publication: { ref: `release-review/${COMMIT}`, path: `.release/reviews/${COMMIT}.json` },
-    receipt_key: { public_key_sha256: sha("issuer-public-key"), key_version: "review-key-2026-08" },
+    candidate_artifact: {
+      actions_run_id: "31970000002",
+      actions_run_attempt: "1",
+      name: "iro41-review-candidate",
+      content_digest: ARTIFACT,
+    },
+    publication: {
+      ref: `release-review/${COMMIT}`,
+      path: `.release/reviews/${COMMIT}.json`,
+    },
+    receipt_key: {
+      public_key_sha256: sha("issuer-public-key"),
+      key_version: "review-key-2026-08",
+    },
+    requested_at: ISSUER_REQUESTED_AT,
+    expires_at: ISSUER_EXPIRES_AT,
     requested_by: "release-admission@ironwrapexteriors.com",
-    expected_issuer: { principal: "independent-reviewer@ironwrapexteriors.com", task_id: "independent-source-review" },
+    expected_issuer: {
+      principal: "independent-reviewer@ironwrapexteriors.com",
+      task_id: "independent-source-review",
+    },
+    ...overrides,
   };
+}
+
+test("independent issuer trigger binds exact artifact, principal, and eventual receipt run", async () => {
+  const request = independentIssuerRequestFixture();
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url: String(url), init });
@@ -351,13 +376,155 @@ test("independent issuer trigger binds exact artifact, principal, and eventual r
       accepted_at: "2026-08-17T08:00:00.000Z",
     } }), { status: 202 });
   };
-  const ack = await requestIndependentIssuer({ url: "https://issuer.example.invalid/releases", apiToken: "issuer-trigger-token", request, fetchImpl });
+  const ack = await requestIndependentIssuer({ url: "https://issuer.example.invalid/v2/independent-issuer", apiToken: "issuer-trigger-token", request, fetchImpl, now: () => ISSUER_NOW });
   assert.equal(ack.status, "accepted");
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.authorization, "Bearer issuer-trigger-token");
   assert.equal(calls[0].init.body, canonicalJson(request));
-  await assert.rejects(() => requestIndependentIssuer({ url: "https://issuer.example.invalid/releases", apiToken: "token", request: { ...request, requested_by: request.expected_issuer.principal }, fetchImpl }), /release_promotion_issuer_request_identity_invalid/);
-  await assert.rejects(() => requestIndependentIssuer({ url: "http://issuer.example.invalid/releases", apiToken: "token", request, fetchImpl }), /release_promotion_issuer_url_invalid/);
+  await assert.rejects(() => requestIndependentIssuer({ url: "https://issuer.example.invalid/v2/independent-issuer", apiToken: "token", request: { ...request, requested_by: request.expected_issuer.principal }, fetchImpl, now: () => ISSUER_NOW }), /release_promotion_issuer_request_identity_invalid/);
+  await assert.rejects(() => requestIndependentIssuer({ url: "https://issuer.example.invalid/v1/independent-issuer", apiToken: "token", request, fetchImpl, now: () => ISSUER_NOW }), /release_promotion_issuer_url_invalid/);
+  await assert.rejects(() => requestIndependentIssuer({ url: "http://issuer.example.invalid/v2/independent-issuer", apiToken: "token", request, fetchImpl, now: () => ISSUER_NOW }), /release_promotion_issuer_url_invalid/);
+});
+
+test("independent issuer client rejects stale or unsafe freshness windows before transport", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response("{}", { status: 202 });
+  };
+  const url = "https://issuer.example.invalid/v2/independent-issuer";
+  const valid = independentIssuerRequestFixture();
+  const invoke = (request) => requestIndependentIssuer({
+    url,
+    apiToken: "issuer-trigger-token",
+    request,
+    fetchImpl,
+    now: () => ISSUER_NOW,
+  });
+
+  await assert.rejects(
+    () => invoke({ ...valid, schema: "ironwrap_independent_issuer_request_v1" }),
+    /release_promotion_issuer_request_invalid/,
+  );
+  await assert.rejects(
+    () => invoke({ ...valid, requested_at: "2026-08-22T23:59:00Z" }),
+    /release_promotion_issuer_requested_at_invalid/,
+  );
+  await assert.rejects(
+    () => invoke({ ...valid, expires_at: "2026-08-23T00:04:00Z" }),
+    /release_promotion_issuer_expires_at_invalid/,
+  );
+  await assert.rejects(
+    () => invoke({
+      ...valid,
+      requested_at: "2026-08-22T23:50:00.000Z",
+      expires_at: "2026-08-22T23:59:59.999Z",
+    }),
+    /release_promotion_issuer_request_expired/,
+  );
+  await assert.rejects(
+    () => invoke({ ...valid, expires_at: "2026-08-23T00:10:00.001Z" }),
+    /release_promotion_issuer_request_lifetime_invalid/,
+  );
+  await assert.rejects(
+    () => invoke({
+      ...valid,
+      requested_at: "2026-08-23T00:02:00.000Z",
+      expires_at: "2026-08-23T00:01:00.000Z",
+    }),
+    /release_promotion_issuer_request_time_order_invalid/,
+  );
+  await assert.rejects(
+    () => invoke({
+      ...valid,
+      requested_at: "2026-08-23T00:01:00.001Z",
+      expires_at: "2026-08-23T00:05:00.001Z",
+    }),
+    /release_promotion_issuer_request_future_invalid/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("issuer-request emits a canonical five-minute v2 freshness window", async (t) => {
+  const root = await tempRoot(t);
+  const sourceFile = path.join(root, "source.json");
+  const prFile = path.join(root, "pr.json");
+  const publicKeyFile = path.join(root, "issuer.pub");
+  const output = path.join(root, "issuer-ack.json");
+  await writeFile(sourceFile, JSON.stringify({
+    repository: "Iron-Wrap/ironwrap-os",
+    source_commit: COMMIT,
+    source_git_tree: GIT_TREE,
+    source_tree_sha256: TREE,
+    diff_sha256: sha("diff"),
+    base_commit: BASE,
+  }));
+  await writeFile(prFile, JSON.stringify({
+    repository: "Iron-Wrap/ironwrap-os",
+    number: 43,
+    ci_merge_commit: COMMIT,
+    ci_merge_tree: GIT_TREE,
+    base_commit: BASE,
+    head_commit: HEAD,
+    ci_run_id: "31970000001",
+  }));
+  await writeFile(publicKeyFile, "synthetic issuer public key");
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.RELEASE_INDEPENDENT_ISSUER_TOKEN;
+  process.env.RELEASE_INDEPENDENT_ISSUER_TOKEN = "issuer-trigger-token";
+  let observed;
+  globalThis.fetch = async (url, init) => {
+    observed = { url: String(url), init };
+    const request = JSON.parse(init.body);
+    return new Response(JSON.stringify({ acknowledgement: {
+      schema: "ironwrap_independent_issuer_ack_v1",
+      status: "accepted",
+      phase: request.phase,
+      repository: request.repository,
+      source_commit: request.source_commit,
+      request_digest: sha(canonicalJson(request)),
+      issuer_principal: request.expected_issuer.principal,
+      issuer_task_id: request.expected_issuer.task_id,
+      issuer_run_id: "issuer-run-31970000003",
+      key_version: request.receipt_key.key_version,
+      accepted_at: new Date().toISOString(),
+    } }), { status: 202 });
+  };
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.RELEASE_INDEPENDENT_ISSUER_TOKEN;
+    else process.env.RELEASE_INDEPENDENT_ISSUER_TOKEN = previousToken;
+  });
+
+  await main([
+    "issuer-request",
+    "--phase", "review",
+    "--url", "https://issuer.example.invalid/v2/independent-issuer",
+    "--repository", "Iron-Wrap/ironwrap-os",
+    "--source", sourceFile,
+    "--pr-context", prFile,
+    "--artifact-name", "iro219-review-candidate",
+    "--artifact-digest", ARTIFACT,
+    "--actions-run-id", "31970000002",
+    "--actions-run-attempt", "1",
+    "--issuer-public-key", publicKeyFile,
+    "--issuer-identity", "independent-reviewer@ironwrapexteriors.com",
+    "--issuer-task-id", "independent-source-review",
+    "--issuer-key-version", "review-key-2026-08",
+    "--requester-identity", "release-admission@ironwrapexteriors.com",
+    "--output", output,
+  ]);
+
+  const request = JSON.parse(observed.init.body);
+  assert.equal(observed.url, "https://issuer.example.invalid/v2/independent-issuer");
+  assert.equal(request.schema, "ironwrap_independent_issuer_request_v2");
+  assert.match(request.requested_at, ISO_TIMESTAMP_RE);
+  assert.match(request.expires_at, ISO_TIMESTAMP_RE);
+  assert.equal(
+    Date.parse(request.expires_at) - Date.parse(request.requested_at),
+    5 * 60_000,
+  );
+  assert.deepEqual(JSON.parse(await readFile(output, "utf8")).status, "accepted");
 });
 
 test("CLI retrieves source-addressed review evidence without a per-release secret", async (t) => {

@@ -214,9 +214,13 @@ successful pull-request CI merge commit, open PR head/base, and tested tree:
   retrieved from `.release/reviews/<source-commit>.json` on the `release-review/<source-commit>`
   ref, is bound to the complete source/tree/diff, and has no unresolved P0/P1 findings. The
   receipt is durable review evidence, not a per-release GitHub secret;
-- `RELEASE_INDEPENDENT_ISSUER_URL` and its trigger-only
-  `RELEASE_INDEPENDENT_ISSUER_TOKEN`; the authenticated issuer must acknowledge its distinct
-  principal/task/run/key identity for the exact GitHub artifact digest before the bounded wait;
+- `RELEASE_INDEPENDENT_ISSUER_URL` (the explicit `/v2/independent-issuer` route) and its
+  trigger-only `RELEASE_INDEPENDENT_ISSUER_TOKEN`; `issuer-request` sends the exact v2 body with
+  a canonical five-minute `requested_at`/`expires_at` window, and the authenticated issuer must
+  acknowledge its distinct principal/task/run/key identity for the exact GitHub artifact digest
+  before the bounded wait. Expired or malformed requests fail closed. An exact still-valid replay
+  returns the ledgered acknowledgement without an executor re-run; an expired replay fails closed.
+  This trigger does not mint findings or receipts;
 - `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`, plus separate
   `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_STAGING_CLOUDFLARE_API_TOKEN`, and
   `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN` credentials with non-overlapping authority;
@@ -230,8 +234,11 @@ successful pull-request CI merge commit, open PR head/base, and tested tree:
   placed in the permit or receipts.
 
 The complete name-only inventory and custody split is in `deploy/release.env.example`. The
-independent review/evidence issuer receives neither the permit private key nor provider mutation
-credentials. The Frappe adapter receives neither GitHub merge authority nor the Cloudflare token.
+independent review/evidence trigger receives neither the permit private key nor provider mutation
+credentials, and it is not the signing/publication implementation. The existing
+`review-sign`, `review-publish`, `release-evidence-sign`, and `release-evidence-publish` primitives
+remain under the independent issuer custodian's custody. The Frappe adapter receives neither
+GitHub merge authority nor the Cloudflare token.
 
 Generation N enforcement is loaded from the PR base, not from candidate source, so a candidate
 cannot weaken and approve its own release boundary. That predecessor enforcer atomically

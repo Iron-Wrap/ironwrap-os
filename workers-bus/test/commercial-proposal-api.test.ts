@@ -16,6 +16,22 @@ import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
 const NOW = new Date("2026-08-20T12:00:00.000Z");
+/**
+ * Seeding runs at the pinned `NOW`, but the routes admit their own permits off the wall clock,
+ * so the policy window has to contain both. Pinned to the calendar it would stop containing the
+ * wall clock on the day it ends, and every route would answer 409 `commercial_policy_not_current`.
+ */
+const A_DAY = 24 * 60 * 60_000;
+const POLICY_VALID_FROM = new Date(
+  Math.min(Date.now(), NOW.getTime()) - A_DAY,
+).toISOString();
+const POLICY_VALID_UNTIL = new Date(
+  Math.max(Date.now(), NOW.getTime()) + A_DAY,
+).toISOString();
+/** Same reason: an approved quote the routes still accept has to outlive the wall clock. */
+const QUOTE_VALID_UNTIL = new Date(Math.max(Date.now(), NOW.getTime()) + A_DAY)
+  .toISOString()
+  .slice(0, 10);
 const OWNER_ID = "appu_owner_0001";
 const OPS_ID = "appu_ops_0001";
 const ENVELOPE_ID = "ow_commercial_api_0001";
@@ -397,7 +413,7 @@ async function seedApprovedQuote(env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSO
     customerId: CUSTOMER_ID,
     status: "approved",
     currency: "CAD",
-    validUntil: "2026-09-20",
+    validUntil: QUOTE_VALID_UNTIL,
     terms: TERMS,
     evidence: EVIDENCE,
     lines: [
@@ -483,8 +499,8 @@ function commercialEnv(db: SqliteD1) {
       policy_version: "v1",
       tenant_id: TENANT,
       status: "active",
-      valid_from: "2026-08-01T00:00:00.000Z",
-      valid_until: "2026-09-01T00:00:00.000Z",
+      valid_from: POLICY_VALID_FROM,
+      valid_until: POLICY_VALID_UNTIL,
       max_fact_age_seconds: 3_600,
       max_permit_lifetime_seconds: 900,
       allowed_actions: [

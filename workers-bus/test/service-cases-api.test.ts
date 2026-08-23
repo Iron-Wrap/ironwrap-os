@@ -21,6 +21,14 @@ const DIGEST_PARTS = "d".repeat(64);
 const DIGEST_FIELD = "e".repeat(64);
 const DIGEST_CUSTOMER = "f".repeat(64);
 const DIGEST_RECOVERY = "1".repeat(64);
+/**
+ * A claim deadline is only ever a future instant - the route rejects a passed one with
+ * `cost_recovery_deadline_passed` - so it is measured from the run rather than pinned to a
+ * calendar date that eventually arrives.
+ */
+const CLAIM_DEADLINE_AT = new Date(
+  Date.now() + 365 * 24 * 60 * 60_000,
+).toISOString();
 
 /** Extended SQLite result codes D1 names in its wrapper; the low byte of each is `SQLITE_CONSTRAINT`. */
 const SQLITE_EXTENDED_CONSTRAINT: Record<number, string> = {
@@ -455,7 +463,7 @@ test("cost recovery is the owner's decision and runs the one-attempt effect shap
     claim_basis_code: "material_defect_granule_loss",
     claimed_amount_cents: 150_000,
     evidence_digest: DIGEST_RECOVERY,
-    deadline_at: "2036-09-19T09:10:00.000Z",
+    deadline_at: CLAIM_DEADLINE_AT,
   };
   const opsDenied = await call(
     appEnv,
@@ -553,7 +561,7 @@ test("an uncertain claim is reconciled by the owner and never retried behind the
       claim_basis_code: "short_shipped_coil",
       claimed_amount_cents: 90_000,
       evidence_digest: DIGEST_RECOVERY,
-      deadline_at: "2036-09-19T09:10:00.000Z",
+      deadline_at: CLAIM_DEADLINE_AT,
     },
   );
   const claimId = (claimed.body.claim as Record<string, unknown>).claim_id as string;

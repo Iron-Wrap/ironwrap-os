@@ -27,6 +27,18 @@ import { runExternalEffect } from "../src/effect-runtime.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
+/**
+ * Every row here is seeded off the wall clock, and the routes read the wall clock too, so anything
+ * the fixture means as "still current" is anchored to the run. A far-future calendar pin only
+ * postpones the day the window stops containing `now` and the whole chain fails closed.
+ */
+const A_YEAR = 365 * 24 * 60 * 60_000;
+const POLICY_VALID_FROM = new Date(Date.now() - A_YEAR).toISOString();
+const POLICY_VALID_UNTIL = new Date(Date.now() + A_YEAR).toISOString();
+const QUOTE_VALID_UNTIL = new Date(Date.now() + A_YEAR)
+  .toISOString()
+  .slice(0, 10);
+const PORTAL_LINK_EXPIRES_AT = new Date(Date.now() + A_YEAR).toISOString();
 const PUBLIC_ORIGIN = "https://app.example.com";
 const OWNER_ID = "appu_owner_0001";
 const ENVELOPE_ID = "ow_acceptance_0001";
@@ -285,8 +297,8 @@ function testEnv(
       policy_version: "v1",
       tenant_id: TENANT,
       status: "active",
-      valid_from: "2020-01-01T00:00:00.000Z",
-      valid_until: "2099-01-01T00:00:00.000Z",
+      valid_from: POLICY_VALID_FROM,
+      valid_until: POLICY_VALID_UNTIL,
       max_fact_age_seconds: 3_600,
       max_permit_lifetime_seconds: 900,
       allowed_actions: [
@@ -319,7 +331,7 @@ async function seedNativeContract(
     customerId: CUSTOMER_ID,
     status: "approved",
     currency: "CAD",
-    validUntil: "2099-12-31",
+    validUntil: QUOTE_VALID_UNTIL,
     terms: TERMS,
     evidence: EVIDENCE,
     lines: [
@@ -615,7 +627,7 @@ async function seedPortalLink(db: SqliteD1): Promise<string> {
       created_at, expires_at, revoked_at, revoked_by_user_id, last_accessed_at, access_count,
       issued_ip_hash, issued_user_agent_hash)
      VALUES ('portal_00000000-0000-4000-8000-000000000001', ?, ?, ?, ?, ?, ?,
-             '2099-01-01T00:00:00.000Z', NULL, NULL, NULL, 0, ?, ?)`,
+             ?, NULL, NULL, NULL, 0, ?, ?)`,
     )
     .run(
       await sha256Hex(token),
@@ -624,6 +636,7 @@ async function seedPortalLink(db: SqliteD1): Promise<string> {
       CUSTOMER_ID,
       OWNER_ID,
       now,
+      PORTAL_LINK_EXPIRES_AT,
       "a".repeat(64),
       "b".repeat(64),
     );

@@ -9,6 +9,14 @@ import { randomToken, sha256Hex } from "../src/app-auth.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
 const NOW = "2026-08-20T10:00:00.000Z";
+/**
+ * The rows are stamped with the pinned `NOW`, but the portal route checks the link against the
+ * wall clock, so a live link has to outlive both. Pinned to the calendar the link simply expires
+ * and every decision route answers 404 `not_found`.
+ */
+const PORTAL_LINK_EXPIRES_AT = new Date(
+  Math.max(Date.now(), Date.parse(NOW)) + 24 * 60 * 60_000,
+).toISOString();
 const PUBLIC_ORIGIN = "https://app.example.com";
 const HMAC_SECRET = "customer-decision-test-hmac-secret-longer-than-thirty-two-characters";
 const RECORD_PATH =
@@ -289,8 +297,14 @@ async function seedPortalLink(db: SqliteD1): Promise<string> {
       created_at, expires_at, revoked_at, revoked_by_user_id, last_accessed_at, access_count,
       issued_ip_hash, issued_user_agent_hash)
      VALUES ('portal_00000000-0000-4000-8000-000000000001', ?, 'ironwrap', 'JOB-A', 'CUSTOMER-A',
-             'appu_owner_0001', ?, '2030-01-01T00:00:00.000Z', NULL, NULL, NULL, 0, ?, ?)`,
-  ).run(await sha256Hex(token), NOW, "a".repeat(64), "b".repeat(64));
+             'appu_owner_0001', ?, ?, NULL, NULL, NULL, 0, ?, ?)`,
+  ).run(
+    await sha256Hex(token),
+    NOW,
+    PORTAL_LINK_EXPIRES_AT,
+    "a".repeat(64),
+    "b".repeat(64),
+  );
   return token;
 }
 

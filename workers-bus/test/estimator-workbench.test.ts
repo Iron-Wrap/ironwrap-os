@@ -16,6 +16,20 @@ import { canonicalJson } from "../src/newo-hash.ts";
 import type { PriceList } from "../src/pricing.ts";
 
 const NOW = new Date("2026-08-21T10:00:00.000Z");
+/**
+ * Two clocks reach this fixture: the pinned `NOW` the direct calls inject, and the wall clock the
+ * routes read because they take no clock at all. Anything the fixture means as "still current"
+ * therefore has to straddle both, since a validity window pinned to the calendar stops containing
+ * the wall clock on the day it ends - and a quote and a pricing policy both genuinely expire.
+ */
+const OLDEST_CLOCK = Math.min(Date.now(), NOW.getTime());
+const NEWEST_CLOCK = Math.max(Date.now(), NOW.getTime());
+const A_DAY = 24 * 60 * 60_000;
+const STILL_VALID_UNTIL = new Date(NEWEST_CLOCK + A_DAY)
+  .toISOString()
+  .slice(0, 10);
+const POLICY_EFFECTIVE_AT = new Date(OLDEST_CLOCK - A_DAY).toISOString();
+const POLICY_EXPIRES_AT = new Date(NEWEST_CLOCK + A_DAY).toISOString();
 const TENANT = "ironwrap";
 const JOB_ID = "job:estimator:0001";
 const JOB_NUMBER = "IW-EST-0001";
@@ -87,8 +101,8 @@ const PRICE_LIST: PriceList = {
     tenantId: TENANT,
     policyId: "retail-metal",
     revision: 3,
-    effectiveAt: "2026-08-01T00:00:00.000Z",
-    expiresAt: "2026-08-31T23:59:59.999Z",
+    effectiveAt: POLICY_EFFECTIVE_AT,
+    expiresAt: POLICY_EXPIRES_AT,
     pricing: { method: "markup", rateBps: 1_000 },
     freightCents: 15_000,
     contingencyRateBps: 250,
@@ -854,7 +868,7 @@ function seedCommercial(db: DatabaseSync): void {
       tax_cents, total_cents, terms_json, terms_hash, evidence_refs_json,
       evidence_digest, policy_permit_id, authority_evidence_digest,
       command_fingerprint, idempotency_key_hash, created_at)
-     VALUES (?, ?, ?, 1, ?, ?, 'approved', 'CAD', '2026-08-31', 1250000,
+     VALUES (?, ?, ?, 1, ?, ?, 'approved', 'CAD', ?, 1250000,
              62500, 1312500, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     QUOTE_REVISION_ID,
@@ -862,6 +876,7 @@ function seedCommercial(db: DatabaseSync): void {
     QUOTE_ID,
     JOB_ID,
     CUSTOMER_ID,
+    STILL_VALID_UNTIL,
     terms,
     sha256(terms),
     evidence,

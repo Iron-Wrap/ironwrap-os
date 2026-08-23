@@ -1058,7 +1058,13 @@ function nativeSalesEnv(
   } as never;
 }
 
+/**
+ * `buildSalesReadModel` takes no clock, so the policy window is compared against the wall clock.
+ * A pinned window would therefore stop containing `now` on the day it ends and the desk would
+ * quietly lose native triage, so the window is anchored to the run instead of to the calendar.
+ */
 function envWithCommercialPolicy(): AppEnv {
+  const now = Date.now();
   return {
     ...nativeSalesEnv(),
     COMMERCIAL_AUTHORITY_POLICY_JSON: JSON.stringify({
@@ -1067,8 +1073,8 @@ function envWithCommercialPolicy(): AppEnv {
       policy_version: "v1",
       tenant_id: "ironwrap",
       status: "active",
-      valid_from: "2026-08-01T00:00:00.000Z",
-      valid_until: "2026-09-01T00:00:00.000Z",
+      valid_from: new Date(now - 24 * 60 * 60_000).toISOString(),
+      valid_until: new Date(now + 24 * 60 * 60_000).toISOString(),
       max_fact_age_seconds: 3600,
       max_permit_lifetime_seconds: 900,
       allowed_actions: ["lead.triage.record"],
@@ -1678,7 +1684,12 @@ test("typed Shop Order packet is served through the universal BFF route without 
     };
     assert.equal(body.version, 1);
     assert.equal(body.source_updated_at, MODIFIED);
-    assert.match(body.read_model_generated_at, /^20\d\d-/);
+    // The claim is "this is an ISO instant", not "this century", so assert the whole shape rather
+    // than a `20\d\d` prefix that stops matching the day the clock leaves the 2000s.
+    assert.match(
+      body.read_model_generated_at,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
     assert.deepEqual(body.stale_fields, []);
     assert.equal(body.permissions.includes("jobs:read:assigned"), true);
     assert.deepEqual(body.work_object, {

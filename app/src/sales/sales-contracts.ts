@@ -194,3 +194,30 @@ export interface CommercialLeadTriageInput {
 export type CommercialLeadTriageDecisionResponse = z.infer<
   typeof commercialLeadTriageDecisionResponseSchema
 >;
+
+/** The office "Add a lead" form. Every value is optional to type; the server decides what is enough. */
+export interface NewLeadInput {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  province: string;
+  postal_code: string;
+  service: string;
+  message: string;
+}
+
+export const newLeadResponseSchema = z.object({
+  version: z.literal(1),
+  lead: z.object({
+    envelope_id: z.string().min(1),
+    canonical_envelope_id: z.string().min(1),
+    tenant_id: z.string().min(1),
+    status: z.string().min(1),
+    duplicate: z.boolean(),
+    queue: z.string().nullable(),
+  }),
+});
+
+export type NewLeadResponse = z.infer<typeof newLeadResponseSchema>;

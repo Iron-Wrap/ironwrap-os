@@ -157,6 +157,11 @@
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
+      "path": "docs/ONBOARDING-RUNBOOK.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+    },
+    {
       "path": "docs/OPERATIONS-RUNBOOK.md",
       "class": "runbook",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]

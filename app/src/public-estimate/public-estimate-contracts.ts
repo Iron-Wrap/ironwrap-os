@@ -11,20 +11,20 @@ export const PUBLIC_ESTIMATE_SERVICES = [
   { id: "soffit_fascia", label: "Soffit or fascia" },
 ] as const;
 
-export const PUBLIC_ESTIMATE_BRANDS = {
-  ironwrap: {
-    displayName: "IronWrap Exteriors",
-    shortName: "IronWrap",
-    serviceArea: "Alberta roofing & exteriors",
-  },
-  iroof: {
-    displayName: "iRoof Alberta",
-    shortName: "iRoof",
-    serviceArea: "Alberta roofing & exteriors",
-  },
-} as const;
+/**
+ * A brand is whatever the Worker says it accepts, named by whatever the owner set in the company
+ * profile. It used to be a two-value enum hard-coded here (`ironwrap`, `iroof`), which meant every
+ * other tenant's customers were rejected with `400 invalid_request` on a page headed with someone
+ * else's brand name (ELEC-158 B2).
+ */
+export const publicEstimateBrandSchema = z.string().trim().min(1).max(80);
 
-export const publicEstimateBrandSchema = z.enum(["ironwrap", "iroof"]);
+export const publicEstimateBrandDescriptorSchema = z.object({
+  id: publicEstimateBrandSchema,
+  display_name: z.string().min(1),
+  short_name: z.string().min(1),
+  service_area: z.string(),
+});
 
 export const PUBLIC_ESTIMATE_DEFAULT_PROVINCE = "AB";
 
@@ -112,6 +112,9 @@ export const publicEstimateConfigSchema = z.object({
   range_available: z.literal(false),
   disclaimer: z.string().trim().min(1),
   review_required: z.literal(true),
+  brands: z.array(publicEstimateBrandDescriptorSchema),
+  default_brand: publicEstimateBrandSchema.nullable(),
+  logo_url: z.string().min(1).nullable(),
 });
 
 export const publicInstantEstimateRequestSchema = z.object({
@@ -145,6 +148,7 @@ export const publicInstantEstimateResponseSchema = z.object({
 
 export type PublicEstimateConfig = z.infer<typeof publicEstimateConfigSchema>;
 export type PublicEstimateBrand = z.infer<typeof publicEstimateBrandSchema>;
+export type PublicEstimateBrandDescriptor = z.infer<typeof publicEstimateBrandDescriptorSchema>;
 export type PublicEstimateFormValues = z.infer<typeof publicEstimateFormSchema>;
 export type PublicEstimateProvince = z.infer<typeof publicEstimateProvinceSchema>;
 export type PublicInstantEstimateRequest = z.infer<typeof publicInstantEstimateRequestSchema>;
@@ -154,7 +158,7 @@ export function publicEstimateRequest(
   values: PublicEstimateFormValues,
   turnstileToken: string,
   clientSubmissionId: string,
-  brand: PublicEstimateBrand = "ironwrap",
+  brand: PublicEstimateBrand,
 ): PublicInstantEstimateRequest {
   return publicInstantEstimateRequestSchema.parse({
     brand,
@@ -171,10 +175,17 @@ export function publicEstimateRequest(
   });
 }
 
-/** Only a fixed marketing embed link may select a tenant brand; unknown values fall back safely. */
-export function publicEstimateBrandFromSearch(search: string): PublicEstimateBrand {
-  const candidate = new URLSearchParams(search).get("brand");
-  return publicEstimateBrandSchema.safeParse(candidate).success
-    ? publicEstimateBrandSchema.parse(candidate)
-    : "ironwrap";
+/**
+ * Which brand a marketing embed link asked for, checked against the brands the server actually
+ * accepts. Anything it does not accept falls back to the tenant's default rather than to a name
+ * from another company.
+ */
+export function publicEstimateBrandFromSearch(
+  search: string,
+  brands: readonly PublicEstimateBrandDescriptor[],
+  defaultBrand: PublicEstimateBrand | null,
+): PublicEstimateBrandDescriptor | undefined {
+  const candidate = new URLSearchParams(search).get("brand")?.trim();
+  const requested = candidate ? brands.find((brand) => brand.id === candidate) : undefined;
+  return requested ?? brands.find((brand) => brand.id === defaultBrand) ?? brands[0];
 }

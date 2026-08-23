@@ -31,6 +31,8 @@ import {
   sweepDeadLetterAutoReplay,
   validateReplayApprovalContext,
 } from "./operations.ts";
+import { ingestLead } from "./lead-intake.ts";
+import { companyLogoResponse } from "./company-profile.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
@@ -537,6 +539,17 @@ async function routeRequest(
       env as import("./app-types.ts").AppEnv,
     );
   }
+  // The tenant's own logo. Public because the estimate request form and the sign-in screen both
+  // render it before there is any session; it carries no tenant data beyond the image the owner
+  // uploaded for exactly that purpose.
+  if (url.pathname === "/public/company-logo") {
+    if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    const tenantId = operatingTenantId(
+      (env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID,
+    );
+    if (!tenantId) return json({ error: "not_found" }, 404);
+    return await companyLogoResponse(env as import("./app-types.ts").AppEnv, tenantId);
+  }
   // Public estimator traffic is browser-origin constrained and has independent
   // Turnstile/rate controls. It never accepts the private ingest bearer token.
   if (url.pathname.startsWith("/public/")) {
@@ -735,119 +748,19 @@ async function handleIngest(
   source: string,
   provider?: string,
 ): Promise<Response> {
-  if (!(ALLOWED_SOURCES as readonly string[]).includes(source))
-    return json({ error: "bad_source" }, 400);
-
-  const tenantId = operatingTenantId((env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID);
-  if (!tenantId) return json({ error: "tenant_identity_required" }, 403);
-
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
   const rawText = await req.text();
   if (rawText.length > MAX_BODY_BYTES)
     return json({ error: "payload_too_large" }, 413);
 
-  const parsed = parseBody(rawText, req.headers.get("content-type"));
-  const raw = provider ? { ...parsed, provider } : parsed;
-  const envelopeId = newEnvelopeId();
-  const now = new Date().toISOString();
-  const rawKey = `raw/${now.slice(0, 10)}/${envelopeId}.json`;
-
-  // 1) Raw to R2 FIRST — nothing is lost even if everything after this throws.
-  await store.putRaw(env, rawKey, rawText, "application/json");
-
-  // 2) Canonical envelope.
-  const envelope = normalizeEnvelope(source as Source, raw, now);
-  const valid = validateInbound(envelope);
-  const key = dedupKey(envelope.contact);
-
-  // 3) Dedup across all inbound paths (phone/email, within the window).
-  let dupOf: string | null = null;
-  if (key) {
-    const windowH = Number(env.DEDUP_WINDOW_HOURS ?? "72");
-    const since = new Date(Date.now() - windowH * 3600_000).toISOString();
-    dupOf = await store.claimDedup(env, key, envelopeId, now, since);
-  }
-
-  const intentText = `${raw["service"] ?? ""} ${raw["service_intent"] ?? ""} ${raw["message"] ?? ""}`;
-  const intentQueue = classifyIntent(intentText);
-
-  // Replay of a claimed contact returns the original identity. A second D1 lead
-  // row (even status=duplicate) would mint a second operating record.
-  if (dupOf) {
-    await store.recordAudit(env, {
-      automation: "ingest",
-      trigger: source,
-      envelope_id: dupOf,
-      source_ids: provider ? `provider:${provider}` : undefined,
-      action: "dedup",
-      result: "ok",
-      recovery_owner: env.OWNER_ALERT_EMAIL,
-    });
-    return json({
-      envelope_id: dupOf,
-      canonical_envelope_id: dupOf,
-      tenant_id: tenantId,
-      status: "duplicate",
-      duplicate: true,
-      queue: intentQueue,
-    });
-  }
-
-  const rec: EnvelopeRecord = {
-    envelope_id: envelopeId,
-    source,
-    contact_name: envelope.contact.name ?? null,
-    contact_phone: envelope.contact.phone ?? null,
-    contact_email: envelope.contact.email ?? null,
-    job_ref: envelope.job_ref,
-    payload_json: JSON.stringify(envelope.payload),
-    raw_key: rawKey,
-    ts: now,
-    status: valid.ok ? "pending_jn_push" : "received",
-    dedup_key: key,
-    dup_of: null,
-    attempts: 0,
-    last_error: valid.ok ? null : (valid.reason ?? null),
-    jn_contact_id: null,
-    jn_job_id: null,
-    intent_queue: intentQueue,
-    tenant_id: tenantId,
-    created_at: now,
-    updated_at: now,
-  };
-
-  // 4) Owned store write (system of record).
-  await store.insertEnvelope(env, rec);
-  await store.recordAudit(env, {
-    automation: "ingest",
-    trigger: source,
-    envelope_id: envelopeId,
-    source_ids: provider ? `provider:${provider}` : undefined,
-    action: "received",
-    result: "ok",
-    error: rec.last_error,
-    recovery_owner: env.OWNER_ALERT_EMAIL,
-  });
-
-  // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
-  ctx.waitUntil(
-    sendInstantAck(env, rec).catch((e) =>
-      log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
-    ),
+  const result = await ingestLead(
+    env,
+    ctx,
+    { source, provider, rawText, contentType: req.headers.get("content-type") },
+    log,
   );
-
-  // 6) Enqueue the JobNimbus push (skip unroutable-no-contact rows).
-  if (valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });
-
-  return json({
-    envelope_id: envelopeId,
-    canonical_envelope_id: envelopeId,
-    tenant_id: tenantId,
-    status: rec.status,
-    duplicate: false,
-    queue: rec.intent_queue,
-  });
+  return result.ok ? json(result.body) : json({ error: result.error }, result.status);
 }
 
 // ---------------------------------------------------------------------------- queue work

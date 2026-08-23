@@ -2466,6 +2466,9 @@ export async function buildSalesReadModel(
       ...(auth.permissions.includes("estimator:read")
         ? ["estimator.read"]
         : []),
+      ...(auth.permissions.includes("sales:lead_create")
+        ? ["sales.lead.create"]
+        : []),
       "sales.read",
     ],
     partial_sources: partialSources,

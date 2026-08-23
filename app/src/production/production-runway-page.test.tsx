@@ -47,7 +47,7 @@ const ownerSession = {
     currency: "CAD",
   },
   permissions: ["jobs:read:any"],
-  allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
+  allowed_actions: ["job.read", "production.read"],
   csrf_token: "csrf",
   session_expires_at: "2026-07-16T13:00:00.000Z",
   source_updated_at: null,
@@ -138,7 +138,7 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
     read_model_generated_at: "2026-07-16T12:00:01.000Z",
     stale_fields: [],
     permissions: ["jobs:read:any"],
-    allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
+    allowed_actions: ["job.read", "production.read"],
     partial_sources: [],
     summary: {
       active_jobs: 5,
@@ -186,10 +186,6 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A",
     );
-    expect(
-      screen.queryByRole("link", { name: "Start schedule check for IW-1004" }),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Schedule requests" })).not.toBeInTheDocument();
 
     productionView.unmount();
     vi.clearAllMocks();
@@ -202,15 +198,15 @@ describe("ProductionRunwayPage", () => {
     expect(loadProductionRunway).not.toHaveBeenCalled();
   });
 
-  it("keeps the runway read-only and links only eligible jobs to a schedule request", async () => {
+  it("keeps the runway read-only and offers no retired schedule-request dead end", async () => {
     renderRunway();
 
     await screen.findByRole("heading", { name: "Production plan" });
     expect(screen.getByText(/This page does not change a job/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Schedule requests" })).toHaveAttribute(
-      "href",
-      "/production/schedule-approvals",
-    );
+    // The owner's schedule-request entry points were retired with the route they led to: the
+    // `/api/v1/production-schedule-approvals` API has answered 404 since the IRO-195 D1 cutover
+    // (#132) replaced it with the native `POST /api/v1/jobs/{job}/schedule` (ELEC-157 item 16).
+    expect(screen.queryByRole("link", { name: "Schedule requests" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ready to check" })).toBeVisible();
     expect(screen.getByText("Material issue")).toBeVisible();
@@ -225,13 +221,7 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A",
     );
-    expect(screen.getByRole("link", { name: "Start schedule check for IW-1004" })).toHaveAttribute(
-      "href",
-      "/production/schedule/JOB-D",
-    );
-    expect(
-      screen.queryByRole("link", { name: "Start schedule check for IW-1001" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Start schedule check/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /schedule|dispatch/i })).not.toBeInTheDocument();
     expect(screen.getByText("JOB-A")).not.toBeVisible();
     await userEvent.setup().click(screen.getAllByText("System details")[0]!);
@@ -265,12 +255,7 @@ describe("ProductionRunwayPage", () => {
     readOnly.unmount();
     vi.mocked(loadProductionRunway).mockResolvedValue(
       model({
-        allowed_actions: [
-          "job.read",
-          "production.read",
-          "production_gate.clear",
-          "production_schedule_approval.prepare",
-        ],
+        allowed_actions: ["job.read", "production.read", "production_gate.clear"],
       }),
     );
     renderRunway();

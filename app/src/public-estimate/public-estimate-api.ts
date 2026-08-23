@@ -6,7 +6,6 @@ import {
   publicInstantEstimateRequestSchema,
   publicInstantEstimateResponseSchema,
   type PublicEstimateConfig,
-  type PublicEstimateBrand,
   type PublicInstantEstimateRequest,
   type PublicInstantEstimateResponse,
 } from "./public-estimate-contracts";
@@ -24,17 +23,17 @@ export class PublicEstimateApiError extends Error {
   }
 }
 
+/**
+ * The config request no longer names a brand: the server states which brands it accepts, and the
+ * page picks from that list. Asking for a brand before knowing the list is what let the frontend
+ * send one the Worker would reject (ELEC-158 B2).
+ */
 export async function loadPublicEstimateConfig(
-  brand: PublicEstimateBrand,
   fetcher: typeof fetch = fetch,
 ): Promise<PublicEstimateConfig> {
-  return publicRequest(
-    `${API_PATHS.publicInstantEstimateConfig}?brand=${encodeURIComponent(brand)}`,
-    publicEstimateConfigSchema,
-    {
-      fetcher,
-    },
-  );
+  return publicRequest(API_PATHS.publicInstantEstimateConfig, publicEstimateConfigSchema, {
+    fetcher,
+  });
 }
 
 export async function submitPublicInstantEstimate(

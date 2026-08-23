@@ -643,6 +643,7 @@ test("sales sessions receive only their bounded desk and preparation capabilitie
     "session:read",
     "now:read",
     "sales:read",
+    "sales:lead_create",
     "estimator:read",
     "approvals:read",
     "approvals:prepare",

@@ -14,7 +14,7 @@ import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
 import { RoleGuard } from "./components/role-guard";
-import { NotFoundPage, SettingsPage } from "./pages/placeholders";
+import { NotFoundPage } from "./pages/placeholders";
 
 const loadCustomerPortalPage = () => import("./portal/customer-portal-page");
 const CustomerPortalPage = lazy(async () => ({
@@ -73,17 +73,20 @@ const QuickBooksFinalInvoicePage = lazy(async () => ({
 const FacetDesignPage = lazy(async () => ({
   default: (await import("./facet/facet-design-page")).FacetDesignPage,
 }));
-const ProductionScheduleApprovalPreparePage = lazy(async () => ({
-  default: (await import("./production/production-schedule-approval-page"))
-    .ProductionScheduleApprovalPreparePage,
+const SetupPage = lazy(async () => ({
+  default: (await import("./admin/setup-page")).SetupPage,
 }));
-const ProductionScheduleApprovalQueuePage = lazy(async () => ({
-  default: (await import("./production/production-schedule-approval-decision-page"))
-    .ProductionScheduleApprovalQueuePage,
+const CompanyProfilePage = lazy(async () => ({
+  default: (await import("./admin/company-profile-page")).CompanyProfilePage,
 }));
-const ProductionScheduleApprovalDetailPage = lazy(async () => ({
-  default: (await import("./production/production-schedule-approval-decision-page"))
-    .ProductionScheduleApprovalDetailPage,
+const TeamPage = lazy(async () => ({
+  default: (await import("./admin/team-page")).TeamPage,
+}));
+const CrewDevicesPage = lazy(async () => ({
+  default: (await import("./admin/crew-devices-page")).CrewDevicesPage,
+}));
+const NewLeadPage = lazy(async () => ({
+  default: (await import("./sales/new-lead-page")).NewLeadPage,
 }));
 const LeadTriagePreparePage = lazy(async () => ({
   default: (await import("./sales/lead-triage-prepare-page")).LeadTriagePreparePage,
@@ -528,24 +531,6 @@ const facetDesignsRoute = createRoute({
   component: FacetDesignsRoute,
 });
 
-const productionScheduleApprovalPrepareRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/production/schedule/$jobId",
-  component: ProductionScheduleApprovalPrepareRoute,
-});
-
-const productionScheduleApprovalQueueRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/production/schedule-approvals",
-  component: ProductionScheduleApprovalQueueRoute,
-});
-
-const productionScheduleApprovalDetailRoute = createRoute({
-  getParentRoute: () => authenticatedRoute,
-  path: "/production/schedule-approvals/$approvalId",
-  component: ProductionScheduleApprovalDetailRoute,
-});
-
 const estimatorWorkbenchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/estimator/jobs/$jobId",
@@ -672,30 +657,6 @@ function FacetDesignsRoute() {
   );
 }
 
-function ProductionScheduleApprovalPrepareRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <ProductionScheduleApprovalPreparePage />
-    </Suspense>
-  );
-}
-
-function ProductionScheduleApprovalQueueRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <ProductionScheduleApprovalQueuePage />
-    </Suspense>
-  );
-}
-
-function ProductionScheduleApprovalDetailRoute() {
-  return (
-    <Suspense fallback={<OwnerRouteSkeleton />}>
-      <ProductionScheduleApprovalDetailPage />
-    </Suspense>
-  );
-}
-
 function EstimatorWorkbenchRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -736,11 +697,77 @@ function QuoteRevisionApprovalPrepareRoute() {
   );
 }
 
+// Setup is a list, not a single screen: `/settings` used to be crew device pairing alone, which
+// left company details and people with nowhere to live (ELEC-158 B3/B4).
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/settings",
-  component: SettingsPage,
+  component: SetupRoute,
 });
+
+const settingsCompanyRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/company",
+  component: CompanyProfileRoute,
+});
+
+const settingsTeamRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/team",
+  component: TeamRoute,
+});
+
+const settingsDevicesRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/devices",
+  component: CrewDevicesRoute,
+});
+
+const newLeadRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/sales/new-lead",
+  component: NewLeadRoute,
+});
+
+function SetupRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <SetupPage />
+    </Suspense>
+  );
+}
+
+function CompanyProfileRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <CompanyProfilePage />
+    </Suspense>
+  );
+}
+
+function TeamRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <TeamPage />
+    </Suspense>
+  );
+}
+
+function CrewDevicesRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <CrewDevicesPage />
+    </Suspense>
+  );
+}
+
+function NewLeadRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <NewLeadPage />
+    </Suspense>
+  );
+}
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -771,16 +798,17 @@ const routeTree = rootRoute.addChildren([
     quickBooksFinalInvoiceRoute,
     facetDesignsRoute,
     productionRoute,
-    productionScheduleApprovalPrepareRoute,
-    productionScheduleApprovalQueueRoute,
-    productionScheduleApprovalDetailRoute,
     salesRoute,
+    newLeadRoute,
     leadTriagePrepareRoute,
     estimatorWorkbenchRoute,
     quoteRevisionApprovalQueueRoute,
     quoteRevisionApprovalDetailRoute,
     quoteRevisionApprovalPrepareRoute,
     settingsRoute,
+    settingsCompanyRoute,
+    settingsTeamRoute,
+    settingsDevicesRoute,
   ]),
 ]);
 

@@ -16,8 +16,6 @@ import placeholders from "./pages/placeholders.tsx?raw";
 import pairing from "./pairing/device-pairing-settings.tsx?raw";
 import contractAccept from "./portal/customer-contract-acceptance-page.tsx?raw";
 import postiz from "./postiz/postiz-page.tsx?raw";
-import schedulePrepare from "./production/production-schedule-approval-page.tsx?raw";
-import scheduleDecision from "./production/production-schedule-approval-decision-page.tsx?raw";
 import publicEstimate from "./public-estimate/public-estimate-page.tsx?raw";
 import leadTriage from "./sales/lead-triage-prepare-page.tsx?raw";
 import serviceCase from "./service/service-case-page.tsx?raw";
@@ -31,8 +29,6 @@ const leftoverSources: Record<string, string> = {
   "sales/lead-triage-prepare-page.tsx": leadTriage,
   "estimator/estimator-workbench-page.tsx": estimator,
   "estimator/quote-revision-approval-page.tsx": quoteRevision,
-  "production/production-schedule-approval-page.tsx": schedulePrepare,
-  "production/production-schedule-approval-decision-page.tsx": scheduleDecision,
   "service/service-desk-page.tsx": serviceDesk,
   "service/service-case-page.tsx": serviceCase,
   "newo/newo-operations-page.tsx": newo,

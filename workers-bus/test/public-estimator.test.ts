@@ -110,6 +110,10 @@ test("GET config is disabled by default through the Worker route and permits sam
     range_available: false,
     disclaimer: "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
     review_required: true,
+    // No APP_TENANT_ID in this bare Worker env, so there is no tenant whose brands could be named.
+    brands: [],
+    default_brand: null,
+    logo_url: null,
   });
   assert.equal(response.headers.get("access-control-allow-origin"), null);
 });

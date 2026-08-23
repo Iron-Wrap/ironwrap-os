@@ -187,6 +187,49 @@ class AuthMemoryDb {
   }
 
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
+    if (
+      sql.includes("UPDATE app_users") && sql.includes("display_name = ?") &&
+      sql.includes("actor.access_role = ?")
+    ) {
+      const [
+        displayName,
+        storageRole,
+        accessRole,
+        frappeUser,
+        active,
+        updatedAt,
+        tenant,
+        email,
+        userId,
+        expectedRole,
+        expectedActive,
+        expectedUpdatedAt,
+        actorTenant,
+        actorUserId,
+        actorRole,
+      ] = args;
+      const user = this.users.get(String(userId));
+      const actor = this.users.get(String(actorUserId));
+      if (
+        !user || user.tenant_id !== String(tenant) ||
+        user.email_normalized !== String(email) || user.role !== String(expectedRole) ||
+        user.active !== Number(expectedActive) || user.updated_at !== String(expectedUpdatedAt) ||
+        !actor || actor.tenant_id !== String(actorTenant) || actor.active !== 1 ||
+        actor.role !== String(actorRole)
+      ) return changed(0);
+      Object.assign(user, {
+        display_name: String(displayName),
+        role: String(accessRole) as AppRole,
+        frappe_user_id: frappeUser === null ? null : String(frappeUser),
+        active: Number(active),
+        updated_at: String(updatedAt),
+      });
+      this.storageRoles.set(user.user_id, {
+        role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
+        access_role: String(accessRole) as AppRole,
+      });
+      return changed(1);
+    }
     if (sql.includes("INSERT INTO app_users")) {
       if (sql.includes("WHERE NOT EXISTS")) {
         const [candidateId, tenant, email, displayName, storageRole, accessRole, frappeUser, active, createdBy, createdAt, updatedAt] = args;
@@ -213,6 +256,13 @@ class AuthMemoryDb {
         return changed(1);
       }
       const [candidateId, tenant, email, displayName, storageRole, accessRole, frappeUser, active, createdBy, createdAt, updatedAt] = args;
+      if (sql.includes("actor.access_role = ?")) {
+        const actor = this.users.get(String(args[12]));
+        if (
+          !actor || actor.tenant_id !== String(args[11]) || actor.active !== 1 ||
+          actor.role !== String(args[13]) || this.userByTenantEmail(String(tenant), String(email))
+        ) return changed(0);
+      }
       const existing = this.userByTenantEmail(String(tenant), String(email));
       const user: AppUserRecord = existing ? {
         ...existing,
@@ -394,6 +444,7 @@ class AuthMemoryDb {
       this.audits.push({ args: [...args] });
       return changed(1);
     }
+    if (sql.includes("UPDATE app_user_invites")) return changed(0);
     if (sql.startsWith("DELETE FROM app_")) return changed(0);
     throw new Error(`unhandled fake SQL: ${sql}`);
   }
@@ -470,12 +521,15 @@ async function addOfficeUser(
   });
 }
 
-async function signInOffice(env: AppEnv): Promise<{
+async function signInOffice(
+  env: AppEnv,
+  role: Exclude<AppRole, "field"> = "owner",
+): Promise<{
   user: AppUserRecord;
   cookiePair: string;
   csrfToken: string;
 }> {
-  const user = await addOfficeUser(env);
+  const user = await addOfficeUser(env, role);
   let token = "";
   const waiter = waitContext();
   await requestMagicLink(
@@ -1091,14 +1145,144 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
   assert.equal(unauthorized.status, 401);
 });
 
+test("legacy app-user provisioning cannot bypass owner and self-change authority", async () => {
+  const opsDb = new AuthMemoryDb();
+  const opsEnv = baseEnv(opsDb);
+  const ops = await signInOffice(opsEnv, "ops");
+
+  const selfPromote = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    tenant_id: "ironwrap",
+    email: ops.user.email_normalized,
+    display_name: ops.user.display_name,
+    role: "owner",
+    frappe_user_id: null,
+    active: true,
+  }, {
+    cookie: ops.cookiePair,
+    "x-csrf-token": ops.csrfToken,
+  }), opsEnv, waitContext().ctx as never);
+  assert.equal(selfPromote.status, 409);
+  assert.deepEqual(await selfPromote.json(), { error: "self_change_forbidden" });
+  assert.equal(opsDb.users.get(ops.user.user_id)?.role, "ops");
+
+  const grantOwner = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    tenant_id: "ironwrap",
+    email: "new-owner@example.com",
+    display_name: "New Owner",
+    role: "owner",
+    frappe_user_id: null,
+    active: true,
+  }, {
+    cookie: ops.cookiePair,
+    "x-csrf-token": ops.csrfToken,
+  }), opsEnv, waitContext().ctx as never);
+  assert.equal(grantOwner.status, 403);
+  assert.deepEqual(await grantOwner.json(), { error: "owner_role_required" });
+  assert.equal(
+    [...opsDb.users.values()].some((user) => user.email_normalized === "new-owner@example.com"),
+    false,
+  );
+
+  const teammate = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    tenant_id: "ironwrap",
+    email: "teammate@example.com",
+    display_name: "Teammate",
+    role: "sales",
+    frappe_user_id: null,
+    active: true,
+  }, {
+    cookie: ops.cookiePair,
+    "x-csrf-token": ops.csrfToken,
+  }), opsEnv, waitContext().ctx as never);
+  assert.equal(teammate.status, 200, "operations keeps non-owner provisioning authority");
+  const teammateId = (await teammate.json() as { user: { user_id: string } }).user.user_id;
+  const replay = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    tenant_id: "ironwrap",
+    email: "teammate@example.com",
+    display_name: "Teammate",
+    role: "sales",
+    frappe_user_id: null,
+    active: true,
+  }, {
+    cookie: ops.cookiePair,
+    "x-csrf-token": ops.csrfToken,
+  }), opsEnv, waitContext().ctx as never);
+  assert.equal(replay.status, 200);
+  assert.equal(
+    (await replay.json() as { user: { user_id: string } }).user.user_id,
+    teammateId,
+    "an exact retry remains one grant",
+  );
+
+  const protectedOwner = await upsertAppUser(opsEnv, {
+    tenant_id: "ironwrap",
+    email_normalized: "protected-owner@example.com",
+    display_name: "Protected Owner",
+    role: "owner",
+    frappe_user_id: null,
+    active: true,
+    provisioned_by: "system:test",
+  });
+  const demoteOwner = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    tenant_id: "ironwrap",
+    email: protectedOwner.email_normalized,
+    display_name: protectedOwner.display_name,
+    role: "ops",
+    frappe_user_id: null,
+    active: true,
+  }, {
+    cookie: ops.cookiePair,
+    "x-csrf-token": ops.csrfToken,
+  }), opsEnv, waitContext().ctx as never);
+  assert.equal(demoteOwner.status, 403);
+  assert.deepEqual(await demoteOwner.json(), { error: "owner_role_required" });
+  assert.equal(opsDb.users.get(protectedOwner.user_id)?.role, "owner");
+
+  const ownerDb = new AuthMemoryDb();
+  const ownerEnv = baseEnv(ownerDb);
+  const owner = await signInOffice(ownerEnv);
+  for (const mutation of [
+    { role: "sales", active: true },
+    { role: "owner", active: false },
+  ] as const) {
+    const refused = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+      tenant_id: "ironwrap",
+      email: owner.user.email_normalized,
+      display_name: owner.user.display_name,
+      role: mutation.role,
+      frappe_user_id: null,
+      active: mutation.active,
+    }, {
+      cookie: owner.cookiePair,
+      "x-csrf-token": owner.csrfToken,
+    }), ownerEnv, waitContext().ctx as never);
+    assert.equal(refused.status, 409);
+    assert.deepEqual(await refused.json(), { error: "self_change_forbidden" });
+  }
+  assert.equal(ownerDb.users.get(owner.user.user_id)?.role, "owner");
+  assert.equal(ownerDb.users.get(owner.user.user_id)?.active, 1);
+});
+
 test("admin deactivation revokes existing sessions and consumes open links", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addOfficeUser(env);
+  const office = await signInOffice(env);
+  const target = await upsertAppUser(env, {
+    tenant_id: "ironwrap",
+    email_normalized: "departing@example.com",
+    display_name: "Departing Teammate",
+    role: "ops",
+    frappe_user_id: null,
+    active: true,
+    provisioned_by: office.user.email_normalized,
+  });
   let token = "";
   const firstWaiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", {
+      tenant_id: "ironwrap",
+      email: target.email_normalized,
+    }),
     env,
     firstWaiter.ctx as never,
     { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
@@ -1112,28 +1296,44 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
 
   const secondWaiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", {
+      tenant_id: "ironwrap",
+      email: target.email_normalized,
+    }),
     env,
     secondWaiter.ctx as never,
     { sendMagicLink: async () => {} },
   );
   await secondWaiter.flush();
-  assert.equal([...db.magic.values()][0].consumed_at, null);
+  assert.equal(
+    [...db.magic.values()].find((link) => link.user_id === target.user_id)?.consumed_at,
+    null,
+  );
 
   const deactivated = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     tenant_id: "ironwrap",
-    email: "owner@example.com",
-    display_name: "Office Owner",
-    role: "owner",
+    email: target.email_normalized,
+    display_name: target.display_name,
+    role: target.role,
     frappe_user_id: null,
     active: false,
   }, {
-    cookie: cookiePair,
-    "x-csrf-token": (await consumed.json() as { csrf_token: string }).csrf_token,
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
   }), env, secondWaiter.ctx as never);
   assert.equal(deactivated.status, 200);
-  assert.equal([...db.sessions.values()][0].revoked_at !== null, true);
-  assert.equal([...db.magic.values()][0].consumed_at !== null, true);
+  assert.equal(
+    [...db.sessions.values()].find((session) => session.user_id === target.user_id)?.revoked_at !== null,
+    true,
+  );
+  assert.equal(
+    [...db.sessions.values()].find((session) => session.user_id === office.user.user_id)?.revoked_at,
+    null,
+  );
+  assert.equal(
+    [...db.magic.values()].find((link) => link.user_id === target.user_id)?.consumed_at !== null,
+    true,
+  );
 
   const after = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: { cookie: cookiePair },

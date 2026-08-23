@@ -9,6 +9,17 @@ import type {
 
 const nowIso = () => new Date().toISOString();
 
+/**
+ * The exact actor and target state an authenticated route authorized. Mutation statements prove
+ * this snapshot still holds at write time, closing the read/check/write race without duplicating
+ * the route's owner/self policy in SQL.
+ */
+export interface AppUserMutationAuthority {
+  actorUserId: string;
+  actorRole: AppRole;
+  expectedTarget: AppUserRecord | null;
+}
+
 export async function findActiveUser(
   env: Env,
   tenantId: string,
@@ -20,6 +31,21 @@ export async function findActiveUser(
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND email_normalized = ? AND active = 1
+     LIMIT 1`,
+  ).bind(tenantId, emailNormalized).first<AppUserRecord>();
+}
+
+export async function findAppUserByEmail(
+  env: Env,
+  tenantId: string,
+  emailNormalized: string,
+): Promise<AppUserRecord | null> {
+  return await env.DB.prepare(
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
+            active, created_by, created_at, updated_at
+     FROM app_users
+     WHERE tenant_id = ? AND email_normalized = ?
      LIMIT 1`,
   ).bind(tenantId, emailNormalized).first<AppUserRecord>();
 }
@@ -107,45 +133,250 @@ export async function findAppUserById(
  */
 export async function setAppUserAccessRole(
   env: Env,
-  input: { tenantId: string; userId: string; role: AppRole; now: string },
+  input: {
+    tenantId: string;
+    userId: string;
+    role: AppRole;
+    now: string;
+    authority: AppUserMutationAuthority;
+  },
 ): Promise<AppUserRecord | null> {
+  const expected = input.authority.expectedTarget;
+  if (
+    !expected || expected.tenant_id !== input.tenantId || expected.user_id !== input.userId
+  ) return null;
   const result = await env.DB.prepare(
     `UPDATE app_users
         SET access_role = ?, role = ?, updated_at = ?
-      WHERE tenant_id = ? AND user_id = ?`,
+      WHERE tenant_id = ? AND user_id = ?
+        AND access_role = ? AND active = ? AND updated_at = ?
+        AND EXISTS (
+          SELECT 1 FROM app_users AS actor
+           WHERE actor.tenant_id = ? AND actor.user_id = ?
+             AND actor.active = 1 AND actor.access_role = ?
+        )`,
   ).bind(
     input.role,
     input.role === "owner" ? "owner" : "ops",
     input.now,
     input.tenantId,
     input.userId,
+    expected.role,
+    expected.active,
+    expected.updated_at,
+    input.tenantId,
+    input.authority.actorUserId,
+    input.authority.actorRole,
   ).run();
   if (d1Changes(result) !== 1) return null;
   return await findAppUserById(env, input.tenantId, input.userId);
 }
 
 /**
- * Grant or withdraw the ability to sign in. Withdrawing also closes every live session, open
- * magic link, and paired device, so "no access" means it now rather than at the next expiry —
- * the same closure `upsertAppUser` performs when it deactivates a row.
+ * Grant or withdraw the ability to sign in. Withdrawing atomically closes every open invitation,
+ * live session, open magic link, and paired device, so "no access" means it now rather than at the
+ * next expiry — the same closure the authenticated legacy upsert performs.
  */
 export async function setAppUserActive(
   env: Env,
-  input: { tenantId: string; userId: string; active: boolean; now: string },
+  input: {
+    tenantId: string;
+    userId: string;
+    active: boolean;
+    now: string;
+    authority: AppUserMutationAuthority;
+  },
 ): Promise<AppUserRecord | null> {
-  const result = await env.DB.prepare(
+  const expected = input.authority.expectedTarget;
+  if (
+    !expected || expected.tenant_id !== input.tenantId || expected.user_id !== input.userId
+  ) return null;
+  const mutationUpdatedAt = authorityMutationTimestamp(input.now);
+  const mutation = env.DB.prepare(
     `UPDATE app_users SET active = ?, updated_at = ?
-      WHERE tenant_id = ? AND user_id = ?`,
-  ).bind(input.active ? 1 : 0, input.now, input.tenantId, input.userId).run();
+      WHERE tenant_id = ? AND user_id = ?
+        AND access_role = ? AND active = ? AND updated_at = ?
+        AND EXISTS (
+          SELECT 1 FROM app_users AS actor
+           WHERE actor.tenant_id = ? AND actor.user_id = ?
+             AND actor.active = 1 AND actor.access_role = ?
+        )`,
+  ).bind(
+    input.active ? 1 : 0,
+    mutationUpdatedAt,
+    input.tenantId,
+    input.userId,
+    expected.role,
+    expected.active,
+    expected.updated_at,
+    input.tenantId,
+    input.authority.actorUserId,
+    input.authority.actorRole,
+  );
+  const result = input.active
+    ? await mutation.run()
+    : (await env.DB.batch([
+      mutation,
+      ...deactivationCleanupStatements(env, {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        emailNormalized: expected.email_normalized,
+        role: expected.role,
+        mutationUpdatedAt,
+        revokedAt: input.now,
+        revokedByUserId: input.authority.actorUserId,
+      }),
+    ]))[0];
   if (d1Changes(result) !== 1) return null;
-  if (!input.active) {
-    await Promise.all([
-      revokeAllUserSessions(env, input.userId, input.now),
-      consumeOpenMagicLinks(env, input.userId, input.now),
-      revokeAllUserDevices(env, input.userId, input.now),
-    ]);
-  }
   return await findAppUserById(env, input.tenantId, input.userId);
+}
+
+/**
+ * The authenticated legacy email-keyed upsert with the same authority CAS as id-addressed
+ * mutations. Existing rows must still equal the snapshot the route authorized; new rows require
+ * the actor to retain the role carried by the authenticated session and never overwrite a row
+ * that appeared after the pre-read. An inactive result and all credential cleanup commit in one
+ * D1 batch, exactly as on the id-addressed access route.
+ */
+export async function upsertAppUserWithAuthority(
+  env: Env,
+  input: ProvisionAppUserInput,
+  authority: AppUserMutationAuthority,
+): Promise<AppUserRecord | null> {
+  const now = nowIso();
+  const mutationUpdatedAt = authorityMutationTimestamp(now);
+  const candidateId = `appu_${crypto.randomUUID()}`;
+  const storageRole = input.role === "owner" ? "owner" : "ops";
+  const expected = authority.expectedTarget;
+  let changed = 0;
+
+  if (expected) {
+    if (
+      expected.tenant_id !== input.tenant_id ||
+      expected.email_normalized !== input.email_normalized
+    ) return null;
+    const mutation = env.DB.prepare(
+      `UPDATE app_users
+          SET display_name = ?, role = ?, access_role = ?, frappe_user_id = ?,
+              active = ?, updated_at = ?
+        WHERE tenant_id = ? AND email_normalized = ? AND user_id = ?
+          AND access_role = ? AND active = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1 FROM app_users AS actor
+             WHERE actor.tenant_id = ? AND actor.user_id = ?
+               AND actor.active = 1 AND actor.access_role = ?
+          )`,
+    ).bind(
+      input.display_name,
+      storageRole,
+      input.role,
+      input.frappe_user_id,
+      input.active ? 1 : 0,
+      mutationUpdatedAt,
+      input.tenant_id,
+      input.email_normalized,
+      expected.user_id,
+      expected.role,
+      expected.active,
+      expected.updated_at,
+      input.tenant_id,
+      authority.actorUserId,
+      authority.actorRole,
+    );
+    const result = input.active
+      ? await mutation.run()
+      : (await env.DB.batch([
+        mutation,
+        ...deactivationCleanupStatements(env, {
+          tenantId: input.tenant_id,
+          userId: expected.user_id,
+          emailNormalized: input.email_normalized,
+          role: input.role,
+          mutationUpdatedAt,
+          revokedAt: now,
+          revokedByUserId: authority.actorUserId,
+        }),
+      ]))[0];
+    changed = d1Changes(result);
+  } else {
+    const mutation = env.DB.prepare(
+      `INSERT INTO app_users
+         (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+          active, created_by, created_at, updated_at)
+       SELECT ?,?,?,?,?,?,?,?,?,?,?
+        WHERE EXISTS (
+          SELECT 1 FROM app_users AS actor
+           WHERE actor.tenant_id = ? AND actor.user_id = ?
+             AND actor.active = 1 AND actor.access_role = ?
+        )
+       ON CONFLICT(tenant_id, email_normalized) DO NOTHING`,
+    ).bind(
+      candidateId,
+      input.tenant_id,
+      input.email_normalized,
+      input.display_name,
+      storageRole,
+      input.role,
+      input.frappe_user_id,
+      input.active ? 1 : 0,
+      input.provisioned_by,
+      now,
+      mutationUpdatedAt,
+      input.tenant_id,
+      authority.actorUserId,
+      authority.actorRole,
+    );
+    const result = input.active
+      ? await mutation.run()
+      : (await env.DB.batch([
+        mutation,
+        ...deactivationCleanupStatements(env, {
+          tenantId: input.tenant_id,
+          userId: candidateId,
+          emailNormalized: input.email_normalized,
+          role: input.role,
+          mutationUpdatedAt,
+          revokedAt: now,
+          revokedByUserId: authority.actorUserId,
+        }),
+      ]))[0];
+    changed = d1Changes(result);
+  }
+
+  let row = changed === 1
+    ? await findAppUserByEmail(env, input.tenant_id, input.email_normalized)
+    : null;
+  // Two identical concurrent creates are one idempotent grant. A changed actor or any different
+  // target state still returns the conflict above instead of being treated as a replay.
+  if (!row && !expected) {
+    row = await env.DB.prepare(
+      `SELECT user_id, tenant_id, email_normalized, display_name,
+              access_role AS role, frappe_user_id,
+              active, created_by, created_at, updated_at
+         FROM app_users AS target
+        WHERE target.tenant_id = ? AND target.email_normalized = ?
+          AND target.display_name = ? AND target.access_role = ?
+          AND target.frappe_user_id IS ? AND target.active = ?
+          AND EXISTS (
+            SELECT 1 FROM app_users AS actor
+             WHERE actor.tenant_id = ? AND actor.user_id = ?
+               AND actor.active = 1 AND actor.access_role = ?
+          )
+        LIMIT 1`,
+    ).bind(
+      input.tenant_id,
+      input.email_normalized,
+      input.display_name,
+      input.role,
+      input.frappe_user_id,
+      input.active ? 1 : 0,
+      input.tenant_id,
+      authority.actorUserId,
+      authority.actorRole,
+    ).first<AppUserRecord>();
+  }
+  if (!row) return null;
+  return row;
 }
 
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
@@ -591,6 +822,80 @@ export async function pruneAuthRecords(env: Env, now = new Date()): Promise<void
            OR (accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= ?)`,
     ).bind(settledInviteCutoff, settledInviteCutoff, settledInviteCutoff).run(),
   ]);
+}
+
+/**
+ * Every statement is guarded by the unique post-CAS row marker written by the first statement in
+ * the D1 batch. If that authority CAS changes zero rows, none of these statements may close a
+ * credential. If it succeeds, D1 commits the access withdrawal and every way back in together.
+ */
+function deactivationCleanupStatements(
+  env: Env,
+  input: {
+    tenantId: string;
+    userId: string;
+    emailNormalized: string;
+    role: AppRole;
+    mutationUpdatedAt: string;
+    revokedAt: string;
+    revokedByUserId: string;
+  },
+): D1PreparedStatement[] {
+  const appliedMutation = `EXISTS (
+    SELECT 1 FROM app_users AS deactivated
+     WHERE deactivated.tenant_id = ? AND deactivated.user_id = ?
+       AND deactivated.email_normalized = ? AND deactivated.access_role = ?
+       AND deactivated.active = 0 AND deactivated.updated_at = ?
+  )`;
+  const marker = [
+    input.tenantId,
+    input.userId,
+    input.emailNormalized,
+    input.role,
+    input.mutationUpdatedAt,
+  ];
+  return [
+    env.DB.prepare(
+      `UPDATE app_user_invites
+          SET revoked_at = ?, revoked_by_user_id = ?, revoked_reason = 'office_revoked'
+        WHERE tenant_id = ? AND email_normalized = ?
+          AND accepted_at IS NULL AND revoked_at IS NULL
+          AND ${appliedMutation}`,
+    ).bind(
+      input.revokedAt,
+      input.revokedByUserId,
+      input.tenantId,
+      input.emailNormalized,
+      ...marker,
+    ),
+    env.DB.prepare(
+      `UPDATE app_sessions SET revoked_at = ?
+        WHERE user_id = ? AND tenant_id = ? AND revoked_at IS NULL
+          AND ${appliedMutation}`,
+    ).bind(input.revokedAt, input.userId, input.tenantId, ...marker),
+    env.DB.prepare(
+      `UPDATE app_magic_links SET consumed_at = ?
+        WHERE user_id = ? AND tenant_id = ? AND consumed_at IS NULL
+          AND ${appliedMutation}`,
+    ).bind(input.revokedAt, input.userId, input.tenantId, ...marker),
+    env.DB.prepare(
+      `UPDATE app_devices SET revoked_at = ?
+        WHERE user_id = ? AND tenant_id = ? AND revoked_at IS NULL
+          AND ${appliedMutation}`,
+    ).bind(input.revokedAt, input.userId, input.tenantId, ...marker),
+  ];
+}
+
+/**
+ * RFC 3339 permits additional fractional-second digits. Appending UUID-derived decimal entropy
+ * keeps `updated_at` a sortable timestamp while giving this one authority mutation a private
+ * marker that a zero-change concurrent CAS cannot accidentally satisfy.
+ */
+function authorityMutationTimestamp(now: string): string {
+  if (!now.endsWith("Z") || now.length > 24) return now;
+  const entropy = crypto.randomUUID().replaceAll("-", "").slice(0, 16)
+    .split("").map((digit) => String(Number.parseInt(digit, 16) % 10)).join("");
+  return `${now.slice(0, -1)}${entropy}Z`;
 }
 
 async function revokeAllUserSessions(env: Env, userId: string, now: string): Promise<void> {

@@ -94,11 +94,11 @@ export class OnboardingMemoryDb {
 
   private first(sql: string, args: unknown[]): unknown {
     if (sql.includes("FROM app_users") && sql.includes("email_normalized = ?")) {
-      return (
-        this.users.find(
-          (user) => user.tenant_id === String(args[0]) && user.email_normalized === String(args[1]),
-        ) ?? null
+      const user = this.users.find(
+        (candidate) => candidate.tenant_id === String(args[0]) &&
+          candidate.email_normalized === String(args[1]),
       );
+      return user ? { ...user, role: user.access_role } : null;
     }
     if (sql.includes("FROM dedup_claims")) {
       return this.dedupClaims.get(String(args[0])) ?? null;
@@ -123,6 +123,38 @@ export class OnboardingMemoryDb {
   }
 
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
+    if (sql.includes("UPDATE app_users") && sql.includes("display_name = ?")) {
+      const [
+        displayName,
+        role,
+        accessRole,
+        frappeUserId,
+        active,
+        updatedAt,
+        tenantId,
+        email,
+        userId,
+        expectedRole,
+        expectedActive,
+        expectedUpdatedAt,
+      ] = args;
+      const existing = this.users.find(
+        (user) => user.tenant_id === String(tenantId) &&
+          user.email_normalized === String(email) && user.user_id === String(userId),
+      );
+      if (
+        !existing || existing.access_role !== expectedRole ||
+        existing.active !== Number(expectedActive) ||
+        existing.updated_at !== String(expectedUpdatedAt)
+      ) return { success: true, meta: { changes: 0 } };
+      existing.display_name = String(displayName);
+      existing.role = String(role);
+      existing.access_role = accessRole as AppRole;
+      existing.frappe_user_id = frappeUserId === null ? null : String(frappeUserId);
+      existing.active = Number(active);
+      existing.updated_at = String(updatedAt);
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO app_users")) {
       const [
         userId, tenantId, email, displayName, role, accessRole, frappeUserId, active, createdBy,

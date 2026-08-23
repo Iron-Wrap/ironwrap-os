@@ -291,29 +291,6 @@ export async function settleUserInviteWithoutGrant(
   return d1Changes(result) === 1;
 }
 
-/** Close every open invitation for one mailbox, so removing access also withdraws the way back. */
-export async function revokeOpenInvitesForEmail(
-  env: Env,
-  input: {
-    tenantId: string;
-    emailNormalized: string;
-    revokedByUserId: string;
-    now: string;
-  },
-): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE app_user_invites
-        SET revoked_at = ?, revoked_by_user_id = ?, revoked_reason = 'office_revoked'
-      WHERE tenant_id = ? AND email_normalized = ?
-        AND accepted_at IS NULL AND revoked_at IS NULL`,
-  ).bind(
-    input.now,
-    input.revokedByUserId,
-    input.tenantId,
-    input.emailNormalized,
-  ).run();
-}
-
 function d1Changes(result: unknown): number {
   return Number((result as { meta?: { changes?: number } }).meta?.changes ?? 0);
 }

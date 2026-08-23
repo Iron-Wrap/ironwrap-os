@@ -39,7 +39,6 @@ import {
   issueUserInvite,
   listUserInvites,
   resendUserInvite,
-  revokeOpenInvitesForEmail,
   revokeUserInvite,
   settleUserInviteWithoutGrant,
   type AppUserInviteRecord,
@@ -82,6 +81,25 @@ interface RouteFailure {
   ok: false;
   error: string;
   status: number;
+}
+
+/**
+ * One semantic authority policy for both id-addressed changes and the legacy email-keyed upsert.
+ * Every caller passes this exact actor/target snapshot to the mutation store, which proves it is
+ * still current in the write statement; that CAS is what keeps these rules true under races.
+ */
+export function authorizeAppUserMutation(
+  auth: AuthContext,
+  target: AppUserRecord | null,
+  requestedRole: AppRole,
+): RouteFailure | null {
+  if (target?.user_id === auth.session.user_id) {
+    return { ok: false, error: "self_change_forbidden", status: 409 };
+  }
+  return (target?.role === "owner" || requestedRole === "owner") &&
+      auth.session.role !== "owner"
+    ? { ok: false, error: "owner_role_required", status: 403 }
+    : null;
 }
 
 // --------------------------------------------------------------------------- projections
@@ -563,9 +581,9 @@ export async function listAppUsersForOffice(
  *
  * Two refusals are the point of this route existing separately from the provisioning upsert:
  * nobody re-grades themselves, and ownership is only handed out or taken back by an owner. Those
- * two together are also what makes a tenant impossible to lock out of itself — the actor must be
- * an active owner to touch an owner at all, and cannot be the target — so there is deliberately
- * no separate "last owner" count to keep in step with them.
+ * two together make a tenant impossible to lock out of itself: the actor must still be an active
+ * owner at write time to touch an owner and cannot be the target, so there is deliberately no
+ * separate "last owner" count to keep in step with them.
  */
 export async function changeAppUserRole(
   req: Request,
@@ -585,15 +603,8 @@ export async function changeAppUserRole(
   const target = await loadTarget(env, auth, userId);
   if (!target.ok) return target;
   const user = target.user;
-  if (user.user_id === auth.session.user_id) {
-    return { ok: false, error: "self_change_forbidden", status: 409 };
-  }
-  if (
-    (user.role === "owner" || parsed.value.role === "owner") &&
-    auth.session.role !== "owner"
-  ) {
-    return { ok: false, error: "owner_role_required", status: 403 };
-  }
+  const authority = authorizeAppUserMutation(auth, user, parsed.value.role);
+  if (authority) return authority;
   if (user.role === parsed.value.role) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
@@ -603,8 +614,13 @@ export async function changeAppUserRole(
     userId: user.user_id,
     role: parsed.value.role,
     now: new Date().toISOString(),
+    authority: {
+      actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
+      expectedTarget: user,
+    },
   });
-  if (!updated) return { ok: false, error: "user_not_found", status: 404 };
+  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
   await authStore.recordAuthAudit(env, {
     tenantId: auth.session.tenant_id,
     userId: updated.user_id,
@@ -645,12 +661,8 @@ export async function changeAppUserAccess(
   const target = await loadTarget(env, auth, userId);
   if (!target.ok) return target;
   const user = target.user;
-  if (user.user_id === auth.session.user_id) {
-    return { ok: false, error: "self_change_forbidden", status: 409 };
-  }
-  if (user.role === "owner" && auth.session.role !== "owner") {
-    return { ok: false, error: "owner_role_required", status: 403 };
-  }
+  const authority = authorizeAppUserMutation(auth, user, user.role);
+  if (authority) return authority;
   if ((user.active === 1) === parsed.value.active) {
     return { ok: true, body: { version: APP_API_VERSION, user: appUserProjection(user, auth) } };
   }
@@ -661,16 +673,13 @@ export async function changeAppUserAccess(
     userId: user.user_id,
     active: parsed.value.active,
     now,
+    authority: {
+      actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
+      expectedTarget: user,
+    },
   });
-  if (!updated) return { ok: false, error: "user_not_found", status: 404 };
-  if (!parsed.value.active) {
-    await revokeOpenInvitesForEmail(env, {
-      tenantId: auth.session.tenant_id,
-      emailNormalized: updated.email_normalized,
-      revokedByUserId: auth.session.user_id,
-      now,
-    });
-  }
+  if (!updated) return { ok: false, error: "app_user_state_changed", status: 409 };
   await authStore.recordAuthAudit(env, {
     tenantId: auth.session.tenant_id,
     userId: updated.user_id,

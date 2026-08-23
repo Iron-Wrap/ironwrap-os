@@ -54,10 +54,10 @@ export async function listActiveFieldUsers(
 }
 
 /**
- * Every app user in the tenant, active or not — what the teammates screen lists. Deactivated rows
- * stay visible because "who used to have access" is the question an owner asks when re-hiring, and
- * the provisioning route is an upsert on (tenant, email): hiding them would make re-activating look
- * like creating a duplicate.
+ * Every app user in the tenant, active or not — what the people screen lists. Deactivated rows
+ * stay visible because "who used to have access" is the question an owner asks when re-hiring,
+ * and the grant is keyed on (tenant, email): hiding them would make restoring access look like
+ * creating a duplicate.
  */
 export async function listAppUsers(
   env: Env,
@@ -73,6 +73,79 @@ export async function listAppUsers(
      LIMIT 500`,
   ).bind(tenantId).all<AppUserRecord>();
   return result.results ?? [];
+}
+
+/**
+ * One app user by id in whatever access state it is in. `findActiveUserById` deliberately hides
+ * deactivated rows because it answers "may this person act"; managing people needs the opposite
+ * question, so restoring access can address the row that already exists.
+ */
+export async function findAppUserById(
+  env: Env,
+  tenantId: string,
+  userId: string,
+): Promise<AppUserRecord | null> {
+  return await env.DB.prepare(
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
+            active, created_by, created_at, updated_at
+     FROM app_users
+     WHERE tenant_id = ? AND user_id = ?
+     LIMIT 1`,
+  ).bind(tenantId, userId).first<AppUserRecord>();
+}
+
+/**
+ * Change one person's effective role. `access_role` is the sole effective role (migration 0038);
+ * the legacy `role` column is a deployed authentication-class constraint that only distinguishes
+ * owner from everything else, and it is kept consistent here for the same reason `upsertAppUser`
+ * keeps it consistent.
+ *
+ * A live session picks this up on its next request: `findActiveSession` reads `access_role` from
+ * `app_users` every time and permissions are derived per request, so a demotion takes effect
+ * without waiting for the session to expire.
+ */
+export async function setAppUserAccessRole(
+  env: Env,
+  input: { tenantId: string; userId: string; role: AppRole; now: string },
+): Promise<AppUserRecord | null> {
+  const result = await env.DB.prepare(
+    `UPDATE app_users
+        SET access_role = ?, role = ?, updated_at = ?
+      WHERE tenant_id = ? AND user_id = ?`,
+  ).bind(
+    input.role,
+    input.role === "owner" ? "owner" : "ops",
+    input.now,
+    input.tenantId,
+    input.userId,
+  ).run();
+  if (d1Changes(result) !== 1) return null;
+  return await findAppUserById(env, input.tenantId, input.userId);
+}
+
+/**
+ * Grant or withdraw the ability to sign in. Withdrawing also closes every live session, open
+ * magic link, and paired device, so "no access" means it now rather than at the next expiry —
+ * the same closure `upsertAppUser` performs when it deactivates a row.
+ */
+export async function setAppUserActive(
+  env: Env,
+  input: { tenantId: string; userId: string; active: boolean; now: string },
+): Promise<AppUserRecord | null> {
+  const result = await env.DB.prepare(
+    `UPDATE app_users SET active = ?, updated_at = ?
+      WHERE tenant_id = ? AND user_id = ?`,
+  ).bind(input.active ? 1 : 0, input.now, input.tenantId, input.userId).run();
+  if (d1Changes(result) !== 1) return null;
+  if (!input.active) {
+    await Promise.all([
+      revokeAllUserSessions(env, input.userId, input.now),
+      consumeOpenMagicLinks(env, input.userId, input.now),
+      revokeAllUserDevices(env, input.userId, input.now),
+    ]);
+  }
+  return await findAppUserById(env, input.tenantId, input.userId);
 }
 
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
@@ -493,6 +566,7 @@ export async function pruneAuthRecords(env: Env, now = new Date()): Promise<void
   const nowValue = now.toISOString();
   const consumedCutoff = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
   const auditCutoff = new Date(now.getTime() - 365 * 24 * 60 * 60_000).toISOString();
+  const settledInviteCutoff = new Date(now.getTime() - 90 * 24 * 60 * 60_000).toISOString();
   await Promise.all([
     env.DB.prepare(
       `DELETE FROM app_magic_links
@@ -506,6 +580,16 @@ export async function pruneAuthRecords(env: Env, now = new Date()): Promise<void
     env.DB.prepare(`DELETE FROM app_auth_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_action_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_auth_audit WHERE created_at <= ?`).bind(auditCutoff).run(),
+    // A settled invitation is retained long enough to answer "who let this person in, and when",
+    // then dropped; the durable answer lives in app_auth_audit, which keeps a year. An expired
+    // invitation is kept for the same window so an owner can still see that it lapsed unused
+    // rather than finding the row silently gone.
+    env.DB.prepare(
+      `DELETE FROM app_user_invites
+        WHERE (accepted_at IS NOT NULL AND accepted_at <= ?)
+           OR (revoked_at IS NOT NULL AND revoked_at <= ?)
+           OR (accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= ?)`,
+    ).bind(settledInviteCutoff, settledInviteCutoff, settledInviteCutoff).run(),
   ]);
 }
 

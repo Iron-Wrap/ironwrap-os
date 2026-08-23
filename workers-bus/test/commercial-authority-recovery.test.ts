@@ -167,8 +167,8 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 193],
-    ["REQUIRED_INDEX_COUNT", 290],
+    ["REQUIRED_TABLE_COUNT", 194],
+    ["REQUIRED_INDEX_COUNT", 293],
     ["REQUIRED_TRIGGER_COUNT", 469],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
@@ -203,7 +203,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0110", () => {
+test("the full schema matches the recovery frontier through 0111", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -222,11 +222,13 @@ test("the full schema matches the recovery frontier through 0110", () => {
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
+    // 0111 adds the office invitation ledger: one table, two query indexes, and the partial
+    // unique index that keeps one invitation open per mailbox. Its rebuild of the dev-only
+    // capture table recreates `idx_dev_outbox_created` under the same name, so no count moves
+    // for it.
     assert.deepEqual(
       { ...counts },
-      // 0110 adds three tables (the tenant company profile, its append-only revisions,
-      // and per-person notification preferences) and their two named indexes.
-      { tables: 193, indexes: 290, triggers: 469 },
+      { tables: 194, indexes: 293, triggers: 469 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

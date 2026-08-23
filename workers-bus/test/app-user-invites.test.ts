@@ -1,0 +1,1052 @@
+// app-user-invites.test.ts — the office invitation credential, end to end through the real Worker.
+//
+// Every case here drives `worker.fetch` against a D1 built from the committed migration chain, so
+// the storage CHECKs, the partial unique index, the D1 batch semantics and the real origin / CSRF
+// / session stack all participate. The invitation secret is never handed to the test: it is read
+// out of `dev_outbox`, which is the same local-development capture the sign-in link uses, so the
+// tests exercise the real delivery path rather than a seam around it.
+
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+
+import worker from "../src/index.ts";
+import { csrfTokenFor, sessionHashFor } from "../src/app-auth.ts";
+import { pruneAuthRecords, upsertAppUser } from "../src/app-auth-store.ts";
+import { userInviteState } from "../src/app-user-invites.ts";
+import type { AppEnv, AppRole, AppUserRecord } from "../src/app-types.ts";
+
+const TENANT = "ironwrap";
+const ORIGIN = "https://app.example.com";
+const INVITES = "/api/v1/admin/user-invites";
+const APP_USERS = "/api/v1/admin/app-users";
+const ACCEPT = "/api/v1/auth/invites/accept";
+
+class SqliteD1 {
+  readonly raw = new DatabaseSync(":memory:");
+
+  constructor() {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    for (
+      const migration of readdirSync(new URL("../migrations/", import.meta.url))
+        .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+        .sort()
+    ) {
+      this.raw.exec(
+        readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"),
+      );
+    }
+  }
+
+  prepare(sql: string) {
+    return {
+      bind: (...args: unknown[]) => {
+        const statement = this.raw.prepare(sql);
+        return {
+          first: async <T>() => (statement.get(...(args as never[])) ?? null) as T | null,
+          all: async <T>() => ({ results: statement.all(...(args as never[])) as T[] }),
+          run: async () => {
+            const result = statement.run(...(args as never[]));
+            return { success: true as const, meta: { changes: Number(result.changes) } };
+          },
+        };
+      },
+    };
+  }
+
+  /** D1 batches are transactional and sequential; so is this. */
+  async batch(statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+interface Harness {
+  env: AppEnv;
+  db: SqliteD1;
+  ctx: { waitUntil(promise: Promise<unknown>): void };
+  flush: () => Promise<void>;
+}
+
+function harness(): Harness {
+  const db = new SqliteD1();
+  const pending: Promise<unknown>[] = [];
+  const env = {
+    APP_BFF_ENABLED: "true",
+    APP_TENANT_ID: TENANT,
+    APP_TENANT_NAME: "IronWrap OS",
+    APP_TENANT_BRAND: "IronWrap",
+    APP_LOCALE: "en-CA",
+    APP_TIME_ZONE: "America/Edmonton",
+    APP_CURRENCY: "CAD",
+    APP_PUBLIC_ORIGIN: ORIGIN,
+    APP_ALLOWED_ORIGINS: ORIGIN,
+    // The local-development capture stands in for Gmail, exactly as it does on `deploy/local`.
+    // Nothing here reaches a provider; `dev_outbox` is where the hrefs land.
+    APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_FIRST_OWNER_BOOTSTRAP_ENABLED: "false",
+    APP_AUTH_PEPPER: "test-only-pepper-which-is-longer-than-thirty-two-characters",
+    ADMIN_TOKEN: "admin-token",
+    DB: db,
+  } as never as AppEnv;
+  return {
+    env,
+    db,
+    ctx: { waitUntil: (promise: Promise<unknown>) => void pending.push(promise) },
+    flush: async () => {
+      await Promise.allSettled(pending.splice(0, pending.length));
+    },
+  };
+}
+
+async function addUser(
+  env: AppEnv,
+  email: string,
+  role: AppRole,
+  displayName = email,
+): Promise<AppUserRecord> {
+  return await upsertAppUser(env, {
+    tenant_id: TENANT,
+    email_normalized: email,
+    display_name: displayName,
+    role,
+    frappe_user_id: role === "field" ? email : null,
+    active: true,
+    provisioned_by: "seed",
+  });
+}
+
+/**
+ * A real signed-in session: the row the sign-in path would have written, addressed by the same
+ * hashed session secret and answering the same CSRF token. Nothing about authority is faked.
+ */
+async function signIn(
+  h: Harness,
+  user: AppUserRecord,
+  rawToken: string,
+): Promise<{ cookie: string; csrf: string }> {
+  const now = new Date();
+  h.db.raw.prepare(
+    `INSERT INTO app_sessions
+       (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?,?,?,?,?,NULL,?,?,?,NULL)`,
+  ).run(
+    await sessionHashFor(h.env, rawToken),
+    user.user_id,
+    user.tenant_id,
+    now.toISOString(),
+    new Date(now.getTime() + 3_600_000).toISOString(),
+    now.toISOString(),
+    "a".repeat(64),
+    "b".repeat(64),
+  );
+  return {
+    cookie: `__Host-ironwrap_session=${rawToken}`,
+    csrf: await csrfTokenFor(h.env, rawToken),
+  };
+}
+
+interface Session {
+  cookie: string;
+  csrf: string;
+}
+
+async function call(
+  h: Harness,
+  method: "GET" | "POST",
+  path: string,
+  options: { session?: Session; body?: unknown; csrf?: boolean } = {},
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers = new Headers({ origin: ORIGIN });
+  if (options.session) {
+    headers.set("cookie", options.session.cookie);
+    if (options.csrf !== false) headers.set("x-csrf-token", options.session.csrf);
+  }
+  if (options.body !== undefined) headers.set("content-type", "application/json");
+  const response = await worker.fetch(
+    new Request(`https://worker.example.com${path}`, {
+      method,
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    }),
+    h.env as never,
+    h.ctx as never,
+  );
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+/** The invitation secret, read where a local operator reads it: out of the captured href. */
+function capturedToken(h: Harness, kind: string, recipient: string): string {
+  const row = h.db.raw.prepare(
+    `SELECT href FROM dev_outbox WHERE kind = ? AND recipient = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  ).get(kind, recipient) as { href: string } | undefined;
+  assert.ok(row, `no ${kind} captured for ${recipient}`);
+  const token = new URL(row.href).hash.replace(/^#token=/, "");
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  return decodeURIComponent(token);
+}
+
+function captureCount(h: Harness, kind: string, recipient: string): number {
+  const row = h.db.raw.prepare(
+    `SELECT COUNT(*) AS captures FROM dev_outbox WHERE kind = ? AND recipient = ?`,
+  ).get(kind, recipient) as { captures: number };
+  return Number(row.captures);
+}
+
+function inviteRow(h: Harness, inviteId: string): Record<string, unknown> {
+  return h.db.raw.prepare(
+    `SELECT * FROM app_user_invites WHERE invite_id = ?`,
+  ).get(inviteId) as Record<string, unknown>;
+}
+
+function userRow(h: Harness, email: string): Record<string, unknown> | undefined {
+  return h.db.raw.prepare(
+    `SELECT user_id, display_name, role, access_role, active FROM app_users
+      WHERE tenant_id = ? AND email_normalized = ?`,
+  ).get(TENANT, email) as Record<string, unknown> | undefined;
+}
+
+function scalar(h: Harness, sql: string, ...args: unknown[]): number {
+  const row = h.db.raw.prepare(sql).get(...(args as never[])) as { value: number };
+  return Number(row.value);
+}
+
+/** Age one invitation past its window, the way a week of wall clock would. */
+function expireInvite(h: Harness, inviteId: string): void {
+  h.db.raw.prepare(
+    `UPDATE app_user_invites
+        SET created_at = ?, last_sent_at = ?, expires_at = ?
+      WHERE invite_id = ?`,
+  ).run(
+    "2026-01-01T00:00:00.000Z",
+    "2026-01-01T00:00:00.000Z",
+    "2026-01-08T00:00:00.000Z",
+    inviteId,
+  );
+}
+
+async function owner(h: Harness): Promise<{ user: AppUserRecord; session: Session }> {
+  const user = await addUser(h.env, "owner@example.invalid", "owner", "Ada Owner");
+  return { user, session: await signIn(h, user, "o".repeat(43)) };
+}
+
+async function invite(
+  h: Harness,
+  session: Session,
+  body: { email: string; display_name: string; role: AppRole },
+): Promise<{ status: number; body: Record<string, unknown>; invite: Record<string, unknown> }> {
+  const result = await call(h, "POST", INVITES, { session, body });
+  await h.flush();
+  return {
+    ...result,
+    invite: (result.body.invite ?? {}) as Record<string, unknown>,
+  };
+}
+
+// --------------------------------------------------------------------------- the happy path
+
+test("an owner invites a teammate, who accepts and lands on the ordinary sign-in path", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+
+  const issued = await invite(h, session, {
+    email: "Sam.Sales@Example.invalid",
+    display_name: "Sam Sales",
+    role: "sales",
+  });
+  assert.equal(issued.status, 201);
+  assert.equal(issued.invite.email, "sam.sales@example.invalid", "the mailbox is normalized once");
+  assert.equal(issued.invite.role, "sales");
+  assert.equal(issued.invite.state, "pending");
+  assert.equal(issued.invite.resend_count, 0);
+  assert.ok(!("token" in issued.invite), "the projection never carries the secret");
+  assert.ok(!("token_hash" in issued.invite), "nor its hash");
+
+  // Nobody has access yet: an invitation is a credential, not a grant.
+  assert.equal(userRow(h, "sam.sales@example.invalid"), undefined);
+
+  const token = capturedToken(h, "user_invite", "sam.sales@example.invalid");
+  const stored = inviteRow(h, String(issued.invite.invite_id));
+  assert.notEqual(stored.token_hash, token, "only the hash is persisted");
+  assert.match(String(stored.token_hash), /^[0-9a-f]{64}$/);
+
+  const accepted = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.result, "accepted");
+  assert.equal(accepted.body.role, "sales");
+  assert.equal(accepted.body.next, "magic_link");
+  assert.equal(accepted.body.sign_in_link_sent, true);
+
+  const user = userRow(h, "sam.sales@example.invalid")!;
+  assert.equal(user.access_role, "sales", "exactly the invited role");
+  assert.equal(user.active, 1);
+  assert.equal(user.display_name, "Sam Sales");
+
+  // The sign-in credential Sam now holds is the product's ordinary magic link — not something
+  // this capability minted for itself.
+  assert.equal(captureCount(h, "magic_link", "sam.sales@example.invalid"), 1);
+  const settled = inviteRow(h, String(issued.invite.invite_id));
+  assert.equal(settled.accepted_user_id, user.user_id);
+  assert.ok(settled.accepted_at);
+});
+
+test("inviting crew grants the account and says the phone still needs pairing", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "kim@example.invalid",
+    display_name: "Kim Crew",
+    role: "field",
+  });
+  const accepted = await call(h, "POST", ACCEPT, {
+    body: { token: capturedToken(h, "user_invite", "kim@example.invalid") },
+  });
+  await h.flush();
+
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.role, "field");
+  assert.equal(accepted.body.next, "device_pairing");
+  assert.equal(accepted.body.sign_in_link_sent, false);
+  assert.equal(
+    captureCount(h, "magic_link", "kim@example.invalid"),
+    0,
+    "crew never receive a passwordless email session",
+  );
+  assert.equal(userRow(h, "kim@example.invalid")!.access_role, "field");
+  assert.equal(inviteRow(h, String(issued.invite.invite_id)).accepted_at !== null, true);
+});
+
+// --------------------------------------------------------------------------- privacy
+
+test("an invitation response never reveals whether the mailbox already has access", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  await addUser(h.env, "already@example.invalid", "ops", "Already Here");
+  const deactivated = await addUser(h.env, "gone@example.invalid", "sales", "Used To Work Here");
+  h.db.raw.prepare(`UPDATE app_users SET active = 0 WHERE user_id = ?`)
+    .run(deactivated.user_id);
+
+  const results = [];
+  for (const email of ["already@example.invalid", "gone@example.invalid", "new@example.invalid"]) {
+    const issued = await invite(h, session, {
+      email,
+      display_name: "Candidate",
+      role: "sales",
+    });
+    results.push(issued);
+  }
+
+  const shapes = results.map((result) => ({
+    status: result.status,
+    keys: Object.keys(result.invite).sort(),
+    state: result.invite.state,
+    role: result.invite.role,
+    resend_count: result.invite.resend_count,
+  }));
+  for (const shape of shapes) {
+    assert.deepEqual(
+      shape,
+      { ...shapes[0], },
+      "issuing must not differ by whether the mailbox already has an account",
+    );
+  }
+  // And the only difference between the three responses is the mailbox the caller typed and the
+  // ids/timestamps the issuance itself created.
+  const varying = new Set(["invite_id", "email", "invited_at", "expires_at", "last_sent_at"]);
+  for (const result of results.slice(1)) {
+    for (const [key, value] of Object.entries(result.invite)) {
+      if (varying.has(key)) continue;
+      assert.deepEqual(value, results[0].invite[key], `field ${key} leaked account existence`);
+    }
+  }
+});
+
+// --------------------------------------------------------------------------- refusals
+
+test("only an office session may touch invitations, and only with a CSRF token", async () => {
+  const h = harness();
+  const { session: ownerSession } = await owner(h);
+
+  for (const role of ["sales", "production", "accounting"] as const) {
+    const user = await addUser(h.env, `${role}@example.invalid`, role, role);
+    const session = await signIn(h, user, role.padEnd(43, "x"));
+    const list = await call(h, "GET", INVITES, { session });
+    assert.equal(list.status, 403, `${role} must not read invitations`);
+    assert.equal(list.body.error, "office_role_required");
+    const created = await call(h, "POST", INVITES, {
+      session,
+      body: { email: "x@example.invalid", display_name: "X", role: "sales" },
+    });
+    assert.equal(created.status, 403, `${role} must not issue invitations`);
+    assert.equal(created.body.error, "office_role_required");
+  }
+
+  const crew = await addUser(h.env, "crew@example.invalid", "field", "Crew");
+  const crewSession = await signIn(h, crew, "c".repeat(43));
+  // A field session additionally has no device proof here, so it is not even authenticated.
+  const crewList = await call(h, "GET", INVITES, { session: crewSession });
+  assert.equal(crewList.status, 401);
+
+  const noCsrf = await call(h, "POST", INVITES, {
+    session: ownerSession,
+    csrf: false,
+    body: { email: "x@example.invalid", display_name: "X", role: "sales" },
+  });
+  assert.equal(noCsrf.status, 403);
+  assert.equal(noCsrf.body.error, "csrf_failed");
+
+  const anonymous = await call(h, "GET", INVITES);
+  assert.equal(anonymous.status, 401);
+});
+
+test("an operations account can invite the desks but never mint an owner", async () => {
+  const h = harness();
+  await owner(h);
+  const ops = await addUser(h.env, "ops@example.invalid", "ops", "Ops");
+  const session = await signIn(h, ops, "p".repeat(43));
+
+  const refused = await call(h, "POST", INVITES, {
+    session,
+    body: { email: "second.owner@example.invalid", display_name: "Second Owner", role: "owner" },
+  });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.error, "owner_role_required");
+  assert.equal(
+    scalar(h, `SELECT COUNT(*) AS value FROM app_user_invites`),
+    0,
+    "a refused issuance writes nothing",
+  );
+
+  const allowed = await invite(h, session, {
+    email: "desk@example.invalid",
+    display_name: "Desk",
+    role: "production",
+  });
+  assert.equal(allowed.status, 201);
+});
+
+test("an expired invitation is refused with its own code and grants nothing", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "late@example.invalid",
+    display_name: "Late Riser",
+    role: "sales",
+  });
+  const token = capturedToken(h, "user_invite", "late@example.invalid");
+  expireInvite(h, String(issued.invite.invite_id));
+
+  const accepted = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(accepted.status, 410);
+  assert.equal(accepted.body.error, "invite_expired");
+  assert.equal(userRow(h, "late@example.invalid"), undefined);
+
+  const listed = await call(h, "GET", INVITES, { session });
+  const rows = listed.body.invites as Array<Record<string, unknown>>;
+  assert.equal(rows[0].state, "expired");
+});
+
+test("a revoked invitation is refused with its own code and grants nothing", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "revoked@example.invalid",
+    display_name: "Changed Our Mind",
+    role: "ops",
+  });
+  const token = capturedToken(h, "user_invite", "revoked@example.invalid");
+
+  const revoked = await call(
+    h,
+    "POST",
+    `${INVITES}/${String(issued.invite.invite_id)}/revoke`,
+    { session },
+  );
+  assert.equal(revoked.status, 200);
+  assert.equal((revoked.body.invite as Record<string, unknown>).state, "revoked");
+  assert.equal((revoked.body.invite as Record<string, unknown>).revoked_reason, "office_revoked");
+
+  const accepted = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(accepted.status, 409);
+  assert.equal(accepted.body.error, "invite_revoked");
+  assert.equal(userRow(h, "revoked@example.invalid"), undefined);
+
+  const again = await call(
+    h,
+    "POST",
+    `${INVITES}/${String(issued.invite.invite_id)}/revoke`,
+    { session },
+  );
+  assert.equal(again.status, 409, "revoking twice is not a second withdrawal");
+  assert.equal(again.body.error, "invite_revoked");
+});
+
+test("a replayed acceptance changes nothing and says why", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "replay@example.invalid",
+    display_name: "Replay Target",
+    role: "sales",
+  });
+  const token = capturedToken(h, "user_invite", "replay@example.invalid");
+
+  const first = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(first.status, 200);
+  const granted = userRow(h, "replay@example.invalid")!;
+
+  // The office demotes them afterwards. A stolen invitation must not undo that.
+  const changed = await call(h, "POST", `${APP_USERS}/${String(granted.user_id)}/role`, {
+    session,
+    body: { role: "production" },
+  });
+  assert.equal(changed.status, 200);
+
+  const replay = await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  assert.equal(replay.status, 409);
+  assert.equal(replay.body.error, "invite_already_accepted");
+  const after = userRow(h, "replay@example.invalid")!;
+  assert.equal(after.access_role, "production", "a replay cannot re-grade the account");
+  assert.equal(after.user_id, granted.user_id, "and cannot create a second account");
+  assert.equal(
+    scalar(h, `SELECT COUNT(*) AS value FROM app_users WHERE tenant_id = ?`, TENANT),
+    2,
+    "one owner plus one invitee, however many times the link is replayed",
+  );
+});
+
+test("an invitation minted for another tenant is answered exactly like one that never existed", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "elsewhere@example.invalid",
+    display_name: "Elsewhere",
+    role: "sales",
+  });
+  const token = capturedToken(h, "user_invite", "elsewhere@example.invalid");
+  assert.equal(inviteRow(h, String(issued.invite.invite_id)).tenant_id, TENANT);
+  // The invitation outlives the deployment's configured tenant. Cross-tenant existence is not
+  // this endpoint's to confirm, so the answer is the unknown-token answer, verbatim.
+  const elsewhere: Harness = { ...h, env: { ...h.env, APP_TENANT_ID: "otherco" } as AppEnv };
+
+  const mismatched = await call(elsewhere, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+  const unknown = await call(elsewhere, "POST", ACCEPT, { body: { token: "z".repeat(43) } });
+  await h.flush();
+
+  assert.equal(mismatched.status, 404);
+  assert.deepEqual(mismatched.body, unknown.body);
+  assert.equal(mismatched.body.error, "invite_not_found");
+  assert.equal(userRow(h, "elsewhere@example.invalid"), undefined);
+});
+
+test("a malformed acceptance is refused before anything is looked up", async () => {
+  const h = harness();
+  const short = await call(h, "POST", ACCEPT, { body: { token: "too-short" } });
+  assert.equal(short.status, 400);
+  assert.equal(short.body.error, "invalid_request");
+  const extra = await call(h, "POST", ACCEPT, {
+    body: { token: "z".repeat(43), role: "owner" },
+  });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.body.error, "unexpected_field");
+});
+
+// --------------------------------------------------------------------------- re-issue
+
+test("re-sending rotates the secret, and the superseded one stops working", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "resend@example.invalid",
+    display_name: "Resend Me",
+    role: "ops",
+  });
+  const first = capturedToken(h, "user_invite", "resend@example.invalid");
+
+  const resent = await call(
+    h,
+    "POST",
+    `${INVITES}/${String(issued.invite.invite_id)}/resend`,
+    { session },
+  );
+  await h.flush();
+  assert.equal(resent.status, 200);
+  assert.equal((resent.body.invite as Record<string, unknown>).resend_count, 1);
+  assert.equal(
+    (resent.body.invite as Record<string, unknown>).invite_id,
+    issued.invite.invite_id,
+    "re-sending keeps one invitation, it does not create a second",
+  );
+  const second = capturedToken(h, "user_invite", "resend@example.invalid");
+  assert.notEqual(first, second);
+
+  const stale = await call(h, "POST", ACCEPT, { body: { token: first } });
+  await h.flush();
+  assert.equal(stale.status, 404, "the superseded secret is not a key any more");
+  assert.equal(userRow(h, "resend@example.invalid"), undefined);
+
+  const fresh = await call(h, "POST", ACCEPT, { body: { token: second } });
+  await h.flush();
+  assert.equal(fresh.status, 200);
+  assert.equal(userRow(h, "resend@example.invalid")!.access_role, "ops");
+});
+
+test("an expired invitation is re-sendable; a settled one is not", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const lapsed = await invite(h, session, {
+    email: "lapsed@example.invalid",
+    display_name: "Lapsed",
+    role: "sales",
+  });
+  expireInvite(h, String(lapsed.invite.invite_id));
+  const revived = await call(
+    h,
+    "POST",
+    `${INVITES}/${String(lapsed.invite.invite_id)}/resend`,
+    { session },
+  );
+  await h.flush();
+  assert.equal(revived.status, 200);
+  assert.equal((revived.body.invite as Record<string, unknown>).state, "pending");
+
+  const settled = await invite(h, session, {
+    email: "settled@example.invalid",
+    display_name: "Settled",
+    role: "sales",
+  });
+  await call(h, "POST", ACCEPT, {
+    body: { token: capturedToken(h, "user_invite", "settled@example.invalid") },
+  });
+  await h.flush();
+  const refused = await call(
+    h,
+    "POST",
+    `${INVITES}/${String(settled.invite.invite_id)}/resend`,
+    { session },
+  );
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "invite_already_accepted");
+});
+
+test("issuing a second invitation supersedes the first, leaving exactly one live secret", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const first = await invite(h, session, {
+    email: "twice@example.invalid",
+    display_name: "First Try",
+    role: "sales",
+  });
+  const firstToken = capturedToken(h, "user_invite", "twice@example.invalid");
+  const second = await invite(h, session, {
+    email: "twice@example.invalid",
+    display_name: "Second Try",
+    role: "production",
+  });
+  const secondToken = capturedToken(h, "user_invite", "twice@example.invalid");
+  assert.notEqual(first.invite.invite_id, second.invite.invite_id);
+
+  const superseded = inviteRow(h, String(first.invite.invite_id));
+  assert.equal(superseded.revoked_reason, "superseded");
+  assert.equal(
+    userInviteState(superseded as never, new Date().toISOString()),
+    "revoked",
+  );
+
+  const stale = await call(h, "POST", ACCEPT, { body: { token: firstToken } });
+  await h.flush();
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error, "invite_revoked");
+
+  const fresh = await call(h, "POST", ACCEPT, { body: { token: secondToken } });
+  await h.flush();
+  assert.equal(fresh.status, 200);
+  assert.equal(userRow(h, "twice@example.invalid")!.access_role, "production");
+});
+
+test("accepting into a mailbox that already has live access spends the invitation and re-grades nothing", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const existing = await addUser(h.env, "steady@example.invalid", "accounting", "Steady Hand");
+
+  const issued = await invite(h, session, {
+    email: "steady@example.invalid",
+    display_name: "Steady Hand",
+    role: "owner",
+  });
+  const accepted = await call(h, "POST", ACCEPT, {
+    body: { token: capturedToken(h, "user_invite", "steady@example.invalid") },
+  });
+  await h.flush();
+
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.result, "already_active");
+  assert.equal(accepted.body.role, "accounting", "the account keeps the role the office set");
+  const after = userRow(h, "steady@example.invalid")!;
+  assert.equal(after.access_role, "accounting");
+  assert.equal(after.user_id, existing.user_id);
+  assert.equal(
+    inviteRow(h, String(issued.invite.invite_id)).accepted_user_id,
+    existing.user_id,
+    "the secret is still spent",
+  );
+});
+
+// --------------------------------------------------------------------------- people
+
+test("the people list is office-only and marks the caller", async () => {
+  const h = harness();
+  const { user, session } = await owner(h);
+  await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+
+  const listed = await call(h, "GET", APP_USERS, { session });
+  assert.equal(listed.status, 200);
+  const users = listed.body.users as Array<Record<string, unknown>>;
+  assert.equal(users.length, 2);
+  assert.equal(users.find((row) => row.user_id === user.user_id)!.is_self, true);
+  assert.equal(users.find((row) => row.email === "mate@example.invalid")!.is_self, false);
+
+  const sales = await addUser(h.env, "nosy@example.invalid", "sales", "Nosy");
+  const nosy = await signIn(h, sales, "n".repeat(43));
+  const refused = await call(h, "GET", APP_USERS, { session: nosy });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.error, "office_role_required");
+});
+
+test("a role change is the server's decision, not the browser's", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "sales", "Mate");
+
+  const promoted = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "production" },
+  });
+  assert.equal(promoted.status, 200);
+  assert.equal((promoted.body.user as Record<string, unknown>).role, "production");
+  assert.equal(userRow(h, "mate@example.invalid")!.access_role, "production");
+
+  const self = await call(h, "POST", `${APP_USERS}/${ownerUser.user_id}/role`, {
+    session,
+    body: { role: "sales" },
+  });
+  assert.equal(self.status, 409);
+  assert.equal(self.body.error, "self_change_forbidden");
+
+  const ops = await addUser(h.env, "ops@example.invalid", "ops", "Ops");
+  const opsSession = await signIn(h, ops, "p".repeat(43));
+  const promoteToOwner = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session: opsSession,
+    body: { role: "owner" },
+  });
+  assert.equal(promoteToOwner.status, 403, "operations does not hand out ownership");
+  assert.equal(promoteToOwner.body.error, "owner_role_required");
+  const selfPromote = await call(h, "POST", `${APP_USERS}/${ops.user_id}/role`, {
+    session: opsSession,
+    body: { role: "owner" },
+  });
+  assert.equal(selfPromote.status, 409, "and cannot re-grade itself at all");
+  assert.equal(selfPromote.body.error, "self_change_forbidden");
+  assert.equal(userRow(h, "ops@example.invalid")!.access_role, "ops");
+
+  const unknown = await call(h, "POST", `${APP_USERS}/appu_${"0".repeat(8)}/role`, {
+    session,
+    body: { role: "sales" },
+  });
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.body.error, "user_not_found");
+  const bogus = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "superuser" },
+  });
+  assert.equal(bogus.status, 400);
+  assert.equal(bogus.body.error, "invalid_role");
+  const extra = await call(h, "POST", `${APP_USERS}/${mate.user_id}/role`, {
+    session,
+    body: { role: "sales", active: true },
+  });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.body.error, "unexpected_field");
+});
+
+test("a tenant cannot be locked out of itself", async () => {
+  const h = harness();
+  const { user: founder, session } = await owner(h);
+  const spare = await addUser(h.env, "spare@example.invalid", "ops", "Spare");
+  const spareSession = await signIn(h, spare, "s".repeat(43));
+
+  // The two rules that make the invariant structural, both from the same office session.
+  const selfDemote = await call(h, "POST", `${APP_USERS}/${founder.user_id}/role`, {
+    session,
+    body: { role: "sales" },
+  });
+  assert.equal(selfDemote.status, 409);
+  assert.equal(selfDemote.body.error, "self_change_forbidden");
+  const selfRemove = await call(h, "POST", `${APP_USERS}/${founder.user_id}/access`, {
+    session,
+    body: { active: false },
+  });
+  assert.equal(selfRemove.status, 409);
+  assert.equal(selfRemove.body.error, "self_change_forbidden");
+
+  for (const path of ["role", "access"]) {
+    const attempt = await call(h, "POST", `${APP_USERS}/${founder.user_id}/${path}`, {
+      session: spareSession,
+      body: path === "role" ? { role: "sales" } : { active: false },
+    });
+    assert.equal(attempt.status, 403, `operations must not ${path}-change an owner`);
+    assert.equal(attempt.body.error, "owner_role_required");
+  }
+  assert.equal(userRow(h, "owner@example.invalid")!.access_role, "owner");
+  assert.equal(userRow(h, "owner@example.invalid")!.active, 1);
+
+  // A second owner may be demoted by the first, because the first is still one.
+  const deputy = await addUser(h.env, "deputy@example.invalid", "owner", "Deputy");
+  const demoted = await call(h, "POST", `${APP_USERS}/${deputy.user_id}/role`, {
+    session,
+    body: { role: "ops" },
+  });
+  assert.equal(demoted.status, 200);
+  assert.equal(
+    scalar(
+      h,
+      `SELECT COUNT(*) AS value FROM app_users
+        WHERE tenant_id = ? AND active = 1 AND access_role = 'owner'`,
+      TENANT,
+    ),
+    1,
+    "an owner always remains",
+  );
+});
+
+test("removing access ends the session, the sign-in link, the paired device, and the invitation", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const mate = await addUser(h.env, "mate@example.invalid", "ops", "Mate");
+  const mateSession = await signIn(h, mate, "m".repeat(43));
+  h.db.raw.prepare(
+    `INSERT INTO app_magic_links
+       (token_hash, user_id, tenant_id, created_at, expires_at, consumed_at,
+        request_ip_hash, request_user_agent_hash)
+     VALUES (?,?,?,?,?,NULL,?,?)`,
+  ).run(
+    "f".repeat(64),
+    mate.user_id,
+    TENANT,
+    "2026-08-23T00:00:00.000Z",
+    "2030-01-01T00:00:00.000Z",
+    "a".repeat(64),
+    "b".repeat(64),
+  );
+  h.db.raw.prepare(
+    `INSERT INTO app_devices
+       (device_id, tenant_id, user_id, device_proof_hash, paired_at, last_seen_at,
+        revoked_at, revoked_by_user_id, created_ip_hash, created_user_agent_hash)
+     VALUES (?,?,?,?,?,?,NULL,NULL,?,?)`,
+  ).run(
+    "appd_mate_device_0001",
+    TENANT,
+    mate.user_id,
+    "e".repeat(64),
+    "2026-08-23T00:00:00.000Z",
+    "2026-08-23T00:00:00.000Z",
+    "a".repeat(64),
+    "b".repeat(64),
+  );
+  const pending = await invite(h, session, {
+    email: "mate@example.invalid",
+    display_name: "Mate",
+    role: "ops",
+  });
+
+  const alive = await call(h, "GET", "/api/v1/session", { session: mateSession });
+  assert.equal(alive.body.authenticated, true);
+
+  const removed = await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+    session,
+    body: { active: false },
+  });
+  assert.equal(removed.status, 200);
+  assert.equal((removed.body.user as Record<string, unknown>).active, false);
+
+  const dead = await call(h, "GET", "/api/v1/session", { session: mateSession });
+  assert.equal(dead.body.authenticated, false, "the live session ends with the decision");
+  assert.equal(
+    scalar(
+      h,
+      `SELECT COUNT(*) AS value FROM app_magic_links
+        WHERE user_id = ? AND consumed_at IS NOT NULL`,
+      mate.user_id,
+    ),
+    1,
+  );
+  assert.equal(
+    scalar(
+      h,
+      `SELECT COUNT(*) AS value FROM app_devices WHERE user_id = ? AND revoked_at IS NOT NULL`,
+      mate.user_id,
+    ),
+    1,
+  );
+  assert.equal(
+    inviteRow(h, String(pending.invite.invite_id)).revoked_reason,
+    "office_revoked",
+    "and the way back in is withdrawn with it",
+  );
+
+  const restored = await call(h, "POST", `${APP_USERS}/${mate.user_id}/access`, {
+    session,
+    body: { active: true },
+  });
+  assert.equal(restored.status, 200);
+  assert.equal((restored.body.user as Record<string, unknown>).active, true);
+});
+
+// --------------------------------------------------------------------------- retention
+
+test("settled invitations are pruned on the ordinary auth sweep; live ones are not", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const keep = await invite(h, session, {
+    email: "keep@example.invalid",
+    display_name: "Keep",
+    role: "sales",
+  });
+  const drop = await invite(h, session, {
+    email: "drop@example.invalid",
+    display_name: "Drop",
+    role: "sales",
+  });
+  h.db.raw.prepare(
+    `UPDATE app_user_invites
+        SET revoked_at = '2020-01-01T00:00:00.000Z', revoked_reason = 'office_revoked',
+            revoked_by_user_id = invited_by_user_id, created_at = '2019-01-01T00:00:00.000Z'
+      WHERE invite_id = ?`,
+  ).run(String(drop.invite.invite_id));
+
+  await pruneAuthRecords(h.env, new Date());
+
+  assert.ok(inviteRow(h, String(keep.invite.invite_id)), "a live invitation survives the sweep");
+  assert.equal(inviteRow(h, String(drop.invite.invite_id)), undefined);
+});
+
+test("an operations account cannot re-send or withdraw an owner's invitation", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const ops = await addUser(h.env, "ops@example.invalid", "ops", "Ops");
+  const opsSession = await signIn(h, ops, "p".repeat(43));
+  const issued = await invite(h, session, {
+    email: "heir@example.invalid",
+    display_name: "Heir",
+    role: "owner",
+  });
+
+  for (const action of ["resend", "revoke"]) {
+    const refused = await call(
+      h,
+      "POST",
+      `${INVITES}/${String(issued.invite.invite_id)}/${action}`,
+      { session: opsSession },
+    );
+    assert.equal(refused.status, 403, `operations must not ${action} an owner invitation`);
+    assert.equal(refused.body.error, "owner_role_required");
+  }
+  const still = inviteRow(h, String(issued.invite.invite_id));
+  assert.equal(still.revoked_at, null);
+  assert.equal(still.resend_count, 0);
+});
+
+test("an unknown invitation is not found, whatever the office asks of it", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  for (const inviteId of [`appi_${crypto.randomUUID()}`, "not-an-invite", "appi_short"]) {
+    for (const action of ["resend", "revoke"]) {
+      const missing = await call(
+        h,
+        "POST",
+        `${INVITES}/${encodeURIComponent(inviteId)}/${action}`,
+        { session },
+      );
+      assert.equal(missing.status, 404);
+      assert.equal(missing.body.error, "invite_not_found");
+    }
+  }
+});
+
+test("an invitation is refused before it is written when the request is malformed", async () => {
+  const h = harness();
+  const { session } = await owner(h);
+  const cases: Array<[Record<string, unknown>, string]> = [
+    [{ email: "not-an-email", display_name: "X", role: "sales" }, "invalid_email"],
+    [{ email: "a@example.invalid", display_name: "  ", role: "sales" }, "invalid_display_name"],
+    [{ email: "a@example.invalid", display_name: "X", role: "superuser" }, "invalid_role"],
+    [{ email: "a@example.invalid", display_name: "X" }, "invalid_role"],
+    [
+      { email: "a@example.invalid", display_name: "X", role: "sales", active: true },
+      "unexpected_field",
+    ],
+  ];
+  for (const [body, error] of cases) {
+    const refused = await call(h, "POST", INVITES, { session, body });
+    assert.equal(refused.status, 400, JSON.stringify(body));
+    assert.equal(refused.body.error, error);
+  }
+  assert.equal(scalar(h, `SELECT COUNT(*) AS value FROM app_user_invites`), 0);
+});
+
+test("every act on an invitation lands in the auth audit with its actor", async () => {
+  const h = harness();
+  const { user: ownerUser, session } = await owner(h);
+  const issued = await invite(h, session, {
+    email: "audited@example.invalid",
+    display_name: "Audited",
+    role: "sales",
+  });
+  await call(h, "POST", `${INVITES}/${String(issued.invite.invite_id)}/resend`, { session });
+  await h.flush();
+  const token = capturedToken(h, "user_invite", "audited@example.invalid");
+  await call(h, "POST", ACCEPT, { body: { token } });
+  await h.flush();
+
+  const events = h.db.raw.prepare(
+    `SELECT event, outcome, user_id, detail_code FROM app_auth_audit
+      WHERE event LIKE 'user_invite%' ORDER BY id ASC`,
+  ).all() as Array<{ event: string; outcome: string; user_id: string; detail_code: string }>;
+  assert.deepEqual(
+    events.map((row) => `${row.event}:${row.outcome}`),
+    [
+      "user_invite_create:issued",
+      "user_invite_delivery:sent",
+      "user_invite_resend:issued",
+      "user_invite_delivery:sent",
+      "user_invite_accept:granted",
+    ],
+  );
+  assert.equal(events[0].user_id, ownerUser.user_id, "the issuing office user is named");
+  assert.ok(
+    events.every((row) => row.detail_code.endsWith(String(issued.invite.invite_id))),
+    "every entry binds the exact invitation",
+  );
+  assert.equal(
+    events.at(-1)!.user_id,
+    String(userRow(h, "audited@example.invalid")!.user_id),
+    "and the acceptance names the account it created",
+  );
+});

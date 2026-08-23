@@ -2144,13 +2144,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0092 field-evidence columns, 0093 commercial authority, 0094–0097 work-package
     // authority/integrity/roles, 0098–0099 assignment authority, 0100–0102 final-invoice
     // derivation and provider bindings, 0103–0104 measurement and photo evidence, 0105 Facet
-    // native design projection, 0106 native gate clearance and option packages, 0110 the tenant
-    // company profile, its append-only revisions, and per-person notification preferences. The
-    // 0070–0078, 0083–0089 and 0107–0109 gaps are collision numbers claimed by other open heads
-    // or abandoned, not missing files.
-    assert.equal(migrations.length, 84);
+    // native design projection, 0106 native gate clearance and option packages. 0111 is the
+    // office user-invitation ledger; it took 0111 because 0107-0110 were already claimed by
+    // heads open when it was numbered. The 0070–0078, 0083–0089 and 0107–0110 gaps are
+    // abandoned or in-flight collision numbers, not missing files.
+    assert.equal(migrations.length, 85);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0110_tenant_company_profile_and_setup.sql");
+    assert.equal(migrations.at(-1), "0111_office_user_invites.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2223,14 +2223,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // job-anchor, parent, no-replace, and append-only guards. 0106 adds one option-package
     // table and its tenant/job index (counted here) plus a partial unique clearance-decision
     // index whose name does not start with idx_ and is therefore counted only by the recovery
-    // inventories. 0109 adds three crm_import_* ledger tables and their four
-// query indexes and no trigger. 0110 adds three tables - the tenant company profile, its append-only
-    // revisions, and per-person notification preferences - and the two `idx_` indexes those
-    // revisions and preferences are read by; its remaining uniqueness is expressed as table
-    // constraints, so it adds no trigger and no further named index.
+    // inventories. 0111 adds the office invitation ledger: one table and its two idx_ query
+    // indexes (counted here), plus the partial unique index that keeps exactly one invitation
+    // open per mailbox, which is again counted only by the recovery inventories. It also
+    // rebuilds the dev-only 0022/0066 capture table to widen its `kind` CHECK, which recreates
+    // `idx_dev_outbox_created` under the same name and therefore changes no count.
     assert.deepEqual(
       { ...counts },
-      { tables: 193, indexes: 283, triggers: 469 },
+      { tables: 194, indexes: 285, triggers: 469 },
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";

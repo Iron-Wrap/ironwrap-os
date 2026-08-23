@@ -30,6 +30,13 @@ const STILL_VALID_UNTIL = new Date(NEWEST_CLOCK + A_DAY)
   .slice(0, 10);
 const POLICY_EFFECTIVE_AT = new Date(OLDEST_CLOCK - A_DAY).toISOString();
 const POLICY_EXPIRES_AT = new Date(NEWEST_CLOCK + A_DAY).toISOString();
+/**
+ * The deliberate opposite: one day past the pinned `NOW`, so it is current for a caller that
+ * supplies its own instant and permanently behind the wall clock for one that does not.
+ */
+const VALID_AT_NOW_ONLY = new Date(NOW.getTime() + A_DAY)
+  .toISOString()
+  .slice(0, 10);
 const TENANT = "ironwrap";
 const JOB_ID = "job:estimator:0001";
 const JOB_NUMBER = "IW-EST-0001";
@@ -183,6 +190,7 @@ async function fixture(
     includeCommercial?: boolean;
     includeExtensions?: boolean;
     priceList?: boolean;
+    quoteValidUntil?: string;
   } = {},
 ): Promise<Fixture> {
   const db = new SqliteD1();
@@ -233,7 +241,8 @@ async function fixture(
   const measurementSha = sha256(measurementRaw);
   const measurementRawKey = `raw/measurements/${measurementSha}.json`;
   seedMeasurement(db.raw, measurementSha, measurementRawKey);
-  if (options.includeCommercial !== false) seedCommercial(db.raw);
+  if (options.includeCommercial !== false)
+    seedCommercial(db.raw, options.quoteValidUntil);
   const objects = new Map([[measurementRawKey, measurementRaw]]);
   let facetRawKey = "";
   if (options.includeFacet !== false) {
@@ -490,6 +499,25 @@ test("commercial ambiguity introduced after import invalidates the workbench", a
   assert.ok(
     model.stale_fields.includes("commercial_quote.authority_ambiguous"),
   );
+});
+
+test("requested asOf, not the wall clock, decides quote validity", async () => {
+  // Any level of the authority chain that drops asOf reads the wall clock, which is
+  // past this window, and reports commercial_quote_drift instead of the quote.
+  const setup = await fixture({ quoteValidUntil: VALID_AT_NOW_ONLY });
+  const model = await buildEstimatorWorkbenchReadModel(
+    setup.env,
+    auth("owner"),
+    JOB_ID,
+    NOW,
+  );
+  assert.ok(model);
+  assert.equal(
+    model.stale_fields.includes("estimator_evidence.commercial_quote_drift"),
+    false,
+  );
+  assert.equal(model.quote?.id, QUOTE_ID);
+  assert.equal(model.measurements.reports.length, 1);
 });
 
 test("native ops role sees Estimator insurance without Frappe identity config", async () => {
@@ -805,7 +833,10 @@ function seedAccountingEvidence(db: DatabaseSync): void {
   );
 }
 
-function seedCommercial(db: DatabaseSync): void {
+function seedCommercial(
+  db: DatabaseSync,
+  validUntil = STILL_VALID_UNTIL,
+): void {
   const terms = canonicalJson({
     schema_version: "ironwrap.customer-terms.v1",
     scope: "Standing seam roof replacement",
@@ -876,7 +907,7 @@ function seedCommercial(db: DatabaseSync): void {
     QUOTE_ID,
     JOB_ID,
     CUSTOMER_ID,
-    STILL_VALID_UNTIL,
+    validUntil,
     terms,
     sha256(terms),
     evidence,

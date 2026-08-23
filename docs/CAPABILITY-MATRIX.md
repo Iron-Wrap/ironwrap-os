@@ -60,12 +60,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 83,
-      "latest": "0109_crm_import_ledger.sql"
+      "count": 84,
+      "latest": "0110_tenant_company_profile_and_setup.sql"
     },
     "tests": {
       "pwa": 586,
-      "worker": 1228
+      "worker": 1263
     }
   },
   "proof_state_policy": {
@@ -596,6 +596,60 @@ Missing for autonomous target:
   Bill/PurchaseOrder/Vendor adapter that would feed the AP readback;
 - universal evidence freshness, revocation, conflict, and compensation semantics;
 - production proof across one real end-to-end job.
+
+### Tenant company setup and the Settings hub (branch-local)
+
+Implemented:
+
+- Migration `0110_tenant_company_profile_and_setup.sql` adds three owned tables: the tenant
+  company profile (business name, customer-facing brand, phone, address line, city, province,
+  postal code, time zone, currency, week start, and a logo reference), its append-only revision
+  ledger, and per-person notification preferences. Identity and the three operating conventions
+  are required from the first save; contact and address may be saved empty and completed later,
+  which is what lets the checklist report a genuine partial state instead of demanding one
+  perfect save.
+- `workers-bus/src/company-setup-store.ts` owns the transitions. A profile update states the
+  version it read and carries an idempotency key: a stale version is
+  `company_profile_version_conflict`, a repeated key with the same body replays the first
+  outcome, and a repeated key with a different body is
+  `company_profile_idempotency_conflict`. The profile row and its revision commit in one D1
+  batch, so a rejected revision can never leave a bumped version behind.
+- `workers-bus/src/company-setup-api.ts` binds them to the same-origin BFF:
+  `GET`/`PUT /api/v1/admin/company-profile` (owner/ops, CSRF, `Idempotency-Key`),
+  `GET /api/v1/admin/setup-progress` (owner/ops), and
+  `GET`/`PUT /api/v1/notification-preferences` (every authenticated person, for themselves).
+  Bodies are validated key-exactly; a session whose tenant is not the configured tenant is
+  refused before a row is read.
+- The setup read model is a projector over `tenant_company_profiles`, `app_users`,
+  `app_devices`, `quickbooks_connections`, `operating_leads`, and
+  `app_user_notification_preferences`, plus the deployment's own capability flags. Each step
+  carries its requirements; a step is `done` when every applicable requirement is met,
+  `in_progress` when some are, `skipped` when this deployment has every requirement's capability
+  switched off, and `later` when nothing is met and real work is still waiting. A requirement
+  stops applying only because a capability is off, never because someone dismissed the row.
+- `handleAppApi` now treats `PUT`, `PATCH`, and `DELETE` as mutations for origin validation. It
+  previously treated only `POST` as one, so the first non-`POST` route would have accepted a
+  request with no `Origin` header without validating it.
+- Notification preferences are persisted and returned only. There is no delivery mechanism: the
+  write response states `delivery.enabled = false` with
+  `notification_delivery_not_implemented`, so no surface can imply a message will be sent.
+
+Repository tests only, in `test/company-setup-store.test.ts` and `test/company-setup-api.test.ts`:
+role refusal, cross-tenant refusal, CSRF, missing and malformed idempotency keys, key-exact body
+validation, oversized and malformed bodies, version conflict, replay, idempotency conflict, and
+each derived step status. There is no PWA surface on this branch, no deployment, no runtime
+verification, and no business acceptance.
+
+Missing for autonomous target:
+
+- a logo byte store and upload authority; `logo_ref` is a same-origin path or tenant R2 key that
+  something else must publish, and a remote URL is refused;
+- notification delivery with consent, suppression, channel preference, effect ledger, and
+  provider reconciliation;
+- more than one profile per tenant (multi-office and multi-brand labels);
+- a change-of-currency or change-of-time-zone rule for records already priced or scheduled under
+  the previous value;
+- deployment, runtime, and real-owner acceptance proof.
 
 ### Frappe compatibility core (retirement in progress)
 

@@ -121,6 +121,7 @@ import {
 import { EstimatorNativeStoreError } from "./estimator-native-store.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
 import { buildOperatingIntakeReadModel } from "./operating-intake.ts";
+import { handleCompanySetupRoute } from "./company-setup-api.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { handleServiceCaseRoute } from "./service-cases.ts";
 import {
@@ -252,6 +253,10 @@ export async function handleAppApi(
     return await handleHermesDesktopNativeRoute(req, appEnv);
 
   const url = new URL(req.url);
+  // Every method that can change state, not just POST. While POST was the only
+  // mutation this router accepted the distinction was invisible; the moment a `PUT`
+  // route exists, treating it as a read would let a request with no `Origin` header
+  // skip origin validation entirely.
   const mutation = req.method === "POST" || req.method === "PUT" ||
     req.method === "PATCH" || req.method === "DELETE";
   const origin = validateAppOrigin(
@@ -629,6 +634,10 @@ export async function handleAuthenticatedRoute(
   if (req.method === "POST" && url.pathname === "/api/v1/sales/leads") {
     return await handleOfficeLeadCreate(req, env, auth, deps.ctx);
   }
+  // Company profile, the derived setup checklist, and per-person notification
+  // preferences. Returns null for anything it does not own, so routing continues.
+  const companySetupResponse = await handleCompanySetupRoute(req, env, auth);
+  if (companySetupResponse) return companySetupResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");

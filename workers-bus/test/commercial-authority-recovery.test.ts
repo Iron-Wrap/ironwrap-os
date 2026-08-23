@@ -167,8 +167,8 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 190],
-    ["REQUIRED_INDEX_COUNT", 288],
+    ["REQUIRED_TABLE_COUNT", 193],
+    ["REQUIRED_INDEX_COUNT", 290],
     ["REQUIRED_TRIGGER_COUNT", 469],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
@@ -203,7 +203,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0106", () => {
+test("the full schema matches the recovery frontier through 0110", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -224,7 +224,9 @@ test("the full schema matches the recovery frontier through 0106", () => {
       .get() as { tables: number; indexes: number; triggers: number };
     assert.deepEqual(
       { ...counts },
-      { tables: 190, indexes: 288, triggers: 469 },
+      // 0110 adds three tables (the tenant company profile, its append-only revisions,
+      // and per-person notification preferences) and their two named indexes.
+      { tables: 193, indexes: 290, triggers: 469 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

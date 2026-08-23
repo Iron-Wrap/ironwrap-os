@@ -25,6 +25,27 @@ const desktopActiveClassName =
 const mobileActiveClassName =
   "bg-surface-muted !text-foreground shadow-[inset_0_2px_0_var(--accent)]";
 
+/**
+ * The company's own logo once an owner has uploaded one, and the product mark until then.
+ *
+ * It is a plain `<img>` at a fixed public path rather than a query, so no role — including a
+ * field device that may be offline — pays a round trip for it, and a company with no logo simply
+ * 404s into the fallback.
+ */
+function CompanyMark({ className }: { className: string }) {
+  const [hasLogo, setHasLogo] = useState(true);
+  if (!hasLogo) return <ShieldCheck className={className} aria-hidden="true" />;
+  return (
+    <img
+      src={API_PATHS.companyLogo}
+      alt=""
+      aria-hidden="true"
+      className="size-full object-contain p-0.5"
+      onError={() => setHasLogo(false)}
+    />
+  );
+}
+
 export function AppShell() {
   const session = useSession();
   const items = navigationForRole(session.user.role);
@@ -74,8 +95,8 @@ export function AppShell() {
             to="/now"
             className="group flex min-h-11 min-w-0 items-center gap-3 rounded-lg focus-visible:outline-offset-4"
           >
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-chrome-border bg-chrome-raised transition-transform group-hover:-translate-y-0.5">
-              <ShieldCheck className="size-[1.125rem] text-accent" aria-hidden="true" />
+            <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg border border-chrome-border bg-chrome-raised transition-transform group-hover:-translate-y-0.5">
+              <CompanyMark className="size-[1.125rem] text-accent" />
             </span>
             <span className="min-w-0">
               <span className="block truncate text-sm font-extrabold tracking-[-0.02em]">
@@ -105,10 +126,10 @@ export function AppShell() {
                   floor the mobile suite enforces; the mark inside stays 20 px. */}
               <Link
                 to="/now"
-                className="grid size-11 shrink-0 place-items-center rounded-lg border border-foreground/10 bg-foreground text-background lg:hidden"
+                className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-lg border border-foreground/10 bg-foreground text-background lg:hidden"
                 aria-label={`${session.tenant.brand} home`}
               >
-                <ShieldCheck className="size-5 text-accent" aria-hidden="true" />
+                <CompanyMark className="size-5 text-accent" />
               </Link>
               <p className="truncate text-sm font-bold text-muted">
                 <span className="lg:hidden">{session.tenant.brand} · </span>

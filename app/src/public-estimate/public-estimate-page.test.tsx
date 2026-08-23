@@ -4,6 +4,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PublicEstimatePage } from "./public-estimate-page";
 
+// Two brands, neither of them the frontend's former hard-coded pair, because what the page must
+// prove is that it takes whatever the server named (ELEC-158 B2).
+const brands = [
+  {
+    id: "freshco",
+    display_name: "FreshCo Exteriors",
+    short_name: "FreshCo",
+    service_area: "Greater Edmonton roofing",
+  },
+  {
+    id: "freshco-commercial",
+    display_name: "FreshCo Commercial",
+    short_name: "FreshCo CX",
+    service_area: "Alberta commercial roofing",
+  },
+];
+
 const config = {
   enabled: true,
   turnstile_site_key: null,
@@ -11,6 +28,9 @@ const config = {
   disclaimer:
     "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
   review_required: true,
+  brands,
+  default_brand: "freshco",
+  logo_url: null,
 };
 
 function response(body: unknown, status = 200): Response {
@@ -104,7 +124,7 @@ describe("PublicEstimatePage", () => {
     const [, request] = fetcher.mock.calls[1]!;
     const body = JSON.parse(String(request?.body));
     expect(body).toMatchObject({
-      brand: "ironwrap",
+      brand: "freshco",
       service: "metal_roofing",
       contact: { name: "Jordan Smith", email: "jordan@example.com" },
       property: { address: "123 Example Street, Calgary", province: "AB" },
@@ -115,8 +135,8 @@ describe("PublicEstimatePage", () => {
     expect(new Headers(request?.headers).get("Idempotency-Key")).toBe(body.client_submission_id);
   });
 
-  it("pins iRoof copy and canonical brand from a fixed iRoof embed link", async () => {
-    window.history.replaceState({}, "", "/estimate?brand=iroof");
+  it("takes a second brand from a fixed embed link, named by the server", async () => {
+    window.history.replaceState({}, "", "/estimate?brand=freshco-commercial");
     const fetcher = mockFetch(
       response(config),
       response({
@@ -130,11 +150,12 @@ describe("PublicEstimatePage", () => {
     const user = userEvent.setup();
 
     await openForm();
-    expect(screen.getByText("IROOF ALBERTA")).toBeInTheDocument();
-    expect(fetcher.mock.calls[0]?.[0]).toBe("/public/instant-estimate/config?brand=iroof");
+    expect(screen.getByText("FRESHCO COMMERCIAL")).toBeInTheDocument();
+    // The config request no longer names a brand: the server states the list first.
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/public/instant-estimate/config");
     expect(
       screen.getByRole("checkbox", {
-        name: "I agree that iRoof may contact me about this estimate request.",
+        name: "I agree that FreshCo CX may contact me about this estimate request.",
       }),
     ).toBeInTheDocument();
     await completeForm(user);
@@ -142,10 +163,39 @@ describe("PublicEstimatePage", () => {
 
     await screen.findByRole("heading", { name: "We got your estimate request" });
     expect(
-      screen.getByText("iRoof will have an estimator check the site and tell you the next step."),
+      screen.getByText(
+        "FreshCo CX will have an estimator check the site and tell you the next step.",
+      ),
     ).toBeInTheDocument();
     const [, request] = fetcher.mock.calls[1]!;
-    expect(JSON.parse(String(request?.body)).brand).toBe("iroof");
+    expect(JSON.parse(String(request?.body)).brand).toBe("freshco-commercial");
+  });
+
+  it("falls back to this tenant's default brand when an embed link names one the server refuses", async () => {
+    window.history.replaceState({}, "", "/estimate?brand=ironwrap");
+    mockFetch(response(config));
+
+    await openForm();
+    expect(screen.getByText("FRESHCO EXTERIORS")).toBeInTheDocument();
+    expect(screen.queryByText(/IRONWRAP/i)).not.toBeInTheDocument();
+  });
+
+  it("does not offer a form at all when the server accepts no brand", async () => {
+    mockFetch(response({ ...config, brands: [], default_brand: null }));
+    render(<PublicEstimatePage />);
+
+    expect(
+      await screen.findByRole("heading", { name: "The estimate form is not ready" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send estimate request" })).not.toBeInTheDocument();
+  });
+
+  it("shows the company logo the owner uploaded", async () => {
+    mockFetch(response({ ...config, logo_url: "/public/company-logo?v=abc123" }));
+    await openForm();
+
+    const logo = document.querySelector('img[src="/public/company-logo?v=abc123"]');
+    expect(logo).not.toBeNull();
   });
 
   it("always routes a request to estimator review", async () => {

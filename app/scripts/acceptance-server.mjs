@@ -49,7 +49,7 @@ const ACCEPTANCE_MODE = process.env.ACCEPTANCE_MODE ?? "field";
 const ACCEPTANCE_PROTOCOL = process.env.ACCEPTANCE_PROTOCOL ?? "http1";
 const FIXTURE_FIELD_DEVICE_PROOF = "a".repeat(43);
 
-if (!new Set(["field", "estimator", "accounting"]).has(ACCEPTANCE_MODE)) {
+if (!new Set(["field", "estimator", "accounting", "onboarding"]).has(ACCEPTANCE_MODE)) {
   throw new Error(`Unsupported ACCEPTANCE_MODE: ${ACCEPTANCE_MODE}`);
 }
 
@@ -1649,6 +1649,260 @@ const fixtureAccountingConnection = {
   allowed_actions: ["refresh"],
 };
 
+// ---------------------------------------------------------------------------
+// Onboarding fixtures (ELEC-160)
+//
+// A brand-new company: an owner signed in, no company details saved, nobody else added, and no
+// leads at all. It mirrors the real routes' request envelopes and error codes closely enough to
+// drive the setup screens end to end at a Pixel-class viewport, which is where the onboarding
+// evidence has to come from. State resets per process, or through
+// `POST /__acceptance/onboarding/reset`.
+// ---------------------------------------------------------------------------
+
+const ACCEPTANCE_PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+const fixtureOwnerSession = {
+  ...fixtureEnvelope,
+  authenticated: true,
+  user: {
+    id: "appu_acceptance_owner",
+    email: "ada@freshco.example",
+    display_name: "Ada Owner",
+    role: "owner",
+    frappe_user_id: null,
+  },
+  tenant: {
+    id: "freshco",
+    name: "FreshCo Exteriors",
+    brand: "FreshCo",
+    locale: "en-CA",
+    time_zone: "America/Edmonton",
+    currency: "CAD",
+  },
+  permissions: ["now:read", "owner:read", "sales:read", "sales:lead_create"],
+  allowed_actions: ["sales.read", "sales.lead.create"],
+  csrf_token: "acceptance-csrf",
+  session_expires_at: "2036-07-10T12:00:00.000Z",
+};
+
+const onboardingDefaults = () => ({
+  profile: {
+    tenant_id: "freshco",
+    company_name: "FreshCo Exteriors",
+    brand_name: "FreshCo",
+    service_area: "",
+    phone: "",
+    email: "",
+    website: "",
+    address_line1: "",
+    address_line2: "",
+    city: "",
+    region: "",
+    postal_code: "",
+    country: "",
+    brand_labels: {},
+    logo: null,
+    updated_at: null,
+    updated_by: null,
+  },
+  users: [
+    {
+      user_id: "appu_acceptance_owner",
+      email: "ada@freshco.example",
+      display_name: "Ada Owner",
+      role: "owner",
+      active: true,
+      updated_at: "2026-08-22T12:00:00.000Z",
+      is_self: true,
+    },
+  ],
+  leads: [],
+});
+
+let onboardingState = onboardingDefaults();
+
+function resetOnboardingState() {
+  onboardingState = onboardingDefaults();
+}
+
+function onboardingProfilePayload() {
+  return {
+    version: 1,
+    profile: onboardingState.profile,
+    logo_url: onboardingState.profile.logo
+      ? `/public/company-logo?v=${onboardingState.profile.logo.version}`
+      : null,
+    logo_limits: {
+      max_bytes: 512 * 1024,
+      content_types: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
+    },
+    public_brands: [
+      {
+        id: "freshco",
+        display_name: onboardingState.profile.company_name,
+        short_name: onboardingState.profile.brand_name,
+        service_area: onboardingState.profile.service_area,
+      },
+    ],
+  };
+}
+
+function onboardingSalesPayload() {
+  return {
+    version: 1,
+    source_updated_at: "2026-08-22T12:00:00.000Z",
+    read_model_generated_at: "2026-08-22T12:34:00.000Z",
+    stale_fields: [],
+    permissions: ["sales:read", "sales:lead_create"],
+    allowed_actions: ["sales.read", "sales.lead.create"],
+    partial_sources: [],
+    leads: onboardingState.leads,
+    summary: {
+      listed_leads: onboardingState.leads.length,
+      triage_unresolved: onboardingState.leads.length,
+      estimate_needs_review: 0,
+      quote_needs_review: 0,
+      quote_expired: 0,
+      no_linked_consent_record: 0,
+    },
+  };
+}
+
+async function routeOnboarding(request, requestUrl, method) {
+  if (method === "POST" && requestUrl.pathname === "/__acceptance/onboarding/reset") {
+    resetOnboardingState();
+    return { status: 200, body: { ok: true } };
+  }
+  if (requestUrl.pathname === "/api/v1/admin/company-profile") {
+    if (method === "GET") return { status: 200, body: onboardingProfilePayload() };
+    if (method === "PUT") {
+      const body = (await readJsonBody(request)) ?? {};
+      if (!String(body.company_name ?? "").trim()) {
+        return { status: 400, body: { error: "invalid_company_name" } };
+      }
+      if (body.website && !/^https?:\/\/\S+$/.test(String(body.website))) {
+        return { status: 400, body: { error: "invalid_website" } };
+      }
+      onboardingState.profile = {
+        ...onboardingState.profile,
+        ...body,
+        tenant_id: "freshco",
+        updated_at: "2026-08-22T12:30:00.000Z",
+        updated_by: "ada@freshco.example",
+      };
+      return { status: 200, body: onboardingProfilePayload() };
+    }
+  }
+  if (requestUrl.pathname === "/api/v1/admin/company-profile/logo") {
+    if (method === "PUT") {
+      const body = (await readJsonBody(request)) ?? {};
+      if (!String(body.data_base64 ?? "")) {
+        return { status: 400, body: { error: "invalid_logo_data" } };
+      }
+      onboardingState.profile = {
+        ...onboardingState.profile,
+        logo: {
+          content_type: String(body.content_type ?? "image/png"),
+          byte_size: String(body.data_base64).length,
+          version: "acceptance",
+          updated_at: "2026-08-22T12:31:00.000Z",
+        },
+      };
+      return { status: 200, body: onboardingProfilePayload() };
+    }
+    if (method === "DELETE") {
+      onboardingState.profile = { ...onboardingState.profile, logo: null };
+      return { status: 200, body: onboardingProfilePayload() };
+    }
+  }
+  if (requestUrl.pathname === "/api/v1/admin/app-users") {
+    if (method === "GET") {
+      return { status: 200, body: { version: 1, users: onboardingState.users } };
+    }
+    if (method === "POST") {
+      const body = (await readJsonBody(request)) ?? {};
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return { status: 400, body: { error: "invalid_email" } };
+      }
+      const existing = onboardingState.users.find((user) => user.email === email);
+      const next = {
+        user_id: existing?.user_id ?? `appu_${onboardingState.users.length}`,
+        email,
+        display_name: String(body.display_name ?? ""),
+        role: String(body.role ?? "sales"),
+        active: body.active !== false,
+        updated_at: "2026-08-22T12:32:00.000Z",
+        is_self: existing?.is_self ?? false,
+      };
+      onboardingState.users = existing
+        ? onboardingState.users.map((user) => (user.email === email ? next : user))
+        : [...onboardingState.users, next];
+      return { status: 200, body: { user: next } };
+    }
+  }
+  if (method === "GET" && requestUrl.pathname === "/api/v1/sales") {
+    return { status: 200, body: onboardingSalesPayload() };
+  }
+  if (method === "POST" && requestUrl.pathname === "/api/v1/sales/leads") {
+    const body = (await readJsonBody(request)) ?? {};
+    if (!body.email && !body.phone) {
+      return { status: 400, body: { error: "contact_required" } };
+    }
+    const contact = String(body.email ?? body.phone);
+    const duplicate = onboardingState.leads.some(
+      (lead) => (lead.contact.email ?? lead.contact.phone) === contact,
+    );
+    if (!duplicate) {
+      onboardingState.leads = [
+        ...onboardingState.leads,
+        {
+          id: `lead_${onboardingState.leads.length}`,
+          envelope_id: `ow_acceptance-lead-${onboardingState.leads.length}`,
+          source: "manual",
+          received_at: "2026-08-22T12:33:00.000Z",
+          transport_status: "pending_jn_push",
+          intent_queue: "residential_sales",
+          contact: {
+            display_name: String(body.name ?? "") || null,
+            phone: body.phone ?? null,
+            email: body.email ?? null,
+          },
+          triage: { status: null, summary: null, version: 1 },
+          job: null,
+          estimate: null,
+          quote: null,
+          proposal: null,
+          consent: { context: "no_linked_record", records: [] },
+          partial_fields: [],
+          // A lead nobody has triaged yet carries `triage_unresolved`, exactly as
+          // `salesAttention` derives it server-side — which is why it lands on the desk's default
+          // "Needs a check" view instead of only under "All leads".
+          attention: ["triage_unresolved"],
+        },
+      ];
+    }
+    return {
+      status: 200,
+      body: {
+        version: 1,
+        lead: {
+          envelope_id: "ow_acceptance-0000-4000-8000-000000000001",
+          canonical_envelope_id: "ow_acceptance-0000-4000-8000-000000000001",
+          tenant_id: "freshco",
+          status: duplicate ? "duplicate" : "pending_jn_push",
+          duplicate,
+          queue: "residential_sales",
+        },
+      },
+    };
+  }
+  return null;
+}
+
 const requestListener = async (request, response) => {
   const method = request.method ?? "GET";
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
@@ -1672,6 +1926,20 @@ const requestListener = async (request, response) => {
   if (method === "POST" && requestUrl.pathname.startsWith("/api/v1/customer-portal/")) {
     const portal = await routeCustomerPortal(request, requestUrl);
     if (portal) return sendJson(response, method, portal.status, portal.body);
+  }
+  if (ACCEPTANCE_MODE === "onboarding") {
+    // The real logo lives in R2 behind `/public/company-logo`. A 1x1 PNG is enough for the
+    // screens to prove they point at it, and for a "no logo yet" state to 404 into its fallback.
+    if (method === "GET" && requestUrl.pathname === "/public/company-logo") {
+      if (!onboardingState.profile.logo) {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        return response.end("Not found");
+      }
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      return response.end(Buffer.from(ACCEPTANCE_PNG_1X1, "base64"));
+    }
+    const onboarding = await routeOnboarding(request, requestUrl, method);
+    if (onboarding) return sendJson(response, method, onboarding.status, onboarding.body);
   }
   const captureKind =
     ACCEPTANCE_MODE === "field" && method === "POST"
@@ -1720,7 +1988,9 @@ const requestListener = async (request, response) => {
         ? fixtureEstimatorSession
         : ACCEPTANCE_MODE === "accounting"
           ? fixtureAccountingSession
-          : fixtureSession,
+          : ACCEPTANCE_MODE === "onboarding"
+            ? fixtureOwnerSession
+            : fixtureSession,
     );
   }
   if (ACCEPTANCE_MODE === "accounting") {

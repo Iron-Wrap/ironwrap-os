@@ -15,14 +15,13 @@ import {
 } from "./public-estimate-api";
 import {
   PUBLIC_ESTIMATE_DISCLAIMER,
-  PUBLIC_ESTIMATE_BRANDS,
   PUBLIC_ESTIMATE_DEFAULT_PROVINCE,
   PUBLIC_ESTIMATE_PROVINCES,
   PUBLIC_ESTIMATE_SERVICES,
   publicEstimateFormSchema,
   publicEstimateBrandFromSearch,
   publicEstimateRequest,
-  type PublicEstimateBrand,
+  type PublicEstimateBrandDescriptor,
   type PublicEstimateConfig,
   type PublicEstimateProvince,
   type PublicInstantEstimateResponse,
@@ -80,8 +79,6 @@ function errorsForForm(error: ZodError): FormErrors {
 }
 
 export function PublicEstimatePage() {
-  const brand = publicEstimateBrandFromSearch(window.location.search);
-  const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
   const [config, setConfig] = useState<PublicEstimateConfig>();
   const [configError, setConfigError] = useState(false);
   const [configAttempt, setConfigAttempt] = useState(0);
@@ -100,7 +97,7 @@ export function PublicEstimatePage() {
 
   useEffect(() => {
     let active = true;
-    void loadPublicEstimateConfig(brand)
+    void loadPublicEstimateConfig()
       .then((nextConfig) => {
         if (active) setConfig(nextConfig);
       })
@@ -110,11 +107,17 @@ export function PublicEstimatePage() {
     return () => {
       active = false;
     };
-  }, [brand, configAttempt]);
+  }, [configAttempt]);
+
+  // The brand cannot be known before the server has said which ones it accepts, so the page is
+  // headed with nothing rather than with a guess.
+  const brandCopy = config
+    ? publicEstimateBrandFromSearch(window.location.search, config.brands, config.default_brand)
+    : undefined;
 
   useEffect(() => {
-    document.title = `Get a roofing estimate | ${brandCopy.displayName}`;
-  }, [brandCopy.displayName]);
+    if (brandCopy) document.title = `Get an estimate | ${brandCopy.display_name}`;
+  }, [brandCopy]);
 
   const clearError = useCallback((field: keyof FormErrors) => {
     setErrors((current) => {
@@ -135,7 +138,7 @@ export function PublicEstimatePage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!config || !config.enabled) return;
+    if (!config || !config.enabled || !brandCopy) return;
 
     setRequestError(undefined);
     setChallengeError(undefined);
@@ -159,7 +162,7 @@ export function PublicEstimatePage() {
     setSubmitting(true);
     try {
       const response = await submitPublicInstantEstimate(
-        publicEstimateRequest(parsed.data, turnstileToken, submissionId, brand),
+        publicEstimateRequest(parsed.data, turnstileToken, submissionId, brandCopy.id),
       );
       clearStableClientSubmissionId();
       setResult(response);
@@ -194,7 +197,7 @@ export function PublicEstimatePage() {
 
   if (configError) {
     return (
-      <PublicEstimateFrame brand={brand}>
+      <PublicEstimateFrame brand={undefined} logoUrl={null}>
         <ErrorState
           title="The estimate form is not ready"
           message="We could not open the estimate form. Check your connection and try again."
@@ -209,7 +212,7 @@ export function PublicEstimatePage() {
 
   if (!config) {
     return (
-      <PublicEstimateFrame brand={brand}>
+      <PublicEstimateFrame brand={undefined} logoUrl={null}>
         <LoadingState label="Opening the estimate form…" />
       </PublicEstimateFrame>
     );
@@ -217,7 +220,7 @@ export function PublicEstimatePage() {
 
   if (!config.enabled) {
     return (
-      <PublicEstimateFrame brand={brand}>
+      <PublicEstimateFrame brand={brandCopy} logoUrl={config.logo_url}>
         <section className="mx-auto max-w-lg py-10 text-center" aria-live="polite">
           <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-warning-soft text-warning">
             <CircleAlert className="size-6" aria-hidden="true" />
@@ -233,16 +236,33 @@ export function PublicEstimatePage() {
     );
   }
 
+  // The server accepts no brand for this deployment, so a submitted request could only ever be
+  // rejected. Say so instead of drawing a form that cannot work.
+  if (!brandCopy) {
+    return (
+      <PublicEstimateFrame brand={undefined} logoUrl={config.logo_url}>
+        <ErrorState
+          title="The estimate form is not ready"
+          message="This company has not finished setting up its request form yet. Please call or email instead."
+        />
+      </PublicEstimateFrame>
+    );
+  }
+
   if (result) {
     return (
-      <PublicEstimateFrame brand={brand}>
-        <EstimateResult brand={brand} result={result} onStartAnotherRequest={startAnotherRequest} />
+      <PublicEstimateFrame brand={brandCopy} logoUrl={config.logo_url}>
+        <EstimateResult
+          brand={brandCopy}
+          result={result}
+          onStartAnotherRequest={startAnotherRequest}
+        />
       </PublicEstimateFrame>
     );
   }
 
   return (
-    <PublicEstimateFrame brand={brand}>
+    <PublicEstimateFrame brand={brandCopy} logoUrl={config.logo_url}>
       <div className="grid gap-8 lg:grid-cols-[0.82fr_1.18fr] lg:items-start lg:gap-12">
         <EstimateIntroduction />
         <Card className="overflow-hidden">
@@ -258,7 +278,7 @@ export function PublicEstimatePage() {
           <CardContent className="p-5 sm:p-7">
             <EstimateForm
               config={config}
-              brand={brand}
+              brand={brandCopy}
               selectedProvince={selectedProvince}
               form={form}
               errors={errors}
@@ -282,21 +302,34 @@ export function PublicEstimatePage() {
 
 function PublicEstimateFrame({
   brand,
+  logoUrl,
   children,
 }: {
-  brand: PublicEstimateBrand;
+  brand: PublicEstimateBrandDescriptor | undefined;
+  logoUrl: string | null;
   children: React.ReactNode;
 }) {
-  const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
   return (
     <main className="min-h-dvh bg-background px-4 py-6 sm:px-6 sm:py-10">
       <div className="mx-auto max-w-5xl">
         <header className="mb-8 flex items-center justify-between gap-4 border-b border-border pb-4 sm:mb-10">
-          <div>
-            <p className="text-xs font-black tracking-[0.16em] text-foreground">
-              {brandCopy.displayName.toUpperCase()}
-            </p>
-            <p className="mt-1 text-xs text-muted">{brandCopy.serviceArea}</p>
+          <div className="flex min-w-0 items-center gap-3">
+            {logoUrl ? (
+              <img
+                src={logoUrl}
+                alt=""
+                aria-hidden="true"
+                className="size-10 shrink-0 object-contain"
+              />
+            ) : null}
+            <div className="min-w-0">
+              <p className="truncate text-xs font-black tracking-[0.16em] text-foreground">
+                {brand ? brand.display_name.toUpperCase() : ""}
+              </p>
+              {brand?.service_area ? (
+                <p className="mt-1 truncate text-xs text-muted">{brand.service_area}</p>
+              ) : null}
+            </div>
           </div>
           <ShieldCheck className="size-6 text-ok" aria-label="Your request is handled securely" />
         </header>
@@ -362,7 +395,7 @@ function EstimateForm({
   onTurnstileFailure,
 }: {
   config: PublicEstimateConfig;
-  brand: PublicEstimateBrand;
+  brand: PublicEstimateBrandDescriptor;
   selectedProvince: PublicEstimateProvince;
   form: React.RefObject<HTMLFormElement | null>;
   errors: FormErrors;
@@ -380,7 +413,6 @@ function EstimateForm({
   const fieldId = useId();
   const isChallengePending = Boolean(config.turnstile_site_key && !turnstileToken);
   const disclaimer = config.disclaimer || PUBLIC_ESTIMATE_DISCLAIMER;
-  const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
 
   return (
     <form ref={form} className="space-y-5" noValidate onSubmit={onSubmit}>
@@ -498,7 +530,7 @@ function EstimateForm({
           id={`${fieldId}-contact-consent`}
           name="contact-consent"
           checkedError={errors.contactConsent}
-          description={`I agree that ${brandCopy.shortName} may contact me about this estimate request.`}
+          description={`I agree that ${brand.short_name} may contact me about this estimate request.`}
           onChange={() => onFieldChange("contactConsent")}
         />
         <ConsentField
@@ -613,11 +645,10 @@ function EstimateResult({
   result,
   onStartAnotherRequest,
 }: {
-  brand: PublicEstimateBrand;
+  brand: PublicEstimateBrandDescriptor;
   result: PublicInstantEstimateResponse;
   onStartAnotherRequest: () => void;
 }) {
-  const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
   return (
     <section className="mx-auto max-w-xl py-4 sm:py-10" aria-live="polite">
       <Card className="overflow-hidden">
@@ -627,7 +658,7 @@ function EstimateResult({
             We got your estimate request
           </h1>
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted">
-            {`${brandCopy.shortName} will have an estimator check the site and tell you the next step.`}
+            {`${brand.short_name} will have an estimator check the site and tell you the next step.`}
           </p>
         </div>
         <CardContent className="p-5 sm:p-8">

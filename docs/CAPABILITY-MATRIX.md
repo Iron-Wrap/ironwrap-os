@@ -64,8 +64,8 @@ implication.
       "latest": "0106_native_gate_clearance_and_option_packages.sql"
     },
     "tests": {
-      "pwa": 582,
-      "worker": 1183
+      "pwa": 586,
+      "worker": 1201
     }
   },
   "proof_state_policy": {

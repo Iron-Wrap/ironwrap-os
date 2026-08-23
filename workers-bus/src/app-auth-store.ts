@@ -53,6 +53,28 @@ export async function listActiveFieldUsers(
   return result.results ?? [];
 }
 
+/**
+ * Every app user in the tenant, active or not — what the teammates screen lists. Deactivated rows
+ * stay visible because "who used to have access" is the question an owner asks when re-hiring, and
+ * the provisioning route is an upsert on (tenant, email): hiding them would make re-activating look
+ * like creating a duplicate.
+ */
+export async function listAppUsers(
+  env: Env,
+  tenantId: string,
+): Promise<AppUserRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
+            active, created_by, created_at, updated_at
+     FROM app_users
+     WHERE tenant_id = ?
+     ORDER BY active DESC, display_name COLLATE NOCASE ASC, user_id ASC
+     LIMIT 500`,
+  ).bind(tenantId).all<AppUserRecord>();
+  return result.results ?? [];
+}
+
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
   const now = nowIso();
   const candidateId = `appu_${crypto.randomUUID()}`;

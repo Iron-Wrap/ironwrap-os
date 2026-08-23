@@ -134,9 +134,6 @@ function ProductionRunwayScreen({
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0;
   const canOpenJob = roleCanAccess(role, "job");
-  const canPrepareSchedule =
-    roleCanAccess(role, "owner") &&
-    model.allowed_actions.includes("production_schedule_approval.prepare");
   // Server-derived, not role-derived: the read model already knows whether this
   // session's app user carries the Frappe identity a clearance is attributed to,
   // so a button that would only ever 403 is never drawn.
@@ -174,11 +171,6 @@ function ProductionRunwayScreen({
                 : "List time not found"}
             </p>
             <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
-            {roleCanAccess(role, "owner") ? (
-              <Button asChild variant="outline" size="compact" className="mt-4">
-                <Link to="/production/schedule-approvals">Schedule requests</Link>
-              </Button>
-            ) : null}
           </div>
         </header>
       </Card>
@@ -197,7 +189,6 @@ function ProductionRunwayScreen({
             locale={locale}
             timeZone={timeZone}
             canOpenJob={canOpenJob}
-            canPrepareSchedule={canPrepareSchedule}
             canClearGates={canClearGates}
           />
         ))}
@@ -294,7 +285,6 @@ function RunwayLane({
   locale,
   timeZone,
   canOpenJob,
-  canPrepareSchedule,
   canClearGates,
 }: {
   lane: ProductionRunwayLane;
@@ -302,7 +292,6 @@ function RunwayLane({
   locale: string;
   timeZone: string;
   canOpenJob: boolean;
-  canPrepareSchedule: boolean;
   canClearGates: boolean;
 }) {
   const copy = laneCopy[lane];
@@ -336,7 +325,6 @@ function RunwayLane({
                   locale={locale}
                   timeZone={timeZone}
                   canOpenJob={canOpenJob}
-                  canPrepareSchedule={canPrepareSchedule}
                   canClearGates={canClearGates}
                 />
               </li>
@@ -355,14 +343,12 @@ function RunwayJobCard({
   locale,
   timeZone,
   canOpenJob,
-  canPrepareSchedule,
   canClearGates,
 }: {
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
   canOpenJob: boolean;
-  canPrepareSchedule: boolean;
   canClearGates: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
@@ -392,18 +378,6 @@ function RunwayJobCard({
                 aria-label={`Open ${job.job_number ?? job.id}`}
               >
                 Open job
-                <ChevronRight aria-hidden="true" />
-              </Link>
-            </Button>
-          ) : null}
-          {canPrepareSchedule && job.scheduling_preparation_allowed ? (
-            <Button asChild variant="outline" size="compact">
-              <Link
-                to="/production/schedule/$jobId"
-                params={{ jobId: job.id }}
-                aria-label={`Start schedule check for ${job.job_number ?? job.id}`}
-              >
-                Start schedule check
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>

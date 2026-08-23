@@ -268,6 +268,10 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "jobs:read:any",
     "owner:read",
     "sales:read",
+    // Taking a lead by hand is the office's own intake path. It is a separate right from reading
+    // the desk because a fresh tenant has no other way in (ELEC-158 B1) and the ingest bearer that
+    // used to be the only one is a deployment secret, not a person's authority.
+    "sales:lead_create",
     "estimator:read",
     "production:read",
     // Clearing a scheduling gate is a write on the production runway, and it is
@@ -295,6 +299,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "jobs:read:any",
     "owner:read",
     "sales:read",
+    "sales:lead_create",
     "estimator:read",
     "production:read",
     "approvals:read",
@@ -309,6 +314,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "session:read",
     "now:read",
     "sales:read",
+    "sales:lead_create",
     "estimator:read",
     "approvals:read",
     "approvals:prepare",

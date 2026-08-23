@@ -21,6 +21,12 @@ export const API_PATHS = {
   customerPortalLinkRevoke: (linkId: string) =>
     `/api/v1/customer-portal/links/${encodeURIComponent(linkId)}/revoke`,
   fieldUsers: "/api/v1/field-users",
+  // Onboarding: the screens that let an owner set up their own company without an engineer.
+  adminAppUsers: "/api/v1/admin/app-users",
+  adminCompanyProfile: "/api/v1/admin/company-profile",
+  adminCompanyLogo: "/api/v1/admin/company-profile/logo",
+  companyLogo: "/public/company-logo",
+  salesLeads: "/api/v1/sales/leads",
   devicePairings: "/api/v1/device-pairings",
   devicePairingRevoke: (deviceId: string) =>
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,
@@ -70,15 +76,6 @@ export const API_PATHS = {
     `/api/v1/quickbooks/final-invoices/${encodeURIComponent(intentId)}/reconcile`,
   production: "/api/v1/production",
   productionJobSchedule: (jobId: string) => `/api/v1/jobs/${encodeURIComponent(jobId)}/schedule`,
-  productionScheduleApprovals: "/api/v1/production-schedule-approvals",
-  productionScheduleApproval: (approvalId: string) =>
-    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}`,
-  productionScheduleApprovalApprove: (approvalId: string) =>
-    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/approve`,
-  productionScheduleApprovalReject: (approvalId: string) =>
-    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reject`,
-  productionScheduleApprovalReconcile: (approvalId: string) =>
-    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   productionGateClearance: (jobId: string, gate: string) =>
     `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
   sales: "/api/v1/sales",

@@ -1,6 +1,14 @@
-import { normalizeEmail, normalizePhone } from "./core.ts";
+import {
+  companyLogoUrl,
+  companyProfileDefaults,
+  publicBrandDescriptors,
+  resolveCompanyProfile,
+  type PublicBrandDescriptor,
+} from "./company-profile.ts";
+import { normalizeEmail, normalizePhone, operatingTenantId } from "./core.ts";
 import { handleEstimateIngest } from "./estimates.ts";
 import * as store from "./store.ts";
+import type { AppEnv } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
@@ -92,12 +100,20 @@ export async function handlePublicInstantEstimate(
 
   const config = publicEstimateConfiguration(env);
   if (isConfig && req.method === "GET") {
+    const brand = await publicBrandConfiguration(env, config.allowedBrands);
     return withCors(publicJson({
       enabled: config.activated && config.ready,
       turnstile_site_key: config.activated && config.ready ? config.siteKey : null,
       range_available: false,
       disclaimer: DEFAULT_DISCLAIMER,
       review_required: true,
+      // The browser cannot know which brands this Worker accepts, and hard-coding them in the
+      // frontend meant every tenant but the first two had its customers rejected with a
+      // competitor's name on the page (ELEC-158 B2). The server states its own allow-list, named
+      // by whatever the owner set in the company profile.
+      brands: brand.brands,
+      default_brand: brand.brands[0]?.id ?? null,
+      logo_url: brand.logo_url,
     }), origin.origin);
   }
   if (!isSubmission || req.method !== "POST") {
@@ -254,6 +270,31 @@ function configuredOrigins(env: PublicEstimatorEnv): Set<string> {
     if (origin) result.add(origin);
   }
   return result;
+}
+
+/**
+ * Brand names and the logo for the public form. The allow-list is the Worker's (a browser may not
+ * widen it); the labels are the owner's, read from the company profile with the generated tenant
+ * vars as the fallback. A profile that cannot be read degrades to those vars rather than failing
+ * the config request — the form must still open for a customer while R2 is unhappy.
+ */
+async function publicBrandConfiguration(
+  env: PublicEstimatorEnv,
+  allowedBrands: Set<string>,
+): Promise<{ brands: PublicBrandDescriptor[]; logo_url: string | null }> {
+  const appEnv = env as unknown as AppEnv;
+  const tenantId = operatingTenantId(appEnv.APP_TENANT_ID);
+  if (!tenantId) return { brands: [], logo_url: null };
+  let profile;
+  try {
+    profile = await resolveCompanyProfile(appEnv, tenantId);
+  } catch {
+    profile = companyProfileDefaults(appEnv, tenantId);
+  }
+  return {
+    brands: publicBrandDescriptors(profile, allowedBrands),
+    logo_url: companyLogoUrl(profile),
+  };
 }
 
 function configuredBrands(env: PublicEstimatorEnv): Set<string> {

@@ -13,6 +13,7 @@ import {
   RefreshCw,
   ShieldCheck,
   TriangleAlert,
+  UserPlus,
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
@@ -113,6 +114,7 @@ function SalesDeskScreen({
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
   const canReviewApprovals = model.allowed_actions.includes("approval.read");
+  const canCreateLead = model.allowed_actions.includes("sales.lead.create");
   const canPrepareTriage = model.allowed_actions.includes("commercial.lead_triage.record");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
   const attentionCount = model.leads.filter((lead) => lead.attention.length > 0).length;
@@ -131,8 +133,8 @@ function SalesDeskScreen({
                   Sales desk
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Check each lead before you call or send anything. This page only reads saved sales
-                  data.
+                  Check each lead before you call or send anything. Add anyone who called or walked
+                  in with <span className="font-semibold text-foreground">Add a lead</span>.
                 </p>
               </div>
             </div>
@@ -147,14 +149,24 @@ function SalesDeskScreen({
             {generatedAt ? (
               <p className="mt-2 text-sm text-muted">List made {generatedAt}</p>
             ) : null}
-            {canReviewApprovals ? (
-              <Button asChild variant="outline" size="compact" className="mt-5">
-                <Link to="/approvals">
-                  <ShieldCheck aria-hidden="true" />
-                  Open lead reviews
-                </Link>
-              </Button>
-            ) : null}
+            <div className="mt-5 flex flex-wrap gap-2">
+              {canCreateLead ? (
+                <Button asChild variant="accent" size="compact">
+                  <Link to="/sales/new-lead">
+                    <UserPlus aria-hidden="true" />
+                    Add a lead
+                  </Link>
+                </Button>
+              ) : null}
+              {canReviewApprovals ? (
+                <Button asChild variant="outline" size="compact">
+                  <Link to="/approvals">
+                    <ShieldCheck aria-hidden="true" />
+                    Open lead reviews
+                  </Link>
+                </Button>
+              ) : null}
+            </div>
           </div>
         </header>
       </Card>
@@ -177,6 +189,8 @@ function SalesDeskScreen({
             currency={currency}
             canOpenWorkbench={canOpenWorkbench}
             canPrepareTriage={canPrepareTriage}
+            canCreateLead={canCreateLead}
+            noLeadsAtAll={model.leads.length === 0}
           />
         </main>
       </div>
@@ -283,6 +297,8 @@ function LeadQueue({
   currency,
   canOpenWorkbench,
   canPrepareTriage,
+  canCreateLead,
+  noLeadsAtAll,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
@@ -290,9 +306,28 @@ function LeadQueue({
   currency: string;
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
+  canCreateLead: boolean;
+  noLeadsAtAll: boolean;
 }) {
   if (leads.length === 0) {
-    return (
+    // A company that has never had a lead is being set up, not filtering. Send it to the one
+    // action that helps instead of to another empty tab.
+    return noLeadsAtAll ? (
+      <EmptyState
+        title="No leads yet"
+        message="Website requests and calls land here on their own. Add the first one by hand to get going."
+        action={
+          canCreateLead ? (
+            <Button asChild variant="accent">
+              <Link to="/sales/new-lead">
+                <UserPlus aria-hidden="true" />
+                Add a lead
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      />
+    ) : (
       <EmptyState
         title={emptyQueueTitle(filter)}
         message="No saved leads match this view. Try another tab."

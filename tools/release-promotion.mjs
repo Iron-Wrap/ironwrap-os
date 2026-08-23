@@ -59,6 +59,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const IDENTITY_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const ACCOUNT_RE = /^[0-9a-f]{32}$/;
+const INDEPENDENT_ISSUER_ROUTE = "/v2/independent-issuer";
+const INDEPENDENT_ISSUER_REQUEST_SCHEMA =
+  "ironwrap_independent_issuer_request_v2";
+const ISO_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const INDEPENDENT_ISSUER_MAX_LIFETIME_MS = 10 * 60_000;
+const INDEPENDENT_ISSUER_MAX_FUTURE_SKEW_MS = 60_000;
+const INDEPENDENT_ISSUER_REQUEST_LIFETIME_MS = 5 * 60_000;
 
 function fail(code) {
   throw new Error(`release_promotion_${code}`);
@@ -86,6 +94,36 @@ function requireCommit(value, code) {
 function requireUuid(value, code) {
   if (!UUID_RE.test(value)) fail(code);
   return value;
+}
+
+function requireCanonicalTimestamp(value, code) {
+  if (typeof value !== "string" || !ISO_TIMESTAMP_RE.test(value)) fail(code);
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    fail(code);
+  }
+  return milliseconds;
+}
+
+function validateIndependentIssuerFreshness(request, now = Date.now) {
+  const requestedAt = requireCanonicalTimestamp(
+    request.requested_at,
+    "issuer_requested_at_invalid",
+  );
+  const expiresAt = requireCanonicalTimestamp(
+    request.expires_at,
+    "issuer_expires_at_invalid",
+  );
+  const currentTime = now();
+  if (!Number.isFinite(currentTime)) fail("issuer_clock_invalid");
+  if (expiresAt <= requestedAt) fail("issuer_request_time_order_invalid");
+  if (expiresAt - requestedAt > INDEPENDENT_ISSUER_MAX_LIFETIME_MS) {
+    fail("issuer_request_lifetime_invalid");
+  }
+  if (requestedAt > currentTime + INDEPENDENT_ISSUER_MAX_FUTURE_SKEW_MS) {
+    fail("issuer_request_future_invalid");
+  }
+  if (expiresAt <= currentTime) fail("issuer_request_expired");
 }
 
 function json(value, code) {
@@ -482,22 +520,34 @@ function validateIssuerAcknowledgement(acknowledgement, expected = {}) {
   return acknowledgement;
 }
 
-export async function requestIndependentIssuer({ url, apiToken, request, fetchImpl = fetch } = {}) {
+export async function requestIndependentIssuer({
+  url,
+  apiToken,
+  request,
+  fetchImpl = fetch,
+  now = Date.now,
+} = {}) {
   let issuerUrl;
   try { issuerUrl = new URL(requireString(url, "issuer_url_invalid")); } catch { fail("issuer_url_invalid"); }
-  if (issuerUrl.protocol !== "https:" || issuerUrl.username || issuerUrl.password || issuerUrl.hash) fail("issuer_url_invalid");
+  if (issuerUrl.protocol !== "https:"
+    || issuerUrl.pathname !== INDEPENDENT_ISSUER_ROUTE
+    || issuerUrl.search
+    || issuerUrl.username
+    || issuerUrl.password
+    || issuerUrl.hash) fail("issuer_url_invalid");
   requireString(apiToken, "issuer_token_missing");
-  exactObjectKeys(request, ["schema", "phase", "repository", "pr_number", "base_commit", "head_commit", "source_commit", "source_git_tree", "source_tree_sha256", "diff_sha256", "ci_run_id", "candidate_artifact", "publication", "receipt_key", "requested_by", "expected_issuer"], "issuer_request_shape_invalid");
+  exactObjectKeys(request, ["schema", "phase", "repository", "pr_number", "base_commit", "head_commit", "source_commit", "source_git_tree", "source_tree_sha256", "diff_sha256", "ci_run_id", "candidate_artifact", "publication", "receipt_key", "requested_at", "expires_at", "requested_by", "expected_issuer"], "issuer_request_shape_invalid");
   exactObjectKeys(request.candidate_artifact, ["actions_run_id", "actions_run_attempt", "name", "content_digest"], "issuer_request_artifact_invalid");
   exactObjectKeys(request.publication, ["ref", "path"], "issuer_request_publication_invalid");
   exactObjectKeys(request.receipt_key, ["public_key_sha256", "key_version"], "issuer_request_key_invalid");
   exactObjectKeys(request.expected_issuer, ["principal", "task_id"], "issuer_request_expected_invalid");
-  if (request.schema !== "ironwrap_independent_issuer_request_v1" || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
+  if (request.schema !== INDEPENDENT_ISSUER_REQUEST_SCHEMA || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
   for (const value of [request.base_commit, request.head_commit, request.source_commit, request.source_git_tree]) requireCommit(value, "issuer_request_commit_invalid");
   for (const value of [request.source_tree_sha256, request.diff_sha256, request.candidate_artifact.content_digest, request.receipt_key.public_key_sha256]) requireHash(value, "issuer_request_digest_invalid");
   for (const value of [request.ci_run_id, request.candidate_artifact.actions_run_id, request.candidate_artifact.actions_run_attempt]) if (!/^[1-9][0-9]*$/.test(String(value))) fail("issuer_request_run_invalid");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(request.candidate_artifact.name) || !IDENTITY_RE.test(request.requested_by) || !IDENTITY_RE.test(request.expected_issuer.principal) || request.requested_by === request.expected_issuer.principal) fail("issuer_request_identity_invalid");
   for (const value of [request.expected_issuer.task_id, request.receipt_key.key_version]) if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("issuer_request_execution_invalid");
+  validateIndependentIssuerFreshness(request, now);
   const requestDigest = sha256(canonicalJson(request));
   const response = await fetchImpl(issuerUrl, {
     method: "POST",
@@ -529,10 +579,11 @@ async function issuerRequest(args) {
   const publicKey = await readFile(arg(args, "issuer-public-key"), "utf8");
   const artifactName = arg(args, "artifact-name");
   const contentDigest = requireHash(arg(args, "artifact-digest"), "issuer_artifact_digest_invalid");
+  const requestedAt = Date.now();
   const receiptRef = phase === "review" ? `${REVIEW_RECEIPT_REF_PREFIX}${source.source_commit}` : `${RELEASE_EVIDENCE_REF_PREFIX}${source.source_commit}`;
   const receiptPath = phase === "review" ? `${REVIEW_RECEIPT_PATH_PREFIX}${source.source_commit}.json` : `${RELEASE_EVIDENCE_PATH_PREFIX}${source.source_commit}.json`;
   const request = {
-    schema: "ironwrap_independent_issuer_request_v1",
+    schema: INDEPENDENT_ISSUER_REQUEST_SCHEMA,
     phase,
     repository,
     pr_number: pr.number,
@@ -551,6 +602,8 @@ async function issuerRequest(args) {
     },
     publication: { ref: receiptRef, path: receiptPath },
     receipt_key: { public_key_sha256: sha256(publicKey), key_version: arg(args, "issuer-key-version") },
+    requested_at: new Date(requestedAt).toISOString(),
+    expires_at: new Date(requestedAt + INDEPENDENT_ISSUER_REQUEST_LIFETIME_MS).toISOString(),
     requested_by: arg(args, "requester-identity"),
     expected_issuer: { principal: arg(args, "issuer-identity"), task_id: arg(args, "issuer-task-id") },
   };

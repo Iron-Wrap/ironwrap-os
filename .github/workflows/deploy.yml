@@ -152,6 +152,9 @@ jobs:
           RELEASE_REVIEW_PUBLIC_KEY: ${{ secrets.RELEASE_REVIEW_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          # The secret must name the explicit /v2/independent-issuer route.
+          # issuer-request emits a canonical five-minute freshness window;
+          # the trigger only queues independent custodian work.
           printf '%s' "$RELEASE_REVIEW_PUBLIC_KEY" > "$RUNNER_TEMP/review.pub"
           node "$RELEASE_ENFORCER" issuer-request \
             --phase review --url "$RELEASE_INDEPENDENT_ISSUER_URL" \
@@ -795,6 +798,8 @@ jobs:
           RELEASE_REVIEW_PUBLIC_KEY: ${{ secrets.RELEASE_REVIEW_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          # The same v2 trigger validates freshness before accepting this exact
+          # full-surface evidence request; signing/publication stay external.
           printf '%s' "$RELEASE_REVIEW_PUBLIC_KEY" > "$RUNNER_TEMP/evidence.pub"
           node "$RELEASE_ENFORCER" issuer-request \
             --phase release-evidence --url "$RELEASE_INDEPENDENT_ISSUER_URL" \

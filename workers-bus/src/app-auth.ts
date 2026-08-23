@@ -271,43 +271,7 @@ export async function requestMagicLink(
   const user = candidate?.role === "field" ? null : candidate;
 
   if (user) {
-    const rawToken = randomToken();
-    const createdAt = now.toISOString();
-    const expiresAt = new Date(now.getTime() + MAGIC_LINK_TTL_SECONDS * 1000).toISOString();
-    await authStore.replaceMagicLink(env, {
-      tokenHash: await sha256Hex(rawToken),
-      user,
-      createdAt,
-      expiresAt,
-      request,
-    });
-    await authStore.recordAuthAudit(env, {
-      tenantId: user.tenant_id,
-      userId: user.user_id,
-      event: "magic_link_request",
-      outcome: "accepted",
-      request,
-    });
-
-    const sender = deps.sendMagicLink ?? sendMagicLinkEmail;
-    const delivery = sender(env, user, rawToken).then(
-      () => authStore.recordAuthAudit(env, {
-        tenantId: user.tenant_id,
-        userId: user.user_id,
-        event: "magic_link_delivery",
-        outcome: "sent",
-        request,
-      }),
-      () => authStore.recordAuthAudit(env, {
-        tenantId: user.tenant_id,
-        userId: user.user_id,
-        event: "magic_link_delivery",
-        outcome: "failed",
-        request,
-        detailCode: "delivery_failed",
-      }),
-    ).then(() => undefined);
-    ctx.waitUntil(delivery);
+    await deliverMagicLink(env, user, request, now, ctx, deps);
   } else {
     await authStore.recordAuthAudit(env, {
       tenantId: tenantMatches ? configuredTenant : null,
@@ -321,6 +285,65 @@ export async function requestMagicLink(
 
   // Deliberately identical for active, inactive, unknown, and throttled identities.
   return authJson(GENERIC_LINK_RESPONSE, 202);
+}
+
+/**
+ * Mint and deliver one magic link for a user who is already known to be authorized for one.
+ *
+ * Extracted so a second caller cannot grow a second copy of the sign-in credential. Accepting an
+ * invitation delivers the ordinary sign-in link through exactly this path: the office invite is a
+ * grant, not a session, and the product keeps one email-session issuer.
+ *
+ * Delivery is deliberately not allowed to fail the caller. The link is already recorded, so a
+ * mailbox outage costs the recipient one "send me a link" tap, not their access.
+ */
+export async function deliverMagicLink(
+  env: AppEnv,
+  user: AppUserRecord,
+  request: AuthRequestContext,
+  now: Date,
+  ctx: Pick<ExecutionContext, "waitUntil">,
+  deps: AuthDependencies = {},
+  requestDetailCode: string | null = null,
+): Promise<void> {
+  const rawToken = randomToken();
+  const createdAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + MAGIC_LINK_TTL_SECONDS * 1000).toISOString();
+  await authStore.replaceMagicLink(env, {
+    tokenHash: await sha256Hex(rawToken),
+    user,
+    createdAt,
+    expiresAt,
+    request,
+  });
+  await authStore.recordAuthAudit(env, {
+    tenantId: user.tenant_id,
+    userId: user.user_id,
+    event: "magic_link_request",
+    outcome: "accepted",
+    request,
+    detailCode: requestDetailCode,
+  });
+
+  const sender = deps.sendMagicLink ?? sendMagicLinkEmail;
+  const delivery = sender(env, user, rawToken).then(
+    () => authStore.recordAuthAudit(env, {
+      tenantId: user.tenant_id,
+      userId: user.user_id,
+      event: "magic_link_delivery",
+      outcome: "sent",
+      request,
+    }),
+    () => authStore.recordAuthAudit(env, {
+      tenantId: user.tenant_id,
+      userId: user.user_id,
+      event: "magic_link_delivery",
+      outcome: "failed",
+      request,
+      detailCode: "delivery_failed",
+    }),
+  ).then(() => undefined);
+  ctx.waitUntil(delivery);
 }
 
 export async function consumeMagicLink(
@@ -735,13 +758,13 @@ function sessionCookie(rawToken: string, expiresAt: string): string {
 
 /**
  * Local-only development capture (APP_ALLOW_INSECURE_LOCAL="true"; always false in
- * production). Records a sign-in or contract-acceptance href in dev_outbox so local
+ * production). Records a sign-in, invitation, or contract-acceptance href in dev_outbox so local
  * end-to-end runs can complete the real consume flow without intercepting email.
  * Returns false when the flag is off, which is what makes Gmail the only deployed path.
  */
 export async function devOutboxCapture(
   env: AppEnv,
-  kind: "magic_link" | "contract_acceptance",
+  kind: "magic_link" | "contract_acceptance" | "user_invite",
   recipient: string,
   href: string,
 ): Promise<boolean> {
@@ -947,13 +970,13 @@ function authJson(body: unknown, status = 200): Response {
   });
 }
 
-function normalizeEmail(value: unknown): string | null {
+export function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const email = value.trim().toLowerCase();
   return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
-function cleanText(value: unknown, min: number, max: number): string | null {
+export function cleanText(value: unknown, min: number, max: number): string | null {
   if (typeof value !== "string") return null;
   const cleaned = value.trim().replace(/\s+/g, " ");
   return cleaned.length >= min && cleaned.length <= max && !/[\u0000-\u001F\u007F]/.test(cleaned)
@@ -979,7 +1002,7 @@ function hex(bytes: Uint8Array): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]!));
 }

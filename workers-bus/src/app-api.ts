@@ -41,6 +41,16 @@ import {
   type AppAuthRefusal,
 } from "./app-auth.ts";
 import {
+  acceptUserInvite,
+  changeAppUserAccess,
+  changeAppUserRole,
+  createUserInvite,
+  listAppUsersForOffice,
+  listUserInvitesForOffice,
+  resendUserInviteForOffice,
+  revokeUserInviteForOffice,
+} from "./app-user-invites.ts";
+import {
   approvalProjection,
   claimApprovalExecution,
   createApprovalRequest,
@@ -284,6 +294,16 @@ export async function handleAppApi(
     url.pathname === "/api/v1/auth/device-pairing/consume"
   ) {
     response = await consumeDevicePairing(req, appEnv);
+  } else if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/auth/invites/accept"
+  ) {
+    // Unauthenticated by construction, exactly like the two consume routes above it: the
+    // one-time secret in the invitation is the authority. It produces a grant, not a session.
+    const accepted = await acceptUserInvite(req, appEnv, ctx);
+    response = accepted.ok
+      ? privateAppJson({ version: APP_API_VERSION, ...accepted.body })
+      : privateAppJson({ error: accepted.error }, accepted.status);
   } else {
     const outcome = await authenticateAppRequest(req, appEnv);
     if (!outcome.ok) {
@@ -400,34 +420,6 @@ export async function handleAdminFirstOwnerBootstrap(
       active: user.active === 1,
       updated_at: user.updated_at,
     },
-  });
-}
-
-/**
- * The teammates screen (ELEC-158 B3). `/settings` used to render crew device pairing and nothing
- * else, and its own empty state told the reader to "create an active Field Companion account"
- * with no way to do it; the provisioning route existed but was reachable only by curl.
- */
-export async function handleAdminAppUserList(
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
-  const appEnv = env as AppEnv;
-  const users = await appAuthStore.listAppUsers(appEnv, auth.session.tenant_id);
-  return privateAppJson({
-    version: APP_API_VERSION,
-    users: users.map((user) => ({
-      user_id: user.user_id,
-      email: user.email_normalized,
-      display_name: user.display_name,
-      role: user.role,
-      active: user.active === 1,
-      updated_at: user.updated_at,
-      /** The signed-in owner must not be able to lock themselves out of their own tenant. */
-      is_self: user.user_id === auth.session.user_id,
-    })),
   });
 }
 
@@ -617,9 +609,75 @@ export async function handleAuthenticatedRoute(
     return await handleHermesDesktopPairingIssue(req, env, auth);
   }
   if (url.pathname === "/api/v1/admin/app-users") {
-    if (req.method === "POST") return await handleAdminAppUserProvision(req, env, auth);
-    if (req.method === "GET") return await handleAdminAppUserList(env, auth);
+    if (req.method === "POST") {
+      return await handleAdminAppUserProvision(req, env, auth);
+    }
+    if (req.method === "GET") {
+      const listed = await listAppUsersForOffice(env, auth);
+      return listed.ok
+        ? privateAppJson(listed.body)
+        : privateAppJson({ error: listed.error }, listed.status);
+    }
     return privateAppJson({ error: "not_found" }, 404);
+  }
+  const appUserRoleMatch = url.pathname.match(
+    /^\/api\/v1\/admin\/app-users\/([^/]+)\/role$/,
+  );
+  if (req.method === "POST" && appUserRoleMatch) {
+    const userId = decodedPathSegment(appUserRoleMatch[1]);
+    if (!userId) return privateAppJson({ error: "user_not_found" }, 404);
+    const changed = await changeAppUserRole(req, env, auth, userId);
+    return changed.ok
+      ? privateAppJson(changed.body)
+      : privateAppJson({ error: changed.error }, changed.status);
+  }
+  const appUserAccessMatch = url.pathname.match(
+    /^\/api\/v1\/admin\/app-users\/([^/]+)\/access$/,
+  );
+  if (req.method === "POST" && appUserAccessMatch) {
+    const userId = decodedPathSegment(appUserAccessMatch[1]);
+    if (!userId) return privateAppJson({ error: "user_not_found" }, 404);
+    const changed = await changeAppUserAccess(req, env, auth, userId);
+    return changed.ok
+      ? privateAppJson(changed.body)
+      : privateAppJson({ error: changed.error }, changed.status);
+  }
+  if (url.pathname === "/api/v1/admin/user-invites") {
+    if (req.method === "GET") {
+      const listed = await listUserInvitesForOffice(env, auth);
+      return listed.ok
+        ? privateAppJson(listed.body)
+        : privateAppJson({ error: listed.error }, listed.status);
+    }
+    if (req.method === "POST") {
+      const created = await createUserInvite(req, env, auth);
+      return created.ok
+        ? privateAppJson(created.body, created.status)
+        : privateAppJson({ error: created.error }, created.status);
+    }
+    return privateAppJson({ error: "not_found" }, 404);
+  }
+  const inviteResendMatch = url.pathname.match(
+    /^\/api\/v1\/admin\/user-invites\/([^/]+)\/resend$/,
+  );
+  if (req.method === "POST" && inviteResendMatch) {
+    const inviteId = decodedPathSegment(inviteResendMatch[1]);
+    if (!inviteId) return privateAppJson({ error: "invite_not_found" }, 404);
+    const resent = await resendUserInviteForOffice(req, env, auth, inviteId);
+    return resent.ok
+      ? privateAppJson(resent.body)
+      : privateAppJson({ error: resent.error }, resent.status);
+  }
+  const inviteRevokeMatch = url.pathname.match(
+    /^\/api\/v1\/admin\/user-invites\/([^/]+)\/revoke$/,
+  );
+  if (req.method === "POST" && inviteRevokeMatch) {
+    const inviteId = decodedPathSegment(inviteRevokeMatch[1]);
+    if (!inviteId) return privateAppJson({ error: "invite_not_found" }, 404);
+    const revoked = await revokeUserInviteForOffice(req, env, auth, inviteId);
+    return revoked.ok
+      ? privateAppJson(revoked.body)
+      : privateAppJson({ error: revoked.error }, revoked.status);
   }
   if (url.pathname === "/api/v1/admin/company-profile") {
     if (req.method === "GET") return await handleCompanyProfileRead(env, auth);

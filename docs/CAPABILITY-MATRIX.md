@@ -60,12 +60,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 84,
-      "latest": "0110_tenant_company_profile_and_setup.sql"
+      "count": 85,
+      "latest": "0111_office_user_invites.sql"
     },
     "tests": {
       "pwa": 586,
-      "worker": 1263
+      "worker": 1286
     }
   },
   "proof_state_policy": {
@@ -587,6 +587,40 @@ IRO-45 branch-local inventory ledger:
   `/api/v1/inventory` off the authenticated app router with effective-role actor binding,
   covered by `test/inventory-control-api.test.ts`. This branch has repository tests only: no
   PWA surface, no provider adapter, no deployment, and no business-acceptance proof.
+
+Office user invitations and access management (branch-local, 2026-08-23):
+
+- Migration `0111_office_user_invites.sql` adds `app_user_invites`: one office-issued credential
+  per row, bound to one tenant, one normalized mailbox and one `access_role`, storing only the
+  SHA-256 of a 43-character secret that is emailed once. It is the same credential shape as the
+  `0014` device pairing — expiring, single-use, revocable — and the same reasons apply: a database
+  export contains nothing replayable, and the secret travels in a URL fragment so it never reaches
+  a request line or a Worker log. A partial unique index keeps exactly one invitation open per
+  mailbox; a re-issue supersedes the previous one inside the same D1 batch.
+- `workers-bus/src/app-user-invites.ts` and `src/app-user-invite-store.ts` own the capability;
+  `src/app-api.ts` binds it to `GET|POST /api/v1/admin/user-invites`,
+  `POST /api/v1/admin/user-invites/{inviteId}/resend|revoke`, the unauthenticated
+  `POST /api/v1/auth/invites/accept`, and the two id-addressed people routes
+  `POST /api/v1/admin/app-users/{userId}/role` and `.../access`, alongside the
+  `GET /api/v1/admin/app-users` list they need.
+- Accepting produces a grant, never a session. The materialization and the claim are one D1 batch
+  under one open-invitation predicate, so a replay cannot create a second account, re-grade a live
+  one, or resurrect a withdrawn one; the invitee is then delivered the product's ordinary
+  magic link through the existing issuer, and a crew invitation is told its phone still needs an
+  office-issued pairing because crew never receive an email session.
+- Authority is decided in the Worker: office role for every route, owner-only for anything that
+  hands out or takes back ownership, and no self-service role change or self-removal — which is
+  also what makes the tenant impossible to lock out of itself. Withdrawing access closes the live
+  sessions, the open sign-in link, the paired devices and any open invitation in the same act.
+- The issuing surface is deliberately not an account-existence oracle: issuing, re-sending and
+  revoking answer with the invitation's own state and nothing else, identically for a mailbox that
+  is unknown, already active, or deactivated.
+- Repository tests only (`workers-bus/test/app-user-invites.test.ts`, 23 cases driving the real
+  Worker against a D1 built from the committed migration chain). There is no PWA surface on this
+  branch, no deployed environment, no real mailbox, and no business-acceptance proof. The
+  pre-existing `POST /api/v1/admin/app-users` upsert remains reachable and still permits an
+  operations session to provision an owner; closing that is a separate change to a route this lane
+  does not own.
 
 Missing for autonomous target:
 

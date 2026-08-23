@@ -67,6 +67,20 @@ Two facts about the local stack that the script depends on, and that a hand-run 
   live on (default `ironwrap.local`). A clone uses `<tenant>.local`, which is what keeps the
   tenant's `ERPNEXT_INTEGRATION_USER` and `QB_RECONCILIATION_ISSUER_USER` from naming another
   tenant's identity.
+- **The compose stack is profile-gated, so every command that starts it passes
+  `--profile frappe`.** All five services in `deploy/local/docker-compose.yml` carry
+  `profiles: [frappe]`, and `docker compose up -d` without the flag selects nothing and exits
+  with `no service selected`. `deploy/clone-tenant.sh` and `deploy/local/predev.mjs` both pass
+  it; a hand-run has to as well:
+
+  ```bash
+  docker compose -f deploy/local/docker-compose.yml --profile frappe up -d
+  docker compose -f deploy/local/docker-compose.yml --profile frappe logs -f frappe-init
+  ```
+
+  `docker compose exec` and `restart` reach an already-running service by name and do not need
+  the flag. Do not reach for `COMPOSE_PROFILES=frappe` in the environment instead: it works,
+  but it makes the requirement invisible to the next reader of the script.
 
 ## Clone Steps
 

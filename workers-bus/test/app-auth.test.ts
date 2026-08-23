@@ -1221,22 +1221,21 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
   assert.equal([...db.sessions.values()].filter((session) => session.device_id !== null).length, 1);
   assert.equal(JSON.stringify({ devices: [...db.devices.values()], audits: db.audits }).includes(deviceProof), false);
 
+  // A proof problem is refused, never answered with the signed-out payload: reading
+  // `authenticated: false` is what makes the PWA drop its device secret.
   const withoutProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: { cookie: fieldCookie, origin: "https://app.example.com" },
   }), env, ctx.ctx as never);
-  assert.equal((await withoutProof.json() as { authenticated: boolean }).authenticated, false);
+  assert.equal(withoutProof.status, 401);
+  assert.deepEqual(await withoutProof.json(), { error: "device_proof_required" });
+  assert.equal(withoutProof.headers.get("set-cookie"), null);
 
   const bootstrapWithoutProof = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
     headers: { cookie: fieldCookie, origin: "https://app.example.com" },
   }), env, ctx.ctx as never);
-  const bootstrapWithoutProofBody = await bootstrapWithoutProof.json() as {
-    version: number;
-    session: { authenticated: boolean };
-  };
-  assert.equal(bootstrapWithoutProof.status, 200);
-  assert.deepEqual(Object.keys(bootstrapWithoutProofBody).sort(), ["session", "version"]);
-  assert.equal(bootstrapWithoutProofBody.version, 1);
-  assert.equal(bootstrapWithoutProofBody.session.authenticated, false);
+  assert.equal(bootstrapWithoutProof.status, 401);
+  assert.deepEqual(await bootstrapWithoutProof.json(), { error: "device_proof_required" });
+  assert.equal(bootstrapWithoutProof.headers.get("set-cookie"), null);
 
   const wrongProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: {
@@ -1245,7 +1244,9 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
       "x-ironwrap-device-proof": "q".repeat(43),
     },
   }), env, ctx.ctx as never);
-  assert.equal((await wrongProof.json() as { authenticated: boolean }).authenticated, false);
+  assert.equal(wrongProof.status, 401);
+  assert.deepEqual(await wrongProof.json(), { error: "device_proof_required" });
+  assert.equal(wrongProof.headers.get("set-cookie"), null);
 
   const fieldSession = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: {
@@ -1327,4 +1328,88 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
     },
   }), env, ctx.ctx as never);
   assert.equal((await afterRevoke.json() as { authenticated: boolean }).authenticated, false);
+});
+
+/**
+ * ELEC-167 item 18. The router used to expire the session cookie on EVERY unauthenticated
+ * request, so a live field session that simply did not carry its device proof - an
+ * office-shaped call from a field surface, or a cold load where reading the proof out of
+ * IndexedDB lost the race - was answered exactly like having no session at all. The browser
+ * dropped the cookie, the next load reported a signed-out session, the PWA cleared the device
+ * secret, and the crew phone demanded re-pairing. One proofless request un-paired a phone.
+ *
+ * The rule this pins: the cookie is expired only when the cookie itself names nothing live.
+ */
+test("a proofless field request is refused without expiring a live session cookie", async () => {
+  const db = new AuthMemoryDb();
+  const env = baseEnv(db);
+  const fieldUser = await addFieldUser(env);
+  const office = await signInOffice(env);
+  const ctx = waitContext();
+
+  const issued = await (await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: fieldUser.user_id,
+  }, { cookie: office.cookiePair, "x-csrf-token": office.csrfToken }), env, ctx.ctx as never))
+    .json() as { pairing_url: string };
+  const deviceProof = "p".repeat(43);
+  const paired = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: new URL(issued.pairing_url).hash.slice("#token=".length),
+    device_proof: deviceProof,
+  }), env, ctx.ctx as never);
+  assert.equal(paired.status, 200);
+  const fieldCookie = (paired.headers.get("set-cookie") ?? "").split(";")[0];
+
+  // An office-shaped read from a field surface: the session is live, the header is simply
+  // not on the request. It is refused, and the cookie is left alone.
+  const proofless = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
+    headers: { cookie: fieldCookie, origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  assert.equal(proofless.status, 401);
+  assert.deepEqual(await proofless.json(), { error: "device_proof_required" });
+  assert.equal(proofless.headers.get("set-cookie"), null);
+
+  // The point of not expiring it: the very same cookie still works once the proof is present,
+  // so the phone never has to be re-paired over a request that forgot its header.
+  const stillPaired = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: {
+      cookie: fieldCookie,
+      origin: "https://app.example.com",
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  }), env, ctx.ctx as never);
+  assert.equal(stillPaired.status, 200);
+  const stillPairedBody = await stillPaired.json() as {
+    authenticated: boolean;
+    user: { role: string };
+  };
+  assert.equal(stillPairedBody.authenticated, true);
+  assert.equal(stillPairedBody.user.role, "field");
+  assert.equal(db.devices.size, 1);
+  assert.equal([...db.devices.values()][0].revoked_at, null);
+
+  // Having no session at all is still a dead cookie, and still gets the expiry.
+  const noSession = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
+    headers: { origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  assert.equal(noSession.status, 401);
+  assert.deepEqual(await noSession.json(), { error: "unauthorized" });
+  assert.match(noSession.headers.get("set-cookie") ?? "", /Max-Age=0/);
+
+  // So is a cookie whose session row is gone, expired or revoked.
+  const staleSession = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
+    headers: {
+      cookie: `__Host-ironwrap_session=${"z".repeat(43)}`,
+      origin: "https://app.example.com",
+    },
+  }), env, ctx.ctx as never);
+  assert.equal(staleSession.status, 401);
+  assert.match(staleSession.headers.get("set-cookie") ?? "", /Max-Age=0/);
+
+  // A signed-out browser still gets the friendly payload it needs to paint a sign-in screen.
+  const signedOutSession = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: { origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  assert.equal(signedOutSession.status, 200);
+  assert.equal((await signedOutSession.json() as { authenticated: boolean }).authenticated, false);
+  assert.match(signedOutSession.headers.get("set-cookie") ?? "", /Max-Age=0/);
 });

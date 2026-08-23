@@ -588,27 +588,63 @@ export async function revokeDevicePairing(
   return { ok: true, device_id: deviceId, revoked_at: now };
 }
 
-export async function authenticateAppRequest(req: Request, env: AppEnv): Promise<AuthContext | null> {
+/**
+ * Why a request could not be authenticated.
+ *
+ * `no_session` - the cookie names nothing live: it is absent, malformed, or its session row is
+ * gone, expired or revoked. Only this case leaves the browser holding a dead cookie.
+ * `device_proof_required` - the cookie names a LIVE field session, but the request did not carry
+ * a valid device proof for it. The session is intact; only this one request is refused.
+ */
+export type AppAuthRefusal = "no_session" | "device_proof_required";
+
+export type AppAuthOutcome =
+  | { ok: true; auth: AuthContext }
+  | { ok: false; refusal: AppAuthRefusal };
+
+/**
+ * Authenticates an app request and says WHY when it fails.
+ *
+ * The two failures used to be one `null`, which made a live field session that omitted its
+ * device proof indistinguishable from having no session at all - and the router then expired
+ * the session cookie for both. One proofless call from a field surface therefore un-paired the
+ * crew phone (ELEC-167 item 18). The router now reads the reason, so it can refuse a proofless
+ * request without expiring the live cookie behind it.
+ */
+export async function authenticateAppRequest(
+  req: Request,
+  env: AppEnv,
+): Promise<AppAuthOutcome> {
   const rawSessionToken = cookieValue(req.headers.get("cookie"), APP_SESSION_COOKIE);
   const tenantId = configuredTenantId(env);
-  if (!rawSessionToken || !tenantId || !/^[A-Za-z0-9_-]{43}$/.test(rawSessionToken)) return null;
+  if (!rawSessionToken || !tenantId || !/^[A-Za-z0-9_-]{43}$/.test(rawSessionToken)) {
+    return { ok: false, refusal: "no_session" };
+  }
   const sessionHash = await sessionHashFor(env, rawSessionToken);
   const now = new Date().toISOString();
   const session = await authStore.findActiveSession(env, sessionHash, tenantId, now);
-  if (!session) return null;
+  if (!session) return { ok: false, refusal: "no_session" };
   if (session.role === "field") {
+    // A proof problem is never grounds for discarding the session: the row is live and the
+    // remedy is to present the proof, not to sign the device out. Missing and mismatched proofs
+    // answer the same way so the refusal never reports whether a guessed proof was close.
     const rawDeviceProof = req.headers.get(APP_DEVICE_PROOF_HEADER);
     if (!rawDeviceProof || !/^[A-Za-z0-9_-]{43}$/.test(rawDeviceProof) || !session.device_proof_hash) {
-      return null;
+      return { ok: false, refusal: "device_proof_required" };
     }
-    if (!constantTimeEqual(await sha256Hex(rawDeviceProof), session.device_proof_hash)) return null;
+    if (!constantTimeEqual(await sha256Hex(rawDeviceProof), session.device_proof_hash)) {
+      return { ok: false, refusal: "device_proof_required" };
+    }
   }
   await authStore.touchSession(env, sessionHash, now);
   return {
-    session,
-    rawSessionToken,
-    csrfToken: await csrfTokenFor(env, rawSessionToken),
-    permissions: permissionsForRole(session.role),
+    ok: true,
+    auth: {
+      session,
+      rawSessionToken,
+      csrfToken: await csrfTokenFor(env, rawSessionToken),
+      permissions: permissionsForRole(session.role),
+    },
   };
 }
 

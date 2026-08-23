@@ -98,7 +98,11 @@ redacted and receipt-bound digests, source, target, version, and supersedes
 lineage to match. Any drift fails before write; a post-invocation failure is
 `Execution Uncertain` and is never retried.
 
-### Production-schedule vertical
+### Production-schedule vertical (retired)
+
+This section records what the retired `/api/v1/production-schedule-approvals` rail enforced while
+it was reachable. It is history, not a live contract: see the retirement note under "Worker BFF
+routes" below.
 
 The production schedule authority can create only an append-only `Production`
 `Job Assignment` for one active Crew Profile with a required scheduled start.
@@ -142,11 +146,11 @@ supersedes the previous assignment; no existing assignment is edited.
   field outbox, retries a timed-out broker call, or displays a success state
   without the returned terminal ledger state.
 - Production Runway remains a source-backed read. Its owner-only contextual
-  `/production/schedule/:jobId` page can submit a bounded schedule preparation
-  only when the Worker grants `production_schedule_approval.prepare` for that
-  exact job and active Crew Profile list. It stages a request; it does not
-  schedule or dispatch directly. Its configured approver is separate:
-  `APP_PRODUCTION_SCHEDULE_APPROVER_ID` with its own recent-session bound.
+  `/production/schedule/:jobId` page used to stage a bounded schedule preparation
+  against this broker. That path is retired: scheduling is the native
+  `POST /api/v1/jobs/{job}/schedule` write (#132), the Worker no longer grants any
+  `production_schedule_approval.*` capability, and ELEC-167 removed the handlers that
+  granted them. Owner schedule approval on the native endpoint is M2 scope.
 
 ## Worker BFF routes
 
@@ -167,12 +171,13 @@ exact allowed origin and session CSRF token.
 | POST | `/api/v1/quote-revision-approvals/:id/approve` | configured owner only | distinct broker, recent session, expected version, decision idempotency, terminal ledger event |
 | POST | `/api/v1/quote-revision-approvals/:id/reject` | configured owner only | durable rejection; no broker invocation |
 | POST | `/api/v1/quote-revision-approvals/:id/reconcile` | configured owner only | one immutable uncertainty evidence/outcome append; no reopen/retry |
-| GET | `/api/v1/production-schedule-approvals` | configured owner only | isolated safe schedule-approval ledger; no generic production writer |
-| GET | `/api/v1/production-schedule-approvals/:id` | configured owner only | current safe DTO; pending expiry is re-evaluated before return |
-| POST | `/api/v1/production-schedule-approvals` | configured owner only | contextual source-backed strict `{roof_job_id,crew_profile_id,scheduled_start,scheduled_end,supersedes_assignment_id,correction_reason}` preparation; target/tool/role/site stay server-derived |
-| POST | `/api/v1/production-schedule-approvals/:id/approve` | configured owner only | independent broker, recent session, expected version, decision idempotency, terminal ledger event |
-| POST | `/api/v1/production-schedule-approvals/:id/reject` | configured owner only | durable rejection; no broker invocation |
-| POST | `/api/v1/production-schedule-approvals/:id/reconcile` | configured owner only | immutable uncertainty evidence/outcome append; no reopen/retry |
+
+**The `/api/v1/production-schedule-approvals` family is retired.** All six routes were replaced
+by the native `POST /api/v1/jobs/{job}/schedule` in the IRO-195 D1 cutover (#132) and have
+answered `404 not_found` since. ELEC-167 deleted the handlers that were still sitting
+unreachable behind that refusal, so the rows above no longer list them. The
+`production_schedule_approval_*` ledger tables and the broker client stay in the tree: they
+carry the history of decisions already taken, and no new request can be prepared against them.
 
 `Execution Uncertain` is a terminal mutation state, not a temporary UI error.
 The stored `run_id` is the reconciliation key; a later reconciliation records

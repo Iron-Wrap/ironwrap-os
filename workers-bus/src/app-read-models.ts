@@ -3456,7 +3456,8 @@ function nativeProductionCrewFrappeRow(
   };
 }
 
-function nativeJobStatusLabel(value: string | null): string | null {
+/** The job status label every office and field surface shows. Shared with `app-search.ts`. */
+export function nativeJobStatusLabel(value: string | null): string | null {
   if (value === "qualified") return "Won";
   if (value === "in_progress") return "In Production";
   if (value === "complete") return "Complete";

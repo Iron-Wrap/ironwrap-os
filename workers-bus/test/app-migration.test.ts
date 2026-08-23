@@ -2144,11 +2144,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0092 field-evidence columns, 0093 commercial authority, 0094–0097 work-package
     // authority/integrity/roles, 0098–0099 assignment authority, 0100–0102 final-invoice
     // derivation and provider bindings, 0103–0104 measurement and photo evidence, 0105 Facet
-    // native design projection, 0106 native gate clearance and option packages. The 0070–0078
-    // and 0083–0089 gaps are abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 82);
+    // native design projection, 0106 native gate clearance and option packages, 0109 the CRM
+    // import ledger. The 0070–0078, 0083–0089 and 0107–0108 gaps are abandoned or
+    // in-flight collision numbers, not missing files.
+    assert.equal(migrations.length, 83);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0106_native_gate_clearance_and_option_packages.sql");
+    assert.equal(migrations.at(-1), "0109_crm_import_ledger.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2221,10 +2222,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // job-anchor, parent, no-replace, and append-only guards. 0106 adds one option-package
     // table and its tenant/job index (counted here) plus a partial unique clearance-decision
     // index whose name does not start with idx_ and is therefore counted only by the recovery
-    // inventories.
+    // inventories. 0109 adds three crm_import_* ledger tables and their four query indexes; it
+    // adds no trigger, because the importer owns no append-only chain of its own.
     assert.deepEqual(
       { ...counts },
-      { tables: 187, indexes: 277, triggers: 469 },
+      { tables: 190, indexes: 281, triggers: 469 },
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";

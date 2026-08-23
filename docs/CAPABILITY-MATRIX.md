@@ -60,12 +60,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 82,
-      "latest": "0106_native_gate_clearance_and_option_packages.sql"
+      "count": 83,
+      "latest": "0109_crm_import_ledger.sql"
     },
     "tests": {
       "pwa": 586,
-      "worker": 1202
+      "worker": 1227
     }
   },
   "proof_state_policy": {
@@ -725,6 +725,11 @@ Implemented or represented:
 - JobNimbus one-way migration readiness (read-only snapshot export, jnid-keyed idempotent import
   into a local Frappe, reconciliation verdict; see `docs/JOBNIMBUS-MIGRATION-MAP.md`) — proven
   against the synthetic fixture only; live snapshot and any system-of-record change remain gated;
+- existing-CRM import into a fresh tenant (provider-agnostic canonical format plus a GoHighLevel
+  adapter, dry-run planner, deterministic idempotent execute into the D1 operating core, stage
+  placement with capped verdicts, per-field disposition report; see `docs/CRM-IMPORT-MAP.md`) —
+  proven against the synthetic fixture only; no real customer export has been seen and no self-service
+  upload surface exists;
 - Google email/Drive paths;
 - QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;

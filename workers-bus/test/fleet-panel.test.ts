@@ -4,6 +4,15 @@ import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppEnv, AuthContext } from "../src/app-types.ts";
 
 const PANEL_PATH = "/api/v1/fleet/panel";
+/**
+ * The panel compares these against the wall clock, so "not due" and "not expired" are relationships
+ * to the run rather than calendar dates. A far-future pin still arrives eventually, and when it does
+ * the healthy asset silently grows `overdue_fleet_inspection` and `expired_driver_licence`. The
+ * deliberately-expired fixtures below stay pinned: a past date only ever gets more past.
+ */
+const NOT_DUE_YET = new Date(Date.now() + 365 * 24 * 60 * 60_000)
+  .toISOString()
+  .slice(0, 10);
 
 function auth(
   role: "field" | "owner" | "ops" = "field",
@@ -45,14 +54,14 @@ function panelAssetFixture(overrides: Record<string, unknown> = {}) {
     relationship: "custody",
     inspection_authority_source: "Physical Inspection",
     last_inspection_at: "2026-08-20T06:30:00.000Z",
-    next_inspection_due: "2099-08-21",
+    next_inspection_due: NOT_DUE_YET,
     last_pre_trip_at: "2026-08-20T06:30:00.000Z",
     last_post_trip_at: null,
-    next_service_due_date: "2099-09-01",
+    next_service_due_date: NOT_DUE_YET,
     calibration_required: 0,
     next_calibration_due: null,
-    registration_expiry: "2099-12-31",
-    insurance_expiry: "2099-12-31",
+    registration_expiry: NOT_DUE_YET,
+    insurance_expiry: NOT_DUE_YET,
     required_licence_class: "5",
     out_of_service_reason: null,
     open_out_of_service_defects: 0,
@@ -194,7 +203,7 @@ test("open safety defects and driver authority remain visible as separate blocke
       driver_status: "Active",
       driver_authority_source: "Physical Document",
       driver_licence_class: "1, 3",
-      driver_licence_expiry: "2099-12-31",
+      driver_licence_expiry: NOT_DUE_YET,
     }),
   ]);
   const response = await handleAuthenticatedRoute(

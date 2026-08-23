@@ -390,8 +390,12 @@ test("an intent still waiting on the dispatcher is surfaced, not re-read", async
     },
   );
 
+  // The sweep's clock is the record's own. `call` stamps `updated_at` from the wall clock, so a
+  // pinned calendar instant stops being in that row's future on the day it arrives, the age the
+  // stuck sweep filters on goes negative, and nothing is stuck any more.
   const waiting = await readAccountingIntent(env, TENANT, intentId);
   const stuckFor = new Date(Date.parse(waiting!.updated_at) + 45 * 60 * 1000);
+
   const provider = observationBinding([entityRoute("Invoice", "invoice-paid-linked.json")]);
   const swept = await runAccountingSweeps(env, {
     tenantId: TENANT,
@@ -414,7 +418,8 @@ test("an intent still waiting on the dispatcher is surfaced, not re-read", async
 
   // ...and stops being calm once it has been waiting as long as the stuck sweep's own window,
   // which is the copy defect ELEC-77 photographed: the cron was already logging a stalled
-  // dispatcher while the screen said there was nothing to do.
+  // dispatcher while the screen said there was nothing to do - the same 45 minutes the sweep above
+  // was handed, so one window drives both the cron figure and the copy.
   assert.equal(
     projectAccountingIntent(waiting!, stuckFor).next_step,
     "This has been waiting to reach QuickBooks longer than it should. "

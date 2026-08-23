@@ -1,0 +1,13 @@
+{
+  "schema": "release_control_publication_evidence_v1",
+  "observed_at": "2026-08-22T23:53:36Z",
+  "repository": "Iron-Wrap/release-control-plane",
+  "repository_id": 1343245226,
+  "visibility": "private",
+  "default_branch": "main",
+  "source_commit": "6a4f8a166ad5c86180dc95b4b31ffa64f472f7fd",
+  "remote_ref": "refs/heads/main",
+  "created_at": "2026-08-22T23:48:39Z",
+  "pushed_at": "2026-08-22T23:48:44Z",
+  "repository_workflows": []
+}

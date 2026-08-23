@@ -2,8 +2,8 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-22
-Latest phase delta verified: 2026-08-22 (code-grounded AI-native architecture and commercial-reachability audit at the current checkout: D1/Worker authority and effect/safety/accounting controls remain strong; native approved-quote and publication-settlement writers have test callers only; acceptance is production-reachable; acceptance-to-deposit derivation is not wired; configured capability and production/customer proof remain incomplete. Repository checks only, not deployed, runtime-verified, business-accepted, or production-proven)
+Last verified: 2026-08-23
+Latest phase delta verified: 2026-08-23 (release-control source publication and dependency audit: a checked-in remote-readback snapshot records the private shared repository at exact bootstrap commit `6a4f8a166ad5c86180dc95b4b31ffa64f472f7fd` with no repository CI workflows at observation time, provider-stage transport, or deployed adapter; IRO-218–IRO-221 provision the independent release services, and IRO-222 proves the exact IronWrap candidate before IRO-41 may close. Repository checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -152,17 +152,80 @@ IRO-41 branch-local implementation:
   PR/head/base/merge tree and CI run/check IDs, publish exact-digest candidate artifacts to an
   independently permissioned issuer trigger, wait for the acknowledged issuer run's signed
   review/full-surface evidence, and reject unresolved P0/P1 findings;
-- one aggregate artifact binds Worker and PWA identities and may still carry a leftover Frappe wheel
-  digest; isolated staging must prove config/secret-name readback, authenticated smoke,
-  content-complete D1 restore, and the prior Worker operating against migrated schema before a
-  short-lived permit can be assembled;
+- one aggregate artifact binds Worker and PWA identities and currently carries a Frappe wheel
+  digest; while that wheel ships, isolated staging must also bind its exact bytes to an immutable
+  provider revision and prove adapter-authenticated stage, readback, restore, and rollback alongside
+  config/secret-name readback, authenticated smoke, content-complete D1 restore, and the prior
+  Worker operating against migrated schema before a short-lived permit can be assembled;
 - the durable D1 ledger provides atomic policy genesis/CAS, single-use permit admission, and
   immutable success/rollback receipts; a migration failure after source merge records a distinct
   recovery-required outcome without claiming a D1 rollback; production promotion and rollback bind
-  exact Worker/PWA, provider, recovery, and post-smoke/post-rollback readbacks; leftover Frappe
-  adapter receipts are optional sentinels, not a release gate; and
+  exact Worker/PWA, provider, recovery, and post-smoke/post-rollback readbacks; signed Frappe
+  adapter promote/readback/rollback receipts are required release evidence while the Frappe wheel
+  ships, and the gate retires only when the wheel and its last compatibility consumer do; and
 - release policy hashing includes the executable CI/deploy/permit/promotion boundary, so candidate
   source cannot approve weakening that boundary for its own release.
+
+The current deploy workflow creates `frappe/ironwrap_roofing.whl` and validates its digest, but it
+does not deliver those bytes to an immutable provider-stage revision or invoke the checked-in
+`service-adapter` client. Receipt filenames in an artifact upload list are not execution evidence.
+No reachable adapter, provider command, staging/production Frappe identity, or live receipt is
+proven. That is the exact gap owned by the release-control chain below.
+
+The checked-in publication evidence snapshot observed at `2026-08-22T23:53:36Z` records the private
+shared codebase `Iron-Wrap/release-control-plane`, default branch `main`, and bootstrap commit
+`6a4f8a166ad5c86180dc95b4b31ffa64f472f7fd`; the snapshot records no repository CI workflows. That
+exact source provides the authenticated Node HTTP adapter, durable single-service file ledger,
+pinned IronWrap contract snapshot, and eight passing local tests.
+Source publication proves only repository availability; it does not prove later repository state,
+repository CI, an HTTPS deployment, the provider command, scoped credentials, Frappe identities,
+or any live stage/promote/readback/rollback receipt.
+
+#### Release-control custody and dependency chain
+
+[IRO-223](https://linear.app/mindburn/issue/IRO-223) resolved the human and infrastructure boundary:
+
+- the shared code must run as separate IronWrap and Facet deployments with product-scoped keys,
+  receipts, policy ledgers, and promotion authority;
+- Ivan owns business approval and GitHub merge authority; Sergey owns provider, Cloudflare, DNS,
+  and the Frappe adapter host; Andrei owns the independent issuer/reviewer; Ilya owns permit signing,
+  the policy ledger, and business counter-approval;
+- all four may participate in the repository and business process, but participation grants no
+  protected credential by implication;
+- the issuer runs in a separately controlled Cloudflare account outside the product account, while
+  the Frappe adapter runs on the Frappe VPS under a dedicated OS/service identity; and
+- recovery is a dormant, logged 2-of-3 ceremony among non-primary custodians. Ivan may hold one
+  share but cannot recover authority alone. Every path fails closed and rollback may select only a
+  previously admitted durable claim.
+
+The native blocker graph is deliberate:
+
+```mermaid
+flowchart LR
+    D["IRO-223 resolved custody and hosts"]
+    A["IRO-218 Frappe adapter and identities"]
+    I["IRO-219 independent issuer"]
+    C["IRO-220 scoped GitHub/provider credentials"]
+    R["IRO-221 custody and recovery ceremony"]
+    P["IRO-222 exact candidate rehearsal"]
+    G["IRO-41 governed release"]
+
+    D --> A
+    D --> I
+    D --> C
+    D --> R
+    A --> P
+    I --> P
+    C --> P
+    R --> P
+    P --> G
+```
+
+IRO-218 must define the immutable artifact-stage transport and provider revision mapping before its
+adapter can truthfully promote anything. The client and provider time budgets must also be made
+compatible before live migration work. IRO-222 then requires authenticated disposable staging,
+exact promote/readback, forced restore/rollback, denial, replay, and custody evidence; source tests
+or a reachable process alone cannot close it.
 
 External proof remains required for the installed predecessor enforcer, protected-branch behavior,
 independent HTTPS review/evidence issuer and publication authority, GitHub secret inventory,
@@ -754,9 +817,146 @@ insufficient as an implementation contract in these areas:
 The canonical operating and authority contracts now close the specification gaps. The
 implementation gaps in this matrix remain real.
 
-## Build order
+## End-to-end execution program
 
-Build in dependency order. Do not create all agents first.
+This is the canonical mutable implementation plan. Architecture and company scope remain in
+[`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md) and
+[`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md). Linear
+[IRO-1](https://linear.app/mindburn/issue/IRO-1) and
+[IRO-2](https://linear.app/mindburn/issue/IRO-2) are execution maps, not competing sources of
+truth. Their tickets may change state without rewriting architecture; a changed target, authority,
+dependency, or proof bar changes this file and the owning contract in the same reviewed change.
+
+The program has exactly two product lanes:
+
+| Product | Owns | Does not own |
+|---|---|---|
+| IronWrap OS | lead/job/customer/property, commercial transitions, production, field, safety, inventory/shop, providers, accounting intent/reconciliation, operating AI | Facet project/design truth |
+| Facet | tenant project, attributable measurement/design, 3D/configuration, visual estimate, customer design-decision evidence, signed evidence delivery | IronWrap quote/publication/contract/deposit/schedule/invoice/accounting truth |
+
+Home Config 3D is retired draft lineage already absorbed into Facet. It has no third workstream,
+repository disposition, parity burden, release, deployment, or proof gate. Any useful historical
+idea becomes an ordinary Facet backlog input.
+
+### Program outcome and pre-customer ceiling
+
+The pre-customer completion target is an exact-source, fully configured, deployed, rollback-capable
+technical production reference journey across both products, using company-controlled actors and
+visibly synthetic tenants/properties. It must exercise production APIs, queues, stores, providers,
+devices, policies, effects, readbacks, reconciliation, backup/restore, and recovery without direct
+database seeds or test-only business helpers.
+
+That result may set `technical_reference_proven=true` for the exact artifact/configuration. It may
+not set `customer_validated=true`, claim real adoption, establish willingness to pay, or satisfy
+business/customer acceptance. Gate 9 remains deliberately open until real customers and workers
+exist; this is an evidence boundary, not unfinished pre-customer engineering.
+
+### Dependency graph and execution frontier
+
+```mermaid
+flowchart TD
+    I0["IronWrap control rails<br/>IRO-38 effects · IRO-41 release · IRO-42 work packages · IRO-43 authority"]
+    F0["Facet source frontier<br/>IRO-29 · IRO-35 · IRO-36 · IRO-196"]
+    F1["Facet deterministic product<br/>IRO-212"]
+    F2["Facet truth and productization<br/>IRO-213 · IRO-214 · IRO-215 · IRO-37"]
+    C1["IronWrap commercial spine<br/>IRO-208"]
+    O1["Complete operating domains<br/>IRO-45–57 · IRO-60"]
+    W1["Role workflows and configuration<br/>IRO-209 · IRO-210"]
+    A1["Cross-domain controls<br/>IRO-58"]
+    A2["Governed AI<br/>IRO-211 · IRO-59"]
+    P1["Exact release permits<br/>IRO-218–222 · IRO-41 · IRO-61"]
+    R1["Exact artifact and runtime proof<br/>IRO-28 · IRO-30"]
+    R2["No-seed production reference gauntlet<br/>IRO-31"]
+    C9["Future real-customer validation<br/>Gate 9"]
+
+    F0 --> F1
+    F1 --> F2
+    I0 --> C1
+    F0 --> C1
+    C1 --> W1
+    I0 --> O1
+    O1 --> A1
+    W1 --> A2
+    A1 --> A2
+    I0 --> P1
+    F2 --> P1
+    P1 --> R1
+    C1 --> R1
+    O1 --> R1
+    A2 --> R1
+    R1 --> R2
+    R2 -. requires genuine later actors .-> C9
+```
+
+The immediate parallel frontier is the non-overlapping control/product work that unblocks every
+later path:
+
+- [IRO-38](https://linear.app/mindburn/issue/IRO-38),
+  [IRO-42](https://linear.app/mindburn/issue/IRO-42), and
+  [IRO-43](https://linear.app/mindburn/issue/IRO-43) in IronWrap OS, with independent privacy work
+  [IRO-60](https://linear.app/mindburn/issue/IRO-60) also unblocked;
+- [IRO-218](https://linear.app/mindburn/issue/IRO-218) through
+  [IRO-221](https://linear.app/mindburn/issue/IRO-221), which converge on the exact rehearsal in
+  [IRO-222](https://linear.app/mindburn/issue/IRO-222) before
+  [IRO-41](https://linear.app/mindburn/issue/IRO-41) may close;
+- [IRO-29](https://linear.app/mindburn/issue/IRO-29),
+  [IRO-35](https://linear.app/mindburn/issue/IRO-35),
+  [IRO-36](https://linear.app/mindburn/issue/IRO-36), and the parallel repository-coherence lane
+  [IRO-196](https://linear.app/mindburn/issue/IRO-196) in Facet; and
+- [IRO-28](https://linear.app/mindburn/issue/IRO-28) for live OCR/provider proof and
+  [IRO-198](https://linear.app/mindburn/issue/IRO-198) for the already-implemented optional
+  OmniRoute fallback's external origin/configuration; neither upgrades the larger reference journey
+  by implication.
+
+Every leaf closes through the same minimum ladder: contract and owner -> source and migration ->
+focused negative-path tests -> role/API reachability -> full repository gates -> exact artifact ->
+configured/readback proof -> failure and rollback drill -> immutable EvidencePack. A later ticket
+may begin behind a stable versioned contract, but it cannot pass its exit gate while a native
+`blockedBy` relation remains open.
+
+### Workstreams, ownership, and exit evidence
+
+| Workstream | Owning tickets | Required output | Exit evidence |
+|---|---|---|---|
+| Authority, effects, and release rails | [IRO-38](https://linear.app/mindburn/issue/IRO-38), [IRO-218](https://linear.app/mindburn/issue/IRO-218)–[IRO-223](https://linear.app/mindburn/issue/IRO-223), [IRO-41](https://linear.app/mindburn/issue/IRO-41), [IRO-61](https://linear.app/mindburn/issue/IRO-61) | one transition/effect/readback/unknown/compensation contract, split-custody release control, and exact-artifact permits for both products | wrong identity, ambiguous provider result, failed migration, rollback, replay, expired-permit, and custody-recovery drills |
+| Facet deterministic product | [IRO-29](https://linear.app/mindburn/issue/IRO-29), [IRO-35](https://linear.app/mindburn/issue/IRO-35), [IRO-36](https://linear.app/mindburn/issue/IRO-36), [IRO-212](https://linear.app/mindburn/issue/IRO-212) | no-placeholder project/import/design/estimate/revision/customer-design/signed-event loop | no-seed deterministic reconstruction and signed consumer receipt; never an IronWrap sale |
+| Facet measurement, catalog, and tenancy | [IRO-213](https://linear.app/mindburn/issue/IRO-213), [IRO-214](https://linear.app/mindburn/issue/IRO-214), [IRO-215](https://linear.app/mindburn/issue/IRO-215), [IRO-37](https://linear.app/mindburn/issue/IRO-37), [IRO-196](https://linear.app/mindburn/issue/IRO-196) | attributable facts, CV abstention/evals, versioned catalog/price/takeoff, two-tenant config/offline/restore, migrated lineage, coherent typed source | calibrated references, drift/unit/price failures, cross-tenant denial, upgrade/rollback/restore, full Facet gates |
+| Native commercial closure | [IRO-208](https://linear.app/mindburn/issue/IRO-208), [IRO-47](https://linear.app/mindburn/issue/IRO-47), [IRO-48](https://linear.app/mindburn/issue/IRO-48), [IRO-51](https://linear.app/mindburn/issue/IRO-51), [IRO-52](https://linear.app/mindburn/issue/IRO-52) | lead conversion through approved quote, publication readback, exact acceptance, deposit, change/closeout, communications, and accounting reconciliation | public/role-API no-seed reference path with duplicate, drift, refusal, unknown-result, mismatch, cancel, and reopen tests |
+| Human and physical operation | [IRO-42](https://linear.app/mindburn/issue/IRO-42)–[IRO-57](https://linear.app/mindburn/issue/IRO-57), plus [IRO-60](https://linear.app/mindburn/issue/IRO-60) | work/authority, inventory/shop/supplier/schedule, HR/fleet/facility/service/continuity/privacy loops | real-device or calibrated physical reference drills where physical facts matter; synthetic records never invent them |
+| Role workflow and configuration | [IRO-209](https://linear.app/mindburn/issue/IRO-209), [IRO-210](https://linear.app/mindburn/issue/IRO-210), [IRO-198](https://linear.app/mindburn/issue/IRO-198) | predicate-based boards, typed Kanban commands, event automations, schema forms, role/offline matrix, readiness profiles, integration manifests, and configured optional LLM fallback | stale/unauthorized command rejection, replay, offline conflict, expired proof, provider/route/realm drift, fallback failure, disable/rollback |
+| Audit and governed AI | [IRO-58](https://linear.app/mindburn/issue/IRO-58), [IRO-211](https://linear.app/mindburn/issue/IRO-211), [IRO-59](https://linear.app/mindburn/issue/IRO-59) | cross-domain invariants/reconstruction, then one thin coordination run and the owner/Agent Center clients | reconstruction, unsupported-claim, prompt-injection, stale/conflicting context, abstention, revoke/kill, and reconciled-action evals |
+| Deployment and reference proof | [IRO-28](https://linear.app/mindburn/issue/IRO-28), [IRO-30](https://linear.app/mindburn/issue/IRO-30), [IRO-31](https://linear.app/mindburn/issue/IRO-31) | identical reviewed artifacts deployed with exact config/provider identities, then the joined two-product reference portfolio | authenticated smoke, provider readback, backup/restore, version skew, outages, rollback, replay, joined EvidencePack |
+
+### Open human decision frontier
+
+Two accounting choices cannot be derived from source and must not be guessed:
+
+- [IRO-217](https://linear.app/mindburn/issue/IRO-217) chooses the holdback basis, QuickBooks mapping,
+  tax/release behavior, and genuine release authority; and
+- [IRO-216](https://linear.app/mindburn/issue/IRO-216) chooses the payroll system of record,
+  calculation/posting boundary, approval/payment/filing authority, and provider contract.
+
+Both are unassigned `wayfinder:grilling` decisions and block only the corresponding
+[IRO-52](https://linear.app/mindburn/issue/IRO-52) implementation. They do not authorize an agent to
+invent legal or accounting policy, and later accountant business acceptance remains separate from
+pre-customer sandbox/reference proof.
+
+### Maturity closure matrix
+
+| Area | Unusually-strong exit condition | Program owners |
+|---|---|---|
+| Core technical design | one writer per fact; versioned schemas/policies; no direct provider or store bypass; invariant and migration checks fail closed | IRO-38, IRO-218–223, IRO-41, IRO-58, IRO-61 |
+| Lead/job/field foundation | native lead/customer/job activation, derived phase, multi-worker offline packages, corrections, evidence slots, authority freshness, and real-device reference drill | IRO-208, IRO-42, IRO-43, IRO-209 |
+| Safety/evidence/accounting controls | current strong source controls survive deployed stop/release, ambiguous effect, mismatch, recovery, fraud/anomaly, and accountant-reviewed sandbox cases | IRO-38, IRO-44, IRO-52, IRO-58 |
+| Repository/migration coherence | two products only; Facet owns absorbed draft lineage; D1/Worker owns IronWrap; one shared but authority-isolated release-control codebase; ordered manifests, expand/compare/switch/project/delete, build-once artifacts, no required Frappe path | IRO-37, IRO-218–223, IRO-41, IRO-61, IRO-195, IRO-196 |
+| Configured capability | every required action has a fresh readiness verdict, exact provider/tenant identity, scoped secret, authenticated readback, TTL, fallback, and rollback | IRO-210, IRO-215, IRO-28, IRO-30 |
+| End-to-end commercial closure | no-seed Facet design evidence reaches an IronWrap job and the native quote/publication/acceptance/deposit/work/final-invoice path reconciles without test-only writers | IRO-212, IRO-36, IRO-208, IRO-47, IRO-48, IRO-52 |
+| Production/customer proof | exact deployed technical reference EvidencePack is reproducible; `customer_validated` remains false until later genuine use and acceptance | IRO-30, IRO-31; future Gate 9 |
+
+## Build order and gates
+
+Build in dependency order. Parallelize only leaves that do not share an authority writer, migration
+range, release artifact, or unresolved contract. Do not create all agents first.
 
 ### Gate 0: documentation and authority
 
@@ -765,8 +965,13 @@ Build in dependency order. Do not create all agents first.
 - implementation versus live proof vocabulary;
 - policy, transition, evidence, and human work-package schemas;
 - canonical Job/Facet Project vocabulary and a staged portability contract;
-- one canonical implementation owner for shared Facet/Home Capture, geometry, rendering, catalog,
-  and computer-vision work before a new shared change starts.
+- exactly two active products, with Facet as the canonical owner of all accepted Home Config 3D
+  draft lineage and no third execution or parity lane;
+- ordered migration manifests, reserved-range handling, authority cutovers, and rollback ownership;
+- map coverage for every open target gap and native blocker edges before implementation claims.
+
+Exit: documentation validation passes in both repositories; IRO-1/IRO-2 contain every active leaf;
+no current document assigns work to retired lineage or promotes a proof class.
 
 ### Gate 1: work package and evidence
 
@@ -794,18 +999,29 @@ Why first: every physical domain consumes this contract.
 
 ### Gate 4: deterministic commercial closure
 
-- production-reachable approved-quote revision writer;
-- proposal delivery effect plus provider readback before publication settlement;
-- acceptance-driven deposit intent with idempotent accounting effect and reconciliation;
-- deterministic lead conversion, customer activation, and lifecycle projection.
+- [IRO-208](https://linear.app/mindburn/issue/IRO-208): production-reachable lead conversion,
+  customer activation, approved-quote revision, delivery-readback publication, acceptance-driven
+  deposit, reconciliation, and derived lifecycle projection;
+- [IRO-212](https://linear.app/mindburn/issue/IRO-212): deterministic Facet project-to-signed-design
+  reference journey through the governed consumer receipt;
+- [IRO-47](https://linear.app/mindburn/issue/IRO-47) and
+  [IRO-48](https://linear.app/mindburn/issue/IRO-48): complete estimate basis, agreement/change,
+  propagation, cancellation, closeout, and reopen behavior;
+- [IRO-51](https://linear.app/mindburn/issue/IRO-51) and
+  [IRO-52](https://linear.app/mindburn/issue/IRO-52): consented communication and configured
+  accounting effect/readback/reconciliation after the IRO-216/IRO-217 policy decisions.
 
 Why before AI: a coordinator cannot safely operate a commercial transition that no production
 command can perform.
 
+Exit: a no-seed API journey reaches reconciled deposit and proves drift, duplicate, refusal,
+unknown-result, mismatch, cancellation, and recovery paths. It does not claim customer validation.
+
 ### Gate 5: complete physical and service operating loops
 
-- governed role/work-type boards, typed-command drag/drop, committed-event automations, and
-  schema-driven operational forms;
+- [IRO-209](https://linear.app/mindburn/issue/IRO-209): governed role/work-type boards,
+  typed-command drag/drop, committed-event automations, schema-driven forms, and the complete
+  role/offline matrix;
 - supplier catalog snapshot/sync plus procurement transmit/ack/reconcile and schedule/reschedule;
 - workforce, vehicle/equipment/facility, complaint/warranty/service, and insurance/continuity;
 - customer communication send/suppression;
@@ -813,7 +1029,8 @@ command can perform.
 
 ### Gate 6: thin governed AI coordinator
 
-- event-fed company/job ContextSnapshots with provenance and freshness;
+- [IRO-211](https://linear.app/mindburn/issue/IRO-211): event-fed company/job ContextSnapshots with
+  provenance and freshness;
 - typed PlanProposals with assumptions, confidence, evidence requirements, and expiry;
 - deterministic policy evaluation and scoped permit issuance outside the model;
 - effect submission, provider readback, reconciliation, and bounded human escalation;
@@ -821,16 +1038,33 @@ command can perform.
   catalog, with role screens and exception queues retained as fallback;
 - evals for abstention, stale/conflicting evidence, prompt injection, and replay safety.
 
+[IRO-59](https://linear.app/mindburn/issue/IRO-59) adds persistent named agents, routines,
+handoffs, and Agent Center only after the thin coordinator and [IRO-58](https://linear.app/mindburn/issue/IRO-58)
+cross-domain invariants are proven. It reuses the same run/action/effect contracts rather than
+creating a second orchestration authority.
+
 ### Gate 7: configured reference environment
 
-- named providers, non-secret configuration, secret identities, and authenticated readback;
-- versioned integration manifests and readiness/proof TTL per provider action;
+- [IRO-218](https://linear.app/mindburn/issue/IRO-218) through
+  [IRO-221](https://linear.app/mindburn/issue/IRO-221): deploy separately authenticated Frappe and
+  issuer services, scoped GitHub/provider credentials, product-isolated keys/ledgers, and the logged
+  custody/recovery ceremony resolved by IRO-223;
+- [IRO-210](https://linear.app/mindburn/issue/IRO-210) and
+  [IRO-215](https://linear.app/mindburn/issue/IRO-215): named providers, non-secret configuration,
+  secret identities, authenticated readback, versioned integration manifests, readiness/proof TTL,
+  two-tenant isolation, offline behavior, disablement, and rollback;
+- [IRO-198](https://linear.app/mindburn/issue/IRO-198): provision and read back the optional
+  OmniRoute origin/key when the reference profile selects that fallback; absence does not block a
+  profile with a healthy primary provider;
 - role-by-role offline profiles and reconciliation behavior;
 - fail-closed readiness profiles for the exact reference journey;
 - recovery/rollback drills and proof expiry.
 
 ### Gate 8: technical production-reference proof
 
+- [IRO-222](https://linear.app/mindburn/issue/IRO-222): prove the exact IronWrap candidate through
+  isolated staging, adapter/provider readback, backup, forced restore, rollback, replay, denial,
+  and custody evidence before IRO-41 release admission;
 - one controlled synthetic/reference job through every applicable state;
 - one supply-only shop order and one warranty/service case;
 - email/magic-link and edge/ingress outages, PWA/Worker/projection version skew, partial rollout
@@ -839,6 +1073,11 @@ command can perform.
 - one second-tenant isolation/export/restore proof;
 - exact source, deployment, provider, runtime, evidence, and reconciliation receipts.
 
+Exit: [IRO-30](https://linear.app/mindburn/issue/IRO-30) proves deployment/runtime/backup/rollback
+identity for both products and [IRO-31](https://linear.app/mindburn/issue/IRO-31) produces the joined
+EvidencePack. The only permitted claim is technical production reference proof for that exact
+source/artifact/configuration.
+
 ### Gate 9: customer validation
 
 - a real customer independently completes and accepts the defined journey;
@@ -846,17 +1085,27 @@ command can perform.
 - commercial outcome, support load, and repeatability are measured without promoting reference
   proof into customer proof.
 
-## Completion definition
+This gate is intentionally outside the pre-customer program. Its open state does not block a fully
+implemented and technically proven production system; it blocks only customer/business claims.
 
-The repository supports the complete governed-AI/human-physical model only when:
+## Completion definitions
+
+The pre-customer implementation and technical production-reference program is complete only when:
 
 - every target gap above is implemented or explicitly excluded by owner policy;
 - every row has fresh repository evidence;
 - live external dependencies pass their own gates;
 - a controlled technical reference journey proves the eleven end-to-end criteria in
   [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md);
-- real-customer validation is separately established and never inferred from the reference tenant;
 - no current operation depends on a hidden spreadsheet, private chat, untracked checklist, or
-  historical document.
+  historical document;
 - no required operation, read model, readiness verdict, release artifact, or rollback path depends
   on Frappe.
+
+At that point the exact system may be called implemented, configured, deployed, runtime-verified,
+rollback-capable, and technically reference-proven where its receipts support those labels. It is
+still not customer-validated or business-accepted.
+
+Full customer and commercial proof additionally requires Gate 9: attributable real-customer,
+operator, field, accounting, and owner evidence. It is established separately and is never inferred
+from the reference tenant.

@@ -11,7 +11,12 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const validator = resolve(root, "tools/validate-documentation.mjs");
 const matrix = resolve(root, "docs/CAPABILITY-MATRIX.md");
+const architecture = resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md");
 const playbook = resolve(root, "docs/WHITE-LABEL-CLONE-PLAYBOOK.md");
+const releaseControlPublication = resolve(
+  root,
+  "docs/release-control-publication.json",
+);
 
 // The gate is exercised against a temporary copy, never the tracked file: a test
 // that edits the real runbook leaves the worktree dirty when it crashes, and the
@@ -66,6 +71,158 @@ test("documentation gate rejects a deliberately stale capability count", () => {
       new RegExp(
         `stale Frappe DocTypes total; contract ${declared - 1}, repository ${declared}`,
       ),
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate rejects a third active product lane", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-topology-stale-"));
+  try {
+    const current = readFileSync(architecture, "utf8");
+    const stale = current.replace(
+      '"active_products": [\n      "ironwrap_os",\n      "facet"\n    ]',
+      '"active_products": [\n      "ironwrap_os",\n      "facet",\n      "home_config_3d"\n    ]',
+    );
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "AI-NATIVE-ARCHITECTURE.md");
+    writeFileSync(stalePath, stale);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--architecture", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /product_topology\.active_products.*home_config_3d/,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate rejects deleting the release-control boundary", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-release-control-stale-"));
+  try {
+    const current = readFileSync(matrix, "utf8");
+    const stale = current.replace(
+      "Iron-Wrap/release-control-plane",
+      "Iron-Wrap/unspecified-release-repository",
+    );
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "CAPABILITY-MATRIX.md");
+    writeFileSync(stalePath, stale);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--capability-matrix", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /missing release-control claim Iron-Wrap\/release-control-plane/,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate rejects promoting release-control source publication into deployment proof", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-release-control-proof-stale-"));
+  try {
+    const current = readFileSync(matrix, "utf8");
+    const stale = current.replace(
+      "Source publication proves only repository availability",
+      "Source publication proves a deployed production service",
+    );
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "CAPABILITY-MATRIX.md");
+    writeFileSync(stalePath, stale);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--capability-matrix", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /missing release-control claim release-control source publication remains non-deployment proof/,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate derives the published release-control commit from evidence", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-release-control-evidence-stale-"));
+  try {
+    const evidence = JSON.parse(readFileSync(releaseControlPublication, "utf8"));
+    evidence.source_commit = "0".repeat(40);
+    const stalePath = join(temp, "release-control-publication.json");
+    writeFileSync(stalePath, `${JSON.stringify(evidence, null, 2)}\n`);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--release-control-publication", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /missing release-control claim publication source commit/,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate rejects breaking the native release-control blocker graph", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-release-graph-stale-"));
+  try {
+    const current = readFileSync(matrix, "utf8");
+    const stale = current.replace("P --> G", "P -.-> G");
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "CAPABILITY-MATRIX.md");
+    writeFileSync(stalePath, stale);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--capability-matrix", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /missing release-control claim IRO-222 -> IRO-41/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate rejects making shipped Frappe release proof optional", () => {
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-frappe-release-stale-"));
+  try {
+    const current = readFileSync(matrix, "utf8");
+    const stale = current.replace(
+      "signed Frappe\n  adapter promote/readback/rollback receipts are required release evidence while the Frappe wheel",
+      "leftover Frappe\n  adapter receipts are optional sentinels, not a release gate while the Frappe wheel",
+    );
+    assert.notEqual(stale, current);
+    const stalePath = join(temp, "CAPABILITY-MATRIX.md");
+    writeFileSync(stalePath, stale);
+
+    const result = spawnSync(
+      process.execPath,
+      [validator, "--capability-matrix", stalePath],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /Frappe release gate must match whether deploy\.yml ships the wheel/,
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });

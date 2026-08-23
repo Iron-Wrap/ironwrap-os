@@ -231,7 +231,10 @@ function NowScreen({
             </div>
           </div>
           <details className="mt-5 border-t border-border pt-4">
-            <summary className="cursor-pointer text-sm font-bold">System details</summary>
+            {/* A 20 px line of text was the whole hit box on a Pixel 5. */}
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold">
+              System details
+            </summary>
             <ul className="mt-2 divide-y divide-border" aria-label="Work list status">
               {model.sources.map((source) => (
                 <li

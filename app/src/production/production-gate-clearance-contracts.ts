@@ -54,15 +54,15 @@ export const productionGateClearanceMessages: Record<string, string> = {
   production_gate_already_cleared:
     "This gate already carries a different clearance. Reload the runway to see it.",
   production_gate_actor_role_denied:
-    "Your Frappe user needs the IronWrap Owner or IronWrap Production role to clear a gate.",
+    "Your IronWrap account needs the Owner or Production role to clear a gate. Ask the office to change it.",
   production_gate_actor_not_enabled:
-    "Your Frappe user is disabled, so no clearance can be attributed to it.",
+    "Your IronWrap account is switched off, so no clearance can be recorded against it.",
   production_gate_job_not_clearable:
     "Only a Won or In Production job has a schedule a gate can unlock.",
   production_gate_due_at_missing:
     "This gate has no due date, so it cannot be marked ready on evidence.",
   production_gate_clearance_forbidden:
-    "Clearing a production gate needs an owner or production session linked to a Frappe user.",
+    "Clearing a production gate needs an owner or production sign-in with a linked operating account.",
   production_gate_receipt_unavailable:
     "The clearance receipt could not be stored, so nothing was changed.",
 };

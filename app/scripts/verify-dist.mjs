@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -64,6 +65,27 @@ if (missingEstimateEmbedDirectives.length > 0) {
   throw new Error(
     `dist/_headers is missing required public-estimator embed directives: ${missingEstimateEmbedDirectives.join(", ")}`,
   );
+}
+
+// The boot shell is the first screen every user sees and its whole stylesheet is inline,
+// so a `style-src` that does not name it is a silently broken first paint, not a warning
+// (ELEC-157). Nothing in the source tree fails when this regresses — only the phone does.
+if (headers.includes("__IRONWRAP_BOOT_STYLE_HASH__")) {
+  throw new Error(
+    "dist/_headers kept the unsubstituted boot-style CSP hash placeholder; the boot shell " +
+      "would render unstyled on every cold start",
+  );
+}
+for (const match of indexHtml.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)) {
+  const hash = createHash("sha256")
+    .update(match[1] ?? "", "utf8")
+    .digest("base64");
+  if (!headers.includes(`'sha256-${hash}'`)) {
+    throw new Error(
+      `dist/index.html ships an inline <style> whose sha256 ('sha256-${hash}') is absent from ` +
+        "the Content-Security-Policy in dist/_headers; the browser will block it",
+    );
+  }
 }
 
 const requiredIcons = new Map([

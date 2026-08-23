@@ -128,21 +128,17 @@ test.describe("Vehicle rail mobile acceptance", () => {
     const nav = page.getByRole("navigation", { name: "Main navigation" }).last();
     const vehicle = nav.getByRole("link", { name: "Vehicle", exact: true }).first();
     await expect(vehicle).toBeVisible();
-    // Daily work stays in the thumb rail; resources and setup live in the complete workspace map.
-    for (const label of ["Now", "Check-in", "Vehicle"]) {
+    // Crew navigation is four destinations, so all four sit in the thumb rail and there is
+    // no workspace drawer to open. Settings left this menu in ELEC-157: the crew-device
+    // pairing desk behind it is owner/ops work, and offering it here only ever produced
+    // "This work belongs to another role".
+    for (const label of ["Now", "Check-in", "Vehicle", "Inventory"]) {
       const box = await nav.getByRole("link", { name: label, exact: true }).boundingBox();
       expect(box?.height, `${label} tab is only ${box?.height}px tall`).toBeGreaterThanOrEqual(44);
       expect(box?.width, `${label} tab is only ${box?.width}px wide`).toBeGreaterThanOrEqual(44);
     }
-    const more = nav.getByLabel("Open all workspaces");
-    const moreBox = await more.boundingBox();
-    expect(moreBox?.height, `More tab is only ${moreBox?.height}px tall`).toBeGreaterThanOrEqual(
-      44,
-    );
-    await more.click();
-    await expect(nav.getByRole("link", { name: "Inventory", exact: true })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
-    await more.click();
+    await expect(nav.getByLabel("Open all workspaces")).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Settings", exact: true })).toHaveCount(0);
 
     await vehicle.click();
     await expect(page.getByRole("heading", { name: "Vehicle", level: 1 })).toBeVisible();

@@ -138,6 +138,11 @@ const officeNavigation = [
   },
 ] as const satisfies readonly NavigationItem[];
 
+// Only roles that can actually open a destination may advertise it. `/settings` is the
+// crew-device pairing desk and is guarded to owner/ops, so listing it under sales,
+// production and field navigation sent those roles to "this work belongs to another
+// role" — a dead end their own menu promised them (ELEC-157). `roleAdvertisesOnlyOpenableSurfaces`
+// in roles.test.ts keeps navigation and `roleCanAccess` from drifting apart again.
 const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   owner: officeNavigation,
   ops: officeNavigation,
@@ -156,14 +161,6 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       activeColor: "ok",
       workspace: "Revenue",
     },
-    {
-      label: "Settings",
-      mobileLabel: "Setup",
-      to: "/settings",
-      icon: Settings,
-      activeColor: "accent",
-      workspace: "Control",
-    },
   ],
   production: [
     {
@@ -180,14 +177,6 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       icon: CalendarClock,
       activeColor: "ok",
       workspace: "Delivery",
-    },
-    {
-      label: "Settings",
-      mobileLabel: "Setup",
-      to: "/settings",
-      icon: Settings,
-      activeColor: "accent",
-      workspace: "Control",
     },
   ],
   // The money desk leads, because it is the accounting role's landing page (contract section 8.2)
@@ -256,13 +245,6 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       icon: Boxes,
       activeColor: "ok",
       workspace: "Resources",
-    },
-    {
-      label: "Settings",
-      to: "/settings",
-      icon: Settings,
-      activeColor: "accent",
-      workspace: "Control",
     },
   ],
 };

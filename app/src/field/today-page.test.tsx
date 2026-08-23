@@ -83,6 +83,19 @@ const fieldSession = {
   stale_fields: [],
 } satisfies AuthenticatedSession;
 
+// The run sheet is not field-only: an owner or ops user opens `/today` to see the same
+// list. Website intake belongs to that reader, never to the crew phone.
+const officeSession = {
+  ...fieldSession,
+  user: {
+    id: "appu_ops_user",
+    email: "ops@example.invalid",
+    display_name: "Operations",
+    role: "ops",
+    frappe_user_id: "ops@example.invalid",
+  },
+} satisfies AuthenticatedSession;
+
 function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
   return {
     version: 1,
@@ -141,13 +154,17 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
   };
 }
 
-function renderToday(model = todayModel(), initialToday?: TodayResponse) {
+function renderToday(
+  model = todayModel(),
+  initialToday?: TodayResponse,
+  session: AuthenticatedSession = fieldSession,
+) {
   vi.mocked(loadToday).mockResolvedValue(model);
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <SessionProvider session={fieldSession} initialToday={initialToday}>
+      <SessionProvider session={session} initialToday={initialToday}>
         <TodayPage />
       </SessionProvider>
     </QueryClientProvider>,
@@ -278,9 +295,9 @@ describe("TodayPage", () => {
     expect(prefetchAssignedPackets).not.toHaveBeenCalled();
   });
 
-  it("shows D1 website intake separately from assigned field jobs", async () => {
+  it("shows D1 website intake separately from assigned field jobs, for an office reader", async () => {
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
-    renderToday();
+    renderToday(todayModel(), undefined, officeSession);
 
     expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
@@ -290,6 +307,21 @@ describe("TodayPage", () => {
       ),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Today's work" })).toBeVisible();
+  });
+
+  // ELEC-157. `/api/v1/operating-intake` refuses a field session, and the client sends no
+  // device proof with it, so the Worker answered 401 and expired the session cookie in the
+  // same response: the crew phone signed itself out every time it opened its own run sheet
+  // and the next cold start showed "Pair this crew phone again". Not rendering the panel
+  // for a field session is what stops the request being made at all.
+  it("never asks a crew phone's run sheet for office website intake", async () => {
+    vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
+    renderToday();
+
+    expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Website intake" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Website intake could not load")).not.toBeInTheDocument();
+    expect(loadOperatingIntake).not.toHaveBeenCalled();
   });
 
   it("makes named preserved field work recoverable from the run sheet", async () => {

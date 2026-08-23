@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
+import { landingPathFor } from "./landing-path";
 import { clearPendingMagicLinkToken } from "./magic-link-fragment";
 import { fetchSession } from "./session";
 import { sessionQueryKey } from "./session-query";
@@ -23,20 +24,19 @@ export function MagicLinkConsume({ token }: { token?: string }) {
   useEffect(() => {
     if (!token) return;
 
+    // Reads the session the consumed link created before navigating: the landing page
+    // depends on the role, and the same read is what proves an already-consumed token
+    // still left a usable session behind.
     const enter = async () => {
-      setState("complete");
-      await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
-      await navigate({ to: "/today", replace: true });
-    };
-
-    const succeedIfAlreadyIn = async () => {
       const session = await fetchSession();
       if (!session.authenticated) throw new Error("unauthenticated");
-      await enter();
+      setState("complete");
+      await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
+      await navigate({ to: landingPathFor(session), replace: true });
     };
 
     if (startedTokens.has(token)) {
-      void succeedIfAlreadyIn().catch(() => {
+      void enter().catch(() => {
         setState("error");
       });
       return;
@@ -46,7 +46,7 @@ export function MagicLinkConsume({ token }: { token?: string }) {
     const consumption = apiCommand({ path: API_PATHS.magicLinkConsume, body: { token } });
     clearPendingMagicLinkToken();
     void consumption.then(enter).catch(() => {
-      void succeedIfAlreadyIn().catch(() => {
+      void enter().catch(() => {
         setState("error");
       });
     });

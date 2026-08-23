@@ -1210,6 +1210,15 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
   );
 }
 
+// The citation source is a wire value naming the system that holds the record. Printed
+// raw it put "Frappe" in front of an office manager, who has no such system to open
+// (ELEC-157). Same treatment the reception desk already gives its own source codes.
+function citationSourceLabel(source: "IronWrap" | "Frappe" | "R2"): string {
+  if (source === "Frappe") return "Main office record";
+  if (source === "R2") return "Saved evidence file";
+  return "IronWrap record";
+}
+
 function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
     <section
@@ -1243,7 +1252,7 @@ function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
               </summary>
               <div className="mb-4 rounded-lg bg-surface-raised p-4">
                 <p className="break-all text-sm text-muted">
-                  {citation.source} · {citation.source_ref}
+                  {citationSourceLabel(citation.source)} · {citation.source_ref}
                 </p>
                 <p className="mt-2 break-all font-mono text-xs text-muted">
                   SHA-256 {citation.sha256}

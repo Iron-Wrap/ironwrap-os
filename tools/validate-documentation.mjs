@@ -55,6 +55,10 @@ const forbiddenAuthorityClaims = [
   /checked-in Worker baseline deliberately leaves `APP_BFF_ENABLED=false`/i,
   /checked-in customer portal is a disabled/i,
   /one tenant \+ one Frappe site \+ one Worker deployment/i,
+  /one canonical implementation owner across Facet and Home Config 3D/i,
+  /Home Config 3D repository \| Separate predecessor\/lineage product/i,
+  /archive\/freeze requires a separate owner decision/i,
+  /leftover Frappe\s+adapter receipts are optional sentinels, not a release gate/i,
 ];
 const architectureNavigationDocuments = new Set([
   "README.md",
@@ -75,9 +79,11 @@ const failures = [];
 const fail = (message) => failures.push(message);
 const allowedOptions = new Set([
   "--app-test-output",
+  "--architecture",
   "--capability-matrix",
   "--clone-playbook",
   "--evidence",
+  "--release-control-publication",
   "--worker-test-output",
 ]);
 const options = new Map();
@@ -277,6 +283,12 @@ function repositoryArchitectureFacts() {
       quickbooks: "posted_accounting_facts",
       ai: "non_authoritative_proposal",
     },
+    product_topology: {
+      active_products: ["ironwrap_os", "facet"],
+      facet_repository: "Iron-Wrap/facet",
+      home_config_3d: "retired_draft_lineage_absorbed_into_facet",
+      home_config_3d_execution_lane: false,
+    },
     maturity: {
       core_technical_design: "strong",
       lead_job_field_foundation: "strong_with_projection_gaps",
@@ -324,7 +336,11 @@ function repositoryArchitectureFacts() {
 }
 
 function compareCapabilityFact(label, expected, actual) {
-  if (expected !== actual) {
+  const equal =
+    expected !== null && typeof expected === "object"
+      ? JSON.stringify(expected) === JSON.stringify(actual)
+      : expected === actual;
+  if (!equal) {
     fail(
       `docs/CAPABILITY-MATRIX.md: stale ${label}; contract ${JSON.stringify(expected)}, repository ${JSON.stringify(actual)}`,
     );
@@ -525,9 +541,125 @@ const capabilityMatrixPath = resolve(
     resolve(root, "docs/CAPABILITY-MATRIX.md"),
 );
 const capabilityContract = loadCapabilityContract(capabilityMatrixPath);
+const capabilityMatrixContent = readFileSync(capabilityMatrixPath, "utf8");
+const releaseControlPublicationPath = resolve(
+  options.get("--release-control-publication") ??
+    resolve(root, "docs/release-control-publication.json"),
+);
+const releaseControlPublication = JSON.parse(
+  readFileSync(releaseControlPublicationPath, "utf8"),
+);
+const expectedPublicationKeys = [
+  "created_at",
+  "default_branch",
+  "observed_at",
+  "pushed_at",
+  "remote_ref",
+  "repository",
+  "repository_id",
+  "repository_workflows",
+  "schema",
+  "source_commit",
+  "visibility",
+];
+if (
+  JSON.stringify(Object.keys(releaseControlPublication).sort()) !==
+  JSON.stringify(expectedPublicationKeys)
+) {
+  fail("docs/release-control-publication.json: evidence shape is invalid");
+}
+if (
+  releaseControlPublication.schema !== "release_control_publication_evidence_v1" ||
+  releaseControlPublication.repository !== "Iron-Wrap/release-control-plane" ||
+  releaseControlPublication.visibility !== "private" ||
+  releaseControlPublication.default_branch !== "main" ||
+  releaseControlPublication.remote_ref !== "refs/heads/main" ||
+  !Number.isInteger(releaseControlPublication.repository_id) ||
+  releaseControlPublication.repository_id <= 0 ||
+  !/^[0-9a-f]{40}$/.test(releaseControlPublication.source_commit) ||
+  !Array.isArray(releaseControlPublication.repository_workflows) ||
+  !releaseControlPublication.repository_workflows.every(
+    (workflow) => typeof workflow === "string" && workflow.length > 0,
+  ) ||
+  !["observed_at", "created_at", "pushed_at"].every(
+    (field) => Number.isFinite(Date.parse(releaseControlPublication[field])),
+  )
+) {
+  fail("docs/release-control-publication.json: evidence values are invalid");
+}
+for (const [pattern, claim] of [
+  [/IRO-218/, "IRO-218"],
+  [/IRO-219/, "IRO-219"],
+  [/IRO-220/, "IRO-220"],
+  [/IRO-221/, "IRO-221"],
+  [/IRO-222/, "IRO-222"],
+  [/IRO-223/, "IRO-223"],
+  [/Iron-Wrap\/release-control-plane/, "Iron-Wrap/release-control-plane"],
+  [
+    /Source publication proves only repository availability/,
+    "release-control source publication remains non-deployment proof",
+  ],
+  [/2-of-3/, "2-of-3"],
+  [/required release evidence while the Frappe wheel/, "required Frappe release evidence"],
+  [/D --> A/, "IRO-223 -> IRO-218"],
+  [/D --> I/, "IRO-223 -> IRO-219"],
+  [/D --> C/, "IRO-223 -> IRO-220"],
+  [/D --> R/, "IRO-223 -> IRO-221"],
+  [/A --> P/, "IRO-218 -> IRO-222"],
+  [/I --> P/, "IRO-219 -> IRO-222"],
+  [/C --> P/, "IRO-220 -> IRO-222"],
+  [/R --> P/, "IRO-221 -> IRO-222"],
+  [/P --> G/, "IRO-222 -> IRO-41"],
+]) {
+  if (!pattern.test(capabilityMatrixContent)) {
+    fail(`docs/CAPABILITY-MATRIX.md: missing release-control claim ${claim}`);
+  }
+}
+for (const [value, claim] of [
+  [releaseControlPublication.repository, "publication repository"],
+  [releaseControlPublication.default_branch, "publication default branch"],
+  [releaseControlPublication.source_commit, "publication source commit"],
+  [releaseControlPublication.observed_at, "publication observation time"],
+]) {
+  if (!capabilityMatrixContent.includes(value)) {
+    fail(`docs/CAPABILITY-MATRIX.md: missing release-control claim ${claim}`);
+  }
+}
+const publicationHasNoWorkflows =
+  releaseControlPublication.repository_workflows.length === 0;
+const planSaysSnapshotHasNoWorkflows = capabilityMatrixContent.includes(
+  "snapshot records no repository CI workflows",
+);
+if (publicationHasNoWorkflows !== planSaysSnapshotHasNoWorkflows) {
+  fail(
+    "docs/CAPABILITY-MATRIX.md: repository CI claim does not match release-control publication evidence",
+  );
+}
+const deployWorkflow = readFileSync(resolve(root, ".github/workflows/deploy.yml"), "utf8");
+const workflowBuildsFrappeWheel = deployWorkflow.includes("frappe/ironwrap_roofing.whl");
+const planRequiresFrappeReceipts = capabilityMatrixContent.includes(
+  "required release evidence while the Frappe wheel",
+);
+if (workflowBuildsFrappeWheel !== planRequiresFrappeReceipts) {
+  fail(
+    "docs/CAPABILITY-MATRIX.md: Frappe release gate must match whether deploy.yml ships the wheel",
+  );
+}
+const workflowInvokesServiceAdapter = /\bservice-adapter\b/.test(deployWorkflow);
+const planSaysAdapterIsNotInvoked = /does not\s+deliver those bytes to an immutable provider-stage revision or invoke the checked-in\s+`service-adapter` client/.test(
+  capabilityMatrixContent,
+);
+if (workflowInvokesServiceAdapter === planSaysAdapterIsNotInvoked) {
+  fail(
+    "docs/CAPABILITY-MATRIX.md: service-adapter invocation claim does not match deploy.yml",
+  );
+}
 const capabilityFacts = repositoryCapabilityFacts();
 const architectureContract = loadArchitectureContract(
-  resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md"),
+  resolve(
+    options.get("--architecture") ??
+      resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md"),
+  ),
 );
 const architectureFacts = repositoryArchitectureFacts();
 validateRestatedCounts(capabilityFacts);
@@ -608,6 +740,7 @@ if (architectureContract) {
   }
   for (const section of [
     "authority",
+    "product_topology",
     "maturity",
     "commercial_reachability",
     "configuration",

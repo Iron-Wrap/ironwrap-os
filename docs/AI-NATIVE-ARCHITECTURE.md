@@ -2,7 +2,7 @@
 
 Status: canonical architecture map and target
 Owner: IronWrap OS product owner
-Last source verification: 2026-08-22
+Last source verification: 2026-08-23
 Review trigger: authority, lifecycle, repository, integration, AI, capability, or proof-state change
 
 ## Purpose and truth boundary
@@ -80,8 +80,7 @@ The primary executable modules are:
 | [`frappe-apps/ironwrap_roofing/`](../frappe-apps/ironwrap_roofing/) | Temporary compatibility projection and legacy command adapters; no new operating authority |
 | [`mcp/`](../mcp/) | Bounded read, preview, compatibility, and recovery adapters; not a second policy or state layer |
 | [`hermes/`](../hermes/) | Role/tool configuration and the narrow desktop drafting pilot; not a resident autonomous runtime |
-| Facet repository | Separate design bounded context and signed evidence producer |
-| Home Config 3D repository | Separate predecessor/lineage product; not an IronWrap OS runtime dependency |
+| Facet repository | Separate design bounded context, signed evidence producer, and canonical owner of the accepted configurator lineage |
 
 ## Authority map
 
@@ -133,6 +132,15 @@ The machine-checked snapshot is intentionally conservative:
     "facet": "design_evidence_producer",
     "quickbooks": "posted_accounting_facts",
     "ai": "non_authoritative_proposal"
+  },
+  "product_topology": {
+    "active_products": [
+      "ironwrap_os",
+      "facet"
+    ],
+    "facet_repository": "Iron-Wrap/facet",
+    "home_config_3d": "retired_draft_lineage_absorbed_into_facet",
+    "home_config_3d_execution_lane": false
   },
   "maturity": {
     "core_technical_design": "strong",
@@ -409,6 +417,9 @@ not a runtime marketplace for arbitrary hooks or plugins.
 
 ## Repository and migration coherence
 
+- The active product topology has exactly two products: IronWrap OS and Facet. Home Config 3D was
+  draft lineage whose accepted capability is already absorbed into Facet; it has no current
+  repository, roadmap, deployment, ownership, parity, or Wayfinder lane.
 - IronWrap is the company operating authority.
 - `Job` is the canonical IronWrap operating and commercial aggregate. `Facet Project` is a separate
   design aggregate. The target is a stable Job kernel plus a versioned `job_kind`/operating profile
@@ -418,13 +429,13 @@ not a runtime marketplace for arbitrary hooks or plugins.
   tables, routes, events, or evidence references before commercial closure and migration proof.
 - Facet remains a separate active customer-facing design/measurement product boundary and signed
   design-evidence producer. IronWrap owns operating association and every commercial transition.
-- Before new shared Capture, parser, geometry, rendering, catalog, or computer-vision work, assign
-  one canonical implementation owner across Facet and Home Config 3D; changes are otherwise ported
-  explicitly with parity tests.
-- Home Config 3D is not an IronWrap runtime dependency; archive/freeze requires a separate owner
-  decision after unique-code and shared-lineage inventory.
-- Frappe is compatibility only. While its wheel ships, its required tests must be release-blocking;
-  remove the wheel after the last consumer and rollback proof are gone.
+- Facet is the canonical implementation owner for accepted Capture, parser, geometry, rendering,
+  pricing, catalog, and computer-vision lineage. A surviving idea found in retired Home Config 3D
+  history is triaged as a Facet backlog input; it never creates a parallel porting obligation or a
+  second product authority.
+- Frappe is compatibility only. While its wheel ships, its required tests and exact
+  stage/promote/readback/rollback receipts must be release-blocking; remove the wheel and that
+  release gate together after the last consumer and rollback proof are gone.
 - Retire old Frappe approval/scheduling broker paths after native equivalents have parity and live
   rollback evidence.
 - Do not renumber historical D1 migrations. Record reserved gaps and authority cutovers in a

@@ -173,7 +173,7 @@ function ContractAcceptanceRequest({ brand, portalToken }: { brand: string; port
         We will email the address on file. Opening this page does not accept the contract.
       </p>
       {state === "sent" ? (
-        <p className="mt-3 text-sm font-semibold text-success" role="status">
+        <p className="mt-3 text-sm font-semibold text-ok" role="status">
           Email sent. Check the email address on file.
         </p>
       ) : (
@@ -250,7 +250,7 @@ function ProgressCard({ model }: { model: CustomerPortalResponse }) {
           <ol className="space-y-4">
             {model.progress.map((item) => (
               <li key={item.id} className="flex gap-3">
-                <BadgeCheck className="mt-0.5 size-5 shrink-0 text-success" aria-hidden="true" />
+                <BadgeCheck className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
                 <div>
                   <p className="font-bold">{item.proof_slot ?? item.type ?? "Checked update"}</p>
                   {item.summary ? (

@@ -59,7 +59,7 @@ export function CustomerContractAcceptancePage() {
         </CardHeader>
         <CardContent>
           {state === "accepted" ? (
-            <p className="text-sm font-semibold text-success" role="status">
+            <p className="text-sm font-semibold text-ok" role="status">
               Your acceptance was saved. We will keep the receipt with your project.
             </p>
           ) : state === "uncertain" ? (

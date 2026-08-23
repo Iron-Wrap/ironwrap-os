@@ -322,7 +322,7 @@ function MobileDrawerItem({ item, active }: { item: NavigationItem; active: bool
       to={item.to}
       className={cn(
         "flex min-h-14 items-center gap-2.5 rounded-lg px-3 text-sm font-bold text-muted transition-colors hover:bg-surface-muted hover:text-foreground",
-        active && "bg-accent-soft text-foreground",
+        active && mobileActiveClassName,
       )}
       aria-current={active ? "page" : undefined}
     >

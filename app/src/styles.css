@@ -28,6 +28,8 @@
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
   --color-danger-soft: var(--danger-soft);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-strong-foreground: var(--danger-strong-foreground);
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
 
@@ -64,6 +66,13 @@
   --danger: #a9171e;
   --danger-foreground: #ffffff;
   --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
+  /* Committed danger surface for filled controls. `--danger` is tuned so that
+     `text-danger` stays readable on each scheme's surfaces, which turns it pale
+     in dark. A stop-work, rescue, or revoke button must not go pale with it, so
+     this pair stays oxide with white text in both schemes and the dark block
+     deliberately leaves it alone. */
+  --danger-strong: #a9171e;
+  --danger-strong-foreground: #ffffff;
   --info: #1f4e66;
   --info-soft: color-mix(in srgb, var(--info) 9%, var(--surface-raised));
   --motion-fast: 140ms;

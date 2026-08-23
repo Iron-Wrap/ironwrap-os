@@ -432,7 +432,7 @@ function TodayJobRow({
           <PacketAvailabilityBadge availability={availability} />
         </div>
         <div className="space-y-2 border-t border-border p-4 lg:flex lg:flex-col lg:justify-center lg:border-l lg:border-t-0">
-          <Button asChild fullWidth variant={blocked ? "default" : "accent"}>
+          <Button asChild size="field" fullWidth variant={blocked ? "default" : "accent"}>
             <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
               {actionLabel}
               <ChevronRight aria-hidden="true" />

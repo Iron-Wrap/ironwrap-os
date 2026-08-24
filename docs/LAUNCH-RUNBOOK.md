@@ -293,7 +293,8 @@ are independently read back.
 
 ### Optional Facet-to-Frappe Compatibility Projection Gate
 
-Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0035` D1 migration is applied in
+The canonical compatibility flag is `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off
+(`false`) in every checked-in environment. Leave it false until the `0035` D1 migration is applied in
 the named environment and all of the following are proven there:
 
 1. Create a dedicated Frappe API user with only `IronWrap Facet Design Projection Service`, pin
@@ -304,20 +305,21 @@ the named environment and all of the following are proven there:
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY`, and
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET` only with `wrangler secret put`. Do not
    reuse the Facet ingress HMAC, broad Worker/Frappe API identity, or customer-acceptance identity.
-3. From an authenticated owner/ops office session, list v2 evidence at
-   `GET /api/v1/facet-design-evidence/association-ready`, then create an exact binding through
-   `POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. Submit the
-   returned event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a bounded
-   reason. Tenant and actor come only from the session. The Worker must read back the Roof Job,
-   brand, linked current `Approved` quote, and approval timestamp before appending the association.
-   There is no deployment JSON association authority.
+3. Establish the governed v2 project/producer-identity link and launch anchors before projection.
+   The Worker must resolve those native D1 anchors and read the current approved quote, proposal,
+   publication, and acceptance authority back from their owning stores. There is no deployment JSON
+   association or commercial authority.
 4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
-   scheduled projection reads an already durable D1 receipt, accepts only an exact association,
-   creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
-   returns a valid signed receipt binding every request and locked-record anchor, and leaves the
-   quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the exact event to
+   scheduled projection reads an already durable native D1 head and accepts only exact current
+   authority. For `approved`/`corrected`, the endpoint creates a blank, non-customer-safe `Draft`
+   Customer Quote. On every chain advance it marks the predecessor projected quote `Rejected`, and
+   creates a replacement only for an active decision. It also creates a non-customer-safe Evidence
+   Item and an Integration Reconciliation row (`Pending` active, `Superseded` terminal). The
+   compatibility draft supplies no price, line items, taxes, payment schedule, or commercial terms.
+   Repeat the exact event to
    prove deterministic replay; separately prove missing/mismatched mappings make no Frappe call,
-   an unsigned or tampered `200` remains `uncertain`, and an Frappe refusal creates no Worker success.
+   an unsigned or tampered `200` becomes an unknown manual-reconciliation effect with no redispatch,
+   and an Frappe refusal creates no Worker success.
 
 Keep the flag false if any proof is missing. Repository tests, an ingress `202`, or a deployed D1
 migration are not runtime evidence for this customer-linked projection. Archive only redacted
@@ -341,9 +343,10 @@ live" claim.
    association may bind only exact v2 receipt anchors to an existing same-brand Roof Job and its
    current `Approved` quote after Frappe read-back; it never copies or changes commercial terms.
 4. Keep `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the projection gate above is closed in
-   that same environment. Projection remains bounded evidence plus reconciliation only; it does not
-   directly mutate a quote, proposal pack, contract acceptance, accounting record, or customer
-   commitment.
+   that same environment. Compatibility projection creates only the blank non-customer-safe Draft
+   shell described above, rejects its predecessor shell on chain advance, and supplies no commercial
+   content; it is not permission to mutate the approved source quote, proposal pack, contract
+   acceptance, accounting record, or customer commitment.
 5. Keep `APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false` until the private quote-revision broker,
    configured human approver, resolved v2 association, dry-run, approval, create-only blank Draft,
    audit, and uncertainty paths are proven in that environment. Do not treat a projected Facet

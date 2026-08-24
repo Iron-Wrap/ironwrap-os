@@ -44,7 +44,8 @@ Facet approved design
   ▼
 [1] signed raw event + source→local allowlist → immutable R2 ........... FIRST
 [2] design receipt + hashed nonce → D1 ........ no quote/contract/Frappe mutation
-[3] optional scheduled projection uses an exact anchor allowlist → review-only Frappe evidence + pending reconciliation
+[3] optional scheduled projection uses exact current anchors → blank non-customer-safe Draft,
+    predecessor rejection on chain advance, evidence + reconciliation
 
 IronWrap PWA
   │  passwordless session cookie + exact-origin CORS + CSRF on authenticated mutations
@@ -75,7 +76,7 @@ IronWrap PWA
 | Optional Frappe compatibility projection | `erpnext.ts` creates/updates bounded legacy records when enabled; failures do not rewrite authoritative D1 state |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + native D1 records plus any enabled compatibility projection, without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
-| Facet review projection | `facet-design-projection.ts` reads only v2 receipts with an exact append-only, office-authored job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
+| Facet review projection | `facet-design-frappe-projection.ts` reads only current native v2 heads with exact project, identity, quote, proposal, publication, and acceptance authority. The default-off Frappe endpoint creates a blank non-customer-safe Draft Customer Quote for active decisions, rejects the predecessor projected quote on chain advance, and appends Evidence Item plus Integration Reconciliation records without supplying commercial terms. |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; any remaining `frappe-read.ts` compatibility access uses hard-coded DocType/field/filter allowlists and fails closed |
 
@@ -595,29 +596,27 @@ or commercial authority.
 
 ### Facet-to-Frappe review projection
 
-`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` stays `false` until a dedicated Frappe user has only the
+The canonical compatibility flag is `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off
+(`false`) in every checked-in environment. It stays `false` until a dedicated Frappe user has only the
 `IronWrap Facet Design Projection Service` role, its user email and separate HMAC are configured
 in the Frappe site, and its distinct API key, API secret, and HMAC are stored as Worker secrets.
 Never reuse the ingress HMAC, broad ERP identity, or customer-acceptance identity.
 
-An authenticated owner/ops office session lists unassociated v2 receipts at
-`GET /api/v1/facet-design-evidence/association-ready` and creates one binding through
-`POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. The body
-contains exact event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a
-bounded reason; tenant and actor are server-derived. The Worker verifies the existing same-brand
-Roof Job and its linked current `Approved` quote before appending the binding. A missing association
-is held and an anchor mismatch is rejected in the separate append-only v2 projection-attempt
-ledger; neither condition calls the projection command. Deployment JSON is not association
-authority.
+The adapter consumes only an already durable native D1 design head whose project and producer
+identity links, launch intent, approved quote, proposal revision, publication, and acceptance
+anchors still resolve exactly. Missing or drifted authority is recorded in the effect/exception
+ledger before dispatch; deployment JSON is not association or commercial authority.
 
-For an exact approved current quote belonging to the locked Roof Job, the scheduled Worker command
-creates one deterministic, non-customer-safe Evidence Item and one Pending Integration
-Reconciliation record. It does not read R2 on this path and does not create or update a quote,
-price, contract, acceptance, or Proposal Evidence Pack. An estimator must reconcile the evidence
-before any commercial use. Frappe returns an HMAC-signed receipt binding the exact request,
+For `approved` and `corrected` events, the endpoint creates a blank, non-customer-safe `Draft`
+Customer Quote. On every chain advance it marks the predecessor projected quote `Rejected`; only
+an active decision receives a replacement Draft. It also creates one deterministic Evidence Item
+and one Integration Reconciliation record (`Pending` for active decisions and `Superseded` for
+terminal decisions). The compatibility draft supplies no price, line items, taxes, payment schedule,
+or commercial terms, and it does not read R2 on this path. An estimator must rebuild and reconcile
+all commercial content before use. Frappe returns an HMAC-signed receipt binding the exact request,
 locked job/brand/current quote, provenance, immutable hashes, and deterministic record IDs. The
-Worker treats any unsigned, malformed, or mismatched `200` as uncertain, never projected. Before
-enabling the flag, run a disposable live proof for success,
+Worker treats any unsigned, malformed, or mismatched `200` as unknown, opens manual reconciliation,
+and never redispatches it without explicit operator reconciliation. Before enabling the flag, run a disposable live proof for success,
 missing/mismatched association, exact replay, and Frappe refusal, then retain only redacted IDs and
 release evidence.
 

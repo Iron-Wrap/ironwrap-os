@@ -77,6 +77,7 @@ import {
 } from "./quickbooks-final-invoice.ts";
 import { deriveNativeFinalInvoiceIntents } from "./native-final-invoice-producer.ts";
 import { reconcileFacetDesignNativeProjections } from "./facet-design-projection.ts";
+import { reconcileFacetDesignFrappeProjections } from "./facet-design-frappe-projection.ts";
 import {
   recoverPostizControlPlane,
 } from "./postiz.ts";
@@ -161,9 +162,20 @@ async function recoverLeadTriageOutboxThenExpireLeases(env: Env): Promise<void> 
   }
 }
 
-async function reconcileFacetV2ThenNativeDesign(env: Env): Promise<void> {
-  await reconcileFacetV2UnassociatedIntakes(env);
-  await reconcileFacetDesignNativeProjections(env);
+async function reconcileFacetDesignSurfaces(env: Env): Promise<void> {
+  try {
+    await reconcileFacetV2UnassociatedIntakes(env);
+    await reconcileFacetDesignNativeProjections(env);
+  } catch (error) {
+    log({ at: "facet_design_native_projection_reconcile", error: String(error) });
+  }
+  try {
+    await reconcileFacetDesignFrappeProjections(
+      env as import("./app-types.ts").AppEnv,
+    );
+  } catch (error) {
+    log({ at: "facet_design_frappe_compatibility_reconcile", error: String(error) });
+  }
 }
 
 async function deriveThenRecoverQuickBooksFinalInvoices(env: Env): Promise<void> {
@@ -359,9 +371,7 @@ export default {
           reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
             log({ at: "customer_portal_decision_reconcile", error: String(error) }),
           ),
-          reconcileFacetV2ThenNativeDesign(env).catch((error) =>
-            log({ at: "facet_design_native_projection_reconcile", error: String(error) }),
-          ),
+          reconcileFacetDesignSurfaces(env),
           recoverLeadTriageOutboxThenExpireLeases(env),
           recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
             if (result.effects_processed > 0 || result.intents_reconciled > 0)
@@ -634,9 +644,7 @@ async function routeRequest(
     const response = await handleFacetDesignIngest(req, env);
     const waitUntil = (ctx as ExecutionContext & { waitUntil?: ExecutionContext["waitUntil"] }).waitUntil;
     if (response.ok && typeof waitUntil === "function") {
-      waitUntil.call(ctx, reconcileFacetV2ThenNativeDesign(env).catch((error) =>
-        log({ at: "facet_design_native_projection_after_ingest", error: String(error) })
-      ));
+      waitUntil.call(ctx, reconcileFacetDesignSurfaces(env));
     }
     return response;
   }

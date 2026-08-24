@@ -33,12 +33,18 @@ test keys, and captures magic-link **and customer contract-acceptance** email in
 `dev_outbox` table instead of Gmail (both writers are gated on
 `APP_ALLOW_INSECURE_LOCAL="true"`, which every deployed environment pins to `"false"`).
 
-`local` also has the Facet v2 chain and the customer portal switched on:
-`FACET_V2_INGEST_ENABLED`, `FACET_V2_FRAPPE_PROJECTION_ENABLED`, `APP_FACET_LAUNCH_ENABLED`,
-`APP_CUSTOMER_PORTAL_ENABLED`, `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED`. `predev.mjs`
+`local` has native Facet v2 ingest/launch and the customer portal switched on:
+`FACET_V2_INGEST_ENABLED`, `APP_FACET_LAUNCH_ENABLED`, `APP_CUSTOMER_PORTAL_ENABLED`, and
+`APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED`. The canonical compatibility flag is
+`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off (`false`) in every checked-in
+environment, including local. `predev.mjs`
 generates the three throwaway Facet keys into `deploy/local/keys/`, provisions the scoped
 `ironwrap-facet-projection@ironwrap.local` service identity, and pins the matching
-`ironwrap_facet_design_projection_hmac_key` into the Frappe site config.
+`ironwrap_facet_design_projection_hmac_key` into the Frappe site config so a controlled proof can
+opt in explicitly. For `approved`/`corrected`, that endpoint creates a blank, non-customer-safe
+`Draft` Customer Quote; on every chain advance it marks the predecessor projected quote `Rejected`
+and creates a replacement only for an active decision. The compatibility draft supplies no price,
+line items, taxes, payment schedule, or commercial terms.
 
 ## Driving the Facet v2 ingest leg
 

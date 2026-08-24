@@ -13,6 +13,8 @@ const validator = resolve(root, "tools/validate-documentation.mjs");
 const matrix = resolve(root, "docs/CAPABILITY-MATRIX.md");
 const architecture = resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md");
 const playbook = resolve(root, "docs/WHITE-LABEL-CLONE-PLAYBOOK.md");
+const workerReadme = resolve(root, "workers-bus/README.md");
+const localReadme = resolve(root, "deploy/local/README.md");
 const releaseControlPublication = resolve(
   root,
   "docs/release-control-publication.json",
@@ -40,6 +42,59 @@ function withPlaybookCopy(prefix, rewrite, assertResult) {
     rmSync(temp, { recursive: true, force: true });
   }
 }
+
+function withDocumentCopy(prefix, source, name, option, rewrite, assertResult) {
+  const temp = mkdtempSync(join(tmpdir(), prefix));
+  try {
+    const current = readFileSync(source, "utf8");
+    const rewritten = rewrite(current);
+    assert.notEqual(rewritten, current, `rewrite must change ${name}`);
+    const copy = join(temp, name);
+    writeFileSync(copy, rewritten);
+    assertResult(
+      spawnSync(process.execPath, [validator, option, copy], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test("documentation gate rejects the stale Facet compatibility flag name", () => {
+  withDocumentCopy(
+    "ironwrap-facet-flag-stale-",
+    localReadme,
+    "README.md",
+    "--local-readme",
+    (content) => content.replace(
+      "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED",
+      "FACET_V2_FRAPPE_PROJECTION_ENABLED",
+    ),
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /deploy\/local\/README\.md: contains stale compatibility flag/);
+    },
+  );
+});
+
+test("documentation gate rejects restoring the false no-quote-mutation contract", () => {
+  withDocumentCopy(
+    "ironwrap-facet-mutation-stale-",
+    workerReadme,
+    "README.md",
+    "--worker-readme",
+    (content) => content.replace(
+      /For `approved` and `corrected` events, the endpoint creates a blank, non-customer-safe `Draft`\s+Customer Quote\./,
+      "The endpoint does not create or update a quote.",
+    ),
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /workers-bus\/README\.md: contains false no-quote-mutation claim/);
+    },
+  );
+});
 
 test("documentation gate rejects a deliberately stale capability count", () => {
   const temp = mkdtempSync(join(tmpdir(), "ironwrap-capability-stale-"));

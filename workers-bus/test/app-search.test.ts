@@ -802,15 +802,15 @@ test("Go to offers exactly the destinations the role's own navigation offers", a
       "/approvals",
       "/settings",
     ],
-    sales: ["/now", "/sales", "/settings"],
-    production: ["/now", "/production", "/settings"],
+    sales: ["/now", "/sales"],
+    production: ["/now", "/production"],
     accounting: [
       "/accounting",
       "/accounting/exceptions",
       "/now",
       "/accounting/quickbooks",
     ],
-    field: ["/now", "/check-in", "/vehicle", "/inventory", "/settings"],
+    field: ["/now", "/check-in", "/vehicle", "/inventory"],
   };
   for (const [role, hrefs] of Object.entries(expected) as Array<
     [AppRole, string[]]

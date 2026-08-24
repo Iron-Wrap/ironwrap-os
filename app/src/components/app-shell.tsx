@@ -1,6 +1,6 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { ChevronDown, LayoutGrid, LogOut, ShieldAlert, ShieldCheck, X } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, LayoutGrid, LogOut, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { clearSessionSnapshot, isOfflineSession } from "../auth/session";
@@ -24,6 +24,9 @@ const desktopActiveClassName =
   "border-chrome-border bg-chrome-raised !text-chrome-foreground shadow-[inset_0_-2px_0_var(--accent)]";
 const mobileActiveClassName =
   "bg-surface-muted !text-foreground shadow-[inset_0_2px_0_var(--accent)]";
+const OperatorSearchPalette = lazy(async () => ({
+  default: (await import("./operator-search-palette")).OperatorSearchPalette,
+}));
 
 /**
  * The company's own logo once an owner has uploaded one, and the product mark until then.
@@ -53,12 +56,35 @@ export function AppShell() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [signingOut, setSigningOut] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoaded, setSearchLoaded] = useState(false);
   const offlineSession = isOfflineSession(session);
   const groups = groupNavigation(items);
   const currentItem = navigationItemForPath(items, pathname);
   const primaryItems = items.length <= 4 ? items : items.filter((item) => item.mobilePrimary);
   const hasMore = primaryItems.length < items.length;
   const currentItemIsInMore = hasMore && !primaryItems.some((item) => item.to === currentItem.to);
+
+  const openSearch = useCallback(() => {
+    setSearchLoaded(true);
+    setSearchOpen(true);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      if (
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName))
+      )
+        return;
+      event.preventDefault();
+      openSearch();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openSearch]);
 
   async function signOut() {
     if (offlineSession) return;
@@ -120,7 +146,7 @@ export function AppShell() {
 
       <div className="min-w-0">
         <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface/95 backdrop-blur-lg">
-          <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
+          <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-3">
               {/* The only "go home" control a phone has, so it carries the 44 px thumb
                   floor the mobile suite enforces; the mark inside stays 20 px. */}
@@ -142,7 +168,18 @@ export function AppShell() {
             </div>
             <SystemStatus />
             <Button
-              className="col-start-3 row-start-1"
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label="Open search (Command or Control K)"
+              aria-keyshortcuts="Control+K Meta+K"
+              title="Search (⌘K / Ctrl+K)"
+              onClick={openSearch}
+            >
+              <Search aria-hidden="true" />
+            </Button>
+            <Button
+              className="col-start-4 row-start-1"
               size="icon"
               variant="ghost"
               aria-label="Sign out"
@@ -164,6 +201,12 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {searchLoaded ? (
+        <Suspense fallback={null}>
+          <OperatorSearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
+        </Suspense>
+      ) : null}
 
       {/* Mounted on every authenticated screen on purpose. Reporting a hazard,
           making an area safe, condemning equipment, and calling for rescue must

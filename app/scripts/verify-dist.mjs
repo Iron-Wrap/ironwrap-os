@@ -130,6 +130,13 @@ if (stylesheetIndex > entryScriptIndex) {
       "behind it, first paint waits for every modulepreload to clear the connection pool",
   );
 }
+if (
+  /<link\b(?=[^>]*\brel=["']preload["'])(?=[^>]*\bas=["']font["'])[^>]*hubot-sans[^>]*>/i.test(
+    indexHtml,
+  )
+) {
+  throw new Error("dist/index.html must not preload optional Hubot faces");
+}
 
 for (const [constant, chunk] of [
   ["TODAY_ROUTE_CHUNK", "today-page"],

@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 95,
-      "latest": "0116_native_commercial_deposit_derivation.sql"
+      "count": 96,
+      "latest": "0117_authority_readback_lifecycle.sql"
     }
   },
   "test_observation_policy": {

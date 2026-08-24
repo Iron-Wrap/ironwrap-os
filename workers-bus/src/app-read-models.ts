@@ -5,6 +5,26 @@ import {
   type AuthContext,
   type WorkObjectScope,
 } from "./app-types.ts";
+import {
+  canMoveCards,
+  canViewPipeline,
+  parsePipelineCardTemplate,
+  PIPELINE_UNDO_WINDOW_MS,
+  renderCardSummary,
+  satisfiesStageRole,
+  templateRelations,
+  type PipelineCardSummary,
+  type PipelineCardTemplate,
+  type PipelineRecord,
+  type PipelineStageRecord,
+} from "./pipeline-board.ts";
+import {
+  cardCountsByPipeline,
+  listCards,
+  listPipelines,
+  listStages,
+  resolveCardRelations,
+} from "./pipeline-board-store.ts";
 import { approvalDecisionConfig } from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
 import {
@@ -5902,6 +5922,229 @@ function valueChanged(current: unknown, prior: unknown): boolean {
   if (currentText !== null || priorText !== null)
     return currentText !== priorText;
   return optionalNumber(current) !== optionalNumber(prior);
+}
+
+/* ------------------------------------------------------------------ pipeline board ------ */
+
+export interface PipelineSummaryReadModel {
+  pipeline_id: string;
+  key: string;
+  name: string;
+  entity_type: string;
+  owning_role: string | null;
+  position: number;
+  version: number;
+  card_count: number;
+  can_move: boolean;
+  /**
+   * The parsed card template, sent on the board payload only. The board surface renders card slots
+   * from it, so it must not have to re-fetch or re-parse the stored `card_template_json`; the
+   * pipeline LIST omits it, because a switcher never renders a card.
+   */
+  card_template?: PipelineCardTemplate;
+}
+
+export interface PipelineListReadModel extends ReadModelEnvelope {
+  pipelines: PipelineSummaryReadModel[];
+}
+
+export interface PipelineBoardStageReadModel {
+  stage_id: string;
+  key: string;
+  name: string;
+  color: string | null;
+  position: number;
+  is_won: boolean;
+  is_lost: boolean;
+  min_role_to_enter: string | null;
+  can_enter: boolean;
+  card_count: number;
+  total_amount_cents: number;
+}
+
+export interface PipelineBoardCardReadModel {
+  card_id: string;
+  stage_id: string;
+  position_in_stage: number;
+  entity_type: string;
+  entity_id: string;
+  version: number;
+  stage_entered_at: string;
+  summary: PipelineCardSummary;
+}
+
+export interface PipelineBoardReadModel extends ReadModelEnvelope {
+  pipeline: PipelineSummaryReadModel;
+  stages: PipelineBoardStageReadModel[];
+  cards: PipelineBoardCardReadModel[];
+  undo_window_seconds: number;
+}
+
+export class PipelineReadModelError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+    this.name = "PipelineReadModelError";
+  }
+}
+
+/**
+ * Every pipeline this session may see.  Role-scoped through `pipelines.owning_role` (PO decision
+ * D8): the owner and ops see all of them, another role sees only the board its role owns.
+ */
+export async function buildPipelineListReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<PipelineListReadModel> {
+  const pipelines = (await listPipelines(env, auth.session.tenant_id)).filter((pipeline) =>
+    canViewPipeline(auth, pipeline),
+  );
+  const counts = await cardCountsByPipeline(env, auth.session.tenant_id);
+  const base = envelope(auth, pipelineEnvelopeRows(pipelines), []);
+  return {
+    ...base,
+    allowed_actions: [...base.allowed_actions, "pipeline.read"],
+    pipelines: pipelines.map((pipeline) =>
+      pipelineSummary(auth, pipeline, counts.get(pipeline.pipeline_id) ?? 0),
+    ),
+  };
+}
+
+/**
+ * The mobile-first board payload: flat, pre-aggregated, no client-side joins and no N+1.  Stage
+ * card counts and value roll-ups are summed here so a phone renders a column header without
+ * walking the card list, and every card's `summary` is rendered from the pipeline's own
+ * `card_template_json` rather than from a per-vertical field list baked into this function.
+ */
+export async function buildPipelineBoardReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  pipeline: PipelineRecord,
+): Promise<PipelineBoardReadModel> {
+  if (!canViewPipeline(auth, pipeline))
+    throw new PipelineReadModelError("pipeline_read_forbidden");
+
+  let template;
+  try {
+    template = parsePipelineCardTemplate(JSON.parse(pipeline.card_template_json) as unknown);
+  } catch {
+    throw new PipelineReadModelError("pipeline_card_template_invalid");
+  }
+
+  const [stages, cards] = await Promise.all([
+    listStages(env, auth.session.tenant_id, pipeline.pipeline_id),
+    listCards(env, auth.session.tenant_id, pipeline.pipeline_id),
+  ]);
+  const stageById = new Map(stages.map((stage) => [stage.stage_id, stage]));
+  const relations = await resolveCardRelations(
+    env,
+    auth.session.tenant_id,
+    cards,
+    templateRelations(template),
+  );
+
+  const shapedCards: PipelineBoardCardReadModel[] = cards.map((card) => {
+    const stage = stageById.get(card.stage_id);
+    const bag = relations.get(card.card_id) ?? {};
+    // `stage` is a relation like any other, so a template binds the won badge by name instead of
+    // the read model deciding per vertical what "won" looks like.
+    bag.stage = stage
+      ? { is_won: stage.is_won === 1, is_lost: stage.is_lost === 1, name: stage.name, key: stage.key }
+      : null;
+    return {
+      card_id: card.card_id,
+      stage_id: card.stage_id,
+      position_in_stage: card.position_in_stage,
+      entity_type: card.entity_type,
+      entity_id: card.entity_id,
+      version: card.version,
+      stage_entered_at: card.stage_entered_at,
+      summary: renderCardSummary(template, bag, card.entity_id),
+    };
+  });
+
+  const byStage = new Map<string, PipelineBoardCardReadModel[]>();
+  for (const card of shapedCards) {
+    const bucket = byStage.get(card.stage_id);
+    if (bucket) bucket.push(card);
+    else byStage.set(card.stage_id, [card]);
+  }
+
+  const staleFields = shapedCards.some((card) => !stageById.has(card.stage_id))
+    ? ["pipeline.cards.stage"]
+    : [];
+  const base = envelope(
+    auth,
+    [...pipelineEnvelopeRows([pipeline]), ...stageEnvelopeRows(stages)],
+    staleFields,
+  );
+  const movable = canMoveCards(auth, pipeline);
+  return {
+    ...base,
+    allowed_actions: [
+      ...base.allowed_actions,
+      "pipeline.read",
+      ...(movable ? ["pipeline.card.move"] : []),
+    ],
+    pipeline: pipelineSummary(auth, pipeline, shapedCards.length, template),
+    stages: stages.map((stage) => {
+      const stageCards = byStage.get(stage.stage_id) ?? [];
+      return {
+        stage_id: stage.stage_id,
+        key: stage.key,
+        name: stage.name,
+        color: stage.color,
+        position: stage.position,
+        is_won: stage.is_won === 1,
+        is_lost: stage.is_lost === 1,
+        min_role_to_enter: stage.min_role_to_enter,
+        can_enter:
+          movable &&
+          (stage.min_role_to_enter === null ||
+            satisfiesStageRole(auth.session.role, stage.min_role_to_enter)),
+        card_count: stageCards.length,
+        total_amount_cents: stageCards.reduce(
+          (total, card) => total + (card.summary.amount_cents ?? 0),
+          0,
+        ),
+      };
+    }),
+    cards: shapedCards,
+    undo_window_seconds: Math.round(PIPELINE_UNDO_WINDOW_MS / 1000),
+  };
+}
+
+function pipelineSummary(
+  auth: AuthContext,
+  pipeline: PipelineRecord,
+  cardCount: number,
+  template?: PipelineCardTemplate,
+): PipelineSummaryReadModel {
+  return {
+    ...(template ? { card_template: template } : {}),
+    pipeline_id: pipeline.pipeline_id,
+    key: pipeline.key,
+    name: pipeline.name,
+    entity_type: pipeline.entity_type,
+    owning_role: pipeline.owning_role,
+    position: pipeline.position,
+    version: pipeline.version,
+    card_count: cardCount,
+    can_move: canMoveCards(auth, pipeline),
+  };
+}
+
+function pipelineEnvelopeRows(pipelines: readonly PipelineRecord[]): FrappeRow[] {
+  return pipelines.map((pipeline) => ({
+    name: pipeline.pipeline_id,
+    modified: pipeline.updated_at,
+  }));
+}
+
+function stageEnvelopeRows(stages: readonly PipelineStageRecord[]): FrappeRow[] {
+  return stages.map((stage) => ({ name: stage.stage_id, modified: stage.updated_at }));
 }
 
 function notNull<T>(value: T | null): value is T {

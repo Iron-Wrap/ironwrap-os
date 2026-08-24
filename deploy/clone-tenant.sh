@@ -129,13 +129,11 @@ else
   chmod 600 "$DEV_VARS"
 
   ACCEPTANCE_HMAC="$(rand)"
-  DECISION_HMAC="$(rand)"
   FACET_PROJECTION_HMAC="$(rand)"
 
   export CLONE_COMPOSE_FILE="$COMPOSE_FILE"
   export CLONE_SITE="$SITE"
   export CLONE_ACCEPTANCE_HMAC="$ACCEPTANCE_HMAC"
-  export CLONE_DECISION_HMAC="$DECISION_HMAC"
   export CLONE_FACET_PROJECTION_HMAC="$FACET_PROJECTION_HMAC"
 
   node - "$DEV_VARS" <<'NODE'
@@ -163,7 +161,6 @@ const quickBooks = credentials(".quickbooks_reconciliation_issuer_credentials");
 const fleet = credentials(".fleet_capture_issuer_credentials");
 const workPackage = credentials(".work_package_issuer_credentials");
 const acceptance = credentials(".customer_acceptance_credentials");
-const decision = credentials(".customer_decision_credentials");
 const facet = credentials(".facet_design_projection_credentials");
 
 const entries = [
@@ -179,7 +176,6 @@ const entries = [
   ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", fresh()],
   ["PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET", fresh()],
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", process.env.CLONE_ACCEPTANCE_HMAC],
-  ["APP_CUSTOMER_DECISION_HMAC_KEY", process.env.CLONE_DECISION_HMAC],
   ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", process.env.CLONE_FACET_PROJECTION_HMAC],
   // Turnstile's documented always-pass test secret; the local stack never calls the provider.
   ["PUBLIC_ESTIMATE_TURNSTILE_SECRET", "1x0000000000000000000000000000000AA"],
@@ -193,8 +189,6 @@ const entries = [
   ["WORK_PACKAGE_FRAPPE_API_SECRET", workPackage.api_secret],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptance.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptance.api_secret],
-  ["APP_CUSTOMER_DECISION_FRAPPE_API_KEY", decision.api_key],
-  ["APP_CUSTOMER_DECISION_FRAPPE_API_SECRET", decision.api_secret],
   ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY", facet.api_key],
   ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET", facet.api_secret],
 ];
@@ -215,8 +209,6 @@ NODE
   # click as an option and `bench set-config` dies with "No such option: -H".
   docker compose -f "$COMPOSE_FILE" exec -T frappe \
     bench --site "$SITE" set-config -- ironwrap_customer_acceptance_hmac_key "$ACCEPTANCE_HMAC"
-  docker compose -f "$COMPOSE_FILE" exec -T frappe \
-    bench --site "$SITE" set-config -- ironwrap_customer_decision_hmac_key "$DECISION_HMAC"
   docker compose -f "$COMPOSE_FILE" exec -T frappe \
     bench --site "$SITE" set-config -- ironwrap_facet_design_projection_hmac_key "$FACET_PROJECTION_HMAC"
 fi

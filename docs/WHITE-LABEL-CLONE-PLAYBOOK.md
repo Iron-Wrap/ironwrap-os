@@ -211,12 +211,15 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
    | site config key | identity | provisioned in |
    |---|---|---|
-   | `ironwrap_customer_decision_service_user` | IronWrap Customer Decision Service | step 3.4 pair, dedicated user |
    | `ironwrap_fleet_capture_issuer_user` | IronWrap Fleet Capture Issuer | dedicated user, own key pair (this step) |
    | `ironwrap_work_package_issuer_user` | IronWrap Work Package Issuer | dedicated user, own key pair (this step) |
    | `ironwrap_quickbooks_reconciliation_issuer_user` | IronWrap QuickBooks Reconciliation Issuer | step 3.5 |
    | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
    | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | leftover Frappe lookup identity only. `tools/launch-proof.mjs` proves D1/Worker identity with `INGEST_TOKEN` / `ADMIN_TOKEN` and ignores `FRAPPE_*` (IRO-189). Do not treat this pin as a release-wire gate. |
+
+   Customer portal decisions are not one of those Frappe-issued rails. The authoritative write is
+   the native D1 intent plus immutable R2 receipt in `0069_customer_portal_decision_intents.sql`;
+   no Frappe decision issuer is provisioned for clones.
 
    Three further pins are tenant *constants* rather than identities. A Roof Job cannot
    reach `Won` without a workflow profile and the locale-policy pair, and the customer

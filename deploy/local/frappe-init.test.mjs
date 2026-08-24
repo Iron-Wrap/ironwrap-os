@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const script = readFileSync(join(root, "deploy/local/frappe-init.sh"), "utf8");
+const predev = readFileSync(join(root, "deploy/local/predev.mjs"), "utf8");
+const cloneTenant = readFileSync(join(root, "deploy/clone-tenant.sh"), "utf8");
 
 // ELEC-143 finding 3. The credential helpers dump `bench console` output - a freshly minted
 // api_secret in plain text - to a scratch file, then grep the secret out of it. That path used
@@ -59,4 +61,28 @@ test("no scratch path is a hard-coded /tmp name", () => {
 test("the plaintext secret dump is removed once the secret is safely in the site directory", () => {
   const removals = [...script.matchAll(/^\s*rm -f "\$raw"$/gm)];
   assert.equal(removals.length, 2, "each credential helper must clean up its own dump");
+});
+
+test("frappe-init no longer provisions or pins a customer-decision service issuer", () => {
+  assert.doesNotMatch(
+    script,
+    /ironwrap_customer_decision_service_user|\.customer_decision_credentials|IronWrap Customer Decision Service/,
+    "customer portal decisions are D1/Worker-authoritative and must not provision a Frappe decision issuer",
+  );
+});
+
+test("local predev does not read or inject retired customer-decision Frappe credentials", () => {
+  assert.doesNotMatch(
+    predev,
+    /\.customer_decision_credentials|APP_CUSTOMER_DECISION_FRAPPE_API_KEY|APP_CUSTOMER_DECISION_FRAPPE_API_SECRET|ironwrap_customer_decision_hmac_key/,
+    "predev.mjs must not revive the retired customer-decision Frappe credential/config path",
+  );
+});
+
+test("clone-tenant does not copy retired customer-decision Frappe credentials or site config", () => {
+  assert.doesNotMatch(
+    cloneTenant,
+    /\.customer_decision_credentials|APP_CUSTOMER_DECISION_FRAPPE_API_KEY|APP_CUSTOMER_DECISION_FRAPPE_API_SECRET|ironwrap_customer_decision_hmac_key/,
+    "clone-tenant.sh must not recreate the retired customer-decision Frappe authority",
+  );
 });

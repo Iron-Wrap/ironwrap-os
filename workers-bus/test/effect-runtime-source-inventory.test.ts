@@ -14,6 +14,10 @@ import { readFile, readdir } from "node:fs/promises";
  * The classifications:
  * - runtime-routed: the file performs provider mutations and binds them to the
  *   canonical effect runtime (`runExternalEffect`/`executeExternalEffect`).
+ * - remote-processing: outbound network for bounded inference/content
+ *   acquisition only. It may consume remote quota or credits, but it does not
+ *   mutate provider business state and therefore does not become an effect
+ *   runtime adapter.
  * - read-only: every fetch site in the file is a GET/HEAD-style read.
  * - read-only-post-rpc: POST transport, but only to the named Frappe read RPCs.
  * - transport-library: a provider client with a dynamic method; mutation
@@ -26,6 +30,7 @@ import { readFile, readdir } from "node:fs/promises";
  */
 type InventoryEntry =
   | { kind: "runtime-routed" }
+  | { kind: "remote-processing"; discipline: string }
   | { kind: "read-only" }
   | { kind: "read-only-post-rpc"; rpcMethods: string[] }
   | { kind: "transport-library"; mutationAuthorityCallers: string[] }
@@ -39,7 +44,7 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "index.ts": { kind: "worker-entry" },
   "jobnimbus.ts": { kind: "runtime-routed" },
   "measurements.ts": {
-    kind: "governed-unrouted",
+    kind: "remote-processing",
     discipline:
       "queue-leased, idempotent Anthropic OCR inference with optional OmniRoute credit-exhausted fallback, bounded by MEASUREMENT_OCR_* and optional OMNIROUTE_* config; mutates no provider business state, plus a redirect-bounded report download",
   },
@@ -158,6 +163,29 @@ test("transport libraries have their mutation authority enforced by real, named 
   }
 });
 
+test("remote-processing files stay outside the effect runtime because they do not own provider authority", async () => {
+  const remoteProcessing = Object.entries(OUTBOUND_FETCH_INVENTORY).filter(
+    (pair): pair is [string, Extract<InventoryEntry, { kind: "remote-processing" }>] =>
+      pair[1].kind === "remote-processing",
+  );
+  assert.deepEqual(
+    remoteProcessing.map(([file]) => file).sort(),
+    ["measurements.ts"],
+    "the remote-processing set changed: additions need an explicit review that the file only performs bounded inference/content acquisition and does not own provider authority",
+  );
+  for (const [file, entry] of remoteProcessing) {
+    assert.ok(
+      entry.discipline.length >= 40,
+      `${file} needs a real recorded discipline, not a placeholder`,
+    );
+    const source = await readFile(new URL(file, SRC_DIR), "utf8");
+    assert.ok(
+      !referencesEffectRuntime(source),
+      `${file} now references the canonical effect runtime: reclassify it as runtime-routed if it starts owning provider mutations`,
+    );
+  }
+});
+
 test("governed-unrouted mutation adapters are exactly the recorded debt, each with its own discipline, and none quietly adopts half the runtime", async () => {
   const unrouted = Object.entries(OUTBOUND_FETCH_INVENTORY).filter(
     (pair): pair is [string, Extract<InventoryEntry, { kind: "governed-unrouted" }>] =>
@@ -167,12 +195,10 @@ test("governed-unrouted mutation adapters are exactly the recorded debt, each wi
   // runtime means moving it to runtime-routed, not editing its discipline.
   assert.deepEqual(
     unrouted.map(([file]) => file).sort(),
-    // IRO-195 moved customer-portal-decision off outbound fetch. IRO-38 leftover
-    // work deleted the unused Frappe gate writer, so production-gate-clearance.ts
-    // no longer has an outbound fetch. Remaining governed-unrouted debt is OCR.
-    [
-      "measurements.ts",
-    ],
+    // IRO-195 moved customer-portal-decision off outbound fetch. The leftover
+    // Frappe gate writer is gone too, so no Worker source now owns a governed,
+    // mutating outbound fetch outside the canonical effect runtime.
+    [],
     "the governed-unrouted set changed: shrinking it means reclassifying to runtime-routed; growing it is a reviewed IRO-38 decision, not a default",
   );
   for (const [file, entry] of unrouted) {
@@ -202,4 +228,15 @@ test("the worker entry file's only fetch is the inbound handler", async () => {
   const sites = outboundFetchSites(source);
   assert.equal(sites.length, 1, "index.ts gained an outbound fetch site; classify it");
   assert.match(sites[0] ?? "", /async fetch\(/, "index.ts's fetch must be the Worker handler");
+});
+
+test("IRO-38 shrink-only adapters that no longer own outbound effects stay out of the fetch inventory", async () => {
+  for (const file of ["customer-portal-decision.ts", "fleet-actions.ts"]) {
+    const source = await readFile(new URL(file, SRC_DIR), "utf8");
+    assert.equal(
+      outboundFetchSites(source).length,
+      0,
+      `${file} regained an outbound fetch site; either route the mutation through effect-runtime.ts or explicitly classify the new bounded non-authority remote processing`,
+    );
+  }
 });

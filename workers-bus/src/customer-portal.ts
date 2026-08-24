@@ -27,7 +27,7 @@ import {
 } from "./native-job-packet-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
-import { customerDecisionBackendConfigured } from "./customer-decision-config.ts";
+import { customerDecisionBackendEnabled } from "./customer-decision-config.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
@@ -386,7 +386,7 @@ export async function buildCustomerPortalReadModel(
     version: 1,
     brand: customerPortalBrand(job, env),
     contract_acceptance_available: contractAcceptanceAvailable,
-    material_decision_available: customerDecisionBackendConfigured(env) &&
+    material_decision_available: customerDecisionBackendEnabled(env) &&
       optionPackages.length > 0,
     option_packages: optionPackages,
     source_updated_at: latestTimestamp(sourceTimestamps),

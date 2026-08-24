@@ -10,7 +10,6 @@ import {
   customerPortalEnabled,
 } from "./customer-portal.ts";
 import {
-  customerDecisionBackendConfigured,
   customerDecisionBackendEnabled,
 } from "./customer-decision-config.ts";
 import {
@@ -23,9 +22,7 @@ import { recordPortalDecisionConfirmation } from "./portal-decision-confirmation
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
-const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1_024;
-const MAX_FRAPPE_DETAIL_CHARS = 500;
-const FRAPPE_ATTEMPT_LEASE_MS = 90 * 1_000;
+const DECISION_COMMIT_LEASE_MS = 90 * 1_000;
 const DECISION_ACCESS_WINDOW_MS = 15 * 60 * 1_000;
 const DECISION_ACCESS_IP_LIMIT = 120;
 const DECISION_RECEIPT_CONTENT_TYPE = "application/json";
@@ -61,6 +58,8 @@ interface DecisionIntent {
   receipt_hash: string | null;
   receipt_content_length: number | null;
   state: DecisionState;
+  // Legacy 0069 schema names retained only in storage while the append-only event/transition
+  // contract still uses them; runtime semantics are a bounded native D1 commit lease.
   frappe_attempted_at: string | null;
   frappe_attempt_lease_expires_at: string | null;
   result_json: string | null;
@@ -78,65 +77,12 @@ type ClaimDecisionResult =
 
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
 
-class FrappeDecisionHttpError extends Error {
-  readonly status: number;
-  /** Frappe's own reason, for the worker log only -- never for the customer. */
-  readonly detail: string | null;
-
-  constructor(status: number, detail: string | null = null) {
-    super(`frappe_http_${status}`);
-    this.name = "FrappeDecisionHttpError";
-    this.status = status;
-    this.detail = detail;
-  }
-}
-
-/**
- * Pull Frappe's own reason out of an error body so a refusal is diagnosable from the worker log
- * alone.
- *
- * ELEC-95 spent a debugging session on this: a guard in `document_validation.py` refused every
- * customer's decision, and the only trace anywhere on our side was the generic
- * `decision_rejected` this route returns. The reason existed the whole time -- in the response
- * body we threw away. Frappe spreads it across `exception`, `_server_messages` (a JSON string of
- * JSON strings) and `message` depending on the throw, so try each.
- */
-function frappeErrorDetail(raw: string): string | null {
-  const clip = (value: unknown): string | null => {
-    const text = typeof value === "string" ? value.trim() : "";
-    return text ? text.slice(0, MAX_FRAPPE_DETAIL_CHARS) : null;
-  };
-  let body: Record<string, unknown>;
-  try {
-    body = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return clip(raw);
-  }
-  if (!body || typeof body !== "object") return clip(raw);
-  const serverMessages = body._server_messages;
-  if (typeof serverMessages === "string") {
-    try {
-      const entries = JSON.parse(serverMessages) as unknown[];
-      for (const entry of entries) {
-        const parsed = typeof entry === "string"
-          ? JSON.parse(entry) as Record<string, unknown>
-          : entry as Record<string, unknown>;
-        const detail = clip(parsed?.message);
-        if (detail) return detail;
-      }
-    } catch {
-      // Fall through to the other shapes below.
-    }
-  }
-  return clip(body.exception) ?? clip(body.message) ?? clip(body.exc_type);
-}
-
-class FrappeDecisionTransportError extends Error {
+class DecisionCommitTransportError extends Error {
   readonly code: string;
 
   constructor(code: string) {
     super(code);
-    this.name = "FrappeDecisionTransportError";
+    this.name = "DecisionCommitTransportError";
     this.code = code;
   }
 }
@@ -151,8 +97,8 @@ class FrappeDecisionTransportError extends Error {
  * moves -- and an email round-trip before a customer may even say "I prefer the charcoal
  * standing-seam" would remove the interaction rather than protect it. What acceptance's shape
  * does buy is kept in full: trusted origin, a fixed two-key body, a required Idempotency-Key, an
- * immutable R2 receipt written before the Frappe effect is attempted, a single-attempt lease, and
- * a request-context re-check that stops a stolen key being replayed from elsewhere.
+ * immutable R2 receipt written before the native D1 commit is attempted, a single-attempt lease,
+ * and a request-context re-check that stops a stolen key being replayed from elsewhere.
  */
 export async function handleCustomerPortalDecision(
   req: Request,
@@ -166,7 +112,7 @@ export async function handleCustomerPortalDecision(
 
   const request = await parseExactJson(req, ["token", "option_package_id"]);
   if (!request || !validToken(request.token)) return decisionNotFound();
-  if (!validFrappeName(request.option_package_id)) {
+  if (!validOptionPackageId(request.option_package_id)) {
     return decisionJson({ error: "invalid_option_package" }, 400);
   }
   const optionPackageId = request.option_package_id;
@@ -222,7 +168,7 @@ export async function handleCustomerPortalDecision(
       now: now.toISOString(),
     });
   } catch {
-    // A Frappe or D1 outage says nothing about whether the supplied capability was valid.
+    // A storage/runtime outage says nothing about whether the supplied capability was valid.
     return decisionUnavailable();
   }
   if (claim.kind === "conflict") {
@@ -231,10 +177,6 @@ export async function handleCustomerPortalDecision(
   return await settleDecisionIntent(env, claim.intent, requestContext);
 }
 
-/**
- * The scheduled sweep only closes a Frappe attempt whose outcome can no longer be known. It never
- * replays a customer's selection; immutable receipts are intentionally retained.
- */
 export async function reconcileCustomerPortalDecisionAttempts(
   env: AppEnv,
   now = new Date(),
@@ -251,7 +193,7 @@ export async function reconcileCustomerPortalDecisionAttempts(
       state: "uncertain",
       response: { status: "uncertain", decision_id: intent.decision_id },
       responseStatus: 202,
-      errorCode: "frappe_attempt_lease_expired",
+      errorCode: "native_commit_lease_expired",
       now: nowValue,
     })
   ));
@@ -305,8 +247,8 @@ async function settleDecisionIntent(
       }
       const receipt = await receiptFor(intent);
       try {
-        // Evidence precedes the effect: the receipt is durable before anything in Frappe is
-        // asked to change, so an interrupted write always leaves a provable customer intent.
+        // Evidence precedes the commit: the receipt is durable before the D1 intent is finalized,
+        // so an interrupted write always leaves a provable customer intent.
         await r2ObjectStore(env.RAW).ensure(
           intent.receipt_key,
           receipt.body,
@@ -342,7 +284,7 @@ async function settleDecisionIntent(
         state: "uncertain",
         response: { status: "uncertain", decision_id: intent.decision_id },
         responseStatus: 202,
-        errorCode: "frappe_attempt_lease_expired",
+        errorCode: "native_commit_lease_expired",
         now: now.toISOString(),
       });
       return uncertain
@@ -356,11 +298,11 @@ async function settleDecisionIntent(
       return decisionJson({ error: "decision_request_context_mismatch" }, 409);
     }
     const attemptAt = now.toISOString();
-    const attemptClaimed = await markFrappeAttempted(
+    const attemptClaimed = await markDecisionCommitStarted(
       env,
       intent.decision_id,
       attemptAt,
-      new Date(now.getTime() + FRAPPE_ATTEMPT_LEASE_MS).toISOString(),
+      new Date(now.getTime() + DECISION_COMMIT_LEASE_MS).toISOString(),
     );
     if (!attemptClaimed) {
       intent = await getDecisionIntent(env, intent.decision_id) ?? intent;
@@ -399,29 +341,6 @@ async function settleDecisionIntent(
       }
       return decisionUnavailable();
     } catch (error) {
-      if (error instanceof FrappeDecisionHttpError && error.status < 500) {
-        const responseStatus = error.status === 400 ? 400 : 409;
-        const rejected = { error: "decision_rejected" };
-        // The customer keeps the generic message; the operator gets Frappe's actual reason.
-        log({
-          at: "customer_portal_decision_rejected",
-          decision_id: intent.decision_id,
-          roof_job_id: intent.roof_job_id,
-          option_package_id: intent.option_package_id,
-          frappe_status: error.status,
-          frappe_detail: error.detail,
-        });
-        const finalized = await finalizeDecisionIntent(env, intent, {
-          state: "rejected",
-          response: rejected,
-          responseStatus,
-          errorCode: `frappe_http_${error.status}`,
-          now: new Date().toISOString(),
-        });
-        return finalized
-          ? decisionJson(rejected, responseStatus)
-          : decisionUnavailable();
-      }
       const uncertain = {
         status: "uncertain" as const,
         decision_id: intent.decision_id,
@@ -431,9 +350,6 @@ async function settleDecisionIntent(
         decision_id: intent.decision_id,
         roof_job_id: intent.roof_job_id,
         error_code: errorCode(error),
-        frappe_detail: error instanceof FrappeDecisionHttpError
-          ? error.detail
-          : null,
       });
       const finalized = await finalizeDecisionIntent(env, intent, {
         state: "uncertain",
@@ -496,12 +412,14 @@ async function commitDecision(
     intent.receipt_hash !== receipt.hash ||
     intent.receipt_content_length !== receipt.length
   ) {
-    throw new FrappeDecisionTransportError("decision_receipt_ledger_mismatch");
+    throw new DecisionCommitTransportError("decision_receipt_ledger_mismatch");
   }
-  const stored = await env.RAW.head(intent.receipt_key);
-  if (!stored) {
-    throw new FrappeDecisionTransportError("decision_receipt_unavailable");
-  }
+  await r2ObjectStore(env.RAW).ensure(
+    intent.receipt_key,
+    receipt.body,
+    DECISION_RECEIPT_CONTENT_TYPE,
+    receipt.hash,
+  );
 }
 
 async function claimDecisionIntent(
@@ -575,7 +493,7 @@ async function markReceiptStored(
   return d1Changes(result) > 0;
 }
 
-async function markFrappeAttempted(
+async function markDecisionCommitStarted(
   env: AppEnv,
   decisionId: string,
   attemptedAt: string,
@@ -693,7 +611,7 @@ function storedTerminalResponse(intent: DecisionIntent): Response | null {
       return decisionJson(body, intent.response_status);
     }
   } catch {
-    // A corrupt ledger must not become a retryable Frappe write.
+    // A corrupt ledger must not become a retryable native commit.
   }
   return decisionUnavailable();
 }
@@ -703,22 +621,13 @@ function customerDecisionEnabled(env: AppEnv): boolean {
 }
 
 function customerDecisionConfigured(env: AppEnv): boolean {
-  return customerPortalConfigured(env) && customerDecisionBackendConfigured(env);
+  return customerPortalConfigured(env) && customerDecisionBackendEnabled(env);
 }
 
 function trustedPortalOrigin(req: Request, env: AppEnv): boolean {
   const configuredOrigin = appPublicOrigin(env);
   const origin = validateAppOrigin(req, env, true);
   return origin.ok && !!configuredOrigin && origin.origin === configuredOrigin;
-}
-
-function responseMessage(value: unknown): Record<string, unknown> {
-  const root = isRecord(value) ? value : null;
-  const message = root && isRecord(root.message) ? root.message : null;
-  if (!message) {
-    throw new FrappeDecisionTransportError("frappe_response_invalid_shape");
-  }
-  return message;
 }
 
 async function parseExactJson(
@@ -748,22 +657,6 @@ async function parseExactJson(
   }
 }
 
-async function hmacBase64Url(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)),
-  );
-  let binary = "";
-  for (const byte of signature) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isRecord(value)) {
@@ -791,7 +684,7 @@ function validIdempotencyKey(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(value);
 }
 
-function validFrappeName(value: unknown): value is string {
+function validOptionPackageId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9._:-]{3,140}$/.test(value);
 }
 
@@ -804,11 +697,8 @@ function boundedText(value: unknown, min: number, max: number): string | null {
 }
 
 function errorCode(error: unknown): string {
-  if (error instanceof FrappeDecisionTransportError) return error.code;
-  if (error instanceof FrappeDecisionHttpError) {
-    return `frappe_http_${error.status}`;
-  }
-  return "frappe_request_unknown";
+  if (error instanceof DecisionCommitTransportError) return error.code;
+  return "decision_commit_unknown";
 }
 
 function d1Changes(result: { meta?: { changes?: number } }): number {

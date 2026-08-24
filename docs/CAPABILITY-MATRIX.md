@@ -450,18 +450,15 @@ ELEC-94 customer-facing option comparison and material decision (2026-08-20):
   paired-device budget. See ELEC-89 for the rejected embed and deep-link alternatives.
 - Migration `0069_customer_portal_decision_intents.sql` is 0029's acceptance-intent machine minus
   the email challenge: one row per `Idempotency-Key`, an immutable R2 receipt written before the
-  Frappe effect is attempted, a single-attempt lease, and a terminal result replayed verbatim.
+  native D1 commit is attempted, a single-attempt lease, and a terminal result replayed verbatim.
   The challenge is absent on purpose — a material preference is provisional, not a legal act.
 - A portal-originated `Customer Decision` never moves a `Customer Quote`. It is a signal an
   estimator confirms, matching the human-verification-in-the-loop rule and the fact that
   `Customer Decision` carries no approval state of its own.
-- Frappe-side authority is a dedicated `IronWrap Customer Decision Service` role that may create a
-  `Customer Decision` and its receipt `Evidence Item` and read the three anchors it binds — it can
-  never sign a contract or write a quote, unlike the acceptance service identity.
--   Fail-closed by default. `APP_CUSTOMER_PORTAL_DECISION_ENABLED` mirrors the acceptance flag, and
-  the route additionally requires its own HMAC secret. IRO-195 removed leftover Frappe service
-  credentials from this required path; the native commit records the choice on D1 after the R2
-  receipt. The read half degrades to a read-only comparison rather than disappearing.
+-   Fail-closed by default. `APP_CUSTOMER_PORTAL_DECISION_ENABLED` mirrors the acceptance flag. The
+  native D1 intent plus immutable R2 receipt is authoritative; no Frappe decision issuer is
+  provisioned for this path. The read half degrades to a read-only comparison rather than
+  disappearing.
 - `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
   drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
   44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.

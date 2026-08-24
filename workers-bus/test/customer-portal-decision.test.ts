@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
@@ -18,10 +18,6 @@ const PORTAL_LINK_EXPIRES_AT = new Date(
   Math.max(Date.now(), Date.parse(NOW)) + 24 * 60 * 60_000,
 ).toISOString();
 const PUBLIC_ORIGIN = "https://app.example.com";
-const HMAC_SECRET = "customer-decision-test-hmac-secret-longer-than-thirty-two-characters";
-const RECORD_PATH =
-  "/api/method/ironwrap_roofing.customer_decision_api.record_customer_portal_material_decision";
-
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
@@ -151,19 +147,6 @@ class MemoryR2 {
   }
 }
 
-type RecordMode = "recorded" | "rejected" | "guard_rejected" | "uncertain";
-
-// The exact body Frappe returned for every customer in ELEC-95: a guard refusal, whose only
-// statement of the cause lives in _server_messages.
-const GUARD_REFUSAL_MESSAGE =
-  "Evidence Item verification can only be issued by the dedicated Worker command.";
-const GUARD_REFUSAL_BODY = JSON.stringify({
-  exc_type: "ValidationError",
-  _server_messages: JSON.stringify([
-    JSON.stringify({ message: GUARD_REFUSAL_MESSAGE, title: "Message" }),
-  ]),
-});
-
 const OPTION_ROWS: Record<string, Array<Record<string, unknown>>> = {
   "Option Package": [
     {
@@ -223,10 +206,9 @@ const OPTION_ROWS: Record<string, Array<Record<string, unknown>>> = {
   ],
 };
 
-function setup(_mode: RecordMode = "recorded") {
+function setup() {
   const db = new SqliteD1();
   const raw = new MemoryR2();
-  const claims: Array<Record<string, unknown>> = [];
   const order: string[] = [];
   const originalFetch = globalThis.fetch;
   const env = testEnv(db, raw);
@@ -238,8 +220,8 @@ function setup(_mode: RecordMode = "recorded") {
     throw new Error(`unexpected fetch ${url.href}`);
   };
 
-  // R2 writes and the Frappe call share one ordered log so "evidence before effect" is asserted
-  // as an ordering fact rather than inferred from two independent counters.
+  // R2 writes are tracked explicitly so "evidence before commit" is asserted as an ordering fact
+  // rather than inferred from two independent counters.
   const originalPut = MemoryR2.prototype.put;
   const put = raw.put.bind(raw);
   raw.put = (async (...args: Parameters<typeof put>) => {
@@ -252,7 +234,6 @@ function setup(_mode: RecordMode = "recorded") {
     db,
     raw,
     env,
-    claims,
     order,
     restore() {
       globalThis.fetch = originalFetch;
@@ -267,9 +248,6 @@ function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
     APP_BFF_ENABLED: "true",
     APP_CUSTOMER_PORTAL_ENABLED: "true",
     APP_CUSTOMER_PORTAL_DECISION_ENABLED: "true",
-    APP_CUSTOMER_DECISION_HMAC_KEY: HMAC_SECRET,
-    APP_CUSTOMER_DECISION_FRAPPE_API_KEY: "customer-decision-key",
-    APP_CUSTOMER_DECISION_FRAPPE_API_SECRET: "customer-decision-secret",
     APP_TENANT_ID: "ironwrap",
     APP_TENANT_NAME: "IronWrap OS",
     APP_TENANT_BRAND: "IronWrap",
@@ -283,9 +261,6 @@ function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
     // healthy before any customer capability resolves at all.
     GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
     FROM_EMAIL: "portal@example.com",
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "frappe-read-key",
-    ERPNEXT_API_SECRET: "frappe-read-secret",
   } as AppEnv;
 }
 
@@ -331,28 +306,6 @@ function matchesFilter(row: Record<string, unknown>, filter: unknown): boolean {
   if (!Array.isArray(filter)) return false;
   const [, field, operator, value] = filter;
   return operator === "=" && String(row[String(field)] ?? "") === String(value ?? "");
-}
-
-function assertFrappeSignature(
-  path: string,
-  claimJson: string,
-  headers: HeadersInit | undefined,
-): void {
-  const values = new Headers(headers);
-  const timestamp = values.get("x-ironwrap-decision-timestamp");
-  const nonce = values.get("x-ironwrap-decision-nonce");
-  assert.match(timestamp ?? "", /^\d{10,12}$/);
-  assert.match(nonce ?? "", /^[A-Za-z0-9_-]{43}$/);
-  const bodyHash = createHash("sha256").update(claimJson).digest("hex");
-  const expected = createHmac("sha256", HMAC_SECRET)
-    .update(`POST\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`)
-    .digest("base64url");
-  assert.equal(values.get("x-ironwrap-decision-signature"), expected);
-  // The broad app-BFF read pair must never reach this command.
-  assert.equal(
-    values.get("authorization"),
-    "token customer-decision-key:customer-decision-secret",
-  );
 }
 
 function fromHex(value: string): Uint8Array {
@@ -411,6 +364,54 @@ test("a portal capability records one approved option, evidence first, and repla
       "receipt_stored",
       "frappe_commit_attempted",
       "recorded",
+    ]);
+  } finally {
+    h.restore();
+  }
+});
+
+test("an R2 receipt overwritten before commit cannot be recorded", async () => {
+  const h = setup();
+  try {
+    const token = await seedPortalLink(h.db);
+    const head = h.raw.head.bind(h.raw);
+    let headCalls = 0;
+    h.raw.head = async (key: string) => {
+      const object = await head(key);
+      headCalls += 1;
+      if (headCalls === 3 && object) {
+        object.customMetadata = { immutable: "true", sha256: "0".repeat(64) };
+      }
+      return object;
+    };
+
+    const response = await post(
+      h.env,
+      decisionRequest(token, "opt-better", "decision-key-r2-overwrite-0001"),
+    );
+    assert.equal(response.status, 202, await response.clone().text());
+    const body = (await response.json()) as { status: string; decision_id: string };
+    assert.equal(body.status, "uncertain");
+    assert.match(body.decision_id, /^decision_[0-9a-f-]{36}$/);
+    assert.equal(headCalls, 3);
+    assert.deepEqual(h.order, ["r2"]);
+
+    const intent = h.db.raw
+      .prepare(
+        "SELECT state, response_status FROM customer_portal_decision_intents WHERE decision_id = ?",
+      )
+      .get(body.decision_id) as { state: string; response_status: number };
+    assert.deepEqual({ ...intent }, { state: "uncertain", response_status: 202 });
+    const events = h.db.raw
+      .prepare(
+        "SELECT event_type FROM customer_portal_decision_events WHERE decision_id = ? ORDER BY event_id",
+      )
+      .all(body.decision_id) as Array<{ event_type: string }>;
+    assert.deepEqual(events.map((event) => event.event_type), [
+      "intent_recorded",
+      "receipt_stored",
+      "frappe_commit_attempted",
+      "uncertain",
     ]);
   } finally {
     h.restore();
@@ -576,7 +577,7 @@ test("an intent stranded before its receipt is not settleable from another conte
   }
 });
 
-test("the decision route stays dark without enablement or HMAC, but leftover Frappe keys are not required", async () => {
+test("the decision route stays dark without enablement, and the enabled native path does not require a retired decision secret", async () => {
   const h = setup();
   try {
     const token = await seedPortalLink(h.db);
@@ -587,22 +588,27 @@ test("the decision route stays dark without enablement or HMAC, but leftover Fra
     );
     assert.equal(disabled.status, 404);
 
-    const shortSecret = await post(
-      { ...h.env, APP_CUSTOMER_DECISION_HMAC_KEY: "too-short" } as AppEnv,
-      decisionRequest(token, "opt-better", "decision-key-0012"),
-    );
-    assert.equal(shortSecret.status, 503);
-
-    const noFrappeKeys = await post(
-      {
-        ...h.env,
-        APP_CUSTOMER_DECISION_FRAPPE_API_KEY: "",
-        APP_CUSTOMER_DECISION_FRAPPE_API_SECRET: "",
-      } as AppEnv,
+    const recorded = await post(
+      h.env,
       decisionRequest(token, "opt-better", "decision-key-0011"),
     );
-    assert.equal(noFrappeKeys.status, 200);
+    assert.equal(recorded.status, 200);
   } finally {
     h.restore();
   }
+});
+
+test("the worker decision path does not reintroduce retired decision secret or Frappe credential bindings", () => {
+  const appTypes = readFileSync(new URL("../src/app-types.ts", import.meta.url), "utf8");
+  const config = readFileSync(new URL("../src/customer-decision-config.ts", import.meta.url), "utf8");
+  const predev = readFileSync(new URL("../../deploy/local/predev.mjs", import.meta.url), "utf8");
+  const cloneTenant = readFileSync(new URL("../../deploy/clone-tenant.sh", import.meta.url), "utf8");
+  const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const capabilityMatrix = readFileSync(new URL("../../docs/CAPABILITY-MATRIX.md", import.meta.url), "utf8");
+  assert.doesNotMatch(appTypes, /APP_CUSTOMER_DECISION_(HMAC_KEY|FRAPPE_API_(KEY|SECRET))/);
+  assert.doesNotMatch(config, /customerDecision(HmacKey|BackendConfigured|FrappeApi(Key|Secret))/);
+  assert.doesNotMatch(predev, /APP_CUSTOMER_DECISION_HMAC_KEY|customer-decision-hmac-key|decisionHmacKey/);
+  assert.doesNotMatch(cloneTenant, /APP_CUSTOMER_DECISION_HMAC_KEY|CLONE_DECISION_HMAC|DECISION_HMAC/);
+  assert.doesNotMatch(wrangler, /APP_CUSTOMER_DECISION_HMAC_KEY/);
+  assert.doesNotMatch(capabilityMatrix, /APP_CUSTOMER_DECISION_HMAC_KEY|requires its own HMAC secret/);
 });

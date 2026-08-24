@@ -12,7 +12,6 @@ import frappe
 
 from ironwrap_roofing.access_control import (
     CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
-    CUSTOMER_DECISION_SERVICE_ROLE,
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
 )
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
@@ -414,10 +413,6 @@ _TRUSTED_FACET_DESIGN_PROJECTION: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_facet_design_projection",
     default=None,
 )
-_TRUSTED_CUSTOMER_DECISION: ContextVar[Any | None] = ContextVar(
-    "ironwrap_trusted_customer_decision",
-    default=None,
-)
 # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded by
 # IRO-195's D1-native production-gate state; delete this ContextVar,
 # `PRODUCTION_GATE_CLEARANCE_EVIDENCE_FIELDS`,
@@ -666,30 +661,6 @@ CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS = (
 # and closeout, not to the acceptance command.
 CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES = frozenset(
     {"Qualified", "Measurement", "Proposal"}
-)
-# Every durable fact the bounded portal-decision command derives for its receipt. Kept
-# as its own tuple rather than shared with the acceptance lane: the two identities are
-# deliberately separate, and a field one lane later adds must not silently widen the other.
-CUSTOMER_DECISION_EVIDENCE_FIELDS = (
-    "evidence_id",
-    "device_action_id",
-    "roof_job",
-    "evidence_type",
-    "proof_owner",
-    "proof_slot",
-    "source_system",
-    "r2_key",
-    "content_checksum",
-    "checksum_algorithm",
-    "content_type",
-    "content_length",
-    "capture_actor",
-    "captured_at",
-    "sync_state",
-    "verified_at",
-    "verification_source",
-    "customer_safe",
-    "summary",
 )
 # The four Select fields Frappe fills from their own defaults during `insert()` -
 # `evidence_freshness`, `evidence_conflict_state`, `evidence_verification` and
@@ -1141,10 +1112,6 @@ def _customer_contract_job_transition_allows(
     ) == _runtime_snapshot(previous_document, CUSTOMER_CONTRACT_JOB_LINEAGE_FIELDS)
 
 
-def _customer_decision_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
-    return _runtime_snapshot(document, CUSTOMER_DECISION_EVIDENCE_FIELDS)
-
-
 def _production_gate_clearance_evidence_snapshot(
     document: Any,
 ) -> tuple[tuple[str, str], ...]:
@@ -1232,22 +1199,6 @@ def _is_customer_acceptance_service_actor() -> bool:
 def _reject_customer_acceptance_service_generic_write() -> None:
     frappe.throw(
         "Customer acceptance service users may only mutate records through the bounded customer contract command.",
-        exc=frappe.PermissionError,
-    )
-
-
-def _is_customer_decision_service_actor() -> bool:
-    actor = getattr(getattr(frappe, "session", None), "user", None)
-    if not isinstance(actor, str) or not actor:
-        return False
-    return CUSTOMER_DECISION_SERVICE_ROLE in {
-        str(role) for role in frappe.get_roles(actor)
-    }
-
-
-def _reject_customer_decision_service_generic_write() -> None:
-    frappe.throw(
-        "Customer decision service users may only mutate records through the bounded customer portal decision command.",
         exc=frappe.PermissionError,
     )
 
@@ -1585,26 +1536,6 @@ def _production_gate_clearance_waiver_actor(document: Any) -> str | None:
 
 
 @contextmanager
-def customer_decision_issuance_context(evidence: Any):
-    """Authorize one exact portal-decision receipt Evidence Item.
-
-    Created only by the service/HMAC-checked customer portal decision command,
-    after it has pinned the dedicated service user and re-locked the
-    job/customer/package lineage itself. It authorizes the single receipt that
-    command derived and nothing else: no Customer Quote, no acceptance, no
-    second Evidence Item.
-    """
-
-    token = _TRUSTED_CUSTOMER_DECISION.set(
-        (_customer_decision_evidence_snapshot(evidence),)
-    )
-    try:
-        yield
-    finally:
-        _TRUSTED_CUSTOMER_DECISION.reset(token)
-
-
-@contextmanager
 def facet_design_projection_issuance_context(
     evidence: Any,
     reconciliation: Any,
@@ -1758,7 +1689,6 @@ def validate_evidence_verification_mutation(document: Any) -> None:
 
     customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
     facet_projection_context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
-    customer_decision_context = _TRUSTED_CUSTOMER_DECISION.get()
     if _is_customer_acceptance_service_actor():
         if (
             customer_contract_context is not None
@@ -1775,14 +1705,6 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         ):
             return
         _reject_facet_design_projection_service_generic_write()
-    if _is_customer_decision_service_actor():
-        if (
-            customer_decision_context is not None
-            and customer_decision_context[0]
-            == _customer_decision_evidence_snapshot(document)
-        ):
-            return
-        _reject_customer_decision_service_generic_write()
     previous = _previous(document)
     if previous is not None and previous.get("sync_state") == "Verified":
         if _field_evidence_issuance_snapshot(document) != _field_evidence_issuance_snapshot(previous):

@@ -168,17 +168,6 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(acceptanceHmacKey)) {
   fail("customer acceptance HMAC key is invalid; remove deploy/local/keys/customer-acceptance-hmac-key.txt and retry");
 }
 
-const decisionHmacPath = path.join(keysDir, "customer-decision-hmac-key.txt");
-if (!existsSync(decisionHmacPath)) {
-  log("generating throwaway customer-decision HMAC key into deploy/local/keys/");
-  mkdirSync(keysDir, { recursive: true });
-  writeFileSync(decisionHmacPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
-}
-const decisionHmacKey = readFileSync(decisionHmacPath, "utf8").trim();
-if (!/^[A-Za-z0-9_-]{43}$/.test(decisionHmacKey)) {
-  fail("customer decision HMAC key is invalid; remove deploy/local/keys/customer-decision-hmac-key.txt and retry");
-}
-
 // 2. Frappe stack -------------------------------------------------------------
 log("ensuring local Frappe stack is up (docker compose)");
 try {
@@ -291,30 +280,6 @@ try {
   fail("could not configure the local customer acceptance HMAC key");
 }
 
-let decisionCreds;
-try {
-  decisionCreds = JSON.parse(
-    run("docker", [
-      "compose", "-f", composeFile, "exec", "-T", "frappe",
-      "cat", "/home/frappe/frappe-bench/sites/ironwrap.localhost/.customer_decision_credentials",
-    ]),
-  );
-} catch {
-  fail("could not read customer decision credentials from the container");
-}
-if (!decisionCreds?.api_key || !decisionCreds?.api_secret) {
-  fail("customer decision credentials are empty");
-}
-try {
-  run("docker", [
-    "compose", "-f", composeFile, "exec", "-T", "frappe",
-    "bench", "--site", "ironwrap.localhost", "set-config", "--",
-    "ironwrap_customer_decision_hmac_key", decisionHmacKey,
-  ]);
-} catch {
-  fail("could not configure the local customer decision HMAC key");
-}
-
 let facetProjectionCreds;
 try {
   facetProjectionCreds = JSON.parse(
@@ -418,9 +383,6 @@ const next = applyVars(vars, [
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],
-  ["APP_CUSTOMER_DECISION_HMAC_KEY", decisionHmacKey],
-  ["APP_CUSTOMER_DECISION_FRAPPE_API_KEY", decisionCreds.api_key],
-  ["APP_CUSTOMER_DECISION_FRAPPE_API_SECRET", decisionCreds.api_secret],
   ["EFFECT_RUNTIME_TOKEN", effectRuntimeToken],
   ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", proposalPublicationBrokerSecret],
   ["PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET", productionScheduleBrokerSecret],

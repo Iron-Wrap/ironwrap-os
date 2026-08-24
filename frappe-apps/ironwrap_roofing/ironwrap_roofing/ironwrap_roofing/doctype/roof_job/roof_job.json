@@ -246,13 +246,6 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "IronWrap Customer Decision Service"
-  },
-  {
-   "delete": 0,
-   "print": 1,
-   "read": 1,
-   "report": 1,
    "role": "IronWrap Facet Design Projection Service"
   }
  ],

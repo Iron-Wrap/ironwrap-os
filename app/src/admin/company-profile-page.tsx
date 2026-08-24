@@ -33,6 +33,7 @@ interface FieldSpec {
   type?: string;
   autoComplete?: string;
   required?: boolean;
+  options?: readonly { value: string; label: string }[];
 }
 
 const IDENTITY_FIELDS: readonly FieldSpec[] = [
@@ -69,6 +70,31 @@ const ADDRESS_FIELDS: readonly FieldSpec[] = [
   { name: "region", label: "Province or state", autoComplete: "address-level1" },
   { name: "postal_code", label: "Postal code", autoComplete: "postal-code" },
   { name: "country", label: "Country", autoComplete: "country-name" },
+];
+
+const OPERATING_FIELDS: readonly FieldSpec[] = [
+  {
+    name: "time_zone",
+    label: "Time zone",
+    hint: "IANA name, for example America/Edmonton.",
+    required: true,
+  },
+  {
+    name: "currency",
+    label: "Currency",
+    hint: "Three-letter code, for example CAD or USD.",
+    required: true,
+  },
+  {
+    name: "week_start",
+    label: "Week starts on",
+    required: true,
+    options: [
+      { value: "sunday", label: "Sunday" },
+      { value: "monday", label: "Monday" },
+      { value: "saturday", label: "Saturday" },
+    ],
+  },
 ];
 
 export function CompanyProfilePage() {
@@ -137,7 +163,7 @@ function CompanyProfileForm({
   const [logoBusy, setLogoBusy] = useState(false);
 
   const save = useMutation({
-    mutationFn: () => saveCompanyProfile(session, values),
+    mutationFn: () => saveCompanyProfile(session, values, data.profile.profile_version),
     onSuccess: (next) => {
       setSaved(true);
       onSaved(next);
@@ -161,7 +187,13 @@ function CompanyProfileForm({
     setLogoError(undefined);
     try {
       const dataBase64 = await readFileAsBase64(file);
-      onSaved(await uploadCompanyLogo(session, { contentType: file.type, dataBase64 }));
+      onSaved(
+        await uploadCompanyLogo(
+          session,
+          { contentType: file.type, dataBase64 },
+          data.profile.profile_version,
+        ),
+      );
     } catch (error) {
       setLogoError(adminErrorMessage(error));
     } finally {
@@ -175,7 +207,7 @@ function CompanyProfileForm({
     setLogoBusy(true);
     setLogoError(undefined);
     try {
-      onSaved(await removeCompanyLogo(session));
+      onSaved(await removeCompanyLogo(session, data.profile.profile_version));
     } catch (error) {
       setLogoError(adminErrorMessage(error));
     } finally {
@@ -279,6 +311,13 @@ function CompanyProfileForm({
           values={values}
           onChange={set}
         />
+        <FieldGroup
+          title="Operating conventions"
+          description="How dates, totals, and work weeks appear across IronWrap."
+          fields={OPERATING_FIELDS}
+          values={values}
+          onChange={set}
+        />
 
         {save.isError ? (
           <Notice tone="danger" title="Company details were not saved">
@@ -351,15 +390,32 @@ function ProfileField({
         {field.label}
         {field.required ? <span className="text-danger"> *</span> : null}
       </label>
-      <Input
-        id={id}
-        name={field.name}
-        type={field.type ?? "text"}
-        value={value}
-        autoComplete={field.autoComplete}
-        aria-describedby={field.hint ? hintId : undefined}
-        onChange={(event) => onChange(field.name, event.target.value)}
-      />
+      {field.options ? (
+        <select
+          id={id}
+          name={field.name}
+          value={value}
+          aria-describedby={field.hint ? hintId : undefined}
+          className="min-h-11 w-full rounded-md border border-border bg-surface-raised px-3 text-sm text-foreground"
+          onChange={(event) => onChange(field.name, event.target.value)}
+        >
+          {field.options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <Input
+          id={id}
+          name={field.name}
+          type={field.type ?? "text"}
+          value={value}
+          autoComplete={field.autoComplete}
+          aria-describedby={field.hint ? hintId : undefined}
+          onChange={(event) => onChange(field.name, event.target.value)}
+        />
+      )}
       {field.hint ? (
         <p id={hintId} className="text-xs leading-5 text-muted">
           {field.hint}

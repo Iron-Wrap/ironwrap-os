@@ -2,7 +2,7 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-23
+Last verified: 2026-08-24
 Latest phase delta verified: 2026-08-23 (release-control source publication and dependency audit: a checked-in remote-readback snapshot records the private shared repository at exact bootstrap commit `6a4f8a166ad5c86180dc95b4b31ffa64f472f7fd` with no repository CI workflows at observation time, provider-stage transport, or deployed adapter; IRO-218–IRO-221 provision the independent release services, and IRO-222 proves the exact IronWrap candidate before IRO-41 may close. Repository checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 93,
-      "latest": "0114_zz_restore_portal_decision_captures.sql"
+      "count": 94,
+      "latest": "0115_company_profile_convergence.sql"
     }
   },
   "test_observation_policy": {
@@ -652,6 +652,78 @@ Missing for autonomous target:
   Bill/PurchaseOrder/Vendor adapter that would feed the AP readback;
 - universal evidence freshness, revocation, conflict, and compensation semantics;
 - production proof across one real end-to-end job.
+
+### Tenant company setup and the Settings hub (repository implementation)
+
+Implemented:
+
+- Migration `0110_tenant_company_profile_and_setup.sql` adds three owned tables: the tenant
+  company profile, its append-only revision ledger, and per-person notification preferences.
+  Forward migration `0115_company_profile_convergence.sql` adds the customer-facing service area,
+  email, website, second address line, country, multi-brand labels, and validated logo metadata to
+  that same profile row. It does not edit the landed `0110` migration or create another profile
+  document. Identity and the three operating conventions are required from the first save;
+  contact and address may be saved empty and completed later, which is what lets the checklist
+  report a genuine partial state instead of demanding one perfect save.
+- `workers-bus/src/company-setup-store.ts` owns the transitions. A profile update states the
+  version it read and carries an idempotency key: a stale version is
+  `company_profile_version_conflict`, a repeated key with the same body replays the first
+  outcome, and a repeated key with a different body is
+  `company_profile_idempotency_conflict`. The profile row and its revision commit in one D1
+  batch, so a rejected revision can never leave a bumped version behind.
+- `workers-bus/src/company-setup-api.ts` is the one production router owner and binds the aggregate
+  to the same-origin BFF: `GET`/`PUT /api/v1/admin/company-profile` and
+  `PUT`/`DELETE /api/v1/admin/company-profile/logo` (owner/ops; mutations require CSRF, the
+  expected profile version, and `Idempotency-Key`),
+  `GET /api/v1/admin/setup-progress` (owner/ops), and
+  `GET`/`PUT /api/v1/notification-preferences` (every authenticated person, for themselves).
+  Bodies are validated key-exactly; a session whose tenant is not the configured tenant is
+  refused before a row is read.
+- `workers-bus/src/company-profile.ts` is a D1-backed public-brand facade plus the logo-byte
+  boundary. D1 is the only source for company/profile fields, the revision, and logo metadata;
+  R2 stores only validated, content-addressed logo bytes. The public estimate and
+  `/public/company-logo` resolve the same profile used by the Settings API, and the retired R2
+  profile JSON reader/writer and duplicate `app-api.ts` handlers are gone.
+- The setup read model is a projector over `tenant_company_profiles`, `app_users`,
+  `app_devices`, `quickbooks_connections`, `operating_leads`, and
+  `app_user_notification_preferences`, plus the deployment's own capability flags. Each step
+  carries its requirements; a step is `done` when every applicable requirement is met,
+  `in_progress` when some are, `skipped` when this deployment has every requirement's capability
+  switched off, and `later` when nothing is met and real work is still waiting. A requirement
+  stops applying only because a capability is off, never because someone dismissed the row.
+- `handleAppApi` now treats `PUT`, `PATCH`, and `DELETE` as mutations for origin validation. It
+  previously treated only `POST` as one, so the first non-`POST` route would have accepted a
+  request with no `Origin` header without validating it.
+- Notification preferences are persisted and returned only. There is no delivery mechanism: the
+  write response states `delivery.enabled = false` with
+  `notification_delivery_not_implemented`, so no surface can imply a message will be sent.
+- The PWA company screen edits the full customer identity, address, time zone, currency, and week
+  start, sends the version it read with one stable idempotency key per network attempt, and uses
+  the same concurrency contract for logo upload/removal. The Setup page gets every status and the
+  completion total from `/api/v1/admin/setup-progress`; it no longer guesses from client-visible
+  profile or user fields.
+
+Repository tests cover the migration chain, production-router reachability, role and cross-tenant
+refusal, CSRF, key-exact validation, size/type limits, profile and logo concurrency/replay, public
+brand/logo behavior, PWA mutation headers/version binding, and server-derived Setup statuses. This
+is source and local/CI evidence only: it is not deployment, runtime, provider, business-acceptance,
+production, or customer proof.
+
+Missing for autonomous target:
+
+- notification delivery with consent, suppression, channel preference, effect ledger, and
+  provider reconciliation;
+- more than one company profile per tenant for a genuine multi-office model (one profile can
+  already name every configured public brand);
+- a change-of-currency or change-of-time-zone rule for records already priced or scheduled under
+  the previous value;
+- garbage collection for an unreferenced content-addressed logo object left by a rejected
+  optimistic-version race, replacement, or removal. Logo mutations intentionally never delete
+  R2 objects synchronously: a concurrent later update could make the old content version canonical
+  before that delete ran and leave the public profile pointing at missing bytes. The safe write
+  order prevents broken public references but can leave inert bytes behind; any future collector
+  must re-read canonical D1 references and apply a retention window before deletion;
+- deployment, runtime, and real-owner acceptance proof.
 
 Operator search-and-jump (2026-08-23):
 

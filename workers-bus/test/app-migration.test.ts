@@ -2180,14 +2180,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // per-person notification preferences. 0110_zz stages portal captures around the shipped
     // 0111 office user-invitation rebuild; 0112 adds operator-search indexes, 0113 adds the
     // pipeline board, and 0114 plus its ordered repairs preserve both development capture kinds
-    // and backfill the historical Work Package acknowledgement projection. The 0070–0078 and
-    // 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 93);
+    // and backfill the historical Work Package acknowledgement projection. 0115 then converges
+    // public company-profile branding metadata onto that same D1 aggregate without introducing
+    // a second authority. The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision
+    // numbers, not missing files.
+    assert.equal(migrations.length, 94);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(
-      migrations.at(-1),
-      "0114_zz_restore_portal_decision_captures.sql",
-    );
+    assert.equal(migrations.at(-1), "0115_company_profile_convergence.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2222,6 +2221,17 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       "ok",
     );
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    const companyProfileColumns = new Set(
+      (db.prepare("PRAGMA table_info(tenant_company_profiles)").all() as Array<{ name: string }>)
+        .map((column) => column.name),
+    );
+    for (const column of [
+      "service_area", "email", "website", "address_line2", "country",
+      "brand_labels_json", "logo_content_type", "logo_byte_size", "logo_version",
+      "logo_updated_at",
+    ]) {
+      assert.equal(companyProfileColumns.has(column), true, column);
+    }
     const counts = db
       .prepare(
         `SELECT

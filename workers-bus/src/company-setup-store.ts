@@ -8,8 +8,9 @@
  * supplies values; it never supplies authority, a version, a timestamp, or an actor.
  *
  * The setup progress model is a projector. It reads app_users, app_devices,
- * quickbooks_connections, operating_leads and the two tables migration 0110 adds, and
- * it reports only what those rows and the deployment's own capability flags say. It has
+ * quickbooks_connections, operating_leads, and the profile/preferences tables established by
+ * migration 0110 and extended by 0115. It reports only what those rows and the deployment's own
+ * capability flags say. It has
  * no state of its own, so it can never disagree with the facts it is derived from, and
  * it never reports a step as done because someone dismissed it.
  */
@@ -18,6 +19,27 @@ import type { AppEnv, AppRole } from "./app-types.ts";
 
 export const COMPANY_PROFILE_WEEK_STARTS = ["sunday", "monday", "saturday"] as const;
 export type CompanyProfileWeekStart = (typeof COMPANY_PROFILE_WEEK_STARTS)[number];
+
+export const COMPANY_LOGO_CONTENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/svg+xml",
+] as const;
+export type CompanyLogoContentType = (typeof COMPANY_LOGO_CONTENT_TYPES)[number];
+
+export interface CompanyBrandLabel {
+  display_name: string;
+  short_name: string;
+  service_area: string;
+}
+
+export interface CompanyLogoRecord {
+  content_type: CompanyLogoContentType;
+  byte_size: number;
+  version: string;
+  updated_at: string;
+}
 
 /** Every step the Settings hub shows, in the order an owner works through them. */
 export const SETUP_STEP_IDS = [
@@ -47,15 +69,20 @@ export type SetupStepStatus = (typeof SETUP_STEP_STATUSES)[number];
 export interface CompanyProfileFields {
   company_name: string;
   brand_name: string;
+  service_area: string;
   phone: string;
+  email: string;
+  website: string;
   address_line1: string;
+  address_line2: string;
   city: string;
   region: string;
   postal_code: string;
+  country: string;
+  brand_labels: Record<string, CompanyBrandLabel>;
   time_zone: string;
   currency: string;
   week_start: CompanyProfileWeekStart;
-  logo_ref: string | null;
 }
 
 export interface CompanyProfile extends CompanyProfileFields {
@@ -64,6 +91,8 @@ export interface CompanyProfile extends CompanyProfileFields {
   profile_version: number;
   /** True while every field is still the deployment default rather than an owner's answer. */
   is_default: boolean;
+  logo_ref: string | null;
+  logo: CompanyLogoRecord | null;
   updated_at: string | null;
   updated_by_user_id: string | null;
 }
@@ -121,23 +150,34 @@ interface CompanyProfileRow {
   profile_version: number;
   company_name: string;
   brand_name: string;
+  service_area: string;
   phone: string;
+  email: string;
+  website: string;
   address_line1: string;
+  address_line2: string;
   city: string;
   region: string;
   postal_code: string;
+  country: string;
+  brand_labels_json: string;
   time_zone: string;
   currency: string;
   week_start: CompanyProfileWeekStart;
   logo_ref: string | null;
+  logo_content_type: CompanyLogoContentType | null;
+  logo_byte_size: number | null;
+  logo_version: string | null;
+  logo_updated_at: string | null;
   updated_at: string;
   updated_by_user_id: string;
 }
 
 const PROFILE_COLUMNS =
-  `tenant_id, profile_version, company_name, brand_name, phone, address_line1, city,
-   region, postal_code, time_zone, currency, week_start, logo_ref, updated_at,
-   updated_by_user_id`;
+  `tenant_id, profile_version, company_name, brand_name, service_area, phone, email,
+   website, address_line1, address_line2, city, region, postal_code, country,
+   brand_labels_json, time_zone, currency, week_start, logo_ref, logo_content_type,
+   logo_byte_size, logo_version, logo_updated_at, updated_at, updated_by_user_id`;
 
 /**
  * What the tenant looks like before an owner has answered for themselves.
@@ -154,39 +194,73 @@ export function companyProfileDefaults(env: AppEnv, tenantId: string): CompanyPr
     is_default: true,
     company_name: (env.APP_TENANT_NAME ?? "").trim(),
     brand_name: (env.APP_TENANT_BRAND ?? "").trim(),
+    service_area: "",
     phone: "",
+    email: "",
+    website: "",
     address_line1: "",
+    address_line2: "",
     city: "",
     region: "",
     postal_code: "",
+    country: "",
+    brand_labels: {},
     time_zone: (env.APP_TIME_ZONE ?? "").trim(),
     currency: (env.APP_CURRENCY ?? "").trim().toUpperCase(),
     week_start: "monday",
     logo_ref: null,
+    logo: null,
     updated_at: null,
     updated_by_user_id: null,
   };
 }
 
 function profileFromRow(row: CompanyProfileRow): CompanyProfile {
+  const logo = row.logo_content_type && row.logo_byte_size && row.logo_version &&
+      row.logo_updated_at
+    ? {
+        content_type: row.logo_content_type,
+        byte_size: Number(row.logo_byte_size),
+        version: row.logo_version,
+        updated_at: row.logo_updated_at,
+      }
+    : null;
   return {
     tenant_id: row.tenant_id,
     profile_version: Number(row.profile_version),
     is_default: false,
     company_name: row.company_name,
     brand_name: row.brand_name,
+    service_area: row.service_area,
     phone: row.phone,
+    email: row.email,
+    website: row.website,
     address_line1: row.address_line1,
+    address_line2: row.address_line2,
     city: row.city,
     region: row.region,
     postal_code: row.postal_code,
+    country: row.country,
+    brand_labels: storedBrandLabels(row.brand_labels_json),
     time_zone: row.time_zone,
     currency: row.currency,
     week_start: row.week_start,
-    logo_ref: row.logo_ref,
+    logo_ref: logo ? row.logo_ref : null,
+    logo,
     updated_at: row.updated_at,
     updated_by_user_id: row.updated_by_user_id,
   };
+}
+
+function storedBrandLabels(value: string): Record<string, CompanyBrandLabel> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, CompanyBrandLabel>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function getCompanyProfile(
@@ -202,6 +276,8 @@ export async function getCompanyProfile(
 export interface UpdateCompanyProfileInput {
   tenantId: string;
   fields: CompanyProfileFields;
+  /** Omitted for an ordinary profile edit; explicit null removes the current logo. */
+  logo?: CompanyLogoRecord | null;
   expectedProfileVersion: number;
   idempotencyKey: string;
   actorUserId: string;
@@ -233,7 +309,20 @@ export async function updateCompanyProfile(
   if (input.actorRole !== "owner" && input.actorRole !== "ops") {
     throw new CompanySetupError("company_profile_write_role_required", 403);
   }
-  const fingerprint = await companyProfileFingerprint(input.tenantId, input.fields);
+  // A logo command accepts only logo metadata; the rest of the profile is preserved
+  // state, not part of that request. Keeping the accepted body exact also lets the same
+  // logo command replay after a later ordinary profile edit.
+  const accepted = JSON.stringify(
+    input.logo === undefined ? input.fields : { logo: input.logo },
+  );
+  if (accepted.length > 4000) {
+    throw new CompanySetupError("company_profile_payload_too_large", 400);
+  }
+  const fingerprint = await companyProfileFingerprint(
+    input.tenantId,
+    input.fields,
+    input.logo,
+  );
 
   const replay = await env.DB.prepare(
     `SELECT profile_version, request_fingerprint_sha256
@@ -259,36 +348,56 @@ export async function updateCompanyProfile(
 
   const nextVersion = currentVersion + 1;
   const createdAt = current?.created_at ?? input.now;
+  const currentProfile = await getCompanyProfile(env, input.tenantId);
+  const logo = input.logo === undefined ? currentProfile.logo : input.logo;
+  const logoRef = logo
+    ? `/public/company-logo?v=${encodeURIComponent(logo.version)}`
+    : null;
   const revisionId = `tcpr_${input.tenantId}_${String(nextVersion).padStart(6, "0")}`;
   const statements = [
     env.DB.prepare(
       `INSERT INTO tenant_company_profiles
-         (tenant_id, profile_version, company_name, brand_name, phone, address_line1,
-          city, region, postal_code, time_zone, currency, week_start, logo_ref,
-          created_at, updated_at, updated_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (tenant_id, profile_version, company_name, brand_name, service_area, phone,
+          email, website, address_line1, address_line2, city, region, postal_code,
+          country, brand_labels_json, time_zone, currency, week_start, logo_ref,
+          logo_content_type, logo_byte_size, logo_version, logo_updated_at, created_at,
+          updated_at, updated_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (tenant_id) DO UPDATE SET
          profile_version = excluded.profile_version,
          company_name = excluded.company_name,
          brand_name = excluded.brand_name,
+         service_area = excluded.service_area,
          phone = excluded.phone,
+         email = excluded.email,
+         website = excluded.website,
          address_line1 = excluded.address_line1,
+         address_line2 = excluded.address_line2,
          city = excluded.city,
          region = excluded.region,
          postal_code = excluded.postal_code,
+         country = excluded.country,
+         brand_labels_json = excluded.brand_labels_json,
          time_zone = excluded.time_zone,
          currency = excluded.currency,
          week_start = excluded.week_start,
          logo_ref = excluded.logo_ref,
+         logo_content_type = excluded.logo_content_type,
+         logo_byte_size = excluded.logo_byte_size,
+         logo_version = excluded.logo_version,
+         logo_updated_at = excluded.logo_updated_at,
          updated_at = excluded.updated_at,
          updated_by_user_id = excluded.updated_by_user_id
        WHERE tenant_company_profiles.profile_version = ?`,
     ).bind(
       input.tenantId, nextVersion, input.fields.company_name, input.fields.brand_name,
-      input.fields.phone, input.fields.address_line1, input.fields.city,
-      input.fields.region, input.fields.postal_code, input.fields.time_zone,
-      input.fields.currency, input.fields.week_start, input.fields.logo_ref,
-      createdAt, input.now, input.actorUserId, currentVersion,
+      input.fields.service_area, input.fields.phone, input.fields.email,
+      input.fields.website, input.fields.address_line1, input.fields.address_line2,
+      input.fields.city, input.fields.region, input.fields.postal_code,
+      input.fields.country, JSON.stringify(input.fields.brand_labels),
+      input.fields.time_zone, input.fields.currency, input.fields.week_start, logoRef,
+      logo?.content_type ?? null, logo?.byte_size ?? null, logo?.version ?? null,
+      logo?.updated_at ?? null, createdAt, input.now, input.actorUserId, currentVersion,
     ),
     env.DB.prepare(
       `INSERT INTO tenant_company_profile_revisions
@@ -297,7 +406,7 @@ export async function updateCompanyProfile(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       revisionId, input.tenantId, nextVersion, currentVersion === 0 ? null : currentVersion,
-      input.idempotencyKey, fingerprint, JSON.stringify(input.fields),
+      input.idempotencyKey, fingerprint, accepted,
       input.actorUserId, input.actorRole, input.now,
     ),
   ];
@@ -321,13 +430,26 @@ export async function updateCompanyProfile(
 async function companyProfileFingerprint(
   tenantId: string,
   fields: CompanyProfileFields,
+  logo: CompanyLogoRecord | null | undefined,
 ): Promise<string> {
+  if (logo !== undefined) {
+    // `updated_at` is assigned by the server after the browser has stated its
+    // command, so it must not make an otherwise identical retry look like a new
+    // request. The content identity and validated metadata are the complete logo
+    // command; an explicit null remains distinct from an upload.
+    return await sha256Hex(JSON.stringify([
+      tenantId,
+      "logo",
+      logo && [logo.content_type, logo.byte_size, logo.version],
+    ]));
+  }
   // Key order is fixed here rather than taken from the request, so two bodies that
   // differ only in key order produce the same fingerprint and replay cleanly.
   return await sha256Hex(JSON.stringify([
-    tenantId, fields.company_name, fields.brand_name, fields.phone, fields.address_line1,
-    fields.city, fields.region, fields.postal_code, fields.time_zone, fields.currency,
-    fields.week_start, fields.logo_ref,
+    tenantId, fields.company_name, fields.brand_name, fields.service_area, fields.phone,
+    fields.email, fields.website, fields.address_line1, fields.address_line2,
+    fields.city, fields.region, fields.postal_code, fields.country,
+    fields.brand_labels, fields.time_zone, fields.currency, fields.week_start,
   ]));
 }
 

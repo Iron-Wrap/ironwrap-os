@@ -5,8 +5,8 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { listAppUsers, loadCompanyProfile } from "./admin-api";
-import { appUsersQueryKey, companyProfileQueryKey } from "./admin-contracts";
+import { loadSetupProgress } from "./admin-api";
+import { setupProgressQueryKey, type SetupStep } from "./admin-contracts";
 import { SetupLink } from "./admin-shell";
 
 /**
@@ -25,23 +25,12 @@ export function SetupPage() {
 function OwnerSetup() {
   const session = useSession();
   const live = !isOfflineSession(session);
-  const profile = useQuery({
-    queryKey: companyProfileQueryKey(session.tenant.id),
-    queryFn: () => loadCompanyProfile(),
+  const progress = useQuery({
+    queryKey: setupProgressQueryKey(session.tenant.id),
+    queryFn: () => loadSetupProgress(),
     enabled: live,
   });
-  const users = useQuery({
-    queryKey: appUsersQueryKey(session.tenant.id),
-    queryFn: () => listAppUsers(),
-    enabled: live,
-  });
-
-  const companyStatus = profile.data
-    ? profile.data.profile.updated_at
-      ? "Set"
-      : "Not set yet"
-    : undefined;
-  const peopleCount = users.data?.users.filter((user) => user.active).length;
+  const steps = new Map(progress.data?.progress.steps.map((step) => [step.id, step]));
 
   return (
     <section className="mx-auto max-w-4xl space-y-6 pb-6">
@@ -67,7 +56,11 @@ function OwnerSetup() {
       <Card>
         <CardHeader>
           <CardTitle>Start here</CardTitle>
-          <CardDescription>Do these in order the first time.</CardDescription>
+          <CardDescription>
+            {progress.data
+              ? `${progress.data.progress.done} of ${progress.data.progress.total} setup areas complete.`
+              : "Do these in order the first time."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <SetupLink
@@ -75,27 +68,34 @@ function OwnerSetup() {
             icon={Building2}
             title="Company details"
             description="Name, logo, address, and what customers see on your request form."
-            status={companyStatus}
+            status={setupStatus(steps.get("company"))}
           />
           <SetupLink
             to="/settings/team"
             icon={Users}
             title="People"
             description="Add the people who work here and choose what each of them sees."
-            status={
-              peopleCount === undefined
-                ? undefined
-                : `${peopleCount} ${peopleCount === 1 ? "person" : "people"}`
-            }
+            status={setupStatus(steps.get("people"))}
           />
           <SetupLink
             to="/settings/devices"
             icon={Smartphone}
             title="Crew phones"
             description="Pair a phone to a crew account so it can work offline on site."
+            status={setupStatus(steps.get("crew_phones"))}
           />
         </CardContent>
       </Card>
     </section>
   );
+}
+
+function setupStatus(step: SetupStep | undefined): string | undefined {
+  if (!step) return undefined;
+  return {
+    done: "Done",
+    in_progress: "In progress",
+    skipped: "Not needed",
+    later: "Later",
+  }[step.status];
 }

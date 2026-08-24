@@ -204,15 +204,20 @@ export function auth(role: AppRole, tenantId = TENANT): AuthContext {
 export const VALID_PROFILE = {
   company_name: "FreshCo Exteriors Ltd.",
   brand_name: "FreshCo",
+  service_area: "Greater Edmonton roofing",
   phone: "+1 587 555 0100",
+  email: "hello@freshco.example",
+  website: "https://freshco.example",
   address_line1: "12 Shop Road",
+  address_line2: "Unit 4",
   city: "Edmonton",
   region: "AB",
   postal_code: "T5J 0N3",
+  country: "Canada",
+  brand_labels: {},
   time_zone: "America/Edmonton",
   currency: "CAD",
   week_start: "monday",
-  logo_ref: "/public/company-logo",
 } as const;
 
 export function request(

@@ -12,6 +12,7 @@ export const TEST_CSRF = "csrf-token-for-tests";
 
 export class MemoryR2 {
   objects = new Map<string, { body: Uint8Array; contentType: string }>();
+  deletedKeys: string[] = [];
 
   async get(key: string) {
     const stored = this.objects.get(key);
@@ -43,6 +44,7 @@ export class MemoryR2 {
   }
 
   async delete(key: string) {
+    this.deletedKeys.push(key);
     this.objects.delete(key);
   }
 }

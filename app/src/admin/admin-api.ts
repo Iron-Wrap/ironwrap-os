@@ -7,8 +7,10 @@ import {
   appUserListResponseSchema,
   appUserMutationResponseSchema,
   companyProfileResponseSchema,
+  setupProgressResponseSchema,
   type CompanyProfileInput,
   type CompanyProfileResponse,
+  type SetupProgressResponse,
 } from "./admin-contracts";
 
 export async function loadCompanyProfile(
@@ -24,14 +26,16 @@ export async function loadCompanyProfile(
 export async function saveCompanyProfile(
   session: AuthenticatedSession,
   input: CompanyProfileInput,
+  expectedProfileVersion: number,
   fetcher: typeof fetch = fetch,
 ): Promise<CompanyProfileResponse> {
   return await apiRequest({
     path: API_PATHS.adminCompanyProfile,
     method: "PUT",
-    body: input,
+    body: { ...input, expected_profile_version: expectedProfileVersion },
     schema: companyProfileResponseSchema,
     csrfToken: session.csrf_token,
+    idempotencyKey: companyProfileActionKey("details"),
     fetcher,
   });
 }
@@ -39,14 +43,20 @@ export async function saveCompanyProfile(
 export async function uploadCompanyLogo(
   session: AuthenticatedSession,
   logo: { contentType: string; dataBase64: string },
+  expectedProfileVersion: number,
   fetcher: typeof fetch = fetch,
 ): Promise<CompanyProfileResponse> {
   return await apiRequest({
     path: API_PATHS.adminCompanyLogo,
     method: "PUT",
-    body: { content_type: logo.contentType, data_base64: logo.dataBase64 },
+    body: {
+      content_type: logo.contentType,
+      data_base64: logo.dataBase64,
+      expected_profile_version: expectedProfileVersion,
+    },
     schema: companyProfileResponseSchema,
     csrfToken: session.csrf_token,
+    idempotencyKey: companyProfileActionKey("logo-upload"),
     // A logo is larger than a form post and can be uploaded on a job-site connection.
     timeoutMs: 30_000,
     fetcher,
@@ -55,15 +65,32 @@ export async function uploadCompanyLogo(
 
 export async function removeCompanyLogo(
   session: AuthenticatedSession,
+  expectedProfileVersion: number,
   fetcher: typeof fetch = fetch,
 ): Promise<CompanyProfileResponse> {
   return await apiRequest({
     path: API_PATHS.adminCompanyLogo,
     method: "DELETE",
+    body: { expected_profile_version: expectedProfileVersion },
     schema: companyProfileResponseSchema,
     csrfToken: session.csrf_token,
+    idempotencyKey: companyProfileActionKey("logo-remove"),
     fetcher,
   });
+}
+
+export async function loadSetupProgress(
+  fetcher: typeof fetch = fetch,
+): Promise<SetupProgressResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminSetupProgress,
+    schema: setupProgressResponseSchema,
+    fetcher,
+  });
+}
+
+function companyProfileActionKey(kind: string): string {
+  return `company-profile:${kind}:${crypto.randomUUID()}`;
 }
 
 export async function listAppUsers(fetcher: typeof fetch = fetch) {

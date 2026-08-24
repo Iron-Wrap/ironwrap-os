@@ -691,24 +691,11 @@ if (capabilityContract) {
     );
   }
   for (const field of ["pwa", "worker"]) {
-    if (
-      !Number.isInteger(expected.tests?.[field]) ||
-      expected.tests[field] < 1
-    ) {
+    if (contract.test_observation_policy?.[field] !== "observe_per_receipt") {
       fail(
-        `docs/CAPABILITY-MATRIX.md: expected.tests.${field} must be a positive integer`,
+        `docs/CAPABILITY-MATRIX.md: test_observation_policy.${field} must be observe_per_receipt`,
       );
     }
-  }
-  if (observedAppTests !== null) {
-    compareCapabilityFact("PWA tests", expected.tests?.pwa, observedAppTests);
-  }
-  if (observedWorkerTests !== null) {
-    compareCapabilityFact(
-      "Worker tests",
-      expected.tests?.worker,
-      observedWorkerTests,
-    );
   }
   const proofPolicy = {
     source: "derive_per_receipt",

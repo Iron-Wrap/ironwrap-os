@@ -280,12 +280,16 @@ test("documentation gate separates source from the tested checkout", () => {
     const appOutput = join(temp, "app.log");
     const workerOutput = join(temp, "worker.tap");
     const evidencePath = join(temp, "evidence.json");
-    // Same reason: read the expected suite totals out of the contract rather
-    // than restating them here, so a lane that adds tests updates one place.
     const contract = JSON.parse(
       /```json\n([\s\S]*?)\n```/.exec(readFileSync(matrix, "utf8"))[1],
     );
-    const { pwa, worker } = contract.expected.tests;
+    assert.deepEqual(contract.test_observation_policy, {
+      pwa: "observe_per_receipt",
+      worker: "observe_per_receipt",
+    });
+    assert.equal(contract.expected.tests, undefined);
+    const pwa = 7;
+    const worker = 11;
     writeFileSync(appOutput, `Tests ${pwa} passed\n`);
     writeFileSync(
       workerOutput,

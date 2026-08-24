@@ -41,10 +41,11 @@ rules are canonical in [`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md
 
 ## Repository evidence contract
 
-The documentation gate derives repository facts from the current checkout and compares them with
-this contract. CI also reads the real PWA and Worker test-run outputs, then emits a mutable receipt
-outside canonical prose. That receipt separately binds the authored source commit, pull-request
-base commit, and exact tested checkout/tree to the workflow SHA, event, refs, run, attempt, and job.
+The documentation gate derives stable repository facts from the current checkout and compares them
+with this contract. PWA and Worker suite totals are not hand-authored facts: CI reads them from each
+real test run and emits them in a mutable receipt outside canonical prose. That receipt separately
+binds the authored source commit, pull-request base commit, and exact tested checkout/tree to the
+workflow SHA, event, refs, run, attempt, and job.
 It never upgrades merge, deployment, runtime, business acceptance, or production proof by
 implication.
 
@@ -62,11 +63,11 @@ implication.
     "d1_migrations": {
       "count": 87,
       "latest": "0113_pipeline_board_core.sql"
-    },
-    "tests": {
-      "pwa": 586,
-      "worker": 1367
     }
+  },
+  "test_observation_policy": {
+    "pwa": "observe_per_receipt",
+    "worker": "observe_per_receipt"
   },
   "proof_state_policy": {
     "source": "derive_per_receipt",
@@ -85,9 +86,10 @@ implication.
 
 <!-- capability-evidence-contract:end -->
 
-The expected counts change only with the same reviewed source change that adds or removes the
-underlying contract. A mismatch fails documentation validation. The generated receipt is an
-exact-source and tested-checkout repository/CI observation, not a release permit.
+The expected structural counts change only with the same reviewed source change that adds or
+removes the underlying contract. A mismatch fails documentation validation. Test totals are
+observed from each successful run and never pinned in this shared document. The generated receipt
+is an exact-source and tested-checkout repository/CI observation, not a release permit.
 
 ## Canonical operating-authority migration
 

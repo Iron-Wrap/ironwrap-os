@@ -117,15 +117,12 @@ function CardSlotRow({ slot, ownerInitials }: { slot: CardSlot; ownerInitials?: 
     return (
       <ul className="mt-2 flex flex-wrap gap-1">
         {slot.items.map((tag) => (
-          <li
-            key={tag}
-            className="rounded-md bg-surface-muted px-1.5 py-0.5 text-[0.6875rem] font-semibold"
-          >
+          <li key={tag} className="rounded-md bg-surface-muted px-1.5 py-0.5 text-xs font-semibold">
             {tag}
           </li>
         ))}
         {slot.overflow > 0 ? (
-          <li className="rounded-md bg-surface-muted px-1.5 py-0.5 text-[0.6875rem] font-semibold">
+          <li className="rounded-md bg-surface-muted px-1.5 py-0.5 text-xs font-semibold">
             +{slot.overflow}
           </li>
         ) : null}
@@ -159,7 +156,7 @@ function CardSlotRow({ slot, ownerInitials }: { slot: CardSlot; ownerInitials?: 
         {ownerInitials ? (
           <span
             aria-hidden="true"
-            className="grid size-6 shrink-0 place-items-center rounded-full bg-surface-muted text-[0.625rem] font-bold text-muted"
+            className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-muted text-xs font-bold text-muted"
           >
             {ownerInitials}
           </span>

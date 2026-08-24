@@ -78,7 +78,7 @@ export function ProofStream({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+                    <p className="text-xs font-extrabold text-muted">
                       {item.proof_slot ?? item.type ?? "Job proof"}
                     </p>
                     <p className="mt-1 line-clamp-2 font-bold">

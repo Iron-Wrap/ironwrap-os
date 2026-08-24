@@ -1448,9 +1448,7 @@ function SafetyAndAccess({
             <p className="mt-5 text-sm font-semibold text-muted">Phone number is missing</p>
           )}
           <div className="mt-5 border-t border-border pt-4">
-            <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">
-              How to enter the site
-            </p>
+            <p className="text-xs font-extrabold text-muted">How to enter the site</p>
             <p className="mt-2 text-sm leading-6 text-muted">
               {contact?.access_instructions ?? "Site entry steps are missing."}
             </p>
@@ -1590,7 +1588,7 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
 function JobFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
+      <dt className="text-xs font-extrabold text-muted">{label}</dt>
       <dd className="mt-1 font-semibold leading-6">{value}</dd>
     </div>
   );
@@ -2355,9 +2353,7 @@ function CheckInProgress({ step }: { step: number }) {
             className={`min-h-14 px-2 py-3 text-center text-sm font-bold ${index > 0 ? "border-l border-border" : ""} ${active ? "border-b-4 border-accent text-foreground" : complete ? "text-ok" : "text-muted"}`}
             aria-current={active ? "step" : undefined}
           >
-            <span className="block text-xs font-extrabold uppercase tracking-[0.08em]">
-              {index + 1}
-            </span>
+            <span className="block text-xs font-extrabold">{index + 1}</span>
             <span className="mt-0.5 block">{label}</span>
           </li>
         );

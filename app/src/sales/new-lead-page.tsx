@@ -216,7 +216,7 @@ function NewLeadContent() {
           </Notice>
         ) : null}
 
-        <div className="sticky bottom-0 -mx-4 border-t border-border bg-surface/95 px-4 py-3 backdrop-blur-lg sm:mx-0 sm:rounded-lg sm:border sm:px-4">
+        <div className="sticky bottom-0 -mx-4 border-t border-border bg-surface px-4 py-3 sm:mx-0 sm:rounded-lg sm:border sm:px-4">
           <Button
             type="submit"
             variant="accent"

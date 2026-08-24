@@ -1838,7 +1838,7 @@ function QuoteRevisionLedger({
       ) : null}
       {delta.scope_summary_changed ? (
         <div className="mt-4 space-y-3 border-t border-border pt-4 text-sm leading-6">
-          <p className="text-xs font-bold uppercase tracking-[0.09em] text-muted">Scope change</p>
+          <p className="text-xs font-bold text-muted">Scope change</p>
           <p className="text-muted">Before: {prior.scope_summary ?? "Not recorded"}</p>
           <p className="text-foreground">Selected: {quote.scope_summary ?? "Not recorded"}</p>
         </div>

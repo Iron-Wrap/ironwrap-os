@@ -75,21 +75,19 @@ function IntakeLeadRow({ lead }: { lead: OperatingIntakeLead }): JSX.Element {
       <p className="font-black tracking-[-0.02em]">{lead.contact_name ?? "Name not recorded"}</p>
       <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
         <div>
-          <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">
-            Desk state
-          </dt>
+          <dt className="text-xs font-extrabold text-muted">Desk state</dt>
           <dd className="mt-1 font-semibold">Intake</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">Source</dt>
+          <dt className="text-xs font-extrabold text-muted">Source</dt>
           <dd className="mt-1 font-semibold">{lead.source}</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">Phone</dt>
+          <dt className="text-xs font-extrabold text-muted">Phone</dt>
           <dd className="mt-1 font-semibold">{lead.contact_phone ?? "Not recorded"}</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">Email</dt>
+          <dt className="text-xs font-extrabold text-muted">Email</dt>
           <dd className="mt-1 break-all font-semibold">{lead.contact_email ?? "Not recorded"}</dd>
         </div>
       </dl>

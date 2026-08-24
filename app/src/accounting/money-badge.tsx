@@ -25,7 +25,7 @@ export function MoneyBadge({ badge }: { badge: AccountingIntentRow["badge"] }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-extrabold uppercase tracking-[0.1em]",
+        "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-extrabold",
         presentation.tone,
       )}
     >

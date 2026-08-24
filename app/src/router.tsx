@@ -40,6 +40,13 @@ const ApprovalInboxPage = lazy(async () => ({
 const SalesDeskPage = lazy(async () => ({
   default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
+const loadPipelineBoardPage = () => import("./pipeline/pipeline-board-page");
+const SalesPipelineBoardPage = lazy(async () => ({
+  default: (await loadPipelineBoardPage()).SalesPipelineBoardPage,
+}));
+const OwnerPipelineBoardPage = lazy(async () => ({
+  default: (await loadPipelineBoardPage()).OwnerPipelineBoardPage,
+}));
 const ProductionRunwayPage = lazy(async () => ({
   default: (await import("./production/production-runway-page")).ProductionRunwayPage,
 }));
@@ -462,6 +469,21 @@ const salesRoute = createRoute({
   component: SalesRoute,
 });
 
+// The board is mounted per role app rather than as one shared `/pipelines` route with
+// role filtering inside it (UX spec section 4): Sales gets its own pipeline, Owner and
+// Operations get the switcher across all of them.
+const salesPipelineBoardRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/sales/board",
+  component: SalesPipelineBoardRoute,
+});
+
+const ownerPipelineBoardRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/owner/board",
+  component: OwnerPipelineBoardRoute,
+});
+
 const productionRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/production",
@@ -565,6 +587,22 @@ function SalesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <SalesDeskPage />
+    </Suspense>
+  );
+}
+
+function SalesPipelineBoardRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <SalesPipelineBoardPage />
+    </Suspense>
+  );
+}
+
+function OwnerPipelineBoardRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <OwnerPipelineBoardPage />
     </Suspense>
   );
 }
@@ -799,6 +837,8 @@ const routeTree = rootRoute.addChildren([
     facetDesignsRoute,
     productionRoute,
     salesRoute,
+    salesPipelineBoardRoute,
+    ownerPipelineBoardRoute,
     newLeadRoute,
     leadTriagePrepareRoute,
     estimatorWorkbenchRoute,

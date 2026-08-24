@@ -79,6 +79,15 @@ export const API_PATHS = {
   productionGateClearance: (jobId: string, gate: string) =>
     `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
   sales: "/api/v1/sales",
+  // Configurable pipeline boards (ELEC-155 "API route contract"). Generic on purpose:
+  // no vertical is named in the path space, only pipelines, cards and transitions.
+  pipelines: "/api/v1/pipelines",
+  pipelineBoard: (pipelineId: string) =>
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/board`,
+  pipelineCardTransitions: (pipelineId: string, cardId: string) =>
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/cards/${encodeURIComponent(cardId)}/transitions`,
+  pipelineCardTransitionUndo: (pipelineId: string, cardId: string, transitionId: string) =>
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/cards/${encodeURIComponent(cardId)}/transitions/${encodeURIComponent(transitionId)}/undo`,
   commercialLeadTriageDecisions: "/api/v1/commercial/lead-triage-decisions",
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   estimatorFacetLaunch: (jobId: string) =>

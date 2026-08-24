@@ -78,6 +78,10 @@
   --motion-fast: 140ms;
   --motion-standard: 220ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Hoisted from `.safe-bottom` so anything anchored above the mobile bottom nav can
+     reuse the one inset rather than re-deriving it. `.safe-bottom` keeps its own
+     declaration; the value is identical. */
+  --safe-bottom-inset: max(1rem, env(safe-area-inset-bottom));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -258,6 +262,18 @@ select {
 
 .safe-top {
   padding-top: env(safe-area-inset-top);
+}
+
+/* The pipeline board's move toast: clear of the mobile bottom nav (min-h-16) and its
+   safe-area inset, and clear of the desktop sidebar rail. */
+.pipeline-move-toast {
+  bottom: calc(4.5rem + var(--safe-bottom-inset));
+}
+
+@media (min-width: 64rem) {
+  .pipeline-move-toast {
+    bottom: 1rem;
+  }
 }
 
 @media (min-width: 64rem) {

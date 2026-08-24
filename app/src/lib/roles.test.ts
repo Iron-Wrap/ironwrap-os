@@ -28,7 +28,11 @@ describe("role-shaped navigation", () => {
 
   it("gives sales only its own daily surfaces", () => {
     expect(appRoles).toContain("sales");
-    expect(navigationForRole("sales").map((item) => item.to)).toEqual(["/now", "/sales"]);
+    expect(navigationForRole("sales").map((item) => item.to)).toEqual([
+      "/now",
+      "/sales",
+      "/sales/board",
+    ]);
     expect(roleCanAccess("sales", "sales")).toBe(true);
     expect(roleCanAccess("sales", "owner")).toBe(false);
     expect(roleCanAccess("sales", "newo")).toBe(false);
@@ -63,8 +67,8 @@ describe("role-shaped navigation", () => {
   });
 
   it("keeps the complete role map while marking only daily phone destinations as primary", () => {
-    expect(navigationForRole("owner")).toHaveLength(10);
-    expect(navigationForRole("ops")).toHaveLength(10);
+    expect(navigationForRole("owner")).toHaveLength(11);
+    expect(navigationForRole("ops")).toHaveLength(11);
     expect(navigationForRole("field")).toHaveLength(4);
     expect(
       navigationForRole("owner")
@@ -78,6 +82,39 @@ describe("role-shaped navigation", () => {
     ).toEqual(["/now", "/check-in", "/vehicle"]);
     expect(navigationForRole("owner").map((item) => item.to)).not.toContain("/vehicle");
     expect(navigationForRole("ops").map((item) => item.to)).not.toContain("/vehicle");
+  });
+
+  // The pipeline board is mounted per role app, not as one shared route with role
+  // filtering inside it (ELEC-156 section 4). Sales reaches its own pipeline; Owner and
+  // Operations reach the switcher across all of them. Production, Accounting and Field
+  // get no board in M1 (PO decision D10).
+  it("gives the board a tab inside each role app that owns one, and none to the rest", () => {
+    expect(navigationForRole("sales").find((item) => item.to === "/sales/board")?.label).toBe(
+      "Board",
+    );
+    expect(navigationForRole("sales").map((item) => item.to)).not.toContain("/owner/board");
+    for (const role of ["owner", "ops"] as const) {
+      expect(navigationForRole(role).find((item) => item.to === "/owner/board")?.workspace).toBe(
+        "Revenue",
+      );
+      expect(navigationForRole(role).map((item) => item.to)).not.toContain("/sales/board");
+    }
+    for (const role of ["production", "accounting", "field"] as const) {
+      const destinations = navigationForRole(role).map((item) => item.to);
+      expect(destinations).not.toContain("/sales/board");
+      expect(destinations).not.toContain("/owner/board");
+    }
+  });
+
+  // Four phone tabs stay four phone tabs: adding a fifth primary destination would push
+  // the bottom nav past the 320px floor `styles.css` sets.
+  it("keeps the phone bottom nav at four destinations after the board arrives", () => {
+    expect(
+      navigationForRole("owner")
+        .filter((item) => item.mobilePrimary)
+        .map((item) => item.to),
+    ).toEqual(["/now", "/sales", "/production"]);
+    expect(navigationForRole("sales")).toHaveLength(3);
   });
 
   // ELEC-157: every role's own menu offered "/settings", but the crew-device pairing desk

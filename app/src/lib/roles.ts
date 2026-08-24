@@ -6,6 +6,7 @@ import {
   CircleGauge,
   ClipboardCheck,
   Headphones,
+  KanbanSquare,
   LifeBuoy,
   Palette,
   Settings,
@@ -44,6 +45,8 @@ export interface NavigationItem {
     | "/approvals"
     | "/production"
     | "/sales"
+    | "/sales/board"
+    | "/owner/board"
     | "/service"
     | "/newo"
     | "/accounting"
@@ -70,6 +73,14 @@ const officeNavigation = [
     to: "/newo",
     icon: Headphones,
     activeColor: "warning",
+    workspace: "Revenue",
+  },
+  {
+    label: "Board",
+    mobileLabel: "Board",
+    to: "/owner/board",
+    icon: KanbanSquare,
+    activeColor: "ok",
     workspace: "Revenue",
   },
   {
@@ -158,6 +169,13 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       label: "Sales",
       to: "/sales",
       icon: BriefcaseBusiness,
+      activeColor: "ok",
+      workspace: "Revenue",
+    },
+    {
+      label: "Board",
+      to: "/sales/board",
+      icon: KanbanSquare,
       activeColor: "ok",
       workspace: "Revenue",
     },

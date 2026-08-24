@@ -70,7 +70,7 @@ test("documentation gate rejects a deliberately stale capability count", () => {
     assert.match(
       result.stderr,
       new RegExp(
-        `stale Frappe DocTypes total; contract ${declared - 1}, repository ${declared}`,
+        `Frappe DocTypes total: stale value; expected ${declared - 1}, actual ${declared}`,
       ),
     );
   } finally {

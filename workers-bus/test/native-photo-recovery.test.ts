@@ -121,9 +121,9 @@ test("0085 native photo evidence authority is complete in backup and restore con
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 202);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 314);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 487);
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 206);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 319);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 495);
   }
 
   for (const [name, table] of INDEXES) {

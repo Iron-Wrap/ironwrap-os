@@ -111,7 +111,7 @@ The source audit represented by this document found:
 | Area | Current code-grounded state | Required unusually-strong state |
 |---|---|---|
 | Core technical design | Strong | One authority per fact, explicit contracts, no bypass around effects or reconciliation |
-| Lead/job/field foundation | Strong, lifecycle projection incomplete | Orthogonal state machines and a deterministic derived job phase |
+| Lead/job/field foundation | Strong, with acceptance-driven activation projection and a read-only phase route | Orthogonal state machines and a deterministic derived job phase |
 | Safety/evidence/accounting control | Unusually strong in source | Preserve fail-closed controls and prove deployed failure/recovery cases |
 | Repository and migration coherence | Mixed | Two active products, explicit compatibility retirement, governed migration ownership |
 | Configured capability | Partial | Per-capability readiness, dependency/readback proof, TTL, and fallback |
@@ -144,7 +144,7 @@ The machine-checked snapshot is intentionally conservative:
   },
   "maturity": {
     "core_technical_design": "strong",
-    "lead_job_field_foundation": "strong_with_projection_gaps",
+    "lead_job_field_foundation": "strong_with_acceptance_projection",
     "safety_evidence_accounting_controls": "unusually_strong_in_source",
     "repository_migration_coherence": "mixed",
     "configured_capability": "partial",
@@ -152,11 +152,11 @@ The machine-checked snapshot is intentionally conservative:
     "production_customer_proof": "not_established"
   },
   "commercial_reachability": {
-    "approved_quote_revision_writer": "test_only",
-    "proposal_revision_writer": "production",
-    "proposal_publication_settlement_writer": "test_only",
+    "approved_quote_revision_writer": "authenticated_role_api",
+    "proposal_revision_writer": "authenticated_role_api",
+    "proposal_publication_settlement_writer": "authenticated_role_api_readback_required",
     "customer_acceptance_writer": "production",
-    "acceptance_to_deposit_derivation": "not_wired"
+    "acceptance_to_deposit_derivation": "acceptance_queue_and_authenticated_recovery_api"
   },
   "configuration": {
     "effect_runtime_enabled": true,
@@ -215,20 +215,21 @@ The native commercial chain is not yet reachable from start to finish:
 lead intake
   -> triage
   -> measurement / Facet design
-  -> approved quote revision          [test callers only]
+  -> approved quote revision          [authenticated role API]
   -> proposal revision                [production route]
-  -> publication effect + settlement [test callers only]
+  -> publication effect + settlement [authenticated route; succeeded readback required]
   -> customer acceptance              [production path]
-  -> deposit intent                   [not acceptance-driven]
+  -> deposit intent                   [acceptance-created queue; provider/tax/policy blockers remain explicit]
   -> reconciled deposit / gate clear  [implemented]
   -> native assignment / work package [implemented]
   -> completion / final invoice       [implemented]
   -> QuickBooks execution/readback    [implemented but disabled]
 ```
 
-Lifecycle projection is also incomplete: lead conversion, customer activation, and the coarse
-roof-job phase are not consistently advanced from their authoritative commercial, gate, assignment,
-work-package, completion, and accounting facts.
+Lifecycle projection is acceptance-driven for lead conversion/customer activation, and
+`GET /api/v1/jobs/{job}/phase` is a read-only projector over authoritative commercial, gate,
+assignment, work-package, safety, accounting, closeout, and warranty facts. A reconciled provider
+journey and customer proof remain open.
 
 ## Target AI coordination loop
 
@@ -294,18 +295,19 @@ Expose a read-only derived `job_phase`:
 | Phase | Deterministic predicate |
 |---|---|
 | `qualified` | Qualified lead/job exists and commercial work has not started |
+| `qualification_pending` | The lead/job is not currently qualified or converted |
 | `commercial_in_progress` | Measurement, design, quote, or proposal exists without binding acceptance |
-| `contracted` | Exact current publication has a binding customer acceptance |
-| `deposit_pending` | Acceptance exists and required deposit is not reconciled |
+| `deposit_pending` | Exact accepted publication is bound and the required deposit is not yet derived and reconciled |
 | `production_ready` | Every required gate is currently cleared |
 | `scheduled` | A current valid assignment exists |
 | `in_progress` | A current work package has started |
 | `substantially_complete` | Required completion packet is accepted |
-| `financially_closed` | Final invoice and balance are reconciled |
-| `warranty_active` | Closeout and warranty activation are complete |
+| `financially_closed` | Current completion packet and final invoice balance are fully reconciled |
 | `cancelled` | An authoritative cancellation supersedes active progress |
 
 The phase is a projector/read model. It is never a second writable truth.
+Warranty terms remain a `warranty_declared` fact; no warranty phase is projected until a durable
+native activation record exists.
 
 ## Role journeys
 

@@ -2182,11 +2182,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // pipeline board, and 0114 plus its ordered repairs preserve both development capture kinds
     // and backfill the historical Work Package acknowledgement projection. 0115 then converges
     // public company-profile branding metadata onto that same D1 aggregate without introducing
-    // a second authority. The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision
+    // a second authority. 0116 adds the acceptance-bound deposit derivation queue and recovery
+    // receipt without introducing a client-writable accounting truth. The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision
     // numbers, not missing files.
-    assert.equal(migrations.length, 94);
+    assert.equal(migrations.length, 95);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0115_company_profile_convergence.sql");
+    assert.equal(migrations.at(-1), "0116_native_commercial_deposit_derivation.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2279,10 +2280,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // adds no trigger. 0111 adds the office invitation ledger and its query indexes; 0112 adds
     // operator-search indexes; 0113 adds the five pipeline-board tables, seven named indexes,
     // and its version/identity/append-only guards. The 0110_zz/0114_zz staging pair, 0114's
-    // dev-outbox rebuild, and the 0114_zy acknowledgement backfill are all count-neutral.
+    // dev-outbox rebuild, and the 0114_zy acknowledgement backfill are all count-neutral. 0116
+    // adds three deposit-derivation truth tables plus the fair-sweep cursor, five indexes, and the
+    // guarded event/projection triggers.
     assert.deepEqual(
       { ...counts },
-      { tables: 202, indexes: 306, triggers: 487 },
+      { tables: 206, indexes: 311, triggers: 495 },
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";

@@ -8,9 +8,11 @@ import { buildSalesReadModel } from "../src/app-read-models.ts";
 import { admitCommercialPermit, type CommercialAction } from "../src/commercial-authority.ts";
 import {
   prepareCommercialQuote,
+  recordCommercialProposalRevision,
   recordCommercialQuoteRevision,
   type RecordCommercialQuoteInput,
 } from "../src/commercial-store.ts";
+import { runExternalEffect } from "../src/effect-runtime.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
@@ -34,6 +36,7 @@ const QUOTE_VALID_UNTIL = new Date(Math.max(Date.now(), NOW.getTime()) + A_DAY)
   .slice(0, 10);
 const OWNER_ID = "appu_owner_0001";
 const OPS_ID = "appu_ops_0001";
+const OTHER_OPS_ID = "appu_ops_0002";
 const ENVELOPE_ID = "ow_commercial_api_0001";
 const LEAD_ID = "lead:commercial:api:0001";
 const CUSTOMER_ID = "customer:commercial:api:0001";
@@ -179,7 +182,7 @@ test("commercial proposal revision route admits a permit-backed proposal and rep
     const proposalCount = db.raw.prepare(
       "SELECT count(*) AS count FROM commercial_proposal_revisions",
     ).get() as { count: number };
-    assert.equal(permitCount.count, 2);
+    assert.equal(permitCount.count, 3);
     assert.equal(proposalCount.count, 1);
   } finally {
     db.close();
@@ -257,7 +260,6 @@ test("native commercial triage is idempotent and drives Sales without Frappe", a
     throw new Error("frappe_must_not_be_called");
   };
   try {
-    await seedApprovedQuote(env);
     const body = {
       lead_id: LEAD_ID,
       expected_lead_version: 1,
@@ -277,6 +279,7 @@ test("native commercial triage is idempotent and drives Sales without Frappe", a
       auth("ops"),
     );
     assert.equal(first.status, 201);
+    await seedApprovedQuote(env, { alreadyQualified: true });
     const created = await first.json() as {
       replayed: boolean;
       decision: { lead_id: string; lead_version: number; lifecycle_status: string };
@@ -342,6 +345,318 @@ test("native commercial triage is idempotent and drives Sales without Frappe", a
   }
 });
 
+test("native commercial quote route binds the active job graph and replays", async () => {
+  const db = new SqliteD1();
+  const env = commercialEnv(db);
+  try {
+    const triage = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/lead-triage-decisions", {
+        lead_id: LEAD_ID,
+        expected_lead_version: 1,
+        lifecycle_status: "qualified",
+        priority: "normal",
+        category: "replacement",
+        summary: "Qualified lead for native quote.",
+        next_action: "Prepare the approved quote.",
+      }, "commercial-quote-api-triage"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(triage.status, 201);
+
+    const body = quoteBody(new Date().toISOString());
+    const first = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", body, "commercial-quote-api-route"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(first.status, 201);
+    const created = await first.json() as {
+      replayed: boolean;
+      quote: { quote_revision_id: string; total_cents: number };
+      permit: { permit_id: string; replayed: boolean };
+    };
+    assert.equal(created.replayed, false);
+    assert.equal(created.quote.quote_revision_id, QUOTE_REVISION_ID);
+    assert.equal(created.quote.total_cents, 14_700);
+    assert.equal(created.permit.replayed, false);
+
+    const replay = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/quote-revisions", body, "commercial-quote-api-route"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(replay.status, 200);
+    const replayed = await replay.json() as typeof created;
+    assert.equal(replayed.replayed, true);
+    assert.equal(replayed.permit.permit_id, created.permit.permit_id);
+
+    const facts = db.raw.prepare(
+      `SELECT actor_type, actor_id, evidence_refs_json
+         FROM commercial_authority_permits WHERE permit_id = ?`,
+    ).get(created.permit.permit_id) as {
+      actor_type: string;
+      actor_id: string;
+      evidence_refs_json: string;
+    };
+    assert.equal(facts.actor_type, "worker");
+    assert.equal(facts.actor_id, OPS_ID);
+    assert.equal(JSON.parse(facts.evidence_refs_json).length, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("native publication route prepares authority and refuses an unverified effect", async () => {
+  const db = new SqliteD1();
+  const env = commercialEnv(db);
+  try {
+    const triage = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/lead-triage-decisions", {
+        lead_id: LEAD_ID,
+        expected_lead_version: 1,
+        lifecycle_status: "qualified",
+        priority: "normal",
+        category: "replacement",
+        summary: "Qualified lead for publication.",
+        next_action: "Prepare the customer proposal.",
+      }, "commercial-publication-api-triage"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(triage.status, 201);
+    await seedApprovedQuote(env, { alreadyQualified: true });
+    const proposal = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-revisions", proposalBody(new Date().toISOString()), "commercial-publication-api-proposal"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(proposal.status, 201);
+    const prepared = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications/prepare", {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        facts_observed_at: new Date().toISOString(),
+        evidence: EVIDENCE,
+      }, "commercial-publication-api-prepare"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(prepared.status, 201);
+    const packet = await prepared.json() as {
+      permit: {
+        permit_id: string;
+        policy_ref: string;
+        policy_version: string;
+        action: string;
+        aggregate_version: number;
+        expires_at: string;
+      };
+    };
+    assert.equal(packet.permit.action, "proposal.publish");
+    assert.equal(packet.permit.aggregate_version, 1);
+
+    const settlementBody = {
+        proposal_revision_id: "proposal-revision:commercial:api:0001",
+        proposal_pack_id: "proposal-pack:commercial:api:0001",
+        publication_version: 1,
+        previous_state: "draft",
+        state: "published",
+        permit_id: packet.permit.permit_id,
+        external_effect_id: "effect:publication:unknown",
+      };
+    const settlement = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/proposal-publications", settlementBody, "commercial-publication-api-settle"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(settlement.status, 409);
+    assert.deepEqual(await settlement.json(), { error: "commercial_publication_effect_mismatch" });
+    const count = db.raw.prepare(
+      "SELECT count(*) AS count FROM commercial_proposal_publication_events",
+    ).get() as { count: number };
+    assert.equal(count.count, 0);
+
+    const expectedReadback = {
+      proposal_revision_id: "proposal-revision:commercial:api:0001",
+      proposal_pack_id: "proposal-pack:commercial:api:0001",
+      publication_version: 1,
+      state: "published",
+    };
+    const succeededEffect = await runExternalEffect(
+      env,
+      {
+        effectId: "effect:publication:succeeded",
+        tenantId: TENANT,
+        actor: { type: "worker", id: OPS_ID },
+        taskId: "task:commercial-publication",
+        authority: {
+          permitRef: packet.permit.permit_id,
+          policyRef: packet.permit.policy_ref,
+          policyVersion: packet.permit.policy_version,
+          tenantId: TENANT,
+          actorType: "worker",
+          actorId: OPS_ID,
+          expiresAt: packet.permit.expires_at,
+          allowedActions: ["proposal.publish"],
+        },
+        aggregate: {
+          type: "proposal_publication",
+          id: "proposal-pack:commercial:api:0001",
+          version: 1,
+        },
+        intentId: "proposal-revision:commercial:api:0001",
+        action: "proposal.publish",
+        request: expectedReadback,
+        provider: "native-commercial-publication",
+        idempotencyKey: "effect:publication:succeeded:key",
+        deadlineAt: new Date(Date.parse(packet.permit.expires_at) - 1_000).toISOString(),
+        expectedReadback,
+        correlationId: "commercial-publication-correlation",
+      },
+      {
+        async dispatch() {
+          return {
+            outcome: "accepted" as const,
+            value: { published: true },
+            providerExternalId: "provider-publication-0001",
+            providerResponse: { id: "provider-publication-0001" },
+            readback: {
+              status: "match" as const,
+              providerExternalId: "provider-publication-0001",
+              observed: expectedReadback,
+            },
+          };
+        },
+        async replay() {
+          return { published: true };
+        },
+      },
+    );
+
+    const otherUser = otherOpsAuth();
+    const refused = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/proposal-publications",
+        { ...settlementBody, external_effect_id: succeededEffect.effect.effect_id },
+        "commercial-publication-api-settle-other-user",
+      ),
+      env,
+      otherUser,
+    );
+    assert.equal(refused.status, 403);
+    assert.deepEqual(await refused.json(), { error: "commercial_permit_actor_mismatch" });
+
+    const settled = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/proposal-publications",
+        { ...settlementBody, external_effect_id: succeededEffect.effect.effect_id },
+        "commercial-publication-api-settle-success",
+      ),
+      env,
+      auth("ops"),
+    );
+    assert.equal(settled.status, 201);
+    const settledBody = await settled.json() as {
+      replayed: boolean;
+      publication: { state: string; external_effect_id: string | null };
+    };
+    assert.equal(settledBody.replayed, false);
+    assert.equal(settledBody.publication.state, "published");
+    assert.equal(settledBody.publication.external_effect_id, succeededEffect.effect.effect_id);
+
+    const replay = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/proposal-publications",
+        { ...settlementBody, external_effect_id: succeededEffect.effect.effect_id },
+        "commercial-publication-api-settle-success",
+      ),
+      env,
+      auth("ops"),
+    );
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+
+    const settledCount = db.raw.prepare(
+      "SELECT count(*) AS count FROM commercial_proposal_publication_events",
+    ).get() as { count: number };
+    assert.equal(settledCount.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("lower-level commercial quote and proposal seams fail closed before lead qualification", async () => {
+  for (const lifecycleStatus of ["untriaged", "triaged", "disqualified"] as const) {
+    const db = new SqliteD1();
+    const env = commercialEnv(db);
+    try {
+      db.raw.prepare(
+        "UPDATE operating_leads SET lifecycle_status = ?, version = version + 1 WHERE tenant_id = ? AND lead_id = ?",
+      ).run(lifecycleStatus, TENANT, LEAD_ID);
+      await assert.rejects(
+        () => seedApprovedQuote(env, { alreadyQualified: true }),
+        (error: unknown) => error instanceof Error && error.message === "commercial_lead_not_qualified",
+      );
+      assert.equal(
+        (db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_quote_revisions").get() as { count: number }).count,
+        0,
+      );
+    } finally {
+      db.close();
+    }
+  }
+
+  const db = new SqliteD1();
+  const env = commercialEnv(db);
+  try {
+    await seedApprovedQuote(env);
+    const mismatchedTerms = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/proposal-revisions",
+        { ...proposalBody(new Date().toISOString()), terms: { ...TERMS, deposit_percent: 50 } },
+        "commercial-proposal-terms-mismatch",
+      ),
+      env,
+      auth("ops"),
+    );
+    assert.equal(mismatchedTerms.status, 409);
+    assert.deepEqual(await mismatchedTerms.json(), { error: "commercial_proposal_quote_mismatch" });
+    db.raw.prepare(
+      "UPDATE operating_leads SET lifecycle_status = 'disqualified', version = version + 1 WHERE tenant_id = ? AND lead_id = ?",
+    ).run(TENANT, LEAD_ID);
+    await assert.rejects(
+      () => recordCommercialProposalRevision(env, {
+        tenantId: TENANT,
+        proposalRevisionId: "proposal-revision:commercial:api:qualification-blocked",
+        proposalPackId: "proposal-pack:commercial:api:qualification-blocked",
+        revisionNumber: 1,
+        quoteRevisionId: QUOTE_REVISION_ID,
+        roofJobId: JOB_ID,
+        customerId: CUSTOMER_ID,
+        title: "Blocked proposal",
+        summary: "Must not persist while the lead is disqualified.",
+        terms: TERMS,
+        contentRef: "r2://commercial/proposals/blocked.pdf",
+        contentHash: "f".repeat(64),
+        evidence: EVIDENCE,
+        authority: { kind: "policy_permit", permitId: "pending" },
+        idempotencyKey: "commercial-proposal-qualification-blocked",
+      }, NOW),
+      (error: unknown) => error instanceof Error && error.message === "commercial_lead_not_qualified",
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_proposal_revisions").get() as { count: number }).count,
+      0,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 function auth(role: AppRole): AuthContext {
   const now = NOW.toISOString();
   const sessionUserId = role === "ops" ? OPS_ID : OWNER_ID;
@@ -365,6 +680,20 @@ function auth(role: AppRole): AuthContext {
       created_by: "seed",
       created_at: now,
       updated_at: now,
+    },
+  };
+}
+
+function otherOpsAuth(): AuthContext {
+  const base = auth("ops");
+  return {
+    ...base,
+    session: {
+      ...base.session,
+      user_id: OTHER_OPS_ID,
+      email_normalized: "other-ops@example.com",
+      display_name: "Other Ops",
+      frappe_user_id: "other-ops@example.com",
     },
   };
 }
@@ -403,7 +732,68 @@ function proposalBody(factsObservedAt: string): Record<string, unknown> {
   };
 }
 
-async function seedApprovedQuote(env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string }) {
+function quoteBody(factsObservedAt: string): Record<string, unknown> {
+  return {
+    quote_revision_id: QUOTE_REVISION_ID,
+    customer_quote_id: QUOTE_ID,
+    revision_number: 1,
+    roof_job_id: JOB_ID,
+    customer_id: CUSTOMER_ID,
+    facts_observed_at: factsObservedAt,
+    supersedes_quote_revision_id: null,
+    status: "approved",
+    currency: "CAD",
+    valid_until: QUOTE_VALID_UNTIL,
+    terms: TERMS,
+    correction_reason: null,
+    lines: [
+      {
+        line_id: "material:shingles",
+        sequence: 1,
+        kind: "material",
+        description: "Architectural shingles",
+        quantity_micros: 1_500_000,
+        uom: "square",
+        unit_price_cents: 10_000,
+        tax_code: "GST",
+        tax_cents: 750,
+      },
+      {
+        line_id: "discount:loyalty",
+        sequence: 2,
+        kind: "discount",
+        description: "Loyalty discount",
+        quantity_micros: 1_000_000,
+        uom: "each",
+        unit_price_cents: -1_000,
+        tax_code: "GST",
+        tax_cents: -50,
+      },
+    ],
+    evidence: EVIDENCE,
+  };
+}
+
+async function seedApprovedQuote(
+  env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
+  options: { alreadyQualified?: boolean } = {},
+) {
+  if (!options.alreadyQualified) {
+    const triage = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/lead-triage-decisions", {
+        lead_id: LEAD_ID,
+        expected_lead_version: 1,
+        lifecycle_status: "qualified",
+        priority: "normal",
+        category: "replacement",
+        summary: "Fixture lead qualified before the lower-level quote seam.",
+        next_action: "Prepare the approved quote.",
+      }, "commercial-quote-fixture-triage"),
+      env,
+      auth("ops"),
+    );
+    assert.equal(triage.status, 201, await triage.clone().text());
+  }
   const quoteInput: RecordCommercialQuoteInput = {
     tenantId: TENANT,
     quoteRevisionId: QUOTE_REVISION_ID,
@@ -530,6 +920,12 @@ function seedOperatingCore(db: DatabaseSync): void {
       active, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, 1, 'test-seed', ?, ?)`,
   ).run(OPS_ID, TENANT, "ops@example.com", "Ops", "ops", "ops@example.com", now, now);
+  db.prepare(
+    `INSERT INTO app_users
+     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+      active, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, 'test-seed', ?, ?)`,
+  ).run(OTHER_OPS_ID, TENANT, "other-ops@example.com", "Other Ops", "ops", "other-ops@example.com", now, now);
   db.prepare(
     `INSERT INTO envelopes
      (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,

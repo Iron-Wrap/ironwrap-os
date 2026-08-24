@@ -702,7 +702,7 @@ test("a correction racing the projection transaction becomes the only native des
   db.close();
 });
 
-test("a second current acceptance racing the projection transaction fails closed", async () => {
+test("an unqualified competing acceptance attempt stays uncertain without fabricating drift", async () => {
   const { db, env } = await fixture();
   seedDecision(db);
   const commercial = db.raw
@@ -758,12 +758,25 @@ test("a second current acceptance racing the projection transaction fails closed
   );
 
   assert.equal(projection(db), null);
+  assert.equal(
+    Number(
+      (
+        db.raw
+          .prepare(
+            `SELECT COUNT(*) AS count FROM commercial_acceptance_bindings
+              WHERE tenant_id = ? AND roof_job_id = ?`,
+          )
+          .get(TENANT, JOB) as { count: number }
+      ).count,
+    ),
+    1,
+  );
   assert.deepEqual(attempts(db), [
     {
-      outcome: "rejected",
+      outcome: "uncertain",
       projection_id: null,
       projection_sha256: null,
-      error_code: "facet_v2_native_commercial_authority_drift",
+      error_code: "facet_v2_native_projection_uncertain",
     },
   ]);
   db.close();

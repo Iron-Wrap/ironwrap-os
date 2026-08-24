@@ -999,8 +999,9 @@ function seedAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number)
   db.exec(`
     CREATE TABLE commercial_quote_revisions (
       quote_revision_id TEXT, tenant_id TEXT, customer_quote_id TEXT, revision_number INTEGER,
-      roof_job_id TEXT, customer_id TEXT, status TEXT, currency TEXT, subtotal_cents INTEGER,
-      tax_cents INTEGER, total_cents INTEGER, terms_json TEXT, terms_hash TEXT
+      roof_job_id TEXT, customer_id TEXT, supersedes_quote_revision_id TEXT, status TEXT,
+      currency TEXT, subtotal_cents INTEGER, tax_cents INTEGER, total_cents INTEGER,
+      terms_json TEXT, terms_hash TEXT
     );
     CREATE TABLE commercial_quote_lines (
       quote_revision_id TEXT, line_id TEXT, sequence INTEGER, subtotal_cents INTEGER,
@@ -1008,7 +1009,8 @@ function seedAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number)
     );
     CREATE TABLE commercial_proposal_revisions (
       proposal_revision_id TEXT, tenant_id TEXT, proposal_pack_id TEXT, revision_number INTEGER,
-      quote_revision_id TEXT, roof_job_id TEXT, customer_id TEXT, terms_hash TEXT
+      quote_revision_id TEXT, roof_job_id TEXT, customer_id TEXT,
+      supersedes_proposal_revision_id TEXT, terms_hash TEXT
     );
     CREATE TABLE commercial_proposal_publication_events (
       publication_event_id TEXT, tenant_id TEXT, proposal_revision_id TEXT,
@@ -1029,7 +1031,7 @@ function seedAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number)
   const termsHash = createHash("sha256").update(termsJson).digest("hex");
   db.prepare(
     `INSERT INTO commercial_quote_revisions VALUES
-       (?, ?, ?, 1, ?, ?, 'approved', 'CAD', 100000, 5000, 105000, ?, ?)`,
+       (?, ?, ?, 1, ?, ?, NULL, 'approved', 'CAD', 100000, 5000, 105000, ?, ?)`,
   ).run("quote-revision:mapping:0001", TENANT, "customer-quote:mapping:0001", "JOB-0001",
     "customer-0001", termsJson, termsHash);
   db.prepare(
@@ -1037,7 +1039,7 @@ function seedAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number)
   ).run("quote-revision:mapping:0001");
   db.prepare(
     `INSERT INTO commercial_proposal_revisions VALUES
-       (?, ?, ?, 1, ?, ?, ?, ?)`,
+       (?, ?, ?, 1, ?, ?, ?, NULL, ?)`,
   ).run("proposal-revision:mapping:0001", TENANT, "proposal-pack:mapping:0001",
     "quote-revision:mapping:0001", "JOB-0001", "customer-0001", termsHash);
   db.prepare(

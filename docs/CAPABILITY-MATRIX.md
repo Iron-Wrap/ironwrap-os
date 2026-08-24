@@ -29,11 +29,11 @@ the launch/readiness tooling and the named external authority.
 | Area | Current state | Next gate |
 |---|---|---|
 | Core technical design | Strong | keep one authority per fact and remove remaining compatibility dependencies |
-| Lead/job/field foundation | Strong with lifecycle projection gaps | close lead conversion/customer activation and derive job phase from authoritative sub-states |
+| Lead/job/field foundation | Strong with acceptance-driven lead conversion/customer activation and a read-only derived phase route | continue orthogonal lifecycle coverage and real reference proof |
 | Safety/evidence/accounting controls | Unusually strong in source | deployed provider/device/failure and recovery proof |
 | Repository/migration coherence | Mixed | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
 | Configured capability | Partial | minimum-provider readiness profiles with readback and proof TTLs |
-| End-to-end commercial closure | Incomplete | native quote writer, publication settlement, acceptance-driven deposit, configured accounting path |
+| End-to-end commercial closure | Incomplete: native quote/publication APIs and acceptance-created deposit derivation queue are reachable, but configured provider/tax/readback reconciliation is not proven | no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout |
 | Production/customer proof | Not established | controlled production reference journey; real-customer validation remains a separate later gate |
 
 The architecture, authority map, user journeys, AI loop, derived lifecycle, and reference-tenant
@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 94,
-      "latest": "0115_company_profile_convergence.sql"
+      "count": 95,
+      "latest": "0116_native_commercial_deposit_derivation.sql"
     }
   },
   "test_observation_policy": {
@@ -137,18 +137,21 @@ IronWrap Job only through the governed evidence contract.
 
 Current source tracing distinguishes implemented modules from reachable production flows:
 
-- `recordCommercialQuoteRevision` has only test seed callers; there is no native production writer
-  for an approved quote revision.
+- `recordCommercialQuoteRevision` is reachable through the authenticated commercial quote route;
+  the route re-evaluates the active tenant job graph and policy permit.
 - `recordCommercialProposalRevision` is reachable through the app API.
-- `recordCommercialProposalPublication` has only test callers; there is no native production
-  settlement path binding a successful delivery effect and readback to publication.
+- `recordCommercialProposalPublication` is reachable through the authenticated settlement route;
+  only a canonical succeeded effect with matching tenant, permit, intent, aggregate, and action is
+  accepted.
 - native customer acceptance is production-reachable and atomically binds the exact quote,
   proposal, publication, terms, challenge, and customer decision.
-- deposit intent can be created through accounting controls and reconciled deposit can clear its
-  gate, but acceptance does not yet deterministically derive that intent.
+- acceptance creates exactly one durable deposit-derivation queue row in the same D1 transaction;
+  authenticated accounting recovery replays that queue and derives an intent only when provider
+  mapping, tax policy, and authority-ceiling facts match. Missing configuration remains blocked.
 - native assignment, work-package, safety, completion, and final-invoice derivation exist.
-- lead `converted`, customer activation, and a coherent current job phase are not projected from
-  all authoritative sub-states.
+- acceptance projects qualified leads to `converted` and prospect customers to `active`; the
+  read-only job-phase route spans the independent commercial, production, safety, accounting,
+  closeout, and warranty facts without becoming a writable status.
 - measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
   `lead_follow_up_draft` pilot. No resident context -> plan -> policy -> permit -> action ->
   readback -> reconciliation coordinator exists.
@@ -924,7 +927,7 @@ Target gaps:
 | Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution, and Facet-owned CV candidate extraction with uncertainty and human review | real site, frozen evaluation set, tolerance/calibration, and conflicting source test |
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
-| Contract | Partial: native acceptance is production-reachable and atomically pins an approved quote, proposal publication, terms snapshot, challenge, and decision; the approved-quote writer and publication settlement are not production-reachable, and acceptance does not derive the deposit intent | native approved-quote writer, delivery-readback publication settlement, acceptance-driven deposit intent, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
+| Contract | Partial: authenticated native quote/publication routes, exact customer acceptance, and an acceptance-created durable deposit derivation queue are reachable; provider/tax configuration and reconciled accounting proof remain open | configured delivery/readback publication, successful provider/tax/accounting reconciliation, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | versioned catalog sync, vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, and provider reconciliation | catalog drift/unit mismatch plus duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
@@ -937,7 +940,7 @@ Target gaps:
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, evidence-bound supplier/manufacturer/insurer recovery on the one-attempt effect shape, history-preserving reopen, and an office BFF surface (`/api/v1/service-cases`) reachable from the PWA at `/service` | dispatch/scheduling integration, customer portal and mobile service surfaces, re-seat onto the IRO-38 canonical effect runtime, and live recovery settlement | callback end to end |
-| Finance | Partial: D1 derives native final-invoice intent from completion and controls deposit/final-invoice effects and reconciliation; QuickBooks final-invoice execution is disabled and required accounting configuration/readback is incomplete; webhook identity alone never establishes payment, posting, or reconciliation truth | configured authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, acceptance-driven deposit intent, and accountant-approved reconciliation | configured reference journey, provider sandbox/readback, linked mirror, and accountant signoff |
+| Finance | Partial: D1 derives native final-invoice intent from completion and now queues/derives the acceptance-bound deposit intent through the same accounting controls; QuickBooks execution is disabled and configured provider mapping/tax/readback remains incomplete; webhook identity alone never establishes payment, posting, or reconciliation truth | configured authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | configured reference journey, provider sandbox/readback, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
 | Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, a driver-scoped read (`/api/v1/fleet/panel`) that reports the release fence's own verdict per asset, a mobile-first field surface at `/vehicle` that files all three captures and states a refusal in plain language, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | photo evidence on a fleet capture (the envelope is JSON-only and `Asset Defect.evidence_item` is never written), telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |

@@ -403,16 +403,19 @@ IRO-38 branch-local side-effect substrate:
 
 ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
 
-- `FACET_V2_INGEST_ENABLED`, `FACET_V2_FRAPPE_PROJECTION_ENABLED` and `APP_FACET_LAUNCH_ENABLED` are
-  `"true"` in every environment; `APP_CUSTOMER_PORTAL_ENABLED` and
+- `FACET_V2_INGEST_ENABLED` and `APP_FACET_LAUNCH_ENABLED` are `"true"` in every environment;
+  `APP_CUSTOMER_PORTAL_ENABLED` and
   `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED` are `"true"` for production and local. A flag alone
   opens nothing: `facetV2ConsumerConfig`, `launchConfig`, `projectionSettings` and
   `customerAcceptanceBackendConfigured` each return null/false without their key material, so a
   deployed environment that has not been provisioned answers 503.
+- The canonical compatibility flag is `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off
+  (`false`) in every checked-in environment. Controlled repository/local proof may inject it for the
+  bounded command, but that does not change the configured baseline or establish runtime proof.
 - Staging keeps the portal off because it runs with `APP_BFF_ENABLED: "false"`, and
   `customerPortalConfigured` reports false whenever the portal is on without the office control
   plane that revokes customer links — which turns `/ready` red and blocks the release.
-- Repository-verified locally, on the `deploy/local` stack with those flags on: an owner session
+- Repository-verified locally, on the `deploy/local` stack with native ingest/launch gates on: an owner session
   issues a Facet launch capability (`POST /api/v1/estimator/jobs/{job}/facet-launches`), a Facet-
   signed customer-decision event is accepted at `POST /ingest/facet-design` with
   `result: accepted_associated` and `detail_code: exact_identity_project_association_verified`, and
@@ -435,6 +438,11 @@ ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
      rest of this app reads Frappe Datetimes by, not moved onto the site clock.
   `tools/validate-facet-blank-quote-contract.mjs` holds the Worker's blank-quote table, the Frappe
   app's `BLANK_QUOTE_FIELDS` and `customer_quote.json` to one description in CI.
+  For `approved`/`corrected`, this is a blank, non-customer-safe `Draft` Customer Quote. On every
+  chain advance the endpoint marks the predecessor projected quote `Rejected`; only an active
+  decision gets a replacement. The compatibility draft supplies no price, line items, taxes,
+  payment schedule, or commercial terms. Evidence Item and Integration Reconciliation records
+  remain the review trail, not permission to change the approved source quote.
 - **Step-5 gap, closed by ELEC-92 (below).** A Proposal Evidence Pack could only be promoted
   Draft → Approved by the Owner Operator MCP command `request_publish_proposal_evidence_pack`;
   no Worker/PWA route published one, so the portal read model returned `proposal: null` and the

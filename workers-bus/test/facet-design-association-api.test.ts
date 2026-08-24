@@ -389,10 +389,24 @@ test("legacy association and quote-preparation routes stay 404 even when old fla
   assert.equal(permissionsForRole("ops").includes("facet:associate"), false);
 });
 
-test("live Facet ingress and the scheduled recovery loop run only signed-v2 reconciliation", () => {
+test("live Facet ingress and recovery keep signed-v2 authority ahead of gated Frappe projection", () => {
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.equal(source.match(/reconcileFacetV2ThenNativeDesign\(env\)/g)?.length, 2);
-  assert.doesNotMatch(source, /reconcileFacetDesignFrappeProjections/);
+  assert.equal(source.match(/reconcileFacetDesignSurfaces\(env\)/g)?.length, 2);
+  assert.equal(source.match(/reconcileFacetDesignFrappeProjections/g)?.length, 2);
+  assert.match(
+    source,
+    /reconcileFacetDesignNativeProjections\(env\);[\s\S]*?at: "facet_design_native_projection_reconcile"/,
+  );
+  assert.match(
+    source,
+    /reconcileFacetDesignFrappeProjections\([\s\S]*?at: "facet_design_frappe_compatibility_reconcile"/,
+  );
+  assert.equal(source.match(/at: "facet_design_native_projection_reconcile"/g)?.length, 1);
+  assert.equal(source.match(/at: "facet_design_frappe_compatibility_reconcile"/g)?.length, 1);
+  assert.doesNotMatch(
+    source,
+    /reconcileFacetDesignFrappeProjections\([\s\S]{0,500}facet_design_native_projection/,
+  );
   assert.doesNotMatch(source, /createPostizDraftFromFacetApproval/);
   assert.doesNotMatch(source, /recoverPostizFacetDrafts/);
 });

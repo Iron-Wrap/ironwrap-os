@@ -39,6 +39,7 @@ type InventoryEntry =
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   "erpnext.ts": { kind: "runtime-routed" },
+  "facet-design-frappe-projection.ts": { kind: "runtime-routed" },
   "frappe-read.ts": { kind: "read-only" },
   "google.ts": { kind: "runtime-routed" },
   "index.ts": { kind: "worker-entry" },

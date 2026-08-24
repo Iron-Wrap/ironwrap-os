@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
@@ -24,6 +24,7 @@ import {
   type RecordCommercialQuoteInput,
 } from "../src/commercial-store.ts";
 import { runExternalEffect } from "../src/effect-runtime.ts";
+import { reconcileFacetDesignFrappeProjections } from "../src/facet-design-frappe-projection.ts";
 import { reconcileFacetDesignNativeProjections } from "../src/facet-design-projection.ts";
 import { canonicalJson } from "../src/facet-design-v2-protocol.ts";
 import { issueFacetLaunch } from "../src/facet-launch.ts";
@@ -225,8 +226,11 @@ function seedDecision(
     decision?: "approved" | "corrected" | "superseded" | "withdrawn";
     previousEventId?: string | null;
     occurredAt?: string;
+    receivedAt?: string;
+    projectId?: string;
   } = {},
 ): string {
+  const projectId = input.projectId ?? PROJECT;
   const link = db.raw
     .prepare(
       `SELECT external_project_link_id, producer_identity_link_id,
@@ -237,14 +241,14 @@ function seedDecision(
          FROM facet_v2_project_links
         WHERE destination_tenant_id = ? AND facet_project_id = ?`,
     )
-    .get(TENANT, PROJECT) as Record<string, string>;
+    .get(TENANT, projectId) as Record<string, string>;
   const eventId = input.eventId ?? EVENT;
   const decision = input.decision ?? "approved";
   const previousEventId = input.previousEventId ?? null;
   const eventBodySha256 = sha256(eventId);
   const designRevisionSha256 = sha256(`design:${eventId}`);
   const occurredAt = input.occurredAt ?? "2027-01-15T08:10:00.000Z";
-  const receivedAt = new Date(Date.parse(occurredAt) + 1_000).toISOString();
+  const receivedAt = input.receivedAt ?? new Date(Date.parse(occurredAt) + 1_000).toISOString();
   db.raw
     .prepare(
       `INSERT INTO facet_v2_customer_decisions
@@ -293,6 +297,158 @@ function seedDecision(
       occurredAt,
       receivedAt,
     );
+  return eventId;
+}
+
+function seedDecisionChain(db: SqliteD1, length: number): string[] {
+  const eventIds: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const eventId = `90000000-0000-4000-8000-${(index + 1).toString(16).padStart(12, "0")}`;
+    seedDecision(db, {
+      eventId,
+      decision: index === 0 ? "approved" : "corrected",
+      previousEventId: eventIds.at(-1) ?? null,
+      occurredAt: new Date(Date.parse("2027-01-15T08:10:00.000Z") + index * 1_000).toISOString(),
+    });
+    eventIds.push(eventId);
+  }
+  return eventIds;
+}
+
+function seedIndependentProjectedHead(
+  db: SqliteD1,
+  ordinal: number,
+  input: {
+    decision?: "approved" | "corrected";
+    previousEventId?: string | null;
+    occurredAt?: string;
+    receivedAt?: string;
+    projectionTemplateEventId?: string;
+  } = {},
+): string {
+  const suffix = ordinal.toString(16).padStart(12, "0");
+  const projectId = `70000000-0000-4000-8000-${suffix}`;
+  const eventId = `80000000-0000-4000-8000-${suffix}`;
+  const externalProjectLinkId = `ironwrap-project-v1:${sha256(`project:${projectId}`)}`;
+  const base = db.raw.prepare(
+    `SELECT producer_identity_link_id, destination_tenant_id, source_tenant_id,
+            brand_id, customer_party_ref, external_customer_identity_link_id,
+            roof_job_id, customer_quote_id, created_by_user_id, created_at
+       FROM facet_v2_project_links
+      WHERE destination_tenant_id = ? AND facet_project_id = ?`,
+  ).get(TENANT, PROJECT) as Record<string, string>;
+  const associationSha256 = sha256(canonicalJson({
+    brand_id: base.brand_id,
+    customer_party_ref: base.customer_party_ref,
+    customer_quote_id: base.customer_quote_id,
+    destination_tenant_id: base.destination_tenant_id,
+    external_customer_identity_link_id: base.external_customer_identity_link_id,
+    external_project_link_id: externalProjectLinkId,
+    facet_project_id: projectId,
+    producer_identity_link_id: base.producer_identity_link_id,
+    roof_job_id: base.roof_job_id,
+    source_tenant_id: base.source_tenant_id,
+  }));
+  db.raw.prepare(
+    `INSERT INTO facet_v2_project_links
+     (external_project_link_id, producer_identity_link_id,
+      destination_tenant_id, source_tenant_id, brand_id, facet_project_id,
+      customer_party_ref, external_customer_identity_link_id, roof_job_id,
+      customer_quote_id, project_claim_sha256, association_sha256,
+      created_by_user_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    externalProjectLinkId,
+    base.producer_identity_link_id,
+    base.destination_tenant_id,
+    base.source_tenant_id,
+    base.brand_id,
+    projectId,
+    base.customer_party_ref,
+    base.external_customer_identity_link_id,
+    base.roof_job_id,
+    base.customer_quote_id,
+    sha256(`claim:${projectId}`),
+    associationSha256,
+    base.created_by_user_id,
+    base.created_at,
+  );
+  db.raw.prepare(
+    `INSERT INTO facet_v2_project_launches
+     (facet_project_id, external_project_link_id, destination_tenant_id,
+      source_tenant_id, brand_id, roof_job_id, customer_quote_id,
+      quote_version, quote_approved_at, customer_party_ref,
+      external_customer_identity_link_id, issued_by_user_id,
+      idempotency_key_sha256, launch_intent_sha256,
+      launch_envelope_sha256, issued_at, not_before, expires_at, created_at)
+     SELECT ?, ?, destination_tenant_id, source_tenant_id, brand_id,
+            roof_job_id, customer_quote_id, quote_version, quote_approved_at,
+            customer_party_ref, external_customer_identity_link_id,
+            issued_by_user_id, ?, launch_intent_sha256, ?, issued_at,
+            not_before, expires_at, created_at
+       FROM facet_v2_project_launches
+      WHERE facet_project_id = ?`,
+  ).run(
+    projectId,
+    externalProjectLinkId,
+    sha256(`launch-idempotency:${projectId}`),
+    sha256(`launch-envelope:${projectId}`),
+    PROJECT,
+  );
+  seedDecision(db, {
+    eventId,
+    decision: input.decision,
+    previousEventId: input.previousEventId,
+    occurredAt: input.occurredAt ?? new Date(Date.parse("2027-01-15T08:20:00.000Z") + ordinal * 1_000).toISOString(),
+    receivedAt: input.receivedAt,
+    projectId,
+  });
+  const decision = db.raw.prepare(
+    `SELECT decision_kind, previous_event_id, design_revision_id,
+            design_revision_sha256, frozen_evidence_sha256, raw_sha256
+       FROM facet_v2_customer_decisions WHERE event_id = ?`,
+  ).get(eventId) as Record<string, string | null>;
+  db.raw.prepare(
+    `INSERT INTO facet_v2_native_design_projections
+     (projection_id, event_id, destination_tenant_id, source_tenant_id,
+      brand_id, facet_project_id, external_project_link_id,
+      producer_identity_link_id, external_customer_identity_link_id,
+      roof_job_id, customer_id, customer_quote_id, source_quote_revision_id,
+      source_quote_version, source_quote_approved_at,
+      source_proposal_revision_id, source_proposal_pack_id,
+      source_publication_event_id, source_acceptance_binding_id,
+      source_acceptance_id, source_acceptance_accepted_at,
+      source_acceptance_receipt_hash, launch_intent_sha256, decision_kind,
+      design_sequence, design_state, previous_event_id, design_revision_id,
+      design_revision_sha256, frozen_evidence_sha256, raw_sha256,
+      projection_sha256, projected_at)
+     SELECT ?, ?, destination_tenant_id, source_tenant_id, brand_id, ?, ?,
+            producer_identity_link_id, external_customer_identity_link_id,
+            roof_job_id, customer_id, customer_quote_id,
+            source_quote_revision_id, source_quote_version,
+            source_quote_approved_at, source_proposal_revision_id,
+            source_proposal_pack_id, source_publication_event_id,
+            source_acceptance_binding_id, source_acceptance_id,
+            source_acceptance_accepted_at, source_acceptance_receipt_hash,
+            launch_intent_sha256, ?, ?, ?, ?, ?, ?, ?, ?, ?, projected_at
+       FROM facet_v2_native_design_projections
+      WHERE event_id = ?`,
+  ).run(
+    `facet-native-design-v2:${sha256(eventId)}`,
+    eventId,
+    projectId,
+    externalProjectLinkId,
+    decision.decision_kind,
+    decision.decision_kind === "approved" ? 1 : 2,
+    "active",
+    decision.previous_event_id,
+    decision.design_revision_id,
+    decision.design_revision_sha256,
+    decision.frozen_evidence_sha256,
+    decision.raw_sha256,
+    sha256(`projection:${eventId}`),
+    input.projectionTemplateEventId ?? EVENT,
+  );
   return eventId;
 }
 
@@ -1373,3 +1529,739 @@ function chainTime(revisionNumber: number, offsetMinutes: number): Date {
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
+
+function compatibilityProvider(options: {
+  beforeResponse?: () => Promise<void> | void;
+  crash?: boolean;
+  drift?: boolean;
+  eventIdempotent?: boolean;
+  rawResponse?: string;
+  transformResponse?: (response: Record<string, unknown>) => Record<string, unknown>;
+} = {}): {
+  fetch: typeof fetch;
+  calls: () => number;
+  claims: () => Array<Record<string, unknown>>;
+} {
+  let callCount = 0;
+  const captured: Array<Record<string, unknown>> = [];
+  const seenEvents = new Set<string>();
+  return {
+    fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      if (options.crash) throw new Error("synthetic_provider_crash");
+      const body = JSON.parse(String(init?.body)) as { facet_claim_json: string };
+      const claim = JSON.parse(body.facet_claim_json) as Record<string, unknown>;
+      captured.push(claim);
+      await options.beforeResponse?.();
+      const eventId = String(claim.event_id);
+      const idempotentReplay = options.eventIdempotent === true && seenEvents.has(eventId);
+      seenEvents.add(eventId);
+      if (options.rawResponse !== undefined) {
+        return new Response(options.rawResponse, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const response = options.transformResponse?.(
+        compatibilityResponse(claim, options.drift ?? false, idempotentReplay),
+      ) ?? compatibilityResponse(claim, options.drift ?? false, idempotentReplay);
+      return new Response(JSON.stringify({ message: response }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    calls: () => callCount,
+    claims: () => captured,
+  };
+}
+
+function compatibilityResponse(
+  claim: Record<string, unknown>,
+  drift: boolean,
+  idempotentReplay = false,
+): Record<string, unknown> {
+  const eventId = String(claim.event_id);
+  const eventHash = sha256(eventId);
+  const active = claim.decision_kind === "approved" || claim.decision_kind === "corrected";
+  const previousEventId = String(claim.previous_event_id ?? eventId);
+  const draftId = `facet-quote-revision:${sha256(active ? eventId : previousEventId)}`;
+  const draftVersion = active ? 2 : 1;
+  const evidenceId = `facet-design:${eventHash}`;
+  const reconciliationId = `facet-design-projection:${eventHash}`;
+  const receipt = {
+    actor_identity_assurance: "oidc",
+    approval_receipt_sha256: claim.approval_receipt_sha256,
+    association_sha256: claim.association_sha256,
+    blank_commercial_revision: active,
+    claim_sha256: sha256(canonicalJson(claim)),
+    customer_safe: false,
+    decision_kind: claim.decision_kind,
+    design_revision_id: claim.design_revision_id,
+    design_revision_sha256: claim.design_revision_sha256,
+    destination_tenant_id: claim.destination_tenant_id,
+    draft_customer_quote_id: draftId,
+    draft_quote_status: active ? "Draft" : "Rejected",
+    draft_quote_version: draftVersion,
+    event_id: eventId,
+    event_type: "facet.design.customer_approved.v2",
+    evidence_id: evidenceId,
+    facet_project_id: claim.facet_project_id,
+    frozen_evidence_sha256: claim.frozen_evidence_sha256,
+    idempotent_replay: idempotentReplay,
+    occurred_at: claim.occurred_at,
+    raw_content_length: claim.raw_content_length,
+    raw_key: claim.raw_key,
+    raw_sha256: claim.raw_sha256,
+    received_at: claim.received_at,
+    reconciliation_id: reconciliationId,
+    roof_job_id: claim.roof_job_id,
+    schema: "ironwrap.facet-design-projection-receipt.v2",
+    schema_version: 2,
+    source_customer_quote_id: claim.customer_quote_id,
+  };
+  const receiptSha256 = sha256(canonicalJson(receipt));
+  const receiptSignature = createHmac("sha256", HMAC_KEY)
+    .update(`ironwrap.facet-design-projection.receipt.v2\n${receiptSha256}`)
+    .digest("base64url");
+  return {
+    draft_customer_quote_id: draftId,
+    draft_quote_version: draftVersion,
+    event_id: eventId,
+    evidence_id: drift ? `${evidenceId}-drift` : evidenceId,
+    idempotent_replay: idempotentReplay,
+    receipt,
+    receipt_sha256: receiptSha256,
+    receipt_signature: receiptSignature,
+    receipt_signature_algorithm: "HMAC-SHA256",
+    reconciliation_id: reconciliationId,
+  };
+}
+
+test("compatibility projection sends the exact signed claim and accepts the signed blank-Draft receipt", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const provider = compatibilityProvider();
+  try {
+    const results = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.outcome, "succeeded");
+    assert.equal(results[0]?.draftCustomerQuoteId, `facet-quote-revision:${sha256(EVENT)}`);
+    assert.equal(results[0]?.draftQuoteVersion, 2);
+    assert.equal(results[0]?.receipt?.blank_commercial_revision, true);
+    assert.deepEqual(Object.keys(provider.claims()[0] ?? {}).sort(), [
+      "approval_receipt_id", "approval_receipt_sha256", "association_sha256", "brand_id",
+      "customer_party_ref", "customer_quote_id", "decision_kind", "design_revision_id",
+      "design_revision_sha256", "destination_tenant_id", "event_id", "event_type",
+      "external_customer_identity_link_id", "external_project_link_id", "facet_project_id",
+      "frozen_evidence_sha256", "identity_assurance", "occurred_at", "oidc_issuer",
+      "oidc_subject_sha256", "previous_event_id", "producer_identity_link_id",
+      "raw_content_length", "raw_key", "raw_sha256", "reason_sha256", "received_at",
+      "roof_job_id", "schema_version", "source_environment", "source_issuer", "source_tenant_id",
+    ].sort());
+    assert.equal(provider.calls(), 1);
+    const effect = db.raw
+      .prepare("SELECT state, provider_external_id FROM external_effects WHERE provider = ? AND intent_id = ?")
+      .get("frappe-facet-design", EVENT) as { state: string; provider_external_id: string };
+    assert.equal(effect.state, "succeeded");
+    assert.equal(effect.provider_external_id, `facet-design-projection:${sha256(EVENT)}`);
+    const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(replay, []);
+    assert.equal(provider.calls(), 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection keeps crash ambiguity unknown and never re-dispatches it as success", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const crashing = compatibilityProvider({ crash: true });
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: crashing.fetch });
+    assert.equal(first[0]?.outcome, "uncertain");
+    assert.equal(first[0]?.errorCode, "effect_dispatch_unknown");
+    assert.equal(crashing.calls(), 1);
+    const succeeding = compatibilityProvider();
+    const retry = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: succeeding.fetch });
+    assert.deepEqual(retry, []);
+    assert.equal(succeeding.calls(), 0);
+    const state = db.raw
+      .prepare("SELECT state FROM external_effects WHERE provider = ?")
+      .get("frappe-facet-design") as { state: string };
+    assert.equal(state.state, "unknown");
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection recovers a pre-seeded decision chain oldest-first and replays without redispatch", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  seedDecision(db, {
+    eventId: CORRECTION,
+    decision: "corrected",
+    previousEventId: EVENT,
+    occurredAt: "2027-01-15T08:12:00.000Z",
+  });
+  seedDecision(db, {
+    eventId: TERMINAL,
+    decision: "withdrawn",
+    previousEventId: CORRECTION,
+    occurredAt: "2027-01-15T08:13:00.000Z",
+  });
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const provider = compatibilityProvider();
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(first.map((item) => item.eventId), [EVENT, CORRECTION, TERMINAL]);
+    assert.deepEqual(first.map((item) => item.outcome), ["succeeded", "succeeded", "succeeded"]);
+    assert.deepEqual(provider.claims().map((claim) => [claim.event_id, claim.decision_kind, claim.previous_event_id]), [
+      [EVENT, "approved", null],
+      [CORRECTION, "corrected", EVENT],
+      [TERMINAL, "withdrawn", CORRECTION],
+    ]);
+    assert.equal(provider.calls(), 3);
+    assert.equal(first[2]?.receipt?.draft_quote_status, "Rejected");
+    assert.equal(first[2]?.draftCustomerQuoteId, `facet-quote-revision:${sha256(CORRECTION)}`);
+    const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(replay, []);
+    assert.equal(provider.calls(), 3);
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection bounds one expanded chain and resumes from its durable succeeded prefix", async () => {
+  const { db, env } = await fixture();
+  const chain = seedDecisionChain(db, 30);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const provider = compatibilityProvider();
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(first.map((item) => item.eventId), chain.slice(0, 25));
+    assert.ok(first.every((item) => item.outcome === "succeeded"));
+    assert.equal(first.length, 25);
+    assert.equal(provider.calls(), 25);
+
+    const second = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(second.map((item) => item.eventId), chain.slice(25));
+    assert.ok(second.every((item) => item.outcome === "succeeded"));
+    assert.equal(second.length, 5);
+    assert.equal(provider.calls(), 30);
+    assert.deepEqual(
+      provider.claims().map((claim) => [claim.event_id, claim.previous_event_id]),
+      chain.map((eventId, index) => [eventId, index === 0 ? null : chain[index - 1]]),
+    );
+
+    const third = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(third, []);
+    assert.equal(provider.calls(), 30);
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection never skips a manual predecessor after a durable succeeded prefix", async () => {
+  const { db, env } = await fixture();
+  const chain = seedDecisionChain(db, 60);
+  await reconcileFacetDesignNativeProjections(env);
+  const later = seedIndependentProjectedHead(db, 90, {
+    occurredAt: "2027-01-15T08:30:00.000Z",
+    projectionTemplateEventId: chain.at(-1),
+  });
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  let responseNumber = 0;
+  const provider = compatibilityProvider({
+    transformResponse(response) {
+      responseNumber += 1;
+      if (responseNumber !== 25) return response;
+      const malformed = { ...response };
+      delete malformed.receipt_signature;
+      return malformed;
+    },
+  });
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.equal(first.length, 25);
+    assert.ok(first.slice(0, 24).every((item) => item.outcome === "succeeded"));
+    assert.equal(first[24]?.eventId, chain[24]);
+    assert.equal(first[24]?.outcome, "uncertain");
+    assert.equal(first[24]?.errorCode, "frappe_projection_receipt_fields");
+    assert.equal(provider.calls(), 25);
+    const manual = db.raw.prepare(
+      `SELECT state, result_code FROM external_effects
+        WHERE action = 'facet.design.v2.compatibility_projection'
+          AND intent_id = ?`,
+    ).get(chain[24]) as { state: string; result_code: string };
+    assert.equal(manual.state, "manual_exception");
+    assert.equal(manual.result_code, "frappe_projection_receipt_fields");
+
+    const second = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(second.map((item) => item.eventId), [chain[24], later]);
+    assert.notEqual(second[0]?.outcome, "succeeded");
+    assert.equal(second[1]?.outcome, "succeeded");
+    assert.equal(second.length, 2);
+    assert.equal(provider.calls(), 26);
+    assert.equal(provider.claims().at(-1)?.event_id, later);
+    assert.ok(provider.claims().every((claim) => !chain.slice(25).includes(String(claim.event_id))));
+
+    const third = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(third.map((item) => item.eventId), [chain[24]]);
+    assert.notEqual(third[0]?.outcome, "succeeded");
+    assert.equal(provider.calls(), 26);
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection incrementally replays prior events while projecting each new native head", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const provider = compatibilityProvider({ eventIdempotent: true });
+  const effectRows = () => db.raw
+    .prepare(
+      `SELECT effect_id, idempotency_key
+         FROM external_effects
+        WHERE provider = ?
+        ORDER BY idempotency_key`,
+    )
+    .all("frappe-facet-design") as Array<{ effect_id: string; idempotency_key: string }>;
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(first.map((item) => item.eventId), [EVENT]);
+    assert.deepEqual(first.map((item) => item.outcome), ["succeeded"]);
+    assert.deepEqual(first.map((item) => item.idempotentReplay), [false]);
+    assert.equal(provider.calls(), 1);
+
+    seedDecision(db, {
+      eventId: CORRECTION,
+      decision: "corrected",
+      previousEventId: EVENT,
+      occurredAt: "2027-01-15T08:12:00.000Z",
+    });
+    await reconcileFacetDesignNativeProjections(env, new Date("2027-01-15T08:12:30.000Z"));
+    const second = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(second.map((item) => item.eventId), [EVENT, CORRECTION]);
+    assert.deepEqual(second.map((item) => item.outcome), ["succeeded", "succeeded"]);
+    assert.deepEqual(second.map((item) => item.idempotentReplay), [true, false]);
+    assert.equal(provider.calls(), 3);
+    assert.deepEqual(effectRows().map((row) => row.idempotency_key), [
+      `facet-design-frappe-v2:${EVENT}:${EVENT}`,
+      `facet-design-frappe-v2:${CORRECTION}:${CORRECTION}`,
+      `facet-design-frappe-v2:${EVENT}:${CORRECTION}`,
+    ].sort());
+
+    seedDecision(db, {
+      eventId: TERMINAL,
+      decision: "withdrawn",
+      previousEventId: CORRECTION,
+      occurredAt: "2027-01-15T08:13:00.000Z",
+    });
+    await reconcileFacetDesignNativeProjections(env, new Date("2027-01-15T08:13:30.000Z"));
+    const third = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(third.map((item) => item.eventId), [EVENT, CORRECTION, TERMINAL]);
+    assert.deepEqual(third.map((item) => item.outcome), ["succeeded", "succeeded", "succeeded"]);
+    assert.deepEqual(third.map((item) => item.idempotentReplay), [true, true, false]);
+    assert.equal(provider.calls(), 6);
+    assert.equal(effectRows().length, 6);
+    assert.equal(new Set(effectRows().map((row) => row.effect_id)).size, 6);
+
+    const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(replay, []);
+    assert.equal(provider.calls(), 6);
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection holds a chain successor when its predecessor is unprojected", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  seedDecision(db, {
+    eventId: CORRECTION,
+    decision: "corrected",
+    previousEventId: EVENT,
+    occurredAt: "2027-01-15T08:12:00.000Z",
+  });
+  seedDecision(db, {
+    eventId: TERMINAL,
+    decision: "withdrawn",
+    previousEventId: CORRECTION,
+    occurredAt: "2027-01-15T08:13:00.000Z",
+  });
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const crashing = compatibilityProvider({ crash: true });
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: crashing.fetch });
+    assert.deepEqual(first.map((item) => item.eventId), [EVENT, CORRECTION, TERMINAL]);
+    assert.equal(first[0]?.errorCode, "effect_dispatch_unknown");
+    assert.equal(first[1]?.errorCode, "facet_frappe_predecessor_unprojected");
+    assert.equal(first[2]?.errorCode, "facet_frappe_predecessor_unprojected");
+    assert.equal(crashing.calls(), 1);
+    const blocked = db.raw.prepare(
+      `SELECT effect_id, intent_id, state, result_code, exception_ref
+         FROM external_effects
+        WHERE action = 'facet.design.v2.compatibility_projection.blocked'
+        ORDER BY intent_id`,
+    ).all() as Array<Record<string, string>>;
+    assert.deepEqual(blocked.map((effect) => [
+      effect.intent_id,
+      effect.state,
+      effect.result_code,
+      Boolean(effect.exception_ref),
+    ]), [
+      [TERMINAL, "manual_exception", "facet_frappe_predecessor_unprojected", true],
+      [CORRECTION, "manual_exception", "facet_frappe_predecessor_unprojected", true],
+    ].sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
+    const succeeding = compatibilityProvider();
+    const retry = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: succeeding.fetch });
+    assert.deepEqual(retry.map((item) => item.eventId), [EVENT]);
+    assert.equal(retry[0]?.errorCode, "effect_unknown_requires_reconciliation");
+    assert.equal(succeeding.calls(), 0);
+    assert.equal(
+      Number((db.raw.prepare(
+        `SELECT COUNT(*) AS count FROM external_effect_exceptions
+          WHERE effect_id IN (
+            SELECT effect_id FROM external_effects
+             WHERE action = 'facet.design.v2.compatibility_projection.blocked'
+          )`,
+      ).get() as { count: number }).count),
+      2,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("unverifiable HTTP-200 receipts stay unknown without redispatch and withdrawal rejects its predecessor", async () => {
+  const drifted = await fixture();
+  seedDecision(drifted.db);
+  await reconcileFacetDesignNativeProjections(drifted.env);
+  drifted.env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  drifted.env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const driftProvider = compatibilityProvider({ drift: true });
+  try {
+    const result = await reconcileFacetDesignFrappeProjections(drifted.env, NOW, { fetch: driftProvider.fetch });
+    assert.equal(result[0]?.outcome, "uncertain");
+    assert.equal(result[0]?.errorCode, "frappe_projection_receipt_identity_drift");
+    const driftEffect = drifted.db.raw.prepare(
+      "SELECT state, exception_ref FROM external_effects WHERE provider = ?",
+    ).get("frappe-facet-design") as { state: string; exception_ref: string };
+    assert.equal(driftEffect.state, "manual_exception");
+    assert.ok(driftEffect.exception_ref);
+    const succeeding = compatibilityProvider();
+    const replay = await reconcileFacetDesignFrappeProjections(drifted.env, NOW, { fetch: succeeding.fetch });
+    assert.deepEqual(replay, []);
+    assert.equal(succeeding.calls(), 0);
+  } finally {
+    drifted.db.close();
+  }
+
+  const withdrawn = await fixture();
+  seedDecision(withdrawn.db);
+  seedDecision(withdrawn.db, {
+    eventId: TERMINAL,
+    decision: "withdrawn",
+    previousEventId: EVENT,
+    occurredAt: "2027-01-15T08:12:00.000Z",
+  });
+  await reconcileFacetDesignNativeProjections(withdrawn.env);
+  withdrawn.env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  withdrawn.env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const terminalProvider = compatibilityProvider();
+  try {
+    const result = await reconcileFacetDesignFrappeProjections(withdrawn.env, NOW, { fetch: terminalProvider.fetch });
+    const terminal = result.find((item) => item.eventId === TERMINAL);
+    assert.equal(result.map((item) => item.eventId).join(","), `${EVENT},${TERMINAL}`);
+    assert.equal(terminal?.outcome, "succeeded");
+    assert.equal(terminal?.decisionKind, "withdrawn");
+    assert.equal(terminal?.draftCustomerQuoteId, `facet-quote-revision:${sha256(EVENT)}`);
+    assert.equal(terminal?.receipt?.draft_quote_status, "Rejected");
+    assert.equal(terminal?.receipt?.blank_commercial_revision, false);
+    assert.deepEqual(terminalProvider.claims().map((claim) => claim.decision_kind), ["approved", "withdrawn"]);
+    assert.equal((withdrawn.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_quote_revisions").get() as { count: number }).count, 1);
+  } finally {
+    withdrawn.db.close();
+  }
+});
+
+test("malformed and unsigned HTTP-200 receipts require explicit reconciliation", async () => {
+  const variants: Array<{
+    code: string;
+    rawResponse?: string;
+    transformResponse?: (response: Record<string, unknown>) => Record<string, unknown>;
+  }> = [
+    {
+      code: "frappe_projection_receipt_invalid_json",
+      rawResponse: "not-json",
+    },
+    {
+      code: "frappe_projection_receipt_too_large",
+      rawResponse: "x".repeat(65 * 1024),
+    },
+    {
+      code: "frappe_projection_receipt_shape",
+      transformResponse: () => [] as unknown as Record<string, unknown>,
+    },
+    {
+      code: "frappe_projection_receipt_signature_invalid",
+      transformResponse: (response: Record<string, unknown>) => ({
+        ...response,
+        receipt_signature: "unsigned",
+      }),
+    },
+  ];
+  for (const variant of variants) {
+    const { db, env } = await fixture();
+    seedDecision(db);
+    await reconcileFacetDesignNativeProjections(env);
+    env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+    env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+    const provider = compatibilityProvider({
+      rawResponse: variant.rawResponse,
+      transformResponse: variant.transformResponse,
+    });
+    try {
+      const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+      assert.equal(first[0]?.outcome, "uncertain");
+      assert.equal(first[0]?.errorCode, variant.code);
+      assert.equal(provider.calls(), 1);
+      const succeeding = compatibilityProvider();
+      const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: succeeding.fetch });
+      assert.deepEqual(replay, []);
+      assert.equal(succeeding.calls(), 0);
+      const effect = db.raw.prepare(
+        `SELECT effect_id, state, result_code, exception_ref FROM external_effects
+          WHERE provider = 'frappe-facet-design' AND intent_id = ?`,
+      ).get(EVENT) as {
+        effect_id: string;
+        state: string;
+        result_code: string;
+        exception_ref: string;
+      };
+      assert.equal(effect.state, "manual_exception");
+      assert.equal(effect.result_code, variant.code);
+      assert.ok(effect.exception_ref);
+      assert.equal(
+        Number((db.raw.prepare(
+          "SELECT COUNT(*) AS count FROM external_effect_exceptions WHERE effect_id = ?",
+        ).get(effect.effect_id) as { count: number }).count),
+        1,
+      );
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("historical Frappe success cannot bypass revoked or changed commercial authority", async () => {
+  for (const drift of ["revoked_link", "commercial_revision"] as const) {
+    const { db, env } = await fixture();
+    seedDecision(db);
+    await reconcileFacetDesignNativeProjections(env);
+    env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+    env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+    const provider = compatibilityProvider();
+    try {
+      const success = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+      assert.equal(success[0]?.outcome, "succeeded");
+      assert.equal(provider.calls(), 1);
+      if (drift === "revoked_link") {
+        const link = db.raw.prepare(
+          "SELECT external_project_link_id FROM facet_v2_project_links WHERE facet_project_id = ?",
+        ).get(PROJECT) as { external_project_link_id: string };
+        db.raw.prepare(
+          `INSERT INTO facet_v2_link_revocations
+           (revocation_id, link_kind, link_id, reason_code, revoked_by_user_id,
+            destination_tenant_id, revoked_at)
+           VALUES ('facet-frappe-success-revocation', 'project', ?,
+                   'customer_request', ?, ?, '2027-01-15T08:30:00.000Z')`,
+        ).run(link.external_project_link_id, OWNER, TENANT);
+      } else {
+        await seedNativeAcceptedContract(db, env, 2);
+      }
+      const afterDrift = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+      assert.equal(afterDrift[0]?.outcome, "uncertain");
+      assert.equal(afterDrift[0]?.errorCode, "facet_frappe_current_authority_drift");
+      assert.equal(provider.calls(), 1);
+      const blocked = db.raw.prepare(
+        `SELECT effect_id, state, result_code, exception_ref, evidence_refs_json
+           FROM external_effects
+          WHERE action = 'facet.design.v2.compatibility_projection.blocked'
+            AND intent_id = ?`,
+      ).get(EVENT) as Record<string, string>;
+      assert.equal(blocked.state, "manual_exception");
+      assert.equal(blocked.result_code, "facet_frappe_current_authority_drift");
+      assert.ok(blocked.exception_ref);
+      assert.match(blocked.evidence_refs_json, /facet-v2:event:/);
+      assert.match(blocked.evidence_refs_json, /facet-native-design:/);
+      const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+      assert.deepEqual(replay, []);
+      assert.equal(provider.calls(), 1);
+      assert.equal(
+        Number((db.raw.prepare(
+          "SELECT COUNT(*) AS count FROM external_effect_exceptions WHERE effect_id = ?",
+        ).get(blocked.effect_id) as { count: number }).count),
+        1,
+      );
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test("terminal current heads advance a bounded recovery window beyond 25 and an invalid oldest head cannot starve later work", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  const invalid = seedIndependentProjectedHead(db, 1, {
+    decision: "corrected",
+    previousEventId: EVENT,
+    occurredAt: "2027-01-15T08:05:00.000Z",
+  });
+  const valid = Array.from({ length: 25 }, (_, index) =>
+    seedIndependentProjectedHead(db, index + 2));
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const provider = compatibilityProvider();
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.equal(first.length, 25);
+    assert.equal(first[0]?.eventId, invalid);
+    assert.equal(first[0]?.errorCode, "facet_frappe_predecessor_chain_invalid");
+    assert.equal(provider.calls(), 24);
+    const second = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(second.map((item) => item.eventId), [valid.at(-1)]);
+    assert.equal(second[0]?.outcome, "succeeded");
+    assert.equal(provider.calls(), 25);
+    const third = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(third, []);
+    assert.equal(provider.calls(), 25);
+    const blocked = db.raw.prepare(
+      `SELECT effect_id, state, exception_ref FROM external_effects
+        WHERE action = 'facet.design.v2.compatibility_projection.blocked'
+          AND intent_id = ?`,
+    ).get(invalid) as { effect_id: string; state: string; exception_ref: string };
+    assert.equal(blocked.state, "manual_exception");
+    assert.ok(blocked.exception_ref);
+    assert.equal(
+      Number((db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM external_effect_events WHERE effect_id = ?",
+      ).get(blocked.effect_id) as { count: number }).count),
+        4,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("request validation failures persist one deterministic pre-dispatch exception", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  const initial = compatibilityProvider();
+  await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: initial.fetch });
+  const invalid = seedIndependentProjectedHead(db, 1, {
+    occurredAt: "2027-01-15T08:20:00.000Z",
+    receivedAt: "2027-01-15T08:19:00.000Z",
+  });
+  const provider = compatibilityProvider();
+  try {
+    const first = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.equal(first.length, 1);
+    assert.equal(first[0]?.eventId, invalid);
+    assert.equal(first[0]?.outcome, "uncertain");
+    assert.equal(first[0]?.errorCode, "facet_v2_native_authority_drift");
+    assert.equal(provider.calls(), 0);
+    const blocked = db.raw.prepare(
+      `SELECT effect_id, state, result_code, exception_ref
+         FROM external_effects
+        WHERE action = 'facet.design.v2.compatibility_projection.blocked'
+          AND intent_id = ?`,
+    ).get(invalid) as Record<string, string>;
+    assert.equal(blocked.state, "manual_exception");
+    assert.equal(blocked.result_code, "facet_v2_native_authority_drift");
+    const replay = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.deepEqual(replay, []);
+    assert.equal(provider.calls(), 0);
+    assert.equal(
+      Number((db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM external_effect_exceptions WHERE effect_id = ?",
+      ).get(blocked.effect_id) as { count: number }).count),
+      1,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("compatibility projection opens manual reconciliation when the native head drifts after dispatch", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = HMAC_KEY;
+  let raced = false;
+  const provider = compatibilityProvider({
+    beforeResponse: async () => {
+      if (raced) return;
+      raced = true;
+      seedDecision(db, {
+        eventId: CORRECTION,
+        decision: "corrected",
+        previousEventId: EVENT,
+        occurredAt: "2027-01-15T08:12:00.000Z",
+      });
+      await reconcileFacetDesignNativeProjections(
+        env,
+        new Date("2027-01-15T08:12:30.000Z"),
+      );
+    },
+  });
+  try {
+    const result = await reconcileFacetDesignFrappeProjections(env, NOW, { fetch: provider.fetch });
+    assert.equal(result[0]?.outcome, "uncertain");
+    assert.equal(result[0]?.errorCode, "facet_v2_native_authority_drift_after_dispatch");
+    const effect = db.raw
+      .prepare("SELECT state, result_code FROM external_effects WHERE provider = ? AND intent_id = ?")
+      .get("frappe-facet-design", EVENT) as { state: string; result_code: string };
+    assert.equal(effect.state, "manual_exception");
+    assert.equal(effect.result_code, "facet_v2_native_authority_drift_after_dispatch");
+    assert.equal(provider.calls(), 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("disabled compatibility projection is a no-op even when native D1 is present", async () => {
+  const { db, env } = await fixture();
+  seedDecision(db);
+  await reconcileFacetDesignNativeProjections(env);
+  const network = installNetworkTrap();
+  try {
+    const result = await reconcileFacetDesignFrappeProjections(env, NOW);
+    assert.deepEqual(result, []);
+    assert.equal(network.count(), 0);
+  } finally {
+    network.restore();
+    db.close();
+  }
+});

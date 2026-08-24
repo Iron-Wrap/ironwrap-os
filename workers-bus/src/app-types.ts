@@ -102,6 +102,12 @@ export type AppEnv = Env & {
   APP_FACET_LAUNCH_SOURCE_TENANT_ID?: string;
   FACET_LAUNCH_HMAC_KEY?: string;
   FACET_V2_NATIVE_PROJECTION_ENABLED?: string;
+  // Compatibility-only Facet evidence projection. Native D1 remains the sole
+  // operating/commercial authority; this flag is deliberately false by default.
+  FACET_DESIGN_FRAPPE_PROJECTION_ENABLED?: string;
+  FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY?: string;
+  FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY?: string;
+  FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET?: string;
   // Postiz is an execution adapter only. The API key remains a Worker secret;
   // D1 and the browser receive only opaque integration ids and bounded receipts.
   // Every provider mutation adapter is fail-closed behind the durable universal effect ledger.

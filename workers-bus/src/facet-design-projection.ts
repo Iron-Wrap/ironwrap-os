@@ -7,6 +7,10 @@ import {
   type FacetLaunchTarget,
 } from "./facet-launch.ts";
 
+// Keep the public Facet projection module as the compatibility seam for
+// callers that already load the native reconciler from this file.
+export { reconcileFacetDesignFrappeProjections } from "./facet-design-frappe-projection.ts";
+
 const PROJECTION_BATCH_SIZE = 25;
 const MAX_DECISION_CHAIN_LENGTH = 100;
 

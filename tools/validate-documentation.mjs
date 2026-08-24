@@ -83,8 +83,11 @@ const allowedOptions = new Set([
   "--capability-matrix",
   "--clone-playbook",
   "--evidence",
+  "--launch-runbook",
+  "--local-readme",
   "--migration-root",
   "--release-control-publication",
+  "--worker-readme",
   "--worker-test-output",
 ]);
 const options = new Map();
@@ -574,6 +577,77 @@ const capabilityMatrixPath = resolve(
 );
 const capabilityContract = loadCapabilityContract(capabilityMatrixPath);
 const capabilityMatrixContent = readFileSync(capabilityMatrixPath, "utf8");
+const facetProjectionDocuments = [
+  {
+    label: "workers-bus/README.md",
+    path: resolve(
+      options.get("--worker-readme") ?? resolve(root, "workers-bus/README.md"),
+    ),
+  },
+  {
+    label: "docs/LAUNCH-RUNBOOK.md",
+    path: resolve(
+      options.get("--launch-runbook") ?? resolve(root, "docs/LAUNCH-RUNBOOK.md"),
+    ),
+  },
+  {
+    label: "docs/CAPABILITY-MATRIX.md",
+    path: capabilityMatrixPath,
+  },
+  {
+    label: "deploy/local/README.md",
+    path: resolve(
+      options.get("--local-readme") ?? resolve(root, "deploy/local/README.md"),
+    ),
+  },
+];
+const facetProjectionRequiredClaims = [
+  [
+    /FACET_DESIGN_FRAPPE_PROJECTION_ENABLED/,
+    "canonical compatibility flag",
+  ],
+  [
+    /default-off\s*\(`false`\)\s*in every checked-in\s+environment/i,
+    "default-off checked-in configuration",
+  ],
+  [
+    /blank,\s+non-customer-safe\s+`Draft`\s+Customer Quote/i,
+    "blank non-customer-safe Draft mutation",
+  ],
+  [
+    /marks the predecessor projected quote\s+`Rejected`/i,
+    "predecessor rejection on chain advance",
+  ],
+  [
+    /supplies no price,\s+line items,\s+taxes,\s+payment schedule,\s+or commercial terms/i,
+    "absence of projected commercial terms",
+  ],
+];
+const facetProjectionForbiddenClaims = [
+  [/FACET_V2_FRAPPE_PROJECTION_ENABLED/, "stale compatibility flag"],
+  [/does not create or update a quote/i, "false no-quote-mutation claim"],
+  [
+    /leaves the\s+quote,\s+Contract Acceptance/i,
+    "ambiguous quote-unchanged projection claim",
+  ],
+  [
+    /Projection remains bounded evidence plus reconciliation only;[\s\S]{0,100}does not\s+directly mutate a quote/i,
+    "false evidence-only projection claim",
+  ],
+];
+for (const document of facetProjectionDocuments) {
+  const content = readFileSync(document.path, "utf8");
+  for (const [pattern, claim] of facetProjectionRequiredClaims) {
+    if (!pattern.test(content)) {
+      fail(`${document.label}: missing Facet compatibility claim ${claim}`);
+    }
+  }
+  for (const [pattern, claim] of facetProjectionForbiddenClaims) {
+    if (pattern.test(content)) {
+      fail(`${document.label}: contains ${claim}`);
+    }
+  }
+}
 const releaseControlPublicationPath = resolve(
   options.get("--release-control-publication") ??
     resolve(root, "docs/release-control-publication.json"),

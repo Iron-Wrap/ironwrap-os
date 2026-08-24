@@ -609,7 +609,7 @@ function ReadinessPanel({ model }: { model: NewoOperationsResponse }) {
         </h2>
         <span
           className={cn(
-            "text-xs font-bold uppercase",
+            "text-xs font-bold",
             model.readiness.status === "ready" ? "text-ok" : "text-warning",
           )}
         >

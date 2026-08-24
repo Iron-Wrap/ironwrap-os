@@ -115,7 +115,7 @@ function OptionCard({
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="text-lg font-black tracking-[-0.02em]">{title}</h3>
         {option.tier ? (
-          <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-extrabold uppercase tracking-[0.1em] text-muted">
+          <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-extrabold text-muted">
             {option.tier}
           </span>
         ) : null}

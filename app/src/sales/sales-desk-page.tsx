@@ -611,7 +611,7 @@ function QuoteSummary({
         <p className="text-sm leading-6 text-muted">{quote.scope_summary}</p>
       ) : null}
       <div className="mt-3 border-t border-border pt-3">
-        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">Customer view</p>
+        <p className="text-xs font-bold text-muted">Customer view</p>
         <ProposalPublicationSummary proposal={proposal} sourcePartial={proposalSourcePartial} />
       </div>
     </div>

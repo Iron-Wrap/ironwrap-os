@@ -615,7 +615,7 @@ function InventoryDesk({
           <div className="overflow-x-auto border border-border bg-surface">
             <table className="w-full min-w-[52rem] text-left text-sm">
               <caption className="sr-only">Tenant inventory positions</caption>
-              <thead className="border-b border-border bg-surface-muted text-xs uppercase tracking-[0.12em] text-muted">
+              <thead className="border-b border-border bg-surface-muted text-xs text-muted">
                 <tr>
                   <th scope="col" className="px-4 py-3">
                     Material
@@ -1598,7 +1598,7 @@ function LookupResult({ result }: { result: NonNullable<InventoryLookupResponse[
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-border bg-surface px-3 py-3">
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-xs font-extrabold text-muted">{label}</dt>
       <dd className="mt-1 text-sm font-bold">{value}</dd>
     </div>
   );
@@ -1607,7 +1607,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function IdentityTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <div className="border border-border bg-surface px-4 py-4">
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-xs font-extrabold text-muted">{label}</dt>
       <dd className="mt-1 break-all font-bold">{value}</dd>
       <dd className="mt-1 text-sm text-muted">{detail}</dd>
     </div>
@@ -1617,7 +1617,7 @@ function IdentityTile({ label, value, detail }: { label: string; value: string; 
 function Tile({ label, value, tone }: { label: string; value: number | string; tone?: "danger" }) {
   return (
     <div className="border border-border bg-surface px-4 py-3">
-      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dt className="text-xs font-extrabold text-muted">{label}</dt>
       <dd
         className={`mt-1 text-2xl font-black tabular-nums ${tone === "danger" ? "text-danger" : ""}`}
       >

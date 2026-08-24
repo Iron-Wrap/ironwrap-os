@@ -307,7 +307,7 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
               <div
                 id={`${listId}-${group.group}`}
                 role="presentation"
-                className="px-2 pb-1 pt-3 text-xs font-extrabold uppercase tracking-[0.08em] text-muted"
+                className="px-2 pb-1 pt-3 text-xs font-extrabold text-muted"
               >
                 {group.label}
               </div>

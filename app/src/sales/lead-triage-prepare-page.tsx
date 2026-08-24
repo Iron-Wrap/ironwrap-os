@@ -438,7 +438,7 @@ function LeadContext({
       </div>
       <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
         <p className="text-sm font-bold text-muted">Current triage state</p>
-        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-extrabold uppercase tracking-[0.08em] text-foreground">
+        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-extrabold text-foreground">
           {humanize(lead.triage.status) ?? "Status unavailable"}
         </p>
         {lead.triage.summary ? (

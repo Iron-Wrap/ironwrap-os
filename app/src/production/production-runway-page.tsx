@@ -363,9 +363,7 @@ function RunwayJobCard({
     <article className="rounded-lg border border-border bg-surface p-4 sm:p-5">
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
-            {job.brand ?? "Unbranded job"}
-          </p>
+          <p className="text-xs font-bold text-muted">{job.brand ?? "Unbranded job"}</p>
           <h3 className="mt-1 text-lg font-black tracking-[-0.02em]">{job.job_number ?? job.id}</h3>
           <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>

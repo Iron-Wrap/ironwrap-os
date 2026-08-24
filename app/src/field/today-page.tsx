@@ -519,7 +519,7 @@ function TodayWorkObjectRow({
 function DispatchFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
+      <dt className="text-xs font-extrabold text-muted">{label}</dt>
       <dd className="mt-1 font-semibold leading-6">{value}</dd>
     </div>
   );

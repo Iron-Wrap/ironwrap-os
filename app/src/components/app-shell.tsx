@@ -145,7 +145,7 @@ export function AppShell() {
       </aside>
 
       <div className="min-w-0">
-        <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface/95 backdrop-blur-lg">
+        <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface">
           <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-3">
               {/* The only "go home" control a phone has, so it carries the 44 px thumb
@@ -240,7 +240,7 @@ export function AppShell() {
                     popoverTarget="mobile-workspace-popover"
                     aria-controls="mobile-workspace-popover"
                     className={cn(
-                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6875rem] font-bold text-muted transition-colors hover:bg-surface-muted active:scale-[0.98]",
+                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold text-muted transition-colors hover:bg-surface-muted active:scale-[0.98]",
                       currentItemIsInMore && mobileActiveClassName,
                     )}
                     aria-label="Open all workspaces"
@@ -370,7 +370,7 @@ function MobileNavItem({ item, active }: { item: NavigationItem; active: boolean
     <Link
       to={item.to}
       className={cn(
-        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6875rem] font-bold text-muted transition-[background-color,color,transform] active:scale-[0.98]",
+        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold text-muted transition-[background-color,color,transform] active:scale-[0.98]",
         active && mobileActiveClassName,
       )}
       aria-current={active ? "page" : undefined}

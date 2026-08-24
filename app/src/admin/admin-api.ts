@@ -136,8 +136,13 @@ export async function readFileAsBase64(file: File): Promise<string> {
 }
 
 export function adminErrorMessage(error: unknown): string {
+  // ADMIN_ERROR_MESSAGES is the written copy for the codes this product raises.
+  // An uncurated code means no sentence was written for it, and `error.message`
+  // there is whatever the transport produced - for a bare 503 that is the HTTP
+  // phrase "Service Unavailable", which reached the setup hub verbatim. A
+  // status phrase is a policy code wearing title case; write a sentence instead.
   if (error instanceof ApiError) {
-    return ADMIN_ERROR_MESSAGES[error.code] ?? error.message;
+    return ADMIN_ERROR_MESSAGES[error.code] ?? "That did not go through. Try again in a moment.";
   }
   return "Something stopped that from saving. Check your connection and try again.";
 }

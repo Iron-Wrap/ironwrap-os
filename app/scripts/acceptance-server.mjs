@@ -1762,6 +1762,38 @@ function resetOnboardingState() {
   onboardingState = onboardingDefaults();
 }
 
+function onboardingSetupProgressPayload() {
+  const named = String(onboardingState.profile.company_name ?? "").trim().length > 0;
+  const peopled = (onboardingState.users ?? []).length > 1;
+  const step = (id, title, done, detail) => ({
+    id,
+    title,
+    status: done ? "done" : "later",
+    detail,
+    requirements: [{ id: `${id}_present`, met: done, applicable: true, detail }],
+  });
+  const steps = [
+    step("company", "Company details", named, "The company has a name customers see."),
+    step("people", "People", peopled, "Someone besides the owner can sign in."),
+    step("crew_phones", "Crew phones", false, "No phone is paired yet."),
+    step("money_and_intake", "Money and intake", false, "No intake route is configured."),
+    step("notifications", "Notifications", false, "Nobody has chosen what to be told about."),
+  ];
+  const done = steps.filter((entry) => entry.status === "done").length;
+  return {
+    version: 1,
+    read_model_generated_at: "2026-08-22T12:30:00.000Z",
+    allowed_actions: [],
+    progress: {
+      generated_at: "2026-08-22T12:30:00.000Z",
+      done,
+      total: steps.length,
+      percent_complete: Math.round((done / steps.length) * 100),
+      steps,
+    },
+  };
+}
+
 function onboardingProfilePayload() {
   return {
     version: 1,
@@ -1808,6 +1840,22 @@ function onboardingSalesPayload() {
 async function routeOnboarding(request, requestUrl, method) {
   if (method === "POST" && requestUrl.pathname === "/__acceptance/onboarding/reset") {
     resetOnboardingState();
+    return { status: 200, body: { ok: true } };
+  }
+  // The setup hub reads this to say what is already done. It was missing, so
+  // the onboarding suite exercised the hub only in its no-data shape and never
+  // caught that a failed read was being reported as an untouched company.
+  if (requestUrl.pathname === "/api/v1/admin/setup-progress" && method === "GET") {
+    if (onboardingState.setupProgressFails) {
+      return { status: 503, body: { error: "setup_progress_unavailable" } };
+    }
+    return { status: 200, body: onboardingSetupProgressPayload() };
+  }
+  if (
+    method === "POST" &&
+    requestUrl.pathname === "/__acceptance/onboarding/setup-progress-fails"
+  ) {
+    onboardingState.setupProgressFails = true;
     return { status: 200, body: { ok: true } };
   }
   if (requestUrl.pathname === "/api/v1/admin/company-profile") {

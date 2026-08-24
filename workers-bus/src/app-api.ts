@@ -190,6 +190,11 @@ import {
 } from "./facet-v2-evidence.ts";
 import { issueFacetLaunch } from "./facet-launch.ts";
 import {
+  issueFacetPrequoteLaunch,
+  promoteFacetEstimatorReady,
+  FacetPrequoteError,
+} from "./facet-prequote.ts";
+import {
   admitCommercialPermit,
   commercialCommandFingerprint,
   CommercialAuthorityError,
@@ -1434,6 +1439,24 @@ export async function handleAuthenticatedRoute(
       ? await handleFacetLaunch(req, env, auth, jobName)
       : privateAppJson({ error: "not_found" }, 404);
   }
+  const facetPrequoteLaunchMatch = url.pathname.match(
+    /^\/api\/v1\/estimator\/jobs\/([^/]+)\/facet-prequote-launches$/,
+  );
+  if (req.method === "POST" && facetPrequoteLaunchMatch) {
+    const jobName = decodedPathSegment(facetPrequoteLaunchMatch[1]);
+    return jobName
+      ? await handleFacetPrequoteLaunch(req, env, auth, jobName)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
+  const facetPrequotePromotionMatch = url.pathname.match(
+    /^\/api\/v1\/estimator\/jobs\/([^/]+)\/facet-prequote-promotions$/,
+  );
+  if (req.method === "POST" && facetPrequotePromotionMatch) {
+    const jobName = decodedPathSegment(facetPrequotePromotionMatch[1]);
+    return jobName
+      ? await handleFacetPrequotePromotion(req, env, auth, jobName)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
   const estimatorEvidenceImportMatch = url.pathname.match(
     /^\/api\/v1\/estimator\/jobs\/([^/]+)\/evidence-imports$/,
   );
@@ -1629,6 +1652,7 @@ async function handleEstimatorEvidenceImport(
     roofJobId,
     measurementReceiptId: body.measurementReceiptId,
     facetEventId: body.facetEventId,
+    estimatorReadyEventId: body.estimatorReadyEventId,
     commercialQuoteRevisionId: body.commercialQuoteRevisionId,
     revisionNumber: body.revisionNumber,
     supersedesEstimatorRevisionId: body.supersedesEstimatorRevisionId,
@@ -1646,6 +1670,7 @@ async function handleEstimatorEvidenceImport(
         revision_number: Number(result.revision.revision_number),
         measurement_receipt_id: result.revision.measurement_receipt_id,
         facet_event_id: result.revision.facet_event_id,
+        estimator_ready_event_id: result.revision.estimator_ready_event_id,
         commercial_quote_revision_id:
           result.revision.commercial_quote_revision_id,
         evidence_digest: result.revision.evidence_digest,
@@ -1699,6 +1724,95 @@ async function handleFacetLaunch(
     }, result.kind === "created" ? 201 : 200);
   } catch {
     return privateAppJson({ error: "facet_launch_unavailable" }, 502);
+  }
+}
+
+async function handleFacetPrequoteLaunch(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  jobName: string,
+): Promise<Response> {
+  // The existing `facet:launch` permission is intentionally not granted to generic roles;
+  // this new route does not widen the role matrix and remains owner-only.
+  if (!hasPermission(auth, "facet:launch") || auth.session.role !== "owner") {
+    return privateAppJson({ error: "facet_prequote_owner_required" }, 403);
+  }
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey) {
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  }
+  const parsed = await readJson(req, 1_024);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  if (!isRecord(parsed.value) || Object.keys(parsed.value).length !== 0) {
+    return privateAppJson({ error: "invalid_facet_prequote_launch_request" }, 400);
+  }
+  try {
+    const result = await issueFacetPrequoteLaunch(env, {
+      tenantId: auth.session.tenant_id,
+      jobName,
+      actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
+      idempotencyKey: requestIdempotencyKey,
+    });
+    if (result.kind === "rejected") return privateAppJson({ error: result.code }, result.status);
+    return privateAppJson({
+      version: APP_API_VERSION,
+      read_model_generated_at: new Date().toISOString(),
+      permissions: auth.permissions,
+      allowed_actions: ["facet_prequote_launch.create"],
+      launch: result.launch,
+      ...(result.kind === "replayed" ? { replayed: true } : {}),
+    }, result.kind === "created" ? 201 : 200);
+  } catch (error) {
+    if (error instanceof FacetPrequoteError) {
+      return privateAppJson({ error: error.code }, error.status);
+    }
+    return privateAppJson({ error: "facet_prequote_launch_unavailable" }, 502);
+  }
+}
+
+async function handleFacetPrequotePromotion(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  roofJobId: string,
+): Promise<Response> {
+  if (!hasPermission(auth, "facet:launch") || auth.session.role !== "owner") {
+    return privateAppJson({ error: "facet_promotion_owner_required" }, 403);
+  }
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey) {
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  }
+  const parsed = await readJson(req, 4_096);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const body = facetPrequotePromotionBody(parsed.value);
+  if (!body) return privateAppJson({ error: "invalid_facet_prequote_promotion" }, 400);
+  try {
+    const result = await promoteFacetEstimatorReady(env, {
+      tenantId: auth.session.tenant_id,
+      roofJobId,
+      estimatorReadyEventId: body.estimatorReadyEventId,
+      estimatorRevisionId: body.estimatorRevisionId,
+      commercialQuoteRevisionId: body.commercialQuoteRevisionId,
+      actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
+      idempotencyKey: requestIdempotencyKey,
+    });
+    if (result.kind === "rejected") return privateAppJson({ error: result.code }, result.status);
+    return privateAppJson({
+      version: APP_API_VERSION,
+      promotion: result.promotion,
+      ...(result.kind === "replayed" ? { replayed: true } : {}),
+    }, result.kind === "created" ? 201 : 200);
+  } catch (error) {
+    if (error instanceof FacetPrequoteError) {
+      return privateAppJson({ error: error.code }, error.status);
+    }
+    return privateAppJson({ error: "facet_prequote_promotion_unavailable" }, 502);
   }
 }
 
@@ -6129,6 +6243,7 @@ function estimatorIdempotencyKey(req: Request): string | null {
 function estimatorEvidenceImportBody(value: unknown): {
   measurementReceiptId: string;
   facetEventId: string | null;
+  estimatorReadyEventId: string | null;
   commercialQuoteRevisionId: string | null;
   revisionNumber: number;
   supersedesEstimatorRevisionId: string | null;
@@ -6138,6 +6253,7 @@ function estimatorEvidenceImportBody(value: unknown): {
   const allowed = new Set([
     "measurement_receipt_id",
     "facet_event_id",
+    "estimator_ready_event_id",
     "commercial_quote_revision_id",
     "revision_number",
     "supersedes_estimator_revision_id",
@@ -6152,6 +6268,11 @@ function estimatorEvidenceImportBody(value: unknown): {
   const revisionNumber = validVersion(value.revision_number);
   const facetEventId = optionalEstimatorIdentifier(
     value.facet_event_id,
+    8,
+    200,
+  );
+  const estimatorReadyEventId = optionalEstimatorIdentifier(
+    value.estimator_ready_event_id,
     8,
     200,
   );
@@ -6173,6 +6294,7 @@ function estimatorEvidenceImportBody(value: unknown): {
   if (!measurementReceiptId || !revisionNumber) return null;
   if (
     (value.facet_event_id !== undefined && facetEventId === undefined) ||
+    (value.estimator_ready_event_id !== undefined && estimatorReadyEventId === undefined) ||
     (value.commercial_quote_revision_id !== undefined &&
       commercialQuoteRevisionId === undefined) ||
     (value.supersedes_estimator_revision_id !== undefined &&
@@ -6187,14 +6309,43 @@ function estimatorEvidenceImportBody(value: unknown): {
       (!supersedesEstimatorRevisionId || !correctionReason))
   )
     return null;
+  if (
+    (facetEventId !== null && estimatorReadyEventId !== null) ||
+    (estimatorReadyEventId !== null && commercialQuoteRevisionId !== null)
+  ) return null;
   return {
     measurementReceiptId,
     facetEventId: facetEventId ?? null,
+    estimatorReadyEventId: estimatorReadyEventId ?? null,
     commercialQuoteRevisionId: commercialQuoteRevisionId ?? null,
     revisionNumber,
     supersedesEstimatorRevisionId: supersedesEstimatorRevisionId ?? null,
     correctionReason: correctionReason ?? null,
   };
+}
+
+function facetPrequotePromotionBody(value: unknown): {
+  estimatorReadyEventId: string;
+  estimatorRevisionId: string;
+  commercialQuoteRevisionId: string;
+} | null {
+  if (!isRecord(value)) return null;
+  const allowed = new Set([
+    "estimator_ready_event_id",
+    "estimator_revision_id",
+    "commercial_quote_revision_id",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const estimatorReadyEventId = exactEstimatorIdentifier(value.estimator_ready_event_id, 8, 160);
+  const estimatorRevisionId = exactEstimatorIdentifier(value.estimator_revision_id, 20, 160);
+  const commercialQuoteRevisionId = exactEstimatorIdentifier(
+    value.commercial_quote_revision_id,
+    8,
+    160,
+  );
+  return estimatorReadyEventId && estimatorRevisionId && commercialQuoteRevisionId
+    ? { estimatorReadyEventId, estimatorRevisionId, commercialQuoteRevisionId }
+    : null;
 }
 
 function exactEstimatorIdentifier(

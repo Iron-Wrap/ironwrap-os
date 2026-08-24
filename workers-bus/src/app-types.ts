@@ -101,7 +101,12 @@ export type AppEnv = Env & {
   APP_FACET_LAUNCH_BASE_URL?: string;
   APP_FACET_LAUNCH_SOURCE_TENANT_ID?: string;
   FACET_LAUNCH_HMAC_KEY?: string;
+  FACET_V2_INGEST_ENABLED?: string;
   FACET_V2_NATIVE_PROJECTION_ENABLED?: string;
+  // Optional dedicated route/key bindings for the quote-free estimator-ready consumer lane.
+  // When absent, the signed v2 key set is reused while the destination path is isolated.
+  FACET_ESTIMATOR_READY_ROUTES_JSON?: string;
+  FACET_ESTIMATOR_READY_KEYS_JSON?: string;
   // Compatibility-only Facet evidence projection. Native D1 remains the sole
   // operating/commercial authority; this flag is deliberately false by default.
   FACET_DESIGN_FRAPPE_PROJECTION_ENABLED?: string;

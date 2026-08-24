@@ -69,6 +69,8 @@ interface StoredAuthorityLink {
   source_product: string;
   source_environment: string;
   proof_sha256: string;
+  created_by_user_id: string;
+  created_at: string;
 }
 
 interface StoredLaunchAuthority {
@@ -205,9 +207,20 @@ export async function registerFacetV2AuthorityLink(
 export async function registerFacetV2LaunchAuthority(
   env: Pick<Env, "DB">,
   input: FacetV2LaunchAuthorityRegistration,
+  options: {
+    additionalStatements?: readonly D1PreparedStatement[];
+    projectLinkProvenance?: { createdByUserId: string; createdAt: string };
+  } = {},
 ): Promise<FacetV2AuthorityLink> {
   assertRegistration(input);
   assertLaunchRegistration(input);
+  const projectLinkProvenance = options.projectLinkProvenance ?? {
+    createdByUserId: input.createdByUserId,
+    createdAt: input.createdAt,
+  };
+  if (!safeIdentifier(projectLinkProvenance.createdByUserId) || !validIso(projectLinkProvenance.createdAt)) {
+    throw new Error("facet_v2_authority_input_invalid");
+  }
   const ids = await facetV2ExternalLinkIds(input);
   const associationSha256 = await registrationAssociationSha256(input, ids);
   const exactLaunchPredicate = `facet_project_id = ? AND external_project_link_id = ?
@@ -298,8 +311,8 @@ export async function registerFacetV2LaunchAuthority(
       input.customerQuoteId,
       input.projectClaimSha256,
       associationSha256,
-      input.createdByUserId,
-      input.createdAt,
+      projectLinkProvenance.createdByUserId,
+      projectLinkProvenance.createdAt,
       ids.producerIdentityLinkId,
       input.destinationTenantId,
       input.sourceTenantId,
@@ -308,13 +321,14 @@ export async function registerFacetV2LaunchAuthority(
       input.producerIdentityProofSha256,
       ...launchBindings,
     ),
+    ...(options.additionalStatements ?? []),
   ]);
   const [stored, launch] = await Promise.all([
     authorityByProject(env, input.destinationTenantId, input.facetProjectId),
     launchByProject(env, input.destinationTenantId, input.facetProjectId),
   ]);
   if (
-    !stored || !sameRegistration(stored, input, ids, associationSha256) ||
+    !stored || !sameRegistration(stored, input, ids, associationSha256, projectLinkProvenance) ||
     !launch || !sameLaunchRegistration(launch, input, ids)
   ) throw new Error("facet_v2_authority_collision");
   return authorityProjection(stored);
@@ -394,7 +408,8 @@ export async function resolveFacetV2AuthorityLink(
             project.customer_party_ref, project.external_customer_identity_link_id,
             project.roof_job_id, project.customer_quote_id, project.project_claim_sha256,
             identity.issuer, identity.source_product, identity.source_environment,
-            identity.proof_sha256
+            identity.proof_sha256,
+            project.created_by_user_id, project.created_at
        FROM facet_v2_project_links AS project
        JOIN facet_v2_producer_identity_links AS identity
          ON identity.producer_identity_link_id = project.producer_identity_link_id
@@ -458,7 +473,8 @@ async function authorityByProject(
             project.customer_party_ref, project.external_customer_identity_link_id,
             project.roof_job_id, project.customer_quote_id, project.project_claim_sha256,
             identity.issuer, identity.source_product, identity.source_environment,
-            identity.proof_sha256
+            identity.proof_sha256,
+            project.created_by_user_id, project.created_at
        FROM facet_v2_project_links AS project
        JOIN facet_v2_producer_identity_links AS identity
          ON identity.producer_identity_link_id = project.producer_identity_link_id
@@ -472,6 +488,10 @@ function sameRegistration(
   input: FacetV2AuthorityRegistration,
   ids: { externalProjectLinkId: string; producerIdentityLinkId: string },
   associationSha256: string,
+  projectLinkProvenance = {
+    createdByUserId: input.createdByUserId,
+    createdAt: input.createdAt,
+  },
 ): boolean {
   return stored.external_project_link_id === ids.externalProjectLinkId &&
     stored.producer_identity_link_id === ids.producerIdentityLinkId &&
@@ -486,7 +506,9 @@ function sameRegistration(
     stored.project_claim_sha256 === input.projectClaimSha256 &&
     stored.issuer === input.issuer && stored.source_product === "facet" &&
     stored.source_environment === input.sourceEnvironment &&
-    stored.proof_sha256 === input.producerIdentityProofSha256;
+    stored.proof_sha256 === input.producerIdentityProofSha256 &&
+    stored.created_by_user_id === projectLinkProvenance.createdByUserId &&
+    stored.created_at === projectLinkProvenance.createdAt;
 }
 
 function authorityProjection(stored: StoredAuthorityLink): FacetV2AuthorityLink {

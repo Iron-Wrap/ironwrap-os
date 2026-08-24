@@ -48,6 +48,7 @@ import {
   handleFacetDesignIngest,
   reconcileFacetV2UnassociatedIntakes,
 } from "./facet-design-ingest.ts";
+import { handleFacetEstimatorReadyIngest } from "./facet-prequote.ts";
 import {
   handleQuickbooksWebhook,
   recoverDueQuickBooksProjections,
@@ -647,6 +648,9 @@ async function routeRequest(
       waitUntil.call(ctx, reconcileFacetDesignSurfaces(env));
     }
     return response;
+  }
+  if (url.pathname === "/ingest/facet-estimator-ready") {
+    return await handleFacetEstimatorReadyIngest(req, env as import("./app-types.ts").AppEnv);
   }
   const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
   if (req.method === "POST" && ingest) {

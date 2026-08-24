@@ -321,7 +321,9 @@ describe("OperatorSearchPalette", () => {
     });
     await userEvent.type(input, "iw");
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Searching"));
-    resolveSearch?.(model);
+    await waitFor(() => expect(loadOperatorSearch).toHaveBeenCalledOnce());
+    expect(resolveSearch).toBeDefined();
+    resolveSearch!(model);
     await screen.findByRole("option", { name: /IW-1001/ });
 
     vi.mocked(loadOperatorSearch).mockRejectedValue(

@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 96,
-      "latest": "0117_authority_readback_lifecycle.sql"
+      "count": 97,
+      "latest": "0118_capability_readiness.sql"
     }
   },
   "test_observation_policy": {
@@ -893,15 +893,28 @@ Implemented or represented:
 - QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;
 - Cloudflare D1/R2/Queue/Workers;
+- append-only, tenant-scoped integration manifests and provider proof facts, versioned readiness
+  profiles with explicit dependencies, and one deterministic fail-closed evaluator exposed through
+  the authenticated owner/operations Integrations page. This is repository capability only: the
+  source creates no browser CRUD or arbitrary hook surface, and no tenant is configured or proven
+  until a governed external path appends approved manifests and fresh provider readbacks. The
+  read-only evaluator validates the recorded bindings but does not yet authenticate the external
+  proof issuer/evidence reference, and `profile_digest_sha256` has no adopted canonical digest
+  contract; the UI therefore labels success as repository checks rather than provider-authenticated
+  proof;
 - temporary Frappe compatibility projection and Hermes;
 - temporary Make/Jotform/RoofRuler compatibility paths.
 
 Target gaps:
 
 - proof-backed retirement of temporary CRM/automation bridges;
-- a versioned integration manifest per provider/tenant/action covering direction, auth scopes, data
-  class, authority, idempotency/retry, readback/reconciliation, fallback, readiness, and proof TTL;
-- an Integrations surface over reviewed manifests rather than a tenant-executable plugin/hook engine;
+- governed issuance of each tenant's approved manifest/profile/proof facts, including an adopted
+  canonical profile-digest contract and authenticated issuer/evidence integrity; the read-only
+  source checkpoint intentionally does not invent an unsafe configuration command path;
+- configured reference-tenant manifests and fresh proof/readback for every required email, magic
+  link, Facet, QuickBooks sandbox or production realm, OCR, supplier, communications, Cloudflare,
+  backup/restore, and observability rail, followed by expiry, drift, disablement, rollback, and
+  second-tenant drills;
 - direct customer send with consent/delivery/suppression reconciliation;
 - versioned supplier catalog snapshots with external material identity, unit/currency, price/freight,
   effective/expiry dates, availability/lead time, source hash, and estimate/takeoff consumption

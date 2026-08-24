@@ -2183,13 +2183,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // and backfill the historical Work Package acknowledgement projection. 0115 then converges
     // public company-profile branding metadata onto that same D1 aggregate without introducing
     // a second authority. 0116 adds the acceptance-bound deposit derivation queue and recovery
-    // receipt without introducing a client-writable accounting truth. 0117 persists authority
+    // receipt without introducing a client-writable accounting truth, 0117 persists authority
     // lifecycle facts and issuer receipt bindings so downstream gates can re-evaluate current
-    // authority from D1 alone. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // authority from D1 alone, and 0118 adds the append-only integration manifest, proof, and
+    // readiness profile facts. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 96);
+    assert.equal(migrations.length, 97);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0117_authority_readback_lifecycle.sql");
+    assert.equal(migrations.at(-1), "0118_capability_readiness.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2286,10 +2287,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // adds three deposit-derivation tables, five indexes, and eight guarded event/projection
     // triggers. 0117 adds the authority-readback lifecycle columns, two current-head/supersession
     // indexes, and one insert-time lifecycle validation trigger so malformed lifecycle rows stay
-    // D1-local.
+    // D1-local. 0118 adds three capability-readiness fact tables, three idx_% head indexes, and
+    // nine validation, append-only, and retention triggers.
     assert.deepEqual(
       { ...counts },
-      { tables: 206, indexes: 313, triggers: 496 },
+      { tables: 209, indexes: 316, triggers: 505 },
     );
     const insertAuthorityReadback = (overrides: Partial<{
       readbackId: string;

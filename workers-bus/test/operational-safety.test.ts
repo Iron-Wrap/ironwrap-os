@@ -94,7 +94,7 @@ function fakeEnv(options: FakeOptions = {}) {
       };
     }
     if (sql.includes("sqlite_master")) {
-      return { table_count: 45, index_count: options.missingSchemaArtifact ? 62 : 63, trigger_count: 54 };
+      return { table_count: 48, index_count: options.missingSchemaArtifact ? 65 : 66, trigger_count: 63 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };

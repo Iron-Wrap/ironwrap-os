@@ -92,6 +92,9 @@ const TeamPage = lazy(async () => ({
 const CrewDevicesPage = lazy(async () => ({
   default: (await import("./admin/crew-devices-page")).CrewDevicesPage,
 }));
+const IntegrationReadinessPage = lazy(async () => ({
+  default: (await import("./integrations/integration-readiness-page")).IntegrationReadinessPage,
+}));
 const NewLeadPage = lazy(async () => ({
   default: (await import("./sales/new-lead-page")).NewLeadPage,
 }));
@@ -761,6 +764,12 @@ const settingsDevicesRoute = createRoute({
   component: CrewDevicesRoute,
 });
 
+const settingsIntegrationsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/integrations",
+  component: IntegrationReadinessRoute,
+});
+
 const newLeadRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/sales/new-lead",
@@ -795,6 +804,14 @@ function CrewDevicesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <CrewDevicesPage />
+    </Suspense>
+  );
+}
+
+function IntegrationReadinessRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <IntegrationReadinessPage />
     </Suspense>
   );
 }
@@ -849,6 +866,7 @@ const routeTree = rootRoute.addChildren([
     settingsCompanyRoute,
     settingsTeamRoute,
     settingsDevicesRoute,
+    settingsIntegrationsRoute,
   ]),
 ]);
 

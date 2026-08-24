@@ -34,6 +34,7 @@ export const API_PATHS = {
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,
   logout: "/api/v1/auth/logout",
   ownerRuntime: "/api/v1/owner/runtime",
+  integrationReadiness: "/api/v1/integrations/readiness?profile=reference_journey",
   ownerMeasurementIntakeExceptions: "/api/v1/owner/measurement-intake-exceptions",
   facetDesignEvidence: "/api/v1/facet-design-evidence",
   newoOperations: "/api/v1/newo/operations",

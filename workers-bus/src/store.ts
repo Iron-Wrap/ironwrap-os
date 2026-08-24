@@ -764,6 +764,38 @@ export const READINESS_COLUMN_PROBES: readonly ReadinessColumnProbe[] = [
   { table: "hermes_desktop_contexts", columns: ["context_id", "context_sha256", "staged_at"] },
   { table: "hermes_desktop_results", columns: ["result_id", "result_json", "recorded_at"] },
   { table: "hermes_desktop_events", columns: ["event_id", "detail_sha256", "created_at"] },
+  {
+    table: "capability_integration_manifests",
+    columns: [
+      "manifest_id", "tenant_id", "capability_id", "manifest_version", "provider_key",
+      "provider_realm_ref", "provider_realm_digest_sha256", "direction", "actions_json",
+      "auth_scope_names_json", "data_class", "authority_registry_ref", "action_registry_ref",
+      "idempotency_contract", "retry_contract", "readback_contract", "reconciliation_contract",
+      "enabled", "proof_ttl_seconds", "safe_fallback", "disable_contract", "rollback_contract",
+      "tenant_config_digest_sha256", "credential_binding_digest_sha256", "route_digest_sha256",
+      "artifact_digest_sha256", "source_repository", "source_commit", "source_path",
+      "owner_user_id", "approved_at",
+    ],
+  },
+  {
+    table: "capability_proof_facts",
+    columns: [
+      "proof_id", "tenant_id", "capability_id", "proof_version", "manifest_id",
+      "manifest_version", "provider_key", "provider_realm_ref", "provider_realm_digest_sha256",
+      "verified_actions_json", "verification_state", "provider_identity_verified",
+      "tenant_config_digest_sha256", "credential_binding_digest_sha256", "route_digest_sha256",
+      "artifact_digest_sha256", "readback_digest_sha256", "evidence_ref", "issuer_ref",
+      "observed_at", "expires_at", "recorded_by_user_id",
+    ],
+  },
+  {
+    table: "capability_readiness_profiles",
+    columns: [
+      "profile_id", "tenant_id", "profile_key", "profile_version", "profile_digest_sha256",
+      "capabilities_json", "dependencies_json", "source_repository", "source_commit",
+      "source_path", "owner_user_id", "approved_at",
+    ],
+  },
 ];
 
 /**
@@ -826,7 +858,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'newo_event_receipts','newo_sessions','newo_control_actions','newo_slot_reservations',
           'newo_reconciliation_runs','hermes_desktop_pairings','hermes_desktop_devices',
           'hermes_desktop_envelopes','hermes_desktop_contexts','hermes_desktop_results',
-          'hermes_desktop_events') THEN 1 ELSE 0 END), 0) AS table_count,
+          'hermes_desktop_events','capability_integration_manifests','capability_proof_facts',
+          'capability_readiness_profiles') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -867,7 +900,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_newo_sessions_missing_report','idx_newo_reconciliation_runs_at',
           'idx_hermes_desktop_pairings_user_expiry','idx_hermes_desktop_devices_binding_active',
           'idx_hermes_desktop_envelopes_device_state_expiry',
-          'idx_hermes_desktop_events_tenant_created')
+          'idx_hermes_desktop_events_tenant_created','idx_capability_manifests_tenant_head',
+          'idx_capability_proofs_tenant_head','idx_capability_profiles_tenant_head')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -911,7 +945,14 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'hermes_desktop_envelopes_state_transition','hermes_desktop_events_immutable_delete',
           'hermes_desktop_events_immutable_update','hermes_desktop_pairings_binding_immutable',
           'hermes_desktop_results_append_only_delete',
-          'hermes_desktop_results_append_only_update') THEN 1 ELSE 0 END), 0) AS trigger_count
+          'hermes_desktop_results_append_only_update',
+          'capability_integration_manifests_validate_owner',
+          'capability_integration_manifests_append_only_update',
+          'capability_integration_manifests_append_only_delete',
+          'capability_proof_facts_validate_actor','capability_proof_facts_append_only_update',
+          'capability_proof_facts_append_only_delete','capability_readiness_profiles_validate_owner',
+          'capability_readiness_profiles_append_only_update',
+          'capability_readiness_profiles_append_only_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
 
@@ -956,9 +997,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
   // The zero-row probes prove every table and column readiness, status, and replay
   // depend on, without reading a single customer row.
   for (const sql of buildReadinessColumnProbeSql()) await env.DB.prepare(sql).all();
-  return Number(artifacts?.table_count ?? 0) === 45 &&
-    Number(artifacts?.index_count ?? 0) === 63 &&
-    Number(artifacts?.trigger_count ?? 0) === 54 &&
+  return Number(artifacts?.table_count ?? 0) === 48 &&
+    Number(artifacts?.index_count ?? 0) === 66 &&
+    Number(artifacts?.trigger_count ?? 0) === 63 &&
     authoritySchemaReady;
 }
 

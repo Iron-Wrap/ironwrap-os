@@ -5,8 +5,12 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { loadSetupProgress } from "./admin-api";
-import { setupProgressQueryKey, type SetupStep } from "./admin-contracts";
+import { adminErrorMessage, loadSetupProgress } from "./admin-api";
+import {
+  setupProgressQueryKey,
+  type SetupProgressResponse,
+  type SetupStep,
+} from "./admin-contracts";
 import { SetupLink } from "./admin-shell";
 
 /**
@@ -56,11 +60,21 @@ function OwnerSetup() {
       <Card>
         <CardHeader>
           <CardTitle>Start here</CardTitle>
-          <CardDescription>
-            {progress.data
-              ? `${progress.data.progress.done} of ${progress.data.progress.total} setup areas complete.`
-              : "Do these in order the first time."}
-          </CardDescription>
+          <CardDescription>{setupSummary(progress, live)}</CardDescription>
+          {progress.isError ? (
+            // The list below still works without progress, so this reports the
+            // gap instead of replacing the page the way a required read would.
+            <p className="mt-2 text-sm leading-6 text-danger" role="status">
+              {adminErrorMessage(progress.error)}{" "}
+              <button
+                type="button"
+                className="min-h-11 font-bold underline underline-offset-4 focus-visible:outline-focus"
+                onClick={() => void progress.refetch()}
+              >
+                Try again
+              </button>
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="space-y-3">
           <SetupLink
@@ -88,6 +102,26 @@ function OwnerSetup() {
       </Card>
     </section>
   );
+}
+
+/**
+ * Never claim a company is untouched when the answer simply did not arrive.
+ * The old fallback read "Do these in order the first time" for every non-data
+ * case, so a fully configured company whose progress query failed was told it
+ * had done nothing.
+ */
+function setupSummary(
+  progress: { data?: SetupProgressResponse; isPending: boolean; isError: boolean },
+  live: boolean,
+): string {
+  if (progress.data) {
+    const { done, total } = progress.data.progress;
+    return `${done} of ${total} setup areas complete.`;
+  }
+  if (!live) return "Offline, so what is already set up cannot be checked right now.";
+  if (progress.isError) return "Progress could not be checked, so nothing below is marked done.";
+  if (progress.isPending) return "Checking what is already set up\u2026";
+  return "Do these in order the first time.";
 }
 
 function setupStatus(step: SetupStep | undefined): string | undefined {

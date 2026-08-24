@@ -74,7 +74,7 @@ function TeamContent() {
       <AdminPageHeader
         icon={<Users className="size-6 text-accent" aria-hidden="true" />}
         title="People"
-        description="Add the people who work here and choose what each of them sees. They sign in with a link sent to their email — there is no password to hand out."
+        description="Add the people who work here and choose what each of them sees. They sign in with a link sent to their email, so there is no password to hand out."
       />
       <AddTeammate onAdded={refresh} />
       <TeamList users={users.data.users} onChanged={refresh} />

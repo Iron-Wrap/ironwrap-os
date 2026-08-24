@@ -192,8 +192,11 @@
     },
     {
       "path": "docs/WORKER-SURFACE-AND-LEAD-PATH.md",
-      "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "class": "component",
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "frappe-apps/ironwrap_roofing/README.md",

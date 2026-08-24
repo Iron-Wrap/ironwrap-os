@@ -1,172 +1,89 @@
-# Worker surface and the path of a lead
+# Worker surface and the path of an inbound lead
 
-**What this page is.** The Worker's external HTTP surface — every route, what authenticates it, and
-what it answers — followed by the path a lead takes through the system, from the form that submits
-it to the record that results.
+Status: source-level component map
+Owner: IronWrap OS product owner
+Last verified: 2026-08-24
+Review trigger: Worker route, guard, lead authority, or outbound-effect change
 
-**What this page is not.** It is not the contract. The contract is the code: `workers-bus/src/index.ts`,
-`src/app-api.ts` and `src/public-estimator.ts`. This page is a map drawn from that code on a stated
-date, and a map goes stale — regenerate it against the deployed revision rather than trusting a table
-when the two disagree.
+## Truth boundary
 
-**Provenance.** Both sections were written in the `iron-wrap-infra` repository between 2026-08-13 and
-2026-08-17 and moved here on 2026-08-24. They were in the wrong place: an infrastructure record has no
-CI that can notice when an application route changes, so they drifted unseen. Here they sit beside the
-code they describe, under the documentation contract that checks them.
+This page maps stable route families and the owned generic lead-ingest path. It is intentionally not
+an exhaustive endpoint inventory, an environment URL registry, or a runtime-status report. Exact
+dispatch and method handling live in `workers-bus/src/index.ts`, `workers-bus/src/app-api.ts`, and
+their delegated handlers.
 
-**Authority:** [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](AUTHORITY-AND-EVIDENCE-CONTRACT.md) governs what
-a documented capability may claim. A route appearing below is evidence that it exists in source — not
-that it is deployed, reachable, or proven.
+A route in source is only **Implemented**. Deployment, reachability, provider configuration, and
+successful delivery require fresh release and runtime evidence. Use
+[`CAPABILITY-MATRIX.md`](CAPABILITY-MATRIX.md) for current implementation gaps and
+[`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](AUTHORITY-AND-EVIDENCE-CONTRACT.md) for the proof boundary.
+The repository does not establish a canonical public Worker base URL.
 
----
+## HTTP boundary
 
-## The Worker REST API
+`routeRequest` in `workers-bus/src/index.ts` is the top-level dispatcher. The table groups its
+stable trust boundaries; each delegated handler still owns its exact methods, body limits,
+validation, rate limits, idempotency, and authorization checks.
 
-Source: `workers-bus/src/index.ts`, `src/app-api.ts`, `src/public-estimator.ts`.
-Base: `https://ironwrap-bus.yellow-rain-7498.workers.dev`.
-
-Global constraints: bodies capped by `MAX_BODY_BYTES` (`413 payload_too_large`), constant-time token
-comparison, `401 unauthorized` on any failed credential.
-
-### Open, no authentication
-
-| Method | Path | Parameters | Response |
-| --- | --- | --- | --- |
-| `GET`/`HEAD` | `/health` | — | `200 {"ok":true}` — isolate liveness only |
-| `GET`/`HEAD` | `/ready` | `?scope=core` — owned intake spine only | `200`/`503 {"ok":bool}`; with `Bearer <ADMIN_TOKEN>` returns the full `checks` map |
-| `GET` | `/estimate` | `?brand=ironwrap\|iroof` | public estimator PWA route |
-| `GET`/`POST` | `/public/instant-estimate*` | `brand`, form fields, Turnstile token | estimate; must carry no contact data |
-
-### Intake — `Authorization: Bearer <INGEST_TOKEN>`
-
-| Method | Path | Body and headers |
+| Route family | Admission boundary | Source owner |
 | --- | --- | --- |
-| `POST` | `/ingest/website` | `first_name`, `last_name`, `phone`, `email`, `service`, `message`, `brand`, attribution `source_url`, `page_type`, `utm_*`. JSON or form-encoded. Returns `{envelope_id, status, duplicate, queue}` |
-| `POST` | `/ingest/photo` | jobsite photo payload |
-| `POST` | `/ingest/measurement` | measurement report; accepts `Idempotency-Key` |
-| `POST` | `/ingest/estimate` | configurator handoff; accepts `Idempotency-Key` |
-| `POST` | `/ingest/<source>` | generic route, lowercase letters |
-| `POST` | `/ingest/facet-design` | **does not accept `INGEST_TOKEN`** — separate HMAC authority |
+| `/health` and `/ready` | Public liveness and reduced readiness; a valid admin bearer reveals the detailed readiness map | `workers-bus/src/index.ts` |
+| `/public/*` and `/public/company-logo` | Public browser surface; estimator operations apply their own origin, Turnstile, and rate controls | `workers-bus/src/public-estimator.ts`, `workers-bus/src/index.ts` |
+| `/api/v1/customer-portal/resolve`, `/acceptance/challenge`, `/acceptance/confirm`, and `/decision` | Opaque customer capability plus route-specific challenge, origin, expiry, and idempotency controls; invalid capabilities fail closed | customer-portal handlers called by `workers-bus/src/index.ts` |
+| `/api/v1/auth/magic-link/request`, `/magic-link/consume`, `/device-pairing/consume`, and `/invites/accept` | Route-specific signed token, invite, pairing, and throttle controls; these entry routes do not require an existing app session | `workers-bus/src/app-api.ts` |
+| Remaining application routes under `/api/v1/*` | Signed app session plus the route's role, action, CSRF, idempotency, and device requirements | `workers-bus/src/app-api.ts` and delegated domain handlers |
+| `/ingest/photo`, `/ingest/measurement`, `/ingest/estimate`, `/ingest/<source>` | Dedicated ingest bearer, bounded body, and handler-specific validation; measurement and estimate accept idempotency keys | `workers-bus/src/index.ts` |
+| `/ingest/facet-design` | Facet v2 rotating HMAC route authority; never the broad ingest bearer | `workers-bus/src/facet-design-ingest.ts` |
+| `/webhook/quickbooks` | Intuit webhook signature validation; not an IronWrap bearer token | `workers-bus/src/quickbooks.ts` |
+| `/webhook/newo*` | Newo handler-specific webhook identity and configuration | `workers-bus/src/newo.ts` |
+| `/oauth/quickbooks/callback` | QuickBooks OAuth callback state and provider-response validation | QuickBooks OAuth handler called by `workers-bus/src/index.ts` |
+| `/internal/v1/authority-records/*` | Timestamped request-body HMAC with a configured executor key, followed by actor/tenant/command binding | `workers-bus/src/authority-record-executor-api.ts` |
+| `/admin/effects/*` | Effect-runtime bearer; claim, retry, reconcile, and settle remain separate from general administration | effect-runtime handlers called by `workers-bus/src/index.ts` |
+| Remaining `/admin/*` | Admin bearer plus route-specific method and input validation | `workers-bus/src/index.ts` and delegated admin handlers |
 
-### Webhooks
+Application routes currently cover authentication and company administration; lead and operating
+intake; search and role-specific work queues; jobs, work objects, assignments, work packages,
+safety, fleet, inventory, and pipelines; Facet evidence; commercial approvals and proposals;
+customer links; accounting and QuickBooks; Postiz; production; and service cases. This list describes
+source domains, not environment readiness. Read `handleAppApi` for the exact current dispatch.
 
-| Method | Path | Authentication |
-| --- | --- | --- |
-| `POST` | `/webhook/quickbooks` | `QB_WEBHOOK_TOKEN`, checked against `QB_EXPECTED_REALM_ID` |
-| — | `/webhook/newo`, `/webhook/newo/*` | Newo webhook ids vs `NEWO_PROTECTED_WEBHOOK_IDS` |
+## Owned generic lead-ingest path
 
-### Administration — `Authorization: Bearer <ADMIN_TOKEN>`
-
-| Method | Path | Parameters |
-| --- | --- | --- |
-| `GET` | `/admin/status` | `?audit_limit=<n>` |
-| `GET` | `/admin/envelopes` | `?limit=<n>` |
-| `GET` | `/admin/envelope/<envelope_id>` | — |
-| `GET` | `/admin/dead-letter` | `?limit=<n>` |
-| `GET` | `/admin/measurements/exceptions` | `?limit=<n>` |
-| `GET` | `/admin/measurements/deltas` | `?limit=<n>`, `?roof_job_id=<id>` |
-| `GET` | `/admin/dev-outbox` | local mode only |
-| `POST` | `/admin/reconcile` · `/admin/source-count` · `/admin/replay` · `/admin/app-users/bootstrap` | — |
-| — | `/admin/newo`, `/admin/newo/*` | voice-rail operations |
-
-### Application — session issued by magic link
-
-Everything under `/api/v1/`. Authentication is a session, not a bearer token. Rate limiting lives in
-`app_auth_throttles` and `app_action_throttles`.
-
-| Group | Paths |
-| --- | --- |
-| Sign-in | `/auth/magic-link/request`, `/auth/magic-link/consume`, `/auth/logout`, `/auth/device-pairing/consume`, `/device-pairings` |
-| Field | `/field/bootstrap`, `/field-users` |
-| Approvals | `/approvals`, `/approvals/lead-triage`, `/quote-revision-approvals`, `/production-schedule-approvals` |
-| Work | `/production`, `/sales`, `/estimator/proposal-doc` |
-| Owner | `/owner/now`, `/owner/runtime`, `/owner/measurement-intake-exceptions` |
-| Facet | `/facet-design-evidence/associations`, `/facet-design-evidence/association-ready` |
-| Customer portal | `/customer-portal/resolve`, `/customer-portal/links`, `/customer-portal/acceptance/challenge`, `/customer-portal/acceptance/confirm` |
-| App admin | `/admin/app-users` |
-
-The portal is fail-closed: an invalid request always returns the same "not found", and the token is
-accepted only in a `POST` body, never from a path or query string.
-
----
-
-## The path of a lead
-
-Read it in stages: who knocks → how the Worker admits them and with what credential → what happens
-to the data → where it goes. A dashed edge means the path exists in code but is disabled or unwired.
+The flow below is specifically `ingestLead` in `workers-bus/src/lead-intake.ts`. Bearer-token
+generic intake and authenticated office lead creation have different admission contracts, then
+converge into this same envelope, deduplication, audit, and owned-store path. Public estimator,
+Facet, measurement, photo, and provider webhook flows have their own handlers; do not infer that
+every inbound record traverses this function.
 
 ```mermaid
 flowchart LR
-  subgraph S1["1 · Who knocks"]
-    SITE["both brand websites<br/>Plesk · 148.163.97.39"]
-    BROWSER["customer browser<br/>public estimator"]
-    OFFICE["office and field<br/>PWA"]
-    FCT["Facet<br/>signed events"]
-    VOICE["Newo.ai · QuickBooks<br/>webhooks"]
-  end
-
-  subgraph S2["2 · Entry points and their guards"]
-    ING["/ingest/*<br/>Bearer INGEST_TOKEN"]
-    PUBR["/public/*<br/>Turnstile + rate limit"]
-    APIR["/api/v1/*<br/>magic-link session"]
-    FCTR["/ingest/facet-design<br/>separate HMAC"]
-    WH["/webhook/*<br/>webhook token"]
-    ADM["/admin/*<br/>Bearer ADMIN_TOKEN"]
-  end
-
-  subgraph S3["3 · What happens to the lead"]
-    NORM["phone and email normalisation<br/>72-hour dedup window"]
-    RAW[("R2 ironwrap-bus-raw")]
-    DB[("D1 ironwrap-bus")]
-    QQ(["Queue jn-push → jn-dlq"])
-  end
-
-  subgraph S4["4 · Where it goes"]
-    JN["JobNimbus · enabled"]
-    GW["Google Workspace"]
-    FR["Frappe core · no machine"]
-    QB["QuickBooks · realm empty"]
-    NW["Newo.ai · disabled"]
-  end
-
-  subgraph S5["5 · Background"]
-    C5["cron */5 · re-sweep stuck >15 min"]
-    C14["cron 0 14 · reconciliation + watchdog"]
-  end
-
-  SITE -->|"not wired"| ING
-  BROWSER --> PUBR
-  OFFICE --> APIR
-  FCT --> FCTR
-  VOICE --> WH
-  ING --> NORM
-  PUBR --> NORM
-  FCTR --> NORM
-  WH --> DB
-  APIR --> DB
-  ADM --> DB
-  NORM --> RAW
-  NORM --> DB
-  NORM --> QQ
-  QQ --> JN
-  DB --> GW
-  DB -.-> FR
-  DB -.-> QB
-  DB -.-> NW
-  C5 --> QQ
-  C14 --> GW
-
-  linkStyle 0 stroke-dasharray:5 4
-  classDef off fill:#5a4a1f,stroke:#da3,color:#fff
-  classDef dead fill:#7a1f1f,stroke:#d33,color:#fff
-  class NW,QB off
-  class FR dead
+  S[Allowed ingest source] --> G[Ingest bearer and bounded body]
+  G --> R[(R2 raw payload first)]
+  R --> N[Normalize contact and validate]
+  N --> D{Contact dedup claim}
+  D -->|existing| A[Return canonical envelope id]
+  D -->|new| O[(D1 owned envelope and audit)]
+  O --> K[Instant acknowledgement effect]
+  O --> Q[JobNimbus projection queue when routable]
 ```
 
-Three things this diagram exists to explain:
+The ordering is deliberate:
 
-1. **Only one outbound rail is enabled — JobNimbus.** Frappe, QuickBooks and Newo exist in code but
-   are switched off or unconfigured.
-2. **Five entry points, each with its own credential.** A leaked `INGEST_TOKEN` opens neither the
-   admin surface, nor the application, nor the Facet channel.
-3. **The funnel is severed at the start** — hence six envelopes in total.
+1. The raw payload is stored in R2 before downstream processing, so later failures do not erase the
+   submitted evidence.
+2. Normalized phone/email identity is deduplicated inside the configured window. A duplicate returns
+   the already-owned envelope identity instead of creating a second operating lead.
+3. The new canonical envelope and audit record are written to D1 before acknowledgement or provider
+   projection is attempted.
+4. Acknowledgement and JobNimbus delivery are downstream effects. Queueing an effect, or a status
+   such as `pending_jn_push`, is not provider readback and does not prove external delivery.
+
+## Outbound and runtime truth
+
+The source tree contains bounded integrations for JobNimbus, QuickBooks, Newo, Postiz, Frappe
+projection, email/SMS, and other effects. Their existence does not say which rails are configured,
+enabled, reachable, or reconciled in any environment. Those claims may be made only from a fresh
+named-environment readiness probe and release/effect receipts under the authority contract.
+
+When this map and code disagree, code controls behavior and this component document must change in
+the same pull request. When code and live provider state disagree, fail closed and use the release
+and reconciliation evidence; never edit this file into a dated deployment snapshot.

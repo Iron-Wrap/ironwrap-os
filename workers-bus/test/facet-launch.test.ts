@@ -26,6 +26,14 @@ import {
 import { runExternalEffect } from "../src/effect-runtime.ts";
 import { issueFacetLaunch } from "../src/facet-launch.ts";
 import {
+  issueFacetPrequoteLaunch,
+  promoteFacetEstimatorReady,
+} from "../src/facet-prequote.ts";
+import {
+  type FacetV2CustomerDecisionEvent,
+} from "../src/facet-design-v2-protocol.ts";
+import { resolveFacetV2AuthorityLink } from "../src/facet-v2-authority.ts";
+import {
   permissionsForRole,
   type AppEnv,
   type AppRole,
@@ -53,6 +61,7 @@ const TERMS = {
 const KEY_BYTES = Buffer.from("synthetic-facet-launch-key-32bytes!", "utf8");
 const KEY = KEY_BYTES.toString("base64url");
 const NOW = new Date("2027-01-15T08:00:00.000Z");
+const PROMOTED_AT = new Date("2027-01-15T09:00:00.000Z");
 const LAUNCH_FIXTURE = JSON.parse(
   readFileSync(
     new URL("./fixtures/facet-v2-launch-roundtrip.json", import.meta.url),
@@ -645,6 +654,621 @@ test("owner BFF launch route requires CSRF, exact empty body, and stable idempot
     assert.equal(network.count(), 0);
   } finally {
     network.restore();
+    db.close();
+  }
+});
+
+test("prequote BFF routes keep owner/CSRF/body/idempotency boundaries explicit", async () => {
+  const db = new SqliteD1();
+  const nativeEnv = env(db);
+  const launchPath = `https://app.example.invalid/api/v1/estimator/jobs/${JOB}/facet-prequote-launches`;
+  const promotionPath = `https://app.example.invalid/api/v1/estimator/jobs/${JOB}/facet-prequote-promotions`;
+  const evidencePath = `https://app.example.invalid/api/v1/estimator/jobs/${JOB}/evidence-imports`;
+  const request = (url: string, body: unknown, headers: Record<string, string> = {}) =>
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal(
+      (
+        await handleAuthenticatedRoute(
+          request(launchPath, {}, {
+            "x-csrf-token": "csrf",
+            "idempotency-key": "facet-prequote:api-0001",
+          }),
+          nativeEnv,
+          auth("ops"),
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await handleAuthenticatedRoute(
+          request(launchPath, {}, { "idempotency-key": "facet-prequote:api-0001" }),
+          nativeEnv,
+          auth("owner"),
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await handleAuthenticatedRoute(
+          request(launchPath, { unexpected: true }, {
+            "x-csrf-token": "csrf",
+            "idempotency-key": "facet-prequote:api-0001",
+          }),
+          nativeEnv,
+          auth("owner"),
+        )
+      ).status,
+      400,
+    );
+    const created = await handleAuthenticatedRoute(
+      request(launchPath, {}, {
+        "x-csrf-token": "csrf",
+        "idempotency-key": "facet-prequote:api-0001",
+      }),
+      nativeEnv,
+      auth("owner"),
+    );
+    assert.equal(created.status, 201);
+    const createdPayload = await created.json() as Record<string, unknown>;
+    assert.equal(
+      (createdPayload.launch as Record<string, unknown>).commercial_quote_revision_id,
+      null,
+    );
+    const replay = await handleAuthenticatedRoute(
+      request(launchPath, {}, {
+        "x-csrf-token": "csrf",
+        "idempotency-key": "facet-prequote:api-0001",
+      }),
+      nativeEnv,
+      auth("owner"),
+    );
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as Record<string, unknown>).replayed, true);
+
+    assert.equal(
+      (
+        await handleAuthenticatedRoute(
+          request(promotionPath, {}, {
+            "x-csrf-token": "csrf",
+            "idempotency-key": "facet-promotion:api-0001",
+          }),
+          nativeEnv,
+          auth("owner"),
+        )
+      ).status,
+      400,
+    );
+    const rejectedPromotion = await handleAuthenticatedRoute(
+      request(promotionPath, {
+        estimator_ready_event_id: "event-0000001",
+        estimator_revision_id: "estimator:revision-0000001",
+        commercial_quote_revision_id: "quote-revision-0001",
+      }, {
+        "x-csrf-token": "csrf",
+        "idempotency-key": "facet-promotion:api-0002",
+      }),
+      nativeEnv,
+      auth("owner"),
+    );
+    assert.equal(rejectedPromotion.status, 409);
+
+    const conflictingImport = await handleAuthenticatedRoute(
+      request(evidencePath, {
+        measurement_receipt_id: "measurement-receipt-0001",
+        estimator_ready_event_id: "event-0000001",
+        commercial_quote_revision_id: "quote-revision-0001",
+        revision_number: 1,
+      }, {
+        "x-csrf-token": "csrf",
+        "idempotency-key": "estimator-import:both-sources-0001",
+      }),
+      nativeEnv,
+      auth("owner"),
+    );
+    assert.equal(conflictingImport.status, 400);
+  } finally {
+    db.close();
+  }
+});
+
+test("prequote Facet launch is quote-free, owner-only, and replay-safe", async () => {
+  const db = new SqliteD1();
+  const nativeEnv = env(db);
+  const input = {
+    tenantId: TENANT,
+    jobName: JOB,
+    actorUserId: OWNER,
+    actorRole: "owner" as const,
+    idempotencyKey: "facet-prequote:test-0001",
+    now: NOW,
+    projectId: "33333333-3333-4333-8333-333333333333",
+  };
+  try {
+    const created = await issueFacetPrequoteLaunch(nativeEnv, input);
+    assert.equal(created.kind, "created");
+    if (created.kind !== "created") return;
+    assert.equal(created.launch.commercial_quote_revision_id, null);
+    assert.match(created.launch.launch_url, /#iwlaunch=ey/);
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_project_links").get() as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_project_launches").get() as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_prequote_project_links").get() as { count: number }).count,
+      1,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_prequote_project_launches").get() as { count: number }).count,
+      1,
+    );
+
+    const replay = await issueFacetPrequoteLaunch(nativeEnv, input);
+    assert.equal(replay.kind, "replayed");
+    if (replay.kind !== "replayed") return;
+    assert.equal(replay.launch.launch_url, created.launch.launch_url);
+    assert.deepEqual(
+      await issueFacetPrequoteLaunch(nativeEnv, {
+        ...input,
+        projectId: "99999999-9999-4999-8999-999999999999",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_prequote_idempotency_conflict",
+        status: 409,
+      },
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_prequote_project_links").get() as { count: number }).count,
+      1,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_prequote_project_launches").get() as { count: number }).count,
+      1,
+    );
+    assert.deepEqual(
+      await issueFacetPrequoteLaunch(nativeEnv, {
+        ...input,
+        actorUserId: "different-owner",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_prequote_idempotency_conflict",
+        status: 409,
+      },
+    );
+    assert.deepEqual(
+      await issueFacetPrequoteLaunch(nativeEnv, {
+        ...input,
+        actorRole: "ops",
+        idempotencyKey: "facet-prequote:unauthorized",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_prequote_owner_required",
+        status: 403,
+      },
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("prequote promotion is exact while customer-approved authority stays quote-bound", async () => {
+  const db = new SqliteD1();
+  const nativeEnv = env(db);
+  try {
+    const launch = await issueFacetPrequoteLaunch(nativeEnv, {
+      tenantId: TENANT,
+      jobName: JOB,
+      actorUserId: OWNER,
+      actorRole: "owner",
+      idempotencyKey: "facet-prequote:promotion-launch-0001",
+      now: NOW,
+      projectId: "44444444-4444-4444-8444-444444444444",
+    });
+    assert.equal(launch.kind, "created");
+    await seedNativeAcceptedChain(nativeEnv, 3);
+    const link = db.raw.prepare(
+      `SELECT link.external_project_link_id, link.producer_identity_link_id,
+              link.facet_project_id, identity.proof_sha256
+         FROM facet_v2_prequote_project_links AS link
+         JOIN facet_v2_producer_identity_links AS identity
+           ON identity.producer_identity_link_id = link.producer_identity_link_id
+        LIMIT 1`,
+    ).get() as Record<string, string>;
+    const readyEventId = "55555555-5555-4555-8555-555555555555";
+    db.raw.prepare(
+      `INSERT INTO facet_v2_estimator_ready_events
+       (event_id, event_type, schema_version, event_body_sha256, issuer, source_product,
+        source_environment, source_tenant_id, destination_tenant_id, brand_id,
+        facet_project_id, external_project_link_id, producer_identity_link_id,
+        roof_job_id, customer_id, actor_identity_ref, actor_type, oidc_issuer,
+        oidc_subject_sha256, previous_event_id, design_revision_id, design_revision_sha256,
+        frozen_evidence_sha256, raw_key, raw_content_length, occurred_at, received_at,
+        result, detail_code)
+       VALUES (?, 'facet.design.estimator_ready.v1', 1, ?, 'facet', 'facet', 'production', ?,
+               'ironwrap', 'ironwrap', ?, ?, ?, ?, ?, ?, 'owner',
+               'https://accounts.google.com', ?, NULL, ?, ?, ?, ?, 2, ?, ?, 'accepted',
+               'exact_prequote_project_association_verified')`,
+    ).run(
+      readyEventId,
+      "a".repeat(64),
+      SOURCE,
+      link.facet_project_id,
+      link.external_project_link_id,
+      link.producer_identity_link_id,
+      JOB,
+      CUSTOMER,
+      `facet-actor-oidc-v1:${sha256("https://accounts.google.com\n" + "b".repeat(64))}`,
+      "b".repeat(64),
+      "facet-json-v1:" + "c".repeat(64),
+      "c".repeat(64),
+      "d".repeat(64),
+      `facet-estimator-ready/v1/raw/${"a".repeat(64)}.json`,
+      "2027-01-15T08:00:00.000Z",
+      "2027-01-15T08:01:00.000Z",
+    );
+    const receiptId = `measurement_${"e".repeat(64)}`;
+    const measurementId = `measurement:${"f".repeat(64)}`;
+    db.raw.prepare(
+      `INSERT INTO measurement_intake_receipts
+       (receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id,
+        provider, job_number, raw_key, content_type, status, attempts, created_at,
+        updated_at, completed_at)
+       VALUES (?, ?, ?, 'payload_hash', ?, 'AppliCad', NULL, ?, 'application/json',
+               'matched', 1, ?, ?, ?)`,
+    ).run(
+      receiptId,
+      "1".repeat(64),
+      "2".repeat(64),
+      measurementId,
+      `raw/measurements/${"2".repeat(64)}.json`,
+      NOW.toISOString(),
+      NOW.toISOString(),
+      NOW.toISOString(),
+    );
+    const estimatorRevisionId = "estimator:prequote-promotion-revision-0001";
+    db.raw.prepare(
+      `INSERT INTO estimator_evidence_revisions
+       (estimator_revision_id, tenant_id, roof_job_id, operating_job_version,
+        revision_number, supersedes_estimator_revision_id, measurement_receipt_id,
+        measurement_raw_key, measurement_raw_sha256, facet_event_id, facet_raw_key,
+        facet_raw_sha256, facet_design_revision_id, facet_design_revision_sha256,
+        facet_frozen_evidence_sha256, commercial_quote_revision_id, payload_json,
+        payload_sha256, evidence_refs_json, evidence_digest, command_fingerprint,
+        idempotency_key_hash, correction_reason, imported_by_user_id, created_at)
+       VALUES (?, ?, ?, 1, 1, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+               '{}', ?, '[]', ?, ?, ?, NULL, ?, ?)`,
+    ).run(
+      estimatorRevisionId,
+      TENANT,
+      JOB,
+      receiptId,
+      `raw/measurements/${"2".repeat(64)}.json`,
+      "2".repeat(64),
+      "3".repeat(64),
+      "4".repeat(64),
+      "5".repeat(64),
+      "d".repeat(64),
+      OWNER,
+      NOW.toISOString(),
+    );
+    db.raw.prepare(
+      `INSERT INTO estimator_evidence_facet_ready_anchors
+       (estimator_revision_id, tenant_id, roof_job_id, estimator_ready_event_id,
+        estimator_ready_raw_key, estimator_ready_raw_sha256, estimator_ready_design_revision_id,
+        estimator_ready_design_revision_sha256, estimator_ready_frozen_evidence_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      estimatorRevisionId,
+      TENANT,
+      JOB,
+      readyEventId,
+      `facet-estimator-ready/v1/raw/${"a".repeat(64)}.json`,
+      "a".repeat(64),
+      "facet-json-v1:" + "c".repeat(64),
+      "c".repeat(64),
+      "d".repeat(64),
+      NOW.toISOString(),
+    );
+    const beforeMoney = (db.raw.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM accounting_intents) AS accounting_intents,
+         (SELECT COUNT(*) FROM accounting_intent_events) AS accounting_events,
+         (SELECT COUNT(*) FROM external_effects) AS external_effects`,
+    ).get() as Record<string, number>);
+    const common = {
+      tenantId: TENANT,
+      roofJobId: JOB,
+      estimatorReadyEventId: readyEventId,
+      estimatorRevisionId,
+      commercialQuoteRevisionId: quoteRevision(3),
+      actorUserId: OWNER,
+      actorRole: "owner" as const,
+      now: PROMOTED_AT,
+    };
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        estimatorRevisionId: "estimator:wrong-revision-0001",
+        idempotencyKey: "facet-promotion:wrong-revision-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_promotion_estimator_revision_mismatch",
+        status: 409,
+      },
+    );
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        commercialQuoteRevisionId: quoteRevision(2),
+        idempotencyKey: "facet-promotion:wrong-quote-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_promotion_quote_head_mismatch",
+        status: 409,
+      },
+    );
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        now: new Date("2027-01-15T07:59:00.000Z"),
+        idempotencyKey: "facet-promotion:early-time-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_promotion_time_not_monotonic",
+        status: 409,
+      },
+    );
+    let failNextPromotionBatch = true;
+    const realBatch = db.batch.bind(db);
+    db.batch = async (statements: SqliteStatement[]) => {
+      if (failNextPromotionBatch && statements.length === 4) {
+        failNextPromotionBatch = false;
+        throw new Error("synthetic_promotion_batch_failure");
+      }
+      return await realBatch(statements);
+    };
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        idempotencyKey: "facet-promotion:success-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_promotion_commercial_authority_collision",
+        status: 409,
+      },
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_project_links").get() as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_project_launches").get() as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_estimator_ready_promotions").get() as { count: number }).count,
+      0,
+    );
+    const promoted = await promoteFacetEstimatorReady(nativeEnv, {
+      ...common,
+      idempotencyKey: "facet-promotion:success-0001",
+    });
+    assert.equal(promoted.kind, "created");
+    if (promoted.kind !== "created") return;
+    assert.equal(promoted.promotion.estimator_revision_id, estimatorRevisionId);
+    assert.equal(promoted.promotion.promoted_at, PROMOTED_AT.toISOString());
+    const provenance = db.raw.prepare(
+      `SELECT launch.created_at AS launch_created_at, promotion.promoted_at,
+              link.created_by_user_id AS link_created_by_user_id,
+              link.created_at AS link_created_at
+         FROM facet_v2_project_launches AS launch
+         JOIN facet_v2_project_links AS link
+           ON link.external_project_link_id = launch.external_project_link_id
+         JOIN facet_v2_estimator_ready_promotions AS promotion
+           ON promotion.external_project_link_id = launch.external_project_link_id
+         JOIN facet_v2_estimator_ready_events AS event
+           ON event.event_id = promotion.event_id
+          AND event.facet_project_id = launch.facet_project_id
+        LIMIT 1`,
+    ).get() as {
+      launch_created_at: string;
+      promoted_at: string;
+      link_created_by_user_id: string;
+      link_created_at: string;
+    };
+    assert.equal(provenance.launch_created_at, NOW.toISOString());
+    assert.equal(provenance.promoted_at, PROMOTED_AT.toISOString());
+    assert.equal(provenance.link_created_by_user_id, OWNER);
+    assert.equal(provenance.link_created_at, PROMOTED_AT.toISOString());
+    const replay = await promoteFacetEstimatorReady(nativeEnv, {
+      ...common,
+      idempotencyKey: "facet-promotion:success-0001",
+    });
+    assert.equal(replay.kind, "replayed");
+
+    const quoteBoundLink = db.raw.prepare(
+      `SELECT external_project_link_id, producer_identity_link_id, facet_project_id,
+              customer_party_ref, external_customer_identity_link_id
+         FROM facet_v2_project_links LIMIT 1`,
+    ).get() as Record<string, string>;
+    const promotedDesignSha256 = "c".repeat(64);
+    const customerApprovedEvent = {
+      brand_id: TENANT,
+      design_revision: {
+        id: `facet-json-v1:${promotedDesignSha256}`,
+        sha256: promotedDesignSha256,
+      },
+      destination: { tenant_id: TENANT },
+      facet_project_id: quoteBoundLink.facet_project_id,
+      project_link: {
+        external_project_link_id: quoteBoundLink.external_project_link_id,
+        producer_identity_link_id: quoteBoundLink.producer_identity_link_id,
+      },
+      source: {
+        environment: "production",
+        issuer: "facet",
+        product: "facet",
+        tenant_id: SOURCE,
+      },
+      approval: {
+        actor: {
+          customer_party_ref: quoteBoundLink.customer_party_ref,
+          external_identity_link_id: quoteBoundLink.external_customer_identity_link_id,
+          identity_assurance: "oidc",
+          oidc_issuer: "https://accounts.google.com",
+          oidc_subject_sha256: "b".repeat(64),
+        },
+      },
+    } as unknown as FacetV2CustomerDecisionEvent;
+    // Customer-approved v2 authority is resolved from its existing quote-bound link.
+    // A prequote promotion must not make that resolution depend on estimator-ready design
+    // revision or head state.
+    assert.ok(await resolveFacetV2AuthorityLink(nativeEnv, customerApprovedEvent));
+    assert.ok(
+      await resolveFacetV2AuthorityLink(nativeEnv, {
+        ...customerApprovedEvent,
+        design_revision: {
+          id: `facet-json-v1:${"e".repeat(64)}`,
+          sha256: "e".repeat(64),
+        },
+      }),
+    );
+
+    const nextReadyEventId = "66666666-6666-4666-8666-666666666666";
+    db.raw.prepare(
+      `INSERT INTO facet_v2_estimator_ready_events
+       (event_id, event_type, schema_version, event_body_sha256, issuer, source_product,
+        source_environment, source_tenant_id, destination_tenant_id, brand_id,
+        facet_project_id, external_project_link_id, producer_identity_link_id,
+        roof_job_id, customer_id, actor_identity_ref, actor_type, oidc_issuer,
+        oidc_subject_sha256, previous_event_id, design_revision_id, design_revision_sha256,
+        frozen_evidence_sha256, raw_key, raw_content_length, occurred_at, received_at,
+        result, detail_code)
+       VALUES (?, 'facet.design.estimator_ready.v1', 1, ?, 'facet', 'facet', 'production', ?,
+               'ironwrap', 'ironwrap', ?, ?, ?, ?, ?, ?, 'owner',
+               'https://accounts.google.com', ?, ?, ?, ?, ?, ?, 2, ?, ?, 'accepted',
+               'exact_prequote_project_association_verified')`,
+    ).run(
+      nextReadyEventId,
+      "b".repeat(64),
+      SOURCE,
+      link.facet_project_id,
+      link.external_project_link_id,
+      link.producer_identity_link_id,
+      JOB,
+      CUSTOMER,
+      `facet-actor-oidc-v1:${sha256("https://accounts.google.com\n" + "b".repeat(64))}`,
+      "b".repeat(64),
+      readyEventId,
+      "facet-json-v1:" + "c".repeat(64),
+      "c".repeat(64),
+      "d".repeat(64),
+      `facet-estimator-ready/v1/raw/${"b".repeat(64)}.json`,
+      "2027-01-15T08:02:00.000Z",
+      "2027-01-15T08:03:00.000Z",
+    );
+    assert.ok(await resolveFacetV2AuthorityLink(nativeEnv, customerApprovedEvent));
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        idempotencyKey: "facet-promotion:stale-ready-event-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_estimator_ready_head_mismatch",
+        status: 409,
+      },
+    );
+    const ambiguousRevisionA = "estimator:prequote-promotion-revision-0002-a";
+    const ambiguousRevisionB = "estimator:prequote-promotion-revision-0003-b";
+    const insertCompetingRevision = db.raw.prepare(
+      `INSERT INTO estimator_evidence_revisions
+       (estimator_revision_id, tenant_id, roof_job_id, operating_job_version,
+        revision_number, supersedes_estimator_revision_id, measurement_receipt_id,
+        measurement_raw_key, measurement_raw_sha256, facet_event_id, facet_raw_key,
+        facet_raw_sha256, facet_design_revision_id, facet_design_revision_sha256,
+        facet_frozen_evidence_sha256, commercial_quote_revision_id, payload_json,
+        payload_sha256, evidence_refs_json, evidence_digest, command_fingerprint,
+        idempotency_key_hash, correction_reason, imported_by_user_id, created_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+               '{}', ?, '[]', ?, ?, ?, 'ambiguous-head-test', ?, ?)`,
+    );
+    insertCompetingRevision.run(
+      ambiguousRevisionA,
+      TENANT,
+      JOB,
+      2,
+      estimatorRevisionId,
+      receiptId,
+      `raw/measurements/${"2".repeat(64)}.json`,
+      "2".repeat(64),
+      "7".repeat(64),
+      "8".repeat(64),
+      "9".repeat(64),
+      "6".repeat(64),
+      OWNER,
+      NOW.toISOString(),
+    );
+    insertCompetingRevision.run(
+      ambiguousRevisionB,
+      TENANT,
+      JOB,
+      3,
+      estimatorRevisionId,
+      receiptId,
+      `raw/measurements/${"2".repeat(64)}.json`,
+      "2".repeat(64),
+      "a".repeat(64),
+      "b".repeat(64),
+      "c".repeat(64),
+      "e".repeat(64),
+      OWNER,
+      NOW.toISOString(),
+    );
+    assert.deepEqual(
+      await promoteFacetEstimatorReady(nativeEnv, {
+        ...common,
+        estimatorReadyEventId: nextReadyEventId,
+        estimatorRevisionId: ambiguousRevisionA,
+        idempotencyKey: "facet-promotion:ambiguous-estimator-head-0001",
+      }),
+      {
+        kind: "rejected",
+        code: "facet_promotion_estimator_head_ambiguous",
+        status: 409,
+      },
+    );
+    assert.equal(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_estimator_ready_promotions").get() as { count: number }).count,
+      1,
+    );
+    assert.deepEqual(
+      db.raw.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM accounting_intents) AS accounting_intents,
+           (SELECT COUNT(*) FROM accounting_intent_events) AS accounting_events,
+           (SELECT COUNT(*) FROM external_effects) AS external_effects`,
+      ).get(),
+      beforeMoney,
+    );
+  } finally {
     db.close();
   }
 });

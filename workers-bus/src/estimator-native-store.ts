@@ -1,5 +1,6 @@
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { resolveFacetEstimatorReadyAnchor } from "./facet-prequote.ts";
 
 export const ESTIMATOR_EVIDENCE_SCHEMA_VERSION =
   "ironwrap.estimator-evidence.v1" as const;
@@ -26,6 +27,7 @@ export interface RecordEstimatorEvidenceInput {
   supersedesEstimatorRevisionId?: string | null;
   measurementReceiptId: string;
   facetEventId?: string | null;
+  estimatorReadyEventId?: string | null;
   commercialQuoteRevisionId?: string | null;
   payload: EstimatorEvidencePayloadV1;
   correctionReason?: string | null;
@@ -49,6 +51,12 @@ export interface EstimatorEvidenceRevisionRecord {
   facet_design_revision_id: string | null;
   facet_design_revision_sha256: string | null;
   facet_frozen_evidence_sha256: string | null;
+  estimator_ready_event_id: string | null;
+  estimator_ready_raw_key: string | null;
+  estimator_ready_raw_sha256: string | null;
+  estimator_ready_design_revision_id: string | null;
+  estimator_ready_design_revision_sha256: string | null;
+  estimator_ready_frozen_evidence_sha256: string | null;
   commercial_quote_revision_id: string | null;
   payload_json: string;
   payload_sha256: string;
@@ -204,6 +212,7 @@ export async function recordEstimatorEvidenceRevision(
         input.supersedesEstimatorRevisionId ?? null,
       measurement_receipt_id: input.measurementReceiptId,
       facet_event_id: input.facetEventId ?? null,
+      estimator_ready_event_id: input.estimatorReadyEventId ?? null,
       commercial_quote_revision_id: input.commercialQuoteRevisionId ?? null,
       payload_sha256: payloadSha256,
       correction_reason: input.correctionReason?.trim() || null,
@@ -224,7 +233,7 @@ export async function recordEstimatorEvidenceRevision(
 
   const job = await operatingJobAnchor(env, input.tenantId, input.roofJobId);
   if (!job) fail("estimator_job_missing", 404);
-  const [measurementEvidence, head, quote, facet] = await Promise.all([
+  const [measurementEvidence, head, quote, facet, estimatorReady] = await Promise.all([
     readEstimatorMeasurementEvidenceAnchor(
       env,
       input.tenantId,
@@ -242,6 +251,14 @@ export async function recordEstimatorEvidenceRevision(
       : Promise.resolve(null),
     input.facetEventId
       ? facetAnchor(env, input.tenantId, input.roofJobId, input.facetEventId)
+      : Promise.resolve(null),
+    input.estimatorReadyEventId
+      ? resolveFacetEstimatorReadyAnchor(
+          env,
+          input.tenantId,
+          input.roofJobId,
+          input.estimatorReadyEventId,
+        )
       : Promise.resolve(null),
   ]);
   const measurement = measurementEvidence?.receipt ?? null;
@@ -269,11 +286,27 @@ export async function recordEstimatorEvidenceRevision(
     fail("estimator_quote_head_mismatch");
   }
   if (input.facetEventId && !facet) fail("estimator_facet_head_mismatch");
+  if (input.facetEventId && input.estimatorReadyEventId) {
+    fail("estimator_facet_ready_sources_conflict");
+  }
+  if (input.estimatorReadyEventId && !estimatorReady) {
+    fail("estimator_ready_head_mismatch");
+  }
+  if (input.estimatorReadyEventId && input.commercialQuoteRevisionId) {
+    fail("estimator_ready_quote_forbidden");
+  }
   if (
     facet &&
     (!quote || facet.customer_quote_id !== quote.customer_quote_id)
   ) {
     fail("estimator_facet_quote_mismatch");
+  }
+  if (
+    estimatorReady &&
+    (estimatorReady.destination_tenant_id !== input.tenantId ||
+      estimatorReady.roof_job_id !== input.roofJobId)
+  ) {
+    fail("estimator_ready_binding_mismatch");
   }
 
   const evidenceRefs = [
@@ -321,6 +354,19 @@ export async function recordEstimatorEvidenceRevision(
             design_revision_id: facet.design_revision_id,
             design_revision_sha256: facet.design_revision_sha256,
             frozen_evidence_sha256: facet.frozen_evidence_sha256,
+          },
+        ]
+      : []),
+    ...(estimatorReady
+      ? [
+          {
+            kind: "facet_estimator_ready",
+            event_id: estimatorReady.event_id,
+            raw_key: estimatorReady.raw_key,
+            sha256: estimatorReady.event_body_sha256,
+            design_revision_id: estimatorReady.design_revision_id,
+            design_revision_sha256: estimatorReady.design_revision_sha256,
+            frozen_evidence_sha256: estimatorReady.frozen_evidence_sha256,
           },
         ]
       : []),
@@ -381,7 +427,31 @@ export async function recordEstimatorEvidenceRevision(
     createdAt,
   );
   try {
-    await statement.run();
+    if (estimatorReady) {
+      await env.DB.batch([
+        statement,
+        env.DB.prepare(
+          `INSERT INTO estimator_evidence_facet_ready_anchors
+           (estimator_revision_id, tenant_id, roof_job_id, estimator_ready_event_id,
+            estimator_ready_raw_key, estimator_ready_raw_sha256, estimator_ready_design_revision_id,
+            estimator_ready_design_revision_sha256, estimator_ready_frozen_evidence_sha256, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          estimatorRevisionId,
+          input.tenantId,
+          input.roofJobId,
+          estimatorReady.event_id,
+          estimatorReady.raw_key,
+          estimatorReady.event_body_sha256,
+          estimatorReady.design_revision_id,
+          estimatorReady.design_revision_sha256,
+          estimatorReady.frozen_evidence_sha256,
+          createdAt,
+        ),
+      ]);
+    } else {
+      await statement.run();
+    }
   } catch (error) {
     const concurrent = await revisionByIdempotency(
       env,
@@ -414,8 +484,14 @@ export async function readEstimatorEvidenceHead(
     return { state: "missing", revision: null, competing_revision_ids: [] };
   const rows = await allRows<EstimatorEvidenceRevisionRecord>(
     env,
-    `SELECT revision.*
+    `SELECT revision.*,
+            anchor.estimator_ready_event_id, anchor.estimator_ready_raw_key,
+            anchor.estimator_ready_raw_sha256, anchor.estimator_ready_design_revision_id,
+            anchor.estimator_ready_design_revision_sha256,
+            anchor.estimator_ready_frozen_evidence_sha256
        FROM estimator_evidence_revisions AS revision
+       LEFT JOIN estimator_evidence_facet_ready_anchors AS anchor
+         ON anchor.estimator_revision_id = revision.estimator_revision_id
       WHERE revision.tenant_id = ? AND revision.roof_job_id = ?
         AND NOT EXISTS (
           SELECT 1 FROM estimator_evidence_revisions AS successor
@@ -451,9 +527,16 @@ export async function listEstimatorEvidenceRevisions(
   if (!env.DB) return { rows: [], partial: false };
   const rows = await allRows<EstimatorEvidenceRevisionRecord>(
     env,
-    `SELECT * FROM estimator_evidence_revisions
-      WHERE tenant_id = ? AND roof_job_id = ?
-      ORDER BY revision_number DESC, estimator_revision_id ASC
+    `SELECT revision.*,
+            anchor.estimator_ready_event_id, anchor.estimator_ready_raw_key,
+            anchor.estimator_ready_raw_sha256, anchor.estimator_ready_design_revision_id,
+            anchor.estimator_ready_design_revision_sha256,
+            anchor.estimator_ready_frozen_evidence_sha256
+       FROM estimator_evidence_revisions AS revision
+       LEFT JOIN estimator_evidence_facet_ready_anchors AS anchor
+         ON anchor.estimator_revision_id = revision.estimator_revision_id
+      WHERE revision.tenant_id = ? AND revision.roof_job_id = ?
+      ORDER BY revision.revision_number DESC, revision.estimator_revision_id ASC
       LIMIT ?`,
     tenantId,
     roofJobId,
@@ -767,8 +850,15 @@ async function revisionByIdempotency(
 ): Promise<EstimatorEvidenceRevisionRecord | null> {
   return await firstRow<EstimatorEvidenceRevisionRecord>(
     env,
-    `SELECT * FROM estimator_evidence_revisions
-      WHERE tenant_id = ? AND idempotency_key_hash = ? LIMIT 1`,
+    `SELECT revision.*,
+            anchor.estimator_ready_event_id, anchor.estimator_ready_raw_key,
+            anchor.estimator_ready_raw_sha256, anchor.estimator_ready_design_revision_id,
+            anchor.estimator_ready_design_revision_sha256,
+            anchor.estimator_ready_frozen_evidence_sha256
+       FROM estimator_evidence_revisions AS revision
+       LEFT JOIN estimator_evidence_facet_ready_anchors AS anchor
+         ON anchor.estimator_revision_id = revision.estimator_revision_id
+      WHERE revision.tenant_id = ? AND revision.idempotency_key_hash = ? LIMIT 1`,
     tenantId,
     idempotencyKeyHash,
   );
@@ -874,6 +964,13 @@ function validateInput(input: RecordEstimatorEvidenceInput): void {
       8,
       200,
       "estimator_facet_event_invalid",
+    );
+  if (input.estimatorReadyEventId)
+    boundedIdentifier(
+      input.estimatorReadyEventId,
+      8,
+      200,
+      "estimator_ready_event_invalid",
     );
   if (input.commercialQuoteRevisionId) {
     boundedIdentifier(

@@ -26,7 +26,7 @@ const UUID_V4 =
 const CUSTOMER_PARTY_CONTEXT = "ironwrap.customer-party.email.v1";
 const CUSTOMER_IDENTITY_CONTEXT = "facet.customer-oidc-email.v1";
 
-interface FacetLaunchConfig {
+export interface FacetLaunchConfig {
   baseUrl: string;
   key: Uint8Array;
   destinationTenantId: string;
@@ -104,6 +104,13 @@ export function facetLaunchConfigured(
   destinationTenantId: string,
 ): boolean {
   return launchConfig(env, destinationTenantId) !== null;
+}
+
+export function facetLaunchConfigForTenant(
+  env: AppEnv,
+  destinationTenantId: string,
+): FacetLaunchConfig | null {
+  return launchConfig(env, destinationTenantId);
 }
 
 export async function issueFacetLaunch(
@@ -566,6 +573,34 @@ async function signedLaunchToken(
     issuedAt: number;
     notBefore: number;
     expiresAt: number;
+  },
+): Promise<string> {
+  return await signFacetLaunchV1Token(key, {
+    brandId: input.brandId,
+    customerPartyRef: input.customerPartyRef,
+    expiresAt: input.expiresAt,
+    externalCustomerIdentityLinkId: input.externalCustomerIdentityLinkId,
+    issuedAt: input.issuedAt,
+    destinationTenantId: input.destinationTenantId,
+    facetProjectId: input.facetProjectId,
+    notBefore: input.notBefore,
+    sourceTenantId: input.sourceTenantId,
+  });
+}
+
+/** The existing v1 launch envelope is deliberately quote-free on the wire. */
+export async function signFacetLaunchV1Token(
+  key: Uint8Array,
+  input: {
+    brandId: string;
+    customerPartyRef: string;
+    expiresAt: number;
+    externalCustomerIdentityLinkId: string;
+    issuedAt: number;
+    destinationTenantId: string;
+    facetProjectId: string;
+    notBefore: number;
+    sourceTenantId: string;
   },
 ): Promise<string> {
   const payload = {

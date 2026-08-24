@@ -248,9 +248,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 210],
-    ["REQUIRED_INDEX_COUNT", 324],
-    ["REQUIRED_TRIGGER_COUNT", 510],
+    ["REQUIRED_TABLE_COUNT", 217],
+    ["REQUIRED_INDEX_COUNT", 332],
+    ["REQUIRED_TRIGGER_COUNT", 524],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -284,7 +284,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0120", () => {
+test("the full schema matches the recovery frontier through 0121", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -315,6 +315,8 @@ test("the full schema matches the recovery frontier through 0120", () => {
     // frontier: three tables, three indexes, and nine append-only/owner guards. 0119 adds the
     // immutable commercial-deposit approval exclusion and its five capture/command guards. 0120
     // scopes the existing gate-clearance decision index without changing the inventory count.
+    // 0121 adds seven isolated prequote/estimator-ready tables, eight indexes, and fourteen
+    // append-only guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -322,7 +324,7 @@ test("the full schema matches the recovery frontier through 0120", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 210, indexes: 324, triggers: 510 },
+      { tables: 217, indexes: 332, triggers: 524 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

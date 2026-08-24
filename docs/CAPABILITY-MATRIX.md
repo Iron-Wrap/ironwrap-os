@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 99,
-      "latest": "0120_production_gate_clearance_scope.sql"
+      "count": 100,
+      "latest": "0121_facet_prequote_estimator_consumer.sql"
     }
   },
   "test_observation_policy": {

@@ -5,6 +5,12 @@ export const FACET_V2_EVENT_SCHEMA_VERSION = 2 as const;
 export const FACET_V2_DELIVERY_CONTEXT = "facet.design.delivery.v2" as const;
 export const FACET_V2_RECEIPT_CONTEXT = "ironwrap.facet-design.receipt.v2" as const;
 export const FACET_V2_RECEIPT_SCHEMA = "ironwrap.facet-design-receipt.v2" as const;
+export const FACET_ESTIMATOR_READY_EVENT_TYPE = "facet.design.estimator_ready.v1" as const;
+export const FACET_ESTIMATOR_READY_EVENT_SCHEMA_VERSION = 1 as const;
+export const FACET_ESTIMATOR_READY_RECEIPT_CONTEXT =
+  "ironwrap.facet-estimator-ready.receipt.v1" as const;
+export const FACET_ESTIMATOR_READY_RECEIPT_SCHEMA =
+  "ironwrap.facet-estimator-ready-receipt.v1" as const;
 export const FACET_V2_MAX_BODY_BYTES = 512 * 1024;
 export const FACET_V2_MAX_DELIVERY_TTL_MS = 5 * 60 * 1_000;
 export const FACET_V2_MAX_CLOCK_SKEW_MS = 60 * 1_000;
@@ -135,6 +141,38 @@ export interface FacetV2CustomerDecisionEvent {
   };
 }
 
+export interface FacetEstimatorReadyEvent {
+  brand_id: string;
+  design_revision: { id: string; sha256: string };
+  destination: { tenant_id: string };
+  event_id: string;
+  event_type: typeof FACET_ESTIMATOR_READY_EVENT_TYPE;
+  facet_project_id: string;
+  frozen_evidence: Record<string, unknown>;
+  occurred_at: string;
+  operator_attestation: {
+    actor: {
+      actor_type: "owner" | "expert";
+      identity_assurance: "oidc";
+      oidc_issuer: "https://accounts.google.com" | "accounts.google.com";
+      oidc_subject_sha256: string;
+    };
+    attestation_version: "facet-estimator-ready-operator-v1";
+  };
+  previous_event_id: string | null;
+  project_link: {
+    external_project_link_id: string;
+    producer_identity_link_id: string;
+  };
+  schema_version: typeof FACET_ESTIMATOR_READY_EVENT_SCHEMA_VERSION;
+  source: {
+    environment: string;
+    issuer: string;
+    product: "facet";
+    tenant_id: string;
+  };
+}
+
 export type FacetV2DeliveryVerification =
   | { ok: true; value: VerifiedFacetV2Delivery }
   | {
@@ -179,6 +217,37 @@ export interface FacetV2Receipt {
   occurred_at: string;
   detail_code: string;
   idempotent_replay: boolean;
+}
+
+export interface FacetEstimatorReadyReceipt {
+  schema: typeof FACET_ESTIMATOR_READY_RECEIPT_SCHEMA;
+  receipt_id: string;
+  event_id: string;
+  event_body_sha256: string;
+  frozen_evidence_sha256: string;
+  design_revision: { id: string; sha256: string };
+  operator_attestation: {
+    actor_type: "owner" | "expert";
+    oidc_issuer: "https://accounts.google.com" | "accounts.google.com";
+    oidc_subject_sha256: string;
+  };
+  destination_tenant_id: string;
+  result: "accepted" | "rejected" | "duplicate";
+  policy_version: string;
+  occurred_at: string;
+  detail_code: string;
+  idempotent_replay: boolean;
+}
+
+export interface SignedFacetEstimatorReadyReceipt {
+  receipt: FacetEstimatorReadyReceipt;
+  receipt_sha256: string;
+  signature: {
+    algorithm: "HMAC-SHA256";
+    key_id: string;
+    key_version: number;
+    value: string;
+  };
 }
 
 export interface SignedFacetV2Receipt {
@@ -233,6 +302,8 @@ export async function verifyFacetV2Delivery(
     routes: readonly FacetV2StaticRoute[];
     keys: readonly FacetV2VerificationKey[];
     nowMs?: number;
+    expectedEventType?: string;
+    expectedSchemaVersion?: number;
   },
 ): Promise<FacetV2DeliveryVerification> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
@@ -299,7 +370,12 @@ export async function verifyFacetV2Delivery(
     return failure("invalid_event_body", 400);
   }
   if (event.event_id !== headers.eventId) return failure("event_id_mismatch", 400);
-  if (!eventMatchesRoute(event, route)) return failure("event_route_mismatch", 403);
+  if (!eventMatchesRoute(
+    event,
+    route,
+    input.expectedEventType ?? FACET_V2_EVENT_TYPE,
+    input.expectedSchemaVersion ?? FACET_V2_EVENT_SCHEMA_VERSION,
+  )) return failure("event_route_mismatch", 403);
   return { ok: true, value: { bodySha256, event, headers, route } };
 }
 
@@ -408,6 +484,85 @@ export async function parseFacetV2CustomerDecisionEvent(
   return value as unknown as FacetV2CustomerDecisionEvent;
 }
 
+export async function parseFacetEstimatorReadyEvent(
+  value: unknown,
+): Promise<FacetEstimatorReadyEvent | null> {
+  if (!isRecord(value) || !sameKeys(value, [
+    "brand_id",
+    "design_revision",
+    "destination",
+    "event_id",
+    "event_type",
+    "facet_project_id",
+    "frozen_evidence",
+    "occurred_at",
+    "operator_attestation",
+    "previous_event_id",
+    "project_link",
+    "schema_version",
+    "source",
+  ])) return null;
+  if (
+    value.event_type !== FACET_ESTIMATOR_READY_EVENT_TYPE ||
+    value.schema_version !== FACET_ESTIMATOR_READY_EVENT_SCHEMA_VERSION ||
+    !UUID.test(String(value.event_id ?? "")) ||
+    !UUID.test(String(value.facet_project_id ?? "")) ||
+    !validIsoTimestamp(String(value.occurred_at ?? "")) ||
+    !validBrand(value.brand_id) ||
+    !isRecord(value.source) ||
+    !sameKeys(value.source, ["environment", "issuer", "product", "tenant_id"]) ||
+    !IDENTIFIER.test(String(value.source.issuer ?? "")) ||
+    value.source.product !== "facet" ||
+    !IDENTIFIER.test(String(value.source.environment ?? "")) ||
+    !UUID.test(String(value.source.tenant_id ?? "")) ||
+    !isRecord(value.destination) ||
+    !sameKeys(value.destination, ["tenant_id"]) ||
+    !IDENTIFIER.test(String(value.destination.tenant_id ?? "")) ||
+    !isRecord(value.project_link) ||
+    !sameKeys(value.project_link, [
+      "external_project_link_id", "producer_identity_link_id",
+    ]) ||
+    !IRONWRAP_PROJECT_LINK.test(String(value.project_link.external_project_link_id ?? "")) ||
+    !IRONWRAP_IDENTITY_LINK.test(String(value.project_link.producer_identity_link_id ?? "")) ||
+    !isRecord(value.design_revision) ||
+    !sameKeys(value.design_revision, ["id", "sha256"]) ||
+    !SHA256.test(String(value.design_revision.sha256 ?? "")) ||
+    value.design_revision.id !== `facet-json-v1:${value.design_revision.sha256}` ||
+    !isRecord(value.frozen_evidence) ||
+    !validEstimatorReadyEvidence(
+      value.frozen_evidence,
+      String(value.brand_id ?? ""),
+      String(value.occurred_at ?? ""),
+    ) ||
+    !isRecord(value.operator_attestation) ||
+    !sameKeys(value.operator_attestation, ["actor", "attestation_version"]) ||
+    value.operator_attestation.attestation_version !==
+      "facet-estimator-ready-operator-v1" ||
+    !isRecord(value.operator_attestation.actor) ||
+    !sameKeys(value.operator_attestation.actor, [
+      "actor_type",
+      "identity_assurance",
+      "oidc_issuer",
+      "oidc_subject_sha256",
+    ]) ||
+    !["owner", "expert"].includes(String(value.operator_attestation.actor.actor_type ?? "")) ||
+    value.operator_attestation.actor.identity_assurance !== "oidc" ||
+    !OIDC_ISSUERS.has(String(value.operator_attestation.actor.oidc_issuer ?? "")) ||
+    !SHA256.test(String(value.operator_attestation.actor.oidc_subject_sha256 ?? ""))
+  ) return null;
+  const previous = value.previous_event_id;
+  if (previous !== null && !UUID.test(String(previous ?? ""))) return null;
+  const designSha256 = await sha256Hex(canonicalJson(value.frozen_evidence.design));
+  const frozenEvidenceSha256 = await sha256Hex(canonicalJson(value.frozen_evidence));
+  if (
+    value.design_revision.sha256 !== designSha256
+  ) return null;
+  // The event's body is the immutable estimator-ready evidence; unlike customer approval,
+  // the operator attestation is deliberately carried in its own namespace.
+  if (!SHA256.test(frozenEvidenceSha256)) return null;
+  return value as unknown as FacetEstimatorReadyEvent;
+}
+
 export async function signFacetV2Receipt(
   receipt: FacetV2Receipt,
   key: Pick<FacetV2VerificationKey, "keyId" | "keyVersion" | "secret">,
@@ -423,6 +578,30 @@ export async function signFacetV2Receipt(
       key_id: key.keyId,
       key_version: key.keyVersion,
       value: await hmacBase64Url(key.secret, facetV2ReceiptSigningInput(receiptSha256)),
+    },
+  };
+}
+
+export async function signFacetEstimatorReadyReceipt(
+  receipt: FacetEstimatorReadyReceipt,
+  key: Pick<FacetV2VerificationKey, "keyId" | "keyVersion" | "secret">,
+): Promise<SignedFacetEstimatorReadyReceipt> {
+  assertEstimatorReadyReceipt(receipt);
+  if (!validKey(key) || key.secret.length < 32) {
+    throw new Error("facet_estimator_ready_receipt_key_invalid");
+  }
+  const receiptSha256 = await sha256Hex(canonicalJson(receipt));
+  return {
+    receipt,
+    receipt_sha256: receiptSha256,
+    signature: {
+      algorithm: "HMAC-SHA256",
+      key_id: key.keyId,
+      key_version: key.keyVersion,
+      value: await hmacBase64Url(
+        key.secret,
+        `${FACET_ESTIMATOR_READY_RECEIPT_CONTEXT}\n${receiptSha256}`,
+      ),
     },
   };
 }
@@ -494,10 +673,15 @@ function routeMatchesHeaders(
     destination.origin === actual.origin && destination.pathname === actual.pathname;
 }
 
-function eventMatchesRoute(event: Record<string, unknown>, route: FacetV2StaticRoute): boolean {
+function eventMatchesRoute(
+  event: Record<string, unknown>,
+  route: FacetV2StaticRoute,
+  expectedEventType: string,
+  expectedSchemaVersion: number,
+): boolean {
   if (
-    event.event_type !== FACET_V2_EVENT_TYPE ||
-    event.schema_version !== FACET_V2_EVENT_SCHEMA_VERSION ||
+    event.event_type !== expectedEventType ||
+    event.schema_version !== expectedSchemaVersion ||
     !isRecord(event.source) || !isRecord(event.destination)
   ) return false;
   return event.source.issuer === route.issuer &&
@@ -505,6 +689,24 @@ function eventMatchesRoute(event: Record<string, unknown>, route: FacetV2StaticR
     event.source.environment === route.sourceEnvironment &&
     event.source.tenant_id === route.sourceTenantId &&
     event.destination.tenant_id === route.destinationTenantId;
+}
+
+function assertEstimatorReadyReceipt(receipt: FacetEstimatorReadyReceipt): void {
+  if (
+    receipt.schema !== FACET_ESTIMATOR_READY_RECEIPT_SCHEMA ||
+    !IDENTIFIER.test(receipt.receipt_id) || !IDENTIFIER.test(receipt.event_id) ||
+    !SHA256.test(receipt.event_body_sha256) || !SHA256.test(receipt.frozen_evidence_sha256) ||
+    !isRecord(receipt.design_revision) || !IDENTIFIER.test(receipt.design_revision.id) ||
+    !SHA256.test(receipt.design_revision.sha256) ||
+    !isRecord(receipt.operator_attestation) ||
+    !["owner", "expert"].includes(receipt.operator_attestation.actor_type) ||
+    !OIDC_ISSUERS.has(receipt.operator_attestation.oidc_issuer) ||
+    !SHA256.test(receipt.operator_attestation.oidc_subject_sha256) ||
+    !IDENTIFIER.test(receipt.destination_tenant_id) ||
+    !["accepted", "rejected", "duplicate"].includes(receipt.result) ||
+    !IDENTIFIER.test(receipt.policy_version) || !IDENTIFIER.test(receipt.detail_code) ||
+    !validIsoTimestamp(receipt.occurred_at) || typeof receipt.idempotent_replay !== "boolean"
+  ) throw new Error("facet_estimator_ready_receipt_invalid");
 }
 
 function assertReceipt(receipt: FacetV2Receipt): void {
@@ -598,7 +800,32 @@ function validFrozenEvidence(value: Record<string, unknown>, brandId: string): b
     !isRecord(approval) || !sameKeys(approval, ["approved_at", "client_revision"]) ||
     !isRecord(approval.client_revision) ||
     !sameKeys(approval.client_revision, CLIENT_REVISION_KEYS) ||
-    !isRecord(design) || !sameKeys(design, DESIGN_KEYS) ||
+    !isRecord(design) || !validDesignSnapshot(design, brandId)
+  ) return false;
+
+  const revision = approval.client_revision;
+  const roof = validSurface(design.roof);
+  const wall = validSurface(design.wall);
+  return validColorRevision(revision.roofColorId, roof!) &&
+    validColorRevision(revision.wallColorId, wall!);
+}
+
+function validEstimatorReadyEvidence(
+  value: Record<string, unknown>,
+  brandId: string,
+  occurredAt: string,
+): boolean {
+  return sameKeys(value, ["estimator_ready", "design"]) &&
+    isRecord(value.estimator_ready) &&
+    sameKeys(value.estimator_ready, ["ready_at"]) &&
+    value.estimator_ready.ready_at === occurredAt &&
+    isRecord(value.design) &&
+    validDesignSnapshot(value.design, brandId);
+}
+
+function validDesignSnapshot(design: Record<string, unknown>, brandId: string): boolean {
+  if (
+    !sameKeys(design, DESIGN_KEYS) ||
     design.schema !== "facet.selection-evidence.v2" || design.brandId !== brandId ||
     !isRecord(design.catalogRevision) || !sameKeys(design.catalogRevision, CATALOG_KEYS) ||
     design.catalogRevision.schema !== "facet.catalog-selection-identities.v1" ||
@@ -650,9 +877,7 @@ function validFrozenEvidence(value: Record<string, unknown>, brandId: string): b
     ) return false;
     trimIds.add(trim.id);
   }
-  const revision = approval.client_revision;
-  return validColorRevision(revision.roofColorId, roof) &&
-    validColorRevision(revision.wallColorId, wall);
+  return true;
 }
 
 function validSurface(value: unknown): { enabled: boolean; colorId: string | null } | null {

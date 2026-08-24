@@ -2188,11 +2188,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // authority from D1 alone, and 0118 adds the append-only integration manifest, proof, and
     // readiness profile facts, 0119 binds a commercial recovery requester away from approval
     // of the agent-derived deposit it recovered, and 0120 scopes gate-clearance decisions to
-    // their tenant/job/gate identity. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // their tenant/job/gate identity. 0121 adds the isolated quote-free Facet prequote authority,
+    // estimator-ready event/receipt/promotion ledgers, and the one-to-one estimator provenance
+    // anchor without widening the historical estimator revision table. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 99);
+    assert.equal(migrations.length, 100);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0120_production_gate_clearance_scope.sql");
+    assert.equal(migrations.at(-1), "0121_facet_prequote_estimator_consumer.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2293,9 +2295,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // nine validation, append-only, and retention triggers. 0119 adds one immutable commercial
     // approval-exclusion table and five capture, validation, retention, and command guards. 0120
     // replaces the global gate-decision index with the scoped equivalent, so counts are unchanged.
+    // 0121 adds seven isolated prequote/estimator-ready tables, eight named indexes, and fourteen
+    // append-only guards without changing any quote-bound Facet table shape.
     assert.deepEqual(
       { ...counts },
-      { tables: 210, indexes: 316, triggers: 510 },
+      { tables: 217, indexes: 324, triggers: 524 },
     );
     assert.deepEqual(
       (db.prepare(

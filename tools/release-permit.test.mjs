@@ -1310,7 +1310,7 @@ test("migration inventory is ordered and expand-contract only", async () => {
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
   assert.equal(
     migrations.ordered.at(-1),
-    "0120_production_gate_clearance_scope.sql",
+    "0121_facet_prequote_estimator_consumer.sql",
   );
 });
 

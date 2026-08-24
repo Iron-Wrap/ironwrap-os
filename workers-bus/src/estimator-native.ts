@@ -3,6 +3,11 @@ import {
   parseFacetV2CustomerDecisionEvent,
   type FacetV2CustomerDecisionEvent,
 } from "./facet-design-v2-protocol.ts";
+import {
+  loadFacetEstimatorReadyEvent,
+  resolveFacetEstimatorReadyAnchor,
+  type FacetEstimatorReadyAnchor,
+} from "./facet-prequote.ts";
 import type { GeometryModel } from "./geometry.ts";
 import { parseMeasurementSubmission, extractGeometry } from "./measurements.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
@@ -44,6 +49,11 @@ interface FacetDecisionAnchor {
   frozen_evidence_sha256: string;
 }
 
+type FacetVisualEvidence = {
+  design_revision: { id: string; sha256: string };
+  occurred_at: string;
+};
+
 interface ImportingActor {
   user_id: string;
   email_normalized: string;
@@ -56,6 +66,7 @@ export interface ImportEstimatorEvidenceInput {
   roofJobId: string;
   measurementReceiptId: string;
   facetEventId?: string | null;
+  estimatorReadyEventId?: string | null;
   commercialQuoteRevisionId?: string | null;
   revisionNumber: number;
   supersedesEstimatorRevisionId?: string | null;
@@ -133,7 +144,7 @@ export async function importEstimatorEvidenceFromNativeSources(
   if (!env.DB) fail("estimator_db_unavailable", 503);
   const core = await readNativeJobCore(env, input.tenantId, input.roofJobId);
   if (!core) fail("estimator_job_missing", 404);
-  const [measurementEvidence, actor, facet] = await Promise.all([
+  const [measurementEvidence, actor, facet, estimatorReady] = await Promise.all([
     readEstimatorMeasurementEvidenceAnchor(
       env,
       input.tenantId,
@@ -159,6 +170,14 @@ export async function importEstimatorEvidenceFromNativeSources(
           input.facetEventId,
         )
       : Promise.resolve(null),
+    input.estimatorReadyEventId
+      ? resolveFacetEstimatorReadyAnchor(
+          env,
+          input.tenantId,
+          input.roofJobId,
+          input.estimatorReadyEventId,
+        )
+      : Promise.resolve(null),
   ]);
   const receipt = measurementEvidence?.receipt ?? null;
   if (
@@ -175,6 +194,15 @@ export async function importEstimatorEvidenceFromNativeSources(
     fail("estimator_import_owner_required", 403);
   }
   if (input.facetEventId && !facet) fail("estimator_facet_head_mismatch");
+  if (input.facetEventId && input.estimatorReadyEventId) {
+    fail("estimator_facet_ready_sources_conflict");
+  }
+  if (input.estimatorReadyEventId && !estimatorReady) {
+    fail("estimator_ready_head_mismatch");
+  }
+  if (input.estimatorReadyEventId && input.commercialQuoteRevisionId) {
+    fail("estimator_ready_quote_forbidden");
+  }
 
   await verifyMeasurementSupplementalEvidence(env, measurementEvidence!);
   const measurementSource = await verifiedJsonSource(
@@ -204,6 +232,9 @@ export async function importEstimatorEvidenceFromNativeSources(
   });
   const facetEvent = facet
     ? await verifiedFacetEvent(env, facet, input.tenantId)
+    : null;
+  const estimatorReadyEvent = estimatorReady
+    ? await verifiedEstimatorReadyEvent(env, estimatorReady, input.tenantId, input.roofJobId)
     : null;
   const extension = estimatorExtension(
     measurementSource.value,
@@ -240,8 +271,12 @@ export async function importEstimatorEvidenceFromNativeSources(
       measurements: measurementMetricRows(geometry),
       native_evidence: measurementEvidence!.projection,
     },
-    visual_model: facetEvent
-      ? visualModelRow(facetEvent, input.roofJobId, measurementName)
+    visual_model: facetEvent || estimatorReadyEvent
+      ? visualModelRow(
+          (facetEvent ?? estimatorReadyEvent)!,
+          input.roofJobId,
+          measurementName,
+        )
       : null,
     takeoff: {
       name: takeoffName,
@@ -271,6 +306,7 @@ export async function importEstimatorEvidenceFromNativeSources(
       supersedesEstimatorRevisionId: input.supersedesEstimatorRevisionId,
       measurementReceiptId: input.measurementReceiptId,
       facetEventId: input.facetEventId,
+      estimatorReadyEventId: input.estimatorReadyEventId,
       commercialQuoteRevisionId: input.commercialQuoteRevisionId,
       payload,
       correctionReason: input.correctionReason,
@@ -424,6 +460,33 @@ export async function resolveNativeEstimatorAuthority(
         await verifiedFacetEvent(env, anchor, tenantId);
       } catch {
         reasons.push("estimator_evidence.facet_source_drift");
+      }
+    }
+  }
+  if (revision.estimator_ready_event_id) {
+    if (revision.commercial_quote_revision_id) {
+      reasons.push("estimator_evidence.estimator_ready_quote_drift");
+    }
+    const anchor = await resolveFacetEstimatorReadyAnchor(
+      env,
+      tenantId,
+      roofJobId,
+      revision.estimator_ready_event_id,
+    );
+    if (
+      !anchor ||
+      anchor.raw_key !== revision.estimator_ready_raw_key ||
+      anchor.event_body_sha256 !== revision.estimator_ready_raw_sha256 ||
+      anchor.design_revision_id !== revision.estimator_ready_design_revision_id ||
+      anchor.design_revision_sha256 !== revision.estimator_ready_design_revision_sha256 ||
+      anchor.frozen_evidence_sha256 !== revision.estimator_ready_frozen_evidence_sha256
+    ) {
+      reasons.push("estimator_evidence.estimator_ready_anchor_drift");
+    } else {
+      try {
+        await verifiedEstimatorReadyEvent(env, anchor, tenantId, roofJobId);
+      } catch {
+        reasons.push("estimator_evidence.estimator_ready_source_drift");
       }
     }
   }
@@ -877,7 +940,7 @@ function takeoffItemRows(takeoff: TakeoffModel): NativeRow[] {
 }
 
 function visualModelRow(
-  event: FacetV2CustomerDecisionEvent,
+  event: FacetVisualEvidence,
   roofJobId: string,
   measurementName: string,
 ): NativeRow {
@@ -1062,6 +1125,30 @@ async function verifiedFacetEvent(
   return event;
 }
 
+async function verifiedEstimatorReadyEvent(
+  env: AppEnv,
+  anchor: FacetEstimatorReadyAnchor,
+  tenantId: string,
+  roofJobId: string,
+) {
+  const event = await loadFacetEstimatorReadyEvent(env, anchor);
+  if (
+    !event ||
+    event.destination.tenant_id !== tenantId ||
+    event.event_id !== anchor.event_id ||
+    event.brand_id !== anchor.brand_id ||
+    anchor.roof_job_id !== roofJobId ||
+    event.facet_project_id !== anchor.facet_project_id ||
+    event.project_link.external_project_link_id !== anchor.external_project_link_id ||
+    event.project_link.producer_identity_link_id !== anchor.producer_identity_link_id ||
+    event.design_revision.id !== anchor.design_revision_id ||
+    event.design_revision.sha256 !== anchor.design_revision_sha256 ||
+    (await sha256Hex(canonicalJson(event.frozen_evidence))) !==
+      anchor.frozen_evidence_sha256
+  ) fail("estimator_ready_source_invalid");
+  return event;
+}
+
 async function verifyMeasurementSupplementalEvidence(
   env: AppEnv,
   evidence: EstimatorMeasurementEvidenceAnchor,
@@ -1151,6 +1238,7 @@ function assertReplayMatches(
     revision.roof_job_id !== input.roofJobId ||
     revision.measurement_receipt_id !== input.measurementReceiptId ||
     revision.facet_event_id !== (input.facetEventId ?? null) ||
+    revision.estimator_ready_event_id !== (input.estimatorReadyEventId ?? null) ||
     revision.commercial_quote_revision_id !==
       (input.commercialQuoteRevisionId ?? null) ||
     Number(revision.revision_number) !== input.revisionNumber ||

@@ -439,7 +439,8 @@ async function listNativeOptionPackages(
   if (!env.DB) return [];
   try {
     const result = await env.DB.prepare(
-      `SELECT option_id, title, tier, material_system
+      `SELECT option_id, title, tier, material_system, options_json, price_delta_cents,
+              currency, warranty_summary
          FROM operating_option_packages
         WHERE tenant_id = ? AND job_id = ? AND status = 'approved'
         ORDER BY option_id`,
@@ -448,20 +449,74 @@ async function listNativeOptionPackages(
       title: string;
       tier: string | null;
       material_system: string | null;
+      options_json: string | null;
+      price_delta_cents: number | null;
+      currency: string | null;
+      warranty_summary: string | null;
     }>();
-    return (result.results ?? []).map((row) => ({
-      id: row.option_id,
-      package_name: text(row.title, 200),
-      tier: text(row.tier, 40),
-      material_system: text(row.material_system, 200),
-      price_delta: null,
-      currency: null,
-      options: null,
-      warranty_summary: null,
-    }));
+    return (result.results ?? []).map((row) => mapOptionPackage(row));
   } catch (error) {
-    if (String(error).includes("no such table")) return [];
+    const detail = String(error);
+    if (detail.includes("no such table")) return [];
+    if (detail.includes("no such column")) {
+      return await listNativeOptionPackagesLegacy(env, tenantId, roofJobId);
+    }
     throw error;
+  }
+}
+
+async function listNativeOptionPackagesLegacy(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+): Promise<CustomerPortalReadModel["option_packages"]> {
+  const result = await env.DB.prepare(
+    `SELECT option_id, title, tier, material_system
+       FROM operating_option_packages
+      WHERE tenant_id = ? AND job_id = ? AND status = 'approved'
+      ORDER BY option_id`,
+  ).bind(tenantId, roofJobId).all<{
+    option_id: string;
+    title: string;
+    tier: string | null;
+    material_system: string | null;
+  }>();
+  return (result.results ?? []).map((row) => mapOptionPackage(row));
+}
+
+function mapOptionPackage(row: {
+  option_id: string;
+  title: string;
+  tier: string | null;
+  material_system: string | null;
+  options_json?: string | null;
+  price_delta_cents?: number | null;
+  currency?: string | null;
+  warranty_summary?: string | null;
+}): CustomerPortalReadModel["option_packages"][number] {
+  return {
+    id: row.option_id,
+    package_name: text(row.title, 200),
+    tier: text(row.tier, 40),
+    material_system: text(row.material_system, 200),
+    price_delta: Number.isFinite(row.price_delta_cents)
+      ? Number(row.price_delta_cents) / 100
+      : null,
+    currency: text(row.currency, 8),
+    options: parseOptionJson(row.options_json),
+    warranty_summary: text(row.warranty_summary, 2000),
+  };
+}
+
+function parseOptionJson(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
   }
 }
 

@@ -768,7 +768,7 @@ function sessionCookie(rawToken: string, expiresAt: string): string {
  */
 export async function devOutboxCapture(
   env: AppEnv,
-  kind: "magic_link" | "contract_acceptance" | "user_invite",
+  kind: "magic_link" | "contract_acceptance" | "portal_decision_confirmation" | "user_invite",
   recipient: string,
   href: string,
 ): Promise<boolean> {

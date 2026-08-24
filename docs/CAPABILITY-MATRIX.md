@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 87,
-      "latest": "0113_pipeline_board_core.sql"
+      "count": 90,
+      "latest": "0114_dev_outbox_capture_kinds.sql"
     }
   },
   "test_observation_policy": {
@@ -90,6 +90,19 @@ The expected structural counts change only with the same reviewed source change 
 removes the underlying contract. A mismatch fails documentation validation. Test totals are
 observed from each successful run and never pinned in this shared document. The generated receipt
 is an exact-source and tested-checkout repository/CI observation, not a release permit.
+
+## Sep 1 remaining honesty (2026-08-21)
+
+Repository-only. None of the following is live proof, deployment, or Done for a real customer job.
+
+- IRO-52 S6/S7 holdback and payroll stay HTTP 501 until owner policy names a posting target.
+- IRO-49 supplier packets stay internal (`external_supplier_contact: false`). No customer or supplier send.
+- IRO-46 / IRO-47 shop travelers and assemblies remain target-only; no empty shop tables and no second pricing engine exist.
+- IRO-50 scheduler capacity remains target-only; no solver or booking surface exists.
+- IRO-53 / IRO-55 / IRO-57 / IRO-58 / IRO-59 / IRO-60 / IRO-190 remain target-only or partial. Do not mark them Done.
+- Do not de-roofify `operating_roof_jobs`. Money, portal, Facet, and QuickBooks still key that identity.
+- JobNimbus has no owned D1 import adapter yet; it remains pending a join to `/admin/crm-import/{dry-run,execute}`. Dual-write is not retired.
+- IRO-31 / IRO-193 / IRO-28 live OCR / IRO-52 S12 remain blocked on a live staging URL, owner participation, a usable measurement-OCR provider, and QuickBooks keys. Do not treat a local `--check` as that proof.
 
 ## Canonical operating-authority migration
 

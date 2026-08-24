@@ -7,6 +7,7 @@
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
+import { recordOperatingJobFileBestEffort } from "./job-file-index.ts";
 import { recordNativePhotoEvidence, type NativePhotoEvidenceRef } from "./photo-evidence-store.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
@@ -85,6 +86,16 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
       job_number: sub.jobNumber, target_ids: native.targetIds, action: "received",
       result: native.ok ? "ok" : "error", error: native.ok ? "drive_not_configured" : native.error });
     if (!native.ok) return jsonResp({ error: native.error }, 500);
+    if (native.record.roof_job_id) {
+      await recordOperatingJobFileBestEffort(env, {
+        tenantId: native.record.tenant_id,
+        roofJobId: native.record.roof_job_id,
+        artifactKind: "photo",
+        artifactId: native.record.submission_id,
+        r2Key: rawKey,
+        idempotencyKey: `photo:${native.record.submission_id}`,
+      });
+    }
     return jsonResp({
       ok: true,
       job_number: sub.jobNumber,
@@ -133,6 +144,19 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
     action: "filed", result: native.ok && uploaded ? "ok" : "error",
     error: native.ok ? (uploaded ? null : "no_files_uploaded") : native.error });
   if (!native.ok) return jsonResp({ error: native.error, uploaded, folder: result.folderUrl }, 500);
+  if (native.record.roof_job_id) {
+    const firstFile = result.files.find((file) => file.driveFileId && !file.error);
+    await recordOperatingJobFileBestEffort(env, {
+      tenantId: native.record.tenant_id,
+      roofJobId: native.record.roof_job_id,
+      artifactKind: "photo",
+      artifactId: native.record.submission_id,
+      driveFolderId: result.folderId,
+      driveFileId: firstFile?.driveFileId ?? null,
+      r2Key: rawKey,
+      idempotencyKey: `photo:${native.record.submission_id}`,
+    });
+  }
   return jsonResp({
     ok: true,
     job_number: sub.jobNumber,

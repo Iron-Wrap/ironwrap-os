@@ -28,7 +28,8 @@ export type RoleSurface =
   | "job"
   | "field"
   | "fleet"
-  | "inventory";
+  | "inventory"
+  | "pairing";
 
 export interface NavigationItem {
   label: string;
@@ -284,6 +285,9 @@ export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
   if (role === "production") return surface === "production";
   if (surface === "field") return role === "field" || role === "ops" || role === "owner";
   if (surface === "inventory") return role === "owner" || role === "ops" || role === "field";
+  // Pairing issues a field-device secret. The API already allows owner and ops;
+  // this surface is the matching UI gate so Settings cannot look owner-only.
+  if (surface === "pairing") return role === "owner" || role === "ops";
   return role === "owner" || role === "ops";
 }
 

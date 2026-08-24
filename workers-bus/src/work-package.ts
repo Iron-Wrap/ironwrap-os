@@ -660,24 +660,28 @@ export function fieldWorkPackageProjection(
       .map((evidence) => evidence.correctionOf)
       .filter((eventId): eventId is string => Boolean(eventId)),
   );
-  const currentEvidenceBySlot = new Map<string, FieldWorkPackageEvidence>();
+  const currentEvidenceBySlot = new Map<string, FieldWorkPackageEvidence[]>();
   for (const evidence of workPackage.evidence ?? []) {
     // A correction is the current leaf for its slot. Only the prior event is
     // superseded; dropping every correction here made a Needs Correction ->
     // corrected capture permanently invisible to completion readiness.
     if (supersededEvidenceIds.has(evidence.eventId)) continue;
-    if (currentEvidenceBySlot.has(evidence.slotId)) {
-      currentEvidenceBySlot.clear();
-      break;
-    }
-    currentEvidenceBySlot.set(evidence.slotId, evidence);
+    const instances = currentEvidenceBySlot.get(evidence.slotId) ?? [];
+    instances.push(evidence);
+    currentEvidenceBySlot.set(evidence.slotId, instances);
   }
+  const conflictingSlots = new Set(
+    [...currentEvidenceBySlot.entries()]
+      .filter(([, instances]) => instances.length > 1)
+      .map(([slotId]) => slotId),
+  );
   const completionEvidenceReady =
     workPackage.evidenceLedgerAvailable === true &&
     requiredEvidenceSlots.length > 0 &&
-    currentEvidenceBySlot.size === requiredEvidenceSlots.length &&
     requiredEvidenceSlots.every((slotId) => {
-      const evidence = currentEvidenceBySlot.get(slotId);
+      const instances = currentEvidenceBySlot.get(slotId) ?? [];
+      if (instances.length === 0 || conflictingSlots.has(slotId)) return false;
+      const evidence = instances[0];
       return (
         evidence?.verification === "Verified" &&
         evidence.disposition === "Accepted" &&
@@ -795,7 +799,9 @@ export function fieldWorkPackageProjection(
         device_id: item.deviceId,
         captured_at: item.capturedAt,
         freshness: item.freshness,
-        conflict_state: item.conflictState,
+        conflict_state: conflictingSlots.has(item.slotId)
+          ? "Detected"
+          : item.conflictState,
         correction_of: item.correctionOf,
         evidence_item_correction_of: item.itemCorrectionOf,
         review_reason: item.reviewReason,

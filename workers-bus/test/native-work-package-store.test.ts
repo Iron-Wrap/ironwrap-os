@@ -817,3 +817,135 @@ test("native Work Package reviews current D1 evidence and completes only after e
     .first<{ status: string }>();
   assert.equal(completed?.status, "Completed");
 });
+
+test("two required workers each acknowledge before start, and the snapshot ledger keeps both", async () => {
+  const env = await testEnv();
+  env.DB.sqlite
+    .prepare(
+      `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id,
+        active, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    )
+    .run(
+      "appu_crew_native_b",
+      "ironwrap",
+      "crew-b@example.com",
+      "Native Crew B",
+      "field",
+      "field",
+      "crew-b@example.com",
+      "owner@example.com",
+      "2026-08-20T08:00:00.000Z",
+      "2026-08-20T08:00:00.000Z",
+    );
+  const packet = {
+    ...definition(),
+    workPackageId: "wp_native_multi_ack",
+    jobId: "JOB-NATIVE-MULTI",
+    assignmentId: "ASSIGN-NATIVE-MULTI",
+    workObjectId: "JOB-NATIVE-MULTI",
+    physicalContextId: "JOB-NATIVE-MULTI",
+    deviceActionId: "issue-native-multi-1",
+    releaseAttemptId: "attempt-native-multi",
+    assignedWorkers: [
+      { sequence: 1, workerUser: "crew@example.com", workerRole: "Installer", required: true },
+      { sequence: 2, workerUser: "crew-b@example.com", workerRole: "Spotter", required: true },
+    ],
+  };
+  await issueNativeWorkPackage(env, packet);
+  insertCapture(env, packet, "hold:1", "evi_native_multi_hold", "capture-native-multi-hold");
+  await releaseNativeWorkPackageHold(env, {
+    tenantId: packet.tenantId,
+    workPackageId: packet.workPackageId,
+    workPackageVersion: packet.version,
+    jobId: packet.jobId,
+    assignmentId: packet.assignmentId,
+    actorUser: "production@example.com",
+    actorRole: "production",
+    deviceActionId: "hold-native-multi-1",
+    holdPointSequence: 1,
+    evidenceItem: "evi_native_multi_hold",
+    releaseAttemptId: packet.releaseAttemptId,
+    workObjectType: packet.workObjectType,
+    workObjectId: packet.workObjectId,
+    physicalContextType: packet.physicalContextType,
+    physicalContextId: packet.physicalContextId,
+    manifestKey: "work-packages/native-multi.json",
+  });
+
+  const ackA = {
+    kind: "acknowledge" as const,
+    workPackageId: packet.workPackageId,
+    workPackageVersion: packet.version,
+    jobId: packet.jobId,
+    assignmentId: packet.assignmentId,
+    actorUser: "crew@example.com",
+    actorRole: "field" as const,
+    deviceActionId: "ack-native-multi-a",
+    blockerReason: null,
+    releaseAttemptId: packet.releaseAttemptId,
+    workObjectType: packet.workObjectType,
+    workObjectId: packet.workObjectId,
+    physicalContextType: packet.physicalContextType,
+    physicalContextId: packet.physicalContextId,
+    manifestKey: "work-packages/native-multi.json",
+  };
+  insertCommandReceipt(env, packet, "acknowledge", ackA.deviceActionId);
+  await nativeWorkPackageAction(env, ackA);
+  await assert.rejects(
+    nativeWorkPackageAction(env, {
+      ...ackA,
+      kind: "start_work",
+      deviceActionId: "start-native-multi-too-soon",
+    }),
+    /work_package_event_transition_invalid|work_package_action_not_allowed/,
+  );
+
+  env.DB.sqlite.prepare(
+    `INSERT INTO field_work_package_actions (
+       device_action_id, tenant_id, user_id, job_id, assignment_id,
+       work_package_id, action_kind, payload_hash, status, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?)`,
+  ).run(
+    "ack-native-multi-b",
+    packet.tenantId,
+    "appu_crew_native_b",
+    packet.jobId,
+    packet.assignmentId,
+    packet.workPackageId,
+    "acknowledge",
+    "d".repeat(64),
+    packet.issuedAt,
+    packet.issuedAt,
+  );
+  await nativeWorkPackageAction(env, {
+    ...ackA,
+    actorUser: "crew-b@example.com",
+    deviceActionId: "ack-native-multi-b",
+  });
+
+  const snapshot = env.DB.sqlite
+    .prepare(
+      `SELECT actor_user_id FROM work_package_worker_acknowledgements
+        WHERE tenant_id = ? AND work_package_id = ? ORDER BY actor_user_id`,
+    )
+    .all(packet.tenantId, packet.workPackageId) as Array<{ actor_user_id: string }>;
+  assert.deepEqual(
+    snapshot.map((row) => row.actor_user_id).sort(),
+    ["appu_crew_native", "appu_crew_native_b"].sort(),
+  );
+
+  const started = await nativeWorkPackageAction(env, {
+    ...ackA,
+    kind: "start_work",
+    deviceActionId: "start-native-multi-1",
+  });
+  assert.equal(started.workPackageName, packet.workPackageId);
+  const row = await env.DB.prepare(
+    "SELECT status FROM work_packages WHERE tenant_id = ? AND work_package_id = ?",
+  )
+    .bind(packet.tenantId, packet.workPackageId)
+    .first<{ status: string }>();
+  assert.equal(row?.status, "In Progress");
+});

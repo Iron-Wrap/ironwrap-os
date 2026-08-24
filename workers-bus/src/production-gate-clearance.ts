@@ -42,7 +42,6 @@ import { validAppCsrf } from "./app-auth.ts";
 import { listAccountingIntents, type AccountingIntentRecord } from "./accounting-intents.ts";
 import { buildProductionRunwayReadModel } from "./app-read-models.ts";
 import { r2ObjectStore } from "./field-actions.ts";
-import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 
@@ -76,10 +75,7 @@ const SETTLED_DEPOSIT_STATES = ["partially_settled", "reconciled"] as const;
 const CLEARANCE_PERMISSION = "production:clear_gate";
 const RECEIPT_CONTENT_TYPE = "application/json";
 const RECEIPT_PREFIX = "production-gate-clearance/v1";
-const FRAPPE_COMMAND_PATH =
-  "/api/method/ironwrap_roofing.production_gate_api.record_production_gate_clearance";
 const MAX_BODY_BYTES = 16 * 1024;
-const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1024;
 const MIN_REASON_LENGTH = 8;
 const MAX_REASON_LENGTH = 1_000;
 const DECISION_ID_RE = /^[A-Za-z0-9._:-]{16,160}$/;
@@ -264,93 +260,15 @@ function depositReason(intent: AccountingIntentRecord): string {
   );
 }
 
-interface FrappeClearanceInput {
-  roofJobId: string;
-  gate: ClearableProductionGate;
-  clearance: "waived" | "verified";
-  actorUser: string;
-  decisionId: string;
-  reason: string;
-  evidence?: {
-    r2_key: string;
-    content_checksum: string;
-    content_type: string;
-    content_length: number;
-    captured_at: string;
-    summary: string;
-  };
-}
-
 export interface ProductionGateClearanceFrappeWriter {
-  clear(input: FrappeClearanceInput): Promise<Record<string, unknown>>;
-}
-
-export function frappeProductionGateWriter(
-  env: AppEnv,
-): ProductionGateClearanceFrappeWriter {
-  return {
-    async clear(input) {
-      if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) {
-        throw new ProductionGateClearanceError("production_gate_frappe_not_configured", 503);
-      }
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS),
-      );
-      try {
-        const response = await fetch(`${frappeBaseUrl(env)}${FRAPPE_COMMAND_PATH}`, {
-          method: "POST",
-          redirect: "manual",
-          signal: controller.signal,
-          headers: {
-            accept: "application/json",
-            authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
-            "content-type": "application/json",
-            "user-agent": "ironwrap-bff/1.0",
-          },
-          body: JSON.stringify({
-            roof_job_id: input.roofJobId,
-            gate: input.gate,
-            clearance: input.clearance,
-            actor_user: input.actorUser,
-            decision_id: input.decisionId,
-            reason: input.reason,
-            ...(input.evidence ? { evidence: input.evidence } : {}),
-          }),
-        });
-        const raw = (await response.text()).slice(0, MAX_FRAPPE_RESPONSE_BYTES);
-        if (!response.ok) {
-          // Frappe states the only real reason it refused; a 409/403 that arrives
-          // here as an anonymous 502 would send an office manager to the wrong
-          // person. The code is carried through, the prose is not.
-          throw new ProductionGateClearanceError(
-            frappeRefusalCode(raw),
-            response.status === 403 ? 403 : response.status === 417 ? 409 : 502,
-          );
-        }
-        let decoded: unknown;
-        try {
-          decoded = JSON.parse(raw) as unknown;
-        } catch {
-          throw new ProductionGateClearanceError("production_gate_frappe_invalid_json", 502);
-        }
-        const message = isRecord(decoded) ? decoded.message : null;
-        if (!isRecord(message) || !isRecord(message.gate)) {
-          throw new ProductionGateClearanceError("production_gate_frappe_invalid_shape", 502);
-        }
-        return message;
-      } catch (error) {
-        if (error instanceof ProductionGateClearanceError) throw error;
-        if (error instanceof Error && error.name === "AbortError") {
-          throw new ProductionGateClearanceError("production_gate_frappe_timeout", 504);
-        }
-        throw new ProductionGateClearanceError("production_gate_frappe_network_error", 502);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  };
+  clear(input: {
+    roofJobId: string;
+    gate: ClearableProductionGate;
+    clearance: "waived" | "verified";
+    actorUser: string;
+    decisionId: string;
+    reason: string;
+  }): Promise<Record<string, unknown>>;
 }
 
 /**

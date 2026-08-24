@@ -16,6 +16,8 @@ import {
   resolveFacetV2AuthorityLink,
   type FacetV2AuthorityLink,
 } from "./facet-v2-authority.ts";
+import { recordOperatingJobFileBestEffort } from "./job-file-index.ts";
+import { fileToJobFolder, googleConfigured } from "./google.ts";
 
 const POLICY_VERSION = "ironwrap-facet-consumer-v2";
 const MAX_BODY_BYTES = 512 * 1024;
@@ -233,6 +235,13 @@ export async function handleFacetDesignIngest(req: Request, env: Env): Promise<R
       nonceSha256,
       receivedAt,
       signed,
+    });
+    await archiveFacetDesignBestEffort(env, {
+      authority,
+      eventId: event.event_id,
+      rawKey,
+      bodySha256,
+      rawText: raw.text,
     });
   } catch {
     const sameNonce = await concurrentNonceReplayResponse(
@@ -879,6 +888,56 @@ function keyId(value: unknown): value is string {
 function uuid(value: unknown): value is string {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function archiveFacetDesignBestEffort(
+  env: Env,
+  input: {
+    authority: FacetV2AuthorityLink;
+    eventId: string;
+    rawKey: string;
+    bodySha256: string;
+    rawText: string;
+  },
+): Promise<void> {
+  let driveFolderId: string | null = null;
+  let driveFileId: string | null = null;
+  if (googleConfigured(env)) {
+    try {
+      const job = await env.DB.prepare(
+        `SELECT job_number FROM operating_roof_jobs
+          WHERE tenant_id = ? AND roof_job_id = ? LIMIT 1`,
+      )
+        .bind(input.authority.destinationTenantId, input.authority.roofJobId)
+        .first<{ job_number: string | null }>();
+      if (job?.job_number) {
+        const encoded = new TextEncoder().encode(input.rawText);
+        const bytes = new ArrayBuffer(encoded.byteLength);
+        new Uint8Array(bytes).set(encoded);
+        const filed = await fileToJobFolder(env, job.job_number, "05 Contract & Estimates", [{
+          name: `facet-design-${input.eventId.slice(0, 16)}.json`,
+          bytes,
+          contentType: "application/json",
+          idempotencyKey: `facet:${input.eventId}`.slice(0, 160),
+        }]);
+        driveFolderId = filed.folderId;
+        driveFileId = filed.files[0]?.driveFileId ?? null;
+      }
+    } catch {
+      // Drive archive is optional. The R2 pointer still lands in the index.
+    }
+  }
+  await recordOperatingJobFileBestEffort(env, {
+    tenantId: input.authority.destinationTenantId,
+    roofJobId: input.authority.roofJobId,
+    artifactKind: "facet_design",
+    artifactId: input.eventId,
+    driveFolderId,
+    driveFileId,
+    r2Key: input.rawKey,
+    contentSha256: input.bodySha256,
+    idempotencyKey: `facet:${input.eventId}`.slice(0, 160),
+  });
 }
 
 function facetJson(body: unknown, status = 200): Response {

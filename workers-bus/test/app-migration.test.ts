@@ -2144,13 +2144,16 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0092 field-evidence columns, 0093 commercial authority, 0094–0097 work-package
     // authority/integrity/roles, 0098–0099 assignment authority, 0100–0102 final-invoice
     // derivation and provider bindings, 0103–0104 measurement and photo evidence, 0105 Facet
-    // native design projection, 0106 native gate clearance and option packages. 0109 is the
-    // generic pipeline board core; it skipped to 0109 because 0107 and 0108 were already claimed
-    // on the open head of PR #144 when it was numbered. The 0070–0078 and 0083–0089 gaps
-    // are abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 87);
+    // native design projection, 0106 native gate clearance and option packages, 0107
+    // per-worker acknowledgement snapshot and portal confirmation, 0108 job-file index, 0109
+    // the CRM import ledger, and 0110 the tenant company profile, append-only revisions, and
+    // per-person notification preferences. 0111 is the office user-invitation ledger, 0112
+    // adds operator-search indexes, 0113 adds the pipeline board, and 0114 preserves both
+    // development capture kinds. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // collision numbers, not missing files.
+    assert.equal(migrations.length, 90);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0113_pipeline_board_core.sql");
+    assert.equal(migrations.at(-1), "0114_dev_outbox_capture_kinds.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2223,11 +2226,19 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // job-anchor, parent, no-replace, and append-only guards. 0106 adds one option-package
     // table and its tenant/job index (counted here) plus a partial unique clearance-decision
     // index whose name does not start with idx_ and is therefore counted only by the recovery
-    // inventories. 0109 adds the five generic pipeline-board tables, seven board/audit indexes,
-    // and ten version, identity and append-only guards.
+    // inventories. 0107 adds the per-worker acknowledgement snapshot, portal confirmation
+    // ledger, and named evidence/confirmation indexes (counted here). 0108 adds the
+    // operating job-file index, two idx_% indexes, and two append-only triggers. 0109 adds
+    // three crm_import_* ledger tables and their four query indexes; it adds no trigger because
+    // the importer owns no append-only chain of its own. 0110 adds three company-setup tables
+    // and two idx_% indexes; its remaining uniqueness is expressed as table constraints, so it
+    // adds no trigger. 0111 adds the office invitation ledger and its query indexes; 0112 adds
+    // operator-search indexes; 0113 adds the five pipeline-board tables, seven named indexes,
+    // and its version/identity/append-only guards. 0114 rebuilds the dev-only capture table once
+    // more to preserve both capture kinds and is count-neutral.
     assert.deepEqual(
       { ...counts },
-      { tables: 199, indexes: 299, triggers: 479 },
+      { tables: 202, indexes: 306, triggers: 487 },
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";
@@ -2764,6 +2775,323 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
         "prevent_production_schedule_approval_refusal_insert",
       ],
     );
+  } finally {
+    db.close();
+  }
+});
+
+test("0107 backfills acknowledged Work Package events before projecting new acknowledgements", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const migrations = (
+      await readdir(new URL("../migrations/", import.meta.url))
+    )
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+      .sort();
+    const pendingMigrations = [
+      "0107_work_package_multi_worker_and_portal_confirm.sql",
+      "0108_operating_job_file_index.sql",
+      "0114_dev_outbox_capture_kinds.sql",
+    ];
+    assert.deepEqual(
+      pendingMigrations.filter((name) => migrations.includes(name)),
+      pendingMigrations,
+    );
+    const pending = new Set(pendingMigrations);
+    for (const name of migrations.filter((candidate) => !pending.has(candidate))) {
+      db.exec(
+        await readFile(
+          new URL(`../migrations/${name}`, import.meta.url),
+          "utf8",
+        ),
+      );
+    }
+    for (const table of ["app_user_invites", "pipeline_cards"]) {
+      assert.equal(
+        (
+          db.prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
+          ).get(table) as { count: number }
+        ).count,
+        1,
+        `${table} must already exist before 0107 is applied`,
+      );
+    }
+
+    const issuedAt = "2026-08-20T08:00:00.000Z";
+    const acknowledgedAt = "2026-08-20T08:01:00.000Z";
+    const startedAt = "2026-08-20T08:02:00.000Z";
+    const ownerUserId = "appu_upgrade_owner_0001";
+    const workerUserId = "appu_upgrade_worker_0001";
+    const workPackageId = "wp_upgrade_ack_0001";
+    const jobId = "JOB-UPGRADE-ACK";
+    const assignmentId = "ASSIGN-UPGRADE-ACK";
+    const releaseAttemptId = "attempt-upgrade-ack-0001";
+
+    const insertUser = db.prepare(
+      `INSERT INTO app_users
+        (user_id, tenant_id, email_normalized, display_name, role, access_role,
+         frappe_user_id, active, created_by, created_at, updated_at)
+       VALUES (?, 'ironwrap', ?, ?, ?, ?, ?, 1, 'migration-test', ?, ?)`,
+    );
+    insertUser.run(
+      ownerUserId,
+      "upgrade-owner@example.com",
+      "Upgrade Owner",
+      "owner",
+      "owner",
+      null,
+      issuedAt,
+      issuedAt,
+    );
+    insertUser.run(
+      workerUserId,
+      "upgrade-worker@example.com",
+      "Upgrade Worker",
+      "field",
+      "field",
+      "upgrade-worker@example.com",
+      issuedAt,
+      issuedAt,
+    );
+
+    const definitionJson = JSON.stringify({
+      tenant_id: "ironwrap",
+      work_package_id: workPackageId,
+      version: 1,
+      job_id: jobId,
+      assignment_id: assignmentId,
+      work_object_type: "Roof Job",
+      work_object_id: jobId,
+      physical_context_type: "Roof Site",
+      physical_context_id: jobId,
+      assignment_authority_user: null,
+      assignment_authority_role: null,
+      title: "Upgrade acknowledgement package",
+      objective: "Prove the acknowledgement migration preserves eligibility",
+      boundaries: "Only this migration fixture",
+      prerequisites: "The worker has the released packet",
+      expected_result: "The package remains startable after migration",
+      stop_conditions: "Stop if the acknowledgement is missing",
+      make_safe_procedure: "Leave the package released",
+      issued_at: issuedAt,
+      expires_at: "2026-08-21T08:00:00.000Z",
+      released_at: issuedAt,
+      release_attempt_id: releaseAttemptId,
+      supersedes_id: null,
+      supersedes_version: null,
+      correction_reason: null,
+      issued_by_user: ownerUserId,
+      issued_by_role: "IronWrap Owner",
+      assigned_workers: [
+        {
+          sequence: 1,
+          worker_user: workerUserId,
+          worker_role: "Installer",
+          required: true,
+        },
+      ],
+      steps: [],
+      hold_points: [],
+    });
+    db.prepare(
+      `INSERT INTO work_packages
+        (work_package_id, tenant_id, version, job_id, assignment_id,
+         work_object_type, work_object_id, physical_context_type, physical_context_id,
+         assignment_authority_user, assignment_authority_role, status,
+         title, objective, boundaries, prerequisites, expected_result, stop_conditions,
+         make_safe_procedure, definition_json, issued_at, expires_at, released_at,
+         release_attempt_id, supersedes_id, correction_reason, created_at, updated_at)
+       VALUES (?, 'ironwrap', 1, ?, ?, 'Roof Job', ?, 'Roof Site', ?, NULL, NULL,
+               'Released', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+    ).run(
+      workPackageId,
+      jobId,
+      assignmentId,
+      jobId,
+      jobId,
+      "Upgrade acknowledgement package",
+      "Prove the acknowledgement migration preserves eligibility",
+      "Only this migration fixture",
+      "The worker has the released packet",
+      "The package remains startable after migration",
+      "Stop if the acknowledgement is missing",
+      "Leave the package released",
+      definitionJson,
+      issuedAt,
+      "2026-08-21T08:00:00.000Z",
+      issuedAt,
+      releaseAttemptId,
+      issuedAt,
+      issuedAt,
+    );
+
+    const insertEvent = db.prepare(
+      `INSERT INTO work_package_events
+        (event_id, tenant_id, work_package_id, work_package_version, job_id,
+         assignment_id, work_object_type, work_object_id, physical_context_type,
+         physical_context_id, release_attempt_id, event_kind, actor_user_id,
+         actor_role, device_action_id, occurred_at, manifest_key, payload_json, created_at)
+       VALUES (?, 'ironwrap', ?, 1, ?, ?, 'Roof Job', ?, 'Roof Site', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertEvent.run(
+      "wpe_upgrade_issued_0001",
+      workPackageId,
+      jobId,
+      assignmentId,
+      jobId,
+      jobId,
+      releaseAttemptId,
+      "issued",
+      ownerUserId,
+      "IronWrap Owner",
+      "dact_upgrade_issued_0001",
+      issuedAt,
+      "work-packages/upgrade/issued.json",
+      JSON.stringify({
+        definition_sha256: "a".repeat(64),
+        command_sha256: "a".repeat(64),
+      }),
+      issuedAt,
+    );
+    insertEvent.run(
+      "wpe_upgrade_ack_0001",
+      workPackageId,
+      jobId,
+      assignmentId,
+      jobId,
+      jobId,
+      releaseAttemptId,
+      "acknowledged",
+      workerUserId,
+      "Installer",
+      "dact_upgrade_ack_0001",
+      acknowledgedAt,
+      "work-packages/upgrade/ack.json",
+      "{}",
+      acknowledgedAt,
+    );
+    assert.equal(
+      (
+        db.prepare(
+          "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
+        ).get(workPackageId) as { status: string }
+      ).status,
+      "Acknowledged",
+    );
+
+    const migrationSql = await readFile(
+      new URL(`../migrations/${pendingMigrations[0]}`, import.meta.url),
+      "utf8",
+    );
+    for (const name of pendingMigrations) {
+      db.exec(
+        name === pendingMigrations[0]
+          ? migrationSql
+          : await readFile(
+              new URL(`../migrations/${name}`, import.meta.url),
+              "utf8",
+            ),
+      );
+    }
+
+    const acknowledgement = db
+      .prepare(
+        `SELECT tenant_id, work_package_id, work_package_version, actor_user_id,
+                actor_role, event_id, device_action_id, occurred_at, created_at
+           FROM work_package_worker_acknowledgements`,
+      )
+      .get() as Record<string, unknown>;
+    assert.deepEqual(
+      { ...acknowledgement },
+      {
+        tenant_id: "ironwrap",
+        work_package_id: workPackageId,
+        work_package_version: 1,
+        actor_user_id: workerUserId,
+        actor_role: "Installer",
+        event_id: "wpe_upgrade_ack_0001",
+        device_action_id: "dact_upgrade_ack_0001",
+        occurred_at: acknowledgedAt,
+        created_at: acknowledgedAt,
+      },
+    );
+    assert.equal(
+      (
+        db.prepare(
+          "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
+        ).get() as { count: number }
+      ).count,
+      1,
+    );
+    assert.throws(
+      () =>
+        db.prepare(
+          `UPDATE work_package_worker_acknowledgements
+              SET actor_role = 'Foreman'
+            WHERE event_id = 'wpe_upgrade_ack_0001'`,
+        ).run(),
+      /work_package_worker_ack_append_only/,
+    );
+    assert.throws(
+      () =>
+        db.prepare(
+          `DELETE FROM work_package_worker_acknowledgements
+            WHERE event_id = 'wpe_upgrade_ack_0001'`,
+        ).run(),
+      /work_package_worker_ack_append_only/,
+    );
+    assert.throws(
+      () =>
+        db.prepare(
+          `INSERT INTO work_package_worker_acknowledgements
+            (tenant_id, work_package_id, work_package_version, actor_user_id,
+             actor_role, event_id, device_action_id, occurred_at, created_at)
+           VALUES ('ironwrap', ?, 1, ?, 'Installer', 'wpe_upgrade_ack_duplicate',
+                   'dact_upgrade_ack_duplicate', ?, ?)`,
+        ).run(workPackageId, workerUserId, acknowledgedAt, acknowledgedAt),
+      /UNIQUE constraint failed/,
+    );
+
+    insertEvent.run(
+      "wpe_upgrade_start_0001",
+      workPackageId,
+      jobId,
+      assignmentId,
+      jobId,
+      jobId,
+      releaseAttemptId,
+      "start_work",
+      workerUserId,
+      "Installer",
+      "dact_upgrade_start_0001",
+      startedAt,
+      "work-packages/upgrade/start.json",
+      "{}",
+      startedAt,
+    );
+    assert.equal(
+      (
+        db.prepare(
+          "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
+        ).get(workPackageId) as { status: string }
+      ).status,
+      "In Progress",
+    );
+
+    // Wrangler records migrations by filename and applies each once. A manual
+    // second application must fail closed instead of masking duplicate truth.
+    assert.throws(() => db.exec(migrationSql), /UNIQUE constraint failed/);
+    assert.equal(
+      (
+        db.prepare(
+          "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
+        ).get() as { count: number }
+      ).count,
+      1,
+    );
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally {
     db.close();
   }

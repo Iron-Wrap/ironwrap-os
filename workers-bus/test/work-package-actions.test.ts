@@ -712,6 +712,148 @@ test("work-package start stays closed until every required worker acknowledges t
   assert.deepEqual(unavailable.allowedActions, ["work_package.stop_work"]);
 });
 
+test("two workers may each keep a current evidence instance; a shared slot stays conflicted", () => {
+  const base = workPackageForProjectionFixture();
+  const shared = {
+    eventId: "evidence-event-a",
+    evidenceItem: "evidence-item-a",
+    actorUser: "crew-a@example.com",
+    actorRole: "Installer",
+    deviceActionId: "evidence-device-a",
+    occurredAt: "2026-07-10T07:12:00.000Z",
+    slotId: "step:1",
+    requirement: "Zone photo",
+    source: "worker-camera",
+    deviceId: "paired-device-a",
+    capturedAt: "2026-07-10T07:12:00.000Z",
+    freshness: "Current" as const,
+    conflictState: "None" as const,
+    correctionOf: null,
+    itemCorrectionOf: null,
+    verification: "Verified" as const,
+    disposition: "Accepted" as const,
+    correctionReason: null,
+    reviewReason: null,
+    releaseAttemptId: "attempt-a",
+  };
+  const projection = fieldWorkPackageProjection(
+    {
+      ...base,
+      status: "In Progress",
+      evidenceLedgerAvailable: true,
+      assignedWorkers: [
+        { sequence: 1, workerUser: "crew-a@example.com", workerRole: "Installer", required: true },
+        { sequence: 2, workerUser: "crew-b@example.com", workerRole: "Spotter", required: true },
+      ],
+      evidence: [
+        shared,
+        {
+          ...shared,
+          eventId: "evidence-event-b",
+          evidenceItem: "evidence-item-b",
+          actorUser: "crew-b@example.com",
+          actorRole: "Spotter",
+          deviceActionId: "evidence-device-b",
+          deviceId: "paired-device-b",
+        },
+        {
+          ...shared,
+          eventId: "evidence-event-hold",
+          evidenceItem: "evidence-item-hold",
+          slotId: "hold:1",
+          requirement: "Deck photo",
+          deviceActionId: "evidence-device-hold",
+        },
+      ],
+      holdPoints: [{ ...base.holdPoints[0]!, released: true }],
+    },
+    "owner@example.com",
+    { completionAuthority: true },
+  );
+  assert.equal(projection.work_package?.evidence_slots.length, 3);
+  assert.equal(
+    projection.work_package?.evidence_slots.filter((slot) => slot.slot_id === "step:1")
+      .every((slot) => slot.conflict_state === "Detected"),
+    true,
+  );
+  assert.equal(projection.allowedActions.includes("work_package.complete"), false);
+});
+
+test("sibling corrections by one worker keep a shared slot conflicted", () => {
+  const base = workPackageForProjectionFixture();
+  const original = {
+    eventId: "evidence-event-original",
+    evidenceItem: "evidence-item-original",
+    actorUser: "crew-a@example.com",
+    actorRole: "Installer",
+    deviceActionId: "evidence-device-original",
+    occurredAt: "2026-07-10T07:12:00.000Z",
+    slotId: "step:1",
+    requirement: "Zone photo",
+    source: "worker-camera",
+    deviceId: "paired-device-a",
+    capturedAt: "2026-07-10T07:12:00.000Z",
+    freshness: "Current" as const,
+    conflictState: "None" as const,
+    correctionOf: null,
+    itemCorrectionOf: null,
+    verification: "Verified" as const,
+    disposition: "Accepted" as const,
+    correctionReason: null,
+    reviewReason: null,
+    releaseAttemptId: "attempt-a",
+  };
+  const projection = fieldWorkPackageProjection(
+    {
+      ...base,
+      status: "In Progress",
+      evidenceLedgerAvailable: true,
+      assignedWorkers: [
+        { sequence: 1, workerUser: "crew-a@example.com", workerRole: "Installer", required: true },
+      ],
+      evidence: [
+        original,
+        {
+          ...original,
+          eventId: "evidence-event-correction-a",
+          evidenceItem: "evidence-item-correction-a",
+          deviceActionId: "evidence-device-correction-a",
+          correctionOf: original.eventId,
+          itemCorrectionOf: original.evidenceItem,
+          correctionReason: "Retake from the west edge",
+        },
+        {
+          ...original,
+          eventId: "evidence-event-correction-b",
+          evidenceItem: "evidence-item-correction-b",
+          deviceActionId: "evidence-device-correction-b",
+          correctionOf: original.eventId,
+          itemCorrectionOf: original.evidenceItem,
+          correctionReason: "Retake with the full roof plane",
+        },
+        {
+          ...original,
+          eventId: "evidence-event-hold",
+          evidenceItem: "evidence-item-hold",
+          slotId: "hold:1",
+          requirement: "Deck photo",
+          deviceActionId: "evidence-device-hold",
+        },
+      ],
+      holdPoints: [{ ...base.holdPoints[0]!, released: true }],
+    },
+    "owner@example.com",
+    { completionAuthority: true },
+  );
+  assert.equal(
+    projection.work_package?.evidence_slots
+      .filter((slot) => slot.slot_id === "step:1")
+      .every((slot) => slot.conflict_state === "Detected"),
+    true,
+  );
+  assert.equal(projection.allowedActions.includes("work_package.complete"), false);
+});
+
 test("optional roster rows remain visible without invalidating a required worker ledger", () => {
   const projection = fieldWorkPackageProjection(
     {

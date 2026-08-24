@@ -164,8 +164,18 @@ describe("role-shaped navigation", () => {
 
   it("allows every role only onto its intended work surfaces", () => {
     const expected = {
-      owner: ["owner", "sales", "production", "accounting", "newo", "job", "field", "inventory"],
-      ops: ["owner", "sales", "production", "newo", "job", "field", "inventory"],
+      owner: [
+        "owner",
+        "sales",
+        "production",
+        "accounting",
+        "newo",
+        "job",
+        "field",
+        "inventory",
+        "pairing",
+      ],
+      ops: ["owner", "sales", "production", "newo", "job", "field", "inventory", "pairing"],
       sales: ["sales"],
       production: ["production", "job"],
       accounting: ["accounting"],
@@ -183,6 +193,7 @@ describe("role-shaped navigation", () => {
       "field",
       "fleet",
       "inventory",
+      "pairing",
     ] as const;
 
     for (const role of appRoles) {
@@ -223,5 +234,11 @@ describe("role-shaped navigation", () => {
     expect(roleCanAccess("sales", "inventory")).toBe(false);
     expect(roleCanAccess("production", "inventory")).toBe(false);
     expect(roleCanAccess("accounting", "inventory")).toBe(false);
+    expect(roleCanAccess("owner", "pairing")).toBe(true);
+    expect(roleCanAccess("ops", "pairing")).toBe(true);
+    expect(roleCanAccess("sales", "pairing")).toBe(false);
+    expect(roleCanAccess("production", "pairing")).toBe(false);
+    expect(roleCanAccess("field", "pairing")).toBe(false);
+    expect(roleCanAccess("accounting", "pairing")).toBe(false);
   });
 });

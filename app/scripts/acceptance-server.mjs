@@ -1762,6 +1762,103 @@ function resetOnboardingState() {
   onboardingState = onboardingDefaults();
 }
 
+const fixturePipelineEnvelope = {
+  version: 1,
+  source_updated_at: "2026-08-22T12:00:00.000Z",
+  read_model_generated_at: "2026-08-22T12:00:01.000Z",
+  stale_fields: [],
+  permissions: ["pipeline:read"],
+  allowed_actions: ["pipeline.card.move"],
+};
+
+const fixturePipeline = {
+  pipeline_id: "pipe-sales",
+  key: "sales",
+  name: "Sales \u00b7 Marketing Pipeline",
+  entity_type: "lead",
+  owning_role: "sales",
+  position: 0,
+};
+
+function fixturePipelineBoard() {
+  const names = [
+    "New Lead",
+    "Visit Booked",
+    "Need Quote",
+    "Quote Sent",
+    "Contract signed",
+    "Deposit",
+    "Materials in prod",
+  ];
+  const id = (name) => name.toLowerCase().replace(/\s+/g, "_");
+  const counts = { "New Lead": 1, "Need Quote": 1, "Quote Sent": 115, "Contract signed": 1 };
+  const totals = { "Need Quote": 400_000, "Quote Sent": 641_420_540, "Contract signed": 1_450_000 };
+  return {
+    ...fixturePipelineEnvelope,
+    pipeline: fixturePipeline,
+    stages: names.map((name, position) => ({
+      stage_id: id(name),
+      key: id(name),
+      name,
+      position,
+      is_won: name === "Contract signed",
+      is_lost: false,
+      card_count: counts[name] ?? 0,
+      total_amount_cents: totals[name] ?? 0,
+      min_role_to_enter: null,
+    })),
+    cards: [
+      {
+        card_id: "card-lead",
+        stage_id: "new_lead",
+        position_in_stage: 10,
+        entity_type: "lead",
+        entity_id: "lead-1",
+        version: 1,
+        summary: { title: "Jubril Mcgregor", counters: [{ kind: "messages", count: 1 }] },
+      },
+      {
+        card_id: "card-quote",
+        stage_id: "need_quote",
+        position_in_stage: 10,
+        entity_type: "lead",
+        entity_id: "lead-2",
+        version: 7,
+        summary: {
+          title: "Naina Tamang",
+          amount_cents: 400_000,
+          identifiers: [{ label: "Lead", value: "26-219-ER" }],
+          tags: ["Metal Roofing"],
+          counters: [
+            { kind: "messages", count: 2 },
+            { kind: "files", count: 8 },
+          ],
+          is_won: false,
+        },
+      },
+      {
+        card_id: "card-won",
+        stage_id: "contract_signed",
+        position_in_stage: 10,
+        entity_type: "lead",
+        entity_id: "lead-3",
+        version: 2,
+        summary: {
+          title: "Petre Milouchev",
+          amount_cents: 1_450_000,
+          identifiers: [
+            { label: "Lead", value: "26-058-ABN" },
+            { label: "Job", value: "ABN26-004" },
+          ],
+          tags: ["Metal Roofing", "Soffit"],
+          counters: [{ kind: "messages", count: 2 }],
+          is_won: true,
+        },
+      },
+    ],
+  };
+}
+
 function onboardingSetupProgressPayload() {
   const named = String(onboardingState.profile.company_name ?? "").trim().length > 0;
   const peopled = (onboardingState.users ?? []).length > 1;
@@ -2132,6 +2229,22 @@ const requestListener = async (request, response) => {
     requestUrl.pathname === "/api/v1/estimator/jobs/JOB-ESTIMATOR-ACCEPTANCE"
   ) {
     return sendJson(response, method, 200, fixtureEstimatorWorkbench);
+  }
+  // The board's own e2e mocks these with page.route inside the spec, which
+  // covers the move contract but leaves the surface unreachable outside
+  // Playwright - so it could not be opened and looked at. Read-only here on
+  // purpose: transitions stay the spec's stateful fixture.
+  if (ACCEPTANCE_MODE === "estimator" && requestUrl.pathname === "/api/v1/pipelines") {
+    return sendJson(response, method, 200, {
+      ...fixturePipelineEnvelope,
+      pipelines: [fixturePipeline],
+    });
+  }
+  if (
+    ACCEPTANCE_MODE === "estimator" &&
+    requestUrl.pathname === "/api/v1/pipelines/pipe-sales/board"
+  ) {
+    return sendJson(response, method, 200, fixturePipelineBoard());
   }
   if (requestUrl.pathname.startsWith("/api/")) {
     return sendJson(response, method, 404, { error: "fixture_route_not_found" });

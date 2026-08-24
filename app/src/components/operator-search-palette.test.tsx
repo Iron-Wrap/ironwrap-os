@@ -140,6 +140,20 @@ describe("OperatorSearchPalette", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
+  it("does not render clear and close as the same glyph", async () => {
+    // They sat side by side as identical X icons with different consequences:
+    // one empties the field, the other loses your place. Only a screen reader
+    // could tell them apart, so the close control names the key instead.
+    const user = userEvent.setup();
+    renderPalette();
+    await user.type(screen.getByRole("combobox"), "ab");
+
+    const clear = screen.getByRole("button", { name: "Clear search" });
+    const close = screen.getByRole("button", { name: "Close search" });
+    expect(close).toHaveTextContent("Esc");
+    expect(clear.innerHTML).not.toEqual(close.innerHTML);
+  });
+
   it("shows the real grouped order and more-results signal", async () => {
     vi.mocked(loadOperatorSearch).mockResolvedValue(model);
     renderPalette();

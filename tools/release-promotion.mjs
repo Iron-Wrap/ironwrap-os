@@ -520,6 +520,22 @@ function validateIssuerAcknowledgement(acknowledgement, expected = {}) {
   return acknowledgement;
 }
 
+export function validateIndependentIssuerRequest(request, now = Date.now) {
+  exactObjectKeys(request, ["schema", "phase", "repository", "pr_number", "base_commit", "head_commit", "source_commit", "source_git_tree", "source_tree_sha256", "diff_sha256", "ci_run_id", "candidate_artifact", "publication", "receipt_key", "requested_at", "expires_at", "requested_by", "expected_issuer"], "issuer_request_shape_invalid");
+  exactObjectKeys(request.candidate_artifact, ["actions_run_id", "actions_run_attempt", "name", "content_digest"], "issuer_request_artifact_invalid");
+  exactObjectKeys(request.publication, ["ref", "path"], "issuer_request_publication_invalid");
+  exactObjectKeys(request.receipt_key, ["public_key_sha256", "key_version"], "issuer_request_key_invalid");
+  exactObjectKeys(request.expected_issuer, ["principal", "task_id"], "issuer_request_expected_invalid");
+  if (request.schema !== INDEPENDENT_ISSUER_REQUEST_SCHEMA || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
+  for (const value of [request.base_commit, request.head_commit, request.source_commit, request.source_git_tree]) requireCommit(value, "issuer_request_commit_invalid");
+  for (const value of [request.source_tree_sha256, request.diff_sha256, request.candidate_artifact.content_digest, request.receipt_key.public_key_sha256]) requireHash(value, "issuer_request_digest_invalid");
+  for (const value of [request.ci_run_id, request.candidate_artifact.actions_run_id, request.candidate_artifact.actions_run_attempt]) if (!/^[1-9][0-9]*$/.test(String(value))) fail("issuer_request_run_invalid");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(request.candidate_artifact.name) || !IDENTITY_RE.test(request.requested_by) || !IDENTITY_RE.test(request.expected_issuer.principal) || request.requested_by === request.expected_issuer.principal) fail("issuer_request_identity_invalid");
+  for (const value of [request.expected_issuer.task_id, request.receipt_key.key_version]) if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("issuer_request_execution_invalid");
+  validateIndependentIssuerFreshness(request, now);
+  return request;
+}
+
 export async function requestIndependentIssuer({
   url,
   apiToken,
@@ -536,23 +552,13 @@ export async function requestIndependentIssuer({
     || issuerUrl.password
     || issuerUrl.hash) fail("issuer_url_invalid");
   requireString(apiToken, "issuer_token_missing");
-  exactObjectKeys(request, ["schema", "phase", "repository", "pr_number", "base_commit", "head_commit", "source_commit", "source_git_tree", "source_tree_sha256", "diff_sha256", "ci_run_id", "candidate_artifact", "publication", "receipt_key", "requested_at", "expires_at", "requested_by", "expected_issuer"], "issuer_request_shape_invalid");
-  exactObjectKeys(request.candidate_artifact, ["actions_run_id", "actions_run_attempt", "name", "content_digest"], "issuer_request_artifact_invalid");
-  exactObjectKeys(request.publication, ["ref", "path"], "issuer_request_publication_invalid");
-  exactObjectKeys(request.receipt_key, ["public_key_sha256", "key_version"], "issuer_request_key_invalid");
-  exactObjectKeys(request.expected_issuer, ["principal", "task_id"], "issuer_request_expected_invalid");
-  if (request.schema !== INDEPENDENT_ISSUER_REQUEST_SCHEMA || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
-  for (const value of [request.base_commit, request.head_commit, request.source_commit, request.source_git_tree]) requireCommit(value, "issuer_request_commit_invalid");
-  for (const value of [request.source_tree_sha256, request.diff_sha256, request.candidate_artifact.content_digest, request.receipt_key.public_key_sha256]) requireHash(value, "issuer_request_digest_invalid");
-  for (const value of [request.ci_run_id, request.candidate_artifact.actions_run_id, request.candidate_artifact.actions_run_attempt]) if (!/^[1-9][0-9]*$/.test(String(value))) fail("issuer_request_run_invalid");
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(request.candidate_artifact.name) || !IDENTITY_RE.test(request.requested_by) || !IDENTITY_RE.test(request.expected_issuer.principal) || request.requested_by === request.expected_issuer.principal) fail("issuer_request_identity_invalid");
-  for (const value of [request.expected_issuer.task_id, request.receipt_key.key_version]) if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/.test(value)) fail("issuer_request_execution_invalid");
-  validateIndependentIssuerFreshness(request, now);
-  const requestDigest = sha256(canonicalJson(request));
+  validateIndependentIssuerRequest(request, now);
+  const requestBody = canonicalJson(request);
+  const requestDigest = sha256(requestBody);
   const response = await fetchImpl(issuerUrl, {
     method: "POST",
     headers: { accept: "application/json", authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-    body: canonicalJson(request),
+    body: requestBody,
     signal: AbortSignal.timeout(30_000),
   }).catch(() => null);
   if (!response?.ok) fail("issuer_unavailable");

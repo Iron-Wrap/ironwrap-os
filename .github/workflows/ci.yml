@@ -141,6 +141,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run app Playwright e2e (PWA suite)
         run: npm run test:pwa --prefix app
+      # The board is an office surface, so it needs an office session the default
+      # field-mode acceptance server does not serve. Mobile evidence for it is a gate,
+      # not a nice-to-have, so the suite runs here rather than only on a laptop.
+      - name: Run app Playwright e2e (pipeline board, office session)
+        run: npm run test:pwa:board --prefix app
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types

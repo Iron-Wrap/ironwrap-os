@@ -1,0 +1,125 @@
+import { z } from "zod";
+
+/**
+ * The pipeline board contract, transcribed from the architect's design (ELEC-155,
+ * "Mobile-first read model" and "API route contract"). The server half ships on a
+ * sibling task and lands in parallel with this surface, so these objects are
+ * deliberately NOT `.strict()` the way the older read-model contracts are: an
+ * additive field on the board payload must never blank a salesperson's board
+ * mid-shift. Every field this surface actually renders is still validated, so drift
+ * on the shape we depend on is still caught at the boundary rather than in a
+ * component.
+ *
+ * `slot` and `format` are plain strings rather than enums for the same reason —
+ * a card template that names a slot this build does not know yet renders the slots
+ * it does know instead of failing the whole board.
+ */
+
+const nullableText = z.string().min(1).nullable();
+
+const pipelineEnvelopeSchema = z.object({
+  version: z.literal(1),
+  source_updated_at: nullableText,
+  read_model_generated_at: z.string().min(1),
+  stale_fields: z.array(z.string()),
+  permissions: z.array(z.string()),
+  allowed_actions: z.array(z.string()),
+});
+
+export const cardTemplateBindingSchema = z.object({
+  slot: z.string().min(1),
+  label: nullableText.optional(),
+  source_field: z.string().min(1),
+  format: nullableText.optional(),
+  limit: z.number().int().positive().optional(),
+});
+
+export const pipelineSummarySchema = z.object({
+  pipeline_id: z.string().min(1),
+  key: z.string().min(1),
+  name: z.string().min(1),
+  entity_type: z.string().min(1).optional(),
+  owning_role: nullableText.optional(),
+  position: z.number().int().nonnegative().optional(),
+  card_template_json: z.array(cardTemplateBindingSchema).nullable().optional(),
+});
+
+export const pipelineListResponseSchema = pipelineEnvelopeSchema.extend({
+  pipelines: z.array(pipelineSummarySchema),
+});
+
+export const boardStageSchema = z.object({
+  stage_id: z.string().min(1),
+  key: z.string().min(1),
+  name: z.string().min(1),
+  position: z.number().int().nonnegative(),
+  is_won: z.boolean().optional(),
+  is_lost: z.boolean().optional(),
+  card_count: z.number().int().nonnegative().optional(),
+  total_amount_cents: z.number().nullable().optional(),
+  // Set by an administrator in M3; every M1-seeded stage carries null, which means
+  // "anyone holding the pipeline's move permission may enter" (ELEC-155 section 4).
+  min_role_to_enter: nullableText.optional(),
+  color: nullableText.optional(),
+});
+
+/**
+ * The card's display payload. `catchall` keeps fields this build does not name:
+ * the card renderer reads slots out of it by the `source_field` its template
+ * declares, so a Production board can bind a field no Sales card has.
+ */
+export const cardSummarySchema = z
+  .object({
+    title: z.string().min(1),
+    amount_cents: z.number().nullable().optional(),
+    identifiers: z
+      .array(z.object({ label: z.string().min(1), value: z.string().min(1) }))
+      .optional(),
+    tags: z.array(z.string().min(1)).optional(),
+    counters: z.array(z.object({ kind: z.string().min(1), count: z.number() })).optional(),
+    is_won: z.boolean().optional(),
+  })
+  .catchall(z.unknown());
+
+export const boardCardSchema = z.object({
+  card_id: z.string().min(1),
+  stage_id: z.string().min(1),
+  position_in_stage: z.number().optional(),
+  entity_type: z.string().min(1).optional(),
+  entity_id: z.string().min(1).optional(),
+  // The CAS token for a move. Optional only so a server that has not wired it into
+  // the read model yet still renders a readable board; see the note in pipeline-api.ts.
+  version: z.number().int().positive().optional(),
+  summary: cardSummarySchema,
+});
+
+export const pipelineBoardResponseSchema = pipelineEnvelopeSchema.extend({
+  pipeline: pipelineSummarySchema,
+  stages: z.array(boardStageSchema),
+  cards: z.array(boardCardSchema),
+});
+
+export const cardTransitionResponseSchema = z
+  .object({
+    transition_id: z.string().min(1).optional(),
+    safeguard: nullableText.optional(),
+    card: z
+      .object({
+        card_id: z.string().min(1).optional(),
+        stage_id: z.string().min(1).optional(),
+        version: z.number().int().positive().optional(),
+        stage_entered_at: nullableText.optional(),
+      })
+      .catchall(z.unknown())
+      .optional(),
+  })
+  .catchall(z.unknown());
+
+export type CardTemplateBinding = z.infer<typeof cardTemplateBindingSchema>;
+export type PipelineSummary = z.infer<typeof pipelineSummarySchema>;
+export type PipelineListResponse = z.infer<typeof pipelineListResponseSchema>;
+export type BoardStage = z.infer<typeof boardStageSchema>;
+export type BoardCard = z.infer<typeof boardCardSchema>;
+export type CardSummary = z.infer<typeof cardSummarySchema>;
+export type PipelineBoardResponse = z.infer<typeof pipelineBoardResponseSchema>;
+export type CardTransitionResponse = z.infer<typeof cardTransitionResponseSchema>;

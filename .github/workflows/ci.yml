@@ -64,6 +64,8 @@ jobs:
         run: node --test tools/validate-lead-triage-shadow-authority.test.mjs
       - name: Test tenant runtime preflight
         run: node --test tools/validate-tenant-runtime.test.mjs
+      - name: Test pipeline template seeding (every config/pipelines document parses)
+        run: node --test tools/seed-pipeline.test.mjs
       - name: Test tenant config generation from the clone template
         run: node --test tools/generate-tenant-config.test.mjs
       - name: Test tenant Worker config derivation (no source-tenant references survive)

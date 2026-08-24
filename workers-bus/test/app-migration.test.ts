@@ -2144,12 +2144,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0092 field-evidence columns, 0093 commercial authority, 0094–0097 work-package
     // authority/integrity/roles, 0098–0099 assignment authority, 0100–0102 final-invoice
     // derivation and provider bindings, 0103–0104 measurement and photo evidence, 0105 Facet
-    // native design projection, 0106 native gate clearance and option packages, 0112 the
-    // operator-search prefix indexes. The 0070–0078, 0083–0089 and 0107–0111 gaps are numbers
-    // claimed by other open heads or abandoned collisions, not missing files.
-    assert.equal(migrations.length, 86);
+    // native design projection, 0106 native gate clearance and option packages. 0109 is the
+    // generic pipeline board core; it skipped to 0109 because 0107 and 0108 were already claimed
+    // on the open head of PR #144 when it was numbered. The 0070–0078 and 0083–0089 gaps
+    // are abandoned collision numbers, not missing files.
+    assert.equal(migrations.length, 87);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0112_operator_search_prefix_indexes.sql");
+    assert.equal(migrations.at(-1), "0113_pipeline_board_core.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2222,10 +2223,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // job-anchor, parent, no-replace, and append-only guards. 0106 adds one option-package
     // table and its tenant/job index (counted here) plus a partial unique clearance-decision
     // index whose name does not start with idx_ and is therefore counted only by the recovery
-    // inventories. 0112 adds seven operator-search prefix indexes and no table or trigger.
+    // inventories. 0109 adds the five generic pipeline-board tables, seven board/audit indexes,
+    // and ten version, identity and append-only guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 194, indexes: 292, triggers: 469 },
+      { tables: 199, indexes: 299, triggers: 479 },
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";

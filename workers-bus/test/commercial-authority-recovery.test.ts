@@ -167,9 +167,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 194],
-    ["REQUIRED_INDEX_COUNT", 300],
-    ["REQUIRED_TRIGGER_COUNT", 469],
+    ["REQUIRED_TABLE_COUNT", 199],
+    ["REQUIRED_INDEX_COUNT", 307],
+    ["REQUIRED_TRIGGER_COUNT", 479],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -203,7 +203,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0112", () => {
+test("the full schema matches the recovery frontier through 0109", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -222,10 +222,11 @@ test("the full schema matches the recovery frontier through 0112", () => {
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    // 0112 adds seven operator-search prefix indexes and no table or trigger.
+    // 0113_pipeline_board_core.sql adds the five pipeline tables, their seven indexes, and the
+    // ten guards that keep a card's version honest and its transition trail append-only.
     assert.deepEqual(
       { ...counts },
-      { tables: 194, indexes: 300, triggers: 469 },
+      { tables: 199, indexes: 307, triggers: 479 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

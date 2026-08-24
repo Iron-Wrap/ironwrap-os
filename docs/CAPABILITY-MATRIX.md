@@ -60,12 +60,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 86,
-      "latest": "0112_operator_search_prefix_indexes.sql"
+      "count": 87,
+      "latest": "0113_pipeline_board_core.sql"
     },
     "tests": {
       "pwa": 586,
-      "worker": 1318
+      "worker": 1367
     }
   },
   "proof_state_policy": {
@@ -846,7 +846,7 @@ Target gaps:
 | Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | Partial: D1 owns append-only assignment revisions, conflict checks, and an approval ledger; the older Frappe approval broker is compatibility residue | constraint solver, authoritative lifecycle projection, weather/material/crew inputs, and policy-bounded reschedule proposals | conflict/weather/material reference test and real dispatcher acceptance |
-| Workflow composition | Read-only owner/production/sales surfaces plus a read-only Frappe pipeline projection; no native configurable drag/drop authority | versioned role/work-type views over orthogonal state machines, typed command gestures, committed-event automations, and schema-driven forms | stale-version drop rejected, gate blocker preserved, event replay idempotent, and form authority enforced |
+| Workflow composition | Partial: D1 owns a generic pipeline/stage/card model (`0113_pipeline_board_core.sql`) and the server-enforced safe-movement contract behind `/api/v1/pipelines` - adjacent-forward direct, backward/skip/role-restricted refused without an explicit confirmation, a bounded undo that appends a reversing transition instead of deleting one, and role scope taken from the pipeline's owning role. Card layout is data-driven from a per-pipeline card template rather than a per-vertical field list, and every transition writes an append-only audit row plus an automation-outbox row that nothing drains yet. Pipeline/stage administration and the drag-and-drop surface itself are not built. | versioned role/work-type views over orthogonal state machines, admin-configurable pipelines and stages, typed command gestures, committed-event automations that consume the outbox, and schema-driven forms | stale-version drop rejected, gate blocker preserved, event replay idempotent, and form authority enforced |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | D1 system of record (IRO-44, #59): nine ledgers for equipment, occurrences, notifications, corrective actions, readiness snapshots, and offline device actions, plus the PWA safety panel; Frappe Safety Plan/acknowledgement remains the preconstruction plan object only — no Frappe projection of the D1 ledgers will be built (IRO-195, 2026-08-21). Crew Profile competence, WCB, and active-stop release fences still consume readiness. | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |

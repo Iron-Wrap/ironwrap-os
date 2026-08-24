@@ -1,0 +1,39 @@
+{
+  "schema_version": "ironwrap.pipeline-template.v1",
+  "key": "sales",
+  "name": "Sales",
+  "entity_type": "lead",
+  "owning_role": "sales",
+  "position": 0,
+  "notes": [
+    "Seed configuration for the first board, not product code. The seven stage names are the",
+    "stakeholder's own columns; the core tables in workers-bus/migrations/0113_pipeline_board_core.sql",
+    "know nothing about them. M3 turns pipelines and stages user-editable by writing these same rows,",
+    "so nothing here has to be unpicked first.",
+    "Card slot bindings follow the PO decisions recorded on IRO-209: D4 value, D5 services, D6",
+    "identifiers. There is no activity-counter source anywhere in the system yet (ELEC-158), so no",
+    "counter slot is declared and every card reports an empty counters list rather than a fake one."
+  ],
+  "stages": [
+    { "key": "new_lead", "name": "New Lead", "color": "slate" },
+    { "key": "visit_booked", "name": "Visit Booked", "color": "sky" },
+    { "key": "need_quote", "name": "Need Quote", "color": "amber" },
+    { "key": "quote_sent", "name": "Quote Sent", "color": "violet" },
+    { "key": "contract_signed", "name": "Contract signed", "color": "emerald", "is_won": true },
+    { "key": "deposit", "name": "Deposit", "color": "teal" },
+    { "key": "materials_in_prod", "name": "Materials in prod", "color": "indigo" }
+  ],
+  "card_template": {
+    "version": 1,
+    "slots": [
+      { "slot": "title", "sources": ["entity.contact_name", "entity.contact_email"] },
+      {
+        "slot": "amount",
+        "sources": ["estimate.estimate_total_cents", "quote.total_cents"]
+      },
+      { "slot": "identifier", "label": "Job", "sources": ["job.job_number"] },
+      { "slot": "tag", "sources": ["job.service_type"] },
+      { "slot": "won_flag", "sources": ["stage.is_won"] }
+    ]
+  }
+}

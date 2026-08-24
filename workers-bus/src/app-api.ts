@@ -1,4 +1,5 @@
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
+import { handlePipelineRoute } from "./pipeline-board-api.ts";
 import {
   companyLogoUrl,
   parseCompanyLogoInput,
@@ -748,6 +749,12 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/inventory")) {
     const inventoryResponse = await handleInventoryRoute(req, env, auth);
     if (inventoryResponse) return inventoryResponse;
+  }
+  // The pipeline board owns `/api/v1/pipelines` outright. Its safe-movement matrix, role scope and
+  // undo window are enforced inside the sub-router, before any write commits (ELEC-159).
+  if (url.pathname.startsWith("/api/v1/pipelines")) {
+    const pipelineResponse = await handlePipelineRoute(req, env, auth);
+    if (pipelineResponse) return pipelineResponse;
   }
   if (req.method === "GET" && url.pathname === "/api/v1/now") {
     if (!hasPermission(auth, "now:read"))

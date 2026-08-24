@@ -6,6 +6,25 @@ import { describe, expect, it } from "vitest";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath: string) => readFileSync(resolve(root, relativePath), "utf8");
 
+const fontFaces = (css: string) =>
+  (css.match(/@font-face\s*\{[^}]+\}/g) ?? []).map((block) => {
+    const properties = Object.fromEntries(
+      [...block.matchAll(/^\s*([\w-]+):\s*([^;]+);/gm)].map(([, name, value]) => [
+        name,
+        value?.replace(/\s+/g, " ").trim(),
+      ]),
+    );
+    return {
+      family: properties["font-family"]?.replace(/["']/g, ""),
+      style: properties["font-style"],
+      display: properties["font-display"],
+      weight: properties["font-weight"],
+      asset: properties.src?.match(/hubot-sans-[\w-]+\.woff2/)?.[0],
+      format: properties.src?.match(/format\(["']?([^"')]+)["']?\)/)?.[1],
+      unicodeRange: properties["unicode-range"]?.replace(/\s+/g, ""),
+    };
+  });
+
 describe("IronWrap OS foundation family", () => {
   it("uses Hubot on mineral paper and dusk chrome, not Inter or cream leftovers", () => {
     const styles = read("src/styles.css");
@@ -13,6 +32,7 @@ describe("IronWrap OS foundation family", () => {
     const html = read("index.html");
     const vite = read("vite.config.ts");
     const pkg = read("package.json");
+    const packagedHubot = read("node_modules/@fontsource-variable/hubot-sans/index.css");
 
     expect(styles).toMatch(/Hubot Sans/);
     expect(styles).toMatch(/--chrome:\s*#161b21/i);
@@ -25,7 +45,10 @@ describe("IronWrap OS foundation family", () => {
     expect(styles).not.toMatch(/#f2efe8/i);
     expect(styles).not.toMatch(/#fffdf9/i);
 
-    expect(main).toMatch(/@fontsource-variable\/hubot-sans/);
+    expect(fontFaces(styles)).toEqual(
+      fontFaces(packagedHubot).map((face) => ({ ...face, display: "optional" })),
+    );
+    expect(main).not.toMatch(/@fontsource-variable\/hubot-sans/);
     expect(main).not.toMatch(/@fontsource-variable\/inter/);
 
     expect(html).toMatch(/content="#161b21"/);

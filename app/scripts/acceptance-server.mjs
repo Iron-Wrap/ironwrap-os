@@ -951,6 +951,42 @@ const fixtureEstimatorSession = {
   session_expires_at: "2030-07-18T12:00:00.000Z",
 };
 
+function fixtureOperatorSearch(query) {
+  const normalizedQuery = query.trim();
+  const matchesNow = normalizedQuery.toLowerCase().startsWith("no");
+  return {
+    version: 1,
+    source_updated_at: null,
+    read_model_generated_at: "2026-07-18T12:00:02.000Z",
+    stale_fields: [],
+    permissions: fixtureEstimatorSession.permissions,
+    allowed_actions: ["search.read", "navigation.read"],
+    query: normalizedQuery,
+    query_class: normalizedQuery.length < 2 ? null : "text",
+    outcome: normalizedQuery.length < 2 ? "query_too_short" : matchesNow ? "results" : "no_matches",
+    groups: [
+      {
+        group: "go_to",
+        label: "Go to",
+        limit: 8,
+        matched_fields: ["label"],
+        results: matchesNow
+          ? [
+              {
+                id: "now",
+                label: "Now",
+                detail: "Command",
+                href: "/now",
+                matched_field: "label",
+              },
+            ]
+          : [],
+        more_results: false,
+      },
+    ],
+  };
+}
+
 const fixtureEstimatorWorkbench = {
   ...fixtureEstimatorEnvelope,
   partial_sources: [],
@@ -1991,6 +2027,14 @@ const requestListener = async (request, response) => {
           : ACCEPTANCE_MODE === "onboarding"
             ? fixtureOwnerSession
             : fixtureSession,
+    );
+  }
+  if (requestUrl.pathname === "/api/v1/search") {
+    return sendJson(
+      response,
+      method,
+      200,
+      fixtureOperatorSearch(requestUrl.searchParams.get("q") ?? ""),
     );
   }
   if (ACCEPTANCE_MODE === "accounting") {

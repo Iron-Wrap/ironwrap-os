@@ -2,6 +2,7 @@ export const API_PATHS = {
   publicInstantEstimateConfig: "/public/instant-estimate/config",
   publicInstantEstimate: "/public/instant-estimate",
   session: "/api/v1/session",
+  search: (query: string) => `/api/v1/search?q=${encodeURIComponent(query)}`,
   inventoryOverview: "/api/v1/inventory/overview",
   inventoryLookup: "/api/v1/inventory/lookup",
   inventoryScans: "/api/v1/inventory/scans",

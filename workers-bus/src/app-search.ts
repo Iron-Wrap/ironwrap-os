@@ -144,12 +144,6 @@ export const OPERATOR_SEARCH_DESTINATIONS: Readonly<
   sales: [
     { id: "now", label: "Now", href: "/now", workspace: "Command" },
     { id: "sales", label: "Sales", href: "/sales", workspace: "Revenue" },
-    {
-      id: "settings",
-      label: "Settings",
-      href: "/settings",
-      workspace: "Control",
-    },
   ],
   production: [
     { id: "now", label: "Now", href: "/now", workspace: "Command" },
@@ -158,12 +152,6 @@ export const OPERATOR_SEARCH_DESTINATIONS: Readonly<
       label: "Production",
       href: "/production",
       workspace: "Delivery",
-    },
-    {
-      id: "settings",
-      label: "Settings",
-      href: "/settings",
-      workspace: "Control",
     },
   ],
   accounting: [
@@ -201,12 +189,6 @@ export const OPERATOR_SEARCH_DESTINATIONS: Readonly<
       label: "Inventory",
       href: "/inventory",
       workspace: "Resources",
-    },
-    {
-      id: "settings",
-      label: "Settings",
-      href: "/settings",
-      workspace: "Control",
     },
   ],
 };

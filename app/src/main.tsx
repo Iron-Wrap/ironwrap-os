@@ -1,4 +1,3 @@
-import "@fontsource-variable/hubot-sans/index.css";
 import "./styles.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -49,45 +49,48 @@ export function SystemStatus() {
     install.canInstall;
 
   return (
-    <div className="contents">
-      {hasCompactStatus ? (
-        <div
-          className="col-start-2 row-start-1 flex max-w-[7.5rem] flex-nowrap items-center gap-1 overflow-x-auto text-xs font-bold [scrollbar-width:none] sm:max-w-none sm:gap-1.5 [&::-webkit-scrollbar]:hidden"
-          aria-label="App status"
-        >
-          {!online || !csrfToken ? (
-            <StatusPill tone="warning" icon={<CloudOff aria-hidden="true" />}>
-              {online ? "Sign-in paused" : "Offline"}
-            </StatusPill>
-          ) : null}
-          {outbox.pending > 0 ? (
-            <StatusPill tone="info" icon={<UploadCloud aria-hidden="true" />}>
-              {outbox.pending} waiting
-            </StatusPill>
-          ) : null}
-          {outbox.needsAttention > 0 ? (
-            <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-              {outbox.needsAttention} need a check
-            </StatusPill>
-          ) : null}
-          {outbox.unclaimed > 0 ? (
-            <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
-              {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device only
-            </StatusPill>
-          ) : null}
-          {storageWarning ? (
-            <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
-              Storage warning
-            </StatusPill>
-          ) : null}
-          {install.canInstall ? (
-            <Button size="compact" variant="outline" onClick={() => void install.promptInstall()}>
-              <Download aria-hidden="true" />
-              <span className="sr-only sm:not-sr-only">Install</span>
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+    <>
+      <div
+        className="col-start-2 row-start-1 flex min-h-11 min-w-[5.25rem] max-w-[7.5rem] flex-nowrap items-center gap-1 overflow-x-auto text-xs font-bold [scrollbar-width:none] sm:max-w-none sm:gap-1.5 [&::-webkit-scrollbar]:hidden"
+        aria-label={hasCompactStatus ? "App status" : undefined}
+      >
+        {hasCompactStatus ? (
+          <>
+            {!online || !csrfToken ? (
+              <StatusPill tone="warning" icon={<CloudOff aria-hidden="true" />}>
+                {online ? "Sign-in paused" : "Offline"}
+              </StatusPill>
+            ) : null}
+            {outbox.pending > 0 ? (
+              <StatusPill tone="info" icon={<UploadCloud aria-hidden="true" />}>
+                {outbox.pending} waiting
+              </StatusPill>
+            ) : null}
+            {outbox.needsAttention > 0 ? (
+              <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
+                {outbox.needsAttention} need a check
+              </StatusPill>
+            ) : null}
+            {outbox.unclaimed > 0 ? (
+              <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
+                {outbox.unclaimed} old {outbox.unclaimed === 1 ? "item" : "items"} on this device
+                only
+              </StatusPill>
+            ) : null}
+            {storageWarning ? (
+              <StatusPill tone="warning" icon={<ShieldAlert aria-hidden="true" />}>
+                Storage warning
+              </StatusPill>
+            ) : null}
+            {install.canInstall ? (
+              <Button size="compact" variant="outline" onClick={() => void install.promptInstall()}>
+                <Download aria-hidden="true" />
+                <span className="sr-only sm:not-sr-only">Install</span>
+              </Button>
+            ) : null}
+          </>
+        ) : null}
+      </div>
 
       {hasBanner ? (
         <div
@@ -163,7 +166,7 @@ export function SystemStatus() {
           </div>
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 

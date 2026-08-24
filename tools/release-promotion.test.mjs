@@ -413,6 +413,28 @@ test("independent issuer client rejects stale or unsafe freshness windows before
   const url = "https://issuer.example.invalid/v2/independent-issuer";
   const valid = independentIssuerRequestFixture();
   assert.equal(validateIndependentIssuerRequest(valid, () => ISSUER_NOW), valid);
+  const validReleaseEvidence = independentIssuerRequestFixture({
+    phase: "release-evidence",
+    publication: {
+      ref: `release-evidence/${COMMIT}`,
+      path: `.release/evidence/${COMMIT}.json`,
+    },
+  });
+  assert.equal(
+    validateIndependentIssuerRequest(validReleaseEvidence, () => ISSUER_NOW),
+    validReleaseEvidence,
+  );
+  for (const request of [
+    { ...valid, phase: "release-evidence" },
+    { ...valid, source_commit: HEAD },
+    { ...valid, publication: { ...valid.publication, ref: 42 } },
+    { ...valid, publication: { ...valid.publication, path: null } },
+  ]) {
+    assert.throws(
+      () => validateIndependentIssuerRequest(request, () => ISSUER_NOW),
+      /release_promotion_issuer_request_publication_invalid/,
+    );
+  }
   const invoke = (request) => requestIndependentIssuer({
     url,
     apiToken: "issuer-trigger-token",
@@ -548,6 +570,10 @@ test("issuer-request emits canonical five-minute v2 freshness windows for both p
     assert.equal(
       request.publication.ref,
       `${phase === "review" ? "release-review" : "release-evidence"}/${COMMIT}`,
+    );
+    assert.equal(
+      request.publication.path,
+      `${phase === "review" ? ".release/reviews" : ".release/evidence"}/${COMMIT}.json`,
     );
     assert.deepEqual(JSON.parse(await readFile(output, "utf8")).status, "accepted");
   }

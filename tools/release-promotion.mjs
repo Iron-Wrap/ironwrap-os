@@ -528,6 +528,9 @@ export function validateIndependentIssuerRequest(request, now = Date.now) {
   exactObjectKeys(request.expected_issuer, ["principal", "task_id"], "issuer_request_expected_invalid");
   if (request.schema !== INDEPENDENT_ISSUER_REQUEST_SCHEMA || !/^(?:review|release-evidence)$/.test(request.phase) || !REPOSITORY_RE.test(request.repository) || !Number.isSafeInteger(request.pr_number) || request.pr_number < 1) fail("issuer_request_invalid");
   for (const value of [request.base_commit, request.head_commit, request.source_commit, request.source_git_tree]) requireCommit(value, "issuer_request_commit_invalid");
+  const expectedPublicationRef = request.phase === "review" ? `${REVIEW_RECEIPT_REF_PREFIX}${request.source_commit}` : `${RELEASE_EVIDENCE_REF_PREFIX}${request.source_commit}`;
+  const expectedPublicationPath = request.phase === "review" ? `${REVIEW_RECEIPT_PATH_PREFIX}${request.source_commit}.json` : `${RELEASE_EVIDENCE_PATH_PREFIX}${request.source_commit}.json`;
+  if (request.publication.ref !== expectedPublicationRef || request.publication.path !== expectedPublicationPath) fail("issuer_request_publication_invalid");
   for (const value of [request.source_tree_sha256, request.diff_sha256, request.candidate_artifact.content_digest, request.receipt_key.public_key_sha256]) requireHash(value, "issuer_request_digest_invalid");
   for (const value of [request.ci_run_id, request.candidate_artifact.actions_run_id, request.candidate_artifact.actions_run_attempt]) if (!/^[1-9][0-9]*$/.test(String(value))) fail("issuer_request_run_invalid");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$/.test(request.candidate_artifact.name) || !IDENTITY_RE.test(request.requested_by) || !IDENTITY_RE.test(request.expected_issuer.principal) || request.requested_by === request.expected_issuer.principal) fail("issuer_request_identity_invalid");

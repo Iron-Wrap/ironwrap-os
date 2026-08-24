@@ -49,11 +49,6 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   },
   "operations.ts": { kind: "read-only" },
   "photos.ts": { kind: "read-only" },
-  "production-gate-clearance.ts": {
-    kind: "governed-unrouted",
-    discipline:
-      "required path writes clearance to D1 after an immutable R2 receipt; leftover frappeProductionGateWriter still holds one unused outbound POST and is not on the live command path",
-  },
   "solar.ts": { kind: "read-only" },
 };
 
@@ -172,13 +167,11 @@ test("governed-unrouted mutation adapters are exactly the recorded debt, each wi
   // runtime means moving it to runtime-routed, not editing its discipline.
   assert.deepEqual(
     unrouted.map(([file]) => file).sort(),
-    // IRO-195 moved customer-portal-decision off outbound fetch (D1 commit after R2
-    // receipt). production-gate-clearance's required path is also a D1 write; the
-    // leftover Frappe writer still contains one unused fetch, so the file stays here
-    // until that leftover function is deleted.
+    // IRO-195 moved customer-portal-decision off outbound fetch. IRO-38 leftover
+    // work deleted the unused Frappe gate writer, so production-gate-clearance.ts
+    // no longer has an outbound fetch. Remaining governed-unrouted debt is OCR.
     [
       "measurements.ts",
-      "production-gate-clearance.ts",
     ],
     "the governed-unrouted set changed: shrinking it means reclassifying to runtime-routed; growing it is a reviewed IRO-38 decision, not a default",
   );

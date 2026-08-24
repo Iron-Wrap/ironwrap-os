@@ -19,6 +19,7 @@ import {
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
 import { r2ObjectStore } from "./field-actions.ts";
+import { recordPortalDecisionConfirmation } from "./portal-decision-confirmation.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -28,6 +29,7 @@ const FRAPPE_ATTEMPT_LEASE_MS = 90 * 1_000;
 const DECISION_ACCESS_WINDOW_MS = 15 * 60 * 1_000;
 const DECISION_ACCESS_IP_LIMIT = 120;
 const DECISION_RECEIPT_CONTENT_TYPE = "application/json";
+const PORTAL_CONFIRMATION_RECONCILE_BATCH_SIZE = 25;
 
 type DecisionState =
   | "receipt_pending"
@@ -236,6 +238,7 @@ export async function handleCustomerPortalDecision(
 export async function reconcileCustomerPortalDecisionAttempts(
   env: AppEnv,
   now = new Date(),
+  confirmationDeps: import("./portal-decision-confirmation.ts").PortalDecisionConfirmationDeps = {},
 ): Promise<void> {
   const nowValue = now.toISOString();
   const expired = await env.DB.prepare(
@@ -252,6 +255,38 @@ export async function reconcileCustomerPortalDecisionAttempts(
       now: nowValue,
     })
   ));
+
+  const pendingConfirmations = await env.DB.prepare(
+    `${decisionIntentSelect}
+     WHERE state = 'recorded'
+       AND NOT EXISTS (
+         SELECT 1 FROM portal_decision_confirmations confirmation
+          WHERE confirmation.tenant_id = customer_portal_decision_intents.tenant_id
+            AND confirmation.decision_id = customer_portal_decision_intents.decision_id
+            AND confirmation.outcome IN ('provider_accepted', 'dev_captured')
+     )
+     ORDER BY updated_at ASC, decision_id ASC
+     LIMIT ?`,
+  ).bind(PORTAL_CONFIRMATION_RECONCILE_BATCH_SIZE).all<DecisionIntent>();
+  for (const intent of pendingConfirmations.results ?? []) {
+    try {
+      await recordPortalDecisionConfirmation(env, {
+        tenantId: intent.tenant_id,
+        decisionId: intent.decision_id,
+        portalLinkId: intent.portal_link_id,
+        roofJobId: intent.roof_job_id,
+        customerId: intent.customer_id,
+        optionPackageId: intent.option_package_id,
+        optionLabel: intent.option_label,
+      }, confirmationDeps);
+    } catch (error) {
+      log({
+        at: "customer_portal_decision_confirmation_reconcile_failed",
+        decision_id: intent.decision_id,
+        error: String(error),
+      });
+    }
+  }
 }
 
 async function settleDecisionIntent(
@@ -344,7 +379,25 @@ async function settleDecisionIntent(
         errorCode: null,
         now: new Date().toISOString(),
       });
-      return finalized ? decisionJson(recorded) : decisionUnavailable();
+      if (finalized) {
+        await recordPortalDecisionConfirmation(env, {
+          tenantId: intent.tenant_id,
+          decisionId: intent.decision_id,
+          portalLinkId: intent.portal_link_id,
+          roofJobId: intent.roof_job_id,
+          customerId: intent.customer_id,
+          optionPackageId: intent.option_package_id,
+          optionLabel: intent.option_label,
+        }).catch((error) => {
+          log({
+            at: "customer_portal_decision_confirmation_failed",
+            decision_id: intent.decision_id,
+            error: String(error),
+          });
+        });
+        return decisionJson(recorded);
+      }
+      return decisionUnavailable();
     } catch (error) {
       if (error instanceof FrappeDecisionHttpError && error.status < 500) {
         const responseStatus = error.status === 400 ? 400 : 409;

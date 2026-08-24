@@ -7,6 +7,7 @@
 import { parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
+import { recordOperatingJobFileBestEffort } from "./job-file-index.ts";
 import {
   isAppliCadXml,
   parseAppliCadGeometry,
@@ -1026,6 +1027,17 @@ async function fileMeasurementReport(
   );
   const filed = batch.files[0];
   if (!filed?.webUrl) throw new MeasurementIntakeFailure("drive_upload_failed");
+  if (receipt.tenant_id && receipt.native_roof_job_id) {
+    await recordOperatingJobFileBestEffort(env, {
+      tenantId: receipt.tenant_id,
+      roofJobId: receipt.native_roof_job_id,
+      artifactKind: "measurement",
+      artifactId: receipt.measurement_id.replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 200),
+      driveFolderId: batch.folderId,
+      driveFileId: filed.driveFileId ?? null,
+      idempotencyKey: receipt.measurement_id.slice(0, 160),
+    });
+  }
   return { report: filed.webUrl, folder: batch.folderUrl, note: null, bytes };
 }
 

@@ -2,13 +2,17 @@
 
 Status: runbook for the JobNimbus exit, phase 1 (data-migration readiness)
 Owner: IronWrap OS product owner
-Last verified: 2026-08-09
-Review trigger: JobNimbus schema change, `ironwrap_roofing` DocType change, or any phase gate decision
+Last verified: 2026-08-21
+Review trigger: JobNimbus schema change, D1 operating-core change, or any phase gate decision
 
 IronWrap OS replaces JobNimbus. The dual-write bridge
 ([`workers-bus/src/jobnimbus.ts`](../workers-bus/src/jobnimbus.ts)) is an exit ramp, not a
-destination. This runbook is the contract for copying JobNimbus data into the owned Frappe
-records and proving the copy, without ever mutating JobNimbus.
+destination. This runbook is the contract for copying JobNimbus data into **D1 operating
+core** (`operating_leads` / `operating_customers` / `operating_properties` /
+`operating_roof_jobs`) and proving the copy, without ever mutating JobNimbus.
+The leftover Frappe importer (`tools/jobnimbus-import.mjs`) remains as a compatibility
+tool only. Dual-write, Make, and Jotform are **not** retired until IRO-193 and the
+Ivan/Ilya crew no longer open JobNimbus.
 
 ## Doctrine
 
@@ -16,23 +20,25 @@ records and proving the copy, without ever mutating JobNimbus.
   The migration is one-way copy + freeze. Nothing in phase 1 flips a system of record.
 - **Snapshots are never committed.** Exported rows carry customer PII and live under the
   gitignored `output/` tree. Only aggregate counts, date ranges, and field names leave it.
-- **Policy is not bypassed.** The import goes through the Frappe REST API and is validated by
-  [`domain_policy.py`](../frappe-apps/ironwrap_roofing/ironwrap_roofing/domain_policy.py) like
-  any other writer. Where policy demands evidence a migration cannot honestly supply
-  (production gates), the import stops short and says so instead of fabricating it.
+- **Policy is not bypassed.** A JobNimbus adapter has not yet been joined to the canonical
+  D1 CRM-import path. Until that adapter exists, no JobNimbus snapshot is treated as an owned
+  D1 import; the existing Frappe importer remains compatibility-only. The future adapter must
+  use `/admin/crm-import/{dry-run,execute}`, preserve source status and unmapped fields in the
+  CRM import ledger, and never fabricate production-gate evidence.
 - **Idempotency is keyed on the preserved JobNimbus id** (`jnid`), stored in the existing
   `jobnimbus_contact_id` / `jobnimbus_job_id` fields and in deterministic record ids
   (`jn:<jnid>` envelopes, `jn-<jnid>` customers/jobs, `jn-contact-<jnid>` properties).
   Records already created by the live bridge are **adopted** through their `jobnimbus_*`
   reference fields, never duplicated. Re-running any step converges.
 
-## Toolchain (Implemented; Repository-verified against the local stack)
+## Toolchain (Export and compatibility tooling only; D1 adapter pending)
 
 | Step | Tool | Side effects |
 |---|---|---|
 | 1. Export | `tools/jobnimbus-export.mjs` | GET-only against api1; NDJSON + manifest under `output/jobnimbus-export/` |
-| 2. Import | `tools/jobnimbus-import.mjs` | Dry-run by default; `--execute` upserts into a **local** Frappe only (non-local targets refused) |
-| 3. Reconcile | `tools/jobnimbus-reconcile.mjs` | Read-only; GREEN/RED verdict with aggregate numbers only |
+| 2. Import (pending) | JobNimbus adapter into `/admin/crm-import/{dry-run,execute}` | Not implemented; no direct-SQLite writer is owned by this repository. The adapter must use the canonical CRM import ledger and provider boundary. |
+| 2b. Import (leftover) | `tools/jobnimbus-import.mjs` | Compatibility only; local Frappe; do not treat as the destination |
+| 3. Reconcile | `tools/jobnimbus-reconcile.mjs` | Read-only leftover Frappe check; no D1 JobNimbus import verdict exists until the adapter is joined |
 | Fixture | `tools/fixtures/generate-jobnimbus-synthetic-snapshot.mjs` | Deterministic synthetic snapshot (reserved `example.invalid` domains, 555 numbers) |
 
 Credentials come from the environment at runtime (`JOBNIMBUS_API_KEY`; Frappe
@@ -55,21 +61,22 @@ the snapshot for exactly that purpose.
 
 ## Field map: JobNimbus contact
 
-Target records: `Lead Envelope` (archive + external-reference anchor), `Roofing Customer`,
-`Roofing Property` (when the contact carries an address).
+Target records: D1 `envelopes` (archive + external-reference anchor), `operating_customers`,
+`operating_properties` (when the contact carries an address). Leftover Frappe names below
+are the old compatibility labels, not the destination.
 
 | JobNimbus field | Target | Transform |
 |---|---|---|
-| `jnid` | `Lead Envelope.jobnimbus_contact_id`; keys `jn:<jnid>` / `jn-<jnid>` / `jn-contact-<jnid>` | verbatim |
-| `display_name` | `Roofing Customer.display_name`, `Lead Envelope.contact_name` | verbatim; fallback `company`, then `JobNimbus contact <jnid>` |
-| `company` | `Roofing Customer.customer_type` | non-empty → `Company`, else `Homeowner` |
-| `first_name`, `last_name` | `Roofing Customer.first_name/.last_name` | verbatim |
-| `email` | `Roofing Customer.email`, `Lead Envelope.contact_email` | verbatim |
-| `mobile_phone`, `home_phone`, `work_phone`, `phone` | `Roofing Customer.phone`, `Lead Envelope.contact_phone` | first non-empty, in that order (GHL imports land in `home_phone`) |
-| `address_line1`, `city`, `state_text`, `zip`, `country_name` | `Roofing Property.address_line1/.city/.province/.postal_code/.country` | verbatim; country defaults `Canada` |
-| `description` | `Roofing Customer.notes` | verbatim |
-| `date_created` | `Lead Envelope.event_ts` | unix seconds → datetime |
-| entire raw row | `Lead Envelope.payload_json` | JSON, archive-only home for everything below |
+| `jnid` | `envelopes.jn_contact_id`; keys `jn:<jnid>` / `jn-<jnid>` / `jn-contact-<jnid>` | verbatim |
+| `display_name` | `operating_customers.display_name`, `envelopes.contact_name` | verbatim; fallback `company`, then `JobNimbus contact <jnid>` |
+| `company` | archive-only in `payload_json` on D1 | D1 customers have no company/homeowner enum |
+| `first_name`, `last_name` | archive-only in `payload_json` on D1 | D1 customers store `display_name` |
+| `email` | `operating_customers.contact_email`, `envelopes.contact_email` | verbatim |
+| `mobile_phone`, `home_phone`, `work_phone`, `phone` | `operating_customers.contact_phone`, `envelopes.contact_phone` | first non-empty, in that order (GHL imports land in `home_phone`) |
+| `address_line1`, `city`, `state_text`, `zip`, `country_name` | `operating_properties.address_line1/.city/.province/.postal_code/.country` | verbatim; country defaults `Canada` |
+| `description` | archive-only in `payload_json` on D1 | no customer notes column on D1 operating customers |
+| `date_created` | `envelopes.ts` | unix seconds → datetime when present; otherwise import time |
+| entire raw row | `envelopes.payload_json` | JSON, archive-only home for everything below |
 
 Envelope constants: `source=manual`, `status=reconciled`,
 `raw_key=jobnimbus-export:contacts:<jnid>`.
@@ -85,16 +92,16 @@ scopes owned workflows.
 
 ## Field map: JobNimbus job
 
-Target record: `Roof Job`, linked to the contact's envelope/customer/property.
+Target record: D1 `operating_roof_jobs`, linked to the contact's envelope/customer/property.
 
 | JobNimbus field | Target | Transform |
 |---|---|---|
-| `jnid` | `Roof Job.jobnimbus_job_id`; key `jn-<jnid>`; mirrored to `Lead Envelope.jobnimbus_job_id` + `.job_ref` | verbatim |
-| `number` | `Roof Job.job_number` | stringified (drives the Drive folder convention) |
-| `related[type=contact].id` | `Roof Job.jobnimbus_contact_id` + links `lead_envelope`/`customer`/`roofing_property` | resolved through the contact's migrated records |
-| `status_name` | `Roof Job.job_status` | status table below |
-| `name`, `description`, `record_type_name` | `Roof Job.service_type` | keyword inference (metal/siding/gutter/soffit/fascia/commercial/roof → `Other`), same rule as the bus |
-| `tags` (`brand:*`) | `Roof Job.brand` | `ironwrap` \| `iroof`; default `ironwrap` (JobNimbus predates the iroof split) |
+| `jnid` | `operating_roof_jobs.jobnimbus_job_id`; key `jn-<jnid>`; mirrored to `envelopes.jn_job_id` | verbatim |
+| `number` | `operating_roof_jobs.job_number` | stringified (drives the Drive folder convention) |
+| `related[type=contact].id` | `operating_roof_jobs.jobnimbus_contact_id` + links lead/customer/property | resolved through the contact's migrated records |
+| `status_name` | `operating_roof_jobs.job_status` | status table below |
+| `name`, `description`, `record_type_name` | `operating_roof_jobs.service_type` | keyword inference (metal/siding/gutter/roof → `Other`), same rule as the bus |
+| `tags` (`brand:*`) | `operating_roof_jobs.brand` | `ironwrap` \| `iroof`; default `ironwrap` (JobNimbus predates the iroof split) |
 
 **No projected home (archive-only via the contact envelope + snapshot):** job-site address
 fields (`address_line1`/`city`/`state_text`/`zip` — phase 1 projects the *contact* address as
@@ -105,73 +112,48 @@ truth), `sales_rep*`, `primary`, `external_id`, `is_archived`, `date_updated`.
 
 ### Status table
 
-| JobNimbus `status_name` (case-insensitive) | `Roof Job.job_status` |
+| JobNimbus `status_name` (case-insensitive) | D1 `operating_roof_jobs.job_status` |
 |---|---|
-| lead, new, qualified | Qualified |
-| measurement, inspection | Measurement |
-| estimating, estimate, proposal, proposal sent, quote | Proposal |
-| signed, sold, won, approved | Won |
-| scheduled, in progress, in production, work in progress | In Production → **imported as Won** (capped) |
-| completed, complete, job completed, invoiced | Completed |
-| paid, closed | Closed → **imported as Completed** (capped) |
-| lost, dead, cancelled, canceled | Lost |
-| anything else | Qualified + `status_unmapped` ledger entry |
+| lead, new, qualified | `qualified` |
+| measurement, inspection, estimating, estimate, proposal, proposal sent, quote, signed, sold, won, approved, scheduled, in progress, in production, work in progress, completed, complete, job completed, invoiced, paid, closed | `qualified` + `status_capped` (do not infer completion or in-progress from JN) |
+| lost, dead, cancelled, canceled | `cancelled` |
+| anything else | `qualified` + `status_unmapped` |
 
-Two policy consequences, discovered by running the loop (not designed in advance):
-
-- `Won`/`Completed` (and beyond) require `workflow_profile` + the locale policy snapshot.
-  The importer supplies `Residential Retail` + the operative locale from
-  [`config/tenants/ironwrap.json`](../config/tenants/ironwrap.json) at create time only
-  (the fields are write-once).
-- `In Production`/`Closed` additionally require real Production Gate State rows. A migration
-  must never fabricate gate evidence, so those imports are **capped** (table above) with a
-  `status_capped` ledger entry carrying the true JobNimbus status; advancing capped jobs
-  through gates is phase-2+ owned-workflow work. Updates never regress a status and never
-  resurrect a `Lost` job (`status_conflict` ledger entry, Frappe state kept).
+A migration must never fabricate gate evidence. Imported jobs stay on
+`current_gate_state=qualification`. Advancing capped jobs through owned gates is later
+workflow work, not an import side effect.
 
 ## Field map: JobNimbus activity
 
-User-written notes (`record_type=1`, `is_status_change=false`, non-empty `note`) become Frappe
-`Comment` records on the mapped `Roof Job` (preferred) or `Roofing Customer`, with the marker
-`[jn:<jnid>]` in `subject` + `content` as the idempotency key. System status-change activities
-are not projected: the frozen snapshot is their archive, and JobNimbus workflow history does
-not become owned workflow history. Estimates, invoices, files, tasks, work orders, and
-material orders are exported for the frozen archive but not imported in phase 1: money stays
-QuickBooks-owned, files belong to the Drive migration, tasks are operational ephemera.
+User-written notes stay in the snapshot archive for the D1 importer. The leftover Frappe
+importer may still write `Comment` records; that is not operating truth. System
+status-change activities are not projected. Estimates, invoices, files, tasks, work orders,
+and material orders are exported for the frozen archive but not imported in phase 1: money
+stays QuickBooks-owned, files belong to the Drive migration, tasks are operational ephemera.
 
 ## Reconciliation contract
 
-`tools/jobnimbus-reconcile.mjs` recomputes, from the snapshot and a fresh read of the local
-Frappe: per-entity counts (snapshot vs landed), missing-id sets, collision sets (duplicate
-`jnid`s in the snapshot; multiple Frappe records claiming one `jnid`; duplicate
-`job_number`s), and the unmapped-field inventory against this map. Verdict is GREEN only when
-every snapshot id landed exactly once and no collisions exist. The verdict file carries
-aggregate numbers and field names only — safe to quote in a PR or Linear comment.
+The leftover `tools/jobnimbus-reconcile.mjs` still reads local Frappe. There are currently no
+owned D1 JobNimbus plan counts or `--execute` receipts: those remain pending a provider adapter
+joined to `/admin/crm-import/{dry-run,execute}`. Once that adapter exists, its canonical CRM
+import ledger and reconciliation report must prove every snapshot id landed exactly once, preserve
+collisions/issues as queryable records, and carry aggregate numbers and field names only.
 
 ### Repository-verified worked example (synthetic fixture)
 
-Loop: fixture snapshot → dry-run → `--execute` → `--execute` again (idempotency) → reconcile,
-against the local stack from [`deploy/local`](../deploy/local/README.md):
-
-| Entity | Snapshot | In Frappe | Missing |
-|---|---:|---:|---:|
-| Contacts → Lead Envelope + Roofing Customer | 12 | 12 | 0 |
-| Jobs → Roof Job | 9 | 9 | 0 |
-| User notes → Comment | 14 | 14 | 0 |
-
-Verdict GREEN; collisions none; second `--execute` pass converged (contacts adopted/updated,
-5 jobs adopted + 4 created after the policy gates above were honored, notes deduplicated);
-2 `status_capped`, 1 `status_unmapped`, 0 errors. Synthetic numbers from the committed
-fixture generator — live counts belong in the phase-2 gate review, not in this file.
+The leftover Frappe importer still has a synthetic GREEN loop against
+[`deploy/local`](../deploy/local/README.md). That loop is compatibility evidence, not the
+owned destination. No JobNimbus D1 adapter or D1 destination test is claimed here; live snapshot
+counts and the adapter's status-cap rules belong in a later gate review, not in this file.
 
 ## Phases (1 is this runbook; 2-4 are decisions, not tools)
 
 | Phase | Content | Gate |
 |---|---|---|
-| 1 | Export + map + idempotent local import + reconciliation (this runbook) | Green synthetic loop (done); green live-snapshot loop pending the restored key |
-| 2 | Live snapshot into a fresh local/staging Frappe; owner reviews counts, capped statuses, unmapped fields; per-field decisions on the archive-only set | Owner sign-off on the reconciliation verdict |
+| 1 | Export + map + adapter design (this runbook) | Green compatibility loop (done); canonical D1 adapter and live-snapshot loop pending |
+| 2 | Live snapshot into a fresh local/staging D1; owner reviews counts, capped statuses, unmapped fields; per-field decisions on the archive-only set | Owner sign-off on the reconciliation verdict |
 | 3 | Production import + JobNimbus freeze (bridge to read-only, owned intake primary) | Owner-authorized flip; rollback documented before execution |
 | 4 | JobNimbus subscription exit after a full parallel period with reconciled evidence | Owner decision on the operating record |
 
-Phase 1 makes no production writes anywhere: the importer refuses non-local Frappe targets at
-startup, and nothing here runs automatically.
+Phase 1 makes no production writes anywhere: the D1 importer refuses remote URLs and
+requires a local `IRONWRAP_D1_SQLITE_PATH` for `--execute`. Nothing here runs automatically.

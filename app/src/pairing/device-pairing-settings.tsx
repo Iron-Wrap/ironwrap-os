@@ -43,7 +43,7 @@ import {
 
 export function DevicePairingSettings() {
   return (
-    <RoleGuard surface="owner">
+    <RoleGuard surface="pairing">
       <OfficeDevicePairingSettings />
     </RoleGuard>
   );

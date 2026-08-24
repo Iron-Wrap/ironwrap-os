@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
@@ -13,6 +14,14 @@ import {
   listFieldUsers,
 } from "./pairing-api";
 
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
+
 vi.mock("./pairing-api", () => ({
   issueDevicePairing: vi.fn(),
   issueHermesDesktopPairing: vi.fn(),
@@ -22,38 +31,45 @@ vi.mock("./pairing-api", () => ({
 }));
 
 const pairingToken = "a".repeat(43);
-const ownerSession: AuthenticatedSession = {
-  version: 1,
-  authenticated: true,
-  user: {
-    id: "appu_owner",
-    email: "owner@ironwrapexteriors.com",
-    display_name: "Owner",
-    role: "owner",
-    frappe_user_id: "owner@example.test",
-  },
-  tenant: {
-    id: "ironwrap",
-    name: "IronWrap Exteriors",
-    brand: "IronWrap Exteriors",
-    locale: "en-CA",
-    time_zone: "America/Edmonton",
-    currency: "CAD",
-  },
-  permissions: [],
-  allowed_actions: [],
-  csrf_token: "csrf",
-  session_expires_at: "2026-07-11T12:00:00.000Z",
-  source_updated_at: null,
-  read_model_generated_at: "2026-07-10T12:00:00.000Z",
-  stale_fields: [],
-};
+const ownerSession = sessionFor("owner");
+const opsSession = sessionFor("ops");
+const salesSession = sessionFor("sales");
+const fieldSession = sessionFor("field");
 
-function renderSettings() {
+function sessionFor(role: AuthenticatedSession["user"]["role"]): AuthenticatedSession {
+  return {
+    version: 1,
+    authenticated: true,
+    user: {
+      id: `appu_${role}`,
+      email: `${role}@ironwrapexteriors.com`,
+      display_name: role === "ops" ? "Operations" : role === "field" ? "Crew" : role,
+      role,
+      frappe_user_id: `${role}@example.test`,
+    },
+    tenant: {
+      id: "ironwrap",
+      name: "IronWrap Exteriors",
+      brand: "IronWrap Exteriors",
+      locale: "en-CA",
+      time_zone: "America/Edmonton",
+      currency: "CAD",
+    },
+    permissions: [],
+    allowed_actions: [],
+    csrf_token: "csrf",
+    session_expires_at: "2026-07-11T12:00:00.000Z",
+    source_updated_at: null,
+    read_model_generated_at: "2026-07-10T12:00:00.000Z",
+    stale_fields: [],
+  };
+}
+
+function renderSettings(session: AuthenticatedSession = ownerSession) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <SessionProvider session={ownerSession}>
+      <SessionProvider session={session}>
         <DevicePairingSettings />
       </SessionProvider>
     </QueryClientProvider>,
@@ -132,5 +148,27 @@ describe("DevicePairingSettings", () => {
         .value,
     ).toContain(window.location.origin);
     expect(screen.getByText(/Bound API audience:/)).toHaveTextContent(window.location.origin);
+  });
+
+  it("lets ops issue pairing on the same Settings surface as owner", async () => {
+    const user = userEvent.setup();
+    renderSettings(opsSession);
+
+    await user.click(await screen.findByRole("button", { name: "Issue one-time QR code" }));
+    expect(issueDevicePairing).toHaveBeenCalledWith(opsSession, "appu_crew");
+    expect(
+      await screen.findByRole("img", { name: "One-time crew device pairing QR code" }),
+    ).toBeVisible();
+  });
+
+  it("refuses sales and field on the pairing surface", async () => {
+    const { unmount } = renderSettings(salesSession);
+    expect(await screen.findByText("This work belongs to another role")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Issue one-time QR code" })).toBeNull();
+    unmount();
+
+    renderSettings(fieldSession);
+    expect(await screen.findByText("This work belongs to another role")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Issue one-time QR code" })).toBeNull();
   });
 });

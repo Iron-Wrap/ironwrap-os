@@ -439,6 +439,15 @@ describe("InventoryPage", () => {
     await submitGuidedTransitions(["count_freeze", "count_adjustment", "yield", "reversal"]);
   }, 20_000);
 
+  it("keeps warehouse receive and transfer on the single D1 inventory desk", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "Inventory" });
+    expect(screen.getByRole("option", { name: "Receive" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Transfer" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /brigadier/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /second warehouse/i })).not.toBeInTheDocument();
+  });
+
   it("omits transitions the field role cannot perform", async () => {
     const fieldSession = {
       ...opsSession,

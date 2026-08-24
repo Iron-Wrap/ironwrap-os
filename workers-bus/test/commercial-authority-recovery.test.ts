@@ -6,6 +6,10 @@ import { test } from "node:test";
 const TABLES = [
   "commercial_acceptance_bindings",
   "commercial_authority_permits",
+  "commercial_deposit_derivation_cursors",
+  "commercial_deposit_derivation_events",
+  "commercial_deposit_derivation_requests",
+  "commercial_deposit_derivations",
   "commercial_lead_triage_decisions",
   "commercial_proposal_publication_events",
   "commercial_proposal_revisions",
@@ -15,6 +19,26 @@ const TABLES = [
 
 const INDEXES = [
   ["idx_commercial_acceptances_job", "commercial_acceptance_bindings"],
+  [
+    "idx_commercial_deposit_derivation_events_lookup",
+    "commercial_deposit_derivation_events",
+  ],
+  [
+    "idx_commercial_deposit_derivation_requests_lookup",
+    "commercial_deposit_derivation_requests",
+  ],
+  [
+    "idx_commercial_deposit_derivations_basis",
+    "commercial_deposit_derivations",
+  ],
+  [
+    "idx_commercial_deposit_derivations_intent",
+    "commercial_deposit_derivations",
+  ],
+  [
+    "idx_commercial_deposit_derivations_recovery",
+    "commercial_deposit_derivations",
+  ],
   ["idx_commercial_permits_aggregate", "commercial_authority_permits"],
   ["idx_commercial_permits_tenant_expiry", "commercial_authority_permits"],
   ["idx_commercial_proposals_current", "commercial_proposal_revisions"],
@@ -48,6 +72,14 @@ const TRIGGERS = [
     "commercial_acceptance_bindings",
   ],
   [
+    "commercial_acceptance_apply_activation_projection",
+    "commercial_acceptance_bindings",
+  ],
+  [
+    "commercial_acceptance_enqueue_deposit_derivation",
+    "commercial_acceptance_bindings",
+  ],
+  [
     "commercial_authority_permits_append_only_delete",
     "commercial_authority_permits",
   ],
@@ -58,6 +90,30 @@ const TRIGGERS = [
   [
     "commercial_authority_permits_no_insert_replace",
     "commercial_authority_permits",
+  ],
+  [
+    "commercial_deposit_derivation_requests_no_insert_replace",
+    "commercial_deposit_derivation_requests",
+  ],
+  [
+    "commercial_deposit_derivation_requests_update_guard",
+    "commercial_deposit_derivation_requests",
+  ],
+  [
+    "commercial_deposit_derivations_insert_event",
+    "commercial_deposit_derivations",
+  ],
+  [
+    "commercial_deposit_derivations_no_insert_replace",
+    "commercial_deposit_derivations",
+  ],
+  [
+    "commercial_deposit_derivations_update_event",
+    "commercial_deposit_derivations",
+  ],
+  [
+    "commercial_deposit_derivations_update_guard",
+    "commercial_deposit_derivations",
   ],
   ["commercial_proposal_authority_guard", "commercial_proposal_revisions"],
   [
@@ -131,10 +187,9 @@ const TRIGGERS = [
 ] as const;
 
 test("0072 commercial authority is complete in migration, backup, and restore inventories", () => {
-  const migration = readFileSync(
-    new URL("../migrations/0093_commercial_authority.sql", import.meta.url),
-    "utf8",
-  );
+  const migration = ["0093_commercial_authority.sql", "0116_native_commercial_deposit_derivation.sql"]
+    .map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"))
+    .join("\n");
   const backup = readFileSync(
     new URL("../../deploy/backup-d1-to-r2.sh", import.meta.url),
     "utf8",
@@ -167,9 +222,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 202],
-    ["REQUIRED_INDEX_COUNT", 314],
-    ["REQUIRED_TRIGGER_COUNT", 487],
+    ["REQUIRED_TABLE_COUNT", 206],
+    ["REQUIRED_INDEX_COUNT", 319],
+    ["REQUIRED_TRIGGER_COUNT", 495],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -178,19 +233,19 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   for (const table of TABLES) {
     assert.match(
       migration,
-      new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`),
+      new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${table}\\b`),
     );
   }
   for (const [name] of INDEXES) {
     assert.match(
       migration,
-      new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${name}\\b`),
+      new RegExp(`CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)? ${name}\\b`),
     );
   }
   for (const [name] of TRIGGERS) {
     assert.match(
       migration,
-      new RegExp(`CREATE TRIGGER IF NOT EXISTS ${name}\\b`),
+      new RegExp(`CREATE TRIGGER(?: IF NOT EXISTS)? ${name}\\b`),
     );
   }
   assert.match(migration, /effect\.state = 'succeeded'/);
@@ -203,7 +258,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0115", () => {
+test("the full schema matches the recovery frontier through 0116", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -227,14 +282,16 @@ test("the full schema matches the recovery frontier through 0115", () => {
     // the five pipeline tables, their seven indexes, and the ten guards that keep a card's
     // version honest and its transition trail append-only. 0115 forward-adds columns to the
     // existing tenant profile and likewise changes no recovery-inventory object count; SQLite
-    // export/restore carries those columns with the row.
+    // export/restore carries those columns with the row. 0116 adds the acceptance-bound deposit
+    // derivation queue, fair-sweep cursor, request receipt, event ledger, five indexes, and the
+    // upgraded publication/acceptance guards and projections.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
       // invitation ledger and recovery-required indexes. 0112 adds operator-search indexes;
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds. The
       // 0107/0108 work-package and job-file evidence remains part of this recovery frontier.
-      { tables: 202, indexes: 314, triggers: 487 },
+      { tables: 206, indexes: 319, triggers: 495 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,
@@ -251,6 +308,47 @@ test("the full schema matches the recovery frontier through 0115", () => {
         table,
       );
     }
+  } finally {
+    db.close();
+  }
+});
+
+test("0116 upgrades the shipped 0093 acceptance guard instead of leaving old installs open", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const directory = new URL("../migrations/", import.meta.url);
+    const migrations = readdirSync(directory)
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+    const shippedIndex = migrations.indexOf("0093_commercial_authority.sql");
+    assert.notEqual(shippedIndex, -1);
+    for (const migration of migrations.slice(0, shippedIndex + 1)) {
+      db.exec(readFileSync(new URL(migration, directory), "utf8"));
+    }
+    const shipped = db
+      .prepare(
+        `SELECT sql FROM sqlite_master
+          WHERE type = 'trigger' AND name = 'commercial_acceptance_binding_guard'`,
+      )
+      .get() as { sql: string };
+    assert.doesNotMatch(shipped.sql, /commercial_lead_not_qualified/);
+
+    for (const migration of migrations.slice(shippedIndex + 1)) {
+      db.exec(readFileSync(new URL(migration, directory), "utf8"));
+    }
+    const upgraded = db
+      .prepare(
+        `SELECT sql FROM sqlite_master
+          WHERE type = 'trigger' AND name = 'commercial_acceptance_binding_guard'`,
+      )
+      .get() as { sql: string };
+    assert.match(upgraded.sql, /commercial_lead_not_qualified/);
+    assert.match(upgraded.sql, /quote\.status = 'approved'/);
+    assert.match(upgraded.sql, /commercial_quote_revisions other_successor/);
+    assert.match(upgraded.sql, /commercial_proposal_revisions other_successor/);
+    assert.match(upgraded.sql, /quote\.terms_hash = NEW\.terms_hash/);
+    assert.match(upgraded.sql, /proposal\.terms_hash = NEW\.terms_hash/);
   } finally {
     db.close();
   }

@@ -1252,27 +1252,50 @@ async function readCommercialHead(
       proposal_found: !!proposal,
     });
   }
-  const currentQuote = await env.DB.prepare(
-    `SELECT quote_revision_id FROM commercial_quote_revisions
-      WHERE tenant_id = ? AND customer_quote_id = ?
-      ORDER BY revision_number DESC LIMIT 1`,
+  const currentQuoteRead = await env.DB.prepare(
+    `SELECT current.quote_revision_id FROM commercial_quote_revisions current
+      WHERE current.tenant_id = ? AND current.roof_job_id = ? AND current.customer_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_quote_revision_id = current.quote_revision_id
+        )
+      ORDER BY current.revision_number DESC, current.quote_revision_id ASC LIMIT 2`,
   )
-    .bind(input.tenantId, quote.customer_quote_id)
-    .first<{ quote_revision_id: string }>();
-  const currentProposal = await env.DB.prepare(
-    `SELECT proposal_revision_id FROM commercial_proposal_revisions
-      WHERE tenant_id = ? AND proposal_pack_id = ?
-      ORDER BY revision_number DESC LIMIT 1`,
+    .bind(input.tenantId, input.roofJobId, customerId)
+    .all<{ quote_revision_id: string }>();
+  const currentQuoteRows = currentQuoteRead.results ?? [];
+  const currentProposalRead = await env.DB.prepare(
+    `SELECT current.proposal_revision_id FROM commercial_proposal_revisions current
+      WHERE current.tenant_id = ? AND current.roof_job_id = ? AND current.customer_id = ?
+        AND current.quote_revision_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_proposal_revision_id = current.proposal_revision_id
+        )
+      ORDER BY current.revision_number DESC, current.proposal_revision_id ASC LIMIT 2`,
+  )
+    .bind(input.tenantId, input.roofJobId, customerId, quote.quote_revision_id)
+    .all<{ proposal_revision_id: string }>();
+  const currentProposalRows = currentProposalRead.results ?? [];
+  const publicationRead = await env.DB.prepare(
+    `SELECT current.* FROM commercial_proposal_publication_events current
+      WHERE current.tenant_id = ? AND current.proposal_pack_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_publication_events successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.proposal_pack_id = current.proposal_pack_id
+             AND successor.publication_version > current.publication_version
+        )
+      ORDER BY current.publication_version DESC LIMIT 2`,
   )
     .bind(input.tenantId, proposal.proposal_pack_id)
-    .first<{ proposal_revision_id: string }>();
-  const publication = await env.DB.prepare(
-    `SELECT * FROM commercial_proposal_publication_events
-      WHERE tenant_id = ? AND proposal_pack_id = ?
-      ORDER BY publication_version DESC LIMIT 1`,
-  )
-    .bind(input.tenantId, proposal.proposal_pack_id)
-    .first<PublicationRow>();
+    .all<PublicationRow>();
+  const publicationRows = publicationRead.results ?? [];
+  const currentQuote = currentQuoteRows.length === 1 ? currentQuoteRows[0] : null;
+  const currentProposal = currentProposalRows.length === 1 ? currentProposalRows[0] : null;
+  const publication = publicationRows.length === 1 ? publicationRows[0] : null;
   if (
     quote.status !== "approved" ||
     quote.currency !== "CAD" ||
@@ -1297,6 +1320,9 @@ async function readCommercialHead(
       current_quote_revision_id: currentQuote?.quote_revision_id ?? null,
       accepted_proposal_revision_id: proposal.proposal_revision_id,
       current_proposal_revision_id: currentProposal?.proposal_revision_id ?? null,
+      current_quote_head_count: currentQuoteRows.length,
+      current_proposal_head_count: currentProposalRows.length,
+      current_publication_head_count: publicationRows.length,
       current_publication_id: publication?.publication_event_id ?? null,
       current_publication_state: publication?.state ?? null,
     });
@@ -1351,7 +1377,20 @@ export async function readAcceptedCommercialPaymentTerms(
   env: AppEnv,
   input: { tenantId: string; roofJobId: string; customerId: string },
 ): Promise<
-  | { ok: true; paymentTermsDays: number; termsHash: string; commercialHeadSha256: string }
+  | {
+      ok: true;
+      paymentTermsDays: number;
+      termsHash: string;
+      receiptHash: string;
+      commercialHeadSha256: string;
+      quoteRevisionId: string;
+      quoteEvidenceDigest: string;
+      proposalRevisionId: string;
+      proposalEvidenceDigest: string;
+      publicationEventId: string;
+      publicationEvidenceDigest: string;
+      acceptanceBindingId: string;
+    }
   | { ok: false; code: string }
 > {
   const head = await readCommercialHead(
@@ -1373,7 +1412,15 @@ export async function readAcceptedCommercialPaymentTerms(
         ok: true,
         paymentTermsDays,
         termsHash: head.value.quote.terms_hash,
+        receiptHash: head.value.acceptance.receipt_hash,
         commercialHeadSha256: head.value.sha256,
+        quoteRevisionId: head.value.quote.quote_revision_id,
+        quoteEvidenceDigest: String(head.value.quote.evidence_digest ?? ""),
+        proposalRevisionId: head.value.proposal.proposal_revision_id,
+        proposalEvidenceDigest: String(head.value.proposal.evidence_digest ?? ""),
+        publicationEventId: head.value.publication.publication_event_id,
+        publicationEvidenceDigest: String(head.value.publication.evidence_digest ?? ""),
+        acceptanceBindingId: head.value.acceptance.acceptance_binding_id,
       };
 }
 
@@ -2003,8 +2050,12 @@ function money(value: number): string {
   return `${Math.floor(value / 100)}.${String(value % 100).padStart(2, "0")}`;
 }
 
-function taxForSubtotal(subtotalCents: number, ratePercent: string): number | null {
-  if (!/^(?:0|[1-9][0-9]{0,2})\.[0-9]{4}$/.test(ratePercent)) return null;
+export function taxForSubtotal(subtotalCents: number, ratePercent: string): number | null {
+  if (
+    !Number.isSafeInteger(subtotalCents) ||
+    subtotalCents < 0 ||
+    !/^(?:0|[1-9][0-9]{0,2})\.[0-9]{4}$/.test(ratePercent)
+  ) return null;
   const units = BigInt(ratePercent.replace(".", ""));
   const numerator = BigInt(subtotalCents) * units;
   return Number((numerator + 500_000n) / 1_000_000n);

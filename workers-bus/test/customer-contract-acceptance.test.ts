@@ -5,7 +5,9 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
 
 import worker from "../src/index.ts";
+import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { randomToken, sha256Hex } from "../src/app-auth.ts";
+import { permissionsForRole } from "../src/app-types.ts";
 import {
   admitCommercialPermit,
   commercialEffectAuthority,
@@ -24,7 +26,8 @@ import {
   type RecordCommercialQuoteInput,
 } from "../src/commercial-store.ts";
 import { runExternalEffect } from "../src/effect-runtime.ts";
-import type { AppEnv } from "../src/app-types.ts";
+import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import { reconcileCustomerContractAcceptanceAttempts } from "../src/customer-contract-acceptance.ts";
 
 const TENANT = "ironwrap";
 /**
@@ -146,6 +149,63 @@ class SqliteStatement {
     };
   }
 }
+
+test("scheduled acceptance recovery advances beyond its first bounded window", async () => {
+  const rows = Array.from({ length: 101 }, (_, index) => ({
+    acceptance_id: `acceptance_${String(index + 1).padStart(16, "0")}`,
+    tenant_id: TENANT,
+  }));
+  const attempted: string[] = [];
+  let cursor: { last_tenant_id: string; last_acceptance_id: string } | null = null;
+  const db = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) {
+          args = values;
+          return statement;
+        },
+        async first<T>(): Promise<T | null> {
+          if (sql.includes("commercial_deposit_derivation_cursors")) return cursor as T | null;
+          if (sql.includes("FROM commercial_deposit_derivations")) {
+            attempted.push(String(args[1]));
+            return null;
+          }
+          throw new Error(`unexpected recovery first: ${sql}`);
+        },
+        async all<T>(): Promise<{ results: T[] }> {
+          if (sql.includes("state = 'receipt_stored'")) return { results: [] };
+          if (sql.includes("state = 'accepted'")) {
+            let selected = rows;
+            if (sql.includes("acceptance_id > ?")) {
+              selected = selected.filter((row) => row.acceptance_id > String(args[1]));
+            } else if (sql.includes("acceptance_id <= ?")) {
+              selected = selected.filter((row) => row.acceptance_id <= String(args[1]));
+            }
+            return { results: selected.slice(0, 100) as T[] };
+          }
+          throw new Error(`unexpected recovery all: ${sql}`);
+        },
+        async run(): Promise<{ success: true }> {
+          if (sql.includes("INSERT INTO commercial_deposit_derivation_cursors")) {
+            cursor = {
+              last_tenant_id: String(args[0]),
+              last_acceptance_id: String(args[1]),
+            };
+          }
+          return { success: true };
+        },
+      };
+      return statement;
+    },
+  };
+  const env = { DB: db, APP_TENANT_ID: TENANT } as unknown as AppEnv;
+
+  await reconcileCustomerContractAcceptanceAttempts(env, new Date("2026-08-24T10:00:00.000Z"));
+  await reconcileCustomerContractAcceptanceAttempts(env, new Date("2026-08-24T10:05:00.000Z"));
+
+  assert.ok(attempted.includes(rows[100]!.acceptance_id));
+});
 
 class MemoryR2 {
   readonly objects = new Map<
@@ -693,6 +753,58 @@ function confirmRequest(
   );
 }
 
+function authenticatedRouteRequest(
+  acceptanceId: string,
+  idempotencyKey: string,
+): Request {
+  return new Request(
+    `${PUBLIC_ORIGIN}/api/v1/commercial/deposit-intents/reconcile`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": idempotencyKey,
+        "x-csrf-token": "csrf",
+      },
+      body: JSON.stringify({ acceptance_id: acceptanceId }),
+    },
+  );
+}
+
+function authenticatedPhaseRequest(jobId: string): Request {
+  return new Request(`${PUBLIC_ORIGIN}/api/v1/jobs/${encodeURIComponent(jobId)}/phase`, {
+    method: "GET",
+  });
+}
+
+function authenticatedRouteAuth(role: AppRole): AuthContext {
+  const now = new Date().toISOString();
+  const userId = role === "owner" ? OWNER_ID : `appu_${role}_0001`;
+  return {
+    rawSessionToken: "s".repeat(43),
+    csrfToken: "csrf",
+    permissions: permissionsForRole(role),
+    session: {
+      session_hash: "c".repeat(64),
+      session_created_at: now,
+      session_expires_at: new Date(Date.now() + A_YEAR).toISOString(),
+      revoked_at: null,
+      device_id: null,
+      device_proof_hash: null,
+      user_id: userId,
+      tenant_id: TENANT,
+      email_normalized: `${role}@example.invalid`,
+      display_name: role,
+      role,
+      frappe_user_id: `${role}@example.invalid`,
+      active: 1,
+      created_by: "test",
+      created_at: now,
+      updated_at: now,
+    },
+  };
+}
+
 function totalChanges(database: DatabaseSync): number {
   return Number(
     (
@@ -771,6 +883,135 @@ test("native customer acceptance is pinned, receipt-backed, atomically bound, an
     assert.equal(binding.roof_job_id, JOB_ID);
     assert.equal(binding.customer_id, CUSTOMER_ID);
     assert.equal(binding.terms_hash, TERMS_HASH);
+    const publication = h.db.raw
+      .prepare(
+        `SELECT publication_event_id, publication_version
+           FROM commercial_proposal_publication_events
+          WHERE proposal_revision_id = ? AND state = 'published'
+          ORDER BY publication_version DESC LIMIT 1`,
+      )
+      .get(h.chain!.proposalRevisionId) as {
+      publication_event_id: string;
+      publication_version: number;
+    };
+    const derivation = h.db.raw
+      .prepare(
+        `SELECT state, blocker_code, acceptance_id, quote_revision_id,
+                proposal_revision_id, proposal_version, publication_event_id,
+                publication_version, command_fingerprint, idempotency_key_hash,
+                version
+           FROM commercial_deposit_derivations
+          WHERE tenant_id = ? AND acceptance_id = ?`,
+      )
+      .get(TENANT, accepted.acceptance_id) as Record<string, unknown>;
+    assert.equal(derivation.state, "blocked");
+    assert.equal(derivation.blocker_code, "provider_mapping_missing");
+    assert.equal(derivation.acceptance_id, accepted.acceptance_id);
+    assert.equal(derivation.quote_revision_id, h.chain!.quoteRevisionId);
+    assert.equal(derivation.proposal_revision_id, h.chain!.proposalRevisionId);
+    assert.equal(derivation.proposal_version, 1);
+    assert.equal(derivation.publication_event_id, publication.publication_event_id);
+    assert.equal(derivation.publication_version, publication.publication_version);
+    assert.match(String(derivation.command_fingerprint), /^[0-9a-f]{64}$/);
+    assert.match(String(derivation.idempotency_key_hash), /^[0-9a-f]{64}$/);
+    assert.equal(
+      h.db.raw
+        .prepare(
+          `SELECT lifecycle_status, version FROM operating_leads
+            WHERE tenant_id = ? AND lead_id = ?`,
+        )
+        .get(TENANT, LEAD_ID)
+        ?.lifecycle_status,
+      "converted",
+    );
+    assert.equal(
+      h.db.raw
+        .prepare(
+          `SELECT lifecycle_status, version FROM operating_leads
+            WHERE tenant_id = ? AND lead_id = ?`,
+        )
+        .get(TENANT, LEAD_ID)
+        ?.version,
+      2,
+    );
+    assert.equal(
+      h.db.raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM commercial_deposit_derivations
+            WHERE tenant_id = ? AND acceptance_id = ?`,
+        )
+        .get(TENANT, accepted.acceptance_id)!.count,
+      1,
+    );
+    const reconcile = await handleAuthenticatedRoute(
+      authenticatedRouteRequest(
+        accepted.acceptance_id,
+        "acceptance-deposit-reconcile-0001",
+      ),
+      h.env,
+      authenticatedRouteAuth("owner"),
+    );
+    assert.equal(reconcile.status, 200, await reconcile.clone().text());
+    const reconciled = await reconcile.json() as {
+      request: { state: string; replayed: boolean };
+      derivation: { state: string; blocker_code: string };
+    };
+    assert.equal(reconciled.request.state, "blocked");
+    assert.equal(reconciled.request.replayed, false);
+    assert.equal(reconciled.derivation.state, "blocked");
+    assert.equal(reconciled.derivation.blocker_code, "provider_mapping_missing");
+    const reconcileReplay = await handleAuthenticatedRoute(
+      authenticatedRouteRequest(
+        accepted.acceptance_id,
+        "acceptance-deposit-reconcile-0001",
+      ),
+      h.env,
+      authenticatedRouteAuth("owner"),
+    );
+    assert.equal(reconcileReplay.status, 200);
+    assert.equal(
+      (await reconcileReplay.json() as { request: { replayed: boolean } }).request.replayed,
+      true,
+    );
+    const unauthorized = await handleAuthenticatedRoute(
+      authenticatedRouteRequest(
+        accepted.acceptance_id,
+        "acceptance-deposit-reconcile-unauthorized",
+      ),
+      h.env,
+      authenticatedRouteAuth("production"),
+    );
+    assert.equal(unauthorized.status, 403);
+    assert.deepEqual(await unauthorized.json(), {
+      error: "accounting_review_required",
+    });
+    const phase = await handleAuthenticatedRoute(
+      authenticatedPhaseRequest(JOB_ID),
+      h.env,
+      authenticatedRouteAuth("owner"),
+    );
+    assert.equal(phase.status, 200, await phase.clone().text());
+    const phaseModel = await phase.json() as {
+      phase: string;
+      facts: {
+        commercial: {
+          quote: { quote_revision_id: string } | null;
+          proposal: { proposal_revision_id: string } | null;
+          publication: { state: string } | null;
+          acceptance: { acceptance_id: string } | null;
+          deposit_derivation: { state: string; blocker_code: string } | null;
+        };
+        safety: { blocked: boolean };
+      };
+    };
+    assert.equal(phaseModel.phase, "deposit_pending");
+    assert.equal(phaseModel.facts.commercial.quote?.quote_revision_id, h.chain!.quoteRevisionId);
+    assert.equal(phaseModel.facts.commercial.proposal?.proposal_revision_id, h.chain!.proposalRevisionId);
+    assert.equal(phaseModel.facts.commercial.publication?.state, "published");
+    assert.equal(phaseModel.facts.commercial.acceptance?.acceptance_id, accepted.acceptance_id);
+    assert.equal(phaseModel.facts.commercial.deposit_derivation?.state, "blocked");
+    assert.equal(phaseModel.facts.commercial.deposit_derivation?.blocker_code, "provider_mapping_missing");
+    assert.equal(phaseModel.facts.safety.blocked, false);
     assert.equal(
       h.db.raw
         .prepare(
@@ -939,6 +1180,42 @@ test("missing or ambiguous native contract chains fail closed before email deliv
           )
           .get()!.count,
         0,
+      );
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("native acceptance snapshot and commit require a qualified lead atomically", async () => {
+  for (const lifecycleStatus of ["untriaged", "triaged", "disqualified"] as const) {
+    const h = await setup();
+    try {
+      const portalToken = await seedPortalLink(h.db);
+      const challenge = await issueChallenge(h.env, portalToken);
+      assert.equal(challenge.status, 200, lifecycleStatus);
+      const challengeToken = emailChallengeToken(h.sentEmails);
+      h.db.raw.prepare(
+        `UPDATE operating_leads SET lifecycle_status = ?, version = version + 1
+          WHERE tenant_id = ? AND lead_id = ?`,
+      ).run(lifecycleStatus, TENANT, LEAD_ID);
+      const confirmation = await worker.fetch(
+        confirmRequest(challengeToken, `acceptance-unqualified-${lifecycleStatus}-0001`),
+        h.env as never,
+        {} as never,
+      );
+      assert.equal(confirmation.status, 409, lifecycleStatus);
+      assert.equal(
+        h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings").get()!.count,
+        0,
+      );
+      assert.equal(
+        h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_deposit_derivations").get()!.count,
+        0,
+      );
+      assert.equal(
+        h.db.raw.prepare("SELECT state FROM customer_portal_acceptance_intents").get()!.state,
+        "rejected",
       );
     } finally {
       h.restore();

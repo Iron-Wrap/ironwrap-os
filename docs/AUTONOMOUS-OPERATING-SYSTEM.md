@@ -672,12 +672,13 @@ The product exposes one read-only `job_phase` derived from those facts:
 | `scheduled` | Current valid append-only assignment exists | version, roster, capacity, predecessor |
 | `in_progress` | Current work package started | stop, hidden condition, dispute |
 | `substantially_complete` | Required completion packet accepted | deficiency or unreleased hold point |
-| `financially_closed` | Final invoice and balance reconciled | mismatch, dispute, open credit |
-| `warranty_active` | Closeout and warranty activation complete | missing registration or evidence |
+| `financially_closed` | Current completion packet and final invoice balance fully reconciled | mismatch, dispute, open credit |
 | `cancelled` | Authoritative cancellation supersedes active work | containment/compensation incomplete |
 
 The phase is a deterministic projector, never an independently writable truth. Corrections and
 compensation append/supersede history; no actor edits history to make a job appear complete.
+Warranty terms are exposed only as a `warranty_declared` fact; activation is not a phase without a
+durable native activation record.
 
 ## Agent organization
 

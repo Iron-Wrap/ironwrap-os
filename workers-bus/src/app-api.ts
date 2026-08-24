@@ -188,16 +188,38 @@ import {
   admitCommercialPermit,
   commercialCommandFingerprint,
   CommercialAuthorityError,
+  getCommercialPermit,
 } from "./commercial-authority.ts";
 import {
   buildLeadTriageCommand,
   CommercialStoreError,
+  buildCommercialPublicationCommand,
+  prepareCommercialQuote,
+  recordCommercialProposalPublication,
+  recordCommercialQuoteRevision,
   prepareCommercialProposal,
   recordLeadTriageDecision,
+  type CommercialQuoteLineInput,
+  type CommercialPublicationState,
+  type CommercialPublicationRecord,
+  type CommercialQuoteRecord,
+  type CommercialQuoteStatus,
+  type RecordCommercialPublicationInput,
+  type RecordCommercialQuoteInput,
   recordCommercialProposalRevision,
   type CommercialLeadTriageRecord,
   type CommercialProposalRecord,
 } from "./commercial-store.ts";
+import {
+  beginCommercialDepositDerivationRequest,
+  ensureCommercialDepositDerivation,
+  finishCommercialDepositDerivationRequest,
+  readCommercialDepositDerivation,
+  readCommercialDepositDerivationEvent,
+  type CommercialDepositDerivationRecord,
+} from "./commercial-deposit.ts";
+import { readAccountingIntent } from "./accounting-intents.ts";
+import { readCommercialJobPhase } from "./commercial-job-phase.ts";
 import {
   OperatingJobAssignmentError,
   recordOperatingJobAssignment,
@@ -893,9 +915,33 @@ export async function handleAuthenticatedRoute(
   }
   if (
     req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/quote-revisions"
+  ) {
+    return await createCommercialQuoteRevision(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
     url.pathname === "/api/v1/commercial/proposal-revisions"
   ) {
     return await createCommercialProposalRevision(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications/prepare"
+  ) {
+    return await prepareCommercialProposalPublication(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/proposal-publications"
+  ) {
+    return await settleCommercialProposalPublication(req, env, auth);
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/commercial/deposit-intents/reconcile"
+  ) {
+    return await reconcileCommercialDepositIntent(req, env, auth);
   }
   const proposalPublicationDecisionMatch = url.pathname.match(
     /^\/api\/v1\/proposal-publication-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
@@ -1417,6 +1463,23 @@ export async function handleAuthenticatedRoute(
     if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
       const model = await buildJobReadModel(env, auth, jobName);
+      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  const jobPhaseMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/phase$/);
+  if (req.method === "GET" && jobPhaseMatch) {
+    if (!canReadJobs(auth))
+      return privateAppJson({ error: "job_read_required" }, 403);
+    const jobName = decodedPathSegment(jobPhaseMatch[1]);
+    if (!jobName) return appJson({ error: "not_found" }, 404);
+    try {
+      const model = await readCommercialJobPhase(
+        env,
+        auth.session.tenant_id,
+        jobName,
+      );
       return model ? appJson(model) : appJson({ error: "not_found" }, 404);
     } catch {
       return appJson({ error: "upstream_unavailable" }, 502);
@@ -3640,6 +3703,553 @@ async function createCommercialLeadTriageDecision(
   }
 }
 
+async function reconcileCommercialDepositIntent(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "accounting:review"))
+    return privateAppJson({ error: "accounting_review_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, 1_024);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const acceptanceId = parseCommercialDepositReconcileRequest(parsed.value);
+  if (!acceptanceId)
+    return privateAppJson({ error: "invalid_commercial_deposit_reconcile_request" }, 400);
+
+  const derivation = await readCommercialDepositDerivation(
+    env,
+    auth.session.tenant_id,
+    acceptanceId,
+  );
+  if (!derivation)
+    return privateAppJson({ error: "commercial_deposit_derivation_missing" }, 404);
+  let evidenceRefs: string[] = [];
+  try {
+    const parsedEvidence = JSON.parse(derivation.evidence_refs_json) as unknown;
+    evidenceRefs = Array.isArray(parsedEvidence)
+      ? parsedEvidence.flatMap((item) => {
+          if (!isRecord(item) || typeof item.ref !== "string") return [];
+          return [item.ref];
+        })
+      : [];
+  } catch {
+    return privateAppJson({ error: "commercial_deposit_evidence_invalid" }, 409);
+  }
+
+  let request;
+  try {
+    request = await beginCommercialDepositDerivationRequest(env, {
+      tenantId: auth.session.tenant_id,
+      acceptanceId,
+      actorUserId: auth.session.user_id,
+      idempotencyKey: requestIdempotencyKey,
+      policyVersion: "ironwrap.commercial-deposit-reconcile.v1",
+      evidenceRefs,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "commercial_deposit_reconcile_idempotency_conflict")
+      return privateAppJson({ error: error.message }, 409);
+    return privateAppJson({ error: "commercial_deposit_reconcile_unavailable" }, 502);
+  }
+  if (!request)
+    return privateAppJson({ error: "commercial_deposit_derivation_missing" }, 404);
+
+  // A terminal command receipt is immutable.  Replaying a blocked/failed key must not run the
+  // derivation again after facts are repaired; a fresh key is the explicit recovery attempt.
+  if (request.replayed && request.request.state !== "pending") {
+    if (request.request.state === "failed") {
+      return privateAppJson({ error: "commercial_deposit_reconcile_unavailable" }, 502);
+    }
+    try {
+      const current = await readCommercialDepositDerivation(
+        env,
+        auth.session.tenant_id,
+        acceptanceId,
+      );
+      if (!current)
+        return privateAppJson({ error: "commercial_deposit_derivation_missing" }, 404);
+      const event = await readCommercialDepositDerivationEvent(
+        env,
+        auth.session.tenant_id,
+        current.derivation_id,
+        request.request.derivation_version,
+      );
+      if (!event) {
+        return privateAppJson({ error: "commercial_deposit_reconcile_terminal_unavailable" }, 409);
+      }
+      const terminalDerivation: CommercialDepositDerivationRecord = {
+        ...current,
+        state: event.state,
+        intent_id: event.intent_id,
+        blocker_code: event.blocker_code,
+        blocker_next_step: event.blocker_next_step,
+        basis_sha256: event.basis_sha256,
+        version: event.event_version,
+        updated_at: event.occurred_at,
+      };
+      const intent = event.state === "derived" && event.intent_id
+        ? await readAccountingIntent(env, current.tenant_id, event.intent_id)
+        : null;
+      return privateAppJson({
+        version: 1,
+        acceptance_id: acceptanceId,
+        request: {
+          request_id: request.request.request_id,
+          state: request.request.state,
+          version: request.request.version,
+          replayed: true,
+        },
+        derivation: commercialDepositDerivationRouteProjection(terminalDerivation),
+        intent: intent
+          ? {
+              intent_id: intent.intent_id,
+              kind: intent.kind,
+              state: intent.state,
+              version: intent.version,
+              currency: intent.currency,
+              total_amount: intent.total_amount,
+            }
+          : null,
+      });
+    } catch {
+      return privateAppJson({ error: "commercial_deposit_reconcile_unavailable" }, 502);
+    }
+  }
+
+  try {
+    const result = await ensureCommercialDepositDerivation(env, {
+      tenantId: auth.session.tenant_id,
+      acceptanceId,
+    });
+    if (!result)
+      return privateAppJson({ error: "commercial_deposit_derivation_missing" }, 404);
+    const finalRequest = await finishCommercialDepositDerivationRequest(env, {
+      tenantId: auth.session.tenant_id,
+      requestId: request.request.request_id,
+      expectedVersion: request.request.version,
+      state: result.derivation.state === "derived" ? "derived" : "blocked",
+      derivationVersion: result.derivation.version,
+    });
+    return privateAppJson({
+      version: 1,
+      acceptance_id: acceptanceId,
+      request: finalRequest
+        ? {
+            request_id: finalRequest.request_id,
+            state: finalRequest.state,
+            version: finalRequest.version,
+            replayed: request.replayed,
+          }
+        : { request_id: request.request.request_id, replayed: request.replayed },
+      derivation: commercialDepositDerivationRouteProjection(result.derivation),
+      intent: result.intent
+        ? {
+            intent_id: result.intent.intent_id,
+            kind: result.intent.kind,
+            state: result.intent.state,
+            version: result.intent.version,
+            currency: result.intent.currency,
+            total_amount: result.intent.total_amount,
+          }
+        : null,
+    });
+  } catch (error) {
+    await finishCommercialDepositDerivationRequest(env, {
+      tenantId: auth.session.tenant_id,
+      requestId: request.request.request_id,
+      expectedVersion: request.request.version,
+      state: "failed",
+      derivationVersion: derivation.version,
+      errorCode: error instanceof Error ? error.message : "commercial_deposit_reconcile_failed",
+    }).catch(() => null);
+    return privateAppJson({ error: "commercial_deposit_reconcile_unavailable" }, 502);
+  }
+}
+
+async function createCommercialQuoteRevision(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseCommercialQuoteRevisionRequest(parsed.value);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_commercial_quote_revision_request" },
+      400,
+    );
+
+  const now = new Date();
+  const routeInput: RecordCommercialQuoteInput = {
+    tenantId: auth.session.tenant_id,
+    quoteRevisionId: input.quoteRevisionId,
+    customerQuoteId: input.customerQuoteId,
+    revisionNumber: input.revisionNumber,
+    roofJobId: input.roofJobId,
+    customerId: input.customerId,
+    supersedesQuoteRevisionId: input.supersedesQuoteRevisionId,
+    status: input.status,
+    currency: input.currency,
+    validUntil: input.validUntil,
+    terms: input.terms,
+    evidence: input.evidence,
+    correctionReason: input.correctionReason,
+    lines: input.lines,
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: requestIdempotencyKey,
+  };
+
+  try {
+    const prepared = await prepareCommercialQuote(routeInput);
+    const existing = await env.DB.prepare(
+      `SELECT policy_permit_id FROM commercial_quote_revisions
+        WHERE tenant_id = ? AND idempotency_key_hash = ? LIMIT 1`,
+    ).bind(
+      auth.session.tenant_id,
+      await sha256Hex(requestIdempotencyKey),
+    ).first<{ policy_permit_id: string | null }>();
+    if (existing) {
+      const permit = existing.policy_permit_id
+        ? await getCommercialPermit(env, auth.session.tenant_id, existing.policy_permit_id)
+        : null;
+      if (!permit) return privateAppJson({ error: "commercial_permit_missing" }, 409);
+      const expectedActorType = auth.session.role === "owner" ? "owner" : "worker";
+      if (permit.actor_type !== expectedActorType || permit.actor_id !== auth.session.user_id) {
+        return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      }
+      if (permit.command_fingerprint !== await commercialCommandFingerprint(prepared.command)) {
+        return privateAppJson({ error: "commercial_permit_idempotency_conflict" }, 409);
+      }
+      const result = await recordCommercialQuoteRevision(env, {
+        ...routeInput,
+        authority: { kind: "policy_permit", permitId: permit.permit_id },
+      }, now);
+      return privateAppJson(
+        {
+          quote: commercialQuoteProjection(result.quote, result.lines),
+          replayed: true,
+          permit: { permit_id: permit.permit_id, replayed: true },
+        },
+        200,
+      );
+    }
+    const binding = await readCommercialJobBinding(
+      env,
+      auth.session.tenant_id,
+      input.roofJobId,
+      input.customerId,
+    );
+    if (!binding) return privateAppJson({ error: "commercial_job_missing" }, 404);
+    if (binding.property_id && !binding.bound_property_id) {
+      return privateAppJson({ error: "commercial_property_missing" }, 404);
+    }
+    if (binding.job_status === "cancelled" || binding.customer_status === "archived") {
+      return privateAppJson({ error: "commercial_job_not_active" }, 409);
+    }
+    const quoteCorrection = input.revisionNumber > 1 && !!input.supersedesQuoteRevisionId;
+    if (
+      !binding.lead_status ||
+      (binding.lead_status !== "qualified" &&
+        !(binding.lead_status === "converted" && quoteCorrection))
+    ) {
+      return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
+    const nowIso = now.toISOString();
+    const sourceFacts = {
+      schema_version: "ironwrap.commercial-job-binding.v1",
+      tenant_id: auth.session.tenant_id,
+      roof_job_id: input.roofJobId,
+      customer_id: input.customerId,
+      property_id: binding.property_id,
+      job_version: binding.job_version,
+      customer_version: binding.customer_version,
+      lead_id: binding.lead_id,
+      lead_version: binding.lead_version,
+      job_status: binding.job_status,
+      customer_status: binding.customer_status,
+      lead_status: binding.lead_status,
+    };
+    const evidence = mergeCommercialEvidence(
+      input.evidence,
+      `d1://operating_roof_jobs/${input.roofJobId}/v${binding.job_version}`,
+      await sha256Hex(canonicalJson(sourceFacts)),
+    );
+    const command = prepared.command;
+    const permit = await admitCommercialPermit(env, {
+      tenantId: auth.session.tenant_id,
+      actor: {
+        type: auth.session.role === "owner" ? "owner" : "worker",
+        id: auth.session.user_id,
+      },
+      action: "quote.revision.record",
+      aggregate: {
+        type: "customer_quote",
+        id: input.customerQuoteId,
+        version: input.revisionNumber,
+      },
+      amountCents: prepared.totalCents,
+      command,
+      facts: {
+        source: "app-api:commercial-quote-revision",
+        source_facts: sourceFacts,
+        quote_revision_id: input.quoteRevisionId,
+        quote_total_cents: prepared.totalCents,
+        terms_hash: prepared.termsHash,
+        requested_by_user_id: auth.session.user_id,
+      },
+      factsObservedAt: input.factsObservedAt,
+      evidence,
+      idempotencyKey: requestIdempotencyKey,
+      expiresAt: new Date(Date.parse(input.factsObservedAt) + 30_000).toISOString(),
+    }, now);
+    const result = await recordCommercialQuoteRevision(env, {
+      ...routeInput,
+      authority: { kind: "policy_permit", permitId: permit.permit.permit_id },
+    }, now);
+    return privateAppJson(
+      {
+        quote: commercialQuoteProjection(result.quote, result.lines),
+        replayed: result.kind === "replayed",
+        permit: {
+          permit_id: permit.permit.permit_id,
+          replayed: permit.kind === "replayed",
+        },
+      },
+      result.kind === "created" ? 201 : 200,
+    );
+  } catch (error) {
+    if (error instanceof CommercialAuthorityError || error instanceof CommercialStoreError) {
+      return privateAppJson({ error: error.code }, commercialRouteStatus(error.code));
+    }
+    throw error;
+  }
+}
+
+async function prepareCommercialProposalPublication(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseCommercialPublicationPreparation(parsed.value);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_commercial_publication_request" },
+      400,
+    );
+  const now = new Date();
+  const routeInput: RecordCommercialPublicationInput = {
+    tenantId: auth.session.tenant_id,
+    proposalRevisionId: input.proposalRevisionId,
+    proposalPackId: input.proposalPackId,
+    publicationVersion: input.publicationVersion,
+    previousState: input.previousState,
+    state: input.state,
+    authority: { kind: "policy_permit", permitId: "pending" },
+    externalEffectId: null,
+    idempotencyKey: requestIdempotencyKey,
+  };
+  try {
+    const proposal = await env.DB.prepare(
+      `SELECT proposal.proposal_revision_id, proposal.proposal_pack_id,
+              proposal.quote_revision_id, proposal.roof_job_id, proposal.customer_id,
+              proposal.terms_hash, quote.customer_quote_id, quote.status AS quote_status,
+              quote.revision_number AS quote_revision_number,
+              quote.supersedes_quote_revision_id,
+              job.version AS job_version, customer.version AS customer_version,
+              lead.lead_id, lead.version AS lead_version,
+              job.property_id, job.job_status, customer.lifecycle_status AS customer_status,
+              lead.lifecycle_status AS lead_status
+         FROM commercial_proposal_revisions proposal
+         JOIN commercial_quote_revisions quote
+           ON quote.tenant_id = proposal.tenant_id
+          AND quote.quote_revision_id = proposal.quote_revision_id
+         JOIN operating_roof_jobs job
+           ON job.tenant_id = proposal.tenant_id AND job.roof_job_id = proposal.roof_job_id
+         JOIN operating_customers customer
+           ON customer.tenant_id = proposal.tenant_id AND customer.customer_id = proposal.customer_id
+         JOIN operating_leads lead
+           ON lead.tenant_id = proposal.tenant_id AND lead.lead_id = job.lead_id
+        WHERE proposal.tenant_id = ? AND proposal.proposal_revision_id = ?
+          AND proposal.proposal_pack_id = ? LIMIT 1`,
+    ).bind(
+      auth.session.tenant_id,
+      input.proposalRevisionId,
+      input.proposalPackId,
+    ).first<CommercialPublicationFacts>();
+    if (!proposal) return privateAppJson({ error: "commercial_publication_proposal_missing" }, 404);
+    if (proposal.quote_status !== "approved") {
+      return privateAppJson({ error: "commercial_publication_quote_not_approved" }, 409);
+    }
+    if (proposal.job_status === "cancelled" || proposal.customer_status === "archived") {
+      return privateAppJson({ error: "commercial_job_not_active" }, 409);
+    }
+    const proposalCorrection =
+      proposal.quote_revision_number > 1 && !!proposal.supersedes_quote_revision_id;
+    if (
+      !proposal.lead_status ||
+      (proposal.lead_status !== "qualified" &&
+        !(proposal.lead_status === "converted" && proposalCorrection))
+    ) {
+      return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
+    const sourceFacts = {
+      schema_version: "ironwrap.commercial-publication-source.v1",
+      tenant_id: auth.session.tenant_id,
+      proposal_revision_id: input.proposalRevisionId,
+      proposal_pack_id: input.proposalPackId,
+      quote_revision_id: proposal.quote_revision_id,
+      roof_job_id: proposal.roof_job_id,
+      customer_id: proposal.customer_id,
+      customer_quote_id: proposal.customer_quote_id,
+      terms_hash: proposal.terms_hash,
+      job_version: proposal.job_version,
+      customer_version: proposal.customer_version,
+      lead_id: proposal.lead_id,
+      lead_version: proposal.lead_version,
+    };
+    const evidence = mergeCommercialEvidence(
+      input.evidence,
+      `d1://commercial_proposal_revisions/${input.proposalRevisionId}`,
+      await sha256Hex(canonicalJson(sourceFacts)),
+    );
+    const command = buildCommercialPublicationCommand(routeInput);
+    const permit = await admitCommercialPermit(env, {
+      tenantId: auth.session.tenant_id,
+      actor: {
+        type: auth.session.role === "owner" ? "owner" : "worker",
+        id: auth.session.user_id,
+      },
+      action: input.state === "published" ? "proposal.publish" : "proposal.withdraw",
+      aggregate: {
+        type: "proposal_publication",
+        id: input.proposalPackId,
+        version: input.publicationVersion,
+      },
+      command,
+      facts: {
+        source: "app-api:commercial-proposal-publication",
+        source_facts: sourceFacts,
+        requested_by_user_id: auth.session.user_id,
+      },
+      factsObservedAt: input.factsObservedAt,
+      evidence,
+      idempotencyKey: requestIdempotencyKey,
+      expiresAt: new Date(Date.parse(input.factsObservedAt) + 30_000).toISOString(),
+    }, now);
+    return privateAppJson({
+      publication: {
+        proposal_revision_id: input.proposalRevisionId,
+        proposal_pack_id: input.proposalPackId,
+        publication_version: input.publicationVersion,
+        previous_state: input.previousState,
+        state: input.state,
+        status: "awaiting_succeeded_effect",
+      },
+      permit: {
+        permit_id: permit.permit.permit_id,
+        policy_ref: permit.permit.policy_id,
+        policy_version: permit.permit.policy_version,
+        actor_type: permit.permit.actor_type,
+        actor_id: permit.permit.actor_id,
+        action: permit.permit.action,
+        aggregate_type: permit.permit.aggregate_type,
+        aggregate_id: permit.permit.aggregate_id,
+        aggregate_version: permit.permit.aggregate_version,
+        expires_at: permit.permit.expires_at,
+        replayed: permit.kind === "replayed",
+      },
+    }, permit.kind === "created" ? 201 : 200);
+  } catch (error) {
+    if (error instanceof CommercialAuthorityError || error instanceof CommercialStoreError) {
+      return privateAppJson({ error: error.code }, commercialRouteStatus(error.code));
+    }
+    throw error;
+  }
+}
+
+async function settleCommercialProposalPublication(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseCommercialPublicationSettlement(parsed.value);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_commercial_publication_settlement" },
+      400,
+    );
+  try {
+    const permit = await getCommercialPermit(
+      env,
+      auth.session.tenant_id,
+      input.permitId,
+    );
+    if (!permit) return privateAppJson({ error: "commercial_permit_missing" }, 404);
+    const expectedActorType = auth.session.role === "owner" ? "owner" : "worker";
+    if (
+      permit.actor_type !== expectedActorType ||
+      permit.actor_id !== auth.session.user_id
+    ) {
+      return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+    }
+    const result = await recordCommercialProposalPublication(env, {
+      tenantId: auth.session.tenant_id,
+      proposalRevisionId: input.proposalRevisionId,
+      proposalPackId: input.proposalPackId,
+      publicationVersion: input.publicationVersion,
+      previousState: input.previousState,
+      state: input.state,
+      authority: { kind: "policy_permit", permitId: permit.permit_id },
+      externalEffectId: input.externalEffectId,
+      idempotencyKey: requestIdempotencyKey,
+    }, new Date());
+    return privateAppJson(
+      {
+        publication: commercialPublicationProjection(result.publication),
+        replayed: result.kind === "replayed",
+        permit: { permit_id: permit.permit_id },
+      },
+      result.kind === "created" ? 201 : 200,
+    );
+  } catch (error) {
+    if (error instanceof CommercialAuthorityError || error instanceof CommercialStoreError) {
+      return privateAppJson({ error: error.code }, commercialRouteStatus(error.code));
+    }
+    throw error;
+  }
+}
+
 async function createCommercialProposalRevision(
   req: Request,
   env: AppEnv,
@@ -3683,6 +4293,63 @@ async function createCommercialProposalRevision(
 
   try {
     const prepared = await prepareCommercialProposal(routeInput);
+    const existing = await env.DB.prepare(
+      `SELECT policy_permit_id FROM commercial_proposal_revisions
+        WHERE tenant_id = ? AND idempotency_key_hash = ? LIMIT 1`,
+    ).bind(
+      auth.session.tenant_id,
+      await sha256Hex(requestIdempotencyKey),
+    ).first<{ policy_permit_id: string | null }>();
+    if (existing) {
+      const permit = existing.policy_permit_id
+        ? await getCommercialPermit(env, auth.session.tenant_id, existing.policy_permit_id)
+        : null;
+      if (!permit) return privateAppJson({ error: "commercial_permit_missing" }, 409);
+      const expectedActorType = auth.session.role === "owner" ? "owner" : "worker";
+      if (permit.actor_type !== expectedActorType || permit.actor_id !== auth.session.user_id) {
+        return privateAppJson({ error: "commercial_permit_actor_mismatch" }, 403);
+      }
+      if (permit.command_fingerprint !== await commercialCommandFingerprint(prepared.command)) {
+        return privateAppJson({ error: "commercial_permit_idempotency_conflict" }, 409);
+      }
+      const result = await recordCommercialProposalRevision(env, {
+        ...routeInput,
+        authority: { kind: "policy_permit", permitId: permit.permit_id },
+      }, now);
+      return privateAppJson(
+        {
+          proposal: commercialProposalProjection(result.proposal),
+          replayed: true,
+          permit: { permit_id: permit.permit_id, replayed: true },
+        },
+        200,
+      );
+    }
+    const binding = await readCommercialJobBinding(
+      env,
+      auth.session.tenant_id,
+      input.roofJobId,
+      input.customerId,
+    );
+    if (!binding) return privateAppJson({ error: "commercial_job_missing" }, 404);
+    const quoteCorrection = await env.DB.prepare(
+      `SELECT revision_number, supersedes_quote_revision_id
+         FROM commercial_quote_revisions
+        WHERE tenant_id = ? AND quote_revision_id = ? LIMIT 1`,
+    ).bind(auth.session.tenant_id, input.quoteRevisionId).first<{
+      revision_number: number;
+      supersedes_quote_revision_id: string | null;
+    }>();
+    const proposalCorrection =
+      (input.revisionNumber > 1 && !!input.supersedesProposalRevisionId) ||
+      (!!quoteCorrection && quoteCorrection.revision_number > 1 && !!quoteCorrection.supersedes_quote_revision_id);
+    if (
+      !binding.lead_status ||
+      (binding.lead_status !== "qualified" &&
+        !(binding.lead_status === "converted" && proposalCorrection))
+    ) {
+      return privateAppJson({ error: "commercial_lead_not_qualified" }, 409);
+    }
     const factsObservedAt = input.factsObservedAt;
     const permit = await admitCommercialPermit(env, {
       tenantId: auth.session.tenant_id,
@@ -4900,6 +5567,90 @@ function parseCommercialLeadTriageRequest(value: unknown): {
     : null;
 }
 
+function parseCommercialQuoteRevisionRequest(value: unknown): {
+  quoteRevisionId: string;
+  customerQuoteId: string;
+  revisionNumber: number;
+  roofJobId: string;
+  customerId: string;
+  factsObservedAt: string;
+  supersedesQuoteRevisionId?: string | null;
+  status: CommercialQuoteStatus;
+  currency: string;
+  validUntil: string;
+  terms: unknown;
+  correctionReason?: string | null;
+  lines: CommercialQuoteLineInput[];
+  evidence: Array<{ ref: string; sha256: string }>;
+} | null {
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, [
+      "quote_revision_id",
+      "customer_quote_id",
+      "revision_number",
+      "roof_job_id",
+      "customer_id",
+      "facts_observed_at",
+      "supersedes_quote_revision_id",
+      "status",
+      "currency",
+      "valid_until",
+      "terms",
+      "correction_reason",
+      "lines",
+      "evidence",
+    ]) ||
+    !Array.isArray(value.lines)
+  ) return null;
+  const quoteRevisionId = idText(value.quote_revision_id, 12, 160);
+  const customerQuoteId = idText(value.customer_quote_id, 8, 160);
+  const revisionNumber = validVersion(value.revision_number);
+  const roofJobId = idText(value.roof_job_id, 8, 200);
+  const customerId = idText(value.customer_id, 8, 200);
+  const factsObservedAt = normalizedIso(value.facts_observed_at);
+  const supersedesQuoteRevisionId =
+    value.supersedes_quote_revision_id === undefined ||
+      value.supersedes_quote_revision_id === null
+      ? value.supersedes_quote_revision_id ?? undefined
+      : idText(value.supersedes_quote_revision_id, 12, 160);
+  const status = ["draft", "needs_review", "approved", "rejected", "expired"].includes(
+    String(value.status),
+  ) ? value.status as CommercialQuoteStatus : null;
+  const currency = typeof value.currency === "string" && /^[A-Z]{3}$/.test(value.currency)
+    ? value.currency
+    : null;
+  const validUntil = isoDateOnly(value.valid_until);
+  const correctionReason =
+    value.correction_reason === undefined || value.correction_reason === null
+      ? value.correction_reason ?? undefined
+      : boundedText(value.correction_reason, 3, 2_000);
+  const lines = commercialQuoteLines(value.lines);
+  const evidence = commercialEvidence(value.evidence);
+  if (
+    !quoteRevisionId || !customerQuoteId || !revisionNumber || !roofJobId || !customerId ||
+    !factsObservedAt || supersedesQuoteRevisionId === null || !status || !currency ||
+    !validUntil || !Object.hasOwn(value, "terms") || correctionReason === null ||
+    !lines || !evidence
+  ) return null;
+  return {
+    quoteRevisionId,
+    customerQuoteId,
+    revisionNumber,
+    roofJobId,
+    customerId,
+    factsObservedAt,
+    supersedesQuoteRevisionId,
+    status,
+    currency,
+    validUntil,
+    terms: value.terms,
+    correctionReason,
+    lines,
+    evidence,
+  };
+}
+
 function parseCommercialProposalRevisionRequest(value: unknown): {
   proposalRevisionId: string;
   proposalPackId: string;
@@ -4984,6 +5735,95 @@ function parseCommercialProposalRevisionRequest(value: unknown): {
     contentHash,
     evidence,
   };
+}
+
+function parseCommercialPublicationPreparation(value: unknown): {
+  proposalRevisionId: string;
+  proposalPackId: string;
+  publicationVersion: number;
+  previousState: CommercialPublicationState;
+  state: Exclude<CommercialPublicationState, "draft">;
+  factsObservedAt: string;
+  evidence: Array<{ ref: string; sha256: string }>;
+} | null {
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, [
+      "proposal_revision_id",
+      "proposal_pack_id",
+      "publication_version",
+      "previous_state",
+      "state",
+      "facts_observed_at",
+      "evidence",
+    ])
+  ) return null;
+  const proposalRevisionId = idText(value.proposal_revision_id, 12, 160);
+  const proposalPackId = idText(value.proposal_pack_id, 8, 160);
+  const publicationVersion = validVersion(value.publication_version);
+  const previousState = ["draft", "published", "withdrawn"].includes(
+    String(value.previous_state),
+  ) ? value.previous_state as CommercialPublicationState : null;
+  const state = ["published", "withdrawn"].includes(String(value.state))
+    ? value.state as Exclude<CommercialPublicationState, "draft">
+    : null;
+  const factsObservedAt = normalizedIso(value.facts_observed_at);
+  const evidence = commercialEvidence(value.evidence);
+  return proposalRevisionId && proposalPackId && publicationVersion && previousState && state &&
+      factsObservedAt && evidence
+    ? {
+        proposalRevisionId,
+        proposalPackId,
+        publicationVersion,
+        previousState,
+        state,
+        factsObservedAt,
+        evidence,
+      }
+    : null;
+}
+
+function parseCommercialPublicationSettlement(value: unknown): {
+  proposalRevisionId: string;
+  proposalPackId: string;
+  publicationVersion: number;
+  previousState: CommercialPublicationState;
+  state: Exclude<CommercialPublicationState, "draft">;
+  permitId: string;
+  externalEffectId: string;
+} | null {
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, [
+      "proposal_revision_id",
+      "proposal_pack_id",
+      "publication_version",
+      "previous_state",
+      "state",
+      "permit_id",
+      "external_effect_id",
+    ])
+  ) return null;
+  const proposalRevisionId = idText(value.proposal_revision_id, 12, 160);
+  const proposalPackId = idText(value.proposal_pack_id, 8, 160);
+  const publicationVersion = validVersion(value.publication_version);
+  const previousState = ["draft", "published", "withdrawn"].includes(
+    String(value.previous_state),
+  ) ? value.previous_state as CommercialPublicationState : null;
+  const state = ["published", "withdrawn"].includes(String(value.state))
+    ? value.state as Exclude<CommercialPublicationState, "draft">
+    : null;
+  const permitId = idText(value.permit_id, 20, 180);
+  const externalEffectId = idText(value.external_effect_id, 16, 160);
+  return proposalRevisionId && proposalPackId && publicationVersion && previousState && state &&
+      permitId && externalEffectId
+    ? { proposalRevisionId, proposalPackId, publicationVersion, previousState, state, permitId, externalEffectId }
+    : null;
+}
+
+function parseCommercialDepositReconcileRequest(value: unknown): string | null {
+  if (!isRecord(value) || !onlyKeys(value, ["acceptance_id"])) return null;
+  return idText(value.acceptance_id, 16, 160);
 }
 
 function parseRejectionDecision(
@@ -5947,6 +6787,195 @@ function commercialProposalProjection(
     evidence: JSON.parse(proposal.evidence_refs_json) as unknown,
     created_at: proposal.created_at,
   };
+}
+
+function commercialQuoteProjection(
+  quote: CommercialQuoteRecord,
+  lines: readonly unknown[],
+): Record<string, unknown> {
+  return {
+    quote_revision_id: quote.quote_revision_id,
+    customer_quote_id: quote.customer_quote_id,
+    revision_number: quote.revision_number,
+    roof_job_id: quote.roof_job_id,
+    customer_id: quote.customer_id,
+    supersedes_quote_revision_id: quote.supersedes_quote_revision_id,
+    status: quote.status,
+    currency: quote.currency,
+    valid_until: quote.valid_until,
+    subtotal_cents: quote.subtotal_cents,
+    tax_cents: quote.tax_cents,
+    total_cents: quote.total_cents,
+    terms_hash: quote.terms_hash,
+    evidence: JSON.parse(quote.evidence_refs_json) as unknown,
+    lines,
+    created_at: quote.created_at,
+  };
+}
+
+function commercialPublicationProjection(
+  publication: CommercialPublicationRecord,
+): Record<string, unknown> {
+  return {
+    publication_event_id: publication.publication_event_id,
+    proposal_revision_id: publication.proposal_revision_id,
+    proposal_pack_id: publication.proposal_pack_id,
+    publication_version: publication.publication_version,
+    previous_state: publication.previous_state,
+    state: publication.state,
+    external_effect_id: publication.external_effect_id,
+    occurred_at: publication.occurred_at,
+  };
+}
+
+function commercialDepositDerivationRouteProjection(
+  derivation: CommercialDepositDerivationRecord,
+): Record<string, unknown> {
+  return {
+    derivation_id: derivation.derivation_id,
+    acceptance_binding_id: derivation.acceptance_binding_id,
+    acceptance_id: derivation.acceptance_id,
+    quote_revision_id: derivation.quote_revision_id,
+    proposal_revision_id: derivation.proposal_revision_id,
+    proposal_version: derivation.proposal_version,
+    publication_event_id: derivation.publication_event_id,
+    publication_version: derivation.publication_version,
+    roof_job_id: derivation.roof_job_id,
+    customer_id: derivation.customer_id,
+    quote_version: derivation.quote_version,
+    quote_currency: derivation.quote_currency,
+    quote_subtotal_cents: derivation.quote_subtotal_cents,
+    quote_tax_cents: derivation.quote_tax_cents,
+    quote_total_cents: derivation.quote_total_cents,
+    deposit_percent: derivation.deposit_percent,
+    state: derivation.state,
+    intent_id: derivation.intent_id,
+    blocker_code: derivation.blocker_code,
+    blocker_next_step: derivation.blocker_next_step,
+    basis_sha256: derivation.basis_sha256,
+    command_fingerprint: derivation.command_fingerprint,
+    version: derivation.version,
+    accepted_at: derivation.accepted_at,
+    updated_at: derivation.updated_at,
+  };
+}
+
+interface CommercialJobBinding {
+  lead_id: string;
+  lead_version: number;
+  lead_status: string;
+  job_version: number;
+  job_status: string;
+  property_id: string | null;
+  bound_property_id: string | null;
+  customer_version: number;
+  customer_status: string;
+}
+
+interface CommercialPublicationFacts {
+  proposal_revision_id: string;
+  proposal_pack_id: string;
+  quote_revision_id: string;
+  roof_job_id: string;
+  customer_id: string;
+  terms_hash: string;
+  customer_quote_id: string;
+  quote_revision_number: number;
+  supersedes_quote_revision_id: string | null;
+  job_version: number;
+  customer_version: number;
+  lead_id: string;
+  lead_version: number;
+  property_id: string | null;
+  job_status: string;
+  customer_status: string;
+  lead_status: string;
+  quote_status: string;
+}
+
+async function readCommercialJobBinding(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+  customerId: string,
+): Promise<CommercialJobBinding | null> {
+  return await env.DB.prepare(
+    `SELECT job.lead_id, job.version AS job_version, job.job_status,
+            job.property_id, property.property_id AS bound_property_id,
+            customer.version AS customer_version,
+            customer.lifecycle_status AS customer_status,
+            lead.version AS lead_version, lead.lifecycle_status AS lead_status
+       FROM operating_roof_jobs job
+       JOIN operating_customers customer
+         ON customer.tenant_id = job.tenant_id AND customer.customer_id = job.customer_id
+       JOIN operating_leads lead
+         ON lead.tenant_id = job.tenant_id AND lead.lead_id = job.lead_id
+       LEFT JOIN operating_properties property
+         ON property.tenant_id = job.tenant_id AND property.property_id = job.property_id
+      WHERE job.tenant_id = ? AND job.roof_job_id = ? AND job.customer_id = ? LIMIT 1`,
+  ).bind(tenantId, roofJobId, customerId).first<CommercialJobBinding>();
+}
+
+function mergeCommercialEvidence(
+  evidence: readonly { ref: string; sha256: string }[],
+  ref: string,
+  sha256: string,
+): Array<{ ref: string; sha256: string }> {
+  return evidence.some((entry) => entry.ref === ref)
+    ? [...evidence]
+    : [...evidence, { ref, sha256 }];
+}
+
+function commercialQuoteLines(value: unknown[]): CommercialQuoteLineInput[] | null {
+  const lines = value.map((entry) => {
+    if (!isRecord(entry) || !onlyKeys(entry, [
+      "line_id", "sequence", "kind", "description", "quantity_micros", "uom",
+      "unit_price_cents", "tax_code", "tax_cents",
+    ])) return null;
+    const lineId = idText(entry.line_id, 3, 120);
+    const sequence = validVersion(entry.sequence);
+    const kind = ["material", "labour", "equipment", "subcontract", "allowance", "discount", "other"].includes(
+      String(entry.kind),
+    ) ? entry.kind as CommercialQuoteLineInput["kind"] : null;
+    const description = boundedText(entry.description, 1, 500);
+    const quantityMicros = safeInteger(entry.quantity_micros, 1, 1_000_000_000_000);
+    const uom = boundedText(entry.uom, 1, 32);
+    const unitPriceCents = safeInteger(entry.unit_price_cents, -1_000_000_000_000, 1_000_000_000_000);
+    const taxCode = entry.tax_code === undefined || entry.tax_code === null
+      ? entry.tax_code ?? null
+      : boundedText(entry.tax_code, 1, 40);
+    const taxCents = safeInteger(entry.tax_cents, -1_000_000_000_000, 1_000_000_000_000);
+    return lineId && sequence && kind && description && quantityMicros && uom &&
+        unitPriceCents !== null && taxCode !== undefined && taxCents !== null
+      ? {
+          lineId,
+          sequence,
+          kind,
+          description,
+          quantityMicros,
+          uom,
+          unitPriceCents,
+          taxCode,
+          taxCents,
+        }
+      : null;
+  });
+  return lines.some((line) => line === null)
+    ? null
+    : lines as CommercialQuoteLineInput[];
+}
+
+function safeInteger(value: unknown, min: number, max: number): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= min && Number(value) <= max
+    ? Number(value)
+    : null;
+}
+
+function isoDateOnly(value: unknown): string | null {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+      Number.isFinite(Date.parse(`${value}T00:00:00.000Z`))
+    ? value
+    : null;
 }
 
 function commercialContentRef(value: unknown): string | null {

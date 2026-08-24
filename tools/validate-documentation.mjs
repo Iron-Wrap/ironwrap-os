@@ -246,6 +246,7 @@ function repositoryArchitectureFacts() {
   const testRoot = resolve(root, "workers-bus/test");
   const sourceFiles = textFilesUnder(sourceRoot, ".ts");
   const testFiles = textFilesUnder(testRoot, ".ts");
+  const appApi = readFileSync(resolve(sourceRoot, "app-api.ts"), "utf8");
   const commercialStorePath = resolve(sourceRoot, "commercial-store.ts");
   const calledOutsideCommercialStore = (symbol) => {
     const pattern = new RegExp(`\\b${symbol}\\s*\\(`);
@@ -263,6 +264,18 @@ function repositoryArchitectureFacts() {
       : calledInTests(symbol)
         ? "test_only"
         : "unreachable";
+  const quoteRevisionRouteReachable =
+    appApi.includes('url.pathname === "/api/v1/commercial/quote-revisions"') &&
+    appApi.includes("return await createCommercialQuoteRevision(req, env, auth);");
+  const proposalRevisionRouteReachable =
+    appApi.includes('url.pathname === "/api/v1/commercial/proposal-revisions"') &&
+    appApi.includes("return await createCommercialProposalRevision(req, env, auth);");
+  const proposalPublicationRouteReachable =
+    appApi.includes('url.pathname === "/api/v1/commercial/proposal-publications"') &&
+    appApi.includes("return await settleCommercialProposalPublication(req, env, auth);");
+  const depositRecoveryRouteReachable =
+    appApi.includes('url.pathname === "/api/v1/commercial/deposit-intents/reconcile"') &&
+    appApi.includes("beginCommercialDepositDerivationRequest");
 
   const acceptance = readFileSync(
     resolve(sourceRoot, "customer-contract-acceptance.ts"),
@@ -305,7 +318,7 @@ function repositoryArchitectureFacts() {
     },
     maturity: {
       core_technical_design: "strong",
-      lead_job_field_foundation: "strong_with_projection_gaps",
+      lead_job_field_foundation: "strong_with_acceptance_projection",
       safety_evidence_accounting_controls: "unusually_strong_in_source",
       repository_migration_coherence: "mixed",
       configured_capability: "partial",
@@ -313,18 +326,23 @@ function repositoryArchitectureFacts() {
       production_customer_proof: "not_established",
     },
     commercial_reachability: {
-      approved_quote_revision_writer: reachability("recordCommercialQuoteRevision"),
-      proposal_revision_writer: reachability("recordCommercialProposalRevision"),
-      proposal_publication_settlement_writer: reachability(
-        "recordCommercialProposalPublication",
-      ),
+      approved_quote_revision_writer: quoteRevisionRouteReachable
+        ? "authenticated_role_api"
+        : reachability("recordCommercialQuoteRevision"),
+      proposal_revision_writer: proposalRevisionRouteReachable
+        ? "authenticated_role_api"
+        : reachability("recordCommercialProposalRevision"),
+      proposal_publication_settlement_writer: proposalPublicationRouteReachable
+        ? "authenticated_role_api_readback_required"
+        : reachability("recordCommercialProposalPublication"),
       customer_acceptance_writer:
         /return await commitNativeAcceptance\s*\(/.test(acceptance)
           ? "production"
           : "unreachable",
       acceptance_to_deposit_derivation:
-        /\bderiveAccountingIntent\s*\(|["']deposit_invoice["']/.test(acceptance)
-          ? "wired"
+        /ensureCommercialDepositDerivation\s*\(/.test(acceptance) &&
+          depositRecoveryRouteReachable
+          ? "acceptance_queue_and_authenticated_recovery_api"
           : "not_wired",
     },
     configuration: {
@@ -356,7 +374,7 @@ function compareCapabilityFact(label, expected, actual) {
       : expected === actual;
   if (!equal) {
     fail(
-      `docs/CAPABILITY-MATRIX.md: stale ${label}; contract ${JSON.stringify(expected)}, repository ${JSON.stringify(actual)}`,
+      `${label}: stale value; expected ${JSON.stringify(expected)}, actual ${JSON.stringify(actual)}`,
     );
   }
 }

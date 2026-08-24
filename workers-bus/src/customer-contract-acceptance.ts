@@ -17,11 +17,13 @@ import {
 } from "./customer-portal-store.ts";
 import { r2ObjectStore } from "./field-actions.ts";
 import { sendGmail } from "./google.ts";
+import { ensureCommercialDepositDerivation } from "./commercial-deposit.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
 const CHALLENGE_TTL_MS = 15 * 60 * 1_000;
 const NATIVE_COMMIT_LEASE_MS = 90 * 1_000;
+const ACCEPTANCE_RECOVERY_WINDOW = 100;
 const ACCEPTANCE_RECEIPT_CONTENT_TYPE = "application/json";
 
 type ChallengeState = "pending_delivery" | "sent" | "consumed" | "invalidated";
@@ -314,6 +316,52 @@ export async function reconcileCustomerContractAcceptanceAttempts(
   )
     .bind(nowValue, nowValue)
     .run();
+  const cursor = await env.DB.prepare(
+    `SELECT last_tenant_id, last_acceptance_id
+       FROM commercial_deposit_derivation_cursors WHERE cursor_name = 'scheduled-v1'`,
+  ).first<{ last_tenant_id: string; last_acceptance_id: string }>();
+  const tenantCursor = cursor?.last_tenant_id === env.APP_TENANT_ID
+    ? cursor.last_acceptance_id
+    : "";
+  const after = await env.DB.prepare(
+    `SELECT acceptance_id, tenant_id FROM customer_portal_acceptance_intents
+      WHERE tenant_id = ? AND state = 'accepted' AND acceptance_id > ?
+      ORDER BY acceptance_id LIMIT ?`,
+  ).bind(env.APP_TENANT_ID, tenantCursor, ACCEPTANCE_RECOVERY_WINDOW)
+    .all<{ acceptance_id: string; tenant_id: string }>();
+  const acceptedRows = [...(after.results ?? [])];
+  if (tenantCursor && acceptedRows.length < ACCEPTANCE_RECOVERY_WINDOW) {
+    const wrapped = await env.DB.prepare(
+      `SELECT acceptance_id, tenant_id FROM customer_portal_acceptance_intents
+        WHERE tenant_id = ? AND state = 'accepted' AND acceptance_id <= ?
+        ORDER BY acceptance_id LIMIT ?`,
+    ).bind(
+      env.APP_TENANT_ID,
+      tenantCursor,
+      ACCEPTANCE_RECOVERY_WINDOW - acceptedRows.length,
+    ).all<{ acceptance_id: string; tenant_id: string }>();
+    acceptedRows.push(...(wrapped.results ?? []));
+  }
+  await Promise.all(
+    acceptedRows.map((row) =>
+      ensureCommercialDepositDerivation(env, {
+        tenantId: row.tenant_id,
+        acceptanceId: row.acceptance_id,
+      }, now).catch(() => null),
+    ),
+  );
+  const lastAcceptance = acceptedRows.at(-1);
+  if (lastAcceptance) {
+    await env.DB.prepare(
+      `INSERT INTO commercial_deposit_derivation_cursors (
+         cursor_name, last_tenant_id, last_acceptance_id, updated_at
+       ) VALUES ('scheduled-v1', ?, ?, ?)
+       ON CONFLICT(cursor_name) DO UPDATE SET
+         last_tenant_id = excluded.last_tenant_id,
+         last_acceptance_id = excluded.last_acceptance_id,
+         updated_at = excluded.updated_at`,
+    ).bind(lastAcceptance.tenant_id, lastAcceptance.acceptance_id, nowValue).run();
+  }
 }
 
 async function settleAcceptanceIntent(
@@ -324,7 +372,15 @@ async function settleAcceptanceIntent(
   let intent = initial;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const terminal = storedTerminalResponse(intent);
-    if (terminal) return terminal;
+    if (terminal) {
+      if (intent.state === "accepted") {
+        await ensureCommercialDepositDerivation(env, {
+          tenantId: intent.tenant_id,
+          acceptanceId: intent.acceptance_id,
+        }).catch(() => null);
+      }
+      return terminal;
+    }
     if (intent.state === "receipt_pending") {
       if (intent.signer_ip_hash !== requestContext.ip_hash) {
         return acceptanceJson(
@@ -507,6 +563,9 @@ async function prepareContract(
        FROM operating_customers customer
        JOIN operating_roof_jobs job
          ON job.tenant_id = customer.tenant_id AND job.customer_id = customer.customer_id
+       JOIN operating_leads lead
+         ON lead.tenant_id = job.tenant_id
+        AND lead.lead_id = job.lead_id
        JOIN commercial_quote_revisions quote
          ON quote.tenant_id = customer.tenant_id AND quote.roof_job_id = job.roof_job_id
         AND quote.customer_id = customer.customer_id
@@ -521,7 +580,15 @@ async function prepareContract(
         AND publication.proposal_revision_id = proposal.proposal_revision_id
       WHERE customer.tenant_id = ? AND customer.customer_id = ? AND job.roof_job_id = ?
         AND customer.lifecycle_status != 'archived' AND job.job_status != 'cancelled'
-        AND quote.status = 'approved' AND quote.valid_until >= ?
+       AND quote.status = 'approved' AND quote.valid_until >= ?
+        AND (
+          lead.lifecycle_status = 'qualified'
+          OR (
+            lead.lifecycle_status = 'converted'
+            AND quote.revision_number > 1
+            AND quote.supersedes_quote_revision_id IS NOT NULL
+          )
+        )
         AND quote.terms_hash = proposal.terms_hash
         AND quote.revision_number = (
           SELECT MAX(current.revision_number) FROM commercial_quote_revisions current
@@ -702,6 +769,9 @@ async function commitNativeAcceptance(
                FROM operating_customers customer
                JOIN operating_roof_jobs job
                  ON job.tenant_id = customer.tenant_id AND job.customer_id = customer.customer_id
+               JOIN operating_leads lead
+                 ON lead.tenant_id = job.tenant_id
+                AND lead.lead_id = job.lead_id
                JOIN commercial_quote_revisions quote
                  ON quote.tenant_id = customer.tenant_id AND quote.roof_job_id = job.roof_job_id
                 AND quote.customer_id = customer.customer_id
@@ -716,6 +786,14 @@ async function commitNativeAcceptance(
                 AND customer.lifecycle_status != 'archived' AND job.job_status != 'cancelled'
                 AND quote.quote_revision_id = ? AND quote.customer_quote_id = ?
                 AND quote.revision_number = ? AND quote.status = 'approved' AND quote.valid_until >= ?
+                AND (
+                  lead.lifecycle_status = 'qualified'
+                  OR (
+                    lead.lifecycle_status = 'converted'
+                    AND quote.revision_number > 1
+                    AND quote.supersedes_quote_revision_id IS NOT NULL
+                  )
+                )
                 AND proposal.proposal_revision_id = ? AND proposal.proposal_pack_id = ?
                 AND publication.publication_event_id = ? AND publication.state = 'published'
                 AND quote.terms_hash = ? AND proposal.terms_hash = ?
@@ -900,6 +978,10 @@ async function nativeTerminalResponse(
     binding.receipt_hash !== current.receipt_hash
   )
     return portalUnavailable();
+  await ensureCommercialDepositDerivation(env, {
+    tenantId: current.tenant_id,
+    acceptanceId,
+  }).catch(() => null);
   return storedTerminalResponse(current) ?? portalUnavailable();
 }
 

@@ -7,7 +7,10 @@ import {
   recordAccountingIntentSubmission,
 } from "../src/accounting-intents.ts";
 import { localFactEnvelope, normalizeProviderEntity } from "../src/accounting-normalizers.ts";
-import { reconcileAccountingIntent } from "../src/accounting-reconciliation.ts";
+import {
+  recordAccountingObservation,
+  reconcileAccountingIntent,
+} from "../src/accounting-reconciliation.ts";
 import {
   bindAccountingIntentTaxSnapshots,
   recordTaxPolicySnapshot,
@@ -20,7 +23,12 @@ import {
   recordNativeFinalInvoiceProviderBinding,
 } from "../src/native-final-invoice-producer.ts";
 import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
-import { approveNativeFinalInvoice, listNativeFinalInvoiceCandidates } from "../src/quickbooks-native-final-invoice.ts";
+import {
+  approveNativeFinalInvoice,
+  isNativeFinalInvoiceCurrent,
+  listNativeFinalInvoiceCandidates,
+  nativeFinalInvoiceProviderPayload,
+} from "../src/quickbooks-native-final-invoice.ts";
 import { AccountingTestD1, NOW, readAccountingMigration, REALM, TENANT } from "./accounting-fixture.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
@@ -111,6 +119,7 @@ function nativeTestEnv(): { env: AppEnv; db: AccountingTestD1 } {
       revision_number INTEGER NOT NULL,
       roof_job_id TEXT NOT NULL,
       customer_id TEXT NOT NULL,
+      supersedes_quote_revision_id TEXT,
       status TEXT NOT NULL,
       currency TEXT NOT NULL,
       subtotal_cents INTEGER NOT NULL,
@@ -137,6 +146,7 @@ function nativeTestEnv(): { env: AppEnv; db: AccountingTestD1 } {
       quote_revision_id TEXT NOT NULL,
       roof_job_id TEXT NOT NULL,
       customer_id TEXT NOT NULL,
+      supersedes_proposal_revision_id TEXT,
       terms_hash TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -906,6 +916,157 @@ test("a corrected provider basis blocks a second final invoice instead of duplic
     ),
     1,
   );
+});
+
+test("independent commercial heads block final derivation and stale an already reconciled final invoice", async () => {
+  const { env, db } = nativeTestEnv();
+  seedNativeSource(db);
+  await seedPriorInvoice(env);
+
+  const first = await deriveNativeFinalInvoiceForJob(
+    env,
+    { tenantId: TENANT, roofJobId: JOB },
+    DERIVE_AT,
+  );
+  assert.equal(first.outcome, "intent_derived");
+  if (first.outcome !== "intent_derived") return;
+
+  const intent = db.raw
+    .prepare("SELECT * FROM accounting_intents WHERE intent_id = ?")
+    .get(first.accounting_intent_id) as AccountingIntentRecord;
+  const approved = await applyAccountingIntentCommand(
+    env,
+    {
+      tenantId: TENANT,
+      intentId: intent.intent_id,
+      operation: "approve",
+      actorUserId: "appu_accounting_0001",
+      idempotencyKey: "approve-independent-head-final-0001",
+      request: { intent_id: intent.intent_id },
+      requestedVersion: intent.version,
+    },
+    DERIVE_AT,
+  );
+  assert.equal(approved.intent.state, "submission_pending");
+
+  const basis = JSON.parse(intent.basis_json) as {
+    commercial: { subtotal: string; tax_amount: string; total_amount: string; lines: unknown[] };
+    qbo: { customer_id: string; item_id: string; tax_code_id: string; terms_id: string };
+  };
+  const providerPayload = nativeFinalInvoiceProviderPayload(basis as never);
+  const observedInvoice = {
+    ...providerPayload,
+    Id: "2002",
+    TotalAmt: Number(basis.commercial.total_amount),
+    Balance: 0,
+    TxnTaxDetail: { TotalTax: Number(basis.commercial.tax_amount) },
+    Line: [
+      ...(providerPayload.Line as unknown[]),
+      {
+        Amount: Number(basis.commercial.subtotal),
+        DetailType: "SubTotalLineDetail",
+        SubTotalLineDetail: {},
+      },
+    ],
+  };
+  const payment = {
+    Id: "3002",
+    CustomerRef: { value: basis.qbo.customer_id },
+    CurrencyRef: { value: "CAD" },
+    TxnDate: "2026-08-21",
+    TotalAmt: Number(basis.commercial.total_amount),
+    UnappliedAmt: 0,
+    Line: [{
+      Amount: Number(basis.commercial.total_amount),
+      LinkedTxn: [{ TxnId: "2002", TxnType: "Invoice" }],
+    }],
+  };
+  await recordAccountingObservation(
+    env,
+    {
+      tenantId: TENANT,
+      realmId: REALM,
+      entityType: "Payment",
+      normalized: normalizeProviderEntity({ realmId: REALM, entityType: "Payment", payload: payment }),
+      payload: payment,
+      readAt: "2026-08-21T12:02:00.000Z",
+      source: "recovery_query",
+    },
+    DERIVE_AT,
+  );
+  await recordAccountingIntentSubmission(
+    env,
+    {
+      tenantId: TENANT,
+      intentId: intent.intent_id,
+      outcome: {
+        effectId: "effect-independent-head-final-0001",
+        state: "succeeded",
+        attemptId: "attempt-independent-head-final-0001",
+        attemptState: "succeeded",
+        providerExternalId: "2002",
+        requestHash: "d".repeat(64),
+        providerResponseHash: "e".repeat(64),
+        readbackHash: "f".repeat(64),
+        resultCode: null,
+      },
+    },
+    new Date("2026-08-21T12:02:30.000Z"),
+  );
+  const reconciled = await reconcileAccountingIntent(
+    env,
+    {
+      tenantId: TENANT,
+      intentId: intent.intent_id,
+      read: {
+        status: "ok",
+        realmId: REALM,
+        entityType: "Invoice",
+        entityId: "2002",
+        payload: observedInvoice,
+        normalized: normalizeProviderEntity({ realmId: REALM, entityType: "Invoice", payload: observedInvoice }),
+        readAt: "2026-08-21T12:03:00.000Z",
+        source: "dispatch_readback",
+        effectAttemptId: "attempt-independent-head-final-0001",
+      },
+    },
+    new Date("2026-08-21T12:03:30.000Z"),
+  );
+  assert.equal(reconciled.verdict, "reconciled");
+  const settled = db.raw
+    .prepare("SELECT * FROM accounting_intents WHERE intent_id = ?")
+    .get(intent.intent_id) as AccountingIntentRecord;
+  assert.equal(await isNativeFinalInvoiceCurrent(env, settled), true);
+
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_quote_revisions (
+         quote_revision_id, tenant_id, customer_quote_id, revision_number, roof_job_id,
+         customer_id, status, currency, subtotal_cents, tax_cents, total_cents, terms_hash,
+         created_at
+       ) VALUES ('quote-rev-independent-0001', ?, 'quote-pack-independent-0001', 1, ?, ?,
+         'approved', 'CAD', 200000, 10000, 210000, ?, '2026-08-19T08:00:00.000Z')`,
+    )
+    .run(TENANT, JOB, CUSTOMER, "b".repeat(64));
+  db.raw
+    .prepare(
+      `INSERT INTO commercial_proposal_revisions (
+         proposal_revision_id, tenant_id, proposal_pack_id, revision_number, quote_revision_id,
+         roof_job_id, customer_id, terms_hash, created_at
+       ) VALUES ('proposal-rev-independent-0001', ?, 'proposal-pack-independent-0001', 1,
+         'quote-rev-independent-0001', ?, ?, ?, '2026-08-19T09:00:00.000Z')`,
+    )
+    .run(TENANT, JOB, CUSTOMER, "b".repeat(64));
+
+  const stale = await isNativeFinalInvoiceCurrent(env, settled);
+  assert.equal(stale, false);
+  const blocked = await deriveNativeFinalInvoiceForJob(
+    env,
+    { tenantId: TENANT, roofJobId: JOB },
+    new Date("2026-08-21T12:04:00.000Z"),
+  );
+  assert.equal(blocked.outcome, "blocked");
+  if (blocked.outcome === "blocked") assert.equal(blocked.blocker_code, "commercial_head_changed");
 });
 
 test("approval fails closed when native completion truth changes after derivation", async () => {

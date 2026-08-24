@@ -264,9 +264,13 @@ function installNetworkGuard() {
 
 function installNativePortalSchema(db: DatabaseSync): void {
   db.exec(`
+    CREATE TABLE operating_leads (
+      lead_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, lifecycle_status TEXT NOT NULL,
+      version INTEGER NOT NULL, updated_at TEXT NOT NULL
+    );
     CREATE TABLE operating_roof_jobs (
       roof_job_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, customer_id TEXT NOT NULL,
-      property_id TEXT, brand TEXT, job_number TEXT, service_type TEXT NOT NULL,
+      lead_id TEXT NOT NULL, property_id TEXT, brand TEXT, job_number TEXT, service_type TEXT NOT NULL,
       job_status TEXT, current_gate_state TEXT NOT NULL, version INTEGER NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -282,6 +286,7 @@ function installNativePortalSchema(db: DatabaseSync): void {
     CREATE TABLE commercial_quote_revisions (
       quote_revision_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, customer_quote_id TEXT NOT NULL,
       revision_number INTEGER NOT NULL, roof_job_id TEXT NOT NULL, customer_id TEXT NOT NULL,
+      supersedes_quote_revision_id TEXT,
       status TEXT NOT NULL, currency TEXT NOT NULL, valid_until TEXT NOT NULL,
       total_cents INTEGER NOT NULL, terms_json TEXT NOT NULL, terms_hash TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -289,7 +294,7 @@ function installNativePortalSchema(db: DatabaseSync): void {
     CREATE TABLE commercial_proposal_revisions (
       proposal_revision_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, proposal_pack_id TEXT NOT NULL,
       revision_number INTEGER NOT NULL, quote_revision_id TEXT NOT NULL, roof_job_id TEXT NOT NULL,
-      customer_id TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL,
+      customer_id TEXT NOT NULL, supersedes_proposal_revision_id TEXT, title TEXT NOT NULL, summary TEXT NOT NULL,
       terms_json TEXT NOT NULL, terms_hash TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE TABLE commercial_proposal_publication_events (
@@ -308,6 +313,11 @@ function installNativePortalSchema(db: DatabaseSync): void {
 
 function seedNativePortal(db: DatabaseSync): void {
   db.prepare(
+    `INSERT INTO operating_leads
+       (lead_id, tenant_id, lifecycle_status, version, updated_at)
+     VALUES ('LEAD-A-0001', 'ironwrap', 'qualified', 1, ?)`,
+  ).run(NOW);
+  db.prepare(
     `INSERT INTO operating_customers
        (customer_id, tenant_id, display_name, contact_email, contact_phone,
         lifecycle_status, updated_at)
@@ -316,9 +326,9 @@ function seedNativePortal(db: DatabaseSync): void {
   ).run(NOW);
   db.prepare(
     `INSERT INTO operating_roof_jobs
-       (roof_job_id, tenant_id, customer_id, property_id, brand, job_number,
+       (roof_job_id, tenant_id, customer_id, lead_id, property_id, brand, job_number,
         service_type, job_status, current_gate_state, version, updated_at)
-     VALUES ('JOB-A', 'ironwrap', 'CUSTOMER-A', NULL, 'ironwrap', 'IW-2026-100',
+     VALUES ('JOB-A', 'ironwrap', 'CUSTOMER-A', 'LEAD-A-0001', NULL, 'ironwrap', 'IW-2026-100',
              'Roofing', 'in_progress', 'materials_ready', 1, ?)`,
   ).run(NOW);
   db.prepare(

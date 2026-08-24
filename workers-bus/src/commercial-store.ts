@@ -415,6 +415,13 @@ export async function recordCommercialQuoteRevision(
   );
   if (existing) return await replayQuote(env, existing, commandFingerprint);
 
+  await assertJobLeadQualified(
+    env,
+    input.tenantId,
+    input.roofJobId,
+    input.revisionNumber > 1 && !!input.supersedesQuoteRevisionId,
+  );
+
   const createdAt = clock(now);
   if (input.validUntil < createdAt.slice(0, 10)) fail("commercial_quote_already_expired");
   await assertJobCustomer(env, input.tenantId, input.roofJobId, input.customerId);
@@ -486,6 +493,22 @@ export async function recordCommercialProposalRevision(
   );
   if (existing) return replay(existing, commandFingerprint, "commercial_proposal_idempotency_conflict", "proposal");
 
+  const quoteCorrection = await env.DB.prepare(
+    `SELECT revision_number, supersedes_quote_revision_id
+       FROM commercial_quote_revisions
+      WHERE tenant_id = ? AND quote_revision_id = ? LIMIT 1`,
+  ).bind(input.tenantId, input.quoteRevisionId).first<{
+    revision_number: number;
+    supersedes_quote_revision_id: string | null;
+  }>();
+  await assertJobLeadQualified(
+    env,
+    input.tenantId,
+    input.roofJobId,
+    (input.revisionNumber > 1 && !!input.supersedesProposalRevisionId) ||
+      (!!quoteCorrection && quoteCorrection.revision_number > 1 && !!quoteCorrection.supersedes_quote_revision_id),
+  );
+
   const createdAt = clock(now);
   const quote = await requiredById<CommercialQuoteRecord>(
     env, "commercial_quote_revisions", "quote_revision_id", input.tenantId,
@@ -549,18 +572,19 @@ export async function recordCommercialProposalPublication(
   const existing = await findByIdempotency<CommercialPublicationRecord>(
     env, "commercial_proposal_publication_events", input.tenantId, idempotencyKeyHash,
   );
-  if (existing) return replayPublication(existing, commandFingerprint, externalEffectId);
 
   const occurredAt = clock(now);
   const proposal = await requiredById<CommercialProposalRecord>(
     env, "commercial_proposal_revisions", "proposal_revision_id", input.tenantId,
     input.proposalRevisionId, "commercial_publication_proposal_missing",
   );
+  if (existing) return replayPublication(existing, commandFingerprint, externalEffectId);
   if (proposal.proposal_pack_id !== input.proposalPackId) fail("commercial_publication_proposal_mismatch");
-  const currentProposal = await env.DB.prepare(
-    `SELECT proposal_revision_id FROM commercial_proposal_revisions
-      WHERE tenant_id = ? AND proposal_pack_id = ? ORDER BY revision_number DESC LIMIT 1`,
-  ).bind(input.tenantId, input.proposalPackId).first<{ proposal_revision_id: string }>();
+  const currentProposal = await getCurrentCommercialProposal(
+    env,
+    input.tenantId,
+    input.proposalPackId,
+  );
   if (currentProposal?.proposal_revision_id !== input.proposalRevisionId) {
     fail("commercial_publication_proposal_not_current");
   }
@@ -569,6 +593,13 @@ export async function recordCommercialProposalPublication(
     proposal.quote_revision_id, "commercial_publication_quote_missing",
   );
   if (quote.status !== "approved") fail("commercial_publication_quote_not_approved");
+  await assertJobLeadQualified(
+    env,
+    input.tenantId,
+    proposal.roof_job_id,
+    quote.revision_number > 1 && !!quote.supersedes_quote_revision_id,
+  );
+  if (quote.terms_hash !== proposal.terms_hash) fail("commercial_publication_terms_mismatch");
   const action = input.state === "published" ? "proposal.publish" : "proposal.withdraw";
   const authority = await resolveCommercialAuthority(env, input.authority, {
     tenantId: input.tenantId,
@@ -659,6 +690,39 @@ export async function bindCommercialCustomerAcceptance(
         AND acceptance.roof_job_id = proposal.roof_job_id
         AND acceptance.customer_id = quote.customer_id
         AND acceptance.customer_id = proposal.customer_id
+        AND quote.status = 'approved'
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions successor
+           WHERE successor.tenant_id = quote.tenant_id
+             AND successor.supersedes_quote_revision_id = quote.quote_revision_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions other
+           WHERE other.tenant_id = quote.tenant_id
+             AND other.customer_quote_id = quote.customer_quote_id
+             AND other.quote_revision_id != quote.quote_revision_id
+             AND NOT EXISTS (
+               SELECT 1 FROM commercial_quote_revisions other_successor
+                WHERE other_successor.tenant_id = other.tenant_id
+                  AND other_successor.supersedes_quote_revision_id = other.quote_revision_id
+             )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions successor
+           WHERE successor.tenant_id = proposal.tenant_id
+             AND successor.supersedes_proposal_revision_id = proposal.proposal_revision_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions other
+           WHERE other.tenant_id = proposal.tenant_id
+             AND other.proposal_pack_id = proposal.proposal_pack_id
+             AND other.proposal_revision_id != proposal.proposal_revision_id
+             AND NOT EXISTS (
+               SELECT 1 FROM commercial_proposal_revisions other_successor
+                WHERE other_successor.tenant_id = other.tenant_id
+                  AND other_successor.supersedes_proposal_revision_id = other.proposal_revision_id
+             )
+        )
         AND acceptance.terms_hash = quote.terms_hash
         AND acceptance.terms_hash = proposal.terms_hash
         AND proposal.quote_revision_id = quote.quote_revision_id
@@ -687,6 +751,7 @@ export async function bindCommercialCustomerAcceptance(
     accepted_at: string;
   }>();
   if (!chain) fail("commercial_acceptance_chain_mismatch");
+  await assertAcceptanceLeadQualified(env, tenantId, chain.roof_job_id, input.quoteRevisionId);
   const boundAt = clock(now);
   if (Date.parse(chain.accepted_at) > Date.parse(boundAt)) fail("commercial_acceptance_time_invalid");
   const bindingId = await recordId(
@@ -729,10 +794,18 @@ export async function getCurrentCommercialQuote(
   tenantId: string,
   customerQuoteId: string,
 ): Promise<{ quote: CommercialQuoteRecord; lines: CommercialQuoteLineRecord[] } | null> {
-  const quote = await env.DB.prepare(
-    `SELECT * FROM commercial_quote_revisions
-      WHERE tenant_id = ? AND customer_quote_id = ? ORDER BY revision_number DESC LIMIT 1`,
-  ).bind(tenant(tenantId), customerQuoteId).first<CommercialQuoteRecord>();
+  const quotes = await env.DB.prepare(
+    `SELECT current.* FROM commercial_quote_revisions current
+      WHERE current.tenant_id = ? AND current.customer_quote_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_quote_revision_id = current.quote_revision_id
+        )
+      ORDER BY current.revision_number DESC LIMIT 2`,
+  ).bind(tenant(tenantId), customerQuoteId).all<CommercialQuoteRecord>();
+  const quoteRows = quotes.results ?? [];
+  const quote = quoteRows.length === 1 ? quoteRows[0]! : null;
   return quote ? { quote, lines: await quoteLines(env, tenantId, quote.quote_revision_id) } : null;
 }
 
@@ -741,10 +814,18 @@ export async function getCurrentCommercialProposal(
   tenantId: string,
   proposalPackId: string,
 ): Promise<CommercialProposalRecord | null> {
-  return await env.DB.prepare(
-    `SELECT * FROM commercial_proposal_revisions
-      WHERE tenant_id = ? AND proposal_pack_id = ? ORDER BY revision_number DESC LIMIT 1`,
-  ).bind(tenant(tenantId), proposalPackId).first<CommercialProposalRecord>();
+  const proposals = await env.DB.prepare(
+    `SELECT current.* FROM commercial_proposal_revisions current
+      WHERE current.tenant_id = ? AND current.proposal_pack_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_proposal_revision_id = current.proposal_revision_id
+        )
+      ORDER BY current.revision_number DESC LIMIT 2`,
+  ).bind(tenant(tenantId), proposalPackId).all<CommercialProposalRecord>();
+  const rows = proposals.results ?? [];
+  return rows.length === 1 ? rows[0]! : null;
 }
 
 export async function getCurrentCommercialPublication(
@@ -752,10 +833,19 @@ export async function getCurrentCommercialPublication(
   tenantId: string,
   proposalPackId: string,
 ): Promise<CommercialPublicationRecord | null> {
-  return await env.DB.prepare(
-    `SELECT * FROM commercial_proposal_publication_events
-      WHERE tenant_id = ? AND proposal_pack_id = ? ORDER BY publication_version DESC LIMIT 1`,
-  ).bind(tenant(tenantId), proposalPackId).first<CommercialPublicationRecord>();
+  const publications = await env.DB.prepare(
+    `SELECT current.* FROM commercial_proposal_publication_events current
+      WHERE current.tenant_id = ? AND current.proposal_pack_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_publication_events successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.proposal_pack_id = current.proposal_pack_id
+             AND successor.publication_version > current.publication_version
+        )
+      ORDER BY current.publication_version DESC LIMIT 2`,
+  ).bind(tenant(tenantId), proposalPackId).all<CommercialPublicationRecord>();
+  const rows = publications.results ?? [];
+  return rows.length === 1 ? rows[0]! : null;
 }
 
 export async function getCommercialAcceptanceForJob(
@@ -763,10 +853,13 @@ export async function getCommercialAcceptanceForJob(
   tenantId: string,
   roofJobId: string,
 ): Promise<CommercialAcceptanceBindingRecord | null> {
-  return await env.DB.prepare(
+  const acceptances = await env.DB.prepare(
     `SELECT * FROM commercial_acceptance_bindings
-      WHERE tenant_id = ? AND roof_job_id = ? ORDER BY accepted_at DESC LIMIT 1`,
-  ).bind(tenant(tenantId), roofJobId).first<CommercialAcceptanceBindingRecord>();
+      WHERE tenant_id = ? AND roof_job_id = ?
+      ORDER BY accepted_at DESC, acceptance_binding_id DESC LIMIT 2`,
+  ).bind(tenant(tenantId), roofJobId).all<CommercialAcceptanceBindingRecord>();
+  const rows = acceptances.results ?? [];
+  return rows.length === 1 ? rows[0]! : null;
 }
 
 export async function prepareCommercialProposal(
@@ -925,6 +1018,59 @@ async function assertJobCustomer(
     `SELECT customer_id FROM operating_roof_jobs WHERE tenant_id = ? AND roof_job_id = ?`,
   ).bind(tenantId, roofJobId).first<{ customer_id: string }>();
   if (!row || row.customer_id !== customerId) fail("commercial_job_customer_mismatch");
+}
+
+async function assertJobLeadQualified(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+  allowConvertedForCorrection = false,
+): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT lead.lifecycle_status
+       FROM operating_roof_jobs job
+       JOIN operating_leads lead
+         ON lead.tenant_id = job.tenant_id AND lead.lead_id = job.lead_id
+      WHERE job.tenant_id = ? AND job.roof_job_id = ?
+      LIMIT 1`,
+  ).bind(tenantId, roofJobId).first<{ lifecycle_status: string }>();
+  if (!row ||
+      (row.lifecycle_status !== "qualified" &&
+        !(allowConvertedForCorrection && row.lifecycle_status === "converted"))) {
+    fail("commercial_lead_not_qualified");
+  }
+}
+
+// Customer acceptance is qualified-only for the initial contract. After conversion, the same
+// native path may re-bind only an explicitly superseding current quote correction; production
+// snapshot/commit applies the identical predicate below.
+async function assertAcceptanceLeadQualified(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+  quoteRevisionId: string,
+): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT lead.lifecycle_status, quote.revision_number, quote.supersedes_quote_revision_id
+       FROM operating_roof_jobs job
+       JOIN operating_leads lead
+         ON lead.tenant_id = job.tenant_id AND lead.lead_id = job.lead_id
+       JOIN commercial_quote_revisions quote
+         ON quote.tenant_id = job.tenant_id AND quote.quote_revision_id = ?
+      WHERE job.tenant_id = ? AND job.roof_job_id = ?
+      LIMIT 1`,
+  ).bind(quoteRevisionId, tenantId, roofJobId).first<{
+    lifecycle_status: string;
+    revision_number: number;
+    supersedes_quote_revision_id: string | null;
+  }>();
+  if (
+    !row ||
+    (row.lifecycle_status !== "qualified" &&
+      !(row.lifecycle_status === "converted" && row.revision_number > 1 && !!row.supersedes_quote_revision_id))
+  ) {
+    fail("commercial_lead_not_qualified");
+  }
 }
 
 async function assertSucceededPublicationEffect(

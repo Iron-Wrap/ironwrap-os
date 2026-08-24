@@ -713,6 +713,36 @@ async function candidateFromAccountingIntent(
 }
 
 /**
+ * A phase may report financial closure only for a settled native V2 final invoice whose immutable
+ * completion/commercial/provider basis is still current.  This is intentionally read-only: a
+ * stale or malformed intent is evidence for a blocker, never a reason to mutate accounting state.
+ */
+export async function isNativeFinalInvoiceCurrent(
+  env: AppEnv,
+  row: AccountingIntentRecord,
+): Promise<boolean> {
+  if (
+    row.kind !== "progress_invoice" ||
+    row.final_invoice_intent_id !== row.intent_id ||
+    row.state !== "reconciled" ||
+    row.settled_amount !== row.total_amount
+  ) return false;
+  const parsed = parseBasis(row.basis_json);
+  if (
+    !parsed.basis ||
+    parsed.basis.schema_version !== 2 ||
+    row.basis_sha256 !== await sha256Hex(canonicalJson(parsed.basis)) ||
+    !sourceDocumentsMatch(row.source_documents_json, parsed.basis)
+  ) return false;
+  try {
+    await assertV2SourceFreshness(env, row, parsed.basis);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Re-read every mutable native head behind a V2 basis before it enters the review queue.
  *
  * The basis proves what was derived. These reads prove the same facts are still current. A
@@ -912,6 +942,7 @@ async function assertCommercialSourceFreshness(
   if (
     quoteLines.length === 0 ||
     quoteLines.length > 100 ||
+    quote.roof_job_id !== row.roof_job_id ||
     (await sha256Hex(canonicalJson({ quote, lines: quoteLines }))) !== basis.accepted_quote.sha256 ||
     Number(quote.subtotal_cents) !== cents(basis.commercial_head.accepted_amounts.subtotal) ||
     Number(quote.tax_cents) !== cents(basis.commercial_head.accepted_amounts.tax_amount) ||
@@ -948,26 +979,43 @@ async function assertCommercialSourceFreshness(
     throw new Error("commercial_chain");
   }
   const currentQuote = await env.DB.prepare(
-    `SELECT quote_revision_id FROM commercial_quote_revisions
-      WHERE tenant_id = ? AND customer_quote_id = ?
-      ORDER BY revision_number DESC LIMIT 1`,
+    `SELECT current.quote_revision_id FROM commercial_quote_revisions current
+      WHERE current.tenant_id = ? AND current.roof_job_id = ? AND current.customer_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_quote_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_quote_revision_id = current.quote_revision_id
+        )
+      ORDER BY current.revision_number DESC, current.quote_revision_id ASC LIMIT 2`,
   )
-    .bind(row.tenant_id, quote.customer_quote_id)
-    .first<{ quote_revision_id: string }>();
+    .bind(row.tenant_id, row.roof_job_id, quote.customer_id)
+    .all<{ quote_revision_id: string }>();
   const currentProposal = await env.DB.prepare(
-    `SELECT proposal_revision_id FROM commercial_proposal_revisions
-      WHERE tenant_id = ? AND proposal_pack_id = ?
-      ORDER BY revision_number DESC LIMIT 1`,
+    `SELECT current.proposal_revision_id FROM commercial_proposal_revisions current
+      WHERE current.tenant_id = ? AND current.roof_job_id = ? AND current.customer_id = ?
+        AND current.quote_revision_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_revisions successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.supersedes_proposal_revision_id = current.proposal_revision_id
+        )
+      ORDER BY current.revision_number DESC, current.proposal_revision_id ASC LIMIT 2`,
   )
-    .bind(row.tenant_id, proposal.proposal_pack_id)
-    .first<{ proposal_revision_id: string }>();
+    .bind(row.tenant_id, row.roof_job_id, quote.customer_id, quote.quote_revision_id)
+    .all<{ proposal_revision_id: string }>();
   const currentPublication = await env.DB.prepare(
-    `SELECT publication_event_id FROM commercial_proposal_publication_events
-      WHERE tenant_id = ? AND proposal_pack_id = ?
-      ORDER BY publication_version DESC LIMIT 1`,
+    `SELECT current.publication_event_id FROM commercial_proposal_publication_events current
+      WHERE current.tenant_id = ? AND current.proposal_pack_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM commercial_proposal_publication_events successor
+           WHERE successor.tenant_id = current.tenant_id
+             AND successor.proposal_pack_id = current.proposal_pack_id
+             AND successor.publication_version > current.publication_version
+        )
+      ORDER BY current.publication_version DESC LIMIT 2`,
   )
     .bind(row.tenant_id, proposal.proposal_pack_id)
-    .first<{ publication_event_id: string }>();
+    .all<{ publication_event_id: string }>();
   const currentAcceptances = await env.DB.prepare(
     `SELECT acceptance_binding_id, accepted_at FROM commercial_acceptance_bindings
       WHERE tenant_id = ? AND roof_job_id = ?
@@ -977,9 +1025,12 @@ async function assertCommercialSourceFreshness(
     .all<{ acceptance_binding_id: string; accepted_at: string }>();
   const acceptanceHeads = currentAcceptances.results ?? [];
   if (
-    currentQuote?.quote_revision_id !== basis.accepted_quote.id ||
-    currentProposal?.proposal_revision_id !== basis.commercial_head.proposal.id ||
-    currentPublication?.publication_event_id !== basis.commercial_head.publication.id ||
+    (currentQuote.results ?? []).length !== 1 ||
+    currentQuote.results![0]!.quote_revision_id !== basis.accepted_quote.id ||
+    (currentProposal.results ?? []).length !== 1 ||
+    currentProposal.results![0]!.proposal_revision_id !== basis.commercial_head.proposal.id ||
+    (currentPublication.results ?? []).length !== 1 ||
+    currentPublication.results![0]!.publication_event_id !== basis.commercial_head.publication.id ||
     acceptanceHeads[0]?.acceptance_binding_id !== basis.commercial_head.acceptance.id ||
     (acceptanceHeads.length > 1 && acceptanceHeads[0]!.accepted_at === acceptanceHeads[1]!.accepted_at)
   ) {

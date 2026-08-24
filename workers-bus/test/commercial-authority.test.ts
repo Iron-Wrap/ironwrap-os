@@ -253,6 +253,12 @@ test("native commercial authority records a complete autonomous customer contrac
     }, at(6));
     assert.equal(acceptance.kind, "created");
     assert.equal(acceptance.binding.receipt_hash, "9".repeat(64));
+    const convertedLead = db.raw.prepare(
+      "SELECT lifecycle_status FROM operating_leads WHERE lead_id = ?",
+    ).get(LEAD_ID) as { lifecycle_status: string };
+    assert.equal(convertedLead.lifecycle_status, "converted");
+    assert.equal((await recordCommercialQuoteRevision(env, quoteInput, at(20))).kind, "replayed");
+    assert.equal((await recordCommercialProposalRevision(env, proposalInput, at(20))).kind, "replayed");
     assert.equal((await bindCommercialCustomerAcceptance(env, {
       tenantId: TENANT,
       acceptanceId: "acceptance_abcdef0123456789",
@@ -395,6 +401,199 @@ test("commercial policy and immutable chain fail closed", async () => {
   }
 });
 
+test("commercial publication and acceptance refuse numerically highest forked heads", async () => {
+  const db = new SqliteD1();
+  const env = commercialEnv(db);
+  try {
+    const leadInput = leadRequest();
+    const leadPermit = await admitFor(
+      env,
+      "lead.triage.record",
+      { type: "lead", id: LEAD_ID, version: 1 },
+      buildLeadTriageCommand(leadInput),
+      "permit:forked-publication:lead",
+    );
+    leadInput.authority = { kind: "policy_permit", permitId: leadPermit.permit_id };
+    await recordLeadTriageDecision(env, leadInput, at(1));
+
+    const quoteInput = quoteRequest();
+    const preparedQuote = await prepareCommercialQuote(quoteInput);
+    const quotePermit = await admitFor(
+      env,
+      "quote.revision.record",
+      { type: "customer_quote", id: QUOTE_ID, version: 1 },
+      preparedQuote.command,
+      "permit:forked-publication:quote",
+      preparedQuote.totalCents,
+    );
+    quoteInput.authority = { kind: "policy_permit", permitId: quotePermit.permit_id };
+    await recordCommercialQuoteRevision(env, quoteInput, at(2));
+
+    db.raw.exec("DROP TRIGGER commercial_quote_revision_sequence_guard");
+    const quote3 = {
+      ...quoteRequest(),
+      quoteRevisionId: `${QUOTE_REVISION_ID}:fork-3`,
+      revisionNumber: 3,
+      supersedesQuoteRevisionId: QUOTE_REVISION_ID,
+      correctionReason: "Synthetic high-number fork used to prove fail-closed head selection.",
+      idempotencyKey: "commercial:quote:fork-3",
+    };
+    const preparedQuote3 = await prepareCommercialQuote(quote3);
+    const quote3Permit = await admitFor(
+      env,
+      "quote.revision.record",
+      { type: "customer_quote", id: QUOTE_ID, version: 3 },
+      preparedQuote3.command,
+      "permit:forked-publication:quote-3",
+      preparedQuote3.totalCents,
+    );
+    quote3.authority = { kind: "policy_permit", permitId: quote3Permit.permit_id };
+    await recordCommercialQuoteRevision(env, quote3, at(2.25));
+
+    const proposalInput = {
+      ...proposalRequest(),
+      quoteRevisionId: quote3.quoteRevisionId,
+    };
+    const preparedProposal = await prepareCommercialProposal(proposalInput);
+    const proposalPermit = await admitFor(
+      env,
+      "proposal.revision.record",
+      { type: "proposal", id: PROPOSAL_PACK_ID, version: 1 },
+      preparedProposal.command,
+      "permit:forked-publication:proposal-1",
+    );
+    proposalInput.authority = { kind: "policy_permit", permitId: proposalPermit.permit_id };
+    await recordCommercialProposalRevision(env, proposalInput, at(3));
+
+    db.raw.exec("DROP TRIGGER commercial_proposal_revision_sequence_guard");
+    const proposal3 = {
+      ...proposalInput,
+      proposalRevisionId: `${PROPOSAL_REVISION_ID}:fork-3`,
+      revisionNumber: 3,
+      supersedesProposalRevisionId: PROPOSAL_REVISION_ID,
+      contentRef: "r2://commercial/proposals/fork-3.pdf",
+      idempotencyKey: "commercial:proposal:fork-3",
+    };
+    const preparedProposal3 = await prepareCommercialProposal(proposal3);
+    const proposal3Permit = await admitFor(
+      env,
+      "proposal.revision.record",
+      { type: "proposal", id: PROPOSAL_PACK_ID, version: 3 },
+      preparedProposal3.command,
+      "permit:forked-publication:proposal-3",
+    );
+    proposal3.authority = { kind: "policy_permit", permitId: proposal3Permit.permit_id };
+    await recordCommercialProposalRevision(env, proposal3, at(3.25));
+
+    const publication1 = {
+      ...publicationRequest(),
+      proposalRevisionId: proposal3.proposalRevisionId,
+      idempotencyKey: "commercial:publication:fork-3",
+    };
+    const publication1Permit = await admitFor(
+      env,
+      "proposal.publish",
+      { type: "proposal_publication", id: PROPOSAL_PACK_ID, version: 1 },
+      buildCommercialPublicationCommand(publication1),
+      "permit:forked-publication:publish",
+    );
+    publication1.authority = { kind: "policy_permit", permitId: publication1Permit.permit_id };
+    publication1.externalEffectId = "effect:commercial-publication:fork-3";
+    await executePublicationEffect(
+      env,
+      publication1Permit,
+      publication1.externalEffectId,
+      proposal3.proposalRevisionId,
+      "effect:commercial-publication:fork-3",
+    );
+    await recordCommercialProposalPublication(env, publication1, at(4));
+
+    const proposal2 = {
+      ...proposalInput,
+      proposalRevisionId: `${PROPOSAL_REVISION_ID}:fork-2`,
+      revisionNumber: 2,
+      supersedesProposalRevisionId: PROPOSAL_REVISION_ID,
+      contentRef: "r2://commercial/proposals/fork-2.pdf",
+      idempotencyKey: "commercial:proposal:fork-2",
+    };
+    const preparedProposal2 = await prepareCommercialProposal(proposal2);
+    const proposal2Permit = await admitFor(
+      env,
+      "proposal.revision.record",
+      { type: "proposal", id: PROPOSAL_PACK_ID, version: 2 },
+      preparedProposal2.command,
+      "permit:forked-publication:proposal-2",
+    );
+    proposal2.authority = { kind: "policy_permit", permitId: proposal2Permit.permit_id };
+    await recordCommercialProposalRevision(env, proposal2, at(4.25));
+    assert.equal(await getCurrentCommercialProposal(env, TENANT, PROPOSAL_PACK_ID), null);
+
+    const quote2 = {
+      ...quoteRequest(),
+      quoteRevisionId: `${QUOTE_REVISION_ID}:fork-2`,
+      revisionNumber: 2,
+      supersedesQuoteRevisionId: QUOTE_REVISION_ID,
+      correctionReason: "Synthetic low-number fork used to prove fail-closed head selection.",
+      idempotencyKey: "commercial:quote:fork-2",
+    };
+    const preparedQuote2 = await prepareCommercialQuote(quote2);
+    const quote2Permit = await admitFor(
+      env,
+      "quote.revision.record",
+      { type: "customer_quote", id: QUOTE_ID, version: 2 },
+      preparedQuote2.command,
+      "permit:forked-publication:quote-2",
+      preparedQuote2.totalCents,
+    );
+    quote2.authority = { kind: "policy_permit", permitId: quote2Permit.permit_id };
+    await recordCommercialQuoteRevision(env, quote2, at(4.5));
+    assert.equal(await getCurrentCommercialQuote(env, TENANT, QUOTE_ID), null);
+
+    const withdrawal = {
+      ...publicationRequest(),
+      proposalRevisionId: proposal3.proposalRevisionId,
+      publicationVersion: 2,
+      previousState: "published" as const,
+      state: "withdrawn" as const,
+      idempotencyKey: "commercial:publication:forked-withdrawal",
+    };
+    const withdrawalPermit = await admitFor(
+      env,
+      "proposal.withdraw",
+      { type: "proposal_publication", id: PROPOSAL_PACK_ID, version: 2 },
+      buildCommercialPublicationCommand(withdrawal),
+      "permit:forked-publication:withdraw",
+    );
+    withdrawal.authority = { kind: "policy_permit", permitId: withdrawalPermit.permit_id };
+    withdrawal.externalEffectId = "effect:commercial-publication:forked-withdrawal";
+    await executePublicationEffect(
+      env,
+      withdrawalPermit,
+      withdrawal.externalEffectId,
+      proposal3.proposalRevisionId,
+      "effect:commercial-publication:forked-withdrawal",
+      { publicationVersion: 2, action: "proposal.withdraw", state: "withdrawn" },
+    );
+    await assert.rejects(
+      recordCommercialProposalPublication(env, withdrawal, at(6)),
+      errorCode("commercial_publication_proposal_not_current"),
+    );
+
+    seedAcceptedIntent(db.raw, preparedQuote3.termsHash, preparedQuote3.termsJson, 3);
+    await assert.rejects(
+      bindCommercialCustomerAcceptance(env, {
+        tenantId: TENANT,
+        acceptanceId: "acceptance_abcdef0123456789",
+        quoteRevisionId: quote3.quoteRevisionId,
+        proposalRevisionId: proposal3.proposalRevisionId,
+      }, at(7)),
+      errorCode("commercial_acceptance_chain_mismatch"),
+    );
+  } finally {
+    db.close();
+  }
+});
+
 function leadRequest(): RecordLeadTriageInput {
   return {
     tenantId: TENANT,
@@ -516,16 +715,24 @@ async function executePublicationEffect(
   effectId: string,
   intentId: string,
   idempotencyKey: string,
+  options: {
+    publicationVersion?: number;
+    action?: "proposal.publish" | "proposal.withdraw";
+    state?: "published" | "withdrawn";
+  } = {},
 ) {
+  const publicationVersion = options.publicationVersion ?? 1;
+  const action = options.action ?? "proposal.publish";
+  const state = options.state ?? "published";
   return await runExternalEffect(env, {
     effectId,
     tenantId: TENANT,
     actor: { type: "agent", id: "sales-orchestrator" },
     taskId: `commercial:${effectId}`,
     authority: commercialEffectAuthority(permit),
-    aggregate: { type: "proposal_publication", id: PROPOSAL_PACK_ID, version: 1 },
+    aggregate: { type: "proposal_publication", id: PROPOSAL_PACK_ID, version: publicationVersion },
     intentId,
-    action: "proposal.publish",
+    action,
     request: { proposal_revision_id: intentId },
     provider: "customer-portal",
     providerAccountRef: "ironwrap-customer-portal",
@@ -533,7 +740,7 @@ async function executePublicationEffect(
     deadlineAt: at(8).toISOString(),
     preconditions: { quote_status: "approved" },
     evidenceRefs: EVIDENCE.map(({ ref }) => ref),
-    expectedReadback: { state: "published" },
+    expectedReadback: { state },
     retryLimit: 1,
     compensationPlan: { action: "proposal.withdraw" },
     correlationId: `correlation:${effectId}`,
@@ -543,8 +750,8 @@ async function executePublicationEffect(
         outcome: "accepted" as const,
         value: { published: true },
         providerExternalId: `portal:${effectId}`,
-        providerResponse: { state: "published" },
-        readback: { status: "match" as const, observed: { state: "published" } },
+        providerResponse: { state },
+        readback: { status: "match" as const, observed: { state } },
       };
     },
     async replay() {
@@ -620,7 +827,12 @@ function seedOperatingCore(db: DatabaseSync): void {
   ).run(JOB_ID, TENANT, LEAD_ID, CUSTOMER_ID, ENVELOPE_ID, "raw/commercial/0001.json", now, now);
 }
 
-function seedAcceptedIntent(db: DatabaseSync, termsHash: string, termsJson: string): void {
+function seedAcceptedIntent(
+  db: DatabaseSync,
+  termsHash: string,
+  termsJson: string,
+  quoteVersion = 1,
+): void {
   const acceptedAt = at(5).toISOString();
   db.prepare(
     `INSERT INTO customer_portal_links (
@@ -637,11 +849,11 @@ function seedAcceptedIntent(db: DatabaseSync, termsHash: string, termsJson: stri
        email_hash, quote_id, quote_version, proposal_pack_id, terms_hash, terms_json,
        request_ip_hash, request_user_agent_hash, state, created_at, expires_at,
        sent_at, provider_message_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?)`,
   ).run(
     "acceptance_challenge_abcdef0123456789", "4".repeat(64), TENANT,
     "portal_abcdef0123456789", JOB_ID, CUSTOMER_ID, "5".repeat(64), QUOTE_ID,
-    PROPOSAL_PACK_ID, termsHash, termsJson, "6".repeat(64), "7".repeat(64),
+    quoteVersion, PROPOSAL_PACK_ID, termsHash, termsJson, "6".repeat(64), "7".repeat(64),
     at(4.5).toISOString(), at(15).toISOString(), at(4.75).toISOString(), "message:0001",
   );
   db.prepare(
@@ -652,12 +864,12 @@ function seedAcceptedIntent(db: DatabaseSync, termsHash: string, termsJson: stri
        signer_ip_hash, accepted_at, receipt_key, receipt_hash, receipt_content_length,
        state, frappe_attempted_at, frappe_attempt_lease_expires_at, result_json,
        response_status, error_code, created_at, updated_at, completed_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'Customer', ?, ?, ?, ?, 512,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Customer', ?, ?, ?, ?, 512,
                'accepted', ?, NULL, '{}', 200, NULL, ?, ?, ?)`,
   ).run(
     "acceptance_abcdef0123456789", "8".repeat(64), "a".repeat(64),
     "acceptance_challenge_abcdef0123456789", TENANT, "portal_abcdef0123456789",
-    JOB_ID, CUSTOMER_ID, "5".repeat(64), QUOTE_ID, PROPOSAL_PACK_ID, termsHash,
+    JOB_ID, CUSTOMER_ID, "5".repeat(64), QUOTE_ID, quoteVersion, PROPOSAL_PACK_ID, termsHash,
     termsJson, "b".repeat(64), acceptedAt,
     `customer-contract-acceptance/v1/${"c".repeat(64)}.json`, "9".repeat(64),
     at(5.25).toISOString(), acceptedAt, at(5.5).toISOString(), at(5.5).toISOString(),

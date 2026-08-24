@@ -372,12 +372,6 @@
    "create": 1,
    "delete": 0,
    "read": 1,
-   "role": "IronWrap Customer Decision Service"
-  },
-  {
-   "create": 1,
-   "delete": 0,
-   "read": 1,
    "role": "IronWrap Facet Design Projection Service"
   }
  ],

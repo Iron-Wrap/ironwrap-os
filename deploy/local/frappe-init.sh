@@ -75,7 +75,7 @@ loud() {
 #
 # The field-evidence and production-gate-clearance rails are issued by the Worker
 # BFF with the single ERPNEXT_API_KEY/SECRET pair, so both pin the integration user
-# created in step 8.  Every other rail - customer acceptance, customer decision,
+# created in step 8.  Every other live Frappe rail - customer acceptance,
 # QuickBooks, Facet design projection, and (since ELEC-56) fleet capture and work
 # package - holds its own least-privilege identity and its own key pair.
 #
@@ -90,7 +90,6 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user "ironwrap-fleet-capture@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_work_package_issuer_user "ironwrap-work-package@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_production_gate_issuer_user "ironwrap-bus@$IDENTITY_DOMAIN"
-  bench --site "$SITE" set-config ironwrap_customer_decision_service_user "ironwrap-customer-decision@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user "ironwrap-quickbooks-issuer@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user "ironwrap-facet-projection@$IDENTITY_DOMAIN"
   pin_tenant_constants
@@ -286,14 +285,12 @@ provision_rail_issuer_identities() {
     "Fleet Capture Issuer" "IronWrap Fleet Capture Issuer" .fleet_capture_issuer_credentials
   provision_rail_issuer "ironwrap-work-package@$IDENTITY_DOMAIN" \
     "Work Package Issuer" "IronWrap Work Package Issuer" .work_package_issuer_credentials
-  # The other four bounded rails have the same shape: one non-interactive user, one
+  # The other three bounded rails have the same shape: one non-interactive user, one
   # least-privilege role, one key pair, one site-config pin.  They used to be four
   # copies of the same console heredoc with the identity spelled out in each, which is
   # why they could not follow a tenant's own domain.
   provision_rail_issuer "ironwrap-customer-acceptance@$IDENTITY_DOMAIN" \
     "Customer Acceptance Service" "IronWrap Customer Acceptance Service" .customer_acceptance_credentials
-  provision_rail_issuer "ironwrap-customer-decision@$IDENTITY_DOMAIN" \
-    "Customer Decision Service" "IronWrap Customer Decision Service" .customer_decision_credentials
   provision_rail_issuer "ironwrap-quickbooks-issuer@$IDENTITY_DOMAIN" \
     "QuickBooks Reconciliation Issuer" "IronWrap QuickBooks Reconciliation Issuer" \
     .quickbooks_reconciliation_issuer_credentials

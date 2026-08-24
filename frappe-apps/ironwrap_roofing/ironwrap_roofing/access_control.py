@@ -8,9 +8,6 @@ QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE = (
     "IronWrap QuickBooks Reconciliation Issuer"
 )
 FACET_DESIGN_PROJECTION_SERVICE_ROLE = "IronWrap Facet Design Projection Service"
-# Separate from the acceptance service on purpose: this identity may record a provisional
-# customer preference and its receipt evidence, and can never sign a contract or touch a quote.
-CUSTOMER_DECISION_SERVICE_ROLE = "IronWrap Customer Decision Service"
 LAUNCH_PROOF_READER_ROLE = "IronWrap Launch Proof Reader"
 # The Worker BFF issued the fleet-capture and work-package rails with the same broad
 # ERPNEXT_API_KEY pair it uses for every other read, so one leaked key reached both rails
@@ -32,7 +29,6 @@ IRONWRAP_ROLES = (
 )
 IRONWRAP_SERVICE_ROLES = (
     CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
-    CUSTOMER_DECISION_SERVICE_ROLE,
     QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
     LAUNCH_PROOF_READER_ROLE,
@@ -148,7 +144,6 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
         "IronWrap Closeout": READ,
-        CUSTOMER_DECISION_SERVICE_ROLE: CREATE,
     },
     "Driver Authority": {
         "IronWrap Production": WRITE,
@@ -163,7 +158,6 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
-        CUSTOMER_DECISION_SERVICE_ROLE: CREATE,
         FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Field Check-in": {
@@ -260,7 +254,6 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Sales": READ,
         "IronWrap Finance": READ,
-        CUSTOMER_DECISION_SERVICE_ROLE: READ,
     },
     "Payment Milestone": {
         "IronWrap Finance": WRITE,
@@ -309,7 +302,6 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         # transition by `validate_customer_contract_job_transition_mutation`.  Restore
         # this to READ when the D1-native acceptance transition ships.
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
-        CUSTOMER_DECISION_SERVICE_ROLE: READ,
         FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },
     "Roofing Customer": {
@@ -320,7 +312,6 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
-        CUSTOMER_DECISION_SERVICE_ROLE: READ,
     },
     "Roofing Property": {
         "IronWrap Sales": WRITE,

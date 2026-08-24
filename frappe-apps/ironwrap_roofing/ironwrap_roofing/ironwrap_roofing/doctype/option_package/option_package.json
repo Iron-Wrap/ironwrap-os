@@ -201,13 +201,6 @@
    "read": 1,
    "report": 1,
    "role": "IronWrap Finance"
-  },
-  {
-   "delete": 0,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "IronWrap Customer Decision Service"
   }
  ],
  "sort_field": "modified",

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Building2, Settings, Smartphone, Users } from "lucide-react";
+import { Building2, PlugZap, Settings, Smartphone, Users } from "lucide-react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -97,6 +97,12 @@ function OwnerSetup() {
             title="Crew phones"
             description="Pair a phone to a crew account so it can work offline on site."
             status={setupStatus(steps.get("crew_phones"))}
+          />
+          <SetupLink
+            to="/settings/integrations"
+            icon={PlugZap}
+            title="Integrations and readiness"
+            description="See which provider rails are proven, blocked, expired, or safely disabled."
           />
         </CardContent>
       </Card>

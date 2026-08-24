@@ -226,9 +226,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 206],
-    ["REQUIRED_INDEX_COUNT", 321],
-    ["REQUIRED_TRIGGER_COUNT", 496],
+    ["REQUIRED_TABLE_COUNT", 209],
+    ["REQUIRED_INDEX_COUNT", 324],
+    ["REQUIRED_TRIGGER_COUNT", 505],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -262,7 +262,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0117", () => {
+test("the full schema matches the recovery frontier through 0118", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -289,14 +289,16 @@ test("the full schema matches the recovery frontier through 0117", () => {
     // export/restore carries those columns with the row. 0116 adds the acceptance-bound deposit
     // derivation queue, fair-sweep cursor, request receipt, event ledger, five indexes, and the
     // upgraded publication/acceptance guards and projections. 0117 adds the authority readback
-    // lifecycle indexes and insert guard.
+    // lifecycle indexes and insert guard. 0118 adds the capability manifest, proof, and readiness
+    // frontier: three tables, three indexes, and nine append-only/owner guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
       // invitation ledger and recovery-required indexes. 0112 adds operator-search indexes;
-      // 0113 adds the pipeline board; 0114 preserves both development capture kinds. The
-      // 0107/0108 work-package and job-file evidence remains part of this recovery frontier.
-      { tables: 206, indexes: 321, triggers: 496 },
+      // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
+      // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
+      // remains part of this recovery frontier.
+      { tables: 209, indexes: 324, triggers: 505 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

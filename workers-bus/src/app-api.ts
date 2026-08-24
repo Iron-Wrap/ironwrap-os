@@ -180,6 +180,11 @@ import {
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 import { buildOwnerRuntimeReadModel } from "./operations.ts";
 import {
+  READINESS_PROFILE_KEYS,
+  buildCapabilityReadinessReadModel,
+  type ReadinessProfileKey,
+} from "./capability-readiness.ts";
+import {
   listFacetV2IntakeExceptions,
   listFacetV2WorkflowEvidence,
 } from "./facet-v2-evidence.ts";
@@ -1529,6 +1534,25 @@ export async function handleAuthenticatedRoute(
       return privateAppJson(await buildOwnerRuntimeReadModel(env));
     } catch {
       return privateAppJson({ error: "owner_runtime_unavailable" }, 502);
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/integrations/readiness") {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    const requestedProfile = url.searchParams.get("profile") ?? "reference_journey";
+    if (!READINESS_PROFILE_KEYS.includes(requestedProfile as ReadinessProfileKey))
+      return privateAppJson({ error: "invalid_readiness_profile" }, 400);
+    try {
+      // Manifests, proofs, and profiles are projected from the tenant's append-only D1 facts.
+      // No provider credential, raw response, evidence body, or configuration mutation crosses
+      // this owner/ops read boundary.
+      return privateAppJson(await buildCapabilityReadinessReadModel(
+        env,
+        auth.session.tenant_id,
+        requestedProfile as ReadinessProfileKey,
+      ));
+    } catch {
+      return privateAppJson({ error: "integration_readiness_unavailable" }, 502);
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {

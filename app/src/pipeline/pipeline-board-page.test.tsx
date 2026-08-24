@@ -465,4 +465,19 @@ describe("PipelineBoardPage", () => {
 
     expect(await screen.findByText("No pipeline yet")).toBeVisible();
   });
+
+  it("keeps sales scoped to an empty board when no returned pipeline is sales-owned", async () => {
+    const salesPipeline = pipelineList.pipelines[0]!;
+    vi.mocked(loadPipelines).mockResolvedValue({
+      ...pipelineList,
+      pipelines: [
+        { ...salesPipeline, pipeline_id: "pipe-owner", owning_role: "owner" },
+        { ...salesPipeline, pipeline_id: "pipe-ops", owning_role: "ops" },
+      ],
+    });
+    renderBoard();
+
+    expect(await screen.findByText("No pipeline yet")).toBeVisible();
+    expect(loadPipelineBoard).not.toHaveBeenCalled();
+  });
 });

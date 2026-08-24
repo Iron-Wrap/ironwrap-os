@@ -93,8 +93,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
     if (scope === "all") return pipelines;
     // Role scoping is `pipelines.owning_role` in M1 (PO decision D8) — no board key is
     // hardcoded here, so a second Sales-owned pipeline needs no client change.
-    const owned = pipelines.filter((pipeline) => pipeline.owning_role === role);
-    return owned.length > 0 ? owned : pipelines;
+    return pipelines.filter((pipeline) => pipeline.owning_role === role);
   }, [pipelines, role, scope]);
 
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);

@@ -90,14 +90,17 @@ class SqliteD1 {
          (readback_id, tenant_id, authority_record_id, authority_version,
           subject_type, subject_role, person_user, organization, authority_kind,
           authority_scope, scope_type, scope_ref, roof_job, scope_json,
-          issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+         issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
           verification_state, evidence_refs_json, evidence_sha256,
-          authority_state_digest_sha256, observed_by_user_id, observed_at,
-          observation_fingerprint_sha256, action_id)
+          authority_state_digest_sha256, authority_effective_from, authority_expires_at,
+          authority_revoked_at, supersedes_authority_record_id, authority_verification_method,
+          issuer_receipt_sha256,
+          observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id)
        VALUES (?, ?, ?, 1, 'Organization', 'Inventory Authority', NULL, ?,
                'Inventory Command Authority', 'inventory-command', 'Tenant', ?, NULL, ?,
                'IronWrap Operations', 'AB-CA', 'internal:inventory-authority:1',
-               'inventory-authority:1', ?, '[]', ?, ?, ?, ?, ?, NULL)`,
+               'inventory-authority:1', ?, '[]', ?, ?, '2026-08-01', '2026-12-31',
+               NULL, NULL, 'Internal Competency Assessment', ?, ?, ?, ?, NULL)`,
     );
     authority.run(
       AUTHORITY_READBACK,
@@ -109,6 +112,7 @@ class SqliteD1 {
       options.authorityState ?? "verified",
       "b".repeat(64),
       "c".repeat(64),
+      null,
       USERS.owner,
       NOW,
       "d".repeat(64),
@@ -123,6 +127,7 @@ class SqliteD1 {
       "verified",
       "e".repeat(64),
       "f".repeat(64),
+      "2".repeat(64),
       "appu_ops_other_00001",
       NOW,
       "0".repeat(64),
@@ -324,20 +329,30 @@ function addAuthorityReadback(
     scopeRef?: string | null;
     roofJob?: string | null;
     scopeJson?: string | null;
+    issuerJurisdiction?: string;
     issuerReference?: string;
     issuerSourceVersion?: string;
+    authorityStateDigestSha256?: string;
+    authorityEffectiveFrom?: string | null;
+    authorityExpiresAt?: string | null;
+    authorityRevokedAt?: string | null;
+    supersedesAuthorityRecordId?: string | null;
+    authorityVerificationMethod?: string;
+    issuerReceiptSha256?: string | null;
   },
 ): void {
   db.raw.prepare(
-    `INSERT INTO authority_record_readbacks
-       (readback_id, tenant_id, authority_record_id, authority_version,
-        subject_type, subject_role, person_user, organization, authority_kind,
-        authority_scope, scope_type, scope_ref, roof_job, scope_json,
-        issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
-        verification_state, evidence_refs_json, evidence_sha256,
-        authority_state_digest_sha256, observed_by_user_id, observed_at,
-        observation_fingerprint_sha256, action_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      `INSERT INTO authority_record_readbacks
+         (readback_id, tenant_id, authority_record_id, authority_version,
+          subject_type, subject_role, person_user, organization, authority_kind,
+          authority_scope, scope_type, scope_ref, roof_job, scope_json,
+         issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+          verification_state, evidence_refs_json, evidence_sha256,
+          authority_state_digest_sha256, authority_effective_from, authority_expires_at,
+          authority_revoked_at, supersedes_authority_record_id, authority_verification_method,
+          issuer_receipt_sha256,
+          observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   ).run(
     options.readbackId,
     TENANT,
@@ -354,13 +369,19 @@ function addAuthorityReadback(
     options.roofJob === undefined ? null : options.roofJob,
     options.scopeJson === undefined ? inventoryAuthorityScopeJson(TENANT) : options.scopeJson,
     "IronWrap Operations",
-    "AB-CA",
+    options.issuerJurisdiction ?? "AB-CA",
     options.issuerReference ?? "internal:inventory-authority:1",
     options.issuerSourceVersion ?? "inventory-authority:1",
     options.verificationState ?? "verified",
     "[]",
     `${options.authorityVersion}`.repeat(64).slice(0, 64),
-    `${options.authorityVersion + 1}`.repeat(64).slice(0, 64),
+    options.authorityStateDigestSha256 ?? `${options.authorityVersion + 1}`.repeat(64).slice(0, 64),
+    options.authorityEffectiveFrom === undefined ? "2026-08-01" : options.authorityEffectiveFrom,
+    options.authorityExpiresAt === undefined ? "2026-12-31" : options.authorityExpiresAt,
+    options.authorityRevokedAt === undefined ? null : options.authorityRevokedAt,
+    options.supersedesAuthorityRecordId === undefined ? null : options.supersedesAuthorityRecordId,
+    options.authorityVerificationMethod ?? "Internal Competency Assessment",
+    options.issuerReceiptSha256 === undefined ? null : options.issuerReceiptSha256,
     USERS.owner,
     options.observedAt,
     `${options.authorityVersion + 2}`.repeat(64).slice(0, 64),
@@ -706,9 +727,13 @@ test("non-current or non-verified authority readbacks fail closed without ledger
     readbackId: "Authority-Inventory-Readback-02",
     authorityVersion: 1,
     observedAt: "2026-08-18T12:00:00.000Z",
+    authorityStateDigestSha256: "c".repeat(64),
   });
   const stale = await handleInventoryRoute(
-    request("POST", "/api/v1/inventory/commands", receivePayload("cmd_api_authority_stale", 5)),
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_stale", 5),
+      authority_ref: AUTHORITY_READBACK,
+    }),
     env(staleDb),
     auth("ops"),
   );
@@ -723,7 +748,10 @@ test("non-current or non-verified authority readbacks fail closed without ledger
     observedAt: "2026-08-18T12:00:00.000Z",
   });
   const superseded = await handleInventoryRoute(
-    request("POST", "/api/v1/inventory/commands", receivePayload("cmd_api_authority_super", 5)),
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_super", 5),
+      authority_ref: AUTHORITY_READBACK,
+    }),
     env(supersededDb),
     auth("ops"),
   );
@@ -739,13 +767,82 @@ test("non-current or non-verified authority readbacks fail closed without ledger
     verificationState: "revoked",
   });
   const newerRevoked = await handleInventoryRoute(
-    request("POST", "/api/v1/inventory/commands", receivePayload("cmd_api_authority_newer_revoked", 5)),
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_newer_revoked", 5),
+      authority_ref: AUTHORITY_READBACK,
+    }),
     env(newerRevokedDb),
     auth("ops"),
   );
   assert.equal(newerRevoked?.status, 403);
   assert.equal((await newerRevoked?.json() as { error: string }).error, "inventory_authority_revoked");
   assert.deepEqual(ledgerCounts(newerRevokedDb), { commands: 0, events: 0, positions: 0 });
+
+  const expiredDb = new SqliteD1();
+  addAuthorityReadback(expiredDb, {
+    readbackId: "Authority-Inventory-Expired-01",
+    authorityVersion: 2,
+    observedAt: "2026-08-19T12:00:00.000Z",
+    authorityExpiresAt: "2026-08-16",
+  });
+  const expired = await handleInventoryRoute(
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_expired", 5),
+      authority_ref: "Authority-Inventory-Expired-01",
+    }),
+    env(expiredDb),
+    auth("ops"),
+  );
+  assert.equal(expired?.status, 403);
+  assert.equal((await expired?.json() as { error: string }).error, "inventory_authority_expired");
+  assert.deepEqual(ledgerCounts(expiredDb), { commands: 0, events: 0, positions: 0 });
+
+  const ambiguousDb = new SqliteD1();
+  addAuthorityReadback(ambiguousDb, {
+    readbackId: "Authority-Inventory-Ambiguous-01",
+    authorityRecordId: "Authority-Inventory-Ambiguous-Record-01",
+    authorityVersion: 2,
+    observedAt: "2026-08-19T12:00:00.000Z",
+    supersedesAuthorityRecordId: AUTHORITY_RECORD,
+  });
+  addAuthorityReadback(ambiguousDb, {
+    readbackId: "Authority-Inventory-Ambiguous-02",
+    authorityRecordId: "Authority-Inventory-Ambiguous-Record-02",
+    authorityVersion: 2,
+    observedAt: "2026-08-19T12:00:00.000Z",
+    supersedesAuthorityRecordId: AUTHORITY_RECORD,
+  });
+  const ambiguous = await handleInventoryRoute(
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_ambiguous", 5),
+      authority_ref: AUTHORITY_READBACK,
+    }),
+    env(ambiguousDb),
+    auth("ops"),
+  );
+  assert.equal(ambiguous?.status, 403);
+  assert.equal((await ambiguous?.json() as { error: string }).error, "inventory_authority_ambiguous");
+  assert.deepEqual(ledgerCounts(ambiguousDb), { commands: 0, events: 0, positions: 0 });
+
+  const jurisdictionDb = new SqliteD1();
+  addAuthorityReadback(jurisdictionDb, {
+    readbackId: "Authority-Inventory-Jurisdiction-01",
+    authorityRecordId: "Authority-Inventory-Jurisdiction-Record",
+    authorityVersion: 2,
+    observedAt: "2026-08-19T12:00:00.000Z",
+    issuerJurisdiction: "BC-CA",
+  });
+  const jurisdiction = await handleInventoryRoute(
+    request("POST", "/api/v1/inventory/commands", {
+      ...receivePayload("cmd_api_authority_jurisdiction", 5),
+      authority_ref: "Authority-Inventory-Jurisdiction-01",
+    }),
+    env(jurisdictionDb),
+    auth("ops"),
+  );
+  assert.equal(jurisdiction?.status, 403);
+  assert.equal((await jurisdiction?.json() as { error: string }).error, "inventory_authority_jurisdiction_mismatch");
+  assert.deepEqual(ledgerCounts(jurisdictionDb), { commands: 0, events: 0, positions: 0 });
 });
 
 test("a verified authority readback outside the inventory scope fails closed", async () => {
@@ -821,6 +918,8 @@ test("same-issuer readbacks bind the inventory command to its subject, role, and
       authorityScope: "licence",
       scopeType: "Organization",
       scopeRef: TENANT,
+      authorityVerificationMethod: "Issuer Portal Readback",
+      issuerReceiptSha256: "f".repeat(64),
       scopeJson: JSON.stringify({
         purpose: "licence",
         tenant_id: TENANT,

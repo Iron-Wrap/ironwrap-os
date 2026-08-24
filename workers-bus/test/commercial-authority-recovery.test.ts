@@ -187,7 +187,11 @@ const TRIGGERS = [
 ] as const;
 
 test("0072 commercial authority is complete in migration, backup, and restore inventories", () => {
-  const migration = ["0093_commercial_authority.sql", "0116_native_commercial_deposit_derivation.sql"]
+  const migration = [
+    "0093_commercial_authority.sql",
+    "0116_native_commercial_deposit_derivation.sql",
+    "0117_authority_readback_lifecycle.sql",
+  ]
     .map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"))
     .join("\n");
   const backup = readFileSync(
@@ -223,8 +227,8 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   );
   for (const [name, expected] of [
     ["REQUIRED_TABLE_COUNT", 206],
-    ["REQUIRED_INDEX_COUNT", 319],
-    ["REQUIRED_TRIGGER_COUNT", 495],
+    ["REQUIRED_INDEX_COUNT", 321],
+    ["REQUIRED_TRIGGER_COUNT", 496],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -258,7 +262,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0116", () => {
+test("the full schema matches the recovery frontier through 0117", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -284,14 +288,15 @@ test("the full schema matches the recovery frontier through 0116", () => {
     // existing tenant profile and likewise changes no recovery-inventory object count; SQLite
     // export/restore carries those columns with the row. 0116 adds the acceptance-bound deposit
     // derivation queue, fair-sweep cursor, request receipt, event ledger, five indexes, and the
-    // upgraded publication/acceptance guards and projections.
+    // upgraded publication/acceptance guards and projections. 0117 adds the authority readback
+    // lifecycle indexes and insert guard.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
       // invitation ledger and recovery-required indexes. 0112 adds operator-search indexes;
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds. The
       // 0107/0108 work-package and job-file evidence remains part of this recovery frontier.
-      { tables: 206, indexes: 319, triggers: 495 },
+      { tables: 206, indexes: 321, triggers: 496 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

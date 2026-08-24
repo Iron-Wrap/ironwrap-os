@@ -18,6 +18,12 @@ import {
   type InventoryCommandIntentInput,
   type InventoryTransition,
 } from "./inventory-control.ts";
+import {
+  currentAuthorityReadback,
+  resolveAuthorityLifecycle,
+  type AuthorityLifecycleDenial,
+  type AuthorityRecordReadback,
+} from "./authority-records.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
 
 /**
@@ -35,6 +41,7 @@ const INVENTORY_POLICY_REF = "policy:inventory-command";
 const INVENTORY_POLICY_VERSION = "1";
 const INVENTORY_AUTHORITY_ISSUER_REFERENCE = "internal:inventory-authority:1";
 const INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION = "inventory-authority:1";
+const INVENTORY_AUTHORITY_ISSUER_JURISDICTION = "AB-CA";
 const INVENTORY_AUTHORITY_SUBJECT_TYPE = "Organization";
 const INVENTORY_AUTHORITY_SUBJECT_ROLE = "Inventory Authority";
 const INVENTORY_AUTHORITY_KIND = "Inventory Command Authority";
@@ -64,6 +71,18 @@ function json(body: unknown, status = 200): Response {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function inventoryAuthorityScopeJson(tenantId: string): string {
+  return JSON.stringify({
+    purpose: INVENTORY_AUTHORITY_PURPOSE,
+    tenant_id: tenantId,
+    allowed_roles: [...INVENTORY_AUTHORITY_ALLOWED_ROLES],
+    operational_scope: {
+      scope_type: INVENTORY_AUTHORITY_SCOPE_TYPE,
+      scope_ref: tenantId,
+    },
+  });
 }
 
 async function body(
@@ -204,26 +223,6 @@ function ledgerErrorResponse(error: unknown): Response {
   return json({ error: "inventory_store_unavailable" }, 502);
 }
 
-type InventoryAuthorityReadback = {
-  readback_id: string;
-  authority_record_id: string;
-  authority_version: number;
-  observed_at: string;
-  subject_type: string | null;
-  subject_role: string | null;
-  person_user: string | null;
-  organization: string | null;
-  authority_kind: string | null;
-  authority_scope: string | null;
-  scope_type: string | null;
-  scope_ref: string | null;
-  roof_job: string | null;
-  scope_json: string | null;
-  issuer_reference: string;
-  issuer_source_version: string;
-  verification_state: "verified" | "revoked" | "contradictory" | "unavailable" | "missing";
-};
-
 type InventoryOperationalScope = {
   scopeType: string;
   scopeRef: string;
@@ -272,7 +271,19 @@ function inventoryScopeJsonMatches(
 }
 
 function inventoryAuthorityBindingDenial(
-  readback: InventoryAuthorityReadback,
+  readback: Pick<
+    AuthorityRecordReadback,
+    | "subject_type"
+    | "subject_role"
+    | "person_user"
+    | "organization"
+    | "authority_kind"
+    | "authority_scope"
+    | "scope_type"
+    | "scope_ref"
+    | "roof_job"
+    | "scope_json"
+  >,
   tenantId: string,
   role: AppRole | null,
 ): "inventory_authority_subject_mismatch" | "inventory_authority_scope_mismatch" | null {
@@ -320,80 +331,26 @@ async function currentInventoryAuthority(
   env: AppEnv,
   tenantId: string,
 ): Promise<InventoryAuthorityIdentity> {
-  const row = await env.DB.prepare(
-    `SELECT candidate.readback_id, candidate.authority_record_id,
-            candidate.authority_version, candidate.observed_at, candidate.verification_state,
-            candidate.subject_type, candidate.subject_role, candidate.person_user,
-            candidate.organization, candidate.authority_kind, candidate.authority_scope,
-            candidate.scope_type, candidate.scope_ref, candidate.roof_job, candidate.scope_json,
-            candidate.issuer_reference, candidate.issuer_source_version
-       FROM authority_record_readbacks AS candidate
-      WHERE candidate.tenant_id = ?
-        AND candidate.issuer_reference = ?
-        AND candidate.issuer_source_version = ?
-        AND candidate.subject_type = ?
-        AND candidate.subject_role = ?
-        AND candidate.person_user IS NULL
-        AND candidate.organization = ?
-        AND candidate.authority_kind = ?
-        AND candidate.authority_scope = ?
-        AND candidate.scope_type = ?
-        AND candidate.scope_ref = ?
-        AND candidate.roof_job IS NULL
-        AND NOT EXISTS (
-          SELECT 1
-            FROM authority_record_readbacks AS newer
-           WHERE newer.tenant_id = candidate.tenant_id
-             AND newer.authority_record_id = candidate.authority_record_id
-             AND (
-               newer.authority_version > candidate.authority_version
-               OR (
-                 newer.authority_version = candidate.authority_version
-                 AND (
-                   newer.observed_at > candidate.observed_at
-                   OR (
-                     newer.observed_at = candidate.observed_at
-                     AND newer.readback_id > candidate.readback_id
-                   )
-                 )
-               )
-             )
-        )
-      ORDER BY candidate.authority_version DESC, candidate.observed_at DESC,
-               candidate.readback_id DESC
-      LIMIT 1`,
-  ).bind(
+  const row = await currentAuthorityReadback(env, {
     tenantId,
-    INVENTORY_AUTHORITY_ISSUER_REFERENCE,
-    INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION,
-    INVENTORY_AUTHORITY_SUBJECT_TYPE,
-    INVENTORY_AUTHORITY_SUBJECT_ROLE,
-    tenantId,
-    INVENTORY_AUTHORITY_KIND,
-    INVENTORY_AUTHORITY_SCOPE,
-    INVENTORY_AUTHORITY_SCOPE_TYPE,
-    tenantId,
-  ).first<{
-    readback_id: string;
-    authority_record_id: string;
-    authority_version: number;
-    observed_at: string;
-    verification_state: InventoryAuthorityIdentity["verification_state"];
-    subject_type: string | null;
-    subject_role: string | null;
-    person_user: string | null;
-    organization: string | null;
-    authority_kind: string | null;
-    authority_scope: string | null;
-    scope_type: string | null;
-    scope_ref: string | null;
-    roof_job: string | null;
-    scope_json: string | null;
-    issuer_reference: string;
-    issuer_source_version: string;
-  }>();
-  if (!row) return missingInventoryAuthority;
-  if (inventoryAuthorityBindingDenial(row, tenantId, null)) return missingInventoryAuthority;
+    now: new Date().toISOString(),
+    subjectType: INVENTORY_AUTHORITY_SUBJECT_TYPE,
+    subjectRole: INVENTORY_AUTHORITY_SUBJECT_ROLE,
+    personUser: null,
+    organization: tenantId,
+    authorityKind: INVENTORY_AUTHORITY_KIND,
+    authorityScope: INVENTORY_AUTHORITY_SCOPE,
+    scopeType: INVENTORY_AUTHORITY_SCOPE_TYPE,
+    scopeRef: tenantId,
+    roofJob: null,
+    scopeJson: inventoryAuthorityScopeJson(tenantId),
+    issuerReference: INVENTORY_AUTHORITY_ISSUER_REFERENCE,
+    issuerSourceVersion: INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION,
+    issuerJurisdiction: INVENTORY_AUTHORITY_ISSUER_JURISDICTION,
+  });
+  if (!row || inventoryAuthorityBindingDenial(row, tenantId, null)) {
+    return missingInventoryAuthority;
+  }
   return {
     authority_ref: row.readback_id,
     authority_record_id: row.authority_record_id,
@@ -411,54 +368,36 @@ async function inventoryAuthorityDenial(
 ): Promise<string | null> {
   const tenantId = session.tenant_id;
   try {
-    const requested = await env.DB.prepare(
-      `SELECT readback_id, authority_record_id, authority_version, observed_at,
-              subject_type, subject_role, person_user, organization, authority_kind,
-              authority_scope, scope_type, scope_ref, roof_job, scope_json,
-              issuer_reference, issuer_source_version, verification_state
-         FROM authority_record_readbacks
-        WHERE tenant_id = ? AND readback_id = ?
-        LIMIT 1`,
-    ).bind(tenantId, authorityRef).first<InventoryAuthorityReadback>();
-    // Tenant scoping deliberately makes a cross-tenant reference indistinguishable from a
-    // missing reference; no authority contents or existence are disclosed to the caller.
-    if (!requested) return "inventory_authority_missing";
-
-    const latest = await env.DB.prepare(
-      `SELECT readback_id, authority_record_id, authority_version, observed_at,
-              subject_type, subject_role, person_user, organization, authority_kind,
-              authority_scope, scope_type, scope_ref, roof_job, scope_json,
-              issuer_reference, issuer_source_version, verification_state
-         FROM authority_record_readbacks
-        WHERE tenant_id = ? AND authority_record_id = ?
-        ORDER BY authority_version DESC, observed_at DESC, readback_id DESC
-        LIMIT 1`,
-    ).bind(tenantId, requested.authority_record_id).first<InventoryAuthorityReadback>();
-    if (!latest) return "inventory_authority_missing";
-    // A newer negative readback is the terminal state for this authority record. Check it
-    // before identity comparisons so revocation, contradiction, and unavailability cannot
-    // be hidden behind a generic stale/superseded response.
-    if (latest.verification_state !== "verified") {
-      return `inventory_authority_${latest.verification_state}`;
+    const verdict = await resolveAuthorityLifecycle(env, {
+      tenantId,
+      now: new Date().toISOString(),
+      readbackId: authorityRef,
+      subjectType: INVENTORY_AUTHORITY_SUBJECT_TYPE,
+      subjectRole: INVENTORY_AUTHORITY_SUBJECT_ROLE,
+      personUser: null,
+      organization: tenantId,
+      authorityKind: INVENTORY_AUTHORITY_KIND,
+      authorityScope: INVENTORY_AUTHORITY_SCOPE,
+      scopeType: INVENTORY_AUTHORITY_SCOPE_TYPE,
+      scopeRef: tenantId,
+      roofJob: null,
+      scopeJson: inventoryAuthorityScopeJson(tenantId),
+      issuerReference: INVENTORY_AUTHORITY_ISSUER_REFERENCE,
+      issuerSourceVersion: INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION,
+      issuerJurisdiction: INVENTORY_AUTHORITY_ISSUER_JURISDICTION,
+    });
+    if (!verdict.ok) {
+      return inventoryLifecycleDenial(
+        verdict.code,
+        verdict.requested ?? verdict.current,
+        tenantId,
+        session.role,
+      );
     }
-    if (latest.issuer_reference !== INVENTORY_AUTHORITY_ISSUER_REFERENCE ||
-        latest.issuer_source_version !== INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION ||
-        requested.issuer_reference !== INVENTORY_AUTHORITY_ISSUER_REFERENCE ||
-        requested.issuer_source_version !== INVENTORY_AUTHORITY_ISSUER_SOURCE_VERSION) {
-      return "inventory_authority_scope_mismatch";
-    }
-    const latestBindingDenial = inventoryAuthorityBindingDenial(latest, tenantId, session.role);
-    if (latestBindingDenial) return latestBindingDenial;
-    const requestedBindingDenial = inventoryAuthorityBindingDenial(requested, tenantId, session.role);
-    if (requestedBindingDenial) return requestedBindingDenial;
-    if (latest.readback_id !== requested.readback_id) {
-      return latest.authority_version > requested.authority_version
-        ? "inventory_authority_superseded"
-        : "inventory_authority_stale";
-    }
-    if (requested.verification_state !== "verified") {
-      return `inventory_authority_${requested.verification_state}`;
-    }
+    const current = verdict.current;
+    if (!current) return "inventory_authority_missing";
+    const bindingDenial = inventoryAuthorityBindingDenial(current, tenantId, session.role);
+    if (bindingDenial) return bindingDenial;
     if (operationalScope === "invalid" || operationalScope &&
         (operationalScope.scopeType !== INVENTORY_AUTHORITY_SCOPE_TYPE ||
           operationalScope.scopeRef !== tenantId)) {
@@ -467,6 +406,55 @@ async function inventoryAuthorityDenial(
     return null;
   } catch {
     return "inventory_authority_unavailable";
+  }
+}
+
+function inventoryLifecycleDenial(
+  code: AuthorityLifecycleDenial | null,
+  readback?: Pick<
+    AuthorityRecordReadback,
+    | "subject_type"
+    | "subject_role"
+    | "person_user"
+    | "organization"
+    | "authority_kind"
+    | "authority_scope"
+    | "scope_type"
+    | "scope_ref"
+    | "roof_job"
+    | "scope_json"
+  > | null,
+  tenantId?: string,
+  role?: AppRole | null,
+): string {
+  switch (code) {
+    case "authority_missing":
+      return "inventory_authority_missing";
+    case "authority_ambiguous":
+      return "inventory_authority_ambiguous";
+    case "authority_revoked":
+      return "inventory_authority_revoked";
+    case "authority_contradictory":
+      return "inventory_authority_contradictory";
+    case "authority_unavailable":
+      return "inventory_authority_unavailable";
+    case "authority_expired":
+      return "inventory_authority_expired";
+    case "authority_stale":
+      return "inventory_authority_stale";
+    case "authority_superseded":
+      return "inventory_authority_superseded";
+    case "authority_jurisdiction_mismatch":
+      return "inventory_authority_jurisdiction_mismatch";
+    case "authority_scope_mismatch":
+      return readback && tenantId
+        ? inventoryAuthorityBindingDenial(readback, tenantId, role ?? null) ??
+            "inventory_authority_scope_mismatch"
+        : "inventory_authority_scope_mismatch";
+    case "authority_unverifiable":
+      return "inventory_authority_unverifiable";
+    case null:
+      return "inventory_authority_unavailable";
   }
 }
 

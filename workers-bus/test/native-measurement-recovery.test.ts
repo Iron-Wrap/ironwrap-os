@@ -100,8 +100,8 @@ test("0084 native measurement authority is complete in backup and restore contra
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 206);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 319);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 495);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 321);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 496);
   }
 
   for (const [name, table] of INDEXES) {

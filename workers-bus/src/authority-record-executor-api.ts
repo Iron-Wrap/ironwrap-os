@@ -1,7 +1,10 @@
 import { sha256Hex } from "./app-auth.ts";
 import {
+  AUTHORITY_VERIFICATION_METHODS,
   claimAuthorityRecordAction,
   completeAuthorityRecordAction,
+  EXTERNAL_ISSUER_AUTHORITY_KINDS,
+  EXTERNAL_ISSUER_VERIFICATION_METHODS,
   getAuthorityRecordAction,
   recordAuthorityReadback,
   type AuthorityRecordOperation,
@@ -22,6 +25,12 @@ const ACTION_OPERATIONS = new Set<AuthorityRecordOperation>([
   "renew",
   "supersede",
   "revoke",
+  "resolve_exception",
+]);
+const VERIFIED_OPERATIONS = new Set<AuthorityRecordOperation>([
+  "verify",
+  "renew",
+  "supersede",
   "resolve_exception",
 ]);
 const D1_TO_FRAPPE_BUSINESS_ROLE = {
@@ -64,16 +73,6 @@ const MATERIAL_FIELDS = [
   "exception_reason",
   "issuer_readback_json",
 ] as const;
-const EXTERNAL_AUTHORITY_KINDS = new Set([
-  "Trade Licence",
-  "WCB Clearance",
-  "Insurance Certificate",
-  "Permit",
-  "Inspection",
-  "Manufacturer Certification",
-  "Manufacturer Bulletin",
-]);
-
 type JsonRecord = Record<string, unknown>;
 
 function json(body: unknown, status = 200): Response {
@@ -403,7 +402,21 @@ export async function handleAuthorityRecordExecutorRoute(
   if (!SHA256.test(String(material.state_digest_sha256 ?? "")) || material.state_digest_sha256 !== stateDigest) {
     return await completeReconciliation(env, actionId, action, "material_frappe_state_digest_mismatch");
   }
-  let issuerReadbackId: string | null = null;
+  const authorityVerificationMethod = optionalField(material, "verification_method");
+  if (VERIFIED_OPERATIONS.has(action.operation) &&
+      (!authorityVerificationMethod || !AUTHORITY_VERIFICATION_METHODS.has(authorityVerificationMethod))) {
+    return await completeReconciliation(env, actionId, action, "authority_verification_method_required");
+  }
+  if (authorityVerificationMethod &&
+      !AUTHORITY_VERIFICATION_METHODS.has(authorityVerificationMethod)) {
+    return await completeReconciliation(env, actionId, action, "authority_verification_method_invalid");
+  }
+  if (VERIFIED_OPERATIONS.has(action.operation) &&
+      EXTERNAL_ISSUER_AUTHORITY_KINDS.has(String(material.authority_kind)) &&
+      !EXTERNAL_ISSUER_VERIFICATION_METHODS.has(authorityVerificationMethod ?? "")) {
+    return await completeReconciliation(env, actionId, action, "authority_external_issuer_readback_required");
+  }
+  let issuerReadbackId = `${actionId}.authority-readback`;
   if (issuerReceipt) {
     if (!issuerReceiptMatches(material, issuerReceipt)) {
       return await completeReconciliation(env, actionId, action, "issuer_receipt_material_mismatch");
@@ -413,39 +426,48 @@ export async function handleAuthorityRecordExecutorRoute(
         material.issuer_readback_json !== JSON.stringify(issuerReceipt)) {
       return await completeReconciliation(env, actionId, action, "issuer_receipt_material_binding_mismatch");
     }
-    const readback = await recordAuthorityReadback(env, {
-      readbackId,
-      tenantId,
-      authorityRecordId: action.authority_record_id,
-      authorityVersion: Number(material.version),
-      subjectType: String(field(material, "subject_type")),
-      subjectRole: String(field(material, "subject_role")),
-      personUser: optionalField(material, "person_user"),
-      organization: optionalField(material, "organization"),
-      authorityKind: String(field(material, "authority_kind")),
-      authorityScope: String(field(material, "authority_scope")),
-      scopeType: String(field(material, "scope_type")),
-      scopeRef: String(field(material, "scope_ref")),
-      roofJob: optionalField(material, "roof_job"),
-      scopeJson: String(field(material, "scope_json")),
-      issuerName: String(material.issuer_name),
-      issuerJurisdiction: String(material.issuer_jurisdiction),
-      issuerReference: String(material.issuer_reference),
-      issuerSourceVersion: String(material.source_version),
-      verificationState: authorityReadbackState(String(material.status)),
-      evidenceRefsJson: String(material.evidence_refs_json),
-      evidenceSha256: String(material.evidence_sha256).toLowerCase(),
-      authorityStateDigestSha256: stateDigest,
-      observedByUserId: action.actor_user_id,
-      observedAt: new Date().toISOString(),
-      actionId,
-    });
-    if (readback.kind === "conflict") return await completeReconciliation(env, actionId, action, "issuer_readback_identity_conflict");
-    issuerReadbackId = readback.readback.readback_id;
-  } else if (EXTERNAL_AUTHORITY_KINDS.has(String(material.authority_kind)) &&
+    issuerReadbackId = readbackId;
+  } else if (EXTERNAL_ISSUER_AUTHORITY_KINDS.has(String(material.authority_kind)) &&
       material.status !== "Unverified") {
     return await completeReconciliation(env, actionId, action, "issuer_receipt_required");
   }
+  const readback = await recordAuthorityReadback(env, {
+    readbackId: issuerReadbackId,
+    tenantId,
+    authorityRecordId: action.authority_record_id,
+    authorityVersion: Number(material.version),
+    subjectType: String(field(material, "subject_type")),
+    subjectRole: String(field(material, "subject_role")),
+    personUser: optionalField(material, "person_user"),
+    organization: optionalField(material, "organization"),
+    authorityKind: String(field(material, "authority_kind")),
+    authorityScope: String(field(material, "authority_scope")),
+    scopeType: String(field(material, "scope_type")),
+    scopeRef: String(field(material, "scope_ref")),
+    roofJob: optionalField(material, "roof_job"),
+    scopeJson: String(field(material, "scope_json")),
+    issuerName: String(material.issuer_name),
+    issuerJurisdiction: String(material.issuer_jurisdiction),
+    issuerReference: String(material.issuer_reference),
+    issuerSourceVersion: String(material.source_version),
+    verificationState: authorityReadbackState(String(material.status)),
+    evidenceRefsJson: String(material.evidence_refs_json),
+    evidenceSha256: String(material.evidence_sha256).toLowerCase(),
+    authorityStateDigestSha256: stateDigest,
+    authorityEffectiveFrom: optionalField(material, "effective_from"),
+    authorityExpiresAt: optionalField(material, "expires_at"),
+    authorityRevokedAt: optionalField(material, "revoked_at"),
+    supersedesAuthorityRecordId: optionalField(material, "supersedes"),
+    authorityVerificationMethod,
+    issuerReceiptSha256: issuerReceipt ? await sha256Hex(canonicalJson(issuerReceipt)) : null,
+    observedByUserId: action.actor_user_id,
+    observedAt: new Date().toISOString(),
+    actionId,
+  });
+  if (readback.kind === "conflict") {
+    return await completeReconciliation(env, actionId, action, "issuer_readback_identity_conflict");
+  }
+  issuerReadbackId = readback.readback.readback_id;
   const materialReadbackSha256 = await sha256Hex(canonicalJson(material));
   const terminal: AuthorityRecordTerminalReceipt = {
     kind: "material_applied",

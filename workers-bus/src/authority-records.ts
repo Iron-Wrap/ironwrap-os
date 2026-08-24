@@ -23,6 +23,47 @@ export type AuthorityReadbackState =
   | "contradictory"
   | "unavailable";
 
+export type AuthorityLifecycleDenial =
+  | "authority_missing"
+  | "authority_ambiguous"
+  | "authority_revoked"
+  | "authority_contradictory"
+  | "authority_unavailable"
+  | "authority_expired"
+  | "authority_stale"
+  | "authority_superseded"
+  | "authority_scope_mismatch"
+  | "authority_jurisdiction_mismatch"
+  | "authority_unverifiable";
+
+export const EXTERNAL_ISSUER_AUTHORITY_KINDS = new Set([
+  "Trade Licence",
+  "WCB Clearance",
+  "Insurance Certificate",
+  "Permit",
+  "Inspection",
+  "Manufacturer Certification",
+  "Manufacturer Bulletin",
+]);
+
+export const INTERNAL_AUTHORITY_VERIFICATION_METHODS = new Set([
+  "Internal Competency Assessment",
+]);
+
+export const EXTERNAL_ISSUER_VERIFICATION_METHODS = new Set([
+  "Issuer Portal Readback",
+  "Signed Issuer Record",
+  "Regulator Readback",
+  "Manufacturer Portal Readback",
+]);
+
+export const AUTHORITY_VERIFICATION_METHODS = new Set([
+  ...INTERNAL_AUTHORITY_VERIFICATION_METHODS,
+  ...EXTERNAL_ISSUER_VERIFICATION_METHODS,
+]);
+
+const MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS = 32;
+
 export interface AuthorityRecordAction {
   action_id: string;
   tenant_id: string;
@@ -73,10 +114,7 @@ export type AuthorityRecordTerminalReceipt =
       authorityVersion: number;
       authorityStateDigestSha256: string;
       materialReadbackSha256: string;
-      // Null is reserved for an internally governed competency assessment.
-      // Undefined retains the strict legacy/direct-call default and therefore
-      // still requires an issuer readback for a verify action.
-      issuerReadbackId?: string | null;
+      issuerReadbackId: string;
     }
   | {
       kind: "reconciliation_required";
@@ -113,6 +151,13 @@ export interface AuthorityRecordReadback {
   verification_state: AuthorityReadbackState;
   evidence_refs_json: string;
   evidence_sha256: string;
+  authority_state_digest_sha256: string;
+  authority_effective_from: string | null;
+  authority_expires_at: string | null;
+  authority_revoked_at: string | null;
+  supersedes_authority_record_id: string | null;
+  authority_verification_method: string | null;
+  issuer_receipt_sha256: string | null;
   observed_by_user_id: string;
   observed_at: string;
   observation_fingerprint_sha256: string;
@@ -142,9 +187,44 @@ export interface RecordAuthorityReadbackInput {
   evidenceRefsJson: string;
   evidenceSha256: string;
   authorityStateDigestSha256: string;
+  authorityEffectiveFrom: string | null;
+  authorityExpiresAt: string | null;
+  authorityRevokedAt: string | null;
+  supersedesAuthorityRecordId: string | null;
+  authorityVerificationMethod: string | null;
+  issuerReceiptSha256: string | null;
   observedByUserId: string;
   observedAt: string;
   actionId: string | null;
+}
+
+export interface AuthorityLifecycleExpectation {
+  tenantId: string;
+  now: string;
+  readbackId?: string;
+  authorityRecordId?: string;
+  authorityVersion?: number;
+  authorityStateDigestSha256?: string;
+  subjectType?: string | null;
+  subjectRole?: string | null;
+  personUser?: string | null;
+  organization?: string | null;
+  authorityKind?: string | null;
+  authorityScope?: string | null;
+  scopeType?: string | null;
+  scopeRef?: string | null;
+  roofJob?: string | null;
+  scopeJson?: string | null;
+  issuerReference?: string | null;
+  issuerSourceVersion?: string | null;
+  issuerJurisdiction?: string | null;
+}
+
+export interface AuthorityLifecycleVerdict {
+  ok: boolean;
+  code: null | AuthorityLifecycleDenial;
+  current: AuthorityRecordReadback | null;
+  requested: AuthorityRecordReadback | null;
 }
 
 const TENANT_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -153,6 +233,7 @@ const USER_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{2,139}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{7,255}$/;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function claimAuthorityRecordAction(
   env: AppEnv,
@@ -162,10 +243,7 @@ export async function claimAuthorityRecordAction(
   const idempotencyHash = await sha256Hex(`${input.tenantId}\n${input.idempotencyKey}`);
   const existing = await authorityActionByIdempotency(env, input.tenantId, idempotencyHash);
   if (existing) {
-    return existing.request_fingerprint_sha256 === input.requestFingerprintSha256 &&
-        existing.authority_record_id === input.authorityRecordId &&
-        existing.operation === input.operation &&
-        existing.expected_version === input.expectedVersion
+    return authorityActionMatchesClaim(existing, input)
       ? { kind: "replayed", action: existing }
       : { kind: "conflict", action: existing };
   }
@@ -196,10 +274,7 @@ export async function claimAuthorityRecordAction(
   }
   const raced = await authorityActionByIdempotency(env, input.tenantId, idempotencyHash);
   if (!raced) throw new Error("authority_record_action_claim_missing");
-  return raced.request_fingerprint_sha256 === input.requestFingerprintSha256 &&
-      raced.authority_record_id === input.authorityRecordId &&
-      raced.operation === input.operation &&
-      raced.expected_version === input.expectedVersion
+  return authorityActionMatchesClaim(raced, input)
     ? { kind: "replayed", action: raced }
     : { kind: "conflict", action: raced };
 }
@@ -219,31 +294,30 @@ export async function completeAuthorityRecordAction(
   if (!actor) throw new Error("authority_record_business_actor_required");
   const existing = await authorityActionById(env, input.tenantId, input.actionId);
   if (!existing) return null;
+  if (existing.actor_user_id !== input.actorUserId) {
+    throw new Error("authority_record_business_actor_required");
+  }
   if (existing.status !== "pending") return existing;
   if (existing.authority_record_id !== input.terminal.authorityRecordId) {
     throw new Error("authority_record_action_completion_identity_mismatch");
   }
-  if (existing.operation === "verify" && input.terminal.kind === "material_applied" &&
-      input.terminal.issuerReadbackId !== null) {
-    const readback = await env.DB.prepare(
-      `SELECT verification_state, authority_state_digest_sha256
-         FROM authority_record_readbacks
-        WHERE tenant_id = ?
-          AND authority_record_id = ?
-          AND (? IS NULL OR authority_version = ?)
-          AND (? IS NULL OR readback_id = ?)
-        ORDER BY observed_at DESC
-        LIMIT 1`,
-    ).bind(
-      input.tenantId,
-      existing.authority_record_id,
-      existing.expected_version,
-      existing.expected_version,
-      input.terminal.issuerReadbackId ?? null,
-      input.terminal.issuerReadbackId ?? null,
-    ).first<{ verification_state: AuthorityReadbackState; authority_state_digest_sha256: string }>();
-    if (!readback || readback.verification_state !== "verified" ||
-        readback.authority_state_digest_sha256 !== input.terminal.authorityStateDigestSha256) {
+  if (input.terminal.kind === "material_applied") {
+    const explicitReadbackId = input.terminal.issuerReadbackId;
+    if (!OPAQUE_ID.test(explicitReadbackId)) {
+      throw new Error("authority_record_issuer_readback_required");
+    }
+    const readback = await authorityReadbackByIdentity(env, input.tenantId, explicitReadbackId);
+    if (!readback || !terminalReadbackMatchesAction(existing, input.terminal, readback)) {
+      throw new Error("authority_record_issuer_readback_required");
+    }
+    const gate = await validateTerminalReadbackForOperation(env, existing.operation, readback, {
+      tenantId: input.tenantId,
+      now: input.now,
+      authorityRecordId: existing.authority_record_id,
+      authorityVersion: existing.expected_version ?? undefined,
+      authorityStateDigestSha256: input.terminal.authorityStateDigestSha256,
+    });
+    if (!gate) {
       throw new Error("authority_record_issuer_readback_required");
     }
   }
@@ -256,9 +330,7 @@ export async function completeAuthorityRecordAction(
         authority_version: input.terminal.authorityVersion,
         authority_state_digest_sha256: input.terminal.authorityStateDigestSha256,
         material_readback_sha256: input.terminal.materialReadbackSha256,
-        ...(input.terminal.issuerReadbackId === undefined
-          ? {}
-          : { issuer_readback_id: input.terminal.issuerReadbackId }),
+        issuer_readback_id: input.terminal.issuerReadbackId,
       }
     : {
         authority_record_id: input.terminal.authorityRecordId,
@@ -326,6 +398,12 @@ export async function recordAuthorityReadback(
     tenant_id: input.tenantId,
     verification_state: input.verificationState,
     authority_state_digest_sha256: input.authorityStateDigestSha256,
+    authority_effective_from: input.authorityEffectiveFrom,
+    authority_expires_at: input.authorityExpiresAt,
+    authority_revoked_at: input.authorityRevokedAt,
+    supersedes_authority_record_id: input.supersedesAuthorityRecordId,
+    authority_verification_method: input.authorityVerificationMethod,
+    issuer_receipt_sha256: input.issuerReceiptSha256,
   }));
   const existing = await authorityReadbackByIdentity(env, input.tenantId, input.readbackId);
   if (existing) {
@@ -352,9 +430,12 @@ export async function recordAuthorityReadback(
         authority_scope, scope_type, scope_ref, roof_job, scope_json,
         issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
         verification_state, evidence_refs_json, evidence_sha256,
-        authority_state_digest_sha256, observed_by_user_id, observed_at,
+        authority_state_digest_sha256, authority_effective_from, authority_expires_at,
+        authority_revoked_at, supersedes_authority_record_id, authority_verification_method,
+        issuer_receipt_sha256,
+        observed_by_user_id, observed_at,
         observation_fingerprint_sha256, action_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT DO NOTHING`,
   ).bind(
     input.readbackId,
@@ -379,6 +460,12 @@ export async function recordAuthorityReadback(
     input.evidenceRefsJson,
     input.evidenceSha256,
     input.authorityStateDigestSha256,
+    input.authorityEffectiveFrom,
+    input.authorityExpiresAt,
+    input.authorityRevokedAt,
+    input.supersedesAuthorityRecordId,
+    input.authorityVerificationMethod,
+    input.issuerReceiptSha256,
     input.observedByUserId,
     input.observedAt,
     observationFingerprint,
@@ -416,6 +503,8 @@ export async function listAuthorityRecordReadbacks(
             authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
        FROM authority_record_readbacks
       WHERE tenant_id = ? AND authority_record_id = ?
@@ -423,6 +512,71 @@ export async function listAuthorityRecordReadbacks(
       LIMIT ?`,
   ).bind(tenantId, authorityRecordId, boundedLimit).all<AuthorityRecordReadback>();
   return rows.results;
+}
+
+export async function resolveAuthorityLifecycle(
+  env: AppEnv,
+  input: AuthorityLifecycleExpectation,
+): Promise<AuthorityLifecycleVerdict> {
+  validateLifecycleExpectation(input);
+  const requested = input.readbackId
+    ? await authorityReadbackByIdentity(env, input.tenantId, input.readbackId)
+    : null;
+  if (input.readbackId && !requested) {
+    return { ok: false, code: "authority_missing", current: null, requested: null };
+  }
+  const bindingSource = requested ?? lifecycleBindingFromExpectation(input);
+  if (!bindingSource) {
+    return { ok: false, code: "authority_missing", current: null, requested };
+  }
+  const roots = await authorityReadbacksByBinding(env, input.tenantId, bindingSource);
+  if (roots.length === 0) {
+    return { ok: false, code: "authority_missing", current: null, requested };
+  }
+  const candidates = await authorityReadbackLineage(env, input.tenantId, roots);
+  if (candidates.overflow) {
+    return { ok: false, code: "authority_ambiguous", current: null, requested };
+  }
+  const currentHeads = currentAuthorityHeads(candidates.rows);
+  if (currentHeads.code) {
+    return { ok: false, code: currentHeads.code, current: null, requested };
+  }
+  if (currentHeads.rows.length !== 1) {
+    return { ok: false, code: "authority_ambiguous", current: null, requested };
+  }
+  const current = currentHeads.rows[0] ?? null;
+  if (!current) {
+    return { ok: false, code: "authority_missing", current: null, requested };
+  }
+  const currentDenial = lifecycleDenialForRow(current, input);
+  if (currentDenial) {
+    return { ok: false, code: currentDenial, current, requested };
+  }
+  const target = requested ?? current;
+  if (requested && requested.readback_id !== current.readback_id) {
+    return {
+      ok: false,
+      code:
+        current.authority_record_id !== requested.authority_record_id ||
+          current.authority_version > requested.authority_version
+          ? "authority_superseded"
+          : "authority_stale",
+      current,
+      requested,
+    };
+  }
+  const denial = lifecycleDenialForRow(target, input);
+  return denial
+    ? { ok: false, code: denial, current, requested: target }
+    : { ok: true, code: null, current, requested: target };
+}
+
+export async function currentAuthorityReadback(
+  env: AppEnv,
+  input: AuthorityLifecycleExpectation,
+): Promise<AuthorityRecordReadback | null> {
+  const verdict = await resolveAuthorityLifecycle(env, input);
+  return verdict.ok ? verdict.current : null;
 }
 
 async function authorityActionById(
@@ -466,6 +620,8 @@ async function authorityReadbackByIdentity(
             authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
        FROM authority_record_readbacks
       WHERE tenant_id = ? AND readback_id = ?
@@ -486,12 +642,132 @@ async function authorityReadbackByEvidence(
             authority_scope, scope_type, scope_ref, roof_job, scope_json,
             issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
             verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
             observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
        FROM authority_record_readbacks
       WHERE tenant_id = ? AND authority_record_id = ?
         AND authority_version = ? AND evidence_sha256 = ?
       LIMIT 1`,
   ).bind(tenantId, authorityRecordId, authorityVersion, evidenceSha256).first<AuthorityRecordReadback>();
+}
+
+async function authorityReadbacksByBinding(
+  env: AppEnv,
+  tenantId: string,
+  binding: Pick<
+    AuthorityRecordReadback,
+    | "subject_type"
+    | "subject_role"
+    | "person_user"
+    | "organization"
+    | "authority_kind"
+    | "authority_scope"
+    | "scope_type"
+    | "scope_ref"
+    | "roof_job"
+    | "scope_json"
+    | "issuer_reference"
+    | "issuer_source_version"
+    | "issuer_jurisdiction"
+  >,
+): Promise<AuthorityRecordReadback[]> {
+  const rows = await env.DB.prepare(
+    `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
+            observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
+       FROM authority_record_readbacks
+      WHERE tenant_id = ?
+        AND ((subject_type IS NULL AND ? IS NULL) OR subject_type = ?)
+        AND ((subject_role IS NULL AND ? IS NULL) OR subject_role = ?)
+        AND ((person_user IS NULL AND ? IS NULL) OR person_user = ?)
+        AND ((organization IS NULL AND ? IS NULL) OR organization = ?)
+        AND ((authority_kind IS NULL AND ? IS NULL) OR authority_kind = ?)
+        AND ((authority_scope IS NULL AND ? IS NULL) OR authority_scope = ?)
+        AND ((scope_type IS NULL AND ? IS NULL) OR scope_type = ?)
+        AND ((scope_ref IS NULL AND ? IS NULL) OR scope_ref = ?)
+        AND ((roof_job IS NULL AND ? IS NULL) OR roof_job = ?)
+        AND ((scope_json IS NULL AND ? IS NULL) OR scope_json = ?)
+        AND issuer_reference = ?
+        AND issuer_source_version = ?
+        AND issuer_jurisdiction = ?
+      ORDER BY authority_record_id ASC, authority_version DESC, observed_at DESC, readback_id DESC
+      LIMIT ?`,
+  ).bind(
+    tenantId,
+    binding.subject_type, binding.subject_type,
+    binding.subject_role, binding.subject_role,
+    binding.person_user, binding.person_user,
+    binding.organization, binding.organization,
+    binding.authority_kind, binding.authority_kind,
+    binding.authority_scope, binding.authority_scope,
+    binding.scope_type, binding.scope_type,
+    binding.scope_ref, binding.scope_ref,
+    binding.roof_job, binding.roof_job,
+    binding.scope_json, binding.scope_json,
+    binding.issuer_reference,
+    binding.issuer_source_version,
+    binding.issuer_jurisdiction,
+    MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS + 1,
+  ).all<AuthorityRecordReadback>();
+  return rows.results;
+}
+
+async function authorityReadbacksBySupersedes(
+  env: AppEnv,
+  tenantId: string,
+  supersedesAuthorityRecordId: string,
+): Promise<AuthorityRecordReadback[]> {
+  const rows = await env.DB.prepare(
+    `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
+            observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
+       FROM authority_record_readbacks
+      WHERE tenant_id = ? AND supersedes_authority_record_id = ?
+      ORDER BY authority_record_id ASC, authority_version DESC, observed_at DESC, readback_id DESC
+      LIMIT ?`,
+  ).bind(
+    tenantId,
+    supersedesAuthorityRecordId,
+    MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS + 1,
+  ).all<AuthorityRecordReadback>();
+  return rows.results;
+}
+
+async function authorityReadbacksByAuthorityRecord(
+  env: AppEnv,
+  tenantId: string,
+  authorityRecordId: string,
+): Promise<AuthorityRecordReadback[]> {
+  const rows = await env.DB.prepare(
+    `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
+            observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
+       FROM authority_record_readbacks
+      WHERE tenant_id = ? AND authority_record_id = ?
+      ORDER BY authority_version DESC, observed_at DESC, readback_id DESC
+      LIMIT ?`,
+  ).bind(
+    tenantId,
+    authorityRecordId,
+    MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS + 1,
+  ).all<AuthorityRecordReadback>();
+  return rows.results;
 }
 
 async function businessActor(
@@ -529,8 +805,7 @@ function validTerminalReceipt(value: unknown): value is AuthorityRecordTerminalR
     return Number.isInteger(value.authorityVersion) && Number(value.authorityVersion) >= 1 &&
       SHA256.test(String(value.authorityStateDigestSha256 ?? "")) &&
       SHA256.test(String(value.materialReadbackSha256 ?? "")) &&
-      (value.issuerReadbackId === undefined || value.issuerReadbackId === null ||
-        OPAQUE_ID.test(String(value.issuerReadbackId)));
+      OPAQUE_ID.test(String(value.issuerReadbackId ?? ""));
   }
   return value.kind === "reconciliation_required" &&
     boundedText(value.reason, 3, 2000) &&
@@ -559,10 +834,41 @@ function validateReadbackInput(input: RecordAuthorityReadbackInput): void {
       !validEvidenceRefsJson(input.evidenceRefsJson) ||
       !SHA256.test(input.evidenceSha256) ||
       !SHA256.test(input.authorityStateDigestSha256) ||
+      !nullableDate(input.authorityEffectiveFrom) ||
+      !nullableDate(input.authorityExpiresAt) ||
+      !nullableInstant(input.authorityRevokedAt) ||
+      input.supersedesAuthorityRecordId !== null && !OPAQUE_ID.test(input.supersedesAuthorityRecordId) ||
+      input.authorityVerificationMethod !== null &&
+        !boundedText(input.authorityVerificationMethod, 2, 200) ||
+      input.issuerReceiptSha256 !== null && !SHA256.test(input.issuerReceiptSha256) ||
       !USER_ID.test(input.observedByUserId) ||
       !ISO_INSTANT.test(input.observedAt) ||
       input.actionId !== null && !OPAQUE_ID.test(input.actionId)) {
     throw new Error("authority_record_readback_input_invalid");
+  }
+}
+
+function validateLifecycleExpectation(input: AuthorityLifecycleExpectation): void {
+  if (!TENANT_ID.test(input.tenantId) || !ISO_INSTANT.test(input.now) ||
+      input.readbackId !== undefined && !OPAQUE_ID.test(input.readbackId) ||
+      input.authorityRecordId !== undefined && !OPAQUE_ID.test(input.authorityRecordId) ||
+      input.authorityVersion !== undefined &&
+        (!Number.isInteger(input.authorityVersion) || input.authorityVersion < 1) ||
+      input.authorityStateDigestSha256 !== undefined && !SHA256.test(input.authorityStateDigestSha256) ||
+      input.subjectType !== undefined && !nullableBoundedText(input.subjectType, 120) ||
+      input.subjectRole !== undefined && !nullableBoundedText(input.subjectRole, 200) ||
+      input.personUser !== undefined && !nullableBoundedText(input.personUser, 200) ||
+      input.organization !== undefined && !nullableBoundedText(input.organization, 200) ||
+      input.authorityKind !== undefined && !nullableBoundedText(input.authorityKind, 200) ||
+      input.authorityScope !== undefined && !nullableBoundedText(input.authorityScope, 240) ||
+      input.scopeType !== undefined && !nullableBoundedText(input.scopeType, 120) ||
+      input.scopeRef !== undefined && !nullableBoundedText(input.scopeRef, 240) ||
+      input.roofJob !== undefined && !nullableBoundedText(input.roofJob, 200) ||
+      input.scopeJson !== undefined && !nullableBoundedText(input.scopeJson, 20_000) ||
+      input.issuerReference !== undefined && !nullableBoundedText(input.issuerReference, 240) ||
+      input.issuerSourceVersion !== undefined && !nullableBoundedText(input.issuerSourceVersion, 120) ||
+      input.issuerJurisdiction !== undefined && !nullableBoundedText(input.issuerJurisdiction, 160)) {
+    throw new Error("authority_record_lifecycle_input_invalid");
   }
 }
 
@@ -595,6 +901,14 @@ function nullableBoundedText(value: unknown, max: number): value is string | nul
   return value === null || boundedText(value, 1, max);
 }
 
+function nullableDate(value: unknown): value is string | null {
+  return value === null || typeof value === "string" && validIsoDate(value);
+}
+
+function nullableInstant(value: unknown): value is string | null {
+  return value === null || typeof value === "string" && validIsoInstant(value);
+}
+
 function isReadbackState(value: unknown): value is AuthorityReadbackState {
   return value === "verified" || value === "revoked" || value === "contradictory" ||
     value === "unavailable";
@@ -606,4 +920,309 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function d1Changes(result: { meta?: { changes?: number } }): number {
   return Number(result.meta?.changes ?? 0);
+}
+
+function lifecycleBindingFromExpectation(
+  input: AuthorityLifecycleExpectation,
+): Pick<
+  AuthorityRecordReadback,
+  | "subject_type"
+  | "subject_role"
+  | "person_user"
+  | "organization"
+  | "authority_kind"
+  | "authority_scope"
+  | "scope_type"
+  | "scope_ref"
+  | "roof_job"
+  | "scope_json"
+  | "issuer_reference"
+  | "issuer_source_version"
+  | "issuer_jurisdiction"
+> | null {
+  if (
+    input.subjectType === undefined ||
+    input.subjectRole === undefined ||
+    input.authorityKind === undefined ||
+    input.authorityScope === undefined ||
+    input.scopeType === undefined ||
+    input.scopeRef === undefined ||
+    input.scopeJson === undefined ||
+    input.issuerReference === undefined ||
+    input.issuerReference === null ||
+    input.issuerSourceVersion === undefined ||
+    input.issuerSourceVersion === null ||
+    input.issuerJurisdiction === undefined ||
+    input.issuerJurisdiction === null
+  ) {
+    return null;
+  }
+  return {
+    subject_type: input.subjectType,
+    subject_role: input.subjectRole,
+    person_user: input.personUser ?? null,
+    organization: input.organization ?? null,
+    authority_kind: input.authorityKind,
+    authority_scope: input.authorityScope,
+    scope_type: input.scopeType,
+    scope_ref: input.scopeRef,
+    roof_job: input.roofJob ?? null,
+    scope_json: input.scopeJson,
+    issuer_reference: input.issuerReference,
+    issuer_source_version: input.issuerSourceVersion,
+    issuer_jurisdiction: input.issuerJurisdiction,
+  };
+}
+
+function currentAuthorityHeads(
+  rows: AuthorityRecordReadback[],
+): { rows: AuthorityRecordReadback[]; code: AuthorityLifecycleDenial | null } {
+  const currentByAuthorityRecord = new Map<string, AuthorityRecordReadback>();
+  const rowsByAuthorityRecord = new Map<string, AuthorityRecordReadback[]>();
+  for (const row of rows) {
+    const peers = rowsByAuthorityRecord.get(row.authority_record_id) ?? [];
+    peers.push(row);
+    rowsByAuthorityRecord.set(row.authority_record_id, peers);
+  }
+  for (const peers of rowsByAuthorityRecord.values()) {
+    const maxVersion = Math.max(...peers.map((peer) => peer.authority_version));
+    const peerMaxVersion = peers.filter((peer) => peer.authority_version === maxVersion);
+    const peerDigests = new Set(peerMaxVersion.map((peer) => peer.authority_state_digest_sha256));
+    if (peerDigests.size > 1) {
+      return { rows: [], code: "authority_contradictory" };
+    }
+    const current = peerMaxVersion.reduce<AuthorityRecordReadback | null>(
+      (best, peer) => !best || compareAuthorityRecency(peer, best) > 0 ? peer : best,
+      null,
+    );
+    if (current) {
+      currentByAuthorityRecord.set(current.authority_record_id, current);
+    }
+  }
+  const currentRows = [...currentByAuthorityRecord.values()];
+  return {
+    rows: currentRows.filter((candidate) => !currentRows.some((other) =>
+      other.readback_id !== candidate.readback_id &&
+      other.supersedes_authority_record_id === candidate.authority_record_id
+    )),
+    code: null,
+  };
+}
+
+async function authorityReadbackLineage(
+  env: AppEnv,
+  tenantId: string,
+  roots: AuthorityRecordReadback[],
+): Promise<{ rows: AuthorityRecordReadback[]; overflow: boolean }> {
+  const byReadback = new Map<string, AuthorityRecordReadback>();
+  const visitedAuthorityRecords = new Set<string>();
+  const queue: AuthorityRecordReadback[] = [];
+  const overflowed = () => byReadback.size > MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS;
+  for (const row of roots) {
+    byReadback.set(row.readback_id, row);
+    queue.push(row);
+  }
+  if (overflowed()) return { rows: [], overflow: true };
+  while (queue.length > 0) {
+    const row = queue.shift()!;
+    if (!visitedAuthorityRecords.has(row.authority_record_id)) {
+      visitedAuthorityRecords.add(row.authority_record_id);
+      const peers = await authorityReadbacksByAuthorityRecord(env, tenantId, row.authority_record_id);
+      for (const peer of peers) {
+        if (!byReadback.has(peer.readback_id)) {
+          byReadback.set(peer.readback_id, peer);
+          queue.push(peer);
+          if (overflowed()) return { rows: [], overflow: true };
+        }
+      }
+      const descendants = await authorityReadbacksBySupersedes(env, tenantId, row.authority_record_id);
+      for (const descendant of descendants) {
+        if (!byReadback.has(descendant.readback_id)) {
+          byReadback.set(descendant.readback_id, descendant);
+          queue.push(descendant);
+          if (overflowed()) return { rows: [], overflow: true };
+        }
+      }
+    }
+    if (row.supersedes_authority_record_id) {
+      const ancestors = await authorityReadbacksByAuthorityRecord(
+        env,
+        tenantId,
+        row.supersedes_authority_record_id,
+      );
+      for (const ancestor of ancestors) {
+        if (!byReadback.has(ancestor.readback_id)) {
+          byReadback.set(ancestor.readback_id, ancestor);
+          queue.push(ancestor);
+          if (overflowed()) return { rows: [], overflow: true };
+        }
+      }
+    }
+  }
+  return { rows: [...byReadback.values()], overflow: false };
+}
+
+function sameAuthorityRecord(left: AuthorityRecordReadback, right: AuthorityRecordReadback): boolean {
+  return left.authority_record_id === right.authority_record_id;
+}
+
+function compareAuthorityRecency(left: AuthorityRecordReadback, right: AuthorityRecordReadback): number {
+  return (
+    left.authority_version - right.authority_version ||
+    left.observed_at.localeCompare(right.observed_at) ||
+    left.readback_id.localeCompare(right.readback_id)
+  );
+}
+
+async function validateTerminalReadbackForOperation(
+  env: AppEnv,
+  operation: AuthorityRecordOperation,
+  readback: AuthorityRecordReadback,
+  expectation: AuthorityLifecycleExpectation,
+): Promise<boolean> {
+  switch (operation) {
+    case "record":
+      return readback.verification_state === "unavailable";
+    case "revoke":
+      return readback.verification_state === "revoked" &&
+        (!issuerEvidenceRequired(readback) || !!readback.issuer_receipt_sha256);
+    case "verify":
+    case "renew":
+    case "supersede":
+    case "resolve_exception": {
+      if (readback.verification_state !== "verified") return false;
+      const lifecycle = await resolveAuthorityLifecycle(env, {
+        ...expectation,
+        readbackId: readback.readback_id,
+      });
+      return lifecycle.ok;
+    }
+  }
+}
+
+function terminalReadbackMatchesAction(
+  action: AuthorityRecordAction,
+  terminal: Extract<AuthorityRecordTerminalReceipt, { kind: "material_applied" }>,
+  readback: AuthorityRecordReadback,
+): boolean {
+  return readback.action_id === action.action_id &&
+    readback.authority_record_id === action.authority_record_id &&
+    readback.authority_version === terminal.authorityVersion &&
+    readback.authority_state_digest_sha256 === terminal.authorityStateDigestSha256 &&
+    (action.expected_version === null || readback.authority_version === action.expected_version);
+}
+
+function authorityActionMatchesClaim(
+  action: AuthorityRecordAction,
+  input: ClaimAuthorityRecordActionInput,
+): boolean {
+  return action.action_id === input.actionId &&
+    action.actor_user_id === input.actorUserId &&
+    action.request_fingerprint_sha256 === input.requestFingerprintSha256 &&
+    action.authority_record_id === input.authorityRecordId &&
+    action.operation === input.operation &&
+    action.expected_version === input.expectedVersion;
+}
+
+function lifecycleDenialForRow(
+  row: AuthorityRecordReadback,
+  input: AuthorityLifecycleExpectation,
+): AuthorityLifecycleDenial | null {
+  if (input.authorityRecordId && row.authority_record_id !== input.authorityRecordId) {
+    return "authority_scope_mismatch";
+  }
+  if (input.authorityVersion && row.authority_version !== input.authorityVersion) {
+    return "authority_scope_mismatch";
+  }
+  if (input.authorityStateDigestSha256 &&
+      row.authority_state_digest_sha256 !== input.authorityStateDigestSha256) {
+    return "authority_unverifiable";
+  }
+  if (input.issuerJurisdiction && row.issuer_jurisdiction !== input.issuerJurisdiction) {
+    return "authority_jurisdiction_mismatch";
+  }
+  if (bindingMismatch(row, input)) return "authority_scope_mismatch";
+  const stateDenial = verificationStateDenial(row);
+  if (stateDenial) return stateDenial;
+  if (!row.authority_effective_from || !row.authority_expires_at) {
+    return "authority_stale";
+  }
+  if (provenanceDenied(row)) {
+    return "authority_unverifiable";
+  }
+  const today = input.now.slice(0, 10);
+  if (row.authority_effective_from > today) {
+    return "authority_stale";
+  }
+  if (row.authority_expires_at < today) {
+    return "authority_expired";
+  }
+  return null;
+}
+
+function bindingMismatch(
+  row: AuthorityRecordReadback,
+  input: AuthorityLifecycleExpectation,
+): boolean {
+  return (
+    fieldMismatch(row.subject_type, input.subjectType) ||
+    fieldMismatch(row.subject_role, input.subjectRole) ||
+    fieldMismatch(row.person_user, input.personUser) ||
+    fieldMismatch(row.organization, input.organization) ||
+    fieldMismatch(row.authority_kind, input.authorityKind) ||
+    fieldMismatch(row.authority_scope, input.authorityScope) ||
+    fieldMismatch(row.scope_type, input.scopeType) ||
+    fieldMismatch(row.scope_ref, input.scopeRef) ||
+    fieldMismatch(row.roof_job, input.roofJob) ||
+    fieldMismatch(row.scope_json, input.scopeJson) ||
+    fieldMismatch(row.issuer_reference, input.issuerReference) ||
+    fieldMismatch(row.issuer_source_version, input.issuerSourceVersion)
+  );
+}
+
+function fieldMismatch(current: string | null, expected: string | null | undefined): boolean {
+  return expected !== undefined && current !== expected;
+}
+
+function verificationStateDenial(row: AuthorityRecordReadback): AuthorityLifecycleDenial | null {
+  if (row.authority_revoked_at) return "authority_revoked";
+  switch (row.verification_state) {
+    case "verified":
+      return null;
+    case "revoked":
+      return "authority_revoked";
+    case "contradictory":
+      return "authority_contradictory";
+    case "unavailable":
+      return "authority_unavailable";
+  }
+}
+
+function provenanceDenied(row: AuthorityRecordReadback): boolean {
+  const method = row.authority_verification_method?.trim() ?? "";
+  if (!method) return true;
+  if (row.authority_kind !== null && EXTERNAL_ISSUER_AUTHORITY_KINDS.has(row.authority_kind)) {
+    return !row.issuer_receipt_sha256 || !EXTERNAL_ISSUER_VERIFICATION_METHODS.has(method);
+  }
+  return !INTERNAL_AUTHORITY_VERIFICATION_METHODS.has(method);
+}
+
+function issuerEvidenceRequired(row: AuthorityRecordReadback): boolean {
+  return row.authority_kind !== null && EXTERNAL_ISSUER_AUTHORITY_KINDS.has(row.authority_kind);
+}
+
+function validIsoDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function validIsoInstant(value: string): boolean {
+  if (!ISO_INSTANT.test(value)) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const canonical = value.includes(".")
+    ? parsed.toISOString()
+    : parsed.toISOString().replace(".000Z", "Z");
+  return canonical === value;
 }

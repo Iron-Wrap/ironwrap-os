@@ -2183,11 +2183,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // and backfill the historical Work Package acknowledgement projection. 0115 then converges
     // public company-profile branding metadata onto that same D1 aggregate without introducing
     // a second authority. 0116 adds the acceptance-bound deposit derivation queue and recovery
-    // receipt without introducing a client-writable accounting truth. The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision
-    // numbers, not missing files.
-    assert.equal(migrations.length, 95);
+    // receipt without introducing a client-writable accounting truth. 0117 persists authority
+    // lifecycle facts and issuer receipt bindings so downstream gates can re-evaluate current
+    // authority from D1 alone. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // collision numbers, not missing files.
+    assert.equal(migrations.length, 96);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0116_native_commercial_deposit_derivation.sql");
+    assert.equal(migrations.at(-1), "0117_authority_readback_lifecycle.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2281,11 +2283,119 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // operator-search indexes; 0113 adds the five pipeline-board tables, seven named indexes,
     // and its version/identity/append-only guards. The 0110_zz/0114_zz staging pair, 0114's
     // dev-outbox rebuild, and the 0114_zy acknowledgement backfill are all count-neutral. 0116
-    // adds three deposit-derivation truth tables plus the fair-sweep cursor, five indexes, and the
-    // guarded event/projection triggers.
+    // adds three deposit-derivation tables, five indexes, and eight guarded event/projection
+    // triggers. 0117 adds the authority-readback lifecycle columns, two current-head/supersession
+    // indexes, and one insert-time lifecycle validation trigger so malformed lifecycle rows stay
+    // D1-local.
     assert.deepEqual(
       { ...counts },
-      { tables: 206, indexes: 311, triggers: 495 },
+      { tables: 206, indexes: 313, triggers: 496 },
+    );
+    const insertAuthorityReadback = (overrides: Partial<{
+      readbackId: string;
+      authorityRecordId: string;
+      effectiveFrom: string | null;
+      expiresAt: string | null;
+      revokedAt: string | null;
+      supersedesAuthorityRecordId: string | null;
+      authorityVerificationMethod: string;
+      issuerReceiptSha256: string | null;
+      observationFingerprint: string;
+    }> = {}) =>
+      db.prepare(
+        `INSERT INTO authority_record_readbacks
+           (readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256,
+            authority_state_digest_sha256, authority_effective_from, authority_expires_at,
+            authority_revoked_at, supersedes_authority_record_id, authority_verification_method,
+            issuer_receipt_sha256, observed_by_user_id, observed_at, observation_fingerprint_sha256,
+            action_id)
+         VALUES (?, 'ironwrap', ?, 1,
+                 'Organization', 'Inventory Authority', NULL, 'ironwrap',
+                 'Inventory Command Authority', 'inventory-command', 'Tenant', 'ironwrap', NULL, '{}',
+                 'IronWrap Operations', 'AB-CA', 'internal:inventory-authority:1', 'inventory-authority:1',
+                 'verified', '[]', ?, ?, ?, ?, ?, ?, ?, ?, 'appu_legacy_ops_0001',
+                 '2026-08-20T12:00:00.000Z', ?, NULL)`,
+      ).run(
+        overrides.readbackId ?? "Authority-Readback-Migration-Base-01",
+        overrides.authorityRecordId ?? "Authority-Record-Migration-Base-01",
+        "a".repeat(64),
+        "b".repeat(64),
+        overrides.effectiveFrom ?? "2026-08-01",
+        overrides.expiresAt ?? "2026-12-31",
+        overrides.revokedAt ?? null,
+        overrides.supersedesAuthorityRecordId ?? null,
+        overrides.authorityVerificationMethod ?? "Internal Competency Assessment",
+        overrides.issuerReceiptSha256 ?? null,
+        overrides.observationFingerprint ?? "c".repeat(64),
+      );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Bad-Date-01",
+        authorityRecordId: "Authority-Record-Migration-Bad-Date-01",
+        effectiveFrom: "2026/08/01",
+        observationFingerprint: "d".repeat(64),
+      }),
+      /authority_record_readbacks_lifecycle_date_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Impossible-Date-01",
+        authorityRecordId: "Authority-Record-Migration-Impossible-Date-01",
+        effectiveFrom: "2026-02-30",
+        observationFingerprint: "dd".repeat(32),
+      }),
+      /authority_record_readbacks_lifecycle_date_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Bad-Range-01",
+        authorityRecordId: "Authority-Record-Migration-Bad-Range-01",
+        effectiveFrom: "2026-12-31",
+        expiresAt: "2026-08-01",
+        observationFingerprint: "e".repeat(64),
+      }),
+      /authority_record_readbacks_lifecycle_range_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Bad-Receipt-01",
+        authorityRecordId: "Authority-Record-Migration-Bad-Receipt-01",
+        authorityVerificationMethod: "Issuer Portal Readback",
+        issuerReceiptSha256: "not-a-sha",
+        observationFingerprint: "f".repeat(64),
+      }),
+      /authority_record_readbacks_receipt_sha_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Bad-Supersedes-01",
+        authorityRecordId: "Authority-Record-Migration-Bad-Supersedes-01",
+        supersedesAuthorityRecordId: "bad id",
+        observationFingerprint: "1".repeat(64),
+      }),
+      /authority_record_readbacks_supersedes_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Bad-Instant-01",
+        authorityRecordId: "Authority-Record-Migration-Bad-Instant-01",
+        revokedAt: "2026-01-01 00:00:00",
+        observationFingerprint: "11".repeat(32),
+      }),
+      /authority_record_readbacks_lifecycle_instant_invalid/,
+    );
+    assert.throws(
+      () => insertAuthorityReadback({
+        readbackId: "Authority-Readback-Migration-Self-Supersede-01",
+        authorityRecordId: "Authority-Record-Migration-Self-Supersede-01",
+        supersedesAuthorityRecordId: "Authority-Record-Migration-Self-Supersede-01",
+        observationFingerprint: "2".repeat(64),
+      }),
+      /authority_record_readbacks_supersedes_self/,
     );
     const fieldUser = "appu_fleet_field_0001";
     const unrelatedFieldUser = "appu_fleet_field_0002";

@@ -200,7 +200,13 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
       aria-labelledby={titleId}
       aria-describedby={statusId}
       aria-modal="true"
-      className="fixed inset-x-2 top-4 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-1rem)] max-w-2xl overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-[0_24px_80px_oklch(0_0_0/0.28)] backdrop:bg-foreground/40 sm:top-[12vh] sm:w-[calc(100%-2rem)]"
+      /* bottom-auto and mx-auto, not m-auto: this is a native <dialog>, and the
+         UA sheet sets inset-block-end: 0 on an open one. With `m-auto` the
+         block margins resolved to ~388px each and centred the box, defeating
+         the top-4 written right beside it - so the input sat at half screen
+         height and drifted upward as results arrived, under the cursor of
+         whoever was typing. */
+      className="fixed inset-x-2 bottom-auto top-4 mx-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-1rem)] max-w-2xl overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-[0_24px_80px_oklch(0_0_0/0.28)] backdrop:bg-foreground/40 sm:top-[12vh] sm:w-[calc(100%-2rem)]"
       onCancel={(event) => {
         event.preventDefault();
         closePalette();
@@ -250,13 +256,17 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
             <X className="size-5" aria-hidden="true" />
           </button>
         ) : null}
+        {/* Not a second X. Clear and close sat side by side as identical
+            glyphs with different consequences - one empties the field, the
+            other loses your place - and only a screen reader could tell them
+            apart. This one mirrors the key that already closes the palette. */}
         <button
           type="button"
-          className="grid size-11 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-focus"
+          className="grid h-11 shrink-0 place-items-center rounded-lg px-3 text-xs font-bold text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-focus"
           aria-label="Close search"
           onClick={closePalette}
         >
-          <X className="size-5" aria-hidden="true" />
+          <span aria-hidden="true">Esc</span>
         </button>
       </div>
 

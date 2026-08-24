@@ -111,6 +111,19 @@ describe("IronWrap OS foundation family", () => {
     expect(offenders(/transition-duration:\s*\d/g)).toEqual([]);
   });
 
+  it("asks for a wrap style without also dictating the wrap mode", () => {
+    // `white-space: nowrap` - what Tailwind's `truncate` sets - is shorthand
+    // for white-space-collapse plus text-wrap-mode. A global `text-wrap:
+    // pretty` therefore won on text-wrap-mode and turned every truncating <p>
+    // and <li> in the app back into a wrapping one: the shell header rendered
+    // a normal-length tenant name over three lines instead of ellipsing it.
+    // These rules only ever meant "when this wraps, wrap well".
+    const styles = read("src/styles.css");
+    expect(styles).not.toMatch(/(^|[\s;{])text-wrap:\s/m);
+    expect(styles).toMatch(/text-wrap-style:\s*balance/);
+    expect(styles).toMatch(/text-wrap-style:\s*pretty/);
+  });
+
   it("stays a family of Facet dusk/mineral without cloning Mona Sans", () => {
     const styles = read("src/styles.css");
     expect(styles).not.toMatch(/Mona Sans/);

@@ -182,13 +182,22 @@ body {
   min-height: 100dvh;
 }
 
+/*
+ * text-wrap-STYLE, not the text-wrap shorthand. `white-space: nowrap` - which
+ * is what Tailwind's `truncate` sets - is itself shorthand for
+ * white-space-collapse plus text-wrap-mode, so `text-wrap: pretty` here was
+ * winning on text-wrap-mode and silently turning every truncating <p> and <li>
+ * in the app back into a wrapping one. The app shell's header was the visible
+ * casualty: a normal-length tenant name wrapped to three lines instead of
+ * ellipsing. These rules only ever meant "when this wraps, wrap well".
+ */
 :is(h1, h2, h3) {
   line-height: 1.12;
-  text-wrap: balance;
+  text-wrap-style: balance;
 }
 
 :is(p, li) {
-  text-wrap: pretty;
+  text-wrap-style: pretty;
 }
 
 button,

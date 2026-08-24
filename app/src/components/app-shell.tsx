@@ -157,8 +157,12 @@ export function AppShell() {
               >
                 <CompanyMark className="size-5 text-accent" />
               </Link>
+              {/* The brand was mobile-only here, which put the longest and least
+                  useful string on the narrowest screen: it pushed the workspace
+                  and page out entirely, so a phone read "IronWrap E…" and never
+                  said which screen it was on. The home button beside this
+                  already carries the mark and names the brand in its label. */}
               <p className="truncate text-sm font-bold text-muted">
-                <span className="lg:hidden">{session.tenant.brand} · </span>
                 <span className="text-foreground">{currentItem.workspace}</span>
                 <span className="px-1.5 text-border-strong" aria-hidden="true">
                   /

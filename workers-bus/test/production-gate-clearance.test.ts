@@ -563,6 +563,30 @@ test("the Deposit gate refuses a settlement clearance the money lane has not set
   }
 });
 
+test("a partial provider payment remains blocked until the deposit intent is reconciled", async () => {
+  const harness = setup();
+  harness.db.seedDepositIntent({
+    state: "partially_settled",
+    settled_amount: "100.00",
+    provider_reconciled_at: null,
+  });
+  try {
+    const result = await post(harness, CLEARANCE_PATH("Deposit"), {
+      basis: "deposit_settlement",
+    });
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error, "deposit_settlement_not_observed");
+    assert.equal(harness.raw.objects.size, 0);
+    const row = harness.db.raw.prepare(
+      `SELECT state, version, clearance_decision_id
+         FROM operating_production_gates WHERE gate = 'Deposit'`,
+    ).get() as { state: string; version: number; clearance_decision_id: string | null };
+    assert.deepEqual({ ...row }, { state: "blocked", version: 1, clearance_decision_id: null });
+  } finally {
+    harness.restore();
+  }
+});
+
 test("a settled deposit invoice clears the gate on a stored, hashed receipt", async () => {
   const harness = setup();
   harness.db.seedDepositIntent();
@@ -575,7 +599,7 @@ test("a settled deposit invoice clears the gate on a stored, hashed receipt", as
     assert.equal(result.body.evidence_item, `gate-clearance:${KEY}`);
 
     const [stored] = [...harness.raw.objects.entries()];
-    assert.equal(stored[0], `production-gate-clearance/v1/${KEY}.json`);
+    assert.match(stored[0], /^production-gate-clearance\/v1\/[a-f0-9]{64}\.json$/);
     const receipt = JSON.parse(stored[1].body) as Record<string, unknown>;
     assert.equal(receipt.kind, "production_gate_clearance");
     assert.equal(receipt.basis, "deposit_settlement");
@@ -609,7 +633,7 @@ test("a settled deposit invoice clears the gate on a stored, hashed receipt", as
     assert.equal(row.clearance_basis, "deposit_settlement");
     assert.equal(row.clearance_decision_id, KEY);
     const evidence = JSON.parse(row.evidence_refs_json) as Record<string, unknown>;
-    assert.equal(evidence.r2_key, `production-gate-clearance/v1/${KEY}.json`);
+    assert.equal(evidence.r2_key, stored[0]);
     assert.equal(
       evidence.content_checksum,
       createHash("sha256").update(stored[1].body).digest("hex"),
@@ -630,7 +654,9 @@ test("the same settlement clearance twice stores the same bytes and converges", 
     const first = await post(harness, CLEARANCE_PATH("Deposit"), {
       basis: "deposit_settlement",
     });
-    const stored = harness.raw.objects.get(`production-gate-clearance/v1/${KEY}.json`)!.body;
+    const [r2Key] = harness.raw.objects.keys();
+    assert.ok(r2Key);
+    const stored = harness.raw.objects.get(r2Key)!.body;
     const second = await post(harness, CLEARANCE_PATH("Deposit"), {
       basis: "deposit_settlement",
     });
@@ -639,7 +665,184 @@ test("the same settlement clearance twice stores the same bytes and converges", 
     // attempt, which is what an immutable object store does to a wall-clock stamp.
     assert.equal(second.status, 200);
     assert.equal(harness.raw.objects.size, 1);
-    assert.equal(harness.raw.objects.get(`production-gate-clearance/v1/${KEY}.json`)!.body, stored);
+    assert.equal(harness.raw.objects.get(r2Key)!.body, stored);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("a conflicting settlement replay preserves the R2 receipt and gate bytes", async () => {
+  const harness = setup();
+  harness.db.seedDepositIntent();
+  try {
+    const first = await post(harness, CLEARANCE_PATH("Deposit"), {
+      basis: "deposit_settlement",
+    });
+    assert.equal(first.status, 200);
+    const [r2Key] = harness.raw.objects.keys();
+    assert.ok(r2Key);
+    const storedBefore = harness.raw.objects.get(r2Key)!;
+    const bodyBefore = storedBefore.body;
+    const checksumBefore = Buffer.from(
+      (storedBefore.object.checksums as { sha256: ArrayBuffer }).sha256,
+    ).toString("hex");
+    const gateBefore = harness.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id,
+              cleared_by_user_id, evidence_refs_json
+         FROM operating_production_gates WHERE gate = 'Deposit'`,
+    ).get();
+
+    const conflictingActor = await post(
+      harness,
+      CLEARANCE_PATH("Deposit"),
+      { basis: "deposit_settlement" },
+      auth("owner", "appu_owner_0002"),
+    );
+    assert.equal(conflictingActor.status, 409);
+    assert.equal(conflictingActor.body.error, "production_gate_clearance_replay_conflict");
+
+    const conflictingPayload = await post(harness, CLEARANCE_PATH("Deposit"), {
+      basis: "office_waiver",
+      reason: "Carrier exception approved for this restoration project.",
+    });
+    assert.equal(conflictingPayload.status, 409);
+    assert.equal(conflictingPayload.body.error, "production_gate_clearance_replay_conflict");
+
+    const storedAfter = harness.raw.objects.get(r2Key)!;
+    assert.equal(storedAfter.body, bodyBefore);
+    assert.equal(
+      Buffer.from((storedAfter.object.checksums as { sha256: ArrayBuffer }).sha256).toString("hex"),
+      checksumBefore,
+    );
+    assert.deepEqual(
+      harness.db.raw.prepare(
+        `SELECT state, version, clearance_basis, clearance_decision_id,
+                cleared_by_user_id, evidence_refs_json
+           FROM operating_production_gates WHERE gate = 'Deposit'`,
+      ).get(),
+      gateBefore,
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("a new Deposit decision on an already-cleared gate writes no orphan receipt", async () => {
+  const harness = setup();
+  harness.db.seedDepositIntent();
+  try {
+    const first = await post(harness, CLEARANCE_PATH("Deposit"), {
+      basis: "deposit_settlement",
+    });
+    assert.equal(first.status, 200);
+    const [[r2Key, storedBefore]] = [...harness.raw.objects.entries()];
+    const checksumBefore = Buffer.from(
+      (storedBefore.object.checksums as { sha256: ArrayBuffer }).sha256,
+    ).toString("hex");
+    const gateBefore = harness.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id,
+              cleared_by_user_id, evidence_refs_json
+         FROM operating_production_gates WHERE gate = 'Deposit'`,
+    ).get();
+
+    const refused = await post(
+      harness,
+      CLEARANCE_PATH("Deposit"),
+      { basis: "deposit_settlement" },
+      auth("owner"),
+      { idempotency: "gate-clearance-key-0000000002" },
+    );
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error, "production_gate_already_cleared");
+    assert.equal(harness.raw.objects.size, 1);
+    assert.equal(harness.raw.objects.get(r2Key)!.body, storedBefore.body);
+    assert.equal(
+      Buffer.from(
+        (harness.raw.objects.get(r2Key)!.object.checksums as { sha256: ArrayBuffer }).sha256,
+      ).toString("hex"),
+      checksumBefore,
+    );
+    assert.deepEqual(
+      harness.db.raw.prepare(
+        `SELECT state, version, clearance_basis, clearance_decision_id,
+                cleared_by_user_id, evidence_refs_json
+           FROM operating_production_gates WHERE gate = 'Deposit'`,
+      ).get(),
+      gateBefore,
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("the same decision id clears two jobs into distinct scoped immutable receipts", async () => {
+  const harness = setup();
+  const secondJobId = "job:elec123";
+  harness.db.seedDepositIntent();
+  harness.db.raw.prepare(
+    `INSERT INTO operating_roof_jobs
+       (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
+        brand, job_number, service_type, job_status, current_gate_state,
+        version, created_at, updated_at)
+     SELECT ?, tenant_id, lead_id, customer_id, source_envelope_id,
+            brand, 'IW-122-2', service_type, job_status, current_gate_state,
+            version, created_at, updated_at
+       FROM operating_roof_jobs
+      WHERE tenant_id = ? AND roof_job_id = ?`,
+  ).run(secondJobId, TENANT, JOB_ID);
+  harness.db.raw.prepare(
+    `INSERT INTO operating_production_gates
+       (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key,
+        gate, state, owner_user, assigned_at, due_at, blocker_reason,
+        version, created_at, updated_at)
+     SELECT 'gate:elec123:' || lower(gate), tenant_id, ?, source_envelope_id,
+            source_raw_key, gate, state, owner_user, assigned_at, due_at, blocker_reason,
+            version, created_at, updated_at
+       FROM operating_production_gates
+      WHERE tenant_id = ? AND roof_job_id = ?`,
+  ).run(secondJobId, TENANT, JOB_ID);
+  harness.db.seedDepositIntent({
+    intent_id: "acct-intent-deposit-0000002",
+    roof_job_id: secondJobId,
+    basis_sha256: "d".repeat(64),
+    expected_sha256: "f".repeat(64),
+    tax_policy_snapshot_sha256: "9".repeat(64),
+    provider_payload_sha256: "8".repeat(64),
+    provider_request_id: "req-deposit-0000000000002",
+    effect_id: "effect:deposit-0000000000002",
+    effect_idempotency_key: "effect-key-deposit-000000002",
+    provider_entity_id: "1043",
+    observed_sha256: "f".repeat(64),
+  });
+  try {
+    const first = await post(harness, CLEARANCE_PATH("Deposit", JOB_ID), {
+      basis: "deposit_settlement",
+    });
+    const second = await post(harness, CLEARANCE_PATH("Deposit", secondJobId), {
+      basis: "deposit_settlement",
+    });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+
+    const rows = harness.db.raw.prepare(
+      `SELECT roof_job_id, evidence_refs_json
+         FROM operating_production_gates
+        WHERE tenant_id = ? AND gate = 'Deposit'
+        ORDER BY roof_job_id`,
+    ).all(TENANT) as Array<{ roof_job_id: string; evidence_refs_json: string }>;
+    const scopedKeys = rows.map((row) =>
+      (JSON.parse(row.evidence_refs_json) as { r2_key: string }).r2_key
+    );
+    assert.equal(new Set(scopedKeys).size, 2);
+    assert.equal(harness.raw.objects.size, 2);
+    for (const [index, row] of rows.entries()) {
+      const receipt = harness.raw.objects.get(scopedKeys[index] ?? "");
+      assert.ok(receipt);
+      assert.equal(
+        (JSON.parse(receipt.body) as { roof_job_id: string }).roof_job_id,
+        row.roof_job_id,
+      );
+    }
   } finally {
     harness.restore();
   }
@@ -715,9 +918,15 @@ test("the same waiver decision id replays the stored D1 clearance", async () => 
       basis: "office_waiver",
       reason: "Environment Canada shows a dry three-day window from Monday.",
     });
+    const conflictingReason = await post(harness, CLEARANCE_PATH("Weather"), {
+      basis: "office_waiver",
+      reason: "A different forecast source now predicts a shorter dry window.",
+    });
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
     assert.equal(second.body.replayed, true);
+    assert.equal(conflictingReason.status, 409);
+    assert.equal(conflictingReason.body.error, "production_gate_clearance_replay_conflict");
     const row = harness.db.raw.prepare(
       `SELECT version FROM operating_production_gates WHERE gate = 'Weather'`,
     ).get() as { version: number };
@@ -750,7 +959,7 @@ test("the runway advertises the clearing action only to a session that may use i
   }
 });
 
-test("settledDepositIntent ranks a reconciled invoice over a partial one and ignores a zero settlement", () => {
+test("settledDepositIntent requires reconciliation and ignores partial or zero settlement", () => {
   const base = {
     kind: "deposit_invoice",
     settled_amount: "100.00",
@@ -765,7 +974,7 @@ test("settledDepositIntent ranks a reconciled invoice over a partial one and ign
     settled_amount: "0.00",
   } as AccountingIntentRecord;
   assert.equal(settledDepositIntent([partial, reconciled])?.intent_id, "b");
-  assert.equal(settledDepositIntent([partial])?.intent_id, "a");
+  assert.equal(settledDepositIntent([partial]), null);
   assert.equal(settledDepositIntent([zero]), null);
   assert.equal(settledDepositIntent([]), null);
   assert.equal(

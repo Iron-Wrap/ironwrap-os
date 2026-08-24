@@ -6,6 +6,7 @@ import { test } from "node:test";
 const TABLES = [
   "commercial_acceptance_bindings",
   "commercial_authority_permits",
+  "commercial_deposit_approval_exclusions",
   "commercial_deposit_derivation_cursors",
   "commercial_deposit_derivation_events",
   "commercial_deposit_derivation_requests",
@@ -58,6 +59,10 @@ const INDEXES = [
 ] as const;
 
 const TRIGGERS = [
+  [
+    "accounting_intent_command_receipts_commercial_deposit_sod",
+    "accounting_intent_command_receipts",
+  ],
   ["commercial_acceptance_binding_guard", "commercial_acceptance_bindings"],
   [
     "commercial_acceptance_bindings_append_only_delete",
@@ -90,6 +95,22 @@ const TRIGGERS = [
   [
     "commercial_authority_permits_no_insert_replace",
     "commercial_authority_permits",
+  ],
+  [
+    "commercial_deposit_approval_exclusions_append_only_delete",
+    "commercial_deposit_approval_exclusions",
+  ],
+  [
+    "commercial_deposit_approval_exclusions_append_only_update",
+    "commercial_deposit_approval_exclusions",
+  ],
+  [
+    "commercial_deposit_approval_exclusions_insert_guard",
+    "commercial_deposit_approval_exclusions",
+  ],
+  [
+    "commercial_deposit_derivation_requests_capture_approval_exclusion",
+    "commercial_deposit_derivation_requests",
   ],
   [
     "commercial_deposit_derivation_requests_no_insert_replace",
@@ -191,6 +212,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     "0093_commercial_authority.sql",
     "0116_native_commercial_deposit_derivation.sql",
     "0117_authority_readback_lifecycle.sql",
+    "0119_commercial_deposit_approval_separation.sql",
   ]
     .map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"))
     .join("\n");
@@ -226,9 +248,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 209],
+    ["REQUIRED_TABLE_COUNT", 210],
     ["REQUIRED_INDEX_COUNT", 324],
-    ["REQUIRED_TRIGGER_COUNT", 505],
+    ["REQUIRED_TRIGGER_COUNT", 510],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -262,7 +284,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0118", () => {
+test("the full schema matches the recovery frontier through 0120", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -290,7 +312,9 @@ test("the full schema matches the recovery frontier through 0118", () => {
     // derivation queue, fair-sweep cursor, request receipt, event ledger, five indexes, and the
     // upgraded publication/acceptance guards and projections. 0117 adds the authority readback
     // lifecycle indexes and insert guard. 0118 adds the capability manifest, proof, and readiness
-    // frontier: three tables, three indexes, and nine append-only/owner guards.
+    // frontier: three tables, three indexes, and nine append-only/owner guards. 0119 adds the
+    // immutable commercial-deposit approval exclusion and its five capture/command guards. 0120
+    // scopes the existing gate-clearance decision index without changing the inventory count.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -298,7 +322,7 @@ test("the full schema matches the recovery frontier through 0118", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 209, indexes: 324, triggers: 505 },
+      { tables: 210, indexes: 324, triggers: 510 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

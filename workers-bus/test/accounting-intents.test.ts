@@ -398,6 +398,49 @@ test("the actor that derived a candidate may not approve it", async () => {
   assert.equal(approved.intent.state, "submission_pending");
 });
 
+test("a commercial deposit recovery requester may not approve the agent-derived intent", async () => {
+  const { env, db } = testEnv();
+  const intent = await deriveAccountingIntent(env, deriveInput({
+    intentId: "acct-intent:job-0001:recovered-deposit",
+    kind: "deposit_invoice",
+    taxPolicySnapshotSha256: "a".repeat(64),
+  }), NOW);
+  db.raw.prepare(
+    `INSERT INTO commercial_deposit_approval_exclusions
+       (request_id, tenant_id, intent_id, actor_user_id)
+     VALUES (?, ?, ?, ?)`,
+  ).run("commercial-deposit-reconcile:requester-sod", TENANT, intent.intent_id, "appu_accounting_0001");
+
+  await assert.rejects(
+    () => approve(env, intent.intent_id, 1, "appu_accounting_0001"),
+    (error: AccountingIntentError) => error.code === "accounting_intent_separation_of_duty",
+  );
+  assert.equal((await readAccountingIntent(env, TENANT, intent.intent_id))?.state, "pending_review");
+
+  // Bypassing the engine and writing a command receipt directly reaches the same refusal.
+  assert.throws(
+    () => db.raw.prepare(
+      `INSERT INTO accounting_intent_command_receipts (
+         receipt_id, tenant_id, intent_id, operation, idempotency_key_sha256,
+         request_fingerprint_sha256, requested_version, actor_user_id, created_at
+       ) VALUES (?, ?, ?, 'approve', ?, ?, 1, ?, ?)`,
+    ).run(
+      "00000000-0000-4000-8000-000000000019",
+      TENANT,
+      intent.intent_id,
+      "1".repeat(64),
+      "2".repeat(64),
+      "appu_accounting_0001",
+      NOW.toISOString(),
+    ),
+    /accounting_intent_separation_of_duty/,
+  );
+
+  const approved = await approve(env, intent.intent_id, 1, "appu_accounting_0002");
+  assert.equal(approved.intent.state, "submission_pending");
+  assert.equal(approved.intent.approved_by_user_id, "appu_accounting_0002");
+});
+
 test("D1 refuses a separation-of-duty violation written straight to the receipt table", async () => {
   const { env, db } = testEnv();
   const intent = await deriveAccountingIntent(

@@ -42,6 +42,35 @@ export function readAccountingMigration(name: string): string {
   return readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
 }
 
+/**
+ * The focused accounting fixtures intentionally stop at 0065.  Install the 0119 command-facing
+ * contract without pulling the full commercial/operating schema into every money-plane unit test.
+ * The complete migration and its causal capture trigger run in app-migration/reference tests.
+ */
+export function installCommercialDepositApprovalExclusionContract(raw: DatabaseSync): void {
+  raw.exec(`
+    CREATE TABLE commercial_deposit_approval_exclusions (
+      request_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      intent_id TEXT NOT NULL,
+      actor_user_id TEXT NOT NULL,
+      UNIQUE (tenant_id, intent_id, actor_user_id)
+    );
+    CREATE TRIGGER accounting_intent_command_receipts_commercial_deposit_sod
+    BEFORE INSERT ON accounting_intent_command_receipts
+    WHEN NEW.operation = 'approve'
+    BEGIN
+      SELECT RAISE(ABORT, 'accounting_intent_separation_of_duty')
+      WHERE EXISTS (
+        SELECT 1 FROM commercial_deposit_approval_exclusions AS exclusion
+         WHERE exclusion.tenant_id = NEW.tenant_id
+           AND exclusion.intent_id = NEW.intent_id
+           AND exclusion.actor_user_id = NEW.actor_user_id
+      );
+    END;
+  `);
+}
+
 export class SqliteStatement {
   private readonly raw: DatabaseSync;
   private readonly sql: string;
@@ -85,6 +114,7 @@ export class AccountingTestD1 {
     for (const migration of ACCOUNTING_MIGRATIONS) {
       this.raw.exec(readAccountingMigration(migration));
     }
+    installCommercialDepositApprovalExclusionContract(this.raw);
     const insert = this.raw.prepare(
       `INSERT INTO app_users (
          user_id, tenant_id, email_normalized, display_name, role, access_role,

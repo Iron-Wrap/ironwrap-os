@@ -2186,11 +2186,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // receipt without introducing a client-writable accounting truth, 0117 persists authority
     // lifecycle facts and issuer receipt bindings so downstream gates can re-evaluate current
     // authority from D1 alone, and 0118 adds the append-only integration manifest, proof, and
-    // readiness profile facts. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // readiness profile facts, 0119 binds a commercial recovery requester away from approval
+    // of the agent-derived deposit it recovered, and 0120 scopes gate-clearance decisions to
+    // their tenant/job/gate identity. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 97);
+    assert.equal(migrations.length, 99);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0118_capability_readiness.sql");
+    assert.equal(migrations.at(-1), "0120_production_gate_clearance_scope.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2288,10 +2290,18 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // triggers. 0117 adds the authority-readback lifecycle columns, two current-head/supersession
     // indexes, and one insert-time lifecycle validation trigger so malformed lifecycle rows stay
     // D1-local. 0118 adds three capability-readiness fact tables, three idx_% head indexes, and
-    // nine validation, append-only, and retention triggers.
+    // nine validation, append-only, and retention triggers. 0119 adds one immutable commercial
+    // approval-exclusion table and five capture, validation, retention, and command guards. 0120
+    // replaces the global gate-decision index with the scoped equivalent, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 209, indexes: 316, triggers: 505 },
+      { tables: 210, indexes: 316, triggers: 510 },
+    );
+    assert.deepEqual(
+      (db.prepare(
+        "PRAGMA index_info(operating_production_gates_clearance_decision_uidx)",
+      ).all() as Array<{ name: string }>).map((column) => column.name),
+      ["tenant_id", "roof_job_id", "gate", "clearance_decision_id"],
     );
     const insertAuthorityReadback = (overrides: Partial<{
       readbackId: string;

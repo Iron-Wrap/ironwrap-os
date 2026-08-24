@@ -14,8 +14,8 @@
 //
 //   * `deposit_settlement` - derived, evidence-linked, no human toggle. The money
 //     lane already records when a deposit invoice settles: an `accounting_intents`
-//     row of kind `deposit_invoice` for this job reaches `partially_settled` or
-//     `reconciled` with a settled amount, and that state is only ever written by an
+//     row of kind `deposit_invoice` for this job reaches `reconciled` with a settled
+//     amount, and that state is only ever written by an
 //     authenticated provider read-back (`accounting-reconciliation.ts`). This path
 //     reads that record, stores an immutable receipt of exactly what it read, and
 //     hands Frappe the receipt facts so the gate is cleared *on evidence*. It
@@ -67,10 +67,10 @@ export type ProductionGateClearanceBasis =
 
 /**
  * The money-lane states that mean "the provider told us money landed against this
- * invoice". Both are only ever reached through an authenticated read-back in
- * `accounting-reconciliation.ts`; neither can be set by a local command.
+ * invoice". This state is only ever reached through an authenticated read-back in
+ * `accounting-reconciliation.ts`; it cannot be set by a local command.
  */
-const SETTLED_DEPOSIT_STATES = ["partially_settled", "reconciled"] as const;
+const SETTLED_DEPOSIT_STATES = ["reconciled"] as const;
 
 const CLEARANCE_PERMISSION = "production:clear_gate";
 const RECEIPT_CONTENT_TYPE = "application/json";
@@ -162,9 +162,9 @@ export function parseProductionGateClearance(
  * The settled deposit invoice this clearance is allowed to be made of, or null.
  *
  * Ordered so the answer is deterministic when a job carries more than one deposit
- * intent: fully `reconciled` outranks `partially_settled`, then the most recently
- * reconciled. A settled amount that is absent or not positive is not a settlement,
- * whatever the state column says.
+ * intent: the most recently reconciled wins. A partial provider payment is evidence
+ * for accounting review, not production admission. A settled amount that is absent
+ * or not positive is not a settlement, whatever the state column says.
  */
 export function settledDepositIntent(
   intents: readonly AccountingIntentRecord[],
@@ -178,14 +178,10 @@ export function settledDepositIntent(
       Number(intent.settled_amount) > 0,
   );
   if (settled.length === 0) return null;
-  return [...settled].sort((left, right) => {
-    const rank = (intent: AccountingIntentRecord) => (intent.state === "reconciled" ? 0 : 1);
-    return (
-      rank(left) - rank(right) ||
-      (right.provider_reconciled_at ?? "").localeCompare(left.provider_reconciled_at ?? "") ||
-      left.intent_id.localeCompare(right.intent_id)
-    );
-  })[0] ?? null;
+  return [...settled].sort((left, right) =>
+    (right.provider_reconciled_at ?? "").localeCompare(left.provider_reconciled_at ?? "") ||
+    left.intent_id.localeCompare(right.intent_id)
+  )[0] ?? null;
 }
 
 /**
@@ -297,6 +293,94 @@ interface NativeClearanceResult {
   replayed: boolean;
 }
 
+interface StoredNativeClearance {
+  gate_id: string;
+  tenant_id: string;
+  roof_job_id: string;
+  gate: string;
+  state: string;
+  version: number;
+  clearance_basis: string | null;
+  clearance_decision_id: string | null;
+  cleared_by_user_id: string | null;
+  evidence_refs_json: string | null;
+}
+
+interface NativeClearanceWrite {
+  state: "complete" | "waived";
+  evidenceItem: string | null;
+  evidenceRefs: Record<string, unknown> | null;
+  clearedAt: string;
+}
+
+function clearanceEvidenceJson(write: NativeClearanceWrite): string | null {
+  return write.evidenceRefs ? canonicalJson(write.evidenceRefs) : null;
+}
+
+function assertReplayCompatible(
+  existing: StoredNativeClearance,
+  auth: AuthContext,
+  input: ProductionGateClearanceRequest,
+  write: NativeClearanceWrite,
+): void {
+  if (existing.clearance_decision_id !== input.decisionId) return;
+  if (
+    existing.state !== write.state
+    || existing.clearance_basis !== input.basis
+    || existing.cleared_by_user_id !== auth.session.user_id
+    || existing.evidence_refs_json !== clearanceEvidenceJson(write)
+  ) {
+    throw new ProductionGateClearanceError("production_gate_clearance_replay_conflict", 409);
+  }
+}
+
+function preflightNativeClearance(
+  existing: StoredNativeClearance | null,
+  auth: AuthContext,
+  input: ProductionGateClearanceRequest,
+  write: NativeClearanceWrite,
+): { existing: StoredNativeClearance; replay: NativeClearanceResult | null } {
+  if (!existing) {
+    throw new ProductionGateClearanceError("production_gate_record_unavailable", 409);
+  }
+  if (existing.clearance_decision_id === input.decisionId) {
+    assertReplayCompatible(existing, auth, input, write);
+    return {
+      existing,
+      replay: {
+        gate: {
+          name: existing.gate_id,
+          gate: existing.gate,
+          roof_job: existing.roof_job_id,
+          state: existing.state === "waived" ? "Waived" : "Ready",
+        },
+        evidence_item: write.evidenceItem,
+        actor_role: auth.session.role,
+        replayed: true,
+      },
+    };
+  }
+  if (existing.state === "complete" || existing.state === "waived") {
+    throw new ProductionGateClearanceError("production_gate_already_cleared", 409);
+  }
+  return { existing, replay: null };
+}
+
+async function readNativeClearance(
+  env: AppEnv,
+  tenantId: string,
+  roofJobId: string,
+  gate: ClearableProductionGate,
+): Promise<StoredNativeClearance | null> {
+  return await env.DB.prepare(
+    `SELECT gate_id, tenant_id, roof_job_id, gate, state, version, clearance_basis,
+            clearance_decision_id, cleared_by_user_id, evidence_refs_json
+       FROM operating_production_gates
+      WHERE tenant_id = ? AND roof_job_id = ? AND gate = ?
+      LIMIT 1`,
+  ).bind(tenantId, roofJobId, gate).first<StoredNativeClearance>();
+}
+
 export async function handleProductionGateClearance(
   req: Request,
   env: AppEnv,
@@ -352,7 +436,7 @@ export async function handleProductionGateClearance(
       : await persistNativeClearance(env, auth, input, {
         state: "waived",
         evidenceItem: null,
-        evidenceRefs: null,
+        evidenceRefs: { waiver_reason: input.reason },
         clearedAt: new Date().toISOString(),
       });
     return json({
@@ -375,49 +459,20 @@ async function persistNativeClearance(
   env: AppEnv,
   auth: AuthContext,
   input: ProductionGateClearanceRequest,
-  write: {
-    state: "complete" | "waived";
-    evidenceItem: string | null;
-    evidenceRefs: Record<string, unknown> | null;
-    clearedAt: string;
-  },
+  write: NativeClearanceWrite,
 ): Promise<NativeClearanceResult> {
   if (!env.DB) {
     throw new ProductionGateClearanceError("production_gate_store_unavailable", 503);
   }
-  const existing = await env.DB.prepare(
-    `SELECT gate_id, tenant_id, roof_job_id, gate, state, version, clearance_decision_id
-       FROM operating_production_gates
-      WHERE tenant_id = ? AND roof_job_id = ? AND gate = ?
-      LIMIT 1`,
-  ).bind(auth.session.tenant_id, input.roofJobId, input.gate).first<{
-    gate_id: string;
-    tenant_id: string;
-    roof_job_id: string;
-    gate: string;
-    state: string;
-    version: number;
-    clearance_decision_id: string | null;
-  }>();
-  if (!existing) {
-    throw new ProductionGateClearanceError("production_gate_record_unavailable", 409);
-  }
-  if (existing.clearance_decision_id === input.decisionId) {
-    return {
-      gate: {
-        name: existing.gate_id,
-        gate: existing.gate,
-        roof_job: existing.roof_job_id,
-        state: existing.state === "waived" ? "Waived" : "Ready",
-      },
-      evidence_item: write.evidenceItem,
-      actor_role: auth.session.role,
-      replayed: true,
-    };
-  }
-  if (existing.state === "complete" || existing.state === "waived") {
-    throw new ProductionGateClearanceError("production_gate_already_cleared", 409);
-  }
+  const existing = await readNativeClearance(
+    env,
+    auth.session.tenant_id,
+    input.roofJobId,
+    input.gate,
+  );
+  const preflight = preflightNativeClearance(existing, auth, input, write);
+  if (preflight.replay) return preflight.replay;
+  const current = preflight.existing;
   const result = await env.DB.prepare(
     `UPDATE operating_production_gates
         SET state = ?,
@@ -435,20 +490,20 @@ async function persistNativeClearance(
     input.basis,
     input.decisionId,
     auth.session.user_id,
-    write.evidenceRefs ? JSON.stringify(write.evidenceRefs) : null,
+    clearanceEvidenceJson(write),
     write.clearedAt,
-    existing.gate_id,
+    current.gate_id,
     auth.session.tenant_id,
-    existing.version,
+    current.version,
   ).run();
   if (Number(result.meta?.changes ?? 0) !== 1) {
     throw new ProductionGateClearanceError("production_gate_version_conflict", 409);
   }
   return {
     gate: {
-      name: existing.gate_id,
-      gate: existing.gate,
-      roof_job: existing.roof_job_id,
+      name: current.gate_id,
+      gate: current.gate,
+      roof_job: current.roof_job_id,
       state: write.state === "waived" ? "Waived" : "Ready",
     },
     evidence_item: write.evidenceItem,
@@ -489,12 +544,13 @@ async function clearOnDepositSettlement(
     intent,
   });
   const checksum = await sha256Hex(receipt);
-  const r2Key = `${RECEIPT_PREFIX}/${input.decisionId}.json`;
-  try {
-    await r2ObjectStore(env.RAW).ensure(r2Key, receipt, RECEIPT_CONTENT_TYPE, checksum);
-  } catch {
-    throw new ProductionGateClearanceError("production_gate_receipt_unavailable", 503);
-  }
+  const decisionScopeSha256 = await sha256Hex(canonicalJson({
+    tenant_id: auth.session.tenant_id,
+    roof_job_id: input.roofJobId,
+    gate: input.gate,
+    decision_id: input.decisionId,
+  }));
+  const r2Key = `${RECEIPT_PREFIX}/${decisionScopeSha256}.json`;
   const evidence = {
     r2_key: r2Key,
     content_checksum: checksum,
@@ -503,10 +559,29 @@ async function clearOnDepositSettlement(
     captured_at: observedAt,
     summary: `Deposit settlement observed on money intent ${intent.intent_id}`,
   };
-  return await persistNativeClearance(env, auth, input, {
+  const write: NativeClearanceWrite = {
     state: "complete",
     evidenceItem: `gate-clearance:${input.decisionId}`,
     evidenceRefs: evidence,
     clearedAt: observedAt,
-  });
+  };
+  // Refuse a conflicting replay or a new decision on an already-cleared gate before touching
+  // immutable storage. A compatible replay still reaches `ensure`, proving the stored bytes and
+  // checksum are exactly the receipt derived from the current authenticated facts.
+  if (!env.DB) {
+    throw new ProductionGateClearanceError("production_gate_store_unavailable", 503);
+  }
+  const existing = await readNativeClearance(
+    env,
+    auth.session.tenant_id,
+    input.roofJobId,
+    input.gate,
+  );
+  preflightNativeClearance(existing, auth, input, write);
+  try {
+    await r2ObjectStore(env.RAW).ensure(r2Key, receipt, RECEIPT_CONTENT_TYPE, checksum);
+  } catch {
+    throw new ProductionGateClearanceError("production_gate_receipt_unavailable", 503);
+  }
+  return await persistNativeClearance(env, auth, input, write);
 }

@@ -20,7 +20,13 @@ import type { AccountingRouteDeps } from "../src/accounting-api.ts";
 import type { MoneyIntentJobDirectory } from "../src/accounting-job-reference.ts";
 import { handleAuthenticatedRoute, type AppRouteDeps } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
-import { ACCOUNTING_MIGRATIONS, NOW, TENANT, readAccountingMigration } from "./accounting-fixture.ts";
+import {
+  ACCOUNTING_MIGRATIONS,
+  NOW,
+  TENANT,
+  installCommercialDepositApprovalExclusionContract,
+  readAccountingMigration,
+} from "./accounting-fixture.ts";
 
 export const ACCOUNTANT_ID = "appu_accounting_0001";
 export const SECOND_ACCOUNTANT_ID = "appu_accounting_0002";
@@ -69,6 +75,7 @@ export class AccountingApiTestD1 {
     for (const migration of ACCOUNTING_MIGRATIONS) {
       this.raw.exec(readAccountingMigration(migration));
     }
+    installCommercialDepositApprovalExclusionContract(this.raw);
     const insert = this.raw.prepare(
       `INSERT INTO app_users (
          user_id, tenant_id, email_normalized, display_name, role, access_role,

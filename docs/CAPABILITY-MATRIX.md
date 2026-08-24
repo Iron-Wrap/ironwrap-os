@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 90,
-      "latest": "0114_dev_outbox_capture_kinds.sql"
+      "count": 93,
+      "latest": "0114_zz_restore_portal_decision_captures.sql"
     }
   },
   "test_observation_policy": {

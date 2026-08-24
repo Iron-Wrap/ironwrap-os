@@ -83,6 +83,7 @@ const allowedOptions = new Set([
   "--capability-matrix",
   "--clone-playbook",
   "--evidence",
+  "--migration-root",
   "--release-control-publication",
   "--worker-test-output",
 ]);
@@ -166,7 +167,9 @@ function repositoryCapabilityFacts() {
     .map((path) => JSON.parse(readFileSync(path, "utf8")));
   const child = doctypes.filter((doctype) => Boolean(doctype.istable)).length;
 
-  const migrationRoot = resolve(root, "workers-bus/migrations");
+  const migrationRoot = resolve(
+    options.get("--migration-root") ?? resolve(root, "workers-bus/migrations"),
+  );
   const migrations = readdirSync(migrationRoot)
     .filter((name) => /^\d{4}_.+\.sql$/.test(name))
     .sort();
@@ -184,13 +187,24 @@ function repositoryCapabilityFacts() {
   if (prefixes[0] !== 1) {
     fail("workers-bus/migrations: numbered SQL migrations must start at 0001");
   }
-  const duplicate = prefixes.find(
-    (prefix, index) => index > 0 && prefix === prefixes[index - 1],
-  );
-  if (duplicate !== undefined) {
-    fail(
-      `workers-bus/migrations: duplicate migration number ${String(duplicate).padStart(4, "0")}`,
-    );
+  const recoveryCompanions = new Set([
+    "0110_zz_stage_portal_decision_captures.sql",
+    "0114_zy_work_package_worker_ack_backfill.sql",
+    "0114_zz_restore_portal_decision_captures.sql",
+  ]);
+  const migrationsByPrefix = new Map();
+  for (const migration of migrations) {
+    const prefix = migration.slice(0, 4);
+    const names = migrationsByPrefix.get(prefix) ?? [];
+    names.push(migration);
+    migrationsByPrefix.set(prefix, names);
+  }
+  for (const [prefix, names] of migrationsByPrefix) {
+    if (names.length <= 1) continue;
+    const ordinary = names.filter((name) => !recoveryCompanions.has(name));
+    if (ordinary.length !== 1) {
+      fail(`workers-bus/migrations: duplicate migration number ${prefix}`);
+    }
   }
   if (prefixes.some((prefix, index) => index > 0 && prefix < prefixes[index - 1])) {
     fail(

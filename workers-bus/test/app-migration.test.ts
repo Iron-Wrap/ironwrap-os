@@ -3,6 +3,40 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
+async function d1MigrationNames(): Promise<string[]> {
+  return (await readdir(new URL("../migrations/", import.meta.url)))
+    .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+    .sort();
+}
+
+async function applyD1Migration(
+  db: DatabaseSync,
+  migration: string,
+): Promise<void> {
+  if (migration === "0038_app_access_roles.sql") {
+    db.prepare(
+      `INSERT INTO app_users
+        (user_id, tenant_id, email_normalized, display_name, role, active,
+         created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'ops', 1, ?, ?, ?)`,
+    ).run(
+      "appu_legacy_ops_0001",
+      "ironwrap",
+      "legacy-ops@example.com",
+      "Legacy Operations",
+      "owner@example.com",
+      "2026-08-13T11:59:00.000Z",
+      "2026-08-13T11:59:00.000Z",
+    );
+  }
+  db.exec(
+    await readFile(
+      new URL(`../migrations/${migration}`, import.meta.url),
+      "utf8",
+    ),
+  );
+}
+
 test("0011 auth migration contains every readiness artifact and never stores raw tokens", async () => {
   const sql = await readFile(
     new URL("../migrations/0011_app_bff_auth.sql", import.meta.url),
@@ -2113,11 +2147,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
-    const migrations = (
-      await readdir(new URL("../migrations/", import.meta.url))
-    )
-      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
-      .sort();
+    const migrations = await d1MigrationNames();
     // The chain starts at 0001 and is unique and increasing, but it is not contiguous: the
     // service lane takes 0056, the IRO-62 forward repair takes 0057, and the IRO-52 money lane
     // takes 0058 (intents), 0059 (tax snapshots), 0060 (observations and verdicts) and 0061
@@ -2147,13 +2177,17 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // native design projection, 0106 native gate clearance and option packages, 0107
     // per-worker acknowledgement snapshot and portal confirmation, 0108 job-file index, 0109
     // the CRM import ledger, and 0110 the tenant company profile, append-only revisions, and
-    // per-person notification preferences. 0111 is the office user-invitation ledger, 0112
-    // adds operator-search indexes, 0113 adds the pipeline board, and 0114 preserves both
-    // development capture kinds. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
-    // collision numbers, not missing files.
-    assert.equal(migrations.length, 90);
+    // per-person notification preferences. 0110_zz stages portal captures around the shipped
+    // 0111 office user-invitation rebuild; 0112 adds operator-search indexes, 0113 adds the
+    // pipeline board, and 0114 plus its ordered repairs preserve both development capture kinds
+    // and backfill the historical Work Package acknowledgement projection. The 0070–0078 and
+    // 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
+    assert.equal(migrations.length, 93);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0114_dev_outbox_capture_kinds.sql");
+    assert.equal(
+      migrations.at(-1),
+      "0114_zz_restore_portal_decision_captures.sql",
+    );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2234,8 +2268,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // and two idx_% indexes; its remaining uniqueness is expressed as table constraints, so it
     // adds no trigger. 0111 adds the office invitation ledger and its query indexes; 0112 adds
     // operator-search indexes; 0113 adds the five pipeline-board tables, seven named indexes,
-    // and its version/identity/append-only guards. 0114 rebuilds the dev-only capture table once
-    // more to preserve both capture kinds and is count-neutral.
+    // and its version/identity/append-only guards. The 0110_zz/0114_zz staging pair, 0114's
+    // dev-outbox rebuild, and the 0114_zy acknowledgement backfill are all count-neutral.
     assert.deepEqual(
       { ...counts },
       { tables: 202, indexes: 306, triggers: 487 },
@@ -2780,44 +2814,52 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
   }
 });
 
-test("0107 backfills acknowledged Work Package events before projecting new acknowledgements", async () => {
+test("0114_zy backfills a database that already applied historical 0107", async () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
-    const migrations = (
-      await readdir(new URL("../migrations/", import.meta.url))
-    )
-      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
-      .sort();
-    const pendingMigrations = [
-      "0107_work_package_multi_worker_and_portal_confirm.sql",
-      "0108_operating_job_file_index.sql",
-      "0114_dev_outbox_capture_kinds.sql",
-    ];
-    assert.deepEqual(
-      pendingMigrations.filter((name) => migrations.includes(name)),
-      pendingMigrations,
+    const migrations = await d1MigrationNames();
+    const shippedMigration =
+      "0107_work_package_multi_worker_and_portal_confirm.sql";
+    const backfillMigration = "0114_zy_work_package_worker_ack_backfill.sql";
+    const shippedIndex = migrations.indexOf(shippedMigration);
+    const backfillIndex = migrations.indexOf(backfillMigration);
+    assert.notEqual(shippedIndex, -1);
+    assert.equal(backfillIndex > shippedIndex, true);
+
+    for (const name of migrations.slice(0, shippedIndex)) {
+      await applyD1Migration(db, name);
+    }
+
+    const current0107Sql = await readFile(
+      new URL(`../migrations/${shippedMigration}`, import.meta.url),
+      "utf8",
     );
-    const pending = new Set(pendingMigrations);
-    for (const name of migrations.filter((candidate) => !pending.has(candidate))) {
-      db.exec(
-        await readFile(
-          new URL(`../migrations/${name}`, import.meta.url),
-          "utf8",
-        ),
-      );
-    }
-    for (const table of ["app_user_invites", "pipeline_cards"]) {
-      assert.equal(
-        (
-          db.prepare(
-            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?",
-          ).get(table) as { count: number }
-        ).count,
-        1,
-        `${table} must already exist before 0107 is applied`,
-      );
-    }
+    const historicalBackfill = `INSERT INTO work_package_worker_acknowledgements (
+  tenant_id, work_package_id, work_package_version, actor_user_id, actor_role,
+  event_id, device_action_id, occurred_at, created_at
+)
+SELECT
+  tenant_id, work_package_id, work_package_version, actor_user_id, actor_role,
+  event_id, device_action_id, occurred_at, created_at
+FROM work_package_events
+WHERE event_kind = 'acknowledged';
+
+`;
+    const currentKinds =
+      "('magic_link', 'contract_acceptance', 'portal_decision_confirmation', 'user_invite')";
+    const historicalKinds =
+      "('magic_link', 'contract_acceptance', 'portal_decision_confirmation')";
+    assert.equal(current0107Sql.includes(historicalBackfill), true);
+    assert.equal(current0107Sql.includes(currentKinds), true);
+    const historical0107Sql = current0107Sql
+      .replace(historicalBackfill, "")
+      .replace(currentKinds, historicalKinds);
+    assert.doesNotMatch(
+      historical0107Sql,
+      /\)\nSELECT\n  tenant_id, work_package_id, work_package_version, actor_user_id, actor_role,/,
+    );
+    assert.doesNotMatch(historical0107Sql, /user_invite/);
 
     const issuedAt = "2026-08-20T08:00:00.000Z";
     const acknowledgedAt = "2026-08-20T08:01:00.000Z";
@@ -2974,26 +3016,34 @@ test("0107 backfills acknowledged Work Package events before projecting new ackn
     );
     assert.equal(
       (
-        db.prepare(
-          "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
-        ).get(workPackageId) as { status: string }
+        db
+          .prepare(
+            "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
+          )
+          .get(workPackageId) as { status: string }
       ).status,
       "Acknowledged",
     );
 
-    const migrationSql = await readFile(
-      new URL(`../migrations/${pendingMigrations[0]}`, import.meta.url),
+    db.exec(historical0107Sql);
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
+          )
+          .get() as { count: number }
+      ).count,
+      0,
+      "historical 0107 must remain immutable and cannot backfill an older event",
+    );
+
+    const backfillSql = await readFile(
+      new URL(`../migrations/${backfillMigration}`, import.meta.url),
       "utf8",
     );
-    for (const name of pendingMigrations) {
-      db.exec(
-        name === pendingMigrations[0]
-          ? migrationSql
-          : await readFile(
-              new URL(`../migrations/${name}`, import.meta.url),
-              "utf8",
-            ),
-      );
+    for (const name of migrations.slice(shippedIndex + 1)) {
+      await applyD1Migration(db, name);
     }
 
     const acknowledgement = db
@@ -3019,38 +3069,46 @@ test("0107 backfills acknowledged Work Package events before projecting new ackn
     );
     assert.equal(
       (
-        db.prepare(
-          "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
-        ).get() as { count: number }
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
+          )
+          .get() as { count: number }
       ).count,
       1,
     );
     assert.throws(
       () =>
-        db.prepare(
-          `UPDATE work_package_worker_acknowledgements
+        db
+          .prepare(
+            `UPDATE work_package_worker_acknowledgements
               SET actor_role = 'Foreman'
             WHERE event_id = 'wpe_upgrade_ack_0001'`,
-        ).run(),
+          )
+          .run(),
       /work_package_worker_ack_append_only/,
     );
     assert.throws(
       () =>
-        db.prepare(
-          `DELETE FROM work_package_worker_acknowledgements
+        db
+          .prepare(
+            `DELETE FROM work_package_worker_acknowledgements
             WHERE event_id = 'wpe_upgrade_ack_0001'`,
-        ).run(),
+          )
+          .run(),
       /work_package_worker_ack_append_only/,
     );
     assert.throws(
       () =>
-        db.prepare(
-          `INSERT INTO work_package_worker_acknowledgements
+        db
+          .prepare(
+            `INSERT INTO work_package_worker_acknowledgements
             (tenant_id, work_package_id, work_package_version, actor_user_id,
              actor_role, event_id, device_action_id, occurred_at, created_at)
            VALUES ('ironwrap', ?, 1, ?, 'Installer', 'wpe_upgrade_ack_duplicate',
                    'dact_upgrade_ack_duplicate', ?, ?)`,
-        ).run(workPackageId, workerUserId, acknowledgedAt, acknowledgedAt),
+          )
+          .run(workPackageId, workerUserId, acknowledgedAt, acknowledgedAt),
       /UNIQUE constraint failed/,
     );
 
@@ -3073,25 +3131,226 @@ test("0107 backfills acknowledged Work Package events before projecting new ackn
     );
     assert.equal(
       (
-        db.prepare(
-          "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
-        ).get(workPackageId) as { status: string }
+        db
+          .prepare(
+            "SELECT status FROM work_packages WHERE tenant_id = 'ironwrap' AND work_package_id = ?",
+          )
+          .get(workPackageId) as { status: string }
       ).status,
       "In Progress",
     );
 
-    // Wrangler records migrations by filename and applies each once. A manual
-    // second application must fail closed instead of masking duplicate truth.
-    assert.throws(() => db.exec(migrationSql), /UNIQUE constraint failed/);
+    // A retry after an interrupted deploy must be a clean no-op.
+    db.exec(backfillSql);
     assert.equal(
       (
-        db.prepare(
-          "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
-        ).get() as { count: number }
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM work_package_worker_acknowledgements",
+          )
+          .get() as { count: number }
       ).count,
       1,
     );
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    db.close();
+  }
+});
+
+test("a portal capture survives the complete upgrade from 0107 through 0114", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const migrations = await d1MigrationNames();
+    const shipped0107 = "0107_work_package_multi_worker_and_portal_confirm.sql";
+    const stageMigration = "0110_zz_stage_portal_decision_captures.sql";
+    const shipped0111 = "0111_office_user_invites.sql";
+    const restoreMigration = "0114_zz_restore_portal_decision_captures.sql";
+    const shipped0107Index = migrations.indexOf(shipped0107);
+    const restoreIndex = migrations.indexOf(restoreMigration);
+    assert.equal(
+      shipped0107Index < migrations.indexOf(stageMigration) &&
+        migrations.indexOf(stageMigration) < migrations.indexOf(shipped0111) &&
+        migrations.indexOf(shipped0111) < restoreIndex,
+      true,
+    );
+
+    for (const name of migrations.slice(0, shipped0107Index + 1)) {
+      await applyD1Migration(db, name);
+    }
+
+    const capture = {
+      capture_id: "capture_portal_upgrade_0001",
+      kind: "portal_decision_confirmation",
+      recipient: "owner@example.com",
+      href: "http://localhost/customer/decision/capture-0001",
+      created_at: "2026-08-20T09:00:00.000Z",
+    };
+    db.prepare(
+      `INSERT INTO dev_outbox (capture_id, kind, recipient, href, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      capture.capture_id,
+      capture.kind,
+      capture.recipient,
+      capture.href,
+      capture.created_at,
+    );
+
+    for (const name of migrations.slice(
+      shipped0107Index + 1,
+      restoreIndex + 1,
+    )) {
+      await applyD1Migration(db, name);
+      if (name === stageMigration) {
+        assert.equal(
+          (
+            db.prepare("SELECT COUNT(*) AS count FROM dev_outbox").get() as {
+              count: number;
+            }
+          ).count,
+          0,
+        );
+        assert.deepEqual(
+          {
+            ...(db
+              .prepare(
+                `SELECT capture_id, kind, recipient, href, created_at
+                   FROM dev_outbox_portal_0110_staging`,
+              )
+              .get() as Record<string, unknown>),
+          },
+          capture,
+        );
+      }
+    }
+
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT capture_id, kind, recipient, href, created_at
+               FROM dev_outbox`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      capture,
+    );
+    assert.equal(
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM sqlite_master
+            WHERE type = 'table' AND name = 'dev_outbox_portal_0110_staging'`,
+          )
+          .get() as { count: number }
+      ).count,
+      0,
+    );
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    db.close();
+  }
+});
+
+test("new interstitial repairs preserve a portal capture on a database already through 0114", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const migrations = await d1MigrationNames();
+    const stageMigration = "0110_zz_stage_portal_decision_captures.sql";
+    const acknowledgementMigration =
+      "0114_zy_work_package_worker_ack_backfill.sql";
+    const restoreMigration = "0114_zz_restore_portal_decision_captures.sql";
+    const repairs = [
+      stageMigration,
+      acknowledgementMigration,
+      restoreMigration,
+    ];
+    assert.deepEqual(
+      migrations.filter((name) => repairs.includes(name)),
+      repairs,
+    );
+
+    for (const name of migrations.filter(
+      (candidate) => !repairs.includes(candidate),
+    )) {
+      await applyD1Migration(db, name);
+    }
+
+    const capture = {
+      capture_id: "capture_portal_applied_0001",
+      kind: "portal_decision_confirmation",
+      recipient: "ops@example.com",
+      href: "http://localhost/customer/decision/capture-0002",
+      created_at: "2026-08-20T10:00:00.000Z",
+    };
+    db.prepare(
+      `INSERT INTO dev_outbox (capture_id, kind, recipient, href, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      capture.capture_id,
+      capture.kind,
+      capture.recipient,
+      capture.href,
+      capture.created_at,
+    );
+
+    await applyD1Migration(db, stageMigration);
+    await applyD1Migration(db, stageMigration);
+    assert.equal(
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM dev_outbox").get() as {
+          count: number;
+        }
+      ).count,
+      0,
+    );
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT capture_id, kind, recipient, href, created_at
+               FROM dev_outbox_portal_0110_staging`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      capture,
+    );
+
+    await applyD1Migration(db, acknowledgementMigration);
+    await applyD1Migration(db, restoreMigration);
+    assert.deepEqual(
+      {
+        ...(db
+          .prepare(
+            `SELECT capture_id, kind, recipient, href, created_at
+               FROM dev_outbox`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      capture,
+    );
+    assert.equal(
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM sqlite_master
+            WHERE type = 'table' AND name = 'dev_outbox_portal_0110_staging'`,
+          )
+          .get() as { count: number }
+      ).count,
+      0,
+    );
+    assert.equal(
+      (
+        db.prepare("PRAGMA integrity_check").get() as {
+          integrity_check: string;
+        }
+      ).integrity_check,
+      "ok",
+    );
   } finally {
     db.close();
   }

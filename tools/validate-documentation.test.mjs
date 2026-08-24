@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -17,6 +17,7 @@ const releaseControlPublication = resolve(
   root,
   "docs/release-control-publication.json",
 );
+const migrations = resolve(root, "workers-bus/migrations");
 
 // The gate is exercised against a temporary copy, never the tracked file: a test
 // that edits the real runbook leaves the worktree dirty when it crashes, and the
@@ -71,6 +72,36 @@ test("documentation gate rejects a deliberately stale capability count", () => {
       new RegExp(
         `stale Frappe DocTypes total; contract ${declared - 1}, repository ${declared}`,
       ),
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("documentation gate permits only the exact forward-repair migration companions", () => {
+  const accepted = spawnSync(process.execPath, [validator], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(accepted.status, 0, accepted.stderr);
+
+  const temp = mkdtempSync(join(tmpdir(), "ironwrap-migration-duplicate-"));
+  try {
+    const copy = join(temp, "migrations");
+    cpSync(migrations, copy, { recursive: true });
+    writeFileSync(
+      join(copy, "0114_unapproved_duplicate.sql"),
+      "-- Deliberate unapproved duplicate for the documentation gate.\n",
+    );
+    const rejected = spawnSync(
+      process.execPath,
+      [validator, "--migration-root", copy],
+      { cwd: root, encoding: "utf8" },
+    );
+    assert.notEqual(rejected.status, 0);
+    assert.match(
+      rejected.stderr,
+      /workers-bus\/migrations: duplicate migration number 0114/,
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });

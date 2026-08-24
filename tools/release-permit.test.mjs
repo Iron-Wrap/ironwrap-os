@@ -1310,7 +1310,7 @@ test("migration inventory is ordered and expand-contract only", async () => {
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
   assert.equal(
     migrations.ordered.at(-1),
-    "0114_dev_outbox_capture_kinds.sql",
+    "0114_zz_restore_portal_decision_captures.sql",
   );
 });
 

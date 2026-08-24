@@ -123,9 +123,9 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
   }
 
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 209],
+    ["REQUIRED_TABLE_COUNT", 210],
     ["REQUIRED_INDEX_COUNT", 324],
-    ["REQUIRED_TRIGGER_COUNT", 505],
+    ["REQUIRED_TRIGGER_COUNT", 510],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

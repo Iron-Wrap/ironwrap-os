@@ -425,7 +425,7 @@ export async function applyAccountingIntentCommand(
   const requestFingerprintSha256 = await sha256Hex(canonicalJson(input.request));
 
   const existing = await env.DB.prepare(
-    `SELECT receipt_id, intent_id, operation, request_fingerprint_sha256
+    `SELECT receipt_id, intent_id, operation, request_fingerprint_sha256, actor_user_id
        FROM accounting_intent_command_receipts
       WHERE tenant_id = ? AND idempotency_key_sha256 = ?`,
   ).bind(input.tenantId, idempotencyKeySha256).first<{
@@ -433,12 +433,14 @@ export async function applyAccountingIntentCommand(
     intent_id: string;
     operation: string;
     request_fingerprint_sha256: string;
+    actor_user_id: string;
   }>();
   if (existing) {
     if (
       existing.request_fingerprint_sha256 !== requestFingerprintSha256
       || existing.intent_id !== input.intentId
       || existing.operation !== input.operation
+      || existing.actor_user_id !== input.actorUserId
     ) {
       throw new AccountingIntentError("accounting_intent_command_conflict");
     }
@@ -459,6 +461,20 @@ export async function applyAccountingIntentCommand(
   }
   if (input.operation === "approve" && intent.derived_by_user_id === input.actorUserId) {
     throw new AccountingIntentError("accounting_intent_separation_of_duty");
+  }
+  if (
+    input.operation === "approve"
+    && intent.kind === "deposit_invoice"
+    && intent.derived_by_actor_kind === "agent"
+  ) {
+    const recoveryRequester = await env.DB.prepare(
+      `SELECT request_id FROM commercial_deposit_approval_exclusions
+        WHERE tenant_id = ? AND intent_id = ? AND actor_user_id = ?
+        LIMIT 1`,
+    ).bind(input.tenantId, input.intentId, input.actorUserId).first<{ request_id: string }>();
+    if (recoveryRequester) {
+      throw new AccountingIntentError("accounting_intent_separation_of_duty");
+    }
   }
 
   try {

@@ -503,6 +503,14 @@ test("a replayed approve is a replay; the same key with a different body is a co
   assert.equal(replay.body.replayed, true);
   assert.equal((replay.body.intent as Record<string, unknown>).version, 2);
 
+  const otherActor = await call(env, "accounting", "POST", path, {
+    body: { version: 1 },
+    userId: SECOND_ACCOUNTANT_ID,
+    idempotencyKey: "idem-approve-0000000001",
+  });
+  assert.equal(otherActor.status, 409);
+  assert.equal(otherActor.body.error, "accounting_intent_command_conflict");
+
   const conflicting = await call(env, "accounting", "POST", path, {
     body: { version: 2 }, idempotencyKey: "idem-approve-0000000001",
   });
@@ -629,6 +637,38 @@ test("one session cannot derive and then approve the same intent; a second accou
   assert.equal(secondAccountant.status, 202, JSON.stringify(secondAccountant.body));
   assert.equal(
     (await readAccountingIntent(env, TENANT, intentId))?.approved_by_user_id,
+    SECOND_ACCOUNTANT_ID,
+  );
+});
+
+test("the commercial recovery requester route is separated from deposit approval", async () => {
+  const { env, db } = apiTestEnv();
+  const { intent } = await deriveScenarioIntent(env, {
+    intentId: "acct-intent:job-0001:commercial-recovery-sod",
+  });
+  db.raw.prepare(
+    `INSERT INTO commercial_deposit_approval_exclusions
+       (request_id, tenant_id, intent_id, actor_user_id)
+     VALUES (?, ?, ?, ?)`,
+  ).run("commercial-deposit-reconcile:route-sod", TENANT, intent.intent_id, ACCOUNTANT_ID);
+
+  const path = `/api/v1/accounting/intents/${encodeURIComponent(intent.intent_id)}/approve`;
+  const requester = await call(env, "accounting", "POST", path, {
+    body: { version: 1 },
+    idempotencyKey: "idem-commercial-recovery-sod-requester",
+  });
+  assert.equal(requester.status, 409);
+  assert.equal(requester.body.error, "accounting_intent_separation_of_duty");
+  assert.equal((await readAccountingIntent(env, TENANT, intent.intent_id))?.state, "pending_review");
+
+  const independentApprover = await call(env, "accounting", "POST", path, {
+    body: { version: 1 },
+    idempotencyKey: "idem-commercial-recovery-sod-approver",
+    userId: SECOND_ACCOUNTANT_ID,
+  });
+  assert.equal(independentApprover.status, 202, JSON.stringify(independentApprover.body));
+  assert.equal(
+    (await readAccountingIntent(env, TENANT, intent.intent_id))?.approved_by_user_id,
     SECOND_ACCOUNTANT_ID,
   );
 });

@@ -15,7 +15,10 @@ import {
   ensureCommercialDepositDerivation,
   type CommercialDepositDerivationRecord,
 } from "../src/commercial-deposit.ts";
-import type { AccountingIntentRecord } from "../src/accounting-intents.ts";
+import {
+  readAccountingIntent,
+  type AccountingIntentRecord,
+} from "../src/accounting-intents.ts";
 import { taxForSubtotal } from "../src/native-final-invoice-producer.ts";
 import {
   derivePhase,
@@ -28,6 +31,8 @@ const PUBLIC_ORIGIN = "https://app.example.invalid";
 const OWNER_ID = "appu_owner_0001";
 const OPS_ID = "appu_ops_0001";
 const OTHER_OPS_ID = "appu_ops_0002";
+const ACCOUNTANT_ID = "appu_accounting_0001";
+const SECOND_ACCOUNTANT_ID = "appu_accounting_0002";
 const CUSTOMER_EMAIL = "customer@example.invalid";
 const EVIDENCE = [{
   ref: "r2://technical-reference/iro208-commercial-reference.json",
@@ -66,6 +71,8 @@ class SqliteD1 {
     insert.run(OWNER_ID, TENANT, "owner@example.invalid", "Owner", "owner", "owner", "owner@example.invalid", now, now);
     insert.run(OPS_ID, TENANT, "ops@example.invalid", "Ops", "ops", "ops", "ops@example.invalid", now, now);
     insert.run(OTHER_OPS_ID, TENANT, "other-ops@example.invalid", "Other Ops", "ops", "ops", "other-ops@example.invalid", now, now);
+    insert.run(ACCOUNTANT_ID, TENANT, "accounting@example.invalid", "Accounting", "ops", "accounting", "accounting@example.invalid", now, now);
+    insert.run(SECOND_ACCOUNTANT_ID, TENANT, "second-accounting@example.invalid", "Second Accounting", "ops", "accounting", "second-accounting@example.invalid", now, now);
   }
 
   prepare(sql: string): SqliteStatement {
@@ -147,6 +154,15 @@ class MemoryR2 {
 
 class FakeIntegrations {
   readonly sentEmails: string[] = [];
+  readonly quickBooksCalls: Array<{
+    method: string;
+    url: string;
+    authorization: string | null;
+  }> = [];
+  readonly providerInvoices = new Map<string, Record<string, unknown>>();
+  readonly providerPayments = new Map<string, Record<string, unknown>>();
+  private readonly invoiceByRequestId = new Map<string, string>();
+  private loseNextInvoiceResponse = false;
   readonly mappingEntities: Record<string, Record<string, unknown>> = {
     Customer: {
       Id: "501", Active: true, SyncToken: "1", MetaData: { LastUpdatedTime: new Date().toISOString() },
@@ -199,7 +215,47 @@ class FakeIntegrations {
       if (!message) return Response.json({ error: "not_found" }, { status: 404 });
       return Response.json({ id: messageId, raw: Buffer.from(message).toString("base64url") });
     }
+    if (url.hostname === "sandbox-quickbooks.api.intuit.com") {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      this.quickBooksCalls.push({ method, url: url.href, authorization: headers.get("authorization") });
+    }
+    if (
+      url.hostname === "sandbox-quickbooks.api.intuit.com" &&
+      method === "POST" &&
+      /\/v3\/company\/[^/]+\/invoice$/u.test(url.pathname)
+    ) {
+      const requestId = url.searchParams.get("requestid");
+      if (!requestId) return Response.json({ Fault: { Error: [{ code: "400" }] } }, { status: 400 });
+      let invoiceId = this.invoiceByRequestId.get(requestId);
+      if (!invoiceId) {
+        invoiceId = String(900 + this.providerInvoices.size + 1);
+        const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const total = String(payload.TotalAmt ?? "0.00");
+        this.providerInvoices.set(invoiceId, {
+          ...structuredClone(payload),
+          Id: invoiceId,
+          Balance: total,
+          LinkedTxn: [],
+        });
+        this.invoiceByRequestId.set(requestId, invoiceId);
+      }
+      if (this.loseNextInvoiceResponse) {
+        this.loseNextInvoiceResponse = false;
+        throw new Error("synthetic_provider_response_lost_after_commit");
+      }
+      return Response.json({ Invoice: this.providerInvoices.get(invoiceId) });
+    }
     if (url.hostname === "sandbox-quickbooks.api.intuit.com" && method === "GET") {
+      const transactionMatch = url.pathname.match(/\/(invoice|payment)\/([^/]+)$/u);
+      if (transactionMatch) {
+        const entityName = transactionMatch[1] === "invoice" ? "Invoice" : "Payment";
+        const entity = entityName === "Invoice"
+          ? this.providerInvoices.get(transactionMatch[2]!)
+          : this.providerPayments.get(transactionMatch[2]!);
+        return entity
+          ? Response.json({ [entityName]: structuredClone(entity) })
+          : Response.json({ Fault: { Error: [{ code: "610" }] } }, { status: 404 });
+      }
       const entityMatch = url.pathname.match(/\/(account|customer|item|taxcode|taxrate|term)\/([^/]+)$/u);
       if (entityMatch) {
         const entityName = {
@@ -211,6 +267,44 @@ class FakeIntegrations {
     }
     throw new Error(`unexpected synthetic integration request: ${method} ${url}`);
   };
+
+  loseNextProviderInvoiceResponse(): void {
+    this.loseNextInvoiceResponse = true;
+  }
+
+  settleInvoice(invoiceId: string): string {
+    const invoice = this.providerInvoices.get(invoiceId);
+    if (!invoice) throw new Error("synthetic_invoice_missing");
+    const paymentId = "902";
+    const total = String(invoice.TotalAmt);
+    this.providerPayments.set(paymentId, {
+      Id: paymentId,
+      CustomerRef: structuredClone(invoice.CustomerRef),
+      CurrencyRef: structuredClone(invoice.CurrencyRef),
+      TxnDate: invoice.TxnDate,
+      TotalAmt: total,
+      UnappliedAmt: "0.00",
+      Line: [{
+        Amount: total,
+        LinkedTxn: [{ TxnId: invoiceId, TxnType: "Invoice" }],
+      }],
+    });
+    this.providerInvoices.set(invoiceId, {
+      ...invoice,
+      Balance: "0.00",
+      LinkedTxn: [{ TxnId: paymentId, TxnType: "Payment" }],
+    });
+    return paymentId;
+  }
+
+  contradictInvoice(invoiceId: string): void {
+    const invoice = this.providerInvoices.get(invoiceId);
+    if (!invoice) throw new Error("synthetic_invoice_missing");
+    this.providerInvoices.set(invoiceId, {
+      ...invoice,
+      CustomerRef: { value: "provider-customer-mismatch" },
+    });
+  }
 }
 
 function env(db: SqliteD1, raw: MemoryR2, queue: QueueDouble): AppEnv {
@@ -374,7 +468,11 @@ function auth(role: AppRole, userId = role === "owner" ? OWNER_ID : role === "op
       session_hash: "c".repeat(64), session_created_at: now,
       session_expires_at: new Date(Date.now() + 86_400_000).toISOString(), revoked_at: null,
       device_id: null, device_proof_hash: null, user_id: userId, tenant_id: TENANT,
-      email_normalized: userId === OTHER_OPS_ID ? "other-ops@example.invalid" : `${role}@example.invalid`,
+      email_normalized: userId === OTHER_OPS_ID
+        ? "other-ops@example.invalid"
+        : userId === SECOND_ACCOUNTANT_ID
+          ? "second-accounting@example.invalid"
+          : `${role}@example.invalid`,
       display_name: userId === OTHER_OPS_ID ? "Other Ops" : role,
       role, frappe_user_id: userId === OTHER_OPS_ID ? "other-ops@example.invalid" : `${role}@example.invalid`,
       active: 1, created_by: "reference-test", created_at: now, updated_at: now,
@@ -676,6 +774,18 @@ function fromHex(value: string): Uint8Array {
   return Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
+function r2Snapshot(raw: MemoryR2): Array<[string, string, string]> {
+  return [...raw.objects.entries()]
+    .map(([key, value]) => [
+      key,
+      value.body,
+      Buffer.from(
+        ((value.object.checksums as { sha256: ArrayBuffer }).sha256),
+      ).toString("hex"),
+    ] as [string, string, string])
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
 async function reconcileTaxCase(input: {
   label: string;
   terms?: Record<string, unknown>;
@@ -718,6 +828,568 @@ async function configureDepositAccounting(h: Harness, ids: Identities, label: st
   );
   assert.equal(mapping.status, 200, await mapping.clone().text());
 }
+
+interface AcceptedDepositJourney {
+  ids: Identities;
+  acceptanceId: string;
+  intentId: string;
+}
+
+async function deriveAcceptedDeposit(
+  h: Harness,
+  label: string,
+): Promise<AcceptedDepositJourney> {
+  const ids = await intakeAndMaterialize(h);
+  await publishSyntheticContract(h, ids, TERMS, label);
+  const acceptanceId = await acceptPublicContract(h, await issuePortalLink(h, ids));
+  await configureDepositAccounting(h, ids, label);
+  const derived = await handleAuthenticatedRoute(
+    request(
+      "/api/v1/commercial/deposit-intents/reconcile",
+      { acceptance_id: acceptanceId },
+      `iro208b-${label}-derive-0001`,
+    ),
+    h.env,
+    auth("accounting", ACCOUNTANT_ID),
+  );
+  assert.equal(derived.status, 200, await derived.clone().text());
+  const body = await derived.json() as {
+    request: { state: string };
+    derivation: { state: string; intent_id: string | null };
+    intent: { intent_id: string } | null;
+  };
+  assert.equal(body.request.state, "derived");
+  assert.equal(body.derivation.state, "derived");
+  assert.ok(body.intent?.intent_id);
+  assert.equal(body.derivation.intent_id, body.intent!.intent_id);
+
+  const requestActor = h.db.raw.prepare(
+    `SELECT actor_user_id FROM commercial_deposit_derivation_requests
+      WHERE tenant_id = ? AND acceptance_id = ? ORDER BY created_at DESC LIMIT 1`,
+  ).get(TENANT, acceptanceId) as { actor_user_id: string };
+  assert.equal(requestActor.actor_user_id, ACCOUNTANT_ID);
+  assert.deepEqual(
+    { ...h.db.raw.prepare(
+      `SELECT exclusion.actor_user_id, exclusion.intent_id
+         FROM commercial_deposit_approval_exclusions AS exclusion
+         JOIN commercial_deposit_derivation_requests AS request
+           ON request.request_id = exclusion.request_id
+          AND request.tenant_id = exclusion.tenant_id
+        WHERE request.acceptance_id = ? AND exclusion.tenant_id = ?`,
+    ).get(acceptanceId, TENANT) },
+    { actor_user_id: ACCOUNTANT_ID, intent_id: body.intent!.intent_id },
+  );
+  return { ids, acceptanceId, intentId: body.intent!.intent_id };
+}
+
+async function approveAcceptedDeposit(
+  h: Harness,
+  intentId: string,
+  label: string,
+): Promise<void> {
+  const intent = await readAccountingIntent(h.env, TENANT, intentId);
+  assert.equal(intent?.state, "pending_review");
+  assert.equal(intent?.derived_by_actor_kind, "agent");
+  assert.equal(intent?.derived_by_user_id, null);
+
+  const denied = await handleAuthenticatedRoute(
+    request(
+      `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/approve`,
+      { version: intent!.version },
+      `iro208b-${label}-approve-denied-0001`,
+    ),
+    h.env,
+    auth("ops"),
+  );
+  assert.equal(denied.status, 403);
+
+  const requesterDenied = await handleAuthenticatedRoute(
+    request(
+      `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/approve`,
+      { version: intent!.version },
+      `iro208b-${label}-approve-requester-denied-0001`,
+    ),
+    h.env,
+    auth("accounting", ACCOUNTANT_ID),
+  );
+  assert.equal(requesterDenied.status, 409);
+  assert.deepEqual(await requesterDenied.json(), {
+    error: "accounting_intent_separation_of_duty",
+  });
+  assert.equal((await readAccountingIntent(h.env, TENANT, intentId))?.state, "pending_review");
+  assert.equal(
+    h.db.raw.prepare(
+      `SELECT COUNT(*) AS count FROM accounting_intent_command_receipts
+        WHERE tenant_id = ? AND intent_id = ? AND operation = 'approve'`,
+    ).get(TENANT, intentId)!.count,
+    0,
+  );
+
+  const approved = await handleAuthenticatedRoute(
+    request(
+      `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/approve`,
+      { version: intent!.version },
+      `iro208b-${label}-approve-0001`,
+    ),
+    h.env,
+    auth("accounting", SECOND_ACCOUNTANT_ID),
+  );
+  assert.equal(approved.status, 202, await approved.clone().text());
+  assert.equal((await readAccountingIntent(h.env, TENANT, intentId))?.state, "submission_pending");
+  const approval = h.db.raw.prepare(
+    `SELECT actor_user_id FROM accounting_intent_command_receipts
+      WHERE tenant_id = ? AND intent_id = ? AND operation = 'approve' LIMIT 1`,
+  ).get(TENANT, intentId) as { actor_user_id: string };
+  assert.equal(approval.actor_user_id, SECOND_ACCOUNTANT_ID);
+  assert.notEqual(approval.actor_user_id, ACCOUNTANT_ID);
+}
+
+async function jobPhase(h: Harness, jobId: string): Promise<{
+  phase: string;
+  facts: {
+    production: { all_required_gates_ready: boolean };
+    accounting: { deposit_reconciled: boolean };
+  };
+}> {
+  const response = await handleAuthenticatedRoute(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/jobs/${encodeURIComponent(jobId)}/phase`),
+    h.env,
+    auth("owner"),
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  return await response.json() as {
+    phase: string;
+    facts: {
+      production: { all_required_gates_ready: boolean };
+      accounting: { deposit_reconciled: boolean };
+    };
+  };
+}
+
+async function clearProductionGate(
+  h: Harness,
+  jobId: string,
+  gate: string,
+  body: Record<string, unknown>,
+  decisionId: string,
+  role: AppRole = "owner",
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await handleAuthenticatedRoute(
+    request(
+      `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
+      body,
+      decisionId,
+    ),
+    h.env,
+    auth(role),
+  );
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+/** Drive the same non-daily Worker entrypoint Wrangler invokes and await its whole lifetime. */
+async function runFrequentCron(h: Harness, scheduledTime: number): Promise<void> {
+  const pending: Promise<unknown>[] = [];
+  await worker.scheduled(
+    { cron: "*/5 * * * *", scheduledTime, noRetry() {} } as never,
+    h.env as never,
+    {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+    } as never,
+  );
+  assert.equal(pending.length, 1, "the frequent cron owns one composed waitUntil lifetime");
+  await Promise.all(pending);
+}
+
+test("IRO-208B closes the no-seed commercial path through reconciled deposit and production admission", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "commercial-closure");
+    assert.equal((await jobPhase(h, journey.ids.jobId)).phase, "deposit_pending");
+    assert.equal(
+      h.db.raw.prepare(
+        `SELECT COUNT(*) AS count FROM accounting_intents
+          WHERE tenant_id = ? AND roof_job_id = ? AND kind = 'deposit_invoice'`,
+      ).get(TENANT, journey.ids.jobId)!.count,
+      1,
+    );
+    await approveAcceptedDeposit(h, journey.intentId, "commercial-closure");
+
+    const preSettlement = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Deposit",
+      { basis: "deposit_settlement" },
+      "iro208b-deposit-pre-settlement-0001",
+    );
+    assert.equal(preSettlement.status, 409);
+    assert.equal(preSettlement.body.error, "deposit_settlement_not_observed");
+
+    await runFrequentCron(h, clockStart);
+    const open = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(open?.state, "partially_settled");
+    assert.equal(open?.settled_amount, "0.00");
+    assert.equal(open?.provider_reconciled_at, null);
+    const invoiceId = open?.provider_entity_id;
+    assert.ok(invoiceId);
+    assert.equal(h.fake.providerInvoices.size, 1);
+    const providerInvoice = h.fake.providerInvoices.get(invoiceId!);
+    assert.ok(providerInvoice);
+    assert.equal((providerInvoice.CustomerRef as { value: string }).value, "501");
+    assert.equal(String(providerInvoice.TotalAmt), "262.50");
+    const createCall = h.fake.quickBooksCalls.find(({ method, url }) =>
+      method === "POST" && new URL(url).pathname.endsWith("/invoice")
+    );
+    assert.ok(createCall);
+    assert.equal(
+      new URL(createCall.url).searchParams.get("requestid"),
+      open?.provider_request_id,
+    );
+
+    const partialGateBefore = h.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id,
+              cleared_by_user_id, evidence_refs_json
+         FROM operating_production_gates
+        WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+    ).get(TENANT, journey.ids.jobId);
+    const partialR2Before = r2Snapshot(h.raw);
+    const partialRefusal = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Deposit",
+      { basis: "deposit_settlement" },
+      "iro208b-deposit-partial-settlement-0001",
+    );
+    assert.equal(partialRefusal.status, 409);
+    assert.equal(partialRefusal.body.error, "deposit_settlement_not_observed");
+    assert.deepEqual(r2Snapshot(h.raw), partialR2Before);
+    assert.deepEqual(
+      h.db.raw.prepare(
+        `SELECT state, version, clearance_basis, clearance_decision_id,
+                cleared_by_user_id, evidence_refs_json
+           FROM operating_production_gates
+          WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+      ).get(TENANT, journey.ids.jobId),
+      partialGateBefore,
+    );
+
+    t.mock.timers.setTime(clockStart + 5 * 60_000);
+    await runFrequentCron(h, Date.now());
+    assert.equal(h.fake.providerInvoices.size, 1);
+    assert.equal(
+      h.fake.quickBooksCalls.filter(({ method, url }) =>
+        method === "POST" && new URL(url).pathname.endsWith("/invoice")
+      ).length,
+      1,
+    );
+
+    const effect = h.db.raw.prepare(
+      `SELECT state, attempt_count, provider_external_id, idempotency_key
+         FROM external_effects WHERE tenant_id = ? AND intent_id = ?`,
+    ).get(TENANT, journey.intentId) as {
+      state: string;
+      attempt_count: number;
+      provider_external_id: string;
+      idempotency_key: string;
+    };
+    assert.equal(effect.state, "succeeded");
+    assert.equal(effect.attempt_count, 1);
+    assert.equal(effect.provider_external_id, invoiceId);
+    assert.match(effect.idempotency_key, /^acct:commercial-deposit:/);
+    assert.equal((await jobPhase(h, journey.ids.jobId)).phase, "deposit_pending");
+
+    const refreshTickMs = clockStart + 24 * 60 * 60_000 + 10 * 60_000;
+    t.mock.timers.setTime(refreshTickMs);
+    await runFrequentCron(h, Date.now());
+    const refreshPending = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(refreshPending?.state, "partially_settled");
+    assert.equal(refreshPending?.provider_reconciled_at, null);
+    assert.deepEqual(
+      { ...h.db.raw.prepare(
+        `SELECT state, bundle_version, refresh_lease_id, refresh_lease_expires_at
+           FROM quickbooks_connections
+          WHERE tenant_id = ? ORDER BY connected_at DESC LIMIT 1`,
+      ).get(TENANT) as Record<string, unknown> },
+      {
+        state: "connected",
+        bundle_version: 2,
+        refresh_lease_id: null,
+        refresh_lease_expires_at: null,
+      },
+    );
+
+    const paymentId = h.fake.settleInvoice(invoiceId!);
+    const reconciledAtMs = refreshTickMs + 5 * 60_000;
+    t.mock.timers.setTime(reconciledAtMs);
+    await runFrequentCron(h, Date.now());
+    assert.ok(h.fake.quickBooksCalls.some(({ method, url }) =>
+      method === "GET" && new URL(url).pathname.endsWith(`/invoice/${invoiceId}`)
+    ));
+    assert.ok(h.fake.quickBooksCalls.some(({ method, url }) =>
+      method === "GET" && new URL(url).pathname.endsWith(`/payment/${paymentId}`)
+    ));
+    const reconciled = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(reconciled?.state, "reconciled");
+    assert.equal(reconciled?.settled_amount, reconciled?.total_amount);
+    assert.equal(reconciled?.provider_reconciled_at, new Date(reconciledAtMs).toISOString());
+    const paymentObservation = h.db.raw.prepare(
+      `SELECT entity_id, intent_id, source FROM accounting_observations
+        WHERE tenant_id = ? AND entity_type = 'Payment' AND entity_id = ?`,
+    ).get(TENANT, paymentId) as { entity_id: string; intent_id: string | null; source: string };
+    assert.deepEqual({ ...paymentObservation }, {
+      entity_id: paymentId,
+      intent_id: null,
+      source: "sweep",
+    });
+    const linked = h.db.raw.prepare(
+      `SELECT linked_txn_type, linked_txn_id, amount_cents
+         FROM accounting_observation_links
+        WHERE tenant_id = ? AND linked_txn_type = 'Invoice' AND linked_txn_id = ?`,
+    ).get(TENANT, invoiceId) as {
+      linked_txn_type: string;
+      linked_txn_id: string;
+      amount_cents: number;
+    };
+    assert.equal(linked.amount_cents, 26_250);
+
+    const blocked = await jobPhase(h, journey.ids.jobId);
+    assert.equal(blocked.phase, "production_blocked");
+    assert.equal(blocked.facts.accounting.deposit_reconciled, true);
+    assert.equal(blocked.facts.production.all_required_gates_ready, false);
+
+    const forbiddenWaiver = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Materials",
+      { basis: "office_waiver", reason: "Synthetic materials waiver for repository proof only." },
+      "iro208b-materials-forbidden-0001",
+      "ops",
+    );
+    assert.equal(forbiddenWaiver.status, 403);
+    assert.equal(forbiddenWaiver.body.error, "production_gate_clearance_forbidden");
+
+    const depositDecision = "iro208b-deposit-settlement-0001";
+    const deposit = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Deposit",
+      { basis: "deposit_settlement" },
+      depositDecision,
+    );
+    assert.equal(deposit.status, 200);
+    assert.equal(deposit.body.clearance, "verified");
+    const depositGateEvidence = h.db.raw.prepare(
+      `SELECT evidence_refs_json
+         FROM operating_production_gates
+        WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+    ).get(TENANT, journey.ids.jobId) as { evidence_refs_json: string };
+    const receiptKey = (
+      JSON.parse(depositGateEvidence.evidence_refs_json) as { r2_key: string }
+    ).r2_key;
+    assert.match(receiptKey, /^production-gate-clearance\/v1\/[a-f0-9]{64}\.json$/);
+    const receipt = h.raw.objects.get(receiptKey);
+    assert.ok(receipt);
+    const receiptBody = JSON.parse(receipt!.body) as {
+      basis: string;
+      settlement_observed_at: string;
+      money_intent: { intent_id: string; provider_entity_id: string; state: string };
+    };
+    assert.equal(receiptBody.basis, "deposit_settlement");
+    assert.equal(receiptBody.settlement_observed_at, new Date(reconciledAtMs).toISOString());
+    assert.equal(receiptBody.money_intent.intent_id, journey.intentId);
+    assert.equal(receiptBody.money_intent.provider_entity_id, invoiceId);
+    assert.equal(receiptBody.money_intent.state, "reconciled");
+
+    const waiverReasons: Record<string, string> = {
+      Materials: "Synthetic materials readiness waived for repository composition proof.",
+      Safety: "Synthetic safety readiness waived for repository composition proof.",
+      Access: "Synthetic site access waived for repository composition proof.",
+      Weather: "Synthetic weather readiness waived for repository composition proof.",
+      Crew: "Synthetic crew readiness waived for repository composition proof.",
+    };
+    for (const [gate, reason] of Object.entries(waiverReasons)) {
+      const decisionId = `iro208b-${gate.toLowerCase()}-waiver-0001`;
+      const cleared = await clearProductionGate(
+        h,
+        journey.ids.jobId,
+        gate,
+        { basis: "office_waiver", reason },
+        decisionId,
+      );
+      assert.equal(cleared.status, 200, `${gate}: ${JSON.stringify(cleared.body)}`);
+      assert.equal(cleared.body.clearance, "waived");
+      const replayed = await clearProductionGate(
+        h,
+        journey.ids.jobId,
+        gate,
+        { basis: "office_waiver", reason },
+        decisionId,
+      );
+      assert.equal(replayed.status, 200);
+      assert.equal(replayed.body.replayed, true);
+    }
+    const depositReplay = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Deposit",
+      { basis: "deposit_settlement" },
+      depositDecision,
+    );
+    assert.equal(depositReplay.status, 200);
+    assert.equal(depositReplay.body.replayed, true);
+    assert.equal(h.raw.objects.get(receiptKey)!.body, receipt!.body);
+
+    const receiptChecksumBefore = Buffer.from(
+      ((receipt!.object.checksums as { sha256: ArrayBuffer }).sha256),
+    ).toString("hex");
+    const depositGateBeforeConflict = h.db.raw.prepare(
+      `SELECT state, version, clearance_basis, clearance_decision_id,
+              cleared_by_user_id, evidence_refs_json
+         FROM operating_production_gates
+        WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+    ).get(TENANT, journey.ids.jobId);
+    const conflictingReplay = await clearProductionGate(
+      h,
+      journey.ids.jobId,
+      "Deposit",
+      {
+        basis: "office_waiver",
+        reason: "A conflicting governed waiver must not replace the settlement decision.",
+      },
+      depositDecision,
+    );
+    assert.equal(conflictingReplay.status, 409);
+    assert.equal(conflictingReplay.body.error, "production_gate_clearance_replay_conflict");
+    const receiptAfterConflict = h.raw.objects.get(receiptKey)!;
+    assert.equal(receiptAfterConflict.body, receipt!.body);
+    assert.equal(
+      Buffer.from(
+        ((receiptAfterConflict.object.checksums as { sha256: ArrayBuffer }).sha256),
+      ).toString("hex"),
+      receiptChecksumBefore,
+    );
+    assert.deepEqual(
+      h.db.raw.prepare(
+        `SELECT state, version, clearance_basis, clearance_decision_id,
+                cleared_by_user_id, evidence_refs_json
+           FROM operating_production_gates
+          WHERE tenant_id = ? AND roof_job_id = ? AND gate = 'Deposit'`,
+      ).get(TENANT, journey.ids.jobId),
+      depositGateBeforeConflict,
+    );
+
+    const ready = await jobPhase(h, journey.ids.jobId);
+    assert.equal(ready.phase, "production_ready");
+    assert.equal(ready.facts.accounting.deposit_reconciled, true);
+    assert.equal(ready.facts.production.all_required_gates_ready, true);
+    assert.equal(h.fake.providerInvoices.size, 1);
+    assert.ok(h.fake.quickBooksCalls.every(({ authorization }) => authorization?.startsWith("Bearer ")));
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("IRO-208B keeps a lost provider create response uncertain and never duplicates the invoice", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "lost-provider-response");
+    await approveAcceptedDeposit(h, journey.intentId, "lost-provider-response");
+    h.fake.loseNextProviderInvoiceResponse();
+    await runFrequentCron(h, clockStart);
+    const uncertain = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(uncertain?.state, "uncertain");
+    assert.equal(uncertain?.provider_entity_id, null);
+    assert.equal(h.fake.providerInvoices.size, 1, "the provider committed exactly one invoice");
+
+    t.mock.timers.setTime(clockStart + 5 * 60_000);
+    await runFrequentCron(h, Date.now());
+    assert.equal(h.fake.providerInvoices.size, 1);
+    assert.equal(
+      h.fake.quickBooksCalls.filter(({ method, url }) =>
+        method === "POST" && new URL(url).pathname.endsWith("/invoice")
+      ).length,
+      1,
+    );
+    assert.deepEqual(
+      { ...h.db.raw.prepare(
+        `SELECT state, attempt_count, provider_external_id FROM external_effects
+          WHERE tenant_id = ? AND intent_id = ?`,
+      ).get(TENANT, journey.intentId) },
+      { state: "unknown", attempt_count: 1, provider_external_id: null },
+    );
+    assert.equal((await readAccountingIntent(h.env, TENANT, journey.intentId))?.provider_reconciled_at, null);
+    assert.equal(
+      h.db.raw.prepare(
+        `SELECT COUNT(*) AS count FROM accounting_intents
+          WHERE tenant_id = ? AND roof_job_id = ? AND kind = 'deposit_invoice'`,
+      ).get(TENANT, journey.ids.jobId)!.count,
+      1,
+    );
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("IRO-208B records a contradictory provider readback as mismatch without reconciliation", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "provider-contradiction");
+    await approveAcceptedDeposit(h, journey.intentId, "provider-contradiction");
+    await runFrequentCron(h, clockStart);
+    const partial = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(partial?.state, "partially_settled");
+    const invoiceId = partial?.provider_entity_id;
+    assert.ok(invoiceId);
+    h.fake.contradictInvoice(invoiceId!);
+
+    const staleTick = clockStart + 24 * 60 * 60_000 + 10 * 60_000;
+    t.mock.timers.setTime(staleTick);
+    await runFrequentCron(h, Date.now());
+    assert.equal(
+      (await readAccountingIntent(h.env, TENANT, journey.intentId))?.state,
+      "partially_settled",
+      "an unavailable refresh-race read is not accounting evidence",
+    );
+    const connection = h.db.raw.prepare(
+      `SELECT state, bundle_version, refresh_lease_id, refresh_lease_expires_at
+         FROM quickbooks_connections
+        WHERE tenant_id = ? ORDER BY connected_at DESC LIMIT 1`,
+    ).get(TENANT) as Record<string, unknown>;
+    assert.deepEqual({ ...connection }, {
+      state: "connected",
+      bundle_version: 2,
+      refresh_lease_id: null,
+      refresh_lease_expires_at: null,
+    });
+
+    t.mock.timers.setTime(staleTick + 5 * 60_000);
+    await runFrequentCron(h, Date.now());
+    const mismatched = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(mismatched?.state, "mismatch");
+    assert.equal(mismatched?.provider_reconciled_at, null);
+    assert.equal(
+      h.db.raw.prepare(
+        `SELECT reason_code FROM accounting_exceptions
+          WHERE tenant_id = ? AND intent_id = ? AND status = 'open'`,
+      ).get(TENANT, journey.intentId)!.reason_code,
+      "expected_observed_mismatch",
+    );
+    assert.equal(h.fake.providerInvoices.size, 1);
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
 
 test("0116 backfills shipped acceptances into the native activation and deposit queue", async () => {
   const h = setup("0115_company_profile_convergence.sql");

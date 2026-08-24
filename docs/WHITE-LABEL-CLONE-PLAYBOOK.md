@@ -128,7 +128,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0118_capability_readiness.sql`; `node tools/validate-documentation.mjs`
+   `0120_production_gate_clearance_scope.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -329,7 +329,7 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 97 D1 migrations through `0118_capability_readiness.sql` applied to the tenant database.
+- [ ] All 99 D1 migrations through `0120_production_gate_clearance_scope.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

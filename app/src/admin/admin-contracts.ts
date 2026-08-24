@@ -10,6 +10,10 @@ export function appUsersQueryKey(tenantId: string) {
   return ["app-users", tenantId] as const;
 }
 
+export function setupProgressQueryKey(tenantId: string) {
+  return ["setup-progress", tenantId] as const;
+}
+
 export const companyBrandLabelSchema = z.object({
   display_name: z.string(),
   short_name: z.string(),
@@ -25,6 +29,8 @@ export const companyLogoSchema = z.object({
 
 export const companyProfileSchema = z.object({
   tenant_id: z.string().min(1),
+  profile_version: z.number().int().nonnegative(),
+  is_default: z.boolean(),
   company_name: z.string(),
   brand_name: z.string(),
   service_area: z.string(),
@@ -38,22 +44,61 @@ export const companyProfileSchema = z.object({
   postal_code: z.string(),
   country: z.string(),
   brand_labels: z.record(z.string(), companyBrandLabelSchema),
+  time_zone: z.string(),
+  currency: z.string(),
+  week_start: z.enum(["sunday", "monday", "saturday"]),
+  logo_ref: z.string().nullable(),
   logo: companyLogoSchema.nullable(),
   updated_at: z.string().nullable(),
   updated_by: z.string().nullable(),
+  updated_by_user_id: z.string().nullable(),
 });
 
 export const publicBrandSchema = companyBrandLabelSchema.extend({ id: z.string().min(1) });
 
 export const companyProfileResponseSchema = z.object({
   version: z.literal(1),
+  read_model_generated_at: z.string(),
+  allowed_actions: z.array(z.string()),
   profile: companyProfileSchema,
+  defaults: companyProfileSchema,
+  missing_fields: z.array(z.string()),
+  week_starts: z.array(z.enum(["sunday", "monday", "saturday"])),
   logo_url: z.string().nullable(),
   logo_limits: z.object({
     max_bytes: z.number(),
     content_types: z.array(z.string()),
   }),
   public_brands: z.array(publicBrandSchema),
+});
+
+const setupStepStatusSchema = z.enum(["done", "in_progress", "skipped", "later"]);
+const setupStepSchema = z.object({
+  id: z.enum(["company", "people", "crew_phones", "money_and_intake", "notifications"]),
+  title: z.string(),
+  status: setupStepStatusSchema,
+  detail: z.string(),
+  requirements: z.array(
+    z.object({
+      id: z.string(),
+      met: z.boolean(),
+      applicable: z.boolean(),
+      detail: z.string(),
+    }),
+  ),
+});
+
+export const setupProgressResponseSchema = z.object({
+  version: z.literal(1),
+  read_model_generated_at: z.string(),
+  allowed_actions: z.array(z.string()),
+  progress: z.object({
+    generated_at: z.string(),
+    done: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    percent_complete: z.number().min(0).max(100),
+    steps: z.array(setupStepSchema),
+  }),
 });
 
 export const appUserSchema = z.object({
@@ -84,6 +129,8 @@ export const appUserMutationResponseSchema = z.object({
 export type CompanyProfile = z.infer<typeof companyProfileSchema>;
 export type CompanyProfileResponse = z.infer<typeof companyProfileResponseSchema>;
 export type PublicBrand = z.infer<typeof publicBrandSchema>;
+export type SetupProgressResponse = z.infer<typeof setupProgressResponseSchema>;
+export type SetupStep = z.infer<typeof setupStepSchema>;
 export type AppUser = z.infer<typeof appUserSchema>;
 
 /** The exact body `PUT /api/v1/admin/company-profile` accepts; extra keys are rejected server-side. */
@@ -101,6 +148,9 @@ export interface CompanyProfileInput {
   postal_code: string;
   country: string;
   brand_labels: Record<string, z.infer<typeof companyBrandLabelSchema>>;
+  time_zone: string;
+  currency: string;
+  week_start: "sunday" | "monday" | "saturday";
 }
 
 export function companyProfileInput(profile: CompanyProfile): CompanyProfileInput {
@@ -118,6 +168,9 @@ export function companyProfileInput(profile: CompanyProfile): CompanyProfileInpu
     postal_code: profile.postal_code,
     country: profile.country,
     brand_labels: profile.brand_labels,
+    time_zone: profile.time_zone,
+    currency: profile.currency,
+    week_start: profile.week_start,
   };
 }
 

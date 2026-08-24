@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { handleAppApi } from "../src/app-api.ts";
+import { handleAppApi, handleAuthenticatedRoute } from "../src/app-api.ts";
 import { handleCompanySetupRoute } from "../src/company-setup-api.ts";
 import type { AppRole } from "../src/app-types.ts";
 import {
@@ -76,6 +76,24 @@ test("an owner reads the deployment defaults with the actions they may take", as
   assert.ok(model.missing_fields.includes("phone"));
 });
 
+test("the production authenticated router reaches the canonical company profile contract", async () => {
+  const response = await handleAuthenticatedRoute(
+    request("GET", PROFILE_PATH),
+    env(new SqliteD1()),
+    auth("owner"),
+  );
+  const model = await payload<{
+    profile: { profile_version?: number };
+    defaults?: { company_name: string };
+    week_starts?: string[];
+  }>(response);
+
+  assert.equal(response.status, 200);
+  assert.equal(model.profile.profile_version, 0);
+  assert.equal(model.defaults?.company_name, "IronWrap OS");
+  assert.deepEqual(model.week_starts, ["sunday", "monday", "saturday"]);
+});
+
 test("a role without company authority cannot read or write the profile", async () => {
   const database = new SqliteD1({ seedUsers: ["owner", "sales"] });
   const read = await call(database, "sales", request("GET", PROFILE_PATH));
@@ -136,11 +154,7 @@ test("the profile body is validated key by key", async () => {
     [body(0, { time_zone: "Edmonton" }), "invalid_time_zone"],
     [body(0, { currency: "dollars" }), "invalid_currency"],
     [body(0, { week_start: "wednesday" }), "invalid_week_start"],
-    [body(0, { logo_ref: "https://evil.example.invalid/logo.png" }), "invalid_logo_ref"],
-    // Protocol-relative: a path by its first character, another origin once resolved.
-    [body(0, { logo_ref: "//evil.example.invalid/logo.png" }), "invalid_logo_ref"],
-    [body(0, { logo_ref: "" }), "invalid_logo_ref"],
-    [body(0, { logo_ref: 12 }), "invalid_logo_ref"],
+    [body(0, { logo_ref: "https://evil.example.invalid/logo.png" }), "unexpected_field"],
     [body(0, { expected_profile_version: -1 }), "invalid_expected_profile_version"],
     [body(0, { expected_profile_version: "1" }), "invalid_expected_profile_version"],
     ["not an object", "invalid_body"],
@@ -195,7 +209,7 @@ test("a valid save is readable, replayable, and refuses a stale version", async 
   assert.equal(saved.status, 200);
   assert.equal(savedModel.outcome, "updated");
   assert.equal(savedModel.profile.profile_version, 1);
-  assert.equal(savedModel.profile.logo_ref, "/public/company-logo");
+  assert.equal(savedModel.profile.logo_ref, null);
   assert.deepEqual(savedModel.missing_fields, []);
 
   const read = await call(database, "owner", request("GET", PROFILE_PATH));

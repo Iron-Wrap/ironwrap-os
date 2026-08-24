@@ -1,18 +1,6 @@
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
 import { handlePipelineRoute } from "./pipeline-board-api.ts";
 import {
-  companyLogoUrl,
-  parseCompanyLogoInput,
-  parseCompanyProfileInput,
-  publicBrandDescriptors,
-  removeCompanyLogo,
-  resolveCompanyProfile,
-  saveCompanyLogo,
-  saveCompanyProfile,
-  COMPANY_LOGO_CONTENT_TYPES,
-  COMPANY_LOGO_MAX_BYTES,
-} from "./company-profile.ts";
-import {
   ingestLead,
   officeLeadPayload,
   parseOfficeLead,
@@ -441,108 +429,6 @@ export async function handleAdminFirstOwnerBootstrap(
   });
 }
 
-async function handleCompanyProfileRead(
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
-  const appEnv = env as AppEnv;
-  const profile = await resolveCompanyProfile(appEnv, auth.session.tenant_id);
-  return privateAppJson(companyProfilePayload(appEnv, profile));
-}
-
-async function handleCompanyProfileWrite(
-  req: Request,
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const appEnv = env as AppEnv;
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const validated = parseCompanyProfileInput(parsed.value);
-  if (!validated.ok) return privateAppJson({ error: validated.error }, 400);
-  const profile = await saveCompanyProfile(
-    appEnv,
-    auth.session.tenant_id,
-    validated.value,
-    auth.session.email_normalized,
-    new Date().toISOString(),
-  );
-  return privateAppJson(companyProfilePayload(appEnv, profile));
-}
-
-async function handleCompanyLogoWrite(
-  req: Request,
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const appEnv = env as AppEnv;
-  // Base64 inflates by 4/3; the bound here is on the encoded body, the decoded bound is the one
-  // that decides (`COMPANY_LOGO_MAX_BYTES`), so an oversized upload is refused by size, not parse.
-  const parsed = await readJson(req, Math.ceil(COMPANY_LOGO_MAX_BYTES * 1.4) + 1024);
-  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const validated = parseCompanyLogoInput(parsed.value);
-  if (!validated.ok) return privateAppJson({ error: validated.error }, 400);
-  const profile = await saveCompanyLogo(
-    appEnv,
-    auth.session.tenant_id,
-    validated.value,
-    auth.session.email_normalized,
-    new Date().toISOString(),
-  );
-  return privateAppJson(companyProfilePayload(appEnv, profile));
-}
-
-async function handleCompanyLogoRemove(
-  req: Request,
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
-  if (!validAppCsrf(req, auth))
-    return privateAppJson({ error: "csrf_failed" }, 403);
-  const appEnv = env as AppEnv;
-  const profile = await removeCompanyLogo(
-    appEnv,
-    auth.session.tenant_id,
-    auth.session.email_normalized,
-    new Date().toISOString(),
-  );
-  return privateAppJson(companyProfilePayload(appEnv, profile));
-}
-
-function companyProfilePayload(
-  env: AppEnv,
-  profile: Awaited<ReturnType<typeof resolveCompanyProfile>>,
-): Record<string, unknown> {
-  const allowedBrands = (env.PUBLIC_ESTIMATE_ALLOWED_BRANDS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  return {
-    version: APP_API_VERSION,
-    profile,
-    logo_url: companyLogoUrl(profile),
-    logo_limits: {
-      max_bytes: COMPANY_LOGO_MAX_BYTES,
-      content_types: [...COMPANY_LOGO_CONTENT_TYPES],
-    },
-    // Which brand ids the Worker will accept on the public request form, and what they are called
-    // right now. The owner names them; only a deployment can add or remove one.
-    public_brands: publicBrandDescriptors(profile, allowedBrands),
-  };
-}
-
 /**
  * Taking a lead by hand (ELEC-158 B1 and ELEC-157 deferred item 9). It travels the same envelope,
  * dedup, audit and native-materialization path as `POST /ingest/<source>`; the only difference is
@@ -696,16 +582,6 @@ export async function handleAuthenticatedRoute(
     return revoked.ok
       ? privateAppJson(revoked.body)
       : privateAppJson({ error: revoked.error }, revoked.status);
-  }
-  if (url.pathname === "/api/v1/admin/company-profile") {
-    if (req.method === "GET") return await handleCompanyProfileRead(env, auth);
-    if (req.method === "PUT") return await handleCompanyProfileWrite(req, env, auth);
-    return privateAppJson({ error: "not_found" }, 404);
-  }
-  if (url.pathname === "/api/v1/admin/company-profile/logo") {
-    if (req.method === "PUT") return await handleCompanyLogoWrite(req, env, auth);
-    if (req.method === "DELETE") return await handleCompanyLogoRemove(req, env, auth);
-    return privateAppJson({ error: "not_found" }, 404);
   }
   if (req.method === "POST" && url.pathname === "/api/v1/sales/leads") {
     return await handleOfficeLeadCreate(req, env, auth, deps.ctx);

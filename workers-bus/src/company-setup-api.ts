@@ -35,9 +35,22 @@ import {
   type CompanyProfileWeekStart,
   type NotificationPreferenceFields,
 } from "./company-setup-store.ts";
+import {
+  COMPANY_LOGO_CONTENT_TYPES,
+  COMPANY_LOGO_MAX_BYTES,
+  companyLogoUrl,
+  parseCompanyLogoInput,
+  parseCompanyLogoRemovalInput,
+  parseCompanyProfileInput,
+  publicBrandDescriptors,
+  removeCompanyLogo,
+  saveCompanyLogo,
+  type CompanyProfile,
+} from "./company-profile.ts";
 import { publicEstimateConfiguration } from "./public-estimator.ts";
 
 const MAX_BODY_BYTES = 8 * 1024;
+const MAX_LOGO_BODY_BYTES = Math.ceil(COMPANY_LOGO_MAX_BYTES * 1.4) + 1024;
 
 /** Company setup is office work: the same two roles that may provision a teammate. */
 const COMPANY_READ_ROLES = new Set(["owner", "ops"]);
@@ -52,21 +65,17 @@ const COMPANY_WRITE_ROLES = new Set(["owner", "ops"]);
  * the setup checklist able to report a real "in progress" rather than demanding one
  * perfect save. What is still blank is reported by `missing_fields`, never guessed.
  */
-const COMPANY_PROFILE_TEXT_LIMITS = {
-  company_name: { min: 1, max: 120, optional: false },
-  brand_name: { min: 1, max: 80, optional: false },
-  phone: { min: 7, max: 32, optional: true },
-  address_line1: { min: 1, max: 160, optional: true },
-  city: { min: 1, max: 80, optional: true },
-  region: { min: 2, max: 80, optional: true },
-  postal_code: { min: 3, max: 24, optional: true },
-} as const;
-
 const COMPANY_PROFILE_BODY_KEYS = new Set([
-  "company_name", "brand_name", "phone", "address_line1", "city", "region",
-  "postal_code", "time_zone", "currency", "week_start", "logo_ref",
-  "expected_profile_version",
+  "company_name", "brand_name", "service_area", "phone", "email", "website",
+  "address_line1", "address_line2", "city", "region", "postal_code", "country",
+  "brand_labels", "time_zone", "currency", "week_start", "expected_profile_version",
 ]);
+
+const PUBLIC_PROFILE_BODY_KEYS = [
+  "company_name", "brand_name", "service_area", "phone", "email", "website",
+  "address_line1", "address_line2", "city", "region", "postal_code", "country",
+  "brand_labels",
+] as const;
 
 const NOTIFICATION_BODY_KEYS = new Set([
   "work_stops", "approvals_waiting", "daily_summary", "daily_summary_send_time",
@@ -76,15 +85,8 @@ const NOTIFICATION_BODY_KEYS = new Set([
 // so an owner cannot save a time zone the rest of the Worker would reject.
 const TIME_ZONE = /^[A-Za-z_]+(?:\/[A-Za-z0-9_+.-]+)+$/;
 const CURRENCY = /^[A-Z]{3}$/;
-const PHONE = /^[0-9 ()+.\-]{7,32}$/;
 const SEND_TIME = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{16,160}$/;
-// A same-origin path or a tenant R2 key. A third-party URL would let tenant
-// configuration point the app shell at an origin this Worker does not control. The
-// negative lookahead is what refuses `//host/logo.png`: a protocol-relative URL is
-// still a path by the first character and an off-origin request by the time a browser
-// resolves it.
-const LOGO_REF = /^(?:\/(?!\/)[A-Za-z0-9._:/?=&-]{0,299}|r2:\/\/[A-Za-z0-9._:/-]{1,294})$/;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -102,12 +104,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function readBody(
   req: Request,
+  maxBytes = MAX_BODY_BYTES,
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string; status: number }> {
-  if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) {
+  if (Number(req.headers.get("content-length") ?? "0") > maxBytes) {
     return { ok: false, error: "payload_too_large", status: 413 };
   }
   const text = await req.text();
-  if (text.length > MAX_BODY_BYTES) {
+  if (text.length > maxBytes) {
     return { ok: false, error: "payload_too_large", status: 413 };
   }
   try {
@@ -120,16 +123,6 @@ async function readBody(
 function idempotencyKey(req: Request): string | null {
   const value = req.headers.get("idempotency-key")?.trim() ?? "";
   return IDEMPOTENCY_KEY.test(value) ? value : null;
-}
-
-function boundedText(
-  value: unknown,
-  limits: { min: number; max: number; optional: boolean },
-): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return limits.optional ? "" : null;
-  return trimmed.length >= limits.min && trimmed.length <= limits.max ? trimmed : null;
 }
 
 /**
@@ -181,16 +174,11 @@ function parseCompanyProfileBody(value: unknown): ParsedProfile {
     if (!(key in value)) return { ok: false, error: `missing_${key}` };
   }
 
-  const text: Partial<Record<keyof typeof COMPANY_PROFILE_TEXT_LIMITS, string>> = {};
-  for (const [key, limits] of Object.entries(COMPANY_PROFILE_TEXT_LIMITS)) {
-    const parsed = boundedText(value[key], limits);
-    if (parsed === null) return { ok: false, error: `invalid_${key}` };
-    text[key as keyof typeof COMPANY_PROFILE_TEXT_LIMITS] = parsed;
-  }
-  const phone = text.phone as string;
-  if (phone && (!PHONE.test(phone) || phone.replace(/[^0-9]/g, "").length < 7)) {
-    return { ok: false, error: "invalid_phone" };
-  }
+  const publicFields = Object.fromEntries(
+    PUBLIC_PROFILE_BODY_KEYS.map((key) => [key, value[key]]),
+  );
+  const parsedPublicFields = parseCompanyProfileInput(publicFields);
+  if (!parsedPublicFields.ok) return parsedPublicFields;
 
   const timeZone = typeof value.time_zone === "string" ? value.time_zone.trim() : "";
   if (!TIME_ZONE.test(timeZone) || timeZone.length > 64) {
@@ -206,15 +194,6 @@ function parseCompanyProfileBody(value: unknown): ParsedProfile {
     return { ok: false, error: "invalid_week_start" };
   }
 
-  let logoRef: string | null = null;
-  if (value.logo_ref !== null) {
-    if (typeof value.logo_ref !== "string") return { ok: false, error: "invalid_logo_ref" };
-    logoRef = value.logo_ref.trim();
-    if (!logoRef || logoRef.length > 300 || !LOGO_REF.test(logoRef)) {
-      return { ok: false, error: "invalid_logo_ref" };
-    }
-  }
-
   const expected = value.expected_profile_version;
   if (!Number.isSafeInteger(expected) || (expected as number) < 0 ||
       (expected as number) > 1_000_000) {
@@ -225,17 +204,10 @@ function parseCompanyProfileBody(value: unknown): ParsedProfile {
     ok: true,
     expectedProfileVersion: expected as number,
     fields: {
-      company_name: text.company_name as string,
-      brand_name: text.brand_name as string,
-      phone: text.phone as string,
-      address_line1: text.address_line1 as string,
-      city: text.city as string,
-      region: text.region as string,
-      postal_code: text.postal_code as string,
+      ...parsedPublicFields.value,
       time_zone: timeZone,
       currency,
       week_start: weekStart as CompanyProfileWeekStart,
-      logo_ref: logoRef,
     },
   };
 }
@@ -292,6 +264,7 @@ export async function handleCompanySetupRoute(
   const url = new URL(req.url);
   const path = url.pathname;
   if (path !== "/api/v1/admin/company-profile" &&
+      path !== "/api/v1/admin/company-profile/logo" &&
       path !== "/api/v1/admin/setup-progress" &&
       path !== "/api/v1/notification-preferences") {
     return null;
@@ -317,6 +290,12 @@ export async function handleCompanySetupRoute(
     return await setupProgressRead(env, auth);
   }
 
+  if (path === "/api/v1/admin/company-profile/logo") {
+    if (req.method === "PUT") return await companyLogoWrite(req, env, auth);
+    if (req.method === "DELETE") return await companyLogoRemove(req, env, auth);
+    return json({ error: "method_not_allowed" }, 405);
+  }
+
   if (req.method === "GET") return await companyProfileRead(env, auth);
   if (req.method === "PUT") return await companyProfileWrite(req, env, auth);
   return json({ error: "method_not_allowed" }, 405);
@@ -325,14 +304,7 @@ export async function handleCompanySetupRoute(
 async function companyProfileRead(env: AppEnv, auth: AuthContext): Promise<Response> {
   try {
     const profile = await getCompanyProfile(env, auth.session.tenant_id);
-    return json(envelope(auth, {
-      profile,
-      // What the deployment supplies when nobody has answered yet, so a screen can
-      // show the difference between a default and a decision.
-      defaults: companyProfileDefaults(env, auth.session.tenant_id),
-      missing_fields: missingCompanyFields(profile),
-      week_starts: [...COMPANY_PROFILE_WEEK_STARTS],
-    }));
+    return json(companyProfileEnvelope(env, auth, profile));
   } catch (error) {
     return storeErrorResponse(error);
   }
@@ -365,16 +337,103 @@ async function companyProfileWrite(
       actorRole: auth.session.role,
       now: new Date().toISOString(),
     });
-    return json(envelope(auth, {
-      outcome: result.outcome,
-      profile: result.profile,
-      defaults: companyProfileDefaults(env, auth.session.tenant_id),
-      missing_fields: missingCompanyFields(result.profile),
-      week_starts: [...COMPANY_PROFILE_WEEK_STARTS],
-    }));
+    return json(companyProfileEnvelope(env, auth, result.profile, result.outcome));
   } catch (error) {
     return storeErrorResponse(error);
   }
+}
+
+async function companyLogoWrite(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!COMPANY_WRITE_ROLES.has(auth.session.role)) {
+    return json({ error: "company_profile_write_role_required" }, 403);
+  }
+  if (!validAppCsrf(req, auth)) return json({ error: "csrf_failed" }, 403);
+  const key = idempotencyKey(req);
+  if (!key) return json({ error: "idempotency_key_required" }, 400);
+  const parsedBody = await readBody(req, MAX_LOGO_BODY_BYTES);
+  if (!parsedBody.ok) return json({ error: parsedBody.error }, parsedBody.status);
+  const parsed = parseCompanyLogoInput(parsedBody.value);
+  if (!parsed.ok) return json({ error: parsed.error }, 400);
+
+  try {
+    const result = await saveCompanyLogo(env, auth.session.tenant_id, parsed.value, {
+      actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
+      idempotencyKey: key,
+      now: new Date().toISOString(),
+    });
+    return json(companyProfileEnvelope(env, auth, result.profile, result.outcome));
+  } catch (error) {
+    return storeErrorResponse(error);
+  }
+}
+
+async function companyLogoRemove(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!COMPANY_WRITE_ROLES.has(auth.session.role)) {
+    return json({ error: "company_profile_write_role_required" }, 403);
+  }
+  if (!validAppCsrf(req, auth)) return json({ error: "csrf_failed" }, 403);
+  const key = idempotencyKey(req);
+  if (!key) return json({ error: "idempotency_key_required" }, 400);
+  const parsedBody = await readBody(req);
+  if (!parsedBody.ok) return json({ error: parsedBody.error }, parsedBody.status);
+  const parsed = parseCompanyLogoRemovalInput(parsedBody.value);
+  if (!parsed.ok) return json({ error: parsed.error }, 400);
+
+  try {
+    const result = await removeCompanyLogo(
+      env,
+      auth.session.tenant_id,
+      parsed.expectedProfileVersion,
+      {
+        actorUserId: auth.session.user_id,
+        actorRole: auth.session.role,
+        idempotencyKey: key,
+        now: new Date().toISOString(),
+      },
+    );
+    return json(companyProfileEnvelope(env, auth, result.profile, result.outcome));
+  } catch (error) {
+    return storeErrorResponse(error);
+  }
+}
+
+function companyProfileEnvelope(
+  env: AppEnv,
+  auth: AuthContext,
+  profile: CompanyProfile,
+  outcome?: "updated" | "replayed",
+): Record<string, unknown> {
+  const defaults = companyProfileDefaults(env, auth.session.tenant_id);
+  const allowedBrands = (env.PUBLIC_ESTIMATE_ALLOWED_BRANDS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return envelope(auth, {
+    ...(outcome ? { outcome } : {}),
+    profile: profileView(profile),
+    defaults: profileView(defaults),
+    missing_fields: missingCompanyFields(profile),
+    week_starts: [...COMPANY_PROFILE_WEEK_STARTS],
+    logo_url: companyLogoUrl(profile),
+    logo_limits: {
+      max_bytes: COMPANY_LOGO_MAX_BYTES,
+      content_types: [...COMPANY_LOGO_CONTENT_TYPES],
+    },
+    public_brands: publicBrandDescriptors(profile, allowedBrands),
+  });
+}
+
+function profileView(profile: CompanyProfile): Record<string, unknown> {
+  return { ...profile, updated_by: profile.updated_by_user_id };
 }
 
 async function setupProgressRead(env: AppEnv, auth: AuthContext): Promise<Response> {

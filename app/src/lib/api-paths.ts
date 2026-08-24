@@ -25,6 +25,7 @@ export const API_PATHS = {
   adminAppUsers: "/api/v1/admin/app-users",
   adminCompanyProfile: "/api/v1/admin/company-profile",
   adminCompanyLogo: "/api/v1/admin/company-profile/logo",
+  adminSetupProgress: "/api/v1/admin/setup-progress",
   companyLogo: "/public/company-logo",
   salesLeads: "/api/v1/sales/leads",
   devicePairings: "/api/v1/device-pairings",

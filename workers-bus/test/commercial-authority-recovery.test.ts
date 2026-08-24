@@ -203,7 +203,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0114", () => {
+test("the full schema matches the recovery frontier through 0115", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -222,8 +222,12 @@ test("the full schema matches the recovery frontier through 0114", () => {
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    // 0113_pipeline_board_core.sql adds the five pipeline tables, their seven indexes, and the
-    // ten guards that keep a card's version honest and its transition trail append-only.
+    // 0111 adds the office invitation ledger: one table, two query indexes, and the partial
+    // unique index that keeps one invitation open per mailbox. 0113_pipeline_board_core.sql adds
+    // the five pipeline tables, their seven indexes, and the ten guards that keep a card's
+    // version honest and its transition trail append-only. 0115 forward-adds columns to the
+    // existing tenant profile and likewise changes no recovery-inventory object count; SQLite
+    // export/restore carries those columns with the row.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office

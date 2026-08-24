@@ -24,28 +24,41 @@ vi.mock("@tanstack/react-router", () => ({ Link: LinkStub }));
 
 function profileResponse(overrides: Record<string, unknown> = {}) {
   const { profile: profileOverrides, ...rest } = overrides;
+  const profile = {
+    tenant_id: "freshco",
+    profile_version: 0,
+    is_default: true,
+    company_name: "FreshCo Exteriors",
+    brand_name: "FreshCo",
+    service_area: "",
+    phone: "",
+    email: "",
+    website: "",
+    address_line1: "",
+    address_line2: "",
+    city: "",
+    region: "",
+    postal_code: "",
+    country: "",
+    brand_labels: {},
+    time_zone: "America/Edmonton",
+    currency: "CAD",
+    week_start: "monday" as const,
+    logo_ref: null,
+    logo: null,
+    updated_at: null,
+    updated_by: null,
+    updated_by_user_id: null,
+    ...(profileOverrides as Record<string, unknown> | undefined),
+  };
   return {
     version: 1 as const,
-    profile: {
-      tenant_id: "freshco",
-      company_name: "FreshCo Exteriors",
-      brand_name: "FreshCo",
-      service_area: "",
-      phone: "",
-      email: "",
-      website: "",
-      address_line1: "",
-      address_line2: "",
-      city: "",
-      region: "",
-      postal_code: "",
-      country: "",
-      brand_labels: {},
-      logo: null,
-      updated_at: null,
-      updated_by: null,
-      ...(profileOverrides as Record<string, unknown> | undefined),
-    },
+    read_model_generated_at: "2026-08-24T12:00:00.000Z",
+    allowed_actions: ["company_profile.read", "company_profile.update"],
+    profile,
+    defaults: { ...profile },
+    missing_fields: [],
+    week_starts: ["sunday", "monday", "saturday"] as const,
     logo_url: null,
     logo_limits: {
       max_bytes: 524288,
@@ -74,7 +87,12 @@ describe("CompanyProfilePage", () => {
     vi.mocked(saveCompanyProfile).mockImplementation(
       async (_session, input) =>
         profileResponse({
-          profile: { ...input, updated_at: "2026-08-22T12:00:00.000Z" },
+          profile: {
+            ...input,
+            profile_version: 1,
+            is_default: false,
+            updated_at: "2026-08-22T12:00:00.000Z",
+          },
         }) as never,
     );
     const user = userEvent.setup();
@@ -95,6 +113,7 @@ describe("CompanyProfilePage", () => {
       brand_name: "FreshCo",
       city: "Edmonton",
     });
+    expect(vi.mocked(saveCompanyProfile).mock.calls[0]![2]).toBe(0);
     expect(await screen.findByText("Company details saved")).toBeInTheDocument();
   });
 
@@ -132,11 +151,13 @@ describe("CompanyProfilePage", () => {
 
     await waitFor(() => expect(uploadCompanyLogo).toHaveBeenCalledOnce());
     expect(vi.mocked(uploadCompanyLogo).mock.calls[0]![1]!.contentType).toBe("image/png");
+    expect(vi.mocked(uploadCompanyLogo).mock.calls[0]![2]).toBe(0);
     const logo = await screen.findByAltText("FreshCo Exteriors logo");
     expect(logo).toHaveAttribute("src", "/public/company-logo?v=abc");
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(removeCompanyLogo).toHaveBeenCalledOnce());
+    expect(vi.mocked(removeCompanyLogo).mock.calls[0]![1]).toBe(0);
   });
 
   it("keeps a rejected logo out of the way of the rest of the form", async () => {

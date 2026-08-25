@@ -228,6 +228,7 @@ export interface FacetEstimatorReadyReceipt {
   design_revision: { id: string; sha256: string };
   operator_attestation: {
     actor_type: "owner" | "expert";
+    identity_assurance: "oidc";
     oidc_issuer: "https://accounts.google.com" | "accounts.google.com";
     oidc_subject_sha256: string;
   };
@@ -699,7 +700,11 @@ function assertEstimatorReadyReceipt(receipt: FacetEstimatorReadyReceipt): void 
     !isRecord(receipt.design_revision) || !IDENTIFIER.test(receipt.design_revision.id) ||
     !SHA256.test(receipt.design_revision.sha256) ||
     !isRecord(receipt.operator_attestation) ||
+    !sameKeys(receipt.operator_attestation, [
+      "actor_type", "identity_assurance", "oidc_issuer", "oidc_subject_sha256",
+    ]) ||
     !["owner", "expert"].includes(receipt.operator_attestation.actor_type) ||
+    receipt.operator_attestation.identity_assurance !== "oidc" ||
     !OIDC_ISSUERS.has(receipt.operator_attestation.oidc_issuer) ||
     !SHA256.test(receipt.operator_attestation.oidc_subject_sha256) ||
     !IDENTIFIER.test(receipt.destination_tenant_id) ||

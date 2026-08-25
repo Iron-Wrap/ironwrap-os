@@ -12,6 +12,7 @@ import {
 import {
   canonicalJson,
   facetV2DeliverySigningInput,
+  signFacetEstimatorReadyReceipt,
 } from "../src/facet-design-v2-protocol.ts";
 import {
   handleFacetEstimatorReadyIngest,
@@ -406,6 +407,15 @@ test("estimator-ready ingest accepts only the separate prequote authority and re
     assert.equal(first.status, 202);
     const firstJson = await first.json() as Record<string, unknown>;
     assert.equal((firstJson.receipt as Record<string, unknown>).result, "accepted");
+    assert.deepEqual(
+      (firstJson.receipt as Record<string, unknown>).operator_attestation,
+      {
+        actor_type: "owner",
+        identity_assurance: "oidc",
+        oidc_issuer: "https://accounts.google.com",
+        oidc_subject_sha256: "b".repeat(64),
+      },
+    );
     assert.equal(count(db, "facet_v2_estimator_ready_events"), 1);
     assert.equal(count(db, "facet_v2_estimator_ready_nonces"), 1);
     assert.equal(count(db, "facet_v2_estimator_ready_receipts"), 1);
@@ -444,6 +454,11 @@ test("estimator-ready ingest accepts only the separate prequote authority and re
     assert.equal(
       (nonMonotonicJson.receipt as Record<string, unknown>).detail_code,
       "estimator_ready_time_not_monotonic",
+    );
+    assert.equal(
+      ((nonMonotonicJson.receipt as Record<string, unknown>).operator_attestation as Record<string, unknown>)
+        .identity_assurance,
+      "oidc",
     );
 
     const rawKeysBeforeNonceConflict = [...raw.objects.keys()].sort();
@@ -559,6 +574,47 @@ test("estimator-ready ingest accepts only the separate prequote authority and re
   } finally {
     db.raw.close();
   }
+});
+
+test("estimator-ready receipt validation requires the OIDC identity assurance field", async () => {
+  const receipt = {
+    schema: "ironwrap.facet-estimator-ready-receipt.v1",
+    receipt_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    event_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    event_body_sha256: "c".repeat(64),
+    frozen_evidence_sha256: "d".repeat(64),
+    design_revision: { id: `facet-json-v1:${"e".repeat(64)}`, sha256: "e".repeat(64) },
+    operator_attestation: {
+      actor_type: "owner",
+      identity_assurance: "oidc",
+      oidc_issuer: "https://accounts.google.com",
+      oidc_subject_sha256: "f".repeat(64),
+    },
+    destination_tenant_id: "ironwrap",
+    result: "accepted",
+    policy_version: "facet-estimator-ready-test-v1",
+    occurred_at: "2027-01-15T08:00:00.000Z",
+    detail_code: "exact_prequote_project_association_verified",
+    idempotent_replay: false,
+  } as const;
+  const key = {
+    keyId: KEY_ID,
+    keyVersion: KEY_VERSION,
+    secret: SECRET,
+  };
+  await signFacetEstimatorReadyReceipt(receipt, key);
+  const missingAssurance = {
+    ...receipt,
+    operator_attestation: {
+      actor_type: receipt.operator_attestation.actor_type,
+      oidc_issuer: receipt.operator_attestation.oidc_issuer,
+      oidc_subject_sha256: receipt.operator_attestation.oidc_subject_sha256,
+    },
+  };
+  await assert.rejects(
+    () => signFacetEstimatorReadyReceipt(missingAssurance as never, key),
+    /facet_estimator_ready_receipt_invalid/,
+  );
 });
 
 test("estimator-ready ingest rejects route drift, association drift, and revoked authority", async () => {

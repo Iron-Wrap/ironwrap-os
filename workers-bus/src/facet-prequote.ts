@@ -878,6 +878,7 @@ export async function handleFacetEstimatorReadyIngest(
     design_revision: event.design_revision,
     operator_attestation: {
       actor_type: event.operator_attestation.actor.actor_type,
+      identity_assurance: event.operator_attestation.actor.identity_assurance,
       oidc_issuer: event.operator_attestation.actor.oidc_issuer,
       oidc_subject_sha256: event.operator_attestation.actor.oidc_subject_sha256,
     },

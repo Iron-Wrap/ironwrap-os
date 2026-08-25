@@ -195,6 +195,10 @@ import {
   FacetPrequoteError,
 } from "./facet-prequote.ts";
 import {
+  parseFacetLinkRevocationBody,
+  revokeFacetLink,
+} from "./facet-link-revocation.ts";
+import {
   admitCommercialPermit,
   commercialCommandFingerprint,
   CommercialAuthorityError,
@@ -791,6 +795,40 @@ export async function handleAuthenticatedRoute(
         { error: "facet_v2_evidence_store_unavailable" },
         502,
       );
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/v1/facet-link-revocations") {
+    if (!hasPermission(auth, "facet:launch") || auth.session.role !== "owner") {
+      return privateAppJson({ error: "facet_link_revocation_owner_required" }, 403);
+    }
+    if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+    const contentType = req.headers.get("content-type")
+      ?.toLowerCase()
+      .split(";", 1)[0]
+      .trim();
+    if (contentType !== "application/json") {
+      return privateAppJson({ error: "content_type_required" }, 415);
+    }
+    const parsed = await readJson(req, 2_048);
+    if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+    const body = parseFacetLinkRevocationBody(parsed.value);
+    if (!body) return privateAppJson({ error: "invalid_facet_link_revocation" }, 400);
+    try {
+      const result = await revokeFacetLink(env, {
+        ...body,
+        tenantId: auth.session.tenant_id,
+        actorUserId: auth.session.user_id,
+      });
+      if (result.kind === "rejected") {
+        return privateAppJson({ error: result.code }, result.status);
+      }
+      return privateAppJson({
+        version: APP_API_VERSION,
+        revocation: result.revocation,
+        ...(result.kind === "replayed" ? { replayed: true } : {}),
+      }, result.kind === "created" ? 201 : 200);
+    } catch {
+      return privateAppJson({ error: "facet_link_revocation_unavailable" }, 502);
     }
   }
   if (url.pathname.startsWith("/api/v1/facet-design-evidence/"))

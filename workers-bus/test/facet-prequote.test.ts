@@ -4,7 +4,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import type { AppEnv } from "../src/app-types.ts";
+import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import {
+  permissionsForRole,
+  type AppEnv,
+  type AuthContext,
+} from "../src/app-types.ts";
 import {
   importEstimatorEvidenceFromNativeSources,
   resolveNativeEstimatorAuthority,
@@ -194,6 +199,42 @@ function appEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
     }]),
     FACET_ESTIMATOR_READY_ROUTES_JSON: JSON.stringify([ROUTE]),
   } as AppEnv;
+}
+
+function officeAuth(): AuthContext {
+  return {
+    rawSessionToken: "s".repeat(43),
+    csrfToken: "csrf",
+    permissions: permissionsForRole("owner"),
+    session: {
+      session_hash: "a".repeat(64),
+      session_created_at: "2027-01-15T06:00:00.000Z",
+      session_expires_at: "2027-01-15T18:00:00.000Z",
+      revoked_at: null,
+      user_id: OWNER,
+      tenant_id: TENANT,
+      email_normalized: "owner@example.invalid",
+      display_name: "Prequote Owner",
+      role: "owner",
+      frappe_user_id: null,
+      active: 1,
+      created_by: "test-fixture",
+      created_at: "2027-01-15T06:00:00.000Z",
+      updated_at: "2027-01-15T06:00:00.000Z",
+    },
+  };
+}
+
+function revokeProjectRequest(projectLinkId: string, reasonCode = "project_rebound"): Request {
+  return new Request("https://app.example.invalid/api/v1/facet-link-revocations", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-csrf-token": "csrf" },
+    body: JSON.stringify({
+      link_kind: "project",
+      link_id: projectLinkId,
+      reason_code: reasonCode,
+    }),
+  });
 }
 
 function seedOperatingCore(db: DatabaseSync): void {
@@ -678,18 +719,12 @@ test("estimator-ready ingest rejects route drift, association drift, and revoked
     const link = db.raw.prepare(
       `SELECT external_project_link_id FROM facet_v2_prequote_project_links LIMIT 1`,
     ).get() as { external_project_link_id: string };
-    db.raw.prepare(
-      `INSERT INTO facet_v2_link_revocations
-       (revocation_id, link_kind, link_id, reason_code, revoked_by_user_id,
-        destination_tenant_id, revoked_at)
-       VALUES (?, 'project', ?, 'test_revocation', ?, ?, ?)`,
-    ).run(
-      "revocation:prequote-project-0001",
-      link.external_project_link_id,
-      OWNER,
-      TENANT,
-      "2027-01-15T08:02:00.000Z",
+    const revocation = await handleAuthenticatedRoute(
+      revokeProjectRequest(link.external_project_link_id, "project_rebound"),
+      env,
+      officeAuth(),
     );
+    assert.equal(revocation.status, 201);
     const revoked = await handleFacetEstimatorReadyIngest(
       signedRequest(
         await readyEvent(db, {

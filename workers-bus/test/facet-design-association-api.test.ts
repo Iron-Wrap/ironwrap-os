@@ -4,7 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { permissionsForRole, type AppEnv, type AuthContext } from "../src/app-types.ts";
+import {
+  permissionsForRole,
+  type AppEnv,
+  type AppRole,
+  type AuthContext,
+} from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
 const USER = "appu_owner_0001";
@@ -25,6 +30,7 @@ class SqliteD1 {
       "0011_app_bff_auth.sql",
       "0043_facet_v2_signed_identity.sql",
       "0105_facet_native_design_projection.sql",
+      "0121_facet_prequote_estimator_consumer.sql",
     ])
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     this.raw.prepare(
@@ -250,6 +256,15 @@ function auth(withRead = true): AuthContext {
   };
 }
 
+function authFor(role: AppRole, tenantId = TENANT): AuthContext {
+  const owner = auth();
+  return {
+    ...owner,
+    permissions: permissionsForRole(role),
+    session: { ...owner.session, role, tenant_id: tenantId },
+  };
+}
+
 function request(path: string, method = "GET"): Request {
   return new Request(`https://app.example.invalid${path}`, {
     method,
@@ -257,6 +272,20 @@ function request(path: string, method = "GET"): Request {
       ? { "content-type": "application/json", "x-csrf-token": "csrf" }
       : undefined,
     body: method === "POST" ? JSON.stringify({ legacy: true }) : undefined,
+  });
+}
+
+function revocationRequest(
+  body: unknown,
+  options: { contentType?: string; csrf?: string } = {},
+): Request {
+  return new Request("https://app.example.invalid/api/v1/facet-link-revocations", {
+    method: "POST",
+    headers: {
+      "content-type": options.contentType ?? "application/json",
+      "x-csrf-token": options.csrf ?? "csrf",
+    },
+    body: JSON.stringify(body),
   });
 }
 
@@ -344,12 +373,16 @@ test("office read quarantines legacy projection history behind the signed-v2 cha
 test("read model fails closed on revoked authority and denies callers without Facet read", async () => {
   const db = new SqliteD1();
   seedDecision(db, { eventId: "facet-approved-1", decisionKind: "approved", ordinal: 3 });
-  db.raw.prepare(
-    `INSERT INTO facet_v2_link_revocations
-     (revocation_id, link_kind, link_id, reason_code, revoked_by_user_id,
-      destination_tenant_id, revoked_at)
-     VALUES ('revoke-project-1', 'project', ?, 'project_rebound', ?, ?, ?)`,
-  ).run(PROJECT_LINK, USER, TENANT, "2026-08-16T09:06:00.000Z");
+  const revoked = await handleAuthenticatedRoute(
+    revocationRequest({
+      link_kind: "project",
+      link_id: PROJECT_LINK,
+      reason_code: "project_rebound",
+    }),
+    appEnv(db),
+    auth(),
+  );
+  assert.equal(revoked.status, 201);
 
   const response = await handleAuthenticatedRoute(
     request("/api/v1/facet-design-evidence"),
@@ -368,6 +401,166 @@ test("read model fails closed on revoked authority and denies callers without Fa
   );
   assert.equal(denied.status, 403);
   assert.deepEqual(await denied.json(), { error: "facet_read_required" });
+});
+
+test("governed Facet link revocation is owner-only, tenant-bound, strict, replayable, and append-only", async () => {
+  const db = new SqliteD1();
+  const env = appEnv(db);
+  const projectBody = {
+    link_kind: "project",
+    link_id: PROJECT_LINK,
+    reason_code: "project_rebound",
+  } as const;
+
+  const wrongRole = await handleAuthenticatedRoute(
+    revocationRequest(projectBody),
+    env,
+    authFor("ops"),
+  );
+  assert.equal(wrongRole.status, 403);
+  assert.deepEqual(await wrongRole.json(), { error: "facet_link_revocation_owner_required" });
+
+  const wrongTenant = await handleAuthenticatedRoute(
+    revocationRequest(projectBody),
+    env,
+    authFor("owner", "other-tenant"),
+  );
+  assert.equal(wrongTenant.status, 404);
+  assert.deepEqual(await wrongTenant.json(), { error: "facet_link_not_found" });
+
+  const missingContentType = await handleAuthenticatedRoute(
+    revocationRequest(projectBody, { contentType: "text/plain" }),
+    env,
+    auth(),
+  );
+  assert.equal(missingContentType.status, 415);
+  assert.deepEqual(await missingContentType.json(), { error: "content_type_required" });
+
+  for (const contentType of ["application/jsonx", "application/json-seq"]) {
+    const invalidMediaType = await handleAuthenticatedRoute(
+      revocationRequest(projectBody, { contentType }),
+      env,
+      auth(),
+    );
+    assert.equal(invalidMediaType.status, 415, contentType);
+    assert.deepEqual(await invalidMediaType.json(), { error: "content_type_required" });
+    assert.equal(
+      Number((db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_link_revocations").get() as { count: number }).count),
+      0,
+      contentType,
+    );
+  }
+
+  const wrongCsrf = await handleAuthenticatedRoute(
+    revocationRequest(projectBody, { csrf: "wrong-csrf" }),
+    env,
+    auth(),
+  );
+  assert.equal(wrongCsrf.status, 403);
+  assert.deepEqual(await wrongCsrf.json(), { error: "csrf_failed" });
+
+  const malformed = await handleAuthenticatedRoute(
+    revocationRequest({ ...projectBody, unexpected: true }),
+    env,
+    auth(),
+  );
+  assert.equal(malformed.status, 400);
+  assert.deepEqual(await malformed.json(), { error: "invalid_facet_link_revocation" });
+
+  const badKind = await handleAuthenticatedRoute(
+    revocationRequest({ ...projectBody, link_kind: "association" }),
+    env,
+    auth(),
+  );
+  assert.equal(badKind.status, 400);
+  const badReason = await handleAuthenticatedRoute(
+    revocationRequest({ ...projectBody, reason_code: "arbitrary_reason" }),
+    env,
+    auth(),
+  );
+  assert.equal(badReason.status, 400);
+
+  const created = await handleAuthenticatedRoute(
+    revocationRequest(projectBody, { contentType: "application/json; charset=utf-8" }),
+    env,
+    auth(),
+  );
+  assert.equal(created.status, 201);
+  const createdBody = await created.json() as {
+    revocation: Record<string, string>;
+  };
+  assert.equal(createdBody.revocation.link_id, PROJECT_LINK);
+  assert.equal(createdBody.revocation.destination_tenant_id, TENANT);
+  assert.equal(createdBody.revocation.revoked_by_user_id, USER);
+  assert.match(createdBody.revocation.revocation_id, /^facet-link-revocation-v1:[0-9a-f]{64}$/);
+  assert.equal(
+    Number((db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_link_revocations").get() as { count: number }).count),
+    1,
+  );
+
+  const replay = await handleAuthenticatedRoute(
+    revocationRequest(projectBody),
+    env,
+    auth(),
+  );
+  assert.equal(replay.status, 200);
+  const replayBody = await replay.json() as { revocation: Record<string, string>; replayed: boolean };
+  assert.equal(replayBody.replayed, true);
+  assert.deepEqual(replayBody.revocation, createdBody.revocation);
+
+  const changedReason = await handleAuthenticatedRoute(
+    revocationRequest({ ...projectBody, reason_code: "source_authority_drift" }),
+    env,
+    auth(),
+  );
+  assert.equal(changedReason.status, 409);
+  assert.deepEqual(await changedReason.json(), { error: "facet_link_revocation_conflict" });
+  assert.equal(
+    Number((db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_link_revocations").get() as { count: number }).count),
+    1,
+  );
+
+  const row = db.raw.prepare(
+    `SELECT revocation_id, link_kind, link_id, reason_code, revoked_by_user_id,
+            destination_tenant_id, revoked_at
+       FROM facet_v2_link_revocations`,
+  ).get() as Record<string, string>;
+  assert.deepEqual({ ...row }, createdBody.revocation);
+  assert.throws(() => db.raw.prepare(
+    `UPDATE facet_v2_link_revocations SET reason_code = 'source_authority_drift'
+      WHERE revocation_id = ?`,
+  ).run(row.revocation_id));
+  assert.throws(() => db.raw.prepare(
+    `DELETE FROM facet_v2_link_revocations WHERE revocation_id = ?`,
+  ).run(row.revocation_id));
+});
+
+test("governed revocation accepts each existing Facet link kind only within the tenant", async () => {
+  const db = new SqliteD1();
+  const env = appEnv(db);
+  for (const body of [
+    {
+      link_kind: "producer_identity",
+      link_id: PRODUCER_LINK,
+      reason_code: "producer_identity_compromised",
+    },
+    {
+      link_kind: "customer_identity",
+      link_id: CUSTOMER_LINK,
+      reason_code: "customer_identity_compromised",
+    },
+  ] as const) {
+    const response = await handleAuthenticatedRoute(
+      revocationRequest(body),
+      env,
+      auth(),
+    );
+    assert.equal(response.status, 201, body.link_kind);
+  }
+  assert.equal(
+    Number((db.raw.prepare("SELECT COUNT(*) AS count FROM facet_v2_link_revocations").get() as { count: number }).count),
+    2,
+  );
 });
 
 test("legacy association and quote-preparation routes stay 404 even when old flags are true", async () => {

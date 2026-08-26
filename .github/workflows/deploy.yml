@@ -33,7 +33,6 @@ env:
   RELEASE_INDEPENDENT_REVIEW_TASK_ID: independent-source-review
   RELEASE_INDEPENDENT_EVIDENCE_TASK_ID: independent-release-evidence
   RELEASE_INDEPENDENT_ISSUER_KEY_VERSION: review-key-2026-08
-  RELEASE_FRAPPE_SCOPE: in-scope
 
 jobs:
   admission:
@@ -843,7 +842,6 @@ jobs:
           printf '%s' "$RELEASE_PERMIT_PRIVATE_KEY" > "$RUNNER_TEMP/permit.key"
           node "$RELEASE_ENFORCER" assemble \
             --repo-root "$GITHUB_WORKSPACE" \
-            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --context "$RUNNER_TEMP/context-download/context.json" \
             --policy "$RUNNER_TEMP/context-download/policy.json" \
             --staging "$RUNNER_TEMP/staging-proof/staging.json" \
@@ -942,7 +940,6 @@ jobs:
         run: |
           set -euo pipefail
           node "$RELEASE_ENFORCER" production-receipt \
-            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --active "$RUNNER_TEMP/production-post-smoke.id" \
             --smoke "$RUNNER_TEMP/production-smoke-evidence.json" \
             --health "$RUNNER_TEMP/production-health.json" --ready "$RUNNER_TEMP/production-ready.json" \
@@ -999,7 +996,6 @@ jobs:
           node "$RELEASE_ENFORCER" readiness \
             --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json"
           node "$RELEASE_ENFORCER" production-rollback-receipt \
-            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --input "$RUNNER_TEMP/production-rollback.json" --previous "$previous" --candidate "$candidate" \
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \

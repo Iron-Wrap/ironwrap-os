@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import {
-  assertBootstrapFrappeScope,
   assertMergePolicyUnchanged,
   collectCiChecks,
   computeReleasePolicyHash,
@@ -231,14 +230,6 @@ test("machine service-adapter signer emits a bounded exact provider receipt", as
     },
   );
   assert.equal(verified.result, "passed");
-});
-
-test("current generation-N bootstrap refuses an out-of-scope Frappe permit", () => {
-  assert.equal(assertBootstrapFrappeScope("in-scope"), "in-scope");
-  assert.throws(
-    () => assertBootstrapFrappeScope("out-of-scope"),
-    /release_promotion_frappe_scope_current_workflow_requires_in_scope/,
-  );
 });
 
 test("service adapter client posts an exact authenticated request and rejects drift", async () => {

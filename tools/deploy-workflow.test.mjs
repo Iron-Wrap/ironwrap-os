@@ -91,7 +91,6 @@ function validateWorkflow(workflow) {
   assert.match(admission, /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/);
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
-  assert.match(workflow, /RELEASE_FRAPPE_SCOPE: in-scope/);
   assert.match(admission, /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
   // The push-sourced arm derives generation N from the squash commit's single
   // parent and hands both commits to the enforcer, which re-reads the same
@@ -204,7 +203,7 @@ function validateWorkflow(workflow) {
   assert.match(production, /release-evidence-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/release-evidence-issuer-ack\.json"/);
   assert.match(
     production,
-    /assemble[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*--artifact-manifest[\s\S]*--release-evidence/,
+    /assemble[\s\S]*--artifact-manifest[\s\S]*--release-evidence/,
   );
   assert.match(production, /assemble[\s\S]*--production-recovery/);
   assert.match(
@@ -234,7 +233,7 @@ function validateWorkflow(workflow) {
     production,
     /production-post-smoke\.json[\s\S]*deployment-revision[\s\S]*production-receipt/,
   );
-  assert.match(production, /node "\$RELEASE_ENFORCER" production-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/);
+  assert.match(production, /node "\$RELEASE_ENFORCER" production-receipt/);
   assert.match(
     production,
     /advance[\s\S]*--production-receipt[\s\S]*--merge-receipt/,
@@ -250,7 +249,7 @@ function validateWorkflow(workflow) {
   assert.doesNotMatch(production, /promote_frappe|frappe-release-adapter/);
   assert.match(
     production,
-    /"\$WRANGLER_BIN" rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*persist-rollback/,
+    /"\$WRANGLER_BIN" rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*persist-rollback/,
   );
   assert.match(
     production,

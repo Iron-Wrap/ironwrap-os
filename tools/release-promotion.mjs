@@ -220,6 +220,16 @@ function serviceArgumentsPresent(args, names) {
   return names.filter((name) => hasArg(args, name));
 }
 
+export function assertBootstrapFrappeScope(scope) {
+  if (scope !== "in-scope") {
+    // The generation-N bootstrap workflow always carries real Frappe staging,
+    // candidate, and recovery evidence, so it cannot honestly mint an
+    // out-of-scope permit yet.
+    fail("frappe_scope_current_workflow_requires_in_scope");
+  }
+  return scope;
+}
+
 async function collectCiChecks(args) {
   const repository = arg(args, "repository");
   if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
@@ -2057,7 +2067,7 @@ async function policyGenesis(args) {
 }
 
 async function assemblePermit(args) {
-  const frappeScopeValue = frappeScope(args);
+  const frappeScopeValue = assertBootstrapFrappeScope(frappeScope(args));
   const context = await readJson(arg(args, "context"));
   const repoRoot = arg(args, "repo-root");
   const sourceCommit = requireCommit(context.source_commit, "source_commit_invalid");

@@ -90,11 +90,22 @@ const COMMIT_RE = /^[0-9a-f]{40}$/;
 const NONCE_RE = /^[A-Za-z0-9_-]{32,128}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/;
 const IDENTITY_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const FRAPPE_SCOPE_RE = /^(?:in-scope|out-of-scope)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MIGRATION_RE = /^\d{4}_[a-z0-9][a-z0-9_-]*\.sql$/;
 const VERSION_MESSAGE_RE = new RegExp(
   `^${VERSION_MESSAGE_SCHEMA}\\|source=([0-9a-f]{40})\\|tree=([0-9a-f]{64})\\|artifact=([0-9a-f]{64})\\|config=([0-9a-f]{64})$`,
 );
+const RECOVERY_REQUIRED_STATES = Object.freeze({
+  d1_migration_failed: Object.freeze({
+    migration_state: "unknown_or_partial",
+    provider_promotion: "not_started",
+  }),
+  automatic_rollback_incomplete: Object.freeze({
+    migration_state: "applied",
+    provider_promotion: "attempted",
+  }),
+});
 
 const PERMIT_KEYS = [
   "schema",
@@ -819,6 +830,7 @@ function validateReleaseManifest(manifest, permit) {
     manifest,
     [
       "schema",
+      "frappe_scope",
       "pr",
       "source",
       "supply_chain",
@@ -838,6 +850,11 @@ function validateReleaseManifest(manifest, permit) {
     "release_manifest_shape_invalid",
   );
   equal(RELEASE_MANIFEST_SCHEMA, manifest.schema, "release_manifest_schema_invalid");
+  text(
+    manifest.frappe_scope,
+    "release_manifest_frappe_scope_invalid",
+    FRAPPE_SCOPE_RE,
+  );
   exactKeys(manifest.pr, ["number", "base_ref", "base_commit", "head_ref", "head_commit", "ci_run_id", "ci_merge_commit", "ci_merge_tree", "merge_method", "merge_policy", "provider_readback_digest", "status"], "release_manifest_pr_shape_invalid");
   positiveInteger(manifest.pr.number, "release_manifest_pr_number_invalid");
   equal("main", manifest.pr.base_ref, "release_manifest_pr_base_ref_invalid");
@@ -1035,6 +1052,7 @@ export function validateProductionRollbackReceipt(
     [
       "schema",
       "source_commit",
+      "frappe_scope",
       "previous_revision",
       "candidate_revision",
       "restored_revision",
@@ -1059,6 +1077,12 @@ export function validateProductionRollbackReceipt(
   );
   equal("ironwrap_production_rollback_v3", receipt.schema, "production_rollback_schema_invalid");
   equal(permit.source_commit, receipt.source_commit, "production_rollback_source_drift");
+  text(receipt.frappe_scope, "production_rollback_frappe_scope_invalid", FRAPPE_SCOPE_RE);
+  equal(
+    permit.release_manifest.frappe_scope,
+    receipt.frappe_scope,
+    "production_rollback_frappe_scope_drift",
+  );
   text(receipt.previous_revision, "production_rollback_previous_invalid", UUID_RE);
   equal(permit.worker.production_version_id, receipt.candidate_revision, "production_rollback_candidate_drift");
   equal(receipt.previous_revision, receipt.restored_revision, "production_rollback_restored_drift");
@@ -1100,34 +1124,59 @@ export function validateProductionRollbackReceipt(
     receipt.pwa_provider_readback_digest,
     "production_rollback_pwa_readback_drift",
   );
-  equal(
-    permit.release_manifest.recovery.prior_frappe_revision,
-    receipt.frappe_previous_revision,
-    "production_rollback_frappe_previous_drift",
-  );
-  equal(
-    permit.release_manifest.production_candidates.frappe_revision,
-    receipt.frappe_candidate_revision,
-    "production_rollback_frappe_candidate_drift",
-  );
-  equal(
-    receipt.frappe_previous_revision,
-    receipt.frappe_restored_revision,
-    "production_rollback_frappe_restored_drift",
-  );
+  const leftoverFrappeDigest = sha256("frappe-not-required");
+  if (receipt.frappe_scope === "in-scope") {
+    equal(
+      permit.release_manifest.recovery.prior_frappe_revision,
+      receipt.frappe_previous_revision,
+      "production_rollback_frappe_previous_drift",
+    );
+    equal(
+      permit.release_manifest.production_candidates.frappe_revision,
+      receipt.frappe_candidate_revision,
+      "production_rollback_frappe_candidate_drift",
+    );
+    equal(
+      receipt.frappe_previous_revision,
+      receipt.frappe_restored_revision,
+      "production_rollback_frappe_restored_drift",
+    );
+    equal(
+      permit.release_manifest.recovery.prior_frappe_readback_digest,
+      receipt.frappe_provider_readback_digest,
+      "production_rollback_frappe_readback_drift",
+    );
+    if (receipt.service_rollback_digest === leftoverFrappeDigest) {
+      fail("production_rollback_frappe_receipt_missing");
+    }
+  } else {
+    for (const value of [
+      receipt.frappe_previous_revision,
+      receipt.frappe_candidate_revision,
+      receipt.frappe_restored_revision,
+    ]) {
+      equal(
+        "leftover-not-promoted",
+        value,
+        "production_rollback_frappe_scope_drift",
+      );
+    }
+    equal(
+      leftoverFrappeDigest,
+      receipt.frappe_provider_readback_digest,
+      "production_rollback_frappe_scope_drift",
+    );
+    equal(
+      leftoverFrappeDigest,
+      receipt.service_rollback_digest,
+      "production_rollback_frappe_scope_drift",
+    );
+  }
   hash(
     receipt.frappe_provider_readback_digest,
     "production_rollback_frappe_readback_invalid",
   );
-  equal(
-    permit.release_manifest.recovery.prior_frappe_readback_digest,
-    receipt.frappe_provider_readback_digest,
-    "production_rollback_frappe_readback_drift",
-  );
-  hash(
-    receipt.service_rollback_digest,
-    "production_rollback_service_digest_invalid",
-  );
+  hash(receipt.service_rollback_digest, "production_rollback_service_digest_invalid");
   hash(receipt.health_digest, "production_rollback_health_invalid");
   hash(receipt.readiness_digest, "production_rollback_readiness_invalid");
   hash(receipt.evidence_digest, "production_rollback_evidence_invalid");
@@ -1175,9 +1224,18 @@ export function validateProductionRecoveryRequiredReceipt(
   if (expectedPermitDigest !== undefined) equal(expectedPermitDigest, receipt.permit_digest, "production_recovery_required_permit_drift");
   hash(receipt.merge_receipt_digest, "production_recovery_required_merge_invalid");
   commit(receipt.merge_commit, "production_recovery_required_merge_commit_invalid");
-  equal("d1_migration_failed", receipt.failure_stage, "production_recovery_required_stage_invalid");
-  equal("unknown_or_partial", receipt.migration_state, "production_recovery_required_migration_state_invalid");
-  equal("not_started", receipt.provider_promotion, "production_recovery_required_provider_state_invalid");
+  const recoveryState = RECOVERY_REQUIRED_STATES[receipt.failure_stage];
+  if (!recoveryState) fail("production_recovery_required_stage_invalid");
+  equal(
+    recoveryState.migration_state,
+    receipt.migration_state,
+    "production_recovery_required_migration_state_invalid",
+  );
+  equal(
+    recoveryState.provider_promotion,
+    receipt.provider_promotion,
+    "production_recovery_required_provider_state_invalid",
+  );
   equal(permit.release_manifest.recovery.production_d1_recovery_digest, receipt.production_d1_recovery_digest, "production_recovery_required_d1_recovery_drift");
   equal(permit.release_manifest.recovery.prior_worker_revision, receipt.prior_worker_revision, "production_recovery_required_worker_drift");
   equal(permit.release_manifest.recovery.prior_worker_readback_digest, receipt.prior_worker_readback_digest, "production_recovery_required_worker_readback_drift");
@@ -1212,6 +1270,7 @@ export function validateProductionPromotionReceipt(
       "source_tree_sha256",
       "artifact_digest",
       "config_digest",
+      "frappe_scope",
       "revision",
       "version_digest",
       "merge_commit",
@@ -1240,6 +1299,7 @@ export function validateProductionPromotionReceipt(
   hash(receipt.source_tree_sha256, "production_promotion_tree_invalid");
   hash(receipt.artifact_digest, "production_promotion_artifact_invalid");
   hash(receipt.config_digest, "production_promotion_config_invalid");
+  text(receipt.frappe_scope, "production_promotion_frappe_scope_invalid", FRAPPE_SCOPE_RE);
   text(receipt.revision, "production_promotion_revision_invalid", UUID_RE);
   hash(receipt.version_digest, "production_promotion_version_digest_invalid");
   commit(receipt.merge_commit, "production_promotion_merge_commit_invalid");
@@ -1270,6 +1330,21 @@ export function validateProductionPromotionReceipt(
     receipt.service_readback_digest,
     "production_promotion_service_readback_digest_invalid",
   );
+  const leftoverFrappeDigest = sha256("frappe-not-required");
+  if (receipt.frappe_scope === "in-scope" &&
+      (receipt.frappe_revision === "leftover-not-promoted" ||
+       receipt.frappe_readback_digest === leftoverFrappeDigest ||
+       receipt.service_promotion_digest === leftoverFrappeDigest ||
+       receipt.service_readback_digest === leftoverFrappeDigest)) {
+    fail("production_promotion_frappe_receipt_missing");
+  }
+  if (receipt.frappe_scope === "out-of-scope" &&
+      (receipt.frappe_revision !== "leftover-not-promoted" ||
+       receipt.frappe_readback_digest !== leftoverFrappeDigest ||
+       receipt.service_promotion_digest !== leftoverFrappeDigest ||
+       receipt.service_readback_digest !== leftoverFrappeDigest)) {
+    fail("production_promotion_frappe_scope_drift");
+  }
   hash(receipt.smoke_evidence_digest, "production_promotion_smoke_digest_invalid");
   equal("passed", receipt.smoke_result, "production_promotion_smoke_invalid");
   if (!Array.isArray(receipt.smoke_step_names) || JSON.stringify([...receipt.smoke_step_names].sort()) !== JSON.stringify([...LAUNCH_PROOF_STEP_NAMES].sort())) fail("production_promotion_smoke_steps_invalid");
@@ -1290,6 +1365,7 @@ export function validateProductionPromotionReceipt(
     pwa_readback_digest: expected.pwaReadbackDigest,
     frappe_revision: expected.frappeRevision,
     frappe_readback_digest: expected.frappeReadbackDigest,
+    frappe_scope: expected.frappeScope,
   }))
     if (value !== undefined) equal(value, receipt[key], `production_promotion_${key}_drift`);
   const digest = sha256(
@@ -1298,6 +1374,7 @@ export function validateProductionPromotionReceipt(
       source_tree_sha256: receipt.source_tree_sha256,
       artifact_digest: receipt.artifact_digest,
       config_digest: receipt.config_digest,
+      frappe_scope: receipt.frappe_scope,
       revision: receipt.revision,
       version_digest: receipt.version_digest,
       merge_commit: receipt.merge_commit,
@@ -1410,6 +1487,13 @@ export function verifyReleasePermit(publicKey, permit, expected = {}, options = 
     "policy_hash",
   ];
   for (const field of fields) if (expected[field] !== undefined) equal(expected[field], payload[field], `expected_${field}_mismatch`);
+  if (expected.frappe_scope !== undefined) {
+    equal(
+      expected.frappe_scope,
+      payload.release_manifest.frappe_scope,
+      "expected_frappe_scope_mismatch",
+    );
+  }
   if (expected.current_generation !== undefined) equal(expected.current_generation + 1, payload.generation, "generation_gate_mismatch");
   if (expected.current_policy_hash !== undefined) equal(expected.current_policy_hash, payload.previous_generation.policy_hash, "previous_policy_gate_mismatch");
   if (expected.required_check_ids !== undefined) {
@@ -2250,10 +2334,16 @@ export async function advanceReleaseGeneration(
       mergeReceiptDigest,
       pwaRevision: payload.release_manifest.production_candidates.pwa_revision,
       pwaReadbackDigest: payload.worker.production_version_digest,
-      frappeRevision:
-        payload.release_manifest.production_candidates.frappe_revision,
-      frappeReadbackDigest:
-        payload.release_manifest.production_candidates.frappe_readback_digest,
+      frappeScope: payload.release_manifest.frappe_scope,
+      ...(payload.release_manifest.frappe_scope === "in-scope"
+        ? {
+            frappeRevision:
+              payload.release_manifest.production_candidates.frappe_revision,
+            frappeReadbackDigest:
+              payload.release_manifest.production_candidates
+                .frappe_readback_digest,
+          }
+        : {}),
     },
     { now },
   );
@@ -2328,6 +2418,8 @@ export async function persistRecoveryRequiredOutcome(publicKey, permit, { bounda
   });
   validateSourceMergeReceipt(mergeReceipt, payload, { now, permitDigest: digest });
   const observedAt = new Date(now).toISOString();
+  const recoveryState = RECOVERY_REQUIRED_STATES[failureStage];
+  if (!recoveryState) fail("production_recovery_required_stage_invalid");
   const fields = {
     schema: PRODUCTION_RECOVERY_REQUIRED_SCHEMA,
     repository: payload.repository,
@@ -2337,8 +2429,7 @@ export async function persistRecoveryRequiredOutcome(publicKey, permit, { bounda
     merge_receipt_digest: sha256(canonicalJson(mergeReceipt)),
     merge_commit: mergeReceipt.merge_commit,
     failure_stage: failureStage,
-    migration_state: "unknown_or_partial",
-    provider_promotion: "not_started",
+    ...recoveryState,
     production_d1_recovery_digest: payload.release_manifest.recovery.production_d1_recovery_digest,
     prior_worker_revision: payload.release_manifest.recovery.prior_worker_revision,
     prior_worker_readback_digest: payload.release_manifest.recovery.prior_worker_readback_digest,

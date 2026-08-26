@@ -102,6 +102,7 @@ function releaseManifest() {
   };
   const fields = {
     schema: "ironwrap_release_manifest_v1",
+    frappe_scope: "in-scope",
     pr: {
       number: 43,
       base_ref: "main",
@@ -513,8 +514,57 @@ test("validates, signs, and verifies the complete source-to-recovery permit", ()
     required_check_ids: ["ci-validation", "ci-release-readiness"],
   }, { now: NOW });
   assert.equal(verified.worker.artifact_digest, ARTIFACT);
+  assert.equal(verified.release_manifest.frappe_scope, "in-scope");
   assert.equal(verified.staging.readback.status, "matched");
   assert.equal(verified.production.readback.status, "matched");
+});
+
+test("the signed manifest owns the exact Frappe release scope", () => {
+  const { privateKey, publicKey } = keyPair();
+  const manifest = releaseManifest();
+  const { evidence_digest: _replaced, ...fields } = manifest;
+  const outOfScopeFields = { ...fields, frappe_scope: "out-of-scope" };
+  const outOfScope = {
+    ...outOfScopeFields,
+    evidence_digest: sha(canonicalJson(outOfScopeFields)),
+  };
+  assert.equal(
+    validateReleasePermitPayload(
+      payload({ release_manifest: outOfScope }),
+      { now: NOW },
+    ).release_manifest.frappe_scope,
+    "out-of-scope",
+  );
+  const outOfScopePermit = signReleasePermit(
+    privateKey,
+    payload({ release_manifest: outOfScope }),
+    { now: NOW },
+  );
+  assert.throws(
+    () =>
+      verifyReleasePermit(
+        publicKey,
+        outOfScopePermit,
+        { frappe_scope: "in-scope" },
+        { now: NOW },
+      ),
+    /release_permit_expected_frappe_scope_mismatch/,
+  );
+
+  for (const frappeScope of [undefined, "optional", "in-scope "]) {
+    const invalidFields = { ...fields, frappe_scope: frappeScope };
+    const invalid = {
+      ...invalidFields,
+      evidence_digest: sha(canonicalJson(invalidFields)),
+    };
+    assert.throws(
+      () =>
+        validateReleasePermitPayload(payload({ release_manifest: invalid }), {
+          now: NOW,
+        }),
+      /release_permit_release_manifest_frappe_scope_invalid/,
+    );
+  }
 });
 
 test("admits an open or merged source state and no other PR status", () => {
@@ -763,6 +813,7 @@ test("generation advance requires an immutable production receipt for the exact 
     frappe_readback_digest: sha("frappe-production-candidate-readback"),
     service_promotion_digest: sha("service-promotion-receipt"),
     service_readback_digest: sha("service-readback-receipt"),
+    frappe_scope: "in-scope",
     smoke_evidence_digest: sha("production-smoke"),
     smoke_result: "passed",
     smoke_step_names: ["admin_envelopes", "admin_reconcile", "admin_status", "d1_lead", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ingest_website_replay", "ready"],
@@ -823,6 +874,7 @@ test("an expired permit can record rollback only through its durable admitted cl
     previous_revision: PREVIOUS_VERSION,
     candidate_revision: WORKER_VERSION,
     restored_revision: PREVIOUS_VERSION,
+    frappe_scope: "in-scope",
     result: "passed",
     readback: "matched",
     provider_readback_digest:
@@ -916,6 +968,14 @@ test("an admitted migration failure persists an immutable recovery-required outc
   assert.equal(result.recovery.provider_promotion, "not_started");
   assert.equal(result.recovery.production_d1_recovery_digest, permitPayload.release_manifest.recovery.production_d1_recovery_digest);
   assert.equal(result.recovery.prior_frappe_revision, permitPayload.release_manifest.recovery.prior_frappe_revision);
+  const rollbackIncomplete = await persistRecoveryRequiredOutcome(publicKey, permit, {
+    boundary,
+    mergeReceipt,
+    failureStage: "automatic_rollback_incomplete",
+    now: Date.parse("2026-08-16T20:20:00.000Z"),
+  });
+  assert.equal(rollbackIncomplete.recovery.migration_state, "applied");
+  assert.equal(rollbackIncomplete.recovery.provider_promotion, "attempted");
   await assert.rejects(() => persistRecoveryRequiredOutcome(publicKey, permit, {
     boundary,
     mergeReceipt,

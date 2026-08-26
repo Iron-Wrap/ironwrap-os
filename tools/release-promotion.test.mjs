@@ -84,6 +84,15 @@ const WORKER_PREVIOUS_READBACK = sha("worker-previous-readback");
 const FRAPPE_PREVIOUS_READBACK = sha("frappe-previous-readback");
 const FRAPPE_CANDIDATE_READBACK = sha("frappe-candidate-readback");
 const PROVIDER_RECONCILIATION = sha("provider-reconciliation");
+const SERVICE_RECEIPT_TEST_FLAGS = [
+  "--service-promotion-receipt",
+  "--service-readback-receipt",
+  "--service-public-key",
+  "--service-issuer-identity",
+  "--service-issuer-task-id",
+  "--service-issuer-run-id",
+  "--service-key-version",
+];
 const run = promisify(execFile);
 
 async function tempRoot(t) {
@@ -95,6 +104,7 @@ async function tempRoot(t) {
 function minimalPermitPayload({
   previous = STAGING,
   candidate = PRODUCTION,
+  frappeScope = "in-scope",
 } = {}) {
   return {
     repository: "Iron-Wrap/ironwrap-os",
@@ -109,6 +119,7 @@ function minimalPermitPayload({
       production_version_digest: sha("version"),
     },
     release_manifest: {
+      frappe_scope: frappeScope,
       pr: { number: 43, head_commit: HEAD, merge_policy: mergePolicyFixture() },
       artifacts: {
         frappe_wheel_digest: FRAPPE_ARTIFACT,
@@ -222,6 +233,7 @@ test("machine service-adapter signer emits a bounded exact provider receipt", as
 });
 
 test("service adapter client posts an exact authenticated request and rejects drift", async () => {
+  const adapterToken = "adapter-token-value-that-is-long-enough-0123456789";
   const keys = generateKeyPairSync("ed25519");
   const receipt = signedServiceReceipt(keys.privateKey, {
     operation: "promote",
@@ -265,8 +277,8 @@ test("service adapter client posts an exact authenticated request and rejects dr
     return new Response(JSON.stringify({ receipt }), { status: 200 });
   };
   const result = await requestServiceAdapter({
-    url: "https://release-adapter.example.invalid/v1/promote",
-    apiToken: "adapter-token-value",
+    url: "https://release-adapter.example.invalid/v1/frappe",
+    apiToken: adapterToken,
     request,
     publicKey: keys.publicKey,
     expected,
@@ -275,18 +287,18 @@ test("service adapter client posts an exact authenticated request and rejects dr
   assert.equal(result.payload.frappe.active_revision, FRAPPE_CANDIDATE);
   assert.equal(
     observed.url,
-    "https://release-adapter.example.invalid/v1/promote",
+    "https://release-adapter.example.invalid/v1/frappe",
   );
   assert.equal(
     observed.init.headers.authorization,
-    "Bearer adapter-token-value",
+    `Bearer ${adapterToken}`,
   );
   assert.equal(observed.init.body, canonicalJson(request));
   await assert.rejects(
     () =>
       requestServiceAdapter({
         url: "http://release-adapter.example.invalid",
-        apiToken: "token",
+        apiToken: adapterToken,
         request,
         publicKey: keys.publicKey,
         expected,
@@ -297,8 +309,8 @@ test("service adapter client posts an exact authenticated request and rejects dr
   await assert.rejects(
     () =>
       requestServiceAdapter({
-        url: "https://release-adapter.example.invalid",
-        apiToken: "token",
+        url: "https://release-adapter.example.invalid/v1/frappe",
+        apiToken: adapterToken,
         request: { ...request, ignored: true },
         publicKey: keys.publicKey,
         expected,
@@ -309,8 +321,8 @@ test("service adapter client posts an exact authenticated request and rejects dr
   await assert.rejects(
     () =>
       requestServiceAdapter({
-        url: "https://release-adapter.example.invalid",
-        apiToken: "token",
+        url: "https://release-adapter.example.invalid/v1/frappe",
+        apiToken: adapterToken,
         request,
         publicKey: keys.publicKey,
         expected: { ...expected, "frappe.candidate_revision": "wrong" },
@@ -318,6 +330,105 @@ test("service adapter client posts an exact authenticated request and rejects dr
       }),
     /release_permit_service_adapter_frappe_candidate_revision_drift/,
   );
+  await assert.rejects(
+    () =>
+      requestServiceAdapter({
+        url: "https://release-adapter.example.invalid/v1/frappe",
+        apiToken: "short-token",
+        request,
+        publicKey: keys.publicKey,
+        expected,
+        fetchImpl,
+      }),
+    /release_promotion_release_service_adapter_token_invalid/,
+  );
+});
+
+test("Frappe adapter preflight is explicit, redacted, and fail-closed", async (t) => {
+  const root = await tempRoot(t);
+  const output = path.join(root, "service-adapter-preflight.json");
+  const names = [
+    "RELEASE_SERVICE_ADAPTER_URL",
+    "RELEASE_SERVICE_ADAPTER_TOKEN",
+    "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
+    "RELEASE_SERVICE_ADAPTER_IDENTITY",
+    "RELEASE_SERVICE_ADAPTER_TASK_ID",
+    "RELEASE_SERVICE_ADAPTER_RUN_ID",
+    "RELEASE_SERVICE_ADAPTER_KEY_VERSION",
+  ];
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  const preflightKeys = generateKeyPairSync("ed25519");
+  const preflightPublicKey = preflightKeys.publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+  try {
+    process.env.RELEASE_SERVICE_ADAPTER_URL = "https://release-adapter.example.invalid/v1/frappe";
+    process.env.RELEASE_SERVICE_ADAPTER_TOKEN = "adapter-token-value-that-is-long-enough-0123456789";
+    process.env.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY = preflightPublicKey;
+    process.env.RELEASE_SERVICE_ADAPTER_IDENTITY = "service-release@ironwrapexteriors.com";
+    process.env.RELEASE_SERVICE_ADAPTER_TASK_ID = "frappe-release-adapter";
+    process.env.RELEASE_SERVICE_ADAPTER_RUN_ID = "github:31970000001:1";
+    process.env.RELEASE_SERVICE_ADAPTER_KEY_VERSION = "service-key-2026-08";
+    await main([
+      "service-adapter-preflight",
+      "--frappe-scope",
+      "in-scope",
+      "--output",
+      output,
+    ]);
+    const inScope = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(inScope.schema, "ironwrap_service_adapter_preflight_v1");
+    assert.equal(inScope.frappe_scope, "in-scope");
+    assert.equal(inScope.adapter_declared, true);
+    assert.equal(inScope.token_present, true);
+    assert.deepEqual(inScope.required_secret_names, names.slice(0, 3));
+    assert.deepEqual(inScope.required_identity_names, names.slice(3));
+    assert.doesNotMatch(
+      JSON.stringify(inScope),
+      /adapter-token-value|BEGIN PUBLIC KEY/,
+    );
+
+    delete process.env.RELEASE_SERVICE_ADAPTER_URL;
+    await assert.rejects(
+      () => main(["service-adapter-preflight", "--frappe-scope", "in-scope", "--output", output]),
+      /release_promotion_release_service_adapter_url_missing/,
+    );
+
+    process.env.RELEASE_SERVICE_ADAPTER_URL =
+      "https://release-adapter.example.invalid/v1/frappe";
+    process.env.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY = "not-a-public-key";
+    await assert.rejects(
+      () =>
+        main([
+          "service-adapter-preflight",
+          "--frappe-scope",
+          "in-scope",
+          "--output",
+          output,
+        ]),
+      /release_promotion_service_adapter_public_key_invalid/,
+    );
+
+    for (const name of names) delete process.env[name];
+    await main([
+      "service-adapter-preflight",
+      "--frappe-scope",
+      "out-of-scope",
+      "--output",
+      output,
+    ]);
+    const outOfScope = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(outOfScope.frappe_scope, "out-of-scope");
+    assert.equal(outOfScope.adapter_declared, false);
+    assert.deepEqual(outOfScope.required_secret_names, []);
+    assert.deepEqual(outOfScope.required_identity_names, []);
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 function independentIssuerRequestFixture(overrides = {}) {
@@ -1181,6 +1292,8 @@ test("production receipt binds active revision, config, readiness, and exact smo
   await writeFile(smoke, JSON.stringify(v4SmokeEvidence()));
   const receiptArgs = [
     "production-receipt",
+    "--frappe-scope",
+    "in-scope",
     "--active",
     active,
     "--smoke",
@@ -1226,6 +1339,16 @@ test("production receipt binds active revision, config, readiness, and exact smo
   const receipt = JSON.parse(await readFile(output, "utf8"));
   assert.equal(receipt.active_readback, "matched");
   assert.equal(receipt.revision, PRODUCTION);
+  const scopeMismatchArgs = receiptArgs.filter((value, index, list) => {
+    const serviceFlags = new Set(SERVICE_RECEIPT_TEST_FLAGS);
+    return !serviceFlags.has(value) && !serviceFlags.has(list[index - 1]);
+  });
+  scopeMismatchArgs[scopeMismatchArgs.indexOf("--frappe-scope") + 1] =
+    "out-of-scope";
+  await assert.rejects(
+    () => main(scopeMismatchArgs),
+    /release_promotion_production_frappe_scope_permit_drift/,
+  );
   await writeFile(active, `${STAGING}\n`);
   await assert.rejects(() => main(receiptArgs), /release_promotion_production_active_revision_drift/);
   await writeFile(active, `${PRODUCTION}\n`);
@@ -1405,6 +1528,8 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
   );
   const productionRollbackArgs = [
     "production-rollback-receipt",
+    "--frappe-scope",
+    "in-scope",
     "--input",
     deployments,
     "--previous",
@@ -1452,10 +1577,20 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
       "--service-key-version",
     ].includes(flag) && !["--service-receipt", "--service-public-key", "--service-issuer-identity", "--service-issuer-task-id", "--service-issuer-run-id", "--service-key-version"].includes(_);
   }).map((value) => (value === rollbackOutput ? leftoverRollbackOutput : value));
+  leftoverRollbackArgs[leftoverRollbackArgs.indexOf("--frappe-scope") + 1] = "out-of-scope";
+  await assert.rejects(
+    () => main(leftoverRollbackArgs),
+    /release_promotion_production_frappe_scope_permit_drift/,
+  );
+  await writeFile(
+    rollbackPermit,
+    JSON.stringify(minimalPermitPayload({ frappeScope: "out-of-scope" })),
+  );
   await main(leftoverRollbackArgs);
   const leftoverRollback = JSON.parse(await readFile(leftoverRollbackOutput, "utf8"));
   assert.equal(leftoverRollback.restored_revision, STAGING);
   assert.equal(leftoverRollback.frappe_restored_revision, "leftover-not-promoted");
+  await writeFile(rollbackPermit, JSON.stringify(minimalPermitPayload()));
   await writeFile(
     deployments,
     JSON.stringify([

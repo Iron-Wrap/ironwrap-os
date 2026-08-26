@@ -7,7 +7,7 @@
  * module owns parsing, digesting, receipt assembly, and permit admission. It
  * never prints credential values or raw provider responses.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -42,6 +42,7 @@ import {
   signExternalReleaseEvidence,
   signServiceAdapterReceipt,
   validateSecretInventoryReadback,
+  validateProductionRollbackReceipt,
   validateProductionPromotionReceipt,
   validateSourceMergeReceipt,
   validateWorkerVersionReadback,
@@ -67,6 +68,36 @@ const ISO_TIMESTAMP_RE =
 const INDEPENDENT_ISSUER_MAX_LIFETIME_MS = 10 * 60_000;
 const INDEPENDENT_ISSUER_MAX_FUTURE_SKEW_MS = 60_000;
 const INDEPENDENT_ISSUER_REQUEST_LIFETIME_MS = 5 * 60_000;
+const FRAPPE_SCOPE_RE = /^(?:in-scope|out-of-scope)$/;
+const SERVICE_ADAPTER_MIN_TOKEN_LENGTH = 32;
+const SERVICE_ADAPTER_ARGUMENTS = Object.freeze([
+  "service-promotion-receipt",
+  "service-readback-receipt",
+  "service-public-key",
+  "service-issuer-identity",
+  "service-issuer-task-id",
+  "service-issuer-run-id",
+  "service-key-version",
+]);
+const SERVICE_ROLLBACK_ARGUMENTS = Object.freeze([
+  "service-receipt",
+  "service-public-key",
+  "service-issuer-identity",
+  "service-issuer-task-id",
+  "service-issuer-run-id",
+  "service-key-version",
+]);
+const SERVICE_ADAPTER_SECRET_NAMES = Object.freeze([
+  "RELEASE_SERVICE_ADAPTER_URL",
+  "RELEASE_SERVICE_ADAPTER_TOKEN",
+  "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
+]);
+const SERVICE_ADAPTER_IDENTITY_NAMES = Object.freeze([
+  "RELEASE_SERVICE_ADAPTER_IDENTITY",
+  "RELEASE_SERVICE_ADAPTER_TASK_ID",
+  "RELEASE_SERVICE_ADAPTER_RUN_ID",
+  "RELEASE_SERVICE_ADAPTER_KEY_VERSION",
+]);
 
 function fail(code) {
   throw new Error(`release_promotion_${code}`);
@@ -177,6 +208,16 @@ function arg(args, name) {
 function hasArg(args, name) {
   const value = args.get(name);
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function frappeScope(args) {
+  const scope = arg(args, "frappe-scope");
+  if (!FRAPPE_SCOPE_RE.test(scope)) fail("frappe_scope_invalid");
+  return scope;
+}
+
+function serviceArgumentsPresent(args, names) {
+  return names.filter((name) => hasArg(args, name));
 }
 
 async function collectCiChecks(args) {
@@ -450,6 +491,86 @@ async function pushContext(args) {
 async function configDigest(args) {
   const result = await computeEnvironmentConfigDigest({ repoRoot: arg(args, "repo-root"), environment: arg(args, "environment") });
   await writeJson(arg(args, "output"), result);
+}
+
+async function serviceAdapterPreflight(args) {
+  const scope = frappeScope(args);
+  if (scope === "out-of-scope") {
+    const fields = {
+      schema: "ironwrap_service_adapter_preflight_v1",
+      frappe_scope: scope,
+      required_secret_names: [],
+      required_identity_names: [],
+      adapter_declared: false,
+      endpoint_digest: sha256("not-applicable"),
+      public_key_digest: sha256("not-applicable"),
+      identity_digest: sha256("not-applicable"),
+      status: "matched",
+    };
+    await writeJson(arg(args, "output"), {
+      ...fields,
+      config_digest: sha256(canonicalJson(fields)),
+      evidence_digest: sha256(canonicalJson(fields)),
+    });
+    return;
+  }
+
+  const url = env("RELEASE_SERVICE_ADAPTER_URL");
+  let adapterUrl;
+  try {
+    adapterUrl = new URL(url);
+  } catch {
+    fail("service_adapter_url_invalid");
+  }
+  if (
+    adapterUrl.protocol !== "https:" ||
+    adapterUrl.pathname !== "/v1/frappe" ||
+    adapterUrl.username ||
+    adapterUrl.password ||
+    adapterUrl.hash ||
+    adapterUrl.search
+  )
+    fail("service_adapter_url_invalid");
+  const token = env("RELEASE_SERVICE_ADAPTER_TOKEN");
+  if (token.length < SERVICE_ADAPTER_MIN_TOKEN_LENGTH)
+    fail("release_service_adapter_token_invalid");
+  const publicKey = env("RELEASE_SERVICE_ADAPTER_PUBLIC_KEY");
+  let parsedPublicKey;
+  try {
+    parsedPublicKey = createPublicKey(publicKey);
+  } catch {
+    fail("service_adapter_public_key_invalid");
+  }
+  if (parsedPublicKey.asymmetricKeyType !== "ed25519")
+    fail("service_adapter_public_key_invalid");
+  const identity = env("RELEASE_SERVICE_ADAPTER_IDENTITY");
+  if (!IDENTITY_RE.test(identity)) fail("service_adapter_identity_invalid");
+  const taskId = env("RELEASE_SERVICE_ADAPTER_TASK_ID");
+  const runId = env("RELEASE_SERVICE_ADAPTER_RUN_ID");
+  const keyVersion = env("RELEASE_SERVICE_ADAPTER_KEY_VERSION");
+  const identityFields = {
+    principal: identity,
+    task_id: taskId,
+    run_id: runId,
+    key_version: keyVersion,
+  };
+  const fields = {
+    schema: "ironwrap_service_adapter_preflight_v1",
+    frappe_scope: scope,
+    required_secret_names: [...SERVICE_ADAPTER_SECRET_NAMES],
+    required_identity_names: [...SERVICE_ADAPTER_IDENTITY_NAMES],
+    adapter_declared: true,
+    token_present: true,
+    endpoint_digest: sha256(url),
+    public_key_digest: sha256(publicKey),
+    identity_digest: sha256(canonicalJson(identityFields)),
+    status: "matched",
+  };
+  await writeJson(arg(args, "output"), {
+    ...fields,
+    config_digest: sha256(canonicalJson(fields)),
+    evidence_digest: sha256(canonicalJson(fields)),
+  });
 }
 
 async function providerTargets(args) {
@@ -909,12 +1030,19 @@ export async function requestServiceAdapter({
   }
   if (
     adapterUrl.protocol !== "https:" ||
+    adapterUrl.pathname !== "/v1/frappe" ||
     adapterUrl.username ||
     adapterUrl.password ||
-    adapterUrl.hash
+    adapterUrl.hash ||
+    adapterUrl.search
   )
     fail("service_adapter_url_invalid");
-  requireString(apiToken, "release_service_adapter_token_missing");
+  const normalizedToken = requireString(
+    apiToken,
+    "release_service_adapter_token_missing",
+  );
+  if (normalizedToken.length < SERVICE_ADAPTER_MIN_TOKEN_LENGTH)
+    fail("release_service_adapter_token_invalid");
   exactObjectKeys(
     request,
     [
@@ -935,7 +1063,7 @@ export async function requestServiceAdapter({
     method: "POST",
     headers: {
       accept: "application/json",
-      authorization: `Bearer ${apiToken}`,
+      authorization: `Bearer ${normalizedToken}`,
       "content-type": "application/json",
     },
     body: canonicalJson(request),
@@ -973,13 +1101,15 @@ async function serviceAdapter(args) {
     permit = verifyReleasePermit(
       permitPublicKey,
       permitToken,
-      {},
+      { frappe_scope: "in-scope" },
       { now: issuedAt + 1 },
     );
     if (canonicalJson(permit) !== canonicalJson(admittedPayload))
       fail("service_adapter_permit_payload_drift");
   } else {
-    permit = verifyReleasePermit(permitPublicKey, permitToken);
+    permit = verifyReleasePermit(permitPublicKey, permitToken, {
+      frappe_scope: "in-scope",
+    });
   }
   const mergeReceipt = await readJson(
     arg(args, "merge-receipt"),
@@ -1417,6 +1547,15 @@ async function stagingCleanupReceipt(args) {
 }
 
 async function productionRollbackReceipt(args) {
+  const frappeScopeValue = frappeScope(args);
+  const suppliedServiceArguments = serviceArgumentsPresent(args, SERVICE_ROLLBACK_ARGUMENTS);
+  if (frappeScopeValue === "in-scope") {
+    if (suppliedServiceArguments.length !== SERVICE_ROLLBACK_ARGUMENTS.length) {
+      fail("production_frappe_rollback_service_receipt_required");
+    }
+  } else if (suppliedServiceArguments.length > 0) {
+    fail("production_frappe_out_of_scope_rollback_receipt_present");
+  }
   const previous = requireUuid(arg(args, "previous"), "previous_revision_invalid");
   const candidate = requireUuid(arg(args, "candidate"), "candidate_revision_invalid");
   if (previous === candidate) fail("rollback_candidate_not_new");
@@ -1424,6 +1563,9 @@ async function productionRollbackReceipt(args) {
     arg(args, "permit-payload"),
     "permit_payload_invalid",
   );
+  if (permitPayload.release_manifest?.frappe_scope !== frappeScopeValue) {
+    fail("production_frappe_scope_permit_drift");
+  }
   if (
     permitPayload.release_manifest?.recovery?.prior_worker_revision !==
       previous ||
@@ -1508,6 +1650,7 @@ async function productionRollbackReceipt(args) {
   const fields = {
     schema: "ironwrap_production_rollback_v3",
     source_commit: sourceCommit,
+    frappe_scope: frappeScopeValue,
     previous_revision: previous,
     candidate_revision: candidate,
     restored_revision: restored,
@@ -1526,11 +1669,11 @@ async function productionRollbackReceipt(args) {
     health_digest: sha256(healthRaw),
     readiness_digest: sha256(readyRaw),
   };
-  await writeJson(arg(args, "output"), {
+  await writeJson(arg(args, "output"), validateProductionRollbackReceipt({
     ...fields,
     evidence_digest: sha256(canonicalJson(fields)),
     observed_at: new Date().toISOString(),
-  });
+  }, permitPayload));
 }
 
 async function parseVersion(args) {
@@ -1651,6 +1794,15 @@ async function smokeReceipt(args) {
 }
 
 async function productionReceipt(args) {
+  const frappeScopeValue = frappeScope(args);
+  const suppliedServiceArguments = serviceArgumentsPresent(args, SERVICE_ADAPTER_ARGUMENTS);
+  if (frappeScopeValue === "in-scope") {
+    if (suppliedServiceArguments.length !== SERVICE_ADAPTER_ARGUMENTS.length) {
+      fail("production_frappe_service_receipt_required");
+    }
+  } else if (suppliedServiceArguments.length > 0) {
+    fail("production_frappe_out_of_scope_service_receipt_present");
+  }
   const sourceCommit = requireCommit(arg(args, "source-commit"), "source_commit_invalid");
   const sourceTreeSha256 = requireHash(arg(args, "source-tree"), "source_tree_invalid");
   const artifactDigest = requireHash(arg(args, "artifact-digest"), "artifact_digest_invalid");
@@ -1658,6 +1810,9 @@ async function productionReceipt(args) {
   const revision = requireUuid(arg(args, "version-id"), "version_id_invalid");
   const versionDigest = requireHash(arg(args, "version-digest"), "version_digest_invalid");
   const permitPayload = await readJson(arg(args, "permit-payload"), "permit_payload_invalid");
+  if (permitPayload.release_manifest?.frappe_scope !== frappeScopeValue) {
+    fail("production_frappe_scope_permit_drift");
+  }
   if (
     permitPayload.source_commit !== sourceCommit ||
     permitPayload.source_tree_sha256 !== sourceTreeSha256 ||
@@ -1754,6 +1909,7 @@ async function productionReceipt(args) {
     source_tree_sha256: sourceTreeSha256,
     artifact_digest: artifactDigest,
     config_digest: configDigest,
+    frappe_scope: frappeScopeValue,
     revision,
     version_digest: versionDigest,
     merge_commit: mergeReceipt.merge_commit,
@@ -1901,6 +2057,7 @@ async function policyGenesis(args) {
 }
 
 async function assemblePermit(args) {
+  const frappeScopeValue = frappeScope(args);
   const context = await readJson(arg(args, "context"));
   const repoRoot = arg(args, "repo-root");
   const sourceCommit = requireCommit(context.source_commit, "source_commit_invalid");
@@ -2044,6 +2201,7 @@ async function assemblePermit(args) {
   };
   const manifestFields = {
     schema: RELEASE_MANIFEST_SCHEMA,
+    frappe_scope: frappeScopeValue,
     pr: context.pr,
     source: {
       commit: sourceCommit,
@@ -2427,6 +2585,7 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "release-evidence-wait") return releaseEvidenceWait(args);
   if (command === "release-evidence-sign") return releaseEvidenceSign(args);
   if (command === "release-evidence-publish") return releaseEvidencePublish(args);
+  if (command === "service-adapter-preflight") return serviceAdapterPreflight(args);
   if (command === "service-adapter-sign") return serviceAdapterSign(args);
   if (command === "service-adapter") return serviceAdapter(args);
   if (command === "admission-context") return admissionContext(args);

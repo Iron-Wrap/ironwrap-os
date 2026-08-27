@@ -17,6 +17,10 @@ JOBNIMBUS_API_KEY=""
 # impersonating FROM_EMAIL via domain-wide delegation.
 GOOGLE_SERVICE_ACCOUNT_JSON=""
 
+# Governed stage-change automation recipient mapping. Keep this deployment-owned mapping
+# in a Worker secret; rules persist only opaque refs and digests, never addresses.
+# PIPELINE_AUTOMATION_RECIPIENTS_JSON='{"operations":"ops@example.invalid"}'
+
 # QuickBooks webhook verifier token (Intuit)
 QB_WEBHOOK_TOKEN=""
 
@@ -55,6 +59,9 @@ AUTHORITY_RECORD_EXECUTOR_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 # separate authority from ADMIN_TOKEN. `npm run dev` generates one into
 # deploy/local/keys/ and writes it here, so a local approved write is not a 401.
 EFFECT_RUNTIME_TOKEN=""
+
+# Independent, false-by-default stage-change automation feature flag.
+# PIPELINE_AUTOMATION_ENABLED="false"
 
 # Dedicated customer-contract acceptance channel. These credentials must belong to the
 # `IronWrap Customer Acceptance Service` role, never the broad Worker BFF identity.

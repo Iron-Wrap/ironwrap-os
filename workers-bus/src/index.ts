@@ -124,6 +124,7 @@ import {
   handleExternalEffectSettlement,
 } from "./effect-runtime-admin.ts";
 import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
+import { drainPipelineStageAutomation } from "./pipeline-automation.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
 import {
@@ -319,7 +320,7 @@ export default {
           ),
         ]).then(() => {}),
       );
-    } else {
+    } else if (controller.cron === "*/5 * * * *") {
       // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
       // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
       const accountingDispatchBinding = resolveAccountingDispatchBinding(
@@ -504,6 +505,24 @@ export default {
             if (result.recovered > 0 || result.failed > 0) log({ at: "external_effect_lease_sweep", ...result });
           }).catch((error) =>
             log({ at: "external_effect_lease_sweep", error: String(error) }),
+          ),
+          drainPipelineStageAutomation(env as import("./app-types.ts").AppEnv).then((result) => {
+            log({
+              at: "pipeline_stage_automation_drain",
+              enabled: result.enabled,
+              available: result.available,
+              scanned: result.scanned,
+              claimed: result.claimed,
+              sent: result.sent,
+              retried: result.retried,
+              failed: result.failed,
+              unknown: result.unknown,
+              no_rule: result.no_rule,
+              recovered: result.recovered,
+              unavailable: result.unavailable,
+            });
+          }).catch((error) =>
+            log({ at: "pipeline_stage_automation_drain", error: String(error) }),
           ),
         ]).then(() => {}),
       ); // the frequent cron

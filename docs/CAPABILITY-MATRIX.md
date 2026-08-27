@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 101,
-      "latest": "0122_pipeline_admin_configuration.sql"
+      "count": 102,
+      "latest": "0123_pipeline_stage_automation.sql"
     }
   },
   "test_observation_policy": {

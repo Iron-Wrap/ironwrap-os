@@ -4,7 +4,8 @@ Status: source-level route contract
 Owner: IronWrap OS product owner
 Last verified: 2026-08-26
 Review trigger: any change to `workers-bus/src/pipeline-board-api.ts` administration routes, their
-store commands, or `workers-bus/migrations/0122_pipeline_admin_configuration.sql`
+store commands, or `workers-bus/migrations/0122_pipeline_admin_configuration.sql` /
+`workers-bus/migrations/0123_pipeline_stage_automation.sql`
 
 ## Truth boundary
 
@@ -13,7 +14,8 @@ administrator configures pipelines through. It exists so the PWA can be built ag
 shape rather than against a reading of the handler. Exact dispatch, validation order and status
 codes live in `workers-bus/src/pipeline-board-api.ts`; the D1 commands live in
 `workers-bus/src/pipeline-board-store.ts`; the schema lives in
-`workers-bus/migrations/0113_pipeline_board_core.sql` and `0122_pipeline_admin_configuration.sql`.
+`workers-bus/migrations/0113_pipeline_board_core.sql`, `0122_pipeline_admin_configuration.sql`, and
+`0123_pipeline_stage_automation.sql`.
 
 A route in source is only **Implemented**. Use
 [`CAPABILITY-MATRIX.md`](CAPABILITY-MATRIX.md) for current implementation gaps and
@@ -25,6 +27,37 @@ Every board a company runs — sales, production and shop, commercial projects, 
 per office — is data an administrator creates and reshapes. Nothing about a board is code: stage
 names, colours, order, won/lost flags, entry restrictions, card templates, entity types and role
 scope are all rows. There is no cap on how many pipelines a tenant may hold.
+
+## Governed stage-change automation
+
+The owner-only automation routes configure a closed v1 catalog for committed stage transitions:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules` | list current immutable rule revisions plus the safe action/template/recipient-ref catalog |
+| GET | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules/{rule_id}/revisions` | read one rule's ordered append-only revision history |
+| POST | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules` | create a rule at revision 1 |
+| POST | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules/{rule_id}/revisions` | append the next revision using the exact current version |
+
+The per-rule history read returns the current revision link and every immutable revision in ascending
+`version` order; each row carries its prior revision link, actor, closed definition, active state,
+version, and `created_at`.
+
+Commands require the owner session, CSRF, an active pipeline/stage, and the exact current rule
+version for revisions. v1 publishes only `operations.email.send` and the escaped
+`pipeline.stage-change-summary` template version 1. A rule stores a deployment-owned recipient
+reference, never an address; `PIPELINE_AUTOMATION_RECIPIENTS_JSON` resolves that reference only in
+the Worker and malformed, missing, or unknown mappings fail closed.
+
+Each committed stage transition has one immutable outbox binding. The five-minute scheduled drain
+binds it to the active revision that pre-dated the transition, records an explicit `no_rule`
+completion when none matches, and never changes an existing binding after a rule edit or disablement.
+Invocation claims and lease recovery use exact lease references. Sends go through the universal
+effect runtime and Gmail provider readback under the distinct `operations.email.send` action; an
+unknown provider result is terminal for automation. The linked effect ledger remains the later
+authority for reconciliation evidence, but automation does not automatically reopen or redispatch it.
+The feature is disabled by default and runs only when the effect runtime, Gmail, and recipient mapping
+are available.
 
 ## Rules that hold on every route here
 

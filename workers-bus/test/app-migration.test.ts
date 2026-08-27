@@ -2193,11 +2193,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // anchor without widening the historical estimator revision table. 0122 adds the pipeline
     // administration surface an owner configures boards through - per-pipeline role grants, the
     // append-only configuration trail, the stage archive flag, and the request-unique marker that
-    // keeps a batched administration command safe against a stale writer. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // keeps a batched administration command safe against a stale writer. 0123 adds the governed
+    // pipeline stage-automation rule, binding, invocation, and lease ledgers. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 101);
+    assert.equal(migrations.length, 102);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0122_pipeline_admin_configuration.sql");
+    assert.equal(migrations.at(-1), "0123_pipeline_stage_automation.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2302,10 +2303,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // append-only guards without changing any quote-bound Facet table shape. 0122 adds the
     // pipeline administration surface: two tables (role grants, configuration events), three
     // named indexes, and three guards - two append-only, one grant-identity. Its two forward-added
-    // columns are count-neutral.
+    // columns are count-neutral. 0123 adds three governed pipeline automation tables, five named
+    // indexes, and seven append-only or lineage guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 219, indexes: 327, triggers: 527 },
+      { tables: 222, indexes: 332, triggers: 534 },
     );
     assert.deepEqual(
       (db.prepare(

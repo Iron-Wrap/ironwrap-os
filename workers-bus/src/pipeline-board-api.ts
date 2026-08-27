@@ -73,6 +73,14 @@ import {
   updatePipeline,
   updateStage,
 } from "./pipeline-board-store.ts";
+import {
+  createPipelineAutomationRule,
+  listPipelineAutomationRules,
+  listPipelineAutomationRuleRevisions,
+  pipelineAutomationCatalog,
+  PipelineAutomationError,
+  revisePipelineAutomationRule,
+} from "./pipeline-automation.ts";
 
 const MAX_PIPELINE_BODY_BYTES = 4 * 1024;
 /** A pipeline an administrator submits carries a stage list and a card template; the board
@@ -612,6 +620,10 @@ const ADMIN_STAGES_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/stages$`);
 const ADMIN_STAGE_ORDER_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/stages/order$`);
 const ADMIN_STAGE_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/stages/([^/]+)$`);
 const ADMIN_STAGE_REMOVE_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/stages/([^/]+)/remove$`);
+const ADMIN_AUTOMATION_RULES_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/automation-rules$`);
+const ADMIN_AUTOMATION_REVISIONS_ROUTE = new RegExp(
+  `^${ADMIN_ROOT}/([^/]+)/automation-rules/([^/]+)/revisions$`,
+);
 
 async function handleAdministrationRoute(
   req: Request,
@@ -622,10 +634,18 @@ async function handleAdministrationRoute(
 ): Promise<Response> {
   if (!canAdministerPipelines(auth)) return json({ error: "pipeline_admin_forbidden" }, 403);
 
-  if (req.method === "GET")
-    return url.pathname === ADMIN_ROOT
-      ? await handleAdminPipelineList(env, auth)
-      : json({ error: "not_found" }, 404);
+  if (req.method === "GET") {
+    if (url.pathname === ADMIN_ROOT) return await handleAdminPipelineList(env, auth);
+    const automationRevision = url.pathname.match(ADMIN_AUTOMATION_REVISIONS_ROUTE);
+    if (automationRevision)
+      return await handleAdminAutomationHistory(
+        env,
+        auth,
+        automationRevision[1] ?? "",
+        automationRevision[2] ?? "",
+      );
+    return await handleAdminAutomationList(env, auth, url.pathname);
+  }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
   if (!validAppCsrf(req, auth)) return json({ error: "csrf_failed" }, 403);
 
@@ -639,6 +659,20 @@ async function handleAdministrationRoute(
     if (url.pathname === ADMIN_ROOT) return await handleAdminPipelineCreate(env, auth, body, now);
     if (url.pathname === `${ADMIN_ROOT}/order`)
       return await handleAdminPipelineReorder(env, auth, body, now);
+
+    const automationRevision = url.pathname.match(ADMIN_AUTOMATION_REVISIONS_ROUTE);
+    if (automationRevision)
+      return await handleAdminAutomationRevision(
+        env,
+        auth,
+        automationRevision[1] ?? "",
+        automationRevision[2] ?? "",
+        body,
+        now,
+      );
+    const automationRules = url.pathname.match(ADMIN_AUTOMATION_RULES_ROUTE);
+    if (automationRules)
+      return await handleAdminAutomationCreate(env, auth, automationRules[1] ?? "", body, now);
 
     // The most specific paths first: a `stages/order` request must never be read as a command
     // against a stage whose id happens to be spelled `order`.
@@ -703,6 +737,123 @@ async function handleAdminPipelineList(env: AppEnv, auth: AuthContext): Promise<
       ),
     ),
   });
+}
+
+async function handleAdminAutomationList(
+  env: AppEnv,
+  auth: AuthContext,
+  pathname: string,
+): Promise<Response> {
+  const route = pathname.match(ADMIN_AUTOMATION_RULES_ROUTE);
+  if (!route) return json({ error: "not_found" }, 404);
+  const pipelineId = decoded(route[1] ?? "");
+  if (!pipelineId) return json({ error: "not_found" }, 404);
+  const pipeline = await adminPipeline(env, auth.session.tenant_id, pipelineId);
+  if (!pipeline) return json({ error: "not_found" }, 404);
+  return json({
+    version: 1,
+    pipeline_id: pipeline.pipeline_id,
+    rules: await listPipelineAutomationRules(env, auth.session.tenant_id, pipeline.pipeline_id),
+    catalog: pipelineAutomationCatalog(env),
+  });
+}
+
+async function handleAdminAutomationHistory(
+  env: AppEnv,
+  auth: AuthContext,
+  encodedPipelineId: string,
+  encodedRuleId: string,
+): Promise<Response> {
+  const pipelineId = decoded(encodedPipelineId);
+  const ruleId = decoded(encodedRuleId);
+  if (!pipelineId || !ruleId) return json({ error: "not_found" }, 404);
+  const pipeline = await adminPipeline(env, auth.session.tenant_id, pipelineId);
+  if (!pipeline) return json({ error: "not_found" }, 404);
+  const revisions = await listPipelineAutomationRuleRevisions(
+    env,
+    auth.session.tenant_id,
+    pipeline.pipeline_id,
+    ruleId,
+  );
+  if (!revisions) return json({ error: "not_found" }, 404);
+  const current = revisions[revisions.length - 1];
+  return json({
+    version: 1,
+    pipeline_id: pipeline.pipeline_id,
+    rule_id: ruleId,
+    current_revision_id: current?.revision_id ?? null,
+    current_version: current?.version ?? null,
+    revisions,
+  });
+}
+
+async function handleAdminAutomationCreate(
+  env: AppEnv,
+  auth: AuthContext,
+  encodedPipelineId: string,
+  body: Record<string, unknown>,
+  now: Date,
+): Promise<Response> {
+  const pipelineId = decoded(encodedPipelineId);
+  const parsed = parseAutomationRuleBody(body);
+  if (!pipelineId || !parsed) return json({ error: "invalid_automation_rule" }, 400);
+  const rule = await createPipelineAutomationRule(env, {
+    ...parsed,
+    pipelineId,
+    tenantId: auth.session.tenant_id,
+    actor: { role: auth.session.role, userId: auth.session.user_id },
+  }, now);
+  return json({ rule, catalog: pipelineAutomationCatalog(env) }, 201);
+}
+
+async function handleAdminAutomationRevision(
+  env: AppEnv,
+  auth: AuthContext,
+  encodedPipelineId: string,
+  encodedRuleId: string,
+  body: Record<string, unknown>,
+  now: Date,
+): Promise<Response> {
+  const pipelineId = decoded(encodedPipelineId);
+  const ruleId = decoded(encodedRuleId);
+  const parsed = parseAutomationRuleBody(body);
+  const expectedVersion = positiveInteger(body.expected_version);
+  if (!pipelineId || !ruleId || !parsed || expectedVersion === null)
+    return json({ error: "invalid_automation_rule_revision" }, 400);
+  const rule = await revisePipelineAutomationRule(env, {
+    ...parsed,
+    pipelineId,
+    tenantId: auth.session.tenant_id,
+    ruleId,
+    expectedVersion,
+    actor: { role: auth.session.role, userId: auth.session.user_id },
+  }, now);
+  return json({ rule, catalog: pipelineAutomationCatalog(env) });
+}
+
+function parseAutomationRuleBody(body: Record<string, unknown>): {
+  toStageId: string;
+  action: unknown;
+  recipientRef: unknown;
+  templateKey: unknown;
+  templateVersion: unknown;
+  active: unknown;
+} | null {
+  const allowedKeys = new Set([
+    "to_stage_id", "action", "recipient_ref", "template_key", "template_version", "active",
+    "expected_version",
+  ]);
+  if (Object.keys(body).some((key) => !allowedKeys.has(key))) return null;
+  const toStageId = typeof body.to_stage_id === "string" ? body.to_stage_id.trim() : "";
+  if (toStageId.length < 8 || toStageId.length > 200) return null;
+  return {
+    toStageId,
+    action: body.action,
+    recipientRef: body.recipient_ref,
+    templateKey: body.template_key,
+    templateVersion: body.template_version,
+    active: Object.hasOwn(body, "active") ? body.active : true,
+  };
 }
 
 async function handleAdminPipelineCreate(
@@ -1327,6 +1478,21 @@ const ADMIN_FAILURE_STATUS: Readonly<Record<string, number>> = {
   pipeline_version_conflict: 409,
   pipeline_stage_changed: 409,
   pipeline_write_failed: 500,
+  automation_active_invalid: 400,
+  automation_action_invalid: 400,
+  automation_actor_invalid: 400,
+  automation_expected_version_invalid: 400,
+  automation_pipeline_or_stage_not_found: 404,
+  automation_pipeline_or_stage_inactive: 409,
+  automation_recipient_config_malformed: 400,
+  automation_recipient_config_unavailable: 400,
+  automation_recipient_ref_invalid: 400,
+  automation_recipient_ref_unknown: 400,
+  automation_rule_exists: 409,
+  automation_rule_not_found: 404,
+  automation_rule_version_conflict: 409,
+  automation_rule_write_failed: 500,
+  automation_template_invalid: 400,
 };
 
 function administrationFailure(error: unknown): Response {
@@ -1337,6 +1503,11 @@ function administrationFailure(error: unknown): Response {
     );
   if (error instanceof PipelineTemplateError)
     return json({ error: error.code }, 400);
+  if (error instanceof PipelineAutomationError)
+    return json(
+      { error: error.code, ...error.detail },
+      ADMIN_FAILURE_STATUS[error.code] ?? 409,
+    );
   if (error instanceof PipelineStoreError)
     return json({ error: error.code }, ADMIN_FAILURE_STATUS[error.code] ?? 409);
   throw error;

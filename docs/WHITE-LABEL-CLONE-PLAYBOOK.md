@@ -115,7 +115,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    `SHARED_DRIVE_ID_JOBS`, `SHARED_DRIVE_ID_RESTRICTED`, `SHARED_DRIVE_ID_ARCHIVE`,
    `ERPNEXT_BASE_URL`, `APP_TENANT_ID`, `APP_TENANT_NAME`, `APP_TENANT_BRAND`,
    `APP_LOCALE`, `APP_TIME_ZONE`, `APP_CURRENCY`, `APP_BFF_ENABLED`,
-   `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, and `APP_CUSTOMER_PORTAL_ENABLED`.
+   `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, `APP_CUSTOMER_PORTAL_ENABLED`, and
+   `PIPELINE_AUTOMATION_ENABLED`.
    Keep `JOBNIMBUS_ENABLED` per the tenant's bridge decision (JobNimbus is a temporary bridge,
    not a keeper).
    If `APP_BFF_ENABLED=true`, set a canonical HTTPS `APP_PUBLIC_ORIGIN` and include that exact
@@ -128,7 +129,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0122_pipeline_admin_configuration.sql`; `node tools/validate-documentation.mjs`
+   `0123_pipeline_stage_automation.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -136,7 +137,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
    `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `QB_RECONCILIATION_ISSUER_API_KEY`,
    `QB_RECONCILIATION_ISSUER_API_SECRET`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
-   and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
+   and `APP_AUTH_PEPPER`; add `PIPELINE_AUTOMATION_RECIPIENTS_JSON` only when governed stage
+   automation is enabled, and add each broker shared secret only when its isolated broker is enabled.
    All tokens are NEW values, never reused from another tenant.
 8. Compare the intended Worker runtime values before deployment (this reads supplied env values;
    it does not inspect or change a live Worker):
@@ -329,7 +331,9 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 101 D1 migrations through `0122_pipeline_admin_configuration.sql` applied to the tenant database.
+- [ ] Governed stage automation is either left disabled, or has `PIPELINE_AUTOMATION_ENABLED=true`
+  and its deployment-owned `PIPELINE_AUTOMATION_RECIPIENTS_JSON` mapping configured.
+- [ ] All 102 D1 migrations through `0123_pipeline_stage_automation.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

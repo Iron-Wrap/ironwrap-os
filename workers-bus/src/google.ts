@@ -102,6 +102,14 @@ export interface GmailSendReceipt {
   providerMessageId: string;
 }
 
+export interface GovernedGmailSendReceipt extends GmailSendReceipt {
+  effectId: string;
+  effectState: string;
+  requestHash: string;
+  providerResponseHash: string | null;
+  readbackHash: string | null;
+}
+
 async function gmailExpectedReadback(
   to: string,
   subject: string,
@@ -163,73 +171,121 @@ export async function sendGmail(
   html: string,
   options: { idempotencyKey?: string; taskId?: string; actorId?: string } = {},
 ): Promise<GmailSendReceipt> {
+  const receipt = await sendGmailThroughEffect(env, to, subject, html, {
+    ...options,
+    action: "customer.email.send",
+  });
+  return { providerMessageId: receipt.providerMessageId };
+}
+
+/**
+ * Governed stage-automation email. It deliberately has a distinct effect action from the
+ * compatibility `customer.email.send` rail, while both actions share the same Gmail adapter,
+ * provider readback and universal effect ledger.
+ */
+export async function sendPipelineAutomationEmail(
+  env: Env,
+  to: string,
+  subject: string,
+  html: string,
+  options: {
+    idempotencyKey: string;
+    taskId?: string;
+    actorId?: string;
+    aggregate?: { type: string; id: string; version: number };
+  },
+): Promise<GovernedGmailSendReceipt> {
+  return await sendGmailThroughEffect(env, to, subject, html, {
+    ...options,
+    action: "operations.email.send",
+  });
+}
+
+async function sendGmailThroughEffect(
+  env: Env,
+  to: string,
+  subject: string,
+  html: string,
+  options: {
+    action: "customer.email.send" | "operations.email.send";
+    idempotencyKey?: string;
+    taskId?: string;
+    actorId?: string;
+    aggregate?: { type: string; id: string; version: number };
+  },
+): Promise<GovernedGmailSendReceipt> {
   assertEffectLedgerReady(env);
   const tenantId = String((env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID ?? "ironwrap");
   const actorId = options.actorId ?? "gmail-adapter";
-    const request = { to, subject, html };
-    const requestHash = await sha256Hex(canonicalJson(request));
-    const idempotencyKey = options.idempotencyKey ?? `gmail:${to}:${requestHash}`;
-    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
-    const result = await runExternalEffect(env as never, {
-      tenantId,
-      actor: { type: "agent", id: actorId },
-      taskId: options.taskId ?? `gmail:${idempotencyKey}`,
-      authority: adapterAuthority({ tenantId, provider: "gmail", action: "customer.email.send", actorId, deadlineAt, retryLimit: 1 }),
-      aggregate: { type: "communication", id: idempotencyKey, version: 0 },
-      intentId: idempotencyKey,
-      action: "customer.email.send",
-      request,
-      requestHash,
-      provider: "gmail",
-      idempotencyKey,
-      deadlineAt,
-      expectedReadback: await gmailExpectedReadback(to, subject, html),
-      retryLimit: 1,
-      compensationPlan: {},
-      correlationId: idempotencyKey,
-    }, {
-      async dispatch() {
-        const value = await sendGmailDirect(env, to, subject, html);
-        return { outcome: "accepted" as const, value, providerExternalId: value.providerMessageId, providerResponse: value };
-      },
-      async readback({ providerExternalId }) {
-        if (!providerExternalId) return { status: "unavailable" as const, detailCode: "gmail_readback_id_missing" };
-        const token = await googleToken(env, env.FROM_EMAIL);
-        const query = new URLSearchParams({ format: "raw" });
-        const response = await fetch(`${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
-          headers: { authorization: `Bearer ${token}` },
-        });
-        if (response.status === 404) return { status: "not_found" as const, detailCode: "gmail_readback_not_found" };
-        if (!response.ok) return { status: "unavailable" as const, detailCode: `gmail_readback_${response.status}` };
-        const value = await response.json() as unknown;
-        const observed = await gmailObservedReadback(value);
-        return observed
-          ? { status: "match" as const, providerExternalId, observed }
-          : { status: "conflict" as const, providerExternalId, observed: value, detailCode: "gmail_readback_conflict" };
-      },
-      async replay({ effect }) {
-        const providerMessageId = effect.provider_external_id;
-        if (!providerMessageId) throw new Error("gmail_replay_id_missing");
-        const token = await googleToken(env, env.FROM_EMAIL);
-        const response = await fetch(
-          `${GMAIL}/users/me/messages/${encodeURIComponent(providerMessageId)}?format=raw`,
-          {
-            headers: { authorization: `Bearer ${token}` },
-          },
-        );
-        const observed = response.ok
-          ? await gmailObservedReadback(await response.json())
-          : null;
-        const expected = await gmailExpectedReadback(to, subject, html);
-        if (!observed || canonicalJson(observed) !== canonicalJson(expected)) {
-          throw new Error("gmail_replay_readback_failed");
-        }
-        return { providerMessageId };
-      },
-    });
-    if (result.effect.state !== "succeeded") throw new Error(result.effect.result_code ?? "gmail_effect_outcome_unknown");
-    if (!result.value?.providerMessageId) throw new Error("gmail_effect_result_missing");
-  return result.value;
+  const request = { to, subject, html };
+  const requestHash = await sha256Hex(canonicalJson(request));
+  const idempotencyKey = options.idempotencyKey ?? `gmail:${to}:${requestHash}`;
+  const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  const action = options.action;
+  const result = await runExternalEffect(env as never, {
+    tenantId,
+    actor: { type: "agent", id: actorId },
+    taskId: options.taskId ?? `gmail:${idempotencyKey}`,
+    authority: adapterAuthority({ tenantId, provider: "gmail", action, actorId, deadlineAt, retryLimit: 1 }),
+    aggregate: options.aggregate ?? { type: "communication", id: idempotencyKey, version: 0 },
+    intentId: idempotencyKey,
+    action,
+    request,
+    requestHash,
+    provider: "gmail",
+    idempotencyKey,
+    deadlineAt,
+    expectedReadback: await gmailExpectedReadback(to, subject, html),
+    retryLimit: 1,
+    compensationPlan: {},
+    correlationId: idempotencyKey,
+  }, {
+    async dispatch() {
+      const value = await sendGmailDirect(env, to, subject, html);
+      return { outcome: "accepted" as const, value, providerExternalId: value.providerMessageId, providerResponse: value };
+    },
+    async readback({ providerExternalId }) {
+      if (!providerExternalId) return { status: "unavailable" as const, detailCode: "gmail_readback_id_missing" };
+      const token = await googleToken(env, env.FROM_EMAIL);
+      const query = new URLSearchParams({ format: "raw" });
+      const response = await fetch(`${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (response.status === 404) return { status: "not_found" as const, detailCode: "gmail_readback_not_found" };
+      if (!response.ok) return { status: "unavailable" as const, detailCode: `gmail_readback_${response.status}` };
+      const value = await response.json() as unknown;
+      const observed = await gmailObservedReadback(value);
+      return observed
+        ? { status: "match" as const, providerExternalId, observed }
+        : { status: "conflict" as const, providerExternalId, observed: value, detailCode: "gmail_readback_conflict" };
+    },
+    async replay({ effect }) {
+      const providerMessageId = effect.provider_external_id;
+      if (!providerMessageId) throw new Error("gmail_replay_id_missing");
+      const token = await googleToken(env, env.FROM_EMAIL);
+      const response = await fetch(
+        `${GMAIL}/users/me/messages/${encodeURIComponent(providerMessageId)}?format=raw`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      const observed = response.ok
+        ? await gmailObservedReadback(await response.json())
+        : null;
+      const expected = await gmailExpectedReadback(to, subject, html);
+      if (!observed || canonicalJson(observed) !== canonicalJson(expected))
+        throw new Error("gmail_replay_readback_failed");
+      return { providerMessageId };
+    },
+  });
+  if (result.effect.state !== "succeeded") throw new Error(result.effect.result_code ?? "gmail_effect_outcome_unknown");
+  if (!result.value?.providerMessageId) throw new Error("gmail_effect_result_missing");
+  return {
+    providerMessageId: result.value.providerMessageId,
+    effectId: result.effect.effect_id,
+    effectState: result.effect.state,
+    requestHash: result.effect.request_hash,
+    providerResponseHash: result.effect.provider_response_hash,
+    readbackHash: result.effect.readback_hash,
+  };
 }
 
 async function sendGmailDirect(env: Env, to: string, subject: string, html: string): Promise<GmailSendReceipt> {

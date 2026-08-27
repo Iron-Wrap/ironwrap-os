@@ -30,6 +30,10 @@ inbound (website/phone/gbp/ad/referral/manual)
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
   cron 0 14 → reconcile: independent source counts vs landed; daily digest = heartbeat
 
+governed pipeline stage automation (disabled by default)
+  committed transition → immutable outbox binding → bounded cron */5 drain
+  owner-only rule revisions + deployment-owned recipient refs → universal effect runtime/Gmail readback
+
 estimator/configurator
   │  POST /ingest/estimate  (Bearer INGEST_TOKEN)
   ▼
@@ -79,6 +83,7 @@ IronWrap PWA
 | Facet review projection | `facet-design-frappe-projection.ts` reads only current native v2 heads with exact project, identity, quote, proposal, publication, and acceptance authority. The default-off Frappe endpoint creates a blank non-customer-safe Draft Customer Quote for active decisions, rejects the predecessor projected quote on chain advance, and appends Evidence Item plus Integration Reconciliation records without supplying commercial terms. |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; any remaining `frappe-read.ts` compatibility access uses hard-coded DocType/field/filter allowlists and fails closed |
+| Governed stage-change automation | `pipeline-automation.ts` + migration `0123_pipeline_stage_automation.sql`; one closed email action/template, immutable outbox bindings, exact leases, effect/readback evidence, and explicit no-rule completion |
 
 ## Files
 
@@ -91,6 +96,7 @@ src/estimates.ts   Owned estimator/configurator intake; idempotent by project/ke
 src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe or commercial mutation
 src/facet-design-projection.ts Scheduled review-only D1-anchor projection through a separately authenticated Frappe command
 src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
+src/pipeline-automation.ts Owner-only rule revisions and bounded stage-change outbox/effect drain
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementation
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
@@ -102,7 +108,7 @@ src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning a
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
 src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state; 0019 adds measurement receipt leases
+migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state; 0019 adds measurement receipt leases; 0123 adds governed stage automation
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -128,6 +134,7 @@ npx wrangler secret put ADMIN_TOKEN --env=""
 npx wrangler secret put NEWO_WEBHOOK_TOKEN --env=""  # only when Newo phone intake is enabled
 npx wrangler secret put JOBNIMBUS_API_KEY --env=""
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env=""
+npx wrangler secret put PIPELINE_AUTOMATION_RECIPIENTS_JSON --env=""  # opaque ref -> address mapping; required only when automation is enabled
 npx wrangler secret put QB_WEBHOOK_TOKEN --env=""  # when the QuickBooks webhook is connected
 npx wrangler secret put QB_RECONCILIATION_ISSUER_API_KEY --env=""
 npx wrangler secret put QB_RECONCILIATION_ISSUER_API_SECRET --env=""

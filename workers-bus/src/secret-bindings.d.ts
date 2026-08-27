@@ -15,6 +15,8 @@ interface Env {
   NEWO_CONTROL_SIGNING_SECRET: string;
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
+  /** Deployment-owned recipient reference mapping for governed pipeline automation. */
+  PIPELINE_AUTOMATION_RECIPIENTS_JSON: string;
   /** Google Maps Platform key (Solar API cross-check); absence disables the check. */
   GOOGLE_MAPS_API_KEY: string;
   MEASUREMENT_OCR_API_KEY: string;
@@ -66,6 +68,7 @@ declare namespace Cloudflare {
     NEWO_CONTROL_SIGNING_SECRET: string;
     JOBNIMBUS_API_KEY: string;
     GOOGLE_SERVICE_ACCOUNT_JSON: string;
+    PIPELINE_AUTOMATION_RECIPIENTS_JSON: string;
     GOOGLE_MAPS_API_KEY: string;
     MEASUREMENT_OCR_API_KEY: string;
     QB_WEBHOOK_TOKEN: string;

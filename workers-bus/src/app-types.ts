@@ -118,6 +118,10 @@ export type AppEnv = Env & {
   // Every provider mutation adapter is fail-closed behind the durable universal effect ledger.
   // Unit-only callers may omit this flag; deployed Worker environments set it explicitly.
   EFFECT_RUNTIME_ENABLED?: string;
+  // Governed stage-change automation is independently activated. Its recipient mapping is
+  // deployment-owned JSON; rule rows carry only opaque references and digests.
+  PIPELINE_AUTOMATION_ENABLED?: string;
+  PIPELINE_AUTOMATION_RECIPIENTS_JSON?: string;
   POSTIZ_ENABLED?: string;
   POSTIZ_EXPECTED_VERSION?: string;
   POSTIZ_API_BASE_URL?: string;

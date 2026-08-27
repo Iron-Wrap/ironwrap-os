@@ -31,6 +31,73 @@ function freePort() {
   });
 }
 
+async function launchRuntime(t, extraEnvironment = {}) {
+  const workspace = mkdtempSync(
+    join(tmpdir(), "ironwrap-runtime-launcher-test-"),
+  );
+  const receipt = join(workspace, "npm-receipt.log");
+  writeFileSync(
+    join(workspace, "npm"),
+    [
+      "#!/bin/sh",
+      'printf "%s|%s|%s\\n" "$PWD" "$*" "${ERPNEXT_TENANT_ID-}" >> "$IRONWRAP_RUNTIME_TEST_RECEIPT"',
+      'if [ "${IRONWRAP_RUNTIME_TEST_FAIL_CWD-}" = "$PWD" ]; then',
+      '  echo "synthetic child exit for $PWD" >&2',
+      '  exit "${IRONWRAP_RUNTIME_TEST_FAIL_STATUS:-0}"',
+      "fi",
+      "exec /bin/sleep 30",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const stubPort = await freePort();
+  let busPort = await freePort();
+  while (busPort === stubPort) busPort = await freePort();
+
+  const environment = {
+    ...process.env,
+    PATH: `${workspace}:${dirname(process.execPath)}:${process.env.PATH}`,
+    IRONWRAP_ADMIN_TOKEN: "synthetic-local-test-token",
+    IRONWRAP_LOCAL_APPROVAL_BROKERS: "off",
+    IRONWRAP_RUNTIME_TEST_RECEIPT: receipt,
+    ERPNEXT_STUB_PORT: String(stubPort),
+    ERPNEXT_STUB_USER: "owner@example.invalid",
+    HERMES_BUS_PORT: String(busPort),
+    ...extraEnvironment,
+  };
+  delete environment.ERPNEXT_TENANT_ID;
+  const child = spawn("/bin/bash", [launcherPath], {
+    cwd: root,
+    detached: true,
+    env: environment,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exited = once(child, "exit");
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let output = "";
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+
+  t.after(async () => {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    if (child.exitCode === null) {
+      await Promise.race([exited, delay(2_000, undefined, { ref: false })]);
+    }
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  return { child, exited, receipt, output: () => output };
+}
+
 test("the Worker package owns the one local port argument", () => {
   assert.match(
     workerPackage.scripts.dev,
@@ -59,77 +126,26 @@ test("the ERP MCP receives a stable local tenant", () => {
 });
 
 test("the launcher waits for the stub and forwards one Worker port plus the default tenant", async (t) => {
-  const workspace = mkdtempSync(
-    join(tmpdir(), "ironwrap-runtime-launcher-test-"),
-  );
-  const receipt = join(workspace, "npm-receipt.log");
-  writeFileSync(
-    join(workspace, "npm"),
-    [
-      "#!/bin/sh",
-      'printf "%s|%s|%s\\n" "$PWD" "$*" "${ERPNEXT_TENANT_ID-}" >> "$IRONWRAP_RUNTIME_TEST_RECEIPT"',
-      "exec /bin/sleep 30",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-
-  const stubPort = await freePort();
-  let busPort = await freePort();
-  while (busPort === stubPort) busPort = await freePort();
-
-  const environment = {
-    ...process.env,
-    PATH: `${workspace}:${dirname(process.execPath)}:${process.env.PATH}`,
-    IRONWRAP_ADMIN_TOKEN: "synthetic-local-test-token",
-    IRONWRAP_LOCAL_APPROVAL_BROKERS: "off",
-    IRONWRAP_RUNTIME_TEST_RECEIPT: receipt,
-    ERPNEXT_STUB_PORT: String(stubPort),
-    ERPNEXT_STUB_USER: "owner@example.invalid",
-    HERMES_BUS_PORT: String(busPort),
-  };
-  delete environment.ERPNEXT_TENANT_ID;
-  const child = spawn("/bin/bash", [launcherPath], {
-    cwd: root,
-    detached: true,
-    env: environment,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  t.after(async () => {
-    if (child.exitCode === null) {
-      process.kill(-child.pid, "SIGTERM");
-      await Promise.race([once(child, "exit"), delay(2_000)]);
-    }
-    rmSync(workspace, { recursive: true, force: true });
-  });
-
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  let output = "";
-  child.stdout.on("data", (chunk) => {
-    output += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    output += chunk;
-  });
+  const runtime = await launchRuntime(t);
 
   for (
     let attempt = 0;
-    attempt < 100 && !output.includes("All services started.");
+    attempt < 100 && !runtime.output().includes("All services started.");
     attempt += 1
   ) {
-    if (child.exitCode !== null) break;
+    if (runtime.child.exitCode !== null) break;
     await delay(100);
   }
   assert.match(
-    output,
+    runtime.output(),
     /erpnext-stub ready[\s\S]*Starting: erpnext-roofing-mcp/,
   );
-  assert.match(output, /All services started\./);
+  assert.match(runtime.output(), /All services started\./);
 
   let launches = [];
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
-      launches = readFileSync(receipt, "utf8").trim().split("\n");
+      launches = readFileSync(runtime.receipt, "utf8").trim().split("\n");
     } catch {
       launches = [];
     }
@@ -153,6 +169,29 @@ test("the launcher waits for the stub and forwards one Worker port plus the defa
     erpMcp,
     `${join(root, "mcp", "erpnext-roofing-mcp")}|start|ironwrap`,
   );
+});
+
+test("a required child exit fails the supervisor with its service name and log", async (t) => {
+  const runtime = await launchRuntime(t, {
+    IRONWRAP_RUNTIME_TEST_FAIL_CWD: join(root, "app"),
+    IRONWRAP_RUNTIME_TEST_FAIL_STATUS: "0",
+  });
+  const [code, signal] = await Promise.race([
+    runtime.exited,
+    delay(10_000, undefined, { ref: false }).then(() => {
+      throw new Error(
+        `supervisor stayed alive after app exited: ${runtime.output()}`,
+      );
+    }),
+  ]);
+
+  assert.equal(signal, null);
+  assert.equal(code, 1, runtime.output());
+  assert.match(
+    runtime.output(),
+    /ERROR: required service app exited unexpectedly with status 0\./,
+  );
+  assert.match(runtime.output(), /\.runtime-logs\/app\.log/);
 });
 
 test("the local ERP stub serves actor attestation and resource reads", async (t) => {

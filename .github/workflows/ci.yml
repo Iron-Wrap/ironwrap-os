@@ -77,6 +77,8 @@ jobs:
         run: node --test tools/generate-tenant-worker-config.test.mjs
       - name: Test local .dev.vars composition (port overrides + example scaffold)
         run: node --test deploy/local/dev-vars.test.mjs
+      - name: Test local runtime supervisor startup contract
+        run: node --test tools/start-local-runtime.test.mjs
       - name: Validate tenant-leakage check 5 sweeps every doctype the Worker writes
         run: node tools/validate-ingest-doctype-coverage.mjs
       - name: Test ingest doctype coverage guard

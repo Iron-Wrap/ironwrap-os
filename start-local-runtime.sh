@@ -15,6 +15,7 @@ ERPNEXT_BASE_URL="${ERPNEXT_BASE_URL:-http://127.0.0.1:$ERPNEXT_STUB_PORT}"
 ERPNEXT_ALLOW_INSECURE_LOCAL="${ERPNEXT_ALLOW_INSECURE_LOCAL:-true}"
 ERPNEXT_API_KEY="${ERPNEXT_API_KEY:-dummy}"
 ERPNEXT_API_SECRET="${ERPNEXT_API_SECRET:-dummy}"
+ERPNEXT_TENANT_ID="${ERPNEXT_TENANT_ID:-ironwrap}"
 
 WORKERS_DEV_VARS="$ROOT_DIR/workers-bus/.dev.vars"
 if [[ -n "${IRONWRAP_ADMIN_TOKEN:-}" ]]; then
@@ -51,7 +52,29 @@ start_service() {
   PIDS+=("$pid")
   NAMES+=("$name")
   STARTED+=("$name:$pid")
+  LAST_STARTED_PID="$pid"
   echo "$name pid=$pid"
+}
+
+wait_for_http() {
+  local name="$1"
+  local url="$2"
+  local pid="$3"
+
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "ERROR: $name exited before readiness. See $LOG_DIR/$name.log."
+      return 1
+    fi
+    if curl --fail --silent --max-time 1 "$url" >/dev/null 2>&1; then
+      echo "$name ready"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "ERROR: $name did not become ready. See $LOG_DIR/$name.log."
+  return 1
 }
 
 cleanup() {
@@ -107,39 +130,18 @@ echo "Logging to: $LOG_DIR"
 
 # Local ERPNext stub (single endpoint for actor attestation + permissive resource reads)
 start_service "erpnext-stub" "$ROOT_DIR" "$LOG_DIR/erpnext-stub.log" \
-  env ERPNEXT_STUB_PORT="$ERPNEXT_STUB_PORT" ERPNEXT_STUB_USER="$ERPNEXT_STUB_USER" node - <<'NODE'
-const http = require('node:http');
-const port = Number(process.env.ERPNEXT_STUB_PORT || '19090');
-const actor = process.env.ERPNEXT_STUB_USER || 'owner@example.com';
-
-const server = http.createServer((req, res) => {
-  if (req.url === '/api/method/frappe.auth.get_logged_user') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ message: actor }));
-    return;
-  }
-
-  if (req.url.startsWith('/api/resource')) {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ data: [] }));
-    return;
-  }
-
-  res.writeHead(404, { 'content-type': 'application/json' });
-  res.end('{}');
-});
-
-server.listen(port, '127.0.0.1', () => {
-  console.log(`stub ERPNext server on http://127.0.0.1:${port}`);
-});
-NODE
+  env ERPNEXT_STUB_PORT="$ERPNEXT_STUB_PORT" ERPNEXT_STUB_USER="$ERPNEXT_STUB_USER" \
+    node "$ROOT_DIR/deploy/local/erpnext-stub.mjs"
+wait_for_http "erpnext-stub" \
+  "http://127.0.0.1:$ERPNEXT_STUB_PORT/api/method/frappe.auth.get_logged_user" \
+  "$LAST_STARTED_PID"
 
 # Workers bus runtime. The port this script picked has to reach predev too, or the
 # origin it writes into .dev.vars (APP_PUBLIC_ORIGIN and its allowlist) would name a
 # port the Worker is not listening on.
 export IRONWRAP_LOCAL_WORKER_PORT="$HERMES_BUS_PORT"
 start_service "workers-bus" "$ROOT_DIR/workers-bus" "$LOG_DIR/workers-bus.log" \
-  npm run dev -- --port "$HERMES_BUS_PORT"
+  npm run dev
 
 # Field/office app runtime
 start_service "app" "$ROOT_DIR/app" "$LOG_DIR/app.log" \
@@ -156,6 +158,7 @@ start_service "ironwrap-bus-mcp" "$ROOT_DIR/mcp/ironwrap-bus-mcp" "$LOG_DIR/iron
 # Frappe/ERPNext MCP (local-read-safe mode)
 start_service "erpnext-roofing-mcp" "$ROOT_DIR/mcp/erpnext-roofing-mcp" "$LOG_DIR/erpnext-roofing-mcp.log" \
   env ERPNEXT_BASE_URL="$ERPNEXT_BASE_URL" \
+    ERPNEXT_TENANT_ID="$ERPNEXT_TENANT_ID" \
     ERPNEXT_ALLOW_INSECURE_LOCAL="$ERPNEXT_ALLOW_INSECURE_LOCAL" \
     ERPNEXT_API_KEY="$ERPNEXT_API_KEY" \
     ERPNEXT_API_SECRET="$ERPNEXT_API_SECRET" \

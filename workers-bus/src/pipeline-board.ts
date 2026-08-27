@@ -8,7 +8,7 @@
  * database only through the named relations an entity-type adapter publishes.
  */
 
-import type { AppRole, AuthContext } from "./app-types.ts";
+import { ROLE_PERMISSIONS, type AppRole, type AuthContext } from "./app-types.ts";
 
 /**
  * How long the server keeps accepting an undo for a transition (IRO-209 safeguard contract).
@@ -34,6 +34,9 @@ export interface PipelineRecord {
   template_source_id: string | null;
   is_active: number;
   position: number;
+  /** Set by the administration command whose version CAS won; the marker every dependent
+   * statement of that command predicates itself on (0122). */
+  configuration_marker: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -50,6 +53,8 @@ export interface PipelineStageRecord {
   is_won: number;
   is_lost: number;
   min_role_to_enter: string | null;
+  /** 0 once an administrator removes a stage the audit trail still names (0122). */
+  is_active: number;
   version: number;
   created_at: string;
   updated_at: string;
@@ -386,29 +391,242 @@ export function satisfiesStageRole(actorRole: AppRole, requiredRole: string): bo
 /** Roles that read every pipeline in the tenant regardless of who owns it. */
 const CROSS_PIPELINE_READ_ROLES: readonly AppRole[] = ["owner", "ops"];
 
+export interface PipelineRoleGrantRecord {
+  grant_id: string;
+  tenant_id: string;
+  pipeline_id: string;
+  role: string;
+  can_write: number;
+  granted_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
- * Board visibility, role-scoped through `pipelines.owning_role` (PO decision D8).
+ * The acting session's grants, keyed by pipeline (0122).  A missing key is the deny: the index
+ * carries only rows that already matched this tenant AND this role, so a caller cannot widen a
+ * session by handing the wrong index in.
+ */
+export type PipelineRoleAccess = ReadonlyMap<string, { can_write: boolean }>;
+
+export const NO_PIPELINE_ROLE_ACCESS: PipelineRoleAccess = new Map();
+
+/**
+ * Board visibility, role-scoped through `pipelines.owning_role` (PO decision D8) plus the
+ * administrator-configured grants of 0122.
+ *
+ * Fail-closed exactly as PR #171 established: a role that neither owns the pipeline nor holds a
+ * grant on it gets nothing, never a widened view.  `access` defaults to empty, so every caller
+ * that has not loaded grants keeps the pre-0122 answer instead of accidentally opening a board.
  *
  * `field` has no board at all and falls out here because it holds no office read permission: a
  * crew member's surface is their task list, not a Sales pipeline (ELEC-156 section 4).  Accounting
  * keeps its money-exception and QuickBooks surfaces and gets no board in M1 (D10), which is what
  * an unmatched `owning_role` already produces.
+ *
+ * An archived pipeline, and a pipeline kept as a copy template, are boards nobody works: they are
+ * invisible on every board route the moment an administrator archives them, including to an owner
+ * probing the id directly.  The administration routes read them through their own authority.
  */
-export function canViewPipeline(auth: AuthContext, pipeline: PipelineRecord): boolean {
+export function canViewPipeline(
+  auth: AuthContext,
+  pipeline: PipelineRecord,
+  access: PipelineRoleAccess = NO_PIPELINE_ROLE_ACCESS,
+): boolean {
   if (!auth.permissions.includes("now:read")) return false;
+  if (pipeline.is_active !== 1 || pipeline.is_template === 1) return false;
   const role = auth.session.role;
   if (CROSS_PIPELINE_READ_ROLES.includes(role)) return true;
-  return pipeline.owning_role !== null && pipeline.owning_role === role;
+  if (pipeline.owning_role !== null && pipeline.owning_role === role) return true;
+  return access.has(pipeline.pipeline_id);
 }
 
 /**
- * Move rights.  `ops` reads every board and moves nothing on it, matching the posture it already
- * has on the production runway and the money desk (`ROLE_PERMISSIONS` in app-types.ts).
+ * Move rights.  `ops` reads every board and moves nothing on it by default, matching the posture it
+ * already has on the production runway and the money desk (`ROLE_PERMISSIONS` in app-types.ts) -
+ * and an administrator can hand it write on one named pipeline with a grant, which is exactly the
+ * "the shop board is read by production and written by ops" shape the stakeholder described.
  */
-export function canMoveCards(auth: AuthContext, pipeline: PipelineRecord): boolean {
-  if (!canViewPipeline(auth, pipeline)) return false;
+export function canMoveCards(
+  auth: AuthContext,
+  pipeline: PipelineRecord,
+  access: PipelineRoleAccess = NO_PIPELINE_ROLE_ACCESS,
+): boolean {
+  if (!canViewPipeline(auth, pipeline, access)) return false;
   const role = auth.session.role;
-  return role === "owner" || (pipeline.owning_role !== null && pipeline.owning_role === role);
+  if (role === "owner") return true;
+  if (pipeline.owning_role !== null && pipeline.owning_role === role) return true;
+  return access.get(pipeline.pipeline_id)?.can_write === true;
+}
+
+/* --------------------------------------------------------------- administration ------ */
+
+/**
+ * Who may reshape the boards themselves.
+ *
+ * The account owner is IronWrap's administrator: there is no separate admin role in
+ * `ROLE_PERMISSIONS` yet, and inventing one here would be a permission model shipped by accident.
+ * When one arrives this predicate is the single place that learns about it - every administration
+ * route asks this question and no other.
+ */
+export function canAdministerPipelines(auth: AuthContext): boolean {
+  return auth.session.role === "owner" && auth.permissions.includes("now:read");
+}
+
+/* ------------------------------------------------------------- configuration input ------ */
+
+/** Hard ceiling on stages per pipeline, refused at the write with an exact blocker rather than
+ * silently truncated at the read.  There is deliberately no equivalent ceiling on pipelines. */
+export const MAX_STAGES_PER_PIPELINE = 200;
+
+const CONFIG_KEY = /^[a-z0-9_]{1,60}$/;
+const ROLE_NAME = /^[a-z_]{2,40}$/;
+const COLOR = /^[A-Za-z0-9_#-]{3,20}$/;
+
+export interface PipelineStageInput {
+  key: string;
+  name: string;
+  color: string | null;
+  is_won: boolean;
+  is_lost: boolean;
+  min_role_to_enter: string | null;
+}
+
+export class PipelineConfigError extends Error {
+  readonly code: string;
+  readonly detail: Record<string, unknown>;
+
+  constructor(code: string, detail: Record<string, unknown> = {}) {
+    super(code);
+    this.code = code;
+    this.detail = detail;
+    this.name = "PipelineConfigError";
+  }
+}
+
+export function configKey(value: unknown, code: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!CONFIG_KEY.test(text)) throw new PipelineConfigError(code);
+  return text;
+}
+
+export function configName(value: unknown, code: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text.length < 1 || text.length > 120) throw new PipelineConfigError(code);
+  return text;
+}
+
+export function configRole(value: unknown, code: string): string {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!ROLE_NAME.test(text)) throw new PipelineConfigError(code);
+  return text;
+}
+
+/** A configured role must be one of the application roles, not merely a well-shaped string. */
+export function knownConfigRole(value: unknown, code: string): string {
+  const role = configRole(value, code);
+  if (!Object.hasOwn(ROLE_PERMISSIONS, role))
+    throw new PipelineConfigError("pipeline_role_unknown", {
+      role,
+      roles: Object.keys(ROLE_PERMISSIONS),
+    });
+  return role;
+}
+
+export function optionalConfigRole(value: unknown, code: string): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return knownConfigRole(value, code);
+}
+
+export function configColor(value: unknown, code: string): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!COLOR.test(text)) throw new PipelineConfigError(code);
+  return text;
+}
+
+export function configPosition(value: unknown, code: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1_000_000)
+    throw new PipelineConfigError(code);
+  return value;
+}
+
+export function configFlag(value: unknown, code: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new PipelineConfigError(code);
+  return value;
+}
+
+/**
+ * One stage as an administrator submits it.  `is_won` and `is_lost` are mutually exclusive in the
+ * schema, so an impossible pair is refused here rather than surfacing as a constraint failure.
+ */
+export function parseStageInput(value: unknown): PipelineStageInput {
+  const body = value as Record<string, unknown> | null;
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new PipelineConfigError("invalid_pipeline_stage");
+  const isWon = configFlag(body.is_won, "invalid_pipeline_stage", false);
+  const isLost = configFlag(body.is_lost, "invalid_pipeline_stage", false);
+  if (isWon && isLost) throw new PipelineConfigError("pipeline_stage_won_and_lost");
+  return {
+    key: configKey(body.key, "invalid_pipeline_stage_key"),
+    name: configName(body.name, "invalid_pipeline_stage_name"),
+    color: configColor(body.color, "invalid_pipeline_stage_color"),
+    is_won: isWon,
+    is_lost: isLost,
+    min_role_to_enter: optionalConfigRole(body.min_role_to_enter, "invalid_pipeline_stage_role"),
+  };
+}
+
+/** The ordered stage list of a new or copied pipeline. */
+export function parseStageInputs(value: unknown): PipelineStageInput[] {
+  if (!Array.isArray(value) || value.length === 0)
+    throw new PipelineConfigError("pipeline_stages_required");
+  if (value.length > MAX_STAGES_PER_PIPELINE)
+    throw new PipelineConfigError("pipeline_stage_limit_reached", {
+      stage_limit: MAX_STAGES_PER_PIPELINE,
+    });
+  const stages = value.map((entry) => parseStageInput(entry));
+  const keys = new Set<string>();
+  for (const stage of stages) {
+    if (keys.has(stage.key))
+      throw new PipelineConfigError("pipeline_stage_key_duplicated", { stage_key: stage.key });
+    keys.add(stage.key);
+  }
+  return stages;
+}
+
+export interface PipelineRoleGrantInput {
+  role: string;
+  can_write: boolean;
+}
+
+/**
+ * The full role-scope set for one pipeline.  It is a SET, not a single column, from day one: the
+ * stakeholder's shop board is read by production and written by ops, and modelling that as one
+ * `owning_role` would force a schema change the first time a second role needs in.
+ */
+export function parseRoleGrantInputs(value: unknown): PipelineRoleGrantInput[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 40)
+    throw new PipelineConfigError("invalid_pipeline_role_grants");
+  const grants = value.map((entry) => {
+    const body = entry as Record<string, unknown> | null;
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      throw new PipelineConfigError("invalid_pipeline_role_grants");
+    return {
+      role: knownConfigRole(body.role, "invalid_pipeline_role_grants"),
+      can_write: configFlag(body.can_write, "invalid_pipeline_role_grants", false),
+    };
+  });
+  const roles = new Set<string>();
+  for (const grant of grants) {
+    if (roles.has(grant.role))
+      throw new PipelineConfigError("pipeline_role_grant_duplicated", { role: grant.role });
+    roles.add(grant.role);
+  }
+  return grants;
 }
 
 /** The transition actor vocabulary the audit table accepts, from the acting session's role. */

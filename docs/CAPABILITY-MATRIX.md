@@ -61,8 +61,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 100,
-      "latest": "0121_facet_prequote_estimator_consumer.sql"
+      "count": 101,
+      "latest": "0122_pipeline_admin_configuration.sql"
     }
   },
   "test_observation_policy": {

@@ -8,6 +8,7 @@ import {
 import {
   canMoveCards,
   canViewPipeline,
+  NO_PIPELINE_ROLE_ACCESS,
   parsePipelineCardTemplate,
   PIPELINE_UNDO_WINDOW_MS,
   renderCardSummary,
@@ -16,10 +17,12 @@ import {
   type PipelineCardSummary,
   type PipelineCardTemplate,
   type PipelineRecord,
+  type PipelineRoleAccess,
   type PipelineStageRecord,
 } from "./pipeline-board.ts";
 import {
   cardCountsByPipeline,
+  pipelineRoleAccessFor,
   listCards,
   listPipelines,
   listStages,
@@ -5992,14 +5995,19 @@ export class PipelineReadModelError extends Error {
 
 /**
  * Every pipeline this session may see.  Role-scoped through `pipelines.owning_role` (PO decision
- * D8): the owner and ops see all of them, another role sees only the board its role owns.
+ * D8) plus the administrator-configured per-pipeline grants (0122): the owner and ops see all of
+ * them, another role sees the boards its role owns or has been granted, and a role with neither
+ * sees an empty list rather than a widened one.
  */
 export async function buildPipelineListReadModel(
   env: AppEnv,
   auth: AuthContext,
+  access?: PipelineRoleAccess,
 ): Promise<PipelineListReadModel> {
+  const roleAccess =
+    access ?? (await pipelineRoleAccessFor(env, auth.session.tenant_id, auth.session.role));
   const pipelines = (await listPipelines(env, auth.session.tenant_id)).filter((pipeline) =>
-    canViewPipeline(auth, pipeline),
+    canViewPipeline(auth, pipeline, roleAccess),
   );
   const counts = await cardCountsByPipeline(env, auth.session.tenant_id);
   const base = envelope(auth, pipelineEnvelopeRows(pipelines), []);
@@ -6007,7 +6015,7 @@ export async function buildPipelineListReadModel(
     ...base,
     allowed_actions: [...base.allowed_actions, "pipeline.read"],
     pipelines: pipelines.map((pipeline) =>
-      pipelineSummary(auth, pipeline, counts.get(pipeline.pipeline_id) ?? 0),
+      pipelineSummary(auth, pipeline, counts.get(pipeline.pipeline_id) ?? 0, roleAccess),
     ),
   };
 }
@@ -6022,8 +6030,9 @@ export async function buildPipelineBoardReadModel(
   env: AppEnv,
   auth: AuthContext,
   pipeline: PipelineRecord,
+  access: PipelineRoleAccess = NO_PIPELINE_ROLE_ACCESS,
 ): Promise<PipelineBoardReadModel> {
-  if (!canViewPipeline(auth, pipeline))
+  if (!canViewPipeline(auth, pipeline, access))
     throw new PipelineReadModelError("pipeline_read_forbidden");
 
   let template;
@@ -6080,7 +6089,7 @@ export async function buildPipelineBoardReadModel(
     [...pipelineEnvelopeRows([pipeline]), ...stageEnvelopeRows(stages)],
     staleFields,
   );
-  const movable = canMoveCards(auth, pipeline);
+  const movable = canMoveCards(auth, pipeline, access);
   return {
     ...base,
     allowed_actions: [
@@ -6088,7 +6097,7 @@ export async function buildPipelineBoardReadModel(
       "pipeline.read",
       ...(movable ? ["pipeline.card.move"] : []),
     ],
-    pipeline: pipelineSummary(auth, pipeline, shapedCards.length, template),
+    pipeline: pipelineSummary(auth, pipeline, shapedCards.length, access, template),
     stages: stages.map((stage) => {
       const stageCards = byStage.get(stage.stage_id) ?? [];
       return {
@@ -6120,6 +6129,7 @@ function pipelineSummary(
   auth: AuthContext,
   pipeline: PipelineRecord,
   cardCount: number,
+  access: PipelineRoleAccess,
   template?: PipelineCardTemplate,
 ): PipelineSummaryReadModel {
   return {
@@ -6132,7 +6142,7 @@ function pipelineSummary(
     position: pipeline.position,
     version: pipeline.version,
     card_count: cardCount,
-    can_move: canMoveCards(auth, pipeline),
+    can_move: canMoveCards(auth, pipeline, access),
   };
 }
 

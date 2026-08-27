@@ -248,9 +248,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 217],
-    ["REQUIRED_INDEX_COUNT", 332],
-    ["REQUIRED_TRIGGER_COUNT", 524],
+    ["REQUIRED_TABLE_COUNT", 219],
+    ["REQUIRED_INDEX_COUNT", 335],
+    ["REQUIRED_TRIGGER_COUNT", 527],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -284,7 +284,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0121", () => {
+test("the full schema matches the recovery frontier through 0122", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -316,7 +316,12 @@ test("the full schema matches the recovery frontier through 0121", () => {
     // immutable commercial-deposit approval exclusion and its five capture/command guards. 0120
     // scopes the existing gate-clearance decision index without changing the inventory count.
     // 0121 adds seven isolated prequote/estimator-ready tables, eight indexes, and fourteen
-    // append-only guards.
+    // append-only guards. 0122 adds the pipeline administration surface: the role-grant and
+    // configuration-event tables, three indexes (the live-stage board index, the grant-by-role
+    // index, and the per-pipeline event index), and three guards - the two that keep the
+    // configuration trail append-only and the one that keeps a grant's identity immutable. Its
+    // two forward-added columns (`pipeline_stages.is_active`, `pipelines.configuration_marker`)
+    // change no object count; SQLite export/restore carries them with the row.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -324,7 +329,7 @@ test("the full schema matches the recovery frontier through 0121", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 217, indexes: 332, triggers: 524 },
+      { tables: 219, indexes: 335, triggers: 527 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

@@ -281,6 +281,49 @@ test("undo inside the 30s window returns the card and appends an 'undo' row, nev
   harness.db.close();
 });
 
+test("undo refuses an origin stage archived after the move", async () => {
+  const harness = setup();
+  const card = await cardIn(harness, "new_lead");
+  const moved = await call(harness, move(card.cardId, "visit_booked", card.version));
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+
+  // The original stage has history, so the real admin route archives it rather than deleting it.
+  const removed = await handlePipelineRoute(
+    request("POST", `/api/v1/admin/pipelines/${SALES_PIPELINE_ID}/stages/${stageId("new_lead")}/remove`, {
+      body: { expected_version: 1 },
+      idempotency: "archive-origin-stage-0001",
+    }),
+    harness.env,
+    auth("owner"),
+    MOVE_TIME,
+  );
+  assert.ok(removed);
+  assert.equal(removed.status, 200, await removed.text());
+
+  const undo = await call(
+    harness,
+    request("POST", `${BOARD}/cards/${card.cardId}/transitions/${moved.body.transition_id}/undo`, {
+      body: { expected_version: Number(moved.body.card_version) },
+      idempotency: "undo-archived-origin-0001",
+    }),
+    "sales",
+    new Date(MOVE_TIME.getTime() + 5_000),
+  );
+  assert.equal(undo.status, 409, JSON.stringify(undo.body));
+  assert.equal(undo.body.error, "pipeline_stage_changed");
+
+  const after = harness.db.raw
+    .prepare(`SELECT stage_id, version, last_transition_id FROM pipeline_cards WHERE card_id = ?`)
+    .get(card.cardId) as { stage_id: string; version: number; last_transition_id: string };
+  assert.deepEqual({ ...after }, {
+    stage_id: stageId("visit_booked"),
+    version: Number(moved.body.card_version),
+    last_transition_id: moved.body.transition_id,
+  });
+  assert.equal(transitions(harness, card.cardId).length, 2, "undo must not append a row");
+  harness.db.close();
+});
+
 test("undo outside the 30s window is refused and the move stands", async () => {
   const harness = setup();
   const card = await cardIn(harness, "new_lead");

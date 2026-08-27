@@ -77,6 +77,25 @@ wait_for_http() {
   return 1
 }
 
+check_required_services() {
+  local i pid name status
+
+  for i in "${!PIDS[@]}"; do
+    pid="${PIDS[$i]}"
+    name="${NAMES[$i]}"
+    if kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    if wait "$pid"; then
+      status=0
+    else
+      status=$?
+    fi
+    echo "ERROR: required service $name exited unexpectedly with status $status. See $LOG_DIR/$name.log."
+    return 1
+  done
+}
+
 cleanup() {
   echo
   echo "Stopping local runtime services..."
@@ -183,6 +202,7 @@ fi
 
 echo
 
+check_required_services || exit 1
 echo "All services started."
 echo "- bus:       $HERMES_BUS_BASE_URL"
 echo "- app:       http://localhost:5173"
@@ -194,5 +214,6 @@ echo "- stop with Ctrl-C (trap will terminate all child processes)."
 echo
 
 while true; do
-  sleep 9999
+  sleep 0.2
+  check_required_services || exit 1
 done

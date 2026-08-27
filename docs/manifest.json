@@ -175,6 +175,14 @@
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
+      "path": "docs/PIPELINE-ADMIN-API-CONTRACT.md",
+      "class": "component",
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
       "path": "docs/WEBSITE-INTEGRATION.md",
       "class": "runbook",
       "authority": [

@@ -239,7 +239,10 @@ function seedSalesPipeline(db: SqliteD1): void {
     db.raw.prepare(sql).run(...(params as never[]));
 }
 
-export function auth(who: keyof typeof USERS): AuthContext {
+/** A second tenant, used to prove that isolation is enforced by the query, not by the caller. */
+export const OTHER_TENANT = "other-co";
+
+export function auth(who: keyof typeof USERS, tenantId: string = TENANT): AuthContext {
   const user = USERS[who] as { userId: string; email: string; role: AppRole };
   return {
     rawSessionToken: "s".repeat(43),
@@ -253,7 +256,7 @@ export function auth(who: keyof typeof USERS): AuthContext {
       device_id: null,
       device_proof_hash: null,
       user_id: user.userId,
-      tenant_id: TENANT,
+      tenant_id: tenantId,
       email_normalized: user.email,
       display_name: user.role,
       role: user.role,

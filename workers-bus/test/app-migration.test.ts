@@ -2190,11 +2190,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // of the agent-derived deposit it recovered, and 0120 scopes gate-clearance decisions to
     // their tenant/job/gate identity. 0121 adds the isolated quote-free Facet prequote authority,
     // estimator-ready event/receipt/promotion ledgers, and the one-to-one estimator provenance
-    // anchor without widening the historical estimator revision table. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // anchor without widening the historical estimator revision table. 0122 adds the pipeline
+    // administration surface an owner configures boards through - per-pipeline role grants, the
+    // append-only configuration trail, the stage archive flag, and the request-unique marker that
+    // keeps a batched administration command safe against a stale writer. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 100);
+    assert.equal(migrations.length, 101);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0121_facet_prequote_estimator_consumer.sql");
+    assert.equal(migrations.at(-1), "0122_pipeline_admin_configuration.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2296,10 +2299,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // approval-exclusion table and five capture, validation, retention, and command guards. 0120
     // replaces the global gate-decision index with the scoped equivalent, so counts are unchanged.
     // 0121 adds seven isolated prequote/estimator-ready tables, eight named indexes, and fourteen
-    // append-only guards without changing any quote-bound Facet table shape.
+    // append-only guards without changing any quote-bound Facet table shape. 0122 adds the
+    // pipeline administration surface: two tables (role grants, configuration events), three
+    // named indexes, and three guards - two append-only, one grant-identity. Its two forward-added
+    // columns are count-neutral.
     assert.deepEqual(
       { ...counts },
-      { tables: 217, indexes: 324, triggers: 524 },
+      { tables: 219, indexes: 327, triggers: 527 },
     );
     assert.deepEqual(
       (db.prepare(

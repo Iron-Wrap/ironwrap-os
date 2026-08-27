@@ -662,9 +662,14 @@ export async function handleAuthenticatedRoute(
     const inventoryResponse = await handleInventoryRoute(req, env, auth);
     if (inventoryResponse) return inventoryResponse;
   }
-  // The pipeline board owns `/api/v1/pipelines` outright. Its safe-movement matrix, role scope and
-  // undo window are enforced inside the sub-router, before any write commits (ELEC-159).
-  if (url.pathname.startsWith("/api/v1/pipelines")) {
+  // The pipeline board owns `/api/v1/pipelines` outright, and `/api/v1/admin/pipelines` with it:
+  // the administration commands reshape exactly the model the board routes read, so one sub-router
+  // owns both. Its safe-movement matrix, role scope, administrator authority and undo window are
+  // enforced inside that sub-router, before any write commits (ELEC-159, ELEC-175).
+  if (
+    url.pathname.startsWith("/api/v1/pipelines") ||
+    url.pathname.startsWith("/api/v1/admin/pipelines")
+  ) {
     const pipelineResponse = await handlePipelineRoute(req, env, auth);
     if (pipelineResponse) return pipelineResponse;
   }

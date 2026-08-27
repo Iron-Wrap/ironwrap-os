@@ -7,7 +7,12 @@
  * module owns parsing, digesting, receipt assembly, and permit admission. It
  * never prints credential values or raw provider responses.
  */
-import { createHash, createPublicKey, randomBytes } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  randomBytes,
+} from "node:crypto";
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -535,6 +540,12 @@ async function serviceAdapterPreflight(args) {
   if (token.length < SERVICE_ADAPTER_MIN_TOKEN_LENGTH)
     fail("release_service_adapter_token_invalid");
   const publicKey = env("RELEASE_SERVICE_ADAPTER_PUBLIC_KEY");
+  let containsPrivateKey = false;
+  try {
+    createPrivateKey(publicKey);
+    containsPrivateKey = true;
+  } catch {}
+  if (containsPrivateKey) fail("service_adapter_public_key_invalid");
   let parsedPublicKey;
   try {
     parsedPublicKey = createPublicKey(publicKey);

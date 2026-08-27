@@ -410,6 +410,20 @@ test("Frappe adapter preflight is explicit, redacted, and fail-closed", async (t
       /release_promotion_service_adapter_public_key_invalid/,
     );
 
+    process.env.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY =
+      preflightKeys.privateKey.export({ type: "pkcs8", format: "pem" });
+    await assert.rejects(
+      () =>
+        main([
+          "service-adapter-preflight",
+          "--frappe-scope",
+          "in-scope",
+          "--output",
+          output,
+        ]),
+      /release_promotion_service_adapter_public_key_invalid/,
+    );
+
     for (const name of names) delete process.env[name];
     await main([
       "service-adapter-preflight",

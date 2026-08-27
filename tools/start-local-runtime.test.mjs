@@ -126,7 +126,22 @@ test("the launcher waits for the stub and forwards one Worker port plus the defa
   );
   assert.match(output, /All services started\./);
 
-  const launches = readFileSync(receipt, "utf8").trim().split("\n");
+  let launches = [];
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      launches = readFileSync(receipt, "utf8").trim().split("\n");
+    } catch {
+      launches = [];
+    }
+    if (
+      launches.some((line) =>
+        line.startsWith(`${join(root, "mcp", "erpnext-roofing-mcp")}|`),
+      )
+    ) {
+      break;
+    }
+    await delay(50);
+  }
   const worker = launches.find((line) =>
     line.startsWith(`${join(root, "workers-bus")}|`),
   );

@@ -146,6 +146,12 @@ jobs:
       # not a nice-to-have, so the suite runs here rather than only on a laptop.
       - name: Run app Playwright e2e (pipeline board, office session)
         run: npm run test:pwa:board --prefix app
+      # Owner configuration is an office surface too, and its spec self-skips unless it
+      # is handed an office session. `test:pwa` never sets one, so without this step the
+      # whole file reported "3 skipped" and the route/state/role/device matrix it proves
+      # was never actually run in CI.
+      - name: Run app Playwright e2e (owner configuration, office session)
+        run: npm run test:pwa:owner-configuration --prefix app
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types

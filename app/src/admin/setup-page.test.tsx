@@ -82,4 +82,28 @@ describe("SetupPage", () => {
       expect(screen.getByText(title)).toBeVisible();
     }
   });
+
+  it("advertises owner configuration to owners without offering it to operations", async () => {
+    vi.mocked(loadSetupProgress).mockResolvedValue({
+      version: 1,
+      read_model_generated_at: "2026-08-24T12:00:00.000Z",
+      allowed_actions: [],
+      progress: {
+        generated_at: "2026-08-24T12:00:00.000Z",
+        done: 0,
+        total: 3,
+        percent_complete: 0,
+        steps: [step("company", "later"), step("people", "later"), step("crew_phones", "later")],
+      },
+    });
+
+    const owner = renderWithSession(<SetupPage />, sessionFor("owner"));
+    await screen.findByText("0 of 3 setup areas complete.");
+    expect(screen.getByText("Owner configuration")).toBeVisible();
+    owner.unmount();
+
+    renderWithSession(<SetupPage />, sessionFor("ops"));
+    await screen.findByText("0 of 3 setup areas complete.");
+    expect(screen.queryByText("Owner configuration")).toBeNull();
+  });
 });

@@ -15,6 +15,7 @@
     "test:pwa:accounting": "npm run build && ACCEPTANCE_MODE=accounting ACCEPTANCE_PORT=4175 playwright test --project=mobile-chromium accounting-money-desk",
     "test:pwa:board": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4176 playwright test --project=chromium pipeline-board",
     "test:pwa:onboarding": "npm run build && ACCEPTANCE_MODE=onboarding ACCEPTANCE_PORT=4176 playwright test --project=mobile-chromium onboarding",
+    "test:pwa:owner-configuration": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4177 playwright test --project=mobile-chromium owner-configuration",
     "test:lighthouse": "npm run build && node scripts/lighthouse-field.mjs",
     "test:lighthouse:ab": "npm run build && node scripts/lighthouse-protocol-ab.mjs",
     "typecheck": "tsc -b --pretty false",

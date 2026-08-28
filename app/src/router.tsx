@@ -95,6 +95,18 @@ const CrewDevicesPage = lazy(async () => ({
 const IntegrationReadinessPage = lazy(async () => ({
   default: (await import("./integrations/integration-readiness-page")).IntegrationReadinessPage,
 }));
+const ConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/configuration-page")).ConfigurationPage,
+}));
+const PipelineConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/pipeline-configuration-page")).PipelineConfigurationPage,
+}));
+const SchemaFieldsConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/schema-fields-configuration-page")).SchemaFieldsConfigurationPage,
+}));
+const AutomationConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/automation-configuration-page")).AutomationConfigurationPage,
+}));
 const NewLeadPage = lazy(async () => ({
   default: (await import("./sales/new-lead-page")).NewLeadPage,
 }));
@@ -770,6 +782,30 @@ const settingsIntegrationsRoute = createRoute({
   component: IntegrationReadinessRoute,
 });
 
+const settingsConfigurationRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration",
+  component: ConfigurationRoute,
+});
+
+const settingsConfigurationPipelinesRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration/pipelines",
+  component: PipelineConfigurationRoute,
+});
+
+const settingsConfigurationFieldsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration/fields",
+  component: SchemaFieldsConfigurationRoute,
+});
+
+const settingsConfigurationAutomationsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration/automations",
+  component: AutomationConfigurationRoute,
+});
+
 const newLeadRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/sales/new-lead",
@@ -812,6 +848,38 @@ function IntegrationReadinessRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <IntegrationReadinessPage />
+    </Suspense>
+  );
+}
+
+function ConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ConfigurationPage />
+    </Suspense>
+  );
+}
+
+function PipelineConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <PipelineConfigurationPage />
+    </Suspense>
+  );
+}
+
+function SchemaFieldsConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <SchemaFieldsConfigurationPage />
+    </Suspense>
+  );
+}
+
+function AutomationConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <AutomationConfigurationPage />
     </Suspense>
   );
 }
@@ -867,6 +935,10 @@ const routeTree = rootRoute.addChildren([
     settingsTeamRoute,
     settingsDevicesRoute,
     settingsIntegrationsRoute,
+    settingsConfigurationRoute,
+    settingsConfigurationPipelinesRoute,
+    settingsConfigurationFieldsRoute,
+    settingsConfigurationAutomationsRoute,
   ]),
 ]);
 

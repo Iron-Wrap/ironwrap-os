@@ -40,6 +40,15 @@ describe("role-shaped navigation", () => {
     expect(roleLabel("sales")).toBe("Sales");
   });
 
+  it("keeps owner configuration distinct from the owner-plus-operations setup surface", () => {
+    expect(roleCanAccess("owner", "ownerConfiguration")).toBe(true);
+    for (const role of ["ops", "sales", "production", "accounting", "field"] as const) {
+      expect(roleCanAccess(role, "ownerConfiguration"), `${role} -> ownerConfiguration`).toBe(
+        false,
+      );
+    }
+  });
+
   it("gives production only its own daily surfaces", () => {
     expect(appRoles).toContain("production");
     expect(navigationForRole("production").map((item) => item.to)).toEqual(["/now", "/production"]);

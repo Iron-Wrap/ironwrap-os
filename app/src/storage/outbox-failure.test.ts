@@ -1,0 +1,114 @@
+// @vitest-environment node
+
+import { describe, expect, it } from "vitest";
+
+import { classifyOutboxFailure, outboxFailureGuidance } from "./outbox-failure";
+import type { OutboxAction } from "./outbox-types";
+
+function checkIn(
+  lastError: OutboxAction["lastError"],
+  conflict?: OutboxAction["conflict"],
+): Pick<OutboxAction, "kind" | "lastError" | "conflict"> {
+  return { kind: "field_checkin", lastError, ...(conflict ? { conflict } : {}) };
+}
+
+describe("outbox failure classification", () => {
+  it("keeps transient answers and transport failures retryable", () => {
+    expect(classifyOutboxFailure({ status: 503, code: "busy" })).toBe("retryable");
+    expect(classifyOutboxFailure({ status: 502, code: "field_action_failed" })).toBe("retryable");
+    expect(classifyOutboxFailure({ status: 429 })).toBe("retryable");
+    expect(classifyOutboxFailure({ status: 408 })).toBe("retryable");
+    expect(classifyOutboxFailure({})).toBe("retryable");
+  });
+
+  it("treats a refusal this device cannot satisfy as terminal", () => {
+    expect(classifyOutboxFailure({ status: 422, code: "field_action_invalid_metadata" })).toBe(
+      "terminal",
+    );
+    expect(classifyOutboxFailure({ status: 403, code: "forbidden" })).toBe("terminal");
+  });
+
+  /**
+   * The defect this exists to close: a constraint violation the Worker still wraps in a 502 is
+   * not retryable however friendly the status looks, and a client that trusts status alone
+   * replays it for ever behind a "Waiting" label.
+   */
+  it("lets a terminal code override a retryable status", () => {
+    expect(
+      classifyOutboxFailure({ status: 502, code: "field_action_work_package_binding_invalid" }),
+    ).toBe("terminal");
+    expect(
+      classifyOutboxFailure({ status: 500, code: "field_action_evidence_requires_work_package" }),
+    ).toBe("terminal");
+  });
+
+  it("separates a conflict from both", () => {
+    expect(classifyOutboxFailure({ status: 409, code: "assignment_changed" })).toBe("conflict");
+    expect(classifyOutboxFailure({ status: 412, code: "version_changed" })).toBe("conflict");
+  });
+});
+
+describe("crew guidance for a stopped item", () => {
+  it("names the missing work plan and a next step the crew member can take", () => {
+    const guidance = outboxFailureGuidance(
+      checkIn({
+        code: "field_action_evidence_requires_work_package",
+        message: "Evidence requires a released work package.",
+        status: 422,
+        occurredAt: 1_000,
+      }),
+    );
+
+    expect(guidance).toEqual({
+      reason: "Production has not issued a work plan for this job, so files cannot be filed to it.",
+      nextStep:
+        "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
+      retryable: false,
+    });
+  });
+
+  it("falls back to the server's own sentence for an unknown terminal refusal", () => {
+    expect(
+      outboxFailureGuidance(
+        checkIn({
+          code: "field_action_invalid_metadata",
+          message: "The capture window is invalid.",
+          status: 400,
+          occurredAt: 1_000,
+        }),
+      ),
+    ).toMatchObject({ reason: "The capture window is invalid.", retryable: false });
+  });
+
+  it("still promises a retry for a transient answer", () => {
+    expect(
+      outboxFailureGuidance(
+        checkIn({ code: "http_503", message: "Busy.", status: 503, occurredAt: 1_000 }),
+      ),
+    ).toMatchObject({ reason: "The server could not take this item yet.", retryable: true });
+  });
+
+  it("routes a preserved conflict to the office rather than to a retry", () => {
+    expect(
+      outboxFailureGuidance(
+        checkIn(
+          {
+            code: "assignment_changed",
+            message: "The office assignment changed.",
+            status: 409,
+            occurredAt: 1_000,
+          },
+          {
+            status: 409,
+            code: "assignment_changed",
+            message: "The office assignment changed.",
+            detectedAt: 1_000,
+          },
+        ),
+      ),
+    ).toMatchObject({
+      reason: "The office copy changed after this item was saved.",
+      retryable: false,
+    });
+  });
+});

@@ -98,9 +98,35 @@ describe("SavedWorkRecoveryPanel", () => {
     expect(heading.closest("section")).toHaveAttribute("id", "saved-work");
     expect(screen.getByRole("heading", { name: "Field check-in · job JOB-1042" })).toBeVisible();
     expect(screen.getByText("The office copy changed after this item was saved.")).toBeVisible();
-    expect(screen.getByText(/office copy changed\. Keep this item saved/i)).toBeVisible();
+    expect(
+      screen.getByText(/Keep this item saved\. Ask the office to check both copies/i),
+    ).toBeVisible();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect((await getOutboxAction("assignment-conflict"))?.state).toBe("needs_attention");
+  });
+
+  // ELEC-211: the refusal a crew member is most likely to hit — a capture made before production
+  // issued a work plan. It must read as a stopped item with a next step, not as a retry.
+  it("names the missing work plan and withholds a retry that cannot work", async () => {
+    await saveAttentionItem("evidence-without-plan", {
+      error: {
+        code: "field_action_evidence_requires_work_package",
+        message: "Evidence requires a released work package.",
+        status: 422,
+        occurredAt: 2_000,
+      },
+    });
+
+    render(<SavedWorkRecoveryPanel session={session} />);
+
+    expect(
+      await screen.findByText(
+        "Production has not issued a work plan for this job, so files cannot be filed to it.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(/Ask production to issue the work plan/i)).toBeVisible();
+    expect(screen.getByText(/note-only blocker report/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("offers an explicit retry only for a transient non-conflict item", async () => {

@@ -191,6 +191,11 @@
       ]
     },
     {
+      "path": "docs/TEMPLATE-MARKETPLACE-REQUIREMENTS.md",
+      "class": "canonical",
+      "authority": []
+    },
+    {
       "path": "docs/WEBSITE-INTEGRATION.md",
       "class": "runbook",
       "authority": [

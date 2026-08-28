@@ -145,6 +145,67 @@ const fixtureOperatingIntake = {
   leads: [],
 };
 
+/**
+ * What an administrator configured for this account, as the record route publishes it
+ * (`GET /api/v1/schema-fields/:entityType/:entityId`). Two field-key namespaces so the acceptance
+ * run exercises more than one service type on a single job, plus a dependent field whose
+ * controlling value does not match — the server would omit that one, and this fixture omits it the
+ * same way rather than letting the client decide.
+ */
+const fixtureJobSchemaCard = {
+  entity_type: "job",
+  entity_id: "roof-job-acceptance",
+  fields: [
+    schemaCardField(
+      "roofing.deck_condition",
+      "Deck condition",
+      0,
+      "text",
+      "Sound, two soft sheets",
+    ),
+    schemaCardField("roofing.underlayment", "Underlayment", 1, "text", "Synthetic"),
+    schemaCardField("gutters.linear_feet", "Linear feet", 2, "integer", 142),
+    schemaCardField("gutters.downspouts", "Downspouts", 3, "integer", 6),
+    schemaCardField("permit_number", "Permit number", 4, "text", null),
+  ],
+};
+
+function schemaCardField(fieldKey, label, position, fieldType, value) {
+  return {
+    definition: {
+      field_id: `fld_${fieldKey}`,
+      field_key: fieldKey,
+      revision_id: `rev_${fieldKey}`,
+      version: 1,
+      label,
+      position,
+      field_type: fieldType,
+      validator_key: "none",
+      validator_config: {},
+      visibility_key: "always",
+      visibility_config: {},
+      evidence_class: "none",
+      retention_policy: "standard",
+      offline_mode: "offline_read",
+    },
+    value:
+      value === null
+        ? null
+        : {
+            value_revision_id: `val_${fieldKey}`,
+            field_definition_revision_id: `rev_${fieldKey}`,
+            version: 1,
+            prior_value_revision_id: null,
+            based_on_value_revision_id: null,
+            correction_reason: null,
+            value,
+            value_digest: `digest_${fieldKey}`,
+            provenance_actor_type: "owner",
+            created_at: "2026-08-27T18:00:00.000Z",
+          },
+  };
+}
+
 const fixtureJob = {
   ...fixtureEnvelope,
   allowed_actions: ["field.checkin.create", "work_package.acknowledge", "work_package.stop_work"],
@@ -2217,6 +2278,9 @@ const requestListener = async (request, response) => {
   }
   if (requestUrl.pathname === "/api/v1/operating-intake") {
     return sendJson(response, method, 200, fixtureOperatingIntake);
+  }
+  if (requestUrl.pathname === "/api/v1/schema-fields/job/roof-job-acceptance") {
+    return sendJson(response, method, 200, fixtureJobSchemaCard);
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
     return sendJson(response, method, 200, buildFixtureJobResponse());

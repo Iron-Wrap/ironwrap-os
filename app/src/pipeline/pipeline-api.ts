@@ -77,9 +77,23 @@ export async function moveCardToStage(
   });
 }
 
+export interface CardMoveUndoInput {
+  pipelineId: string;
+  cardId: string;
+  transitionId: string;
+  /**
+   * The card's version AFTER the move being undone. REQUIRED: the undo route parses it
+   * before anything else and answers `400 invalid_pipeline_transition` when it is absent
+   * (`handleUndo`, `workers-bus/src/pipeline-board-api.ts`), so an undo posted without it
+   * can never succeed. It comes from the move response's `card_version`, or from the
+   * refreshed board when that arrived first.
+   */
+  expectedVersion: number;
+}
+
 export async function undoCardMove(
   session: AuthenticatedSession,
-  input: { pipelineId: string; cardId: string; transitionId: string },
+  input: CardMoveUndoInput,
   idempotencyKey: string,
   fetcher: typeof fetch = fetch,
 ): Promise<CardTransitionResponse> {
@@ -87,7 +101,7 @@ export async function undoCardMove(
     path: API_PATHS.pipelineCardTransitionUndo(input.pipelineId, input.cardId, input.transitionId),
     schema: cardTransitionResponseSchema,
     method: "POST",
-    body: {},
+    body: { expected_version: input.expectedVersion },
     csrfToken: session.csrf_token,
     idempotencyKey,
     fetcher,

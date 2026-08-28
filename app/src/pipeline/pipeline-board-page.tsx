@@ -15,7 +15,6 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
-import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import type { AppRole } from "../lib/roles";
 import { MoveMenu } from "./move-menu";
@@ -24,14 +23,18 @@ import {
   canEnterStage,
   canMoveCards,
   cardsInStage,
+  cardVersionAfterTransition,
   classifyMove,
+  describeMoveBlocker,
+  describeUndoBlocker,
   DRAG_START_DISTANCE_PX,
   LONG_PRESS_MS,
   moveNeedsConfirmation,
   orderedStages,
+  preferredPipeline,
   stageById,
   stageRollUp,
-  UNDO_WINDOW_MS,
+  undoWindowMs,
 } from "./pipeline-board-model";
 import {
   loadPipelineBoard,
@@ -46,10 +49,13 @@ import type { BoardCard, BoardStage, PipelineBoardResponse } from "./pipeline-co
 
 /**
  * The pipeline board, mounted once per role app rather than as one shared `/pipelines`
- * route with role filtering inside it (UX spec section 4). Sales reaches its own
- * pipeline at `/sales/board`; Owner and Operations reach every pipeline, with a
- * switcher, at `/owner/board`. Production, Accounting and Field get no board in M1
- * (PO decision D10, UX spec section 4).
+ * route with role filtering inside it (UX spec section 4). Sales reaches its board at
+ * `/sales/board`, Owner and Operations at `/owner/board`.
+ *
+ * WHICH boards a session sees is the server's answer, not this component's: the list
+ * route is role-scoped and deny-by-default, so a role an administrator granted a second
+ * pipeline reaches it here through the switcher, and a role granted none lands on the
+ * empty state. `scope` only decides which of them the app opens on.
  */
 export function SalesPipelineBoardPage() {
   return (
@@ -71,7 +77,14 @@ type BoardToast = {
   id: number;
   tone: "success" | "error";
   message: string;
-  undo?: { cardId: string; transitionId: string; fromStageId: string };
+  /**
+   * Present only when an undo can actually be performed: the route needs the transition,
+   * the origin stage AND the card's post-move version, so a response that carried no
+   * version yields no button rather than one that is a guaranteed 400.
+   */
+  undo?: { cardId: string; transitionId: string; fromStageId: string; expectedVersion: number };
+  /** How long this toast — and the Undo on it — stays up. */
+  windowMs?: number;
 };
 
 type MoveMenuState = { cardId: string; lifted: boolean; pendingStageId: string | null };
@@ -88,18 +101,31 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
     queryFn: () => loadPipelines(),
   });
 
-  const pipelines = useMemo(() => pipelinesQuery.data?.pipelines ?? [], [pipelinesQuery.data]);
-  const visiblePipelines = useMemo(() => {
-    if (scope === "all") return pipelines;
-    // Role scoping is `pipelines.owning_role` in M1 (PO decision D8) — no board key is
-    // hardcoded here, so a second Sales-owned pipeline needs no client change.
-    return pipelines.filter((pipeline) => pipeline.owning_role === role);
-  }, [pipelines, role, scope]);
+  /**
+   * Exactly what the server returned, in the server's order.
+   *
+   * `GET /api/v1/pipelines` is already deny-by-default and role-scoped — `canViewPipeline`
+   * folds `owning_role`, the administrator's per-pipeline role grants (0122) and the
+   * archived/template exclusions into the list itself, and the board read re-checks the
+   * same rule before it will open one. Re-filtering by `owning_role` here would not add
+   * authority (client-side hiding never was authority); it would only make a board an
+   * administrator deliberately granted to this role unreachable, which is the "the shop
+   * board is read by production" case the stakeholder asked for. A role the server grants
+   * nothing still lands on the fail-closed empty state, because the list comes back empty.
+   */
+  const visiblePipelines = useMemo(
+    () => pipelinesQuery.data?.pipelines ?? [],
+    [pipelinesQuery.data],
+  );
 
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
-  const activePipeline =
-    visiblePipelines.find((pipeline) => pipeline.pipeline_id === selectedPipelineId) ??
-    visiblePipelines[0];
+  // `scope` still decides which board the role app OPENS on, not which boards exist:
+  // Sales lands on the pipeline Sales owns, Owner lands on the first board in the account.
+  const activePipeline = preferredPipeline(
+    visiblePipelines,
+    scope === "owned" ? role : "owner",
+    selectedPipelineId,
+  );
 
   const boardKey = ["pipeline-board", session.tenant.id, activePipeline?.pipeline_id ?? "none"];
   const boardQuery = useQuery({
@@ -132,10 +158,11 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
 
   // The success toast carries the Undo affordance for exactly this window (PO decision
   // D1). The server keeps accepting an undo for longer; the UI never offers a button
-  // that could outlive the server's answer.
+  // that could outlive the server's answer, and when the response names the server's own
+  // window we clamp to whichever is shorter.
   useEffect(() => {
     if (!toast || toast.tone !== "success") return;
-    const timer = window.setTimeout(() => setToast(null), UNDO_WINDOW_MS);
+    const timer = window.setTimeout(() => setToast(null), toast.windowMs ?? undoWindowMs());
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -186,15 +213,20 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
       const stageName = stageById(stages, variables.toStageId)?.name ?? "the next stage";
       const transitionId =
         typeof response.transition_id === "string" ? response.transition_id : undefined;
+      // The card's version AFTER this move is the undo route's `expected_version`. With no
+      // version there is no undo we could actually perform, so no button is offered.
+      const expectedVersion = cardVersionAfterTransition(response);
       showToast({
         tone: "success",
         message: `Moved to ${stageName}`,
+        windowMs: undoWindowMs(response.undo_window_seconds),
         undo:
-          transitionId && context?.fromStageId
+          transitionId && context?.fromStageId && expectedVersion !== undefined
             ? {
                 cardId: variables.cardId,
                 transitionId,
                 fromStageId: context.fromStageId,
+                expectedVersion,
               }
             : undefined,
       });
@@ -206,11 +238,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
 
   const undoMutation = useMutation({
     retry: false,
-    mutationFn: async (variables: {
-      cardId: string;
-      transitionId: string;
-      fromStageId: string;
-    }) => {
+    mutationFn: async (variables: NonNullable<BoardToast["undo"]>) => {
       if (!activePipeline) throw new Error("pipeline_unavailable");
       return await undoCardMove(
         session,
@@ -218,6 +246,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
           pipelineId: activePipeline.pipeline_id,
           cardId: variables.cardId,
           transitionId: variables.transitionId,
+          expectedVersion: variables.expectedVersion,
         },
         newCardMoveUndoKey(),
       );
@@ -234,12 +263,14 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
       }
       return { previous };
     },
-    onError: (error, _variables, context) => {
+    onError: (error, variables, context) => {
       if (context?.previous) queryClient.setQueryData(boardKey, context.previous);
-      showToast({
-        tone: "error",
-        message: messageForError(error, "The move could not be undone."),
+      // The undo route re-checks the window, the origin stage, the actor and the version,
+      // and each refusal is a different next step. Render the one the server actually sent.
+      const blocker = describeUndoBlocker(error, {
+        fromStageName: stageById(stages, variables.fromStageId)?.name,
       });
+      showToast({ tone: "error", message: blocker.message });
     },
     onSuccess: (_response, variables) => {
       const stageName = stageById(stages, variables.fromStageId)?.name ?? "its previous stage";
@@ -251,33 +282,20 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
   });
 
   function handleMoveError(error: unknown, variables: MoveVariables) {
-    if (error instanceof ApiError && error.code === "confirmation_required") {
+    const blocker = describeMoveBlocker(error, {
+      toStageName: stageById(stages, variables.toStageId)?.name,
+    });
+    if (blocker.outcome === "confirm") {
       // The server asked for the confirm this client thought it could skip. Surface the
       // same confirm step rather than failing the move: the rule stays server-owned.
       setMoveMenu({ cardId: variables.cardId, lifted: false, pendingStageId: variables.toStageId });
       return;
     }
-    if (
-      error instanceof ApiError &&
-      (error.code === "stage_entry_role_required" || error.status === 403)
-    ) {
-      setMoveMenu(null);
-      showToast({
-        tone: "error",
-        message: "Your role cannot move a card into that stage. The card stayed where it was.",
-      });
-      return;
-    }
-    if (error instanceof ApiError && error.status === 409) {
-      setMoveMenu(null);
-      showToast({
-        tone: "error",
-        message: "Someone else changed this card first. The board has been refreshed.",
-      });
-      return;
-    }
     setMoveMenu(null);
-    showToast({ tone: "error", message: messageForError(error, "The card stayed where it was.") });
+    // The server names its blockers exactly — a stale version, the role a stage is reserved
+    // for, a card that is already there. Each one is rendered as itself; none of them is
+    // flattened into "the move failed", because they need different next steps.
+    showToast({ tone: "error", message: blocker.message });
   }
 
   const requestMove = useCallback(
@@ -469,13 +487,19 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
 
   return (
     <section className="mx-auto max-w-[100rem] space-y-4 pb-6">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
+      {/* Wraps on purpose. A `select` sizes itself to its widest option, so a board named
+          "Sales · Marketing Pipeline" makes the switcher ~224px wide — against a phone's
+          358px of usable header that leaves the title 66px, and the `min-w-0` heading
+          inside it collapses to a 10px vertical sliver (or to nothing once a classic
+          scrollbar takes another 15px). The title keeps a readable floor and the controls
+          take their own row rather than crushing it. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-[12rem] flex-1 items-center gap-3">
           <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-foreground text-background">
             <KanbanSquare className="size-5 text-accent" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <h1 className="text-xl font-black tracking-[-0.03em] sm:text-2xl lg:text-3xl">
+            <h1 className="truncate text-xl font-black tracking-[-0.03em] sm:text-2xl lg:text-3xl">
               {activePipeline.name}
             </h1>
             <p className="text-xs font-semibold text-muted sm:text-sm">
@@ -483,14 +507,19 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {scope === "all" && visiblePipelines.length > 1 ? (
-            <label className="flex items-center gap-2 text-sm font-bold text-muted">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* Any role can hold more than one board once an administrator creates or grants
+              one — the account has no cap on pipelines — so the switcher is not an
+              owner-only affordance. */}
+          {visiblePipelines.length > 1 ? (
+            <label className="flex min-w-0 items-center gap-2 text-sm font-bold text-muted">
               <span className="sr-only sm:not-sr-only">Pipeline</span>
+              {/* Capped and truncating: the account may hold any number of boards under any
+                  name, and none of them may set the width of this header. */}
               <select
                 value={activePipeline.pipeline_id}
                 onChange={(event) => setSelectedPipelineId(event.target.value)}
-                className="min-h-11 rounded-md border border-border bg-surface-raised px-3 text-sm font-bold text-foreground"
+                className="min-h-11 max-w-[11rem] truncate rounded-md border border-border bg-surface-raised px-3 text-sm font-bold text-foreground sm:max-w-[16rem]"
               >
                 {visiblePipelines.map((pipeline) => (
                   <option key={pipeline.pipeline_id} value={pipeline.pipeline_id}>
@@ -787,12 +816,4 @@ function BoardSkeleton() {
       ))}
     </div>
   );
-}
-
-function messageForError(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 0) {
-    return "No connection to IronWrap OS. The card stayed where it was.";
-  }
-  if (error instanceof ApiError && error.message) return `${error.message} ${fallback}`.trim();
-  return fallback;
 }

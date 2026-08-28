@@ -130,14 +130,35 @@ interface MoveRequest {
   body: Record<string, unknown>;
 }
 
+/** The undo window the server advertises on every committed transition. */
+const SERVER_UNDO_WINDOW_SECONDS = 30;
+
 /**
  * A stateful board fixture: an accepted transition actually moves the card, so the
  * refetch the UI does after a commit reconciles to the new state instead of snapping the
  * card back. That is what the real server does, and it is what the evidence screenshots
  * have to show.
  */
-async function installBoardRoutes(page: Page, moves: MoveRequest[]) {
+async function installBoardRoutes(page: Page, moves: MoveRequest[], undos: MoveRequest[] = []) {
   const state = structuredClone(boardModel);
+
+  function shiftCard(cardId: string | undefined, toStageId: string | undefined) {
+    const card = state.cards.find((candidate) => candidate.card_id === cardId);
+    if (!card || !toStageId) return card;
+    const amount = card.summary.amount_cents ?? 0;
+    for (const item of state.stages) {
+      if (item.stage_id === card.stage_id) {
+        item.card_count -= 1;
+        item.total_amount_cents -= amount;
+      } else if (item.stage_id === toStageId) {
+        item.card_count += 1;
+        item.total_amount_cents += amount;
+      }
+    }
+    card.stage_id = toStageId;
+    card.version += 1;
+    return card;
+  }
 
   await page.route("**/api/v1/pipelines", (route) =>
     route.fulfill({
@@ -153,32 +174,83 @@ async function installBoardRoutes(page: Page, moves: MoveRequest[]) {
       body: JSON.stringify(state),
     }),
   );
+  // The undo route is registered first so its longer path wins over the transitions glob.
+  // It undoes for real: the card goes back to the stage it came from, exactly as the
+  // server's append-only undo transition does.
+  await page.route("**/api/v1/pipelines/pipe-sales/cards/*/transitions/*/undo", (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+    undos.push({ url: route.request().url(), body });
+    const cardId = /\/cards\/([^/]+)\/transitions/.exec(route.request().url())?.[1];
+    const card = state.cards.find((candidate) => candidate.card_id === cardId);
+    // The route parses `expected_version` before anything else and answers 400 without it.
+    if (typeof body.expected_version !== "number") {
+      return route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "invalid_pipeline_transition" }),
+      });
+    }
+    if (card && card.version !== body.expected_version) {
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "pipeline_card_version_conflict",
+          card_version: card.version,
+        }),
+      });
+    }
+    const moved = shiftCard(cardId, "need_quote");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        transition_id: "tr-acceptance-undo",
+        card_id: cardId,
+        to_stage_id: "need_quote",
+        safeguard: "undo",
+        card_version: moved?.version ?? 1,
+        undo_window_seconds: SERVER_UNDO_WINDOW_SECONDS,
+        replayed: false,
+      }),
+    });
+  });
   await page.route("**/api/v1/pipelines/pipe-sales/cards/*/transitions", (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
     moves.push({ url: route.request().url(), body });
     const cardId = /\/cards\/([^/]+)\/transitions/.exec(route.request().url())?.[1];
-    const card = state.cards.find((candidate) => candidate.card_id === cardId);
     const toStageId = typeof body.to_stage_id === "string" ? body.to_stage_id : undefined;
-    if (card && toStageId) {
-      const amount = card.summary.amount_cents ?? 0;
-      for (const item of state.stages) {
-        if (item.stage_id === card.stage_id) {
-          item.card_count -= 1;
-          item.total_amount_cents -= amount;
-        } else if (item.stage_id === toStageId) {
-          item.card_count += 1;
-          item.total_amount_cents += amount;
-        }
-      }
-      card.stage_id = toStageId;
-      card.version += 1;
-    }
+    const card = shiftCard(cardId, toStageId);
+    // `transitionPayload` in workers-bus/src/pipeline-board-api.ts: flat, and carrying the
+    // post-move card version that the undo route requires back as `expected_version`.
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ transition_id: "tr-acceptance" }),
+      body: JSON.stringify({
+        transition_id: "tr-acceptance",
+        card_id: cardId,
+        to_stage_id: toStageId,
+        safeguard: "none",
+        card_version: card?.version ?? 1,
+        undo_window_seconds: SERVER_UNDO_WINDOW_SECONDS,
+        replayed: false,
+      }),
     });
   });
+}
+
+/**
+ * The board title is legible, not merely present in the DOM. A `min-w-0` heading in a flex
+ * row can be squeezed to a few pixels wide and still "render": Playwright then reports it
+ * hidden the moment that width reaches zero, which is how this was first caught.
+ */
+async function expectReadableBoardTitle(page: Page, name: string) {
+  const heading = page.getByRole("heading", { name });
+  await expect(heading).toBeVisible();
+  const box = await heading.boundingBox();
+  expect(box?.width ?? 0, `width of the board title "${name}"`).toBeGreaterThanOrEqual(120);
+  // One line, not a vertical column of characters.
+  expect(box?.height ?? 0, `height of the board title "${name}"`).toBeLessThanOrEqual(60);
 }
 
 async function pageOverflow(page: Page) {
@@ -329,6 +401,137 @@ test.describe("Pipeline board acceptance", () => {
     expect(moves[0]?.body).toMatchObject({ to_stage_id: "new_lead", confirmed: true });
   });
 
+  /**
+   * The undo half of the safe move, walked on a phone against a server that actually
+   * undoes: the card comes back to the stage it left, and the request carries the
+   * post-move `expected_version` the route refuses an undo without.
+   */
+  test("undoes a committed move on a phone and returns the card to its stage", async ({ page }) => {
+    const moves: MoveRequest[] = [];
+    const undos: MoveRequest[] = [];
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installBoardRoutes(page, moves, undos);
+    await page.goto("/owner/board");
+
+    const card = page.getByRole("article", { name: "Naina Tamang" });
+    await card.scrollIntoViewIfNeeded();
+    await card.getByRole("button", { name: /^Move/ }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Quote Sent/ })
+      .click();
+    await expect(page.getByText("Moved to Quote Sent")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Quote Sent column" }).getByRole("article", {
+        name: "Naina Tamang",
+      }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Undo" }).click();
+
+    await expect(page.getByText("Move undone. Card is back in Need Quote.")).toBeVisible();
+    await page.screenshot({ path: `${shotDir}/pipeline-board-undo-restored.png` });
+    // The card is back in the column it left, on the board the server re-read.
+    await expect(
+      page.getByRole("region", { name: "Need Quote column" }).getByRole("article", {
+        name: "Naina Tamang",
+      }),
+    ).toBeVisible();
+    expect(undos).toHaveLength(1);
+    // Version 7 before the move, 8 after it: the undo has to present the post-move token.
+    expect(undos[0]?.body).toMatchObject({ expected_version: 8 });
+  });
+
+  // The rejected-by-server half: the exact blocker, with the server's own facts in it.
+  test("renders the server's exact stale-version blocker instead of a generic failure", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installBoardRoutes(page, []);
+    await page.unroute("**/api/v1/pipelines/pipe-sales/cards/*/transitions");
+    await page.route("**/api/v1/pipelines/pipe-sales/cards/*/transitions", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "pipeline_card_version_conflict", card_version: 9 }),
+      }),
+    );
+    await page.goto("/owner/board");
+
+    const card = page.getByRole("article", { name: "Naina Tamang" });
+    await card.scrollIntoViewIfNeeded();
+    await card.getByRole("button", { name: /^Move/ }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Quote Sent/ })
+      .click();
+
+    await expect(page.getByRole("alert")).toContainText(
+      /Someone else changed this card first — it is now at version 9/,
+    );
+    await page.screenshot({ path: `${shotDir}/pipeline-board-version-conflict.png` });
+    // Rolled back: the card is still in the column it started in.
+    await expect(
+      page.getByRole("region", { name: "Need Quote column" }).getByRole("article", {
+        name: "Naina Tamang",
+      }),
+    ).toBeVisible();
+  });
+
+  /**
+   * An account holds as many boards as it configures, and the switcher is not owner-only:
+   * whoever the server returns two boards to reaches both of them, on a phone.
+   *
+   * 360px as well as 390px, because a `select` sizes itself to its widest option and the
+   * header has to survive that: at 390px with a classic scrollbar the usable row is 375px,
+   * which is what collapsed the board title to a zero-width sliver before the header was
+   * allowed to wrap. The title floor below is the assertion that pins it.
+   */
+  for (const width of [360, 390]) {
+    test(`switches between two boards on a ${width}px-wide phone`, async ({ page }) => {
+      const resale = {
+        ...pipeline,
+        pipeline_id: "pipe-resale",
+        key: "resale",
+        name: "Material resale",
+      };
+      await page.setViewportSize({ width, height: 844 });
+      await installBoardRoutes(page, []);
+      await page.unroute("**/api/v1/pipelines");
+      await page.route("**/api/v1/pipelines", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...envelope, pipelines: [pipeline, resale] }),
+        }),
+      );
+      await page.route("**/api/v1/pipelines/pipe-resale/board", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...boardModel, pipeline: resale, cards: [] }),
+        }),
+      );
+      await page.goto("/owner/board");
+
+      const switcher = page.getByRole("combobox", { name: "Pipeline" });
+      await expect(switcher).toBeVisible();
+      expect((await switcher.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+      // The switcher may never set the width of the header: whatever an account named its
+      // boards, the title beside it stays readable rather than being squeezed to a sliver.
+      await expectReadableBoardTitle(page, "Sales · Marketing Pipeline");
+      if (width === 390) {
+        await page.screenshot({ path: `${shotDir}/pipeline-board-pipeline-switcher.png` });
+      }
+
+      await switcher.selectOption("pipe-resale");
+      await expect(page.getByRole("heading", { name: "Material resale" })).toBeVisible();
+      await expectReadableBoardTitle(page, "Material resale");
+      const geometry = await pageOverflow(page);
+      expect(geometry.page).toBeLessThanOrEqual(geometry.viewport);
+    });
+  }
+
   // Check 7: the whole journey, keyboard only, ending in a backward confirm.
   test("moves a card backward with the keyboard alone", async ({ page }) => {
     const moves: MoveRequest[] = [];
@@ -410,7 +613,7 @@ test.describe("Pipeline board acceptance", () => {
       route.fulfill({
         status: 403,
         contentType: "application/json",
-        body: JSON.stringify({ error: "stage_entry_role_required" }),
+        body: JSON.stringify({ error: "stage_entry_role_required", required_role: "production" }),
       }),
     );
     await page.goto("/owner/board");
@@ -423,7 +626,9 @@ test.describe("Pipeline board acceptance", () => {
       .getByRole("button", { name: /^Quote Sent/ })
       .click();
 
-    await expect(page.getByRole("alert")).toContainText(/cannot move a card into that stage/);
+    await expect(page.getByRole("alert")).toContainText(
+      /cannot move a card into Quote Sent — it is reserved for production/,
+    );
     await expect(
       page.getByRole("region", { name: "Need Quote column" }).getByRole("article", {
         name: "Naina Tamang",

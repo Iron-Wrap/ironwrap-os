@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { getDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
-import { apiRequest, isRetryableApiError, retryAfterMilliseconds } from "./api";
+import { ApiError, apiRequest, isRetryableApiError, retryAfterMilliseconds } from "./api";
 
 describe("apiRequest", () => {
   it("sends same-origin credentials and parses the response contract", async () => {
@@ -114,6 +114,53 @@ describe("apiRequest", () => {
       retryAfterMs: 4_000,
     });
     expect(isRetryableApiError(caught)).toBe(true);
+  });
+
+  /**
+   * A refused command carries the facts that make it actionable — `required_role` on a
+   * stage refusal, `card_version` on a CAS conflict, `undo_window_seconds` on an expired
+   * undo. Dropping them is what forces a surface to render "something went wrong".
+   */
+  it("keeps the rest of a refusal body so a surface can render the exact blocker", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { error: "stage_entry_role_required", required_role: "production", card_version: 12 },
+          { status: 403 },
+        ),
+      );
+    let caught: unknown;
+    try {
+      await apiRequest({ path: "/api/v1/pipelines", schema: z.unknown(), fetcher });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    const error = caught as ApiError;
+    expect(error.code).toBe("stage_entry_role_required");
+    expect(error.detailText("required_role")).toBe("production");
+    expect(error.detailNumber("card_version")).toBe(12);
+    // The envelope fields stay on their own properties rather than doubling up in details.
+    expect(error.details).not.toHaveProperty("error");
+    expect(error.detailText("card_version")).toBeUndefined();
+    expect(error.detailNumber("required_role")).toBeUndefined();
+  });
+
+  it("carries an empty detail bag when the server sent no extra facts", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ error: "not_found" }, { status: 404 }));
+    let caught: unknown;
+    try {
+      await apiRequest({ path: "/api/v1/pipelines", schema: z.unknown(), fetcher });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as ApiError).details).toEqual({});
+    expect((caught as ApiError).detailText("required_role")).toBeUndefined();
   });
 
   it("rejects paths that could bypass the versioned BFF", async () => {

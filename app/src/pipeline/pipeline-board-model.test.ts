@@ -1,22 +1,33 @@
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "../lib/api";
 import {
   applyOptimisticMove,
   canEnterStage,
   canMoveCards,
   cardSlots,
   cardsInStage,
+  cardVersionAfterTransition,
   classifyMove,
   DEFAULT_CARD_TEMPLATE,
+  describeMoveBlocker,
+  describeUndoBlocker,
   formatMoneyFromCents,
   LONG_PRESS_MS,
   moveConfirmationPrompt,
   moveNeedsConfirmation,
   orderedStages,
+  preferredPipeline,
   stageRollUp,
+  undoWindowMs,
   UNDO_WINDOW_MS,
 } from "./pipeline-board-model";
-import type { BoardStage, CardSummary, PipelineBoardResponse } from "./pipeline-contracts";
+import type {
+  BoardStage,
+  CardSummary,
+  PipelineBoardResponse,
+  PipelineSummary,
+} from "./pipeline-contracts";
 
 function stage(
   overrides: Partial<BoardStage> & Pick<BoardStage, "stage_id" | "position">,
@@ -121,6 +132,150 @@ describe("pipeline board move rules", () => {
         "s",
       ).map((card) => card.card_id),
     ).toEqual(["a", "b"]);
+  });
+});
+
+describe("server truth over the client's mirror", () => {
+  it("takes the server's can_enter answer over its own role comparison", () => {
+    // The client's fallback would say "open" for both of these: no `min_role_to_enter`.
+    expect(canEnterStage("sales", stage({ stage_id: "deposit", position: 5 }))).toBe(true);
+    expect(
+      canEnterStage("sales", stage({ stage_id: "deposit", position: 5, can_enter: false })),
+    ).toBe(false);
+    // And "closed" for this one, which the server nonetheless opened for this session.
+    expect(
+      canEnterStage(
+        "sales",
+        stage({ stage_id: "deposit", position: 5, min_role_to_enter: "ops", can_enter: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the mirror for a payload that carries no can_enter", () => {
+    const restricted = stage({ stage_id: "deposit", position: 5, min_role_to_enter: "ops" });
+    expect(canEnterStage("sales", restricted)).toBe(false);
+    expect(canEnterStage("ops", restricted)).toBe(true);
+    expect(canEnterStage("owner", restricted)).toBe(true);
+  });
+
+  it("opens on the role's own board but never hides the ones the server also returned", () => {
+    const pipelines: PipelineSummary[] = [
+      { pipeline_id: "pipe-shop", key: "shop", name: "Shop", owning_role: "production" },
+      { pipeline_id: "pipe-sales", key: "sales", name: "Sales", owning_role: "sales" },
+    ];
+    expect(preferredPipeline(pipelines, "sales", null)?.pipeline_id).toBe("pipe-sales");
+    // A granted board this role does not own is still reachable — selection, not filtering.
+    expect(preferredPipeline(pipelines, "sales", "pipe-shop")?.pipeline_id).toBe("pipe-shop");
+    // A role that owns none of them still gets a board rather than a blank screen.
+    expect(preferredPipeline(pipelines, "accounting", null)?.pipeline_id).toBe("pipe-shop");
+    expect(preferredPipeline([], "sales", null)).toBeUndefined();
+  });
+
+  it("reads the card version a transition leaves behind, in either payload shape", () => {
+    expect(cardVersionAfterTransition({ card_version: 8 })).toBe(8);
+    expect(cardVersionAfterTransition({ card: { version: 8 } })).toBe(8);
+    // No version means no undo can be performed — the caller must not invent one.
+    expect(cardVersionAfterTransition({})).toBeUndefined();
+  });
+
+  it("never offers Undo for longer than the server accepts it", () => {
+    expect(undoWindowMs()).toBe(UNDO_WINDOW_MS);
+    expect(undoWindowMs(30)).toBe(UNDO_WINDOW_MS);
+    expect(undoWindowMs(2)).toBe(2_000);
+    expect(undoWindowMs(Number.NaN)).toBe(UNDO_WINDOW_MS);
+  });
+});
+
+describe("blockers the server actually sends", () => {
+  function refusal(code: string, status: number, details: Record<string, unknown> = {}) {
+    return new ApiError({ status, code, message: code, details });
+  }
+
+  it("routes a confirmation_required refusal to the confirm step, not to an error", () => {
+    const blocker = describeMoveBlocker(refusal("confirmation_required", 409), {
+      toStageName: "Quote Sent",
+    });
+    expect(blocker.outcome).toBe("confirm");
+  });
+
+  it("names the stale version the server reported", () => {
+    const blocker = describeMoveBlocker(
+      refusal("pipeline_card_version_conflict", 409, { card_version: 12 }),
+      { toStageName: "Quote Sent" },
+    );
+    expect(blocker.code).toBe("pipeline_card_version_conflict");
+    expect(blocker.message).toContain("version 12");
+    expect(blocker.refresh).toBe(true);
+  });
+
+  it("names the stage and the role a stage refusal was about", () => {
+    const blocker = describeMoveBlocker(
+      refusal("stage_entry_role_required", 403, { required_role: "production" }),
+      { toStageName: "Materials in prod" },
+    );
+    expect(blocker.message).toContain("Materials in prod");
+    expect(blocker.message).toContain("production");
+  });
+
+  it("gives each transition blocker its own next step", () => {
+    const cases: Array<[string, number, RegExp]> = [
+      ["pipeline_move_forbidden", 403, /move permission on this pipeline/],
+      ["pipeline_transition_noop", 409, /already in Quote Sent/],
+      ["pipeline_entity_type_mismatch", 409, /does not belong on this board/],
+      ["not_found", 404, /no longer exists on the board/],
+      ["invalid_pipeline_transition", 400, /would not accept/],
+      ["csrf_failed", 403, /session expired/],
+    ];
+    const messages = new Set<string>();
+    for (const [code, status, expected] of cases) {
+      const blocker = describeMoveBlocker(refusal(code, status), { toStageName: "Quote Sent" });
+      expect(blocker.code, code).toBe(code);
+      expect(blocker.message, code).toMatch(expected);
+      messages.add(blocker.message);
+    }
+    // Distinct blockers, distinct copy: none of them collapses into a shared toast.
+    expect(messages.size).toBe(cases.length);
+  });
+
+  it("says the card stayed put when the connection is the problem", () => {
+    const offline = new ApiError({ status: 0, code: "network_error", message: "offline" });
+    expect(describeMoveBlocker(offline, {}).message).toMatch(
+      /No connection to IronWrap OS\. The card stayed where it was\./,
+    );
+  });
+
+  it("gives each undo blocker its own next step", () => {
+    const expired = describeUndoBlocker(
+      refusal("pipeline_undo_window_expired", 409, { undo_window_seconds: 30 }),
+      { fromStageName: "Need Quote" },
+    );
+    expect(expired.message).toContain("30 seconds");
+    expect(expired.message).toContain("Need Quote");
+
+    const cases: Array<[string, number, RegExp]> = [
+      ["pipeline_undo_superseded", 409, /moved again since then/],
+      ["pipeline_stage_changed", 409, /moved again since then/],
+      ["pipeline_undo_actor_forbidden", 403, /Only the person who made this move/],
+      ["pipeline_undo_not_undoable", 409, /undo cannot itself be undone/],
+      ["pipeline_undo_origin_unknown", 409, /no earlier stage to return to/],
+      ["pipeline_card_version_conflict", 409, /Someone else changed this card first/],
+    ];
+    for (const [code, status, expected] of cases) {
+      const blocker = describeUndoBlocker(refusal(code, status), { fromStageName: "Need Quote" });
+      expect(blocker.code, code).toBe(code);
+      expect(blocker.message, code).toMatch(expected);
+    }
+  });
+
+  it("still says something actionable for a blocker this build has never seen", () => {
+    const blocker = describeMoveBlocker(refusal("pipeline_gate_not_cleared", 409), {
+      toStageName: "Deposit",
+    });
+    expect(blocker.code).toBe("pipeline_gate_not_cleared");
+    // The server's own message survives instead of being replaced by a category.
+    expect(blocker.message).toContain("pipeline_gate_not_cleared");
+    expect(blocker.message).toContain("The card stayed where it was.");
+    expect(blocker.refresh).toBe(true);
   });
 });
 

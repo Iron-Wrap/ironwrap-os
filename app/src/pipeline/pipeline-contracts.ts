@@ -41,6 +41,15 @@ export const pipelineSummarySchema = z.object({
   entity_type: z.string().min(1).optional(),
   owning_role: nullableText.optional(),
   position: z.number().int().nonnegative().optional(),
+  /**
+   * The server's own answer to "may this session move cards on this board" — it folds
+   * `owning_role` AND the administrator-configured per-pipeline role grants (0122) into
+   * one boolean, so the client never has to reconstruct the rule.  Optional because a
+   * server that predates the grants still returns a readable list.
+   */
+  can_move: z.boolean().optional(),
+  card_count: z.number().int().nonnegative().optional(),
+  version: z.number().int().positive().optional(),
   card_template_json: z.array(cardTemplateBindingSchema).nullable().optional(),
 });
 
@@ -60,6 +69,14 @@ export const boardStageSchema = z.object({
   // Set by an administrator in M3; every M1-seeded stage carries null, which means
   // "anyone holding the pipeline's move permission may enter" (ELEC-155 section 4).
   min_role_to_enter: nullableText.optional(),
+  /**
+   * The server's decision on whether THIS session may move a card into this stage — it
+   * already folds the move right and `min_role_to_enter` together
+   * (`buildPipelineBoardReadModel`).  When present it wins over the client's mirror of
+   * the same rule, so an administrator's stage restriction lands on the board without a
+   * client release.
+   */
+  can_enter: z.boolean().optional(),
   color: nullableText.optional(),
 });
 
@@ -99,10 +116,25 @@ export const pipelineBoardResponseSchema = pipelineEnvelopeSchema.extend({
   cards: z.array(boardCardSchema),
 });
 
+/**
+ * What a committed transition (or undo) actually answers with, transcribed from
+ * `transitionPayload` in `workers-bus/src/pipeline-board-api.ts`: a FLAT record, not a
+ * nested card.  `card_version` is the card's version AFTER the move, and it is the value
+ * the undo route demands back as its `expected_version` — without it the undo button is
+ * a 400.  The older nested `card` shape stays optional so a server that still answers
+ * that way keeps working.
+ */
 export const cardTransitionResponseSchema = z
   .object({
     transition_id: z.string().min(1).optional(),
+    card_id: z.string().min(1).optional(),
+    from_stage_id: nullableText.optional(),
+    to_stage_id: z.string().min(1).optional(),
     safeguard: nullableText.optional(),
+    card_version: z.number().int().positive().optional(),
+    occurred_at: nullableText.optional(),
+    undo_window_seconds: z.number().positive().optional(),
+    replayed: z.boolean().optional(),
     card: z
       .object({
         card_id: z.string().min(1).optional(),

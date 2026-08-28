@@ -16,6 +16,14 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId?: string;
   readonly retryAfterMs?: number;
+  /**
+   * The rest of the error body, verbatim. Our routes answer a refused command with the
+   * exact blocker AND the facts that make it actionable — `required_role` on a stage
+   * refusal, `card_version` on a CAS conflict, `undo_window_seconds` on an expired undo
+   * (`workers-bus/src/pipeline-board-api.ts`). Keeping them here is what lets a surface
+   * render the server's reason instead of flattening every refusal into one toast.
+   */
+  readonly details: Readonly<Record<string, unknown>>;
 
   constructor(input: {
     message: string;
@@ -23,6 +31,7 @@ export class ApiError extends Error {
     code?: string;
     requestId?: string;
     retryAfterMs?: number;
+    details?: Record<string, unknown>;
     cause?: unknown;
   }) {
     super(input.message, { cause: input.cause });
@@ -31,6 +40,19 @@ export class ApiError extends Error {
     this.code = input.code ?? "api_error";
     this.requestId = input.requestId;
     this.retryAfterMs = input.retryAfterMs;
+    this.details = Object.freeze({ ...(input.details ?? {}) });
+  }
+
+  /** One detail field, when the server sent it as a string. */
+  detailText(key: string): string | undefined {
+    const value = this.details[key];
+    return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  }
+
+  /** One detail field, when the server sent it as a finite number. */
+  detailNumber(key: string): number | undefined {
+    const value = this.details[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   }
 }
 
@@ -180,12 +202,20 @@ async function responseError(response: Response): Promise<ApiError> {
   } catch {
     // The status and headers still carry enough truth for an actionable error.
   }
+  const {
+    error: _error,
+    code: _code,
+    message: _message,
+    request_id: _requestId,
+    ...details
+  } = body;
   return new ApiError({
     status: response.status,
     code: body.code ?? body.error ?? `http_${response.status}`,
     message: body.message ?? response.statusText ?? "The request could not be completed.",
     requestId: body.request_id ?? response.headers.get("X-Request-ID") ?? undefined,
     retryAfterMs: retryAfterMilliseconds(response.headers.get("Retry-After")),
+    details,
   });
 }
 

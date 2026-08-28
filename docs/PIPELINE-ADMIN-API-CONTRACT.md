@@ -36,12 +36,35 @@ The owner-only automation routes configure a closed v1 catalog for committed sta
 |---|---|---|
 | GET | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules` | list current immutable rule revisions plus the safe action/template/recipient-ref catalog |
 | GET | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules/{rule_id}/revisions` | read one rule's ordered append-only revision history |
+| GET | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules/{rule_id}/activity` | read what the rule DID: its most recent dispatch outcomes |
 | POST | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules` | create a rule at revision 1 |
 | POST | `/api/v1/admin/pipelines/{pipeline_id}/automation-rules/{rule_id}/revisions` | append the next revision using the exact current version |
 
 The per-rule history read returns the current revision link and every immutable revision in ascending
 `version` order; each row carries its prior revision link, actor, closed definition, active state,
 version, and `created_at`.
+
+The per-rule **activity** read is the other half of that pair and answers a different question:
+`/revisions` says how the rule was configured over time, `/activity` says whether a firing worked.
+It returns at most the 20 most recent invocations newest-first, with `limit` and `truncated` published
+so a window is never mistaken for the whole record. Each row carries `invocation_id`, `outbox_id`,
+`transition_id`, `card_id`, `to_stage_id`, `rule_version`, `action`, `status`, `attempt_count`,
+`result_code`, `created_at`, `updated_at` and `completed_at` — and nothing else. Recipient references
+and digests, effect ids and states, provider external ids and response/readback hashes stay
+server-side: they are ledger evidence for an operator, not something a configuration screen needs in
+order to say what happened. `result_code` crosses as provenance beside a translated sentence, never as
+the sentence itself.
+
+`status` has **three** terminal values, not two. `succeeded` and `failed` are the two an administrator
+expects; `unknown` is the effect ledger declining to claim a delivery it could not verify, and any
+surface that renders it as either neighbour asserts something the server deliberately refused to
+assert. A rule that exists and has never fired returns an empty list — "nothing fired", which is a
+different answer from "no such rule" (404). The automation-rules catalog publishes
+`activity_available: true` to say that this build serves the route at all, so a client can withhold a
+firing surface entirely rather than show an empty one that would read as an all-clear.
+
+The route is read-only. Re-dispatching a governed effect needs its own authority and idempotency
+story, so no `Retry now` command exists here and a `POST` to the path is a 404.
 
 Commands require the owner session, CSRF, an active pipeline/stage, and the exact current rule
 version for revisions. v1 publishes only `operations.email.send` and the escaped

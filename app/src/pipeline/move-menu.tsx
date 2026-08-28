@@ -1,10 +1,11 @@
-import { Check, Lock, X } from "lucide-react";
+import { Check, CloudOff, Lock, X } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 
 import type { AppRole } from "../lib/roles";
 import { cn } from "../lib/cn";
 import { Button } from "../components/ui/button";
+import { Notice } from "../components/ui/notice";
 import {
   canEnterStage,
   classifyMove,
@@ -25,6 +26,7 @@ export function MoveMenu({
   currentStageId,
   role,
   lifted,
+  live,
   hoverStageId,
   pendingStageId,
   busy,
@@ -38,6 +40,14 @@ export function MoveMenu({
   currentStageId: string;
   role: AppRole;
   lifted: boolean;
+  /**
+   * Whether a move can reach the server at all. A move is committed on the server or not
+   * at all — it is never queued on this device — so an offline menu says so and offers
+   * nothing, the same read-only treatment every configuration surface already gives an
+   * offline edit (ELEC-188). Silence here would be the worst place for it: this is the
+   * surface where an accidental transition moves a job and money.
+   */
+  live: boolean;
   hoverStageId: string | null;
   pendingStageId: string | null;
   busy: boolean;
@@ -55,6 +65,8 @@ export function MoveMenu({
       listRef.current?.querySelector<HTMLButtonElement>("[data-confirm-move]")?.focus();
       return;
     }
+    // Offline every row is disabled, so there is nothing to land the caret on.
+    if (!live) return;
     // A lifted card keeps the finger in charge; moving focus under it would fight the
     // gesture. Every other trigger lands the caret on the first stage the user can pick.
     if (lifted) return;
@@ -62,7 +74,7 @@ export function MoveMenu({
       "button[data-stage-id]:not(:disabled)",
     );
     first?.focus();
-  }, [lifted, pendingStageId]);
+  }, [lifted, live, pendingStageId]);
 
   function onListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (
@@ -131,6 +143,15 @@ export function MoveMenu({
           {lifted ? `Moving ${cardTitle}. Choose a stage.` : ""}
         </p>
 
+        {!live ? (
+          <div className="mt-2">
+            <Notice tone="warning" title="Offline — this card cannot be moved">
+              A stage change is saved on the server, not on this device, so nothing here is queued.
+              The card stays in {currentStage?.name ?? "its stage"} until you reconnect.
+            </Notice>
+          </div>
+        ) : null}
+
         <div ref={listRef} className="mt-2 space-y-1" onKeyDown={onListKeyDown}>
           {stages.map((stage) => {
             const isCurrent = stage.stage_id === currentStageId;
@@ -154,7 +175,13 @@ export function MoveMenu({
                     <Button variant="outline" onClick={onCancelPending} disabled={busy}>
                       Cancel
                     </Button>
-                    <Button data-confirm-move variant="accent" busy={busy} onClick={onConfirm}>
+                    <Button
+                      data-confirm-move
+                      variant="accent"
+                      busy={busy}
+                      disabled={!live}
+                      onClick={onConfirm}
+                    >
                       <Check aria-hidden="true" />
                       Confirm move
                     </Button>
@@ -167,7 +194,7 @@ export function MoveMenu({
                 key={stage.stage_id}
                 type="button"
                 data-stage-id={stage.stage_id}
-                disabled={isCurrent || !enterable || busy}
+                disabled={isCurrent || !enterable || busy || !live}
                 aria-current={isCurrent ? "true" : undefined}
                 onClick={() => onRequest(stage)}
                 className={cn(
@@ -185,6 +212,7 @@ export function MoveMenu({
                   {isCurrent ? " (current)" : ""}
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-xs font-bold text-muted">
+                  {!live ? <CloudOff className="size-4" aria-label="Offline" /> : null}
                   {!enterable ? <Lock className="size-4" aria-label="Restricted stage" /> : null}
                   <span className="tabular-nums">{stage.card_count ?? 0}</span>
                 </span>

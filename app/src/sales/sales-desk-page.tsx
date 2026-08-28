@@ -10,6 +10,7 @@ import {
   Clock3,
   FileSearch,
   FileText,
+  KanbanSquare,
   RefreshCw,
   ShieldCheck,
   TriangleAlert,
@@ -24,6 +25,14 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { AddToBoardDialog } from "../pipeline/add-to-board-dialog";
+import { loadPipelines } from "../pipeline/pipeline-api";
+import {
+  boardPlacementOptions,
+  pipelineListQueryKey,
+  type PlaceableEntity,
+} from "../pipeline/pipeline-board-model";
+import type { PipelineSummary } from "../pipeline/pipeline-contracts";
 import { loadSales } from "./sales-api";
 import type { SalesLead, SalesResponse } from "./sales-contracts";
 
@@ -67,6 +76,15 @@ function SalesDeskContent() {
     queryKey: ["sales", session.tenant.id, session.user.id],
     queryFn: () => loadSales(),
   });
+  /**
+   * Which boards this session may add a card to. Shared key with the board screen, so a
+   * salesperson who has already opened a board pays nothing for this. A failure here only
+   * removes the "Add to board" affordance — the desk itself never depends on it.
+   */
+  const pipelines = useQuery({
+    queryKey: pipelineListQueryKey(session.tenant.id, session.user.id),
+    queryFn: () => loadPipelines(),
+  });
   const model = query.data;
 
   if (!model && query.isPending) return <SalesDeskSkeleton />;
@@ -77,6 +95,7 @@ function SalesDeskContent() {
     <SalesDeskScreen
       filter={filter}
       model={model}
+      pipelines={pipelines.data?.pipelines ?? []}
       locale={session.tenant.locale}
       currency={session.tenant.currency}
       refreshFailed={query.isError}
@@ -86,8 +105,37 @@ function SalesDeskContent() {
   );
 }
 
+/**
+ * What this desk can put on a board, as the core's own generic vocabulary.
+ *
+ * `lead` and `job` are the entity types the server's registry publishes
+ * (`ENTITY_REGISTRY` in `workers-bus/src/pipeline-board-store.ts`), not a roofing noun and not a
+ * list this file invents: which of them is actually offered is decided by the `entity_type` each
+ * board declares, and by the server when the placement is posted.
+ */
+function placeableEntities(lead: SalesLead): PlaceableEntity[] {
+  const entities: PlaceableEntity[] = [
+    {
+      entityType: "lead",
+      entityId: lead.id,
+      label: lead.contact.display_name ?? "this lead",
+      typeLabel: "lead",
+    },
+  ];
+  if (lead.job) {
+    entities.push({
+      entityType: "job",
+      entityId: lead.job.id,
+      label: lead.job.job_number ?? lead.job.id,
+      typeLabel: "job",
+    });
+  }
+  return entities;
+}
+
 function SalesDeskScreen({
   model,
+  pipelines,
   filter,
   locale,
   currency,
@@ -96,6 +144,7 @@ function SalesDeskScreen({
   onRetry,
 }: {
   model: SalesResponse;
+  pipelines: readonly PipelineSummary[];
   filter: SalesFilter;
   locale: string;
   currency: string;
@@ -103,6 +152,7 @@ function SalesDeskScreen({
   onFilterChange: (filter: SalesFilter) => void;
   onRetry: () => void;
 }) {
+  const [addToBoard, setAddToBoard] = useState<SalesLead | null>(null);
   const leads = useMemo(
     () => model.leads.filter((lead) => matchesFilter(lead, filter)),
     [filter, model.leads],
@@ -187,13 +237,22 @@ function SalesDeskScreen({
             filter={filter}
             locale={locale}
             currency={currency}
+            pipelines={pipelines}
             canOpenWorkbench={canOpenWorkbench}
             canPrepareTriage={canPrepareTriage}
             canCreateLead={canCreateLead}
             noLeadsAtAll={model.leads.length === 0}
+            onAddToBoard={setAddToBoard}
           />
         </main>
       </div>
+
+      {addToBoard ? (
+        <AddToBoardDialog
+          entities={placeableEntities(addToBoard)}
+          onClose={() => setAddToBoard(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -295,19 +354,23 @@ function LeadQueue({
   filter,
   locale,
   currency,
+  pipelines,
   canOpenWorkbench,
   canPrepareTriage,
   canCreateLead,
   noLeadsAtAll,
+  onAddToBoard,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
   locale: string;
   currency: string;
+  pipelines: readonly PipelineSummary[];
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
   canCreateLead: boolean;
   noLeadsAtAll: boolean;
+  onAddToBoard: (lead: SalesLead) => void;
 }) {
   if (leads.length === 0) {
     // A company that has never had a lead is being set up, not filtering. Send it to the one
@@ -360,8 +423,10 @@ function LeadQueue({
               lead={lead}
               locale={locale}
               defaultCurrency={currency}
+              pipelines={pipelines}
               canOpenWorkbench={canOpenWorkbench}
               canPrepareTriage={canPrepareTriage}
+              onAddToBoard={onAddToBoard}
             />
           </li>
         ))}
@@ -374,15 +439,23 @@ function LeadRow({
   lead,
   locale,
   defaultCurrency,
+  pipelines,
   canOpenWorkbench,
   canPrepareTriage,
+  onAddToBoard,
 }: {
   lead: SalesLead;
   locale: string;
   defaultCurrency: string;
+  pipelines: readonly PipelineSummary[];
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
+  onAddToBoard: (lead: SalesLead) => void;
 }) {
+  // The affordance appears only when the SERVER says a board exists that binds this kind of work
+  // and that this session may write. A role with no such board never sees an action it cannot
+  // complete, and the placement route re-checks both rules anyway.
+  const canAddToBoard = boardPlacementOptions(pipelines, placeableEntities(lead)).length > 0;
   const receivedAt = formatDate(lead.received_at, locale);
   const contact = [lead.contact.phone, lead.contact.email].filter((value): value is string =>
     Boolean(value),
@@ -482,6 +555,17 @@ function LeadRow({
                 <ClipboardCheck className="size-4" aria-hidden="true" />
                 Start lead check
               </Link>
+            ) : null}
+            {canAddToBoard ? (
+              <button
+                type="button"
+                onClick={() => onAddToBoard(lead)}
+                aria-label={`Add ${lead.contact.display_name ?? "this lead"} to a board`}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 font-bold text-foreground transition-colors hover:bg-surface-muted"
+              >
+                <KanbanSquare className="size-4" aria-hidden="true" />
+                Add to board
+              </button>
             ) : null}
           </div>
           <details className="group rounded-lg border border-border">

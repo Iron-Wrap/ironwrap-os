@@ -6,11 +6,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { loadPipelines, placeCardOnPipeline } from "../pipeline/pipeline-api";
+import type { PipelineListResponse } from "../pipeline/pipeline-contracts";
 import { loadSales } from "./sales-api";
 import type { SalesResponse } from "./sales-contracts";
 import { SalesDeskPage } from "./sales-desk-page";
 
 vi.mock("./sales-api", () => ({ loadSales: vi.fn() }));
+vi.mock("../pipeline/pipeline-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pipeline/pipeline-api")>();
+  return { ...actual, loadPipelines: vi.fn(), placeCardOnPipeline: vi.fn() };
+});
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
     children,
@@ -185,10 +191,32 @@ function renderSales({ session = ownerSession }: { session?: AuthenticatedSessio
   );
 }
 
+const pipelineList: PipelineListResponse = {
+  version: 1,
+  source_updated_at: "2026-07-11T12:00:00.000Z",
+  read_model_generated_at: "2026-07-11T12:00:01.000Z",
+  stale_fields: [],
+  permissions: ["pipeline:read"],
+  allowed_actions: ["pipeline.read"],
+  pipelines: [
+    {
+      pipeline_id: "pipe-sales",
+      key: "sales",
+      name: "Sales",
+      entity_type: "lead",
+      owning_role: "sales",
+      can_move: true,
+      position: 0,
+    },
+  ],
+};
+
 describe("SalesDeskPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(loadSales).mockResolvedValue(salesModel());
+    vi.mocked(loadPipelines).mockResolvedValue(pipelineList);
   });
 
   it("shows source-backed review context without inventing a send, quote, or payment action", async () => {
@@ -372,6 +400,80 @@ describe("SalesDeskPage", () => {
 
     await screen.findByRole("heading", { name: "Sales desk" });
     expect(screen.queryByRole("link", { name: /start lead check/i })).not.toBeInTheDocument();
+  });
+
+  // The gap ELEC-202 closes: before this, a lead created here could never reach a board
+  // because nothing in the product called the card-placement route.
+  describe("putting a lead on a board", () => {
+    it("offers the action once the server names a board that takes a lead", async () => {
+      renderSales();
+
+      expect(
+        await screen.findByRole("button", { name: "Add Pat Prospect to a board" }),
+      ).toBeVisible();
+    });
+
+    it("places the lead the person is looking at, by its own id", async () => {
+      const user = userEvent.setup();
+      vi.mocked(placeCardOnPipeline).mockResolvedValue({
+        card_id: "plc_1",
+        pipeline_id: "pipe-sales",
+        entity_type: "lead",
+        entity_id: "LEAD-A",
+        replayed: false,
+      });
+      renderSales();
+
+      await user.click(await screen.findByRole("button", { name: "Add Pat Prospect to a board" }));
+      await user.click(await screen.findByRole("button", { name: /^Sales/ }));
+
+      await screen.findByText(/Pat Prospect is on Sales/);
+      expect(vi.mocked(placeCardOnPipeline).mock.calls[0]?.[1]).toMatchObject({
+        pipelineId: "pipe-sales",
+        entityType: "lead",
+        entityId: "LEAD-A",
+      });
+    });
+
+    it("does not offer the action when no board this session can write takes a lead", async () => {
+      vi.mocked(loadPipelines).mockResolvedValue({
+        ...pipelineList,
+        pipelines: [{ ...pipelineList.pipelines[0]!, can_move: false }],
+      });
+      renderSales();
+
+      await screen.findByRole("heading", { name: "Sales desk" });
+      expect(screen.queryByRole("button", { name: /to a board$/ })).not.toBeInTheDocument();
+    });
+
+    it("offers a job board the linked job, not the lead", async () => {
+      vi.mocked(loadPipelines).mockResolvedValue({
+        ...pipelineList,
+        pipelines: [
+          {
+            pipeline_id: "pipe-shop",
+            key: "shop",
+            name: "Shop",
+            entity_type: "job",
+            owning_role: "production",
+            can_move: true,
+            position: 0,
+          },
+        ],
+      });
+      const user = userEvent.setup();
+      renderSales();
+
+      await user.click(await screen.findByRole("button", { name: "Add Pat Prospect to a board" }));
+
+      expect(await screen.findByRole("button", { name: /^Shop/ })).toHaveTextContent(
+        "Adds job IW-1001",
+      );
+      // The lead with no job never gets the affordance for a job-only board.
+      expect(
+        screen.queryByRole("button", { name: "Add Morgan Homeowner to a board" }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("keeps the sales payload out of field devices before it asks the BFF", async () => {

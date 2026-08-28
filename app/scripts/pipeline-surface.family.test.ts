@@ -20,6 +20,7 @@ const surfaceFiles = readdirSync(surfaceDir)
 describe("pipeline board surface family", () => {
   it("has surfaces to check", () => {
     expect(surfaceFiles.map((entry) => entry.file).sort()).toEqual([
+      "add-to-board-dialog.tsx",
       "move-menu.tsx",
       "pipeline-board-page.tsx",
       "pipeline-card.tsx",

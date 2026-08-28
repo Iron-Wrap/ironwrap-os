@@ -10,11 +10,14 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { useReadOnlyOfflineSurface } from "../components/offline-write-mode";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
+import { useOnlineStatus } from "../hooks/use-online-status";
 import { cn } from "../lib/cn";
 import type { AppRole } from "../lib/roles";
 import { MoveMenu } from "./move-menu";
@@ -31,6 +34,7 @@ import {
   LONG_PRESS_MS,
   moveNeedsConfirmation,
   orderedStages,
+  pipelineListQueryKey,
   preferredPipeline,
   stageById,
   stageRollUp,
@@ -95,9 +99,19 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
   const session = useSession();
   const role = session.user.role;
   const queryClient = useQueryClient();
+  const online = useOnlineStatus();
+  /**
+   * A stage change is committed on the server or not at all: `moveCardToStage` posts straight to
+   * the transition route and there is no outbox entry behind it. So this board is a `read_only`
+   * offline surface in the ELEC-188 sense — the same class as the configuration screens, not the
+   * field surfaces whose captures really are queued — and it registers as one so the app-wide
+   * banner stops promising a sync that will never happen here.
+   */
+  useReadOnlyOfflineSurface();
+  const live = online && !isOfflineSession(session);
 
   const pipelinesQuery = useQuery({
-    queryKey: ["pipelines", session.tenant.id, session.user.id],
+    queryKey: pipelineListQueryKey(session.tenant.id, session.user.id),
     queryFn: () => loadPipelines(),
   });
 
@@ -302,6 +316,15 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
     (card: BoardCard, targetStage: BoardStage, keepMenuOpen: boolean) => {
       const fromStage = stageById(stages, card.stage_id);
       if (!fromStage || targetStage.stage_id === card.stage_id) return;
+      // Every trigger — the Move button, the long-press sheet and the desktop drag — commits
+      // through here, so this is the one place the offline refusal has to hold.
+      if (!live) {
+        showToast({
+          tone: "error",
+          message: `Offline, so the card stayed in ${fromStage.name}. Nothing was queued to send.`,
+        });
+        return;
+      }
       if (!canEnterStage(role, targetStage)) {
         showToast({
           tone: "error",
@@ -321,7 +344,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
         confirmed: false,
       });
     },
-    [moveMutation, role, showToast, stages],
+    [live, moveMutation, role, showToast, stages],
   );
 
   // ---- Pointer gestures: desktop drag and touch long-press, one commit path --------
@@ -352,7 +375,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
   }, []);
 
   useEffect(() => {
-    if (!movePermitted) return;
+    if (!movePermitted || !live) return;
 
     function onPointerMove(event: PointerEvent) {
       const current = gesture.current;
@@ -406,10 +429,12 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", endGesture);
     };
-  }, [board?.cards, endGesture, movePermitted, requestMove, stageIdAtPoint, stages]);
+  }, [board?.cards, endGesture, live, movePermitted, requestMove, stageIdAtPoint, stages]);
 
   function onCardPointerDown(event: ReactPointerEvent<HTMLElement>, card: BoardCard) {
-    if (!movePermitted || moveMenu) return;
+    // Offline the gesture is dropped but the Move BUTTON keeps working: lifting a card that
+    // cannot land anywhere is the confusing half, while the menu is where the reason is said.
+    if (!movePermitted || !live || moveMenu) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     // The card's own controls stay clickable; only its body is a drag handle.
     if ((event.target as Element).closest("button, a, input")) return;
@@ -544,6 +569,13 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
         </div>
       </header>
 
+      {!live ? (
+        <Notice tone="warning" title="Offline — the board is read-only">
+          Cards stay readable. A stage change is saved on the server, never queued on this device,
+          so reconnect before moving anything.
+        </Notice>
+      ) : null}
+
       {board && !movePermitted ? (
         <Notice tone="info" title="Read only">
           You can read this board. Moving a card between stages needs the move permission for this
@@ -623,6 +655,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
           currentStageId={activeCard.stage_id}
           role={role}
           lifted={moveMenu.lifted}
+          live={live}
           hoverStageId={sheetHoverStageId}
           pendingStageId={moveMenu.pendingStageId}
           busy={moveMutation.isPending}
@@ -642,7 +675,9 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
 
       <MoveToast
         toast={toast}
-        busy={undoMutation.isPending}
+        // An undo is a server command like the move it reverses, so offline it is refused
+        // rather than offered and dropped.
+        busy={undoMutation.isPending || !live}
         onUndo={(undo) => undoMutation.mutate(undo)}
         onDismiss={() => setToast(null)}
       />

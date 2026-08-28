@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../lib/api";
 import {
   applyOptimisticMove,
+  boardPlacementOptions,
   canEnterStage,
   canMoveCards,
   cardSlots,
@@ -11,12 +12,14 @@ import {
   classifyMove,
   DEFAULT_CARD_TEMPLATE,
   describeMoveBlocker,
+  describePlacementBlocker,
   describeUndoBlocker,
   formatMoneyFromCents,
   LONG_PRESS_MS,
   moveConfirmationPrompt,
   moveNeedsConfirmation,
   orderedStages,
+  pipelineBoardRoute,
   preferredPipeline,
   stageRollUp,
   undoWindowMs,
@@ -28,6 +31,7 @@ import type {
   PipelineBoardResponse,
   PipelineSummary,
 } from "./pipeline-contracts";
+import type { PlaceableEntity } from "./pipeline-board-model";
 
 function stage(
   overrides: Partial<BoardStage> & Pick<BoardStage, "stage_id" | "position">,
@@ -477,5 +481,145 @@ describe("card template binding", () => {
     expect(
       stageRollUp(stage({ stage_id: "s", position: 0, total_amount_cents: null }), "en-CA", "CAD"),
     ).toBeNull();
+  });
+});
+
+describe("putting work on a board", () => {
+  function board(overrides: Partial<PipelineSummary> & Pick<PipelineSummary, "pipeline_id">) {
+    return {
+      key: overrides.pipeline_id,
+      name: overrides.pipeline_id,
+      ...overrides,
+    } satisfies PipelineSummary;
+  }
+
+  const lead: PlaceableEntity = {
+    entityType: "lead",
+    entityId: "lead-1",
+    label: "Pat Prospect",
+    typeLabel: "lead",
+  };
+  const job: PlaceableEntity = {
+    entityType: "job",
+    entityId: "job-1",
+    label: "IW-1001",
+    typeLabel: "job",
+  };
+
+  it("offers a board only when its entity type matches the thing being placed", () => {
+    const options = boardPlacementOptions(
+      [
+        board({ pipeline_id: "sales", name: "Sales", entity_type: "lead", can_move: true }),
+        board({ pipeline_id: "shop", name: "Shop", entity_type: "job", can_move: true }),
+        board({
+          pipeline_id: "resale",
+          name: "Material resale",
+          entity_type: "material_order",
+          can_move: true,
+        }),
+      ],
+      [lead],
+    );
+    expect(options.map((option) => option.pipeline.pipeline_id)).toEqual(["sales"]);
+  });
+
+  it("pairs each offered board with the entity that board actually takes", () => {
+    const options = boardPlacementOptions(
+      [
+        board({ pipeline_id: "sales", name: "Sales", entity_type: "lead", can_move: true }),
+        board({ pipeline_id: "shop", name: "Shop", entity_type: "job", can_move: true }),
+      ],
+      [lead, job],
+    );
+    expect(options.map((option) => [option.pipeline.pipeline_id, option.entity.entityId])).toEqual([
+      ["sales", "lead-1"],
+      ["shop", "job-1"],
+    ]);
+  });
+
+  // Role scoping, mirrored from the server's own `can_move`. The route re-checks it; this only
+  // keeps a person from being offered a board that will refuse them.
+  it("does not offer a board this session may not write", () => {
+    expect(
+      boardPlacementOptions(
+        [board({ pipeline_id: "sales", entity_type: "lead", can_move: false })],
+        [lead],
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not guess when the server named neither the binding nor the write right", () => {
+    expect(
+      boardPlacementOptions([board({ pipeline_id: "sales", entity_type: "lead" })], [lead]),
+    ).toEqual([]);
+    expect(
+      boardPlacementOptions([board({ pipeline_id: "sales", can_move: true })], [lead]),
+    ).toEqual([]);
+  });
+
+  it("keeps the server's order", () => {
+    const options = boardPlacementOptions(
+      [
+        board({ pipeline_id: "second", entity_type: "lead", can_move: true, position: 1 }),
+        board({ pipeline_id: "first", entity_type: "lead", can_move: true, position: 0 }),
+      ],
+      [lead],
+    );
+    expect(options.map((option) => option.pipeline.pipeline_id)).toEqual(["second", "first"]);
+  });
+
+  it("sends each role to the board its own app mounts", () => {
+    expect(pipelineBoardRoute("sales")).toBe("/sales/board");
+    expect(pipelineBoardRoute("owner")).toBe("/owner/board");
+    expect(pipelineBoardRoute("production")).toBe("/owner/board");
+  });
+});
+
+describe("describePlacementBlocker", () => {
+  const context = { boardName: "Sales", entityLabel: "Pat Prospect" };
+
+  function refusal(code: string, status: number) {
+    return new ApiError({ message: "", status, code });
+  }
+
+  it("names the missing write right rather than a generic failure", () => {
+    const blocker = describePlacementBlocker(refusal("pipeline_move_forbidden", 403), context);
+    expect(blocker.code).toBe("pipeline_move_forbidden");
+    expect(blocker.message).toContain("not add cards to it");
+    expect(blocker.alreadyPlaced).toBe(false);
+  });
+
+  it("says the board tracks other work when the entity type does not match", () => {
+    const blocker = describePlacementBlocker(
+      refusal("pipeline_entity_type_mismatch", 409),
+      context,
+    );
+    expect(blocker.message).toContain("Sales tracks a different kind of work");
+    expect(blocker.alreadyPlaced).toBe(false);
+  });
+
+  it("reports a repeat placement as an outcome, not a failure", () => {
+    const blocker = describePlacementBlocker(
+      refusal("pipeline_transition_idempotency_conflict", 409),
+      context,
+    );
+    expect(blocker.alreadyPlaced).toBe(true);
+    expect(blocker.message).toContain("already on Sales");
+  });
+
+  it("keeps the entity's own name in an unknown refusal", () => {
+    const blocker = describePlacementBlocker(refusal("teapot", 418), context);
+    expect(blocker.message).toContain("Pat Prospect was not added to Sales");
+  });
+
+  it("says the connection failed rather than blaming the board", () => {
+    const blocker = describePlacementBlocker(refusal("network_error", 0), context);
+    expect(blocker.message).toContain("No connection");
+  });
+
+  it("still answers when the failure is not an ApiError", () => {
+    const blocker = describePlacementBlocker(new Error("boom"), context);
+    expect(blocker.code).toBe("unknown_error");
+    expect(blocker.alreadyPlaced).toBe(false);
   });
 });

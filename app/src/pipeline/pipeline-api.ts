@@ -2,9 +2,11 @@ import type { AuthenticatedSession } from "../auth/session";
 import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
+  cardPlacementResponseSchema,
   cardTransitionResponseSchema,
   pipelineBoardResponseSchema,
   pipelineListResponseSchema,
+  type CardPlacementResponse,
   type CardTransitionResponse,
   type PipelineBoardResponse,
   type PipelineListResponse,
@@ -102,6 +104,57 @@ export async function undoCardMove(
     schema: cardTransitionResponseSchema,
     method: "POST",
     body: { expected_version: input.expectedVersion },
+    csrfToken: session.csrf_token,
+    idempotencyKey,
+    fetcher,
+  });
+}
+
+/**
+ * One key per placement attempt. The route demands an `idempotency-key` header matching
+ * `^[A-Za-z0-9._:-]{8,140}$` and answers `400 idempotency_key_required` without one
+ * (`handleCardPlacement`, `workers-bus/src/pipeline-board-api.ts`).
+ */
+export function newCardPlacementKey(): string {
+  return `pipeline-card-place:${crypto.randomUUID()}`;
+}
+
+export interface CardPlacementInput {
+  pipelineId: string;
+  entityType: string;
+  entityId: string;
+  /**
+   * Which column the card lands in. Omitted by this surface on purpose: the server puts a
+   * new card in the board's FIRST stage, which is what "add this lead to the board" means.
+   * Kept on the input so a future surface that places into a named stage does not have to
+   * fork the call.
+   */
+  stageKey?: string;
+}
+
+/**
+ * Put an entity on a board.
+ *
+ * Every rule that matters is the server's: it re-checks that the session may write this
+ * pipeline, that `entity_type` matches what the board binds, and that the entity exists in
+ * THIS tenant. The client's filtering is a mirror so the person is not offered a board that
+ * will refuse them — it is not the authority, and a refusal is rendered as itself.
+ */
+export async function placeCardOnPipeline(
+  session: AuthenticatedSession,
+  input: CardPlacementInput,
+  idempotencyKey: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CardPlacementResponse> {
+  return await apiRequest({
+    path: API_PATHS.pipelineCards(input.pipelineId),
+    schema: cardPlacementResponseSchema,
+    method: "POST",
+    body: {
+      entity_type: input.entityType,
+      entity_id: input.entityId,
+      ...(input.stageKey ? { stage_key: input.stageKey } : {}),
+    },
     csrfToken: session.csrf_token,
     idempotencyKey,
     fetcher,

@@ -582,3 +582,156 @@ export function initials(name: string): string {
   const last = parts.length > 1 ? (parts.at(-1)?.[0] ?? "") : "";
   return `${first}${last}`.toUpperCase();
 }
+
+/* ------------------------------------------------------- putting work on a board ------ */
+
+/**
+ * Something the product can put on a board: a generic (type, id) pair plus what to call it.
+ *
+ * The type is the core vocabulary the server's entity registry publishes (`lead`, `job` today),
+ * never a vertical noun, so the surface that offers this does not learn a roofing word to do it.
+ */
+export interface PlaceableEntity {
+  entityType: string;
+  entityId: string;
+  /** What the person calls this thing — "Pat Prospect", "Job IW-1001". */
+  label: string;
+  /** The kind, in the person's words. Server-supplied where one is available. */
+  typeLabel: string;
+}
+
+export interface BoardPlacementOption {
+  pipeline: PipelineSummary;
+  entity: PlaceableEntity;
+}
+
+/**
+ * Which boards this session may actually put one of these entities on, in the server's order.
+ *
+ * Both halves of the answer come from `GET /api/v1/pipelines` and neither is reconstructed here:
+ * `entity_type` is the binding the administrator chose for the board, and `can_move` is the
+ * server's own fold of `owning_role` plus the per-pipeline role grants. A board is offered only
+ * when the server said BOTH — an unknown value is treated as "not offered" rather than guessed,
+ * because offering a board the server will refuse is how a user learns to ignore refusals.
+ *
+ * This is a mirror, not the authority. `handleCardPlacement` re-checks the same two rules and a
+ * refusal from it is rendered as itself; hiding a board here never stands in for that check.
+ */
+export function boardPlacementOptions(
+  pipelines: readonly PipelineSummary[],
+  entities: readonly PlaceableEntity[],
+): BoardPlacementOption[] {
+  const options: BoardPlacementOption[] = [];
+  for (const pipeline of pipelines) {
+    if (pipeline.can_move !== true) continue;
+    const entity = entities.find((candidate) => candidate.entityType === pipeline.entity_type);
+    if (entity) options.push({ pipeline, entity });
+  }
+  return options;
+}
+
+/**
+ * The pipeline list's cache key, shared by the board screen and by every surface that offers
+ * "add to board": one fetch answers both, and neither can drift onto its own key.
+ */
+export function pipelineListQueryKey(tenantId: string, userId: string): [string, string, string] {
+  return ["pipelines", tenantId, userId];
+}
+
+/** Where this role reads its boards, matching the per-role mounts in `router.tsx`. */
+export function pipelineBoardRoute(role: AppRole): "/sales/board" | "/owner/board" {
+  return role === "sales" ? "/sales/board" : "/owner/board";
+}
+
+export interface PlacementBlocker {
+  /** The server's own code, so a test asserts the mapping rather than the prose. */
+  code: string;
+  message: string;
+  /**
+   * True when the entity is on the board already and the refusal is not a failure — the card is
+   * there, so the surface reports the outcome rather than an error.
+   */
+  alreadyPlaced: boolean;
+}
+
+/**
+ * Every refusal `POST /api/v1/pipelines/{id}/cards` can answer with, rendered as itself.
+ *
+ * The codes are transcribed from `handleCardPlacement` and `placeCard`
+ * (`workers-bus/src/pipeline-board-api.ts`, `workers-bus/src/pipeline-board-store.ts`). Each one
+ * needs a different next step from the person, so none of them collapses into "could not add".
+ */
+export function describePlacementBlocker(
+  error: unknown,
+  context: { boardName?: string; entityLabel?: string },
+): PlacementBlocker {
+  const board = context.boardName ?? "that board";
+  const entity = context.entityLabel ?? "This";
+  if (!(error instanceof ApiError)) {
+    return {
+      code: "unknown_error",
+      message: `${entity} was not added to ${board}. Nothing was changed.`,
+      alreadyPlaced: false,
+    };
+  }
+  switch (error.code) {
+    case "pipeline_move_forbidden":
+      return {
+        code: error.code,
+        message: `You can read ${board} but not add cards to it. Ask the office for the move permission on this pipeline.`,
+        alreadyPlaced: false,
+      };
+    case "pipeline_entity_type_mismatch":
+    case "pipeline_entity_type_unknown":
+      return {
+        code: error.code,
+        message: `${board} tracks a different kind of work, so ${entity} cannot go on it. Nothing was changed.`,
+        alreadyPlaced: false,
+      };
+    case "pipeline_entity_not_found":
+      return {
+        code: error.code,
+        message: `${entity} is not in the office system yet, so it cannot go on a board. Refresh and try again.`,
+        alreadyPlaced: false,
+      };
+    // The card already exists for this (board, entity) pair but was first placed by someone else
+    // or into another stage, so the replay fingerprint does not match. The card IS on the board;
+    // saying "it failed" would send the person looking for a problem that is not there.
+    case "pipeline_transition_idempotency_conflict":
+      return {
+        code: error.code,
+        message: `${entity} is already on ${board}. Nothing was changed.`,
+        alreadyPlaced: true,
+      };
+    case "not_found":
+      return {
+        code: error.code,
+        message: `${board} is no longer available to you. Refresh and try again.`,
+        alreadyPlaced: false,
+      };
+    case "invalid_pipeline_card":
+    case "idempotency_key_required":
+      return {
+        code: error.code,
+        message: `The app sent something this server would not accept. Refresh and try again — ${entity.toLowerCase()} was not added.`,
+        alreadyPlaced: false,
+      };
+    case "csrf_failed":
+      return {
+        code: error.code,
+        message: `Your session expired. Sign in again — ${entity.toLowerCase()} was not added.`,
+        alreadyPlaced: false,
+      };
+    default:
+      return {
+        code: error.code,
+        message:
+          error.status === 0
+            ? `No connection to IronWrap OS. ${entity} was not added to ${board}.`
+            : error.message
+              ? `${error.message} ${entity} was not added to ${board}.`
+              : `${entity} was not added to ${board}.`,
+        alreadyPlaced: false,
+      };
+  }
+}

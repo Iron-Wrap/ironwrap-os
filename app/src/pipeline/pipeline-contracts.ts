@@ -155,3 +155,29 @@ export type BoardCard = z.infer<typeof boardCardSchema>;
 export type CardSummary = z.infer<typeof cardSummarySchema>;
 export type PipelineBoardResponse = z.infer<typeof pipelineBoardResponseSchema>;
 export type CardTransitionResponse = z.infer<typeof cardTransitionResponseSchema>;
+
+/**
+ * What `POST /api/v1/pipelines/{id}/cards` answers with, transcribed from
+ * `handleCardPlacement` in `workers-bus/src/pipeline-board-api.ts`: a flat record of the card that
+ * now exists, plus `replayed` — `false` on the 201 that created it, `true` on the 200 that found
+ * the same entity already on this board. `card_id` is derived from
+ * `(tenant, pipeline, entity_type, entity_id)`, which is why placing the same entity on the same
+ * board twice is a replay rather than a second card.
+ *
+ * Non-strict for the same reason as the board payload: an additive field on the placement receipt
+ * must never turn a committed placement into a client-side parse error.
+ */
+export const cardPlacementResponseSchema = z
+  .object({
+    card_id: z.string().min(1),
+    pipeline_id: z.string().min(1).optional(),
+    stage_id: z.string().min(1).optional(),
+    entity_type: z.string().min(1).optional(),
+    entity_id: z.string().min(1).optional(),
+    card_version: z.number().int().positive().optional(),
+    transition_id: nullableText.optional(),
+    replayed: z.boolean().optional(),
+  })
+  .catchall(z.unknown());
+
+export type CardPlacementResponse = z.infer<typeof cardPlacementResponseSchema>;

@@ -37,6 +37,7 @@ import {
   messageFor,
   type FieldDateOptions,
 } from "./field-formatting";
+import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { WorkPackageIssueForm } from "./work-package-issue-form";
@@ -280,6 +281,17 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           captureAllowed={fieldCaptureAllowed}
         />
         <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
+        {/*
+          Whatever the administrator configured for this account, rendered for whoever is holding
+          the phone. The entity id is the `operating_roof_jobs` key the server's entity registry
+          binds `job` fields to, not the read-model job id.
+        */}
+        <SchemaCardSection
+          entityType="job"
+          entityId={model.job.roof_job_id}
+          dateOptions={dateOptions}
+          headingId="job-configured-details-heading"
+        />
         <CaptureProofPanel
           jobId={model.job.id}
           workObjectScope={

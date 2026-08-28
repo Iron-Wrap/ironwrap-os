@@ -2,8 +2,11 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-24
-Latest phase delta verified: 2026-08-23 (release-control source publication and dependency audit: a checked-in remote-readback snapshot records the private shared repository at exact bootstrap commit `6a4f8a166ad5c86180dc95b4b31ffa64f472f7fd` with no repository CI workflows at observation time, provider-stage transport, or deployed adapter; IRO-218–IRO-221 provision the independent release services, and IRO-222 proves the exact IronWrap candidate before IRO-41 may close. Repository checks only, not deployed, runtime-verified, business-accepted, or production-proven)
+Last verified: 2026-08-27
+Latest phase delta verified: 2026-08-27 (IRO-242 branch-local schema fields/templates and the
+default-off R2 generation/effect/readback/reconciliation path pass focused repository tests. This is
+unmerged source evidence only, not exact-main CI, activation, deployment, runtime, business
+acceptance, customer validation, or production proof.)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -61,8 +64,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 102,
-      "latest": "0123_pipeline_stage_automation.sql"
+      "count": 105,
+      "latest": "0126_document_generation_settled_outcomes.sql"
     }
   },
   "test_observation_policy": {
@@ -870,8 +873,23 @@ Target gaps:
   field evidence, reconnection reconciliation, and online-only commercial/accounting decisions;
 - governed workflow boards whose lanes are versioned predicates and whose drag/drop gestures submit
   typed commands with aggregate-version preconditions rather than editing a generic status;
-- schema-driven operational forms with typed fields, field-level authority, provenance,
-  conditional evidence, versioning, offline policy, and correction audit;
+- schema-driven operational forms — **server/domain source implemented; PWA and production proof
+  absent** — typed fields, field-level authority, provenance, evidence, conditional visibility,
+  offline conflict/correction, append-only attributable definitions, DB-enforced immutable value
+  history, monotonic current versions, same-scope lineage, full command fingerprints, closed
+  validators, object/evidence receipts, and retention guards are present. Authenticated owner
+  configuration and current-session record routes derive authority from the session and omit
+  unauthorized fields. The owner/role PWA, merge/exact-main evidence, deployed runtime and business
+  acceptance remain open;
+- governed generated documents — **server/source implementation; activation and PWA proof open** —
+  append-only template revisions, exact read-authorized input snapshots, bounded actor/service
+  authority, generation attempts, and append-only terminal/reconciliation receipts are present.
+  The owner-only command composes the universal effect ledger with immutable R2 PUT plus exact HEAD
+  checksum/size/content-type readback; ambiguous outcomes remain unknown until server reconciliation,
+  and verified output can atomically create a server-minted derived attachment receipt/value. The
+  capability is false in every checked-in environment. The document PWA, merge/exact-main evidence,
+  named-environment activation/readback, deployed runtime, business acceptance, and customer proof
+  remain open;
 - the office command palette itself: `GET /api/v1/search` answers, but no PWA shortcut, grouped
   result list, or keyboard navigation consumes it yet;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
@@ -954,7 +972,7 @@ Target gaps:
 | Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | Partial: D1 owns append-only assignment revisions, conflict checks, and an approval ledger; the older Frappe approval broker is compatibility residue | constraint solver, authoritative lifecycle projection, weather/material/crew inputs, and policy-bounded reschedule proposals | conflict/weather/material reference test and real dispatcher acceptance |
-| Workflow composition | Partial: D1 owns a generic pipeline/stage/card model (`0113_pipeline_board_core.sql`) and the server-enforced safe-movement contract behind `/api/v1/pipelines` - adjacent-forward direct, backward/skip/role-restricted refused without an explicit confirmation, a bounded undo that appends a reversing transition instead of deleting one, and role scope taken from the pipeline's owning role. Card layout is data-driven from a per-pipeline card template rather than a per-vertical field list, and every transition writes an append-only audit row plus an automation-outbox row that nothing drains yet. Pipeline/stage administration and the drag-and-drop surface itself are not built. | versioned role/work-type views over orthogonal state machines, admin-configurable pipelines and stages, typed command gestures, committed-event automations that consume the outbox, and schema-driven forms | stale-version drop rejected, gate blocker preserved, event replay idempotent, and form authority enforced |
+| Workflow composition | Partial: D1 owns the generic pipeline/stage/card model and safe-movement contract, append-only schema-field/value/template histories, owner-only configuration routes, current-session field authority, and a default-off owner R2 generation command closed by effect/readback/receipt reconciliation, including durable `not_executed` and `manual_exception` outcomes. Pipeline/stage administration source exists on its open reviewed branch, but the drag-and-drop and schema/document PWA surfaces are not built; no named environment has activated or runtime-proven document generation. | versioned role/work-type views over orthogonal state machines, merged admin-configurable pipelines and stages, typed command gestures, committed-event automations, schema/document PWA surfaces, and named-environment proof under the canonical Target contract | stale-version drop rejected, gate blocker preserved, event replay idempotent, field authority and same-scope correction enforced without silent overwrite, document R2 ambiguity reconciled without duplicate objects/effects/receipts, and real runtime readback |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | D1 system of record (IRO-44, #59): nine ledgers for equipment, occurrences, notifications, corrective actions, readiness snapshots, and offline device actions, plus the PWA safety panel; Frappe Safety Plan/acknowledgement remains the preconstruction plan object only — no Frappe projection of the D1 ledgers will be built (IRO-195, 2026-08-21). Crew Profile competence, WCB, and active-stop release fences still consume readiness. | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |

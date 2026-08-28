@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-22
+Last verified: 2026-08-26
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -259,6 +259,116 @@ evidence slots and independent rules, for example:
 - customer/authority signoff only when the contract or law requires it.
 
 Missing physical evidence creates `needs_evidence`, not `complete`.
+
+## Schema-driven form fields and generated documents (Partial)
+
+Status: **Partial source implementation**. The repository now contains the append-only field,
+value, template, generation-attempt, and generation-receipt aggregates plus the authenticated
+field/template HTTP boundary and default-off immutable R2 execution described below. The owner PWA,
+merge/exact-main proof, deployment, named-environment activation, runtime verification, business
+acceptance, customer validation, and production proof remain unproven. Track the wider product gap
+in `CAPABILITY-MATRIX.md`.
+
+The current authenticated HTTP boundary is deliberately narrow:
+
+- `GET|POST /api/v1/admin/schema-fields` and
+  `GET|POST /api/v1/admin/schema-fields/{field_id}` expose owner-only current configuration;
+- `GET /api/v1/admin/schema-fields/{field_id}/revisions` exposes its immutable history;
+- the equivalent owner-only routes under `/api/v1/admin/document-templates` expose current template
+  configuration and revisions;
+- `GET /api/v1/schema-fields/{entity_type}/{entity_id}` returns only fields the current session may
+  read, and the value and revision routes beneath that record enforce current write/read authority;
+- `POST /api/v1/document-generations` is an owner-only, CSRF- and idempotency-bound command that
+  snapshots the exact authorized inputs, proposes the durable effect, persists the attempt, then
+  authorizes R2 execution and accepts success only after exact HEAD checksum, byte-length, and
+  content-type readback;
+- `GET /api/v1/document-generations/{receipt_id}` reconstructs the browser-safe immutable receipt
+  and input versions, while
+  `POST /api/v1/document-generations/{generation_attempt_id}/reconcile` performs a fresh server-side
+  R2 HEAD and never accepts browser-supplied provider evidence;
+- every mutation requires the app CSRF proof and an `Idempotency-Key`; tenant, actor, role,
+  authority reference, and exact user identities are derived from `AuthContext`, never from the
+  browser. Ordinary record projections omit configuration command fingerprints, idempotency hashes,
+  role matrices, and unrelated authority coordinates.
+
+The generation route is separately fail-closed behind `APP_DOCUMENT_GENERATION_ENABLED=true`, the
+universal effect runtime, and a real `RAW` binding; every checked-in environment keeps the capability
+`false`. A PUT or HEAD ambiguity remains a durable `unknown` receipt and cannot mint attachment
+evidence. A later server-side match can append a reconciled success; not-found becomes
+`not_executed`, and mismatched metadata becomes a manual exception. Those two settled outcomes are
+persisted separately from the original `unknown` terminal classification, so a later receipt GET
+reconstructs the conclusion instead of reverting to ambiguity. If the command names a current
+`attachment` field with `derived` evidence, the server—not the browser—atomically appends the exact
+R2 object receipt and field-value revision only after verified readback. The generation receipt is
+persisted first, so a stale attachment CAS returns a conflict without erasing provider truth or
+minting attachment evidence.
+
+Tenant-configurable record fields and generated documents must follow the actor, authority level,
+evidence class, freshness, conflict, and side-effect rules above at field and document granularity.
+
+**Append-only configuration revisions.** Field definitions and document templates are tenant-scoped
+configuration. Every create, relabel, reorder, retire, or template/binding change appends an
+attributable revision recording the authenticated actor or bounded service authority, authority
+reference, effective/supersession metadata, and the normalized command fingerprint. Revisions are
+immutable; no in-place edit or deletion may erase configuration history. A field type or validator is
+part of a closed, reviewed code vocabulary, not tenant-authored executable configuration.
+
+**DB-enforced immutable value history.** Every accepted field-value write appends an immutable value
+history record enforced at the database boundary. The server maintains the monotonic current value
+and version for each tenant, entity type, entity id, and field, and rejects a write based on a stale
+version rather than silently replacing a newer value. Each value records its provenance and the exact
+field-definition revision used to accept it.
+
+**Same-scope lineage and full command fingerprints.** Every `based-on` or correction reference must
+match the same tenant, entity type, entity id, and field as the value it references. Database
+constraints and server checks must reject cross-tenant, cross-entity, cross-record, and cross-field
+lineage. A correction is a new value linked to the superseded value and its reason; it never mutates
+or deletes the prior value. Each mutating command stores a normalized full-command fingerprint
+alongside its idempotency key: an identical retry may replay the result, while the same key with any
+different normalized input is rejected as a conflict.
+
+**Closed safe validators only.** Field types, option vocabularies, visibility rules, and validators
+come from bounded, reviewed registries. Validation may enforce declared types, ranges, formats,
+options, and safe conditional rules. Tenant configuration must not supply arbitrary regular
+expressions, formulas, scripts, code, or executable expressions.
+
+**Server-side authority and conditional visibility.** Read and write authority is re-derived from
+the current record and authenticated session immediately before every operation; it is never trusted
+from a prior response or a client claim. Unauthorized fields are omitted server-side, not merely
+hidden in a rendered form. Conditional visibility is evaluated again at write time, and a write to a
+field that the current record does not make visible is refused.
+
+**Immutable object and evidence references.** Image and attachment values must bind to immutable
+object and evidence references carrying the content digest, tenant/entity/field scope, attributable
+actor or device, capture time, and evidence class. A mutable URL, filename, or client-provided label
+alone is not evidence. Corrections add new references and preserve the prior object/evidence link.
+
+**Provider-derived facts require authoritative readback.** A value derived from a provider remains
+untrusted until the provider's authoritative readback receipt confirms the exact request, scope,
+identity, and value/version that the system is using. Missing, stale, contradictory, or mismatched
+readback blocks the value from satisfying a field, document, transition, or side effect.
+
+**Closed retention subordinate to holds.** Retention is a closed policy vocabulary with explicit
+access and disposal behavior. It is always subordinate to legal holds and evidence holds: a hold may
+extend retention, but no tenant policy, field retirement, correction, compaction, or deletion may
+remove history or evidence required by a hold. Retiring a field stops new writes and new views while
+preserving authorized access to its recorded values for the applicable retention period.
+
+**Explicit bounded service authority for background document generation.** A generated document is a
+governed side effect, not a static file. Resolution uses only current, read-authorized values and
+exact field/template revisions. Background generation requires an explicit bounded service authority
+with tenant, entity, document, action, policy, permit-expiry, idempotency, retry, stop, and
+compensation limits; it cannot inherit a requester's authority or infer authority from model output.
+External delivery follows the Side-effect contract, including provider reconciliation.
+
+**Generation receipt.** Every generation attempt must end in a terminal receipt or a durable unknown
+exception. The receipt binds the exact template revision, input and value versions, authenticated
+actor or bounded service authority, policy/permit, provider doc id, output/readback digest, and
+terminal reconciliation result. No document generation is complete until authoritative readback and
+reconciliation satisfy that receipt; an unknown or mismatched result blocks the next transition.
+`terminal_status` preserves the direct execution classification (`succeeded`, `failed`, or
+`unknown`), while `reconciliation_outcome` preserves a later `not_executed` or `manual_exception`
+conclusion on the immutable receipt.
 
 ## Side-effect contract
 

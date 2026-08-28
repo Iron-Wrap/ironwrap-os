@@ -672,9 +672,9 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
       contract,
       /estimator_evidence_revisions_immutable_update=estimator_evidence_revisions/,
     );
-    assert.match(contract, /REQUIRED_TABLE_COUNT=222/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=340/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=534/);
+    assert.match(contract, /REQUIRED_TABLE_COUNT=232/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=352/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=566/);
   }
 });
 

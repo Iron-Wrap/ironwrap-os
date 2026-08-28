@@ -83,7 +83,8 @@ IronWrap PWA
 | Facet review projection | `facet-design-frappe-projection.ts` reads only current native v2 heads with exact project, identity, quote, proposal, publication, and acceptance authority. The default-off Frappe endpoint creates a blank non-customer-safe Draft Customer Quote for active decisions, rejects the predecessor projected quote on chain advance, and appends Evidence Item plus Integration Reconciliation records without supplying commercial terms. |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` and native D1 domain stores; any remaining `frappe-read.ts` compatibility access uses hard-coded DocType/field/filter allowlists and fails closed |
-| Governed stage-change automation | `pipeline-automation.ts` + migration `0123_pipeline_stage_automation.sql`; one closed email action/template, immutable outbox bindings, exact leases, effect/readback evidence, and explicit no-rule completion |
+| Governed stage-change automation | `pipeline-automation.ts` + migrations `0123_pipeline_stage_automation.sql` and `0127_pipeline_automation_action_registry.sql`; a closed two-action registry (stage-change email, and generate-a-document-then-email-it), immutable outbox bindings, exact leases, effect/readback evidence, and explicit no-rule completion |
+| Automation-generated documents | `pipeline-automation.ts` -> `document-generation-r2.ts`; the document action mints a scoped `worker`/`ops` service permit per invocation - one tenant, entity, template, action and attempt - so an automation never borrows the owner's route or role, and the delivered mail carries the exact bytes the immutable receipt attests |
 
 ## Files
 
@@ -108,7 +109,7 @@ src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning a
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
 src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state; 0019 adds measurement receipt leases; 0123 adds governed stage automation
+migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state; 0019 adds measurement receipt leases; 0123 adds governed stage automation; 0127 widens its closed action registry
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 

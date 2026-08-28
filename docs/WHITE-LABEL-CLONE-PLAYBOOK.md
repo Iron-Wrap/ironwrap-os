@@ -129,7 +129,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0126_document_generation_settled_outcomes.sql`; `node tools/validate-documentation.mjs`
+   `0127_pipeline_automation_action_registry.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -333,7 +333,7 @@ recovery boundaries.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] Governed stage automation is either left disabled, or has `PIPELINE_AUTOMATION_ENABLED=true`
   and its deployment-owned `PIPELINE_AUTOMATION_RECIPIENTS_JSON` mapping configured.
-- [ ] All 105 D1 migrations through `0126_document_generation_settled_outcomes.sql` applied to the tenant database.
+- [ ] All 106 D1 migrations through `0127_pipeline_automation_action_registry.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

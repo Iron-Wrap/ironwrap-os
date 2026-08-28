@@ -70,13 +70,17 @@ export const adminPipelineStageMutationResponseSchema = z
   })
   .passthrough();
 
+// The catalog carries whatever the server registry holds: a built-in template pinned at version 1,
+// and administrator-authored document templates whose version advances every time one is revised.
+// Pinning a version here would make the picker reject a revised template, so the client accepts any
+// version the server publishes and echoes back exactly the pair it was offered.
 export const automationCatalogSchema = z
   .object({
     actions: z.array(z.object({ action: z.string().min(1), label: z.string().min(1) })),
     templates: z.array(
       z.object({
         template_key: z.string().min(1),
-        version: z.literal(1),
+        version: z.number().int().positive(),
         label: z.string().min(1),
       }),
     ),
@@ -97,7 +101,7 @@ export const automationRuleSchema = z
     action: z.string().min(1),
     recipient_ref: z.string().min(1),
     template_key: z.string().min(1),
-    template_version: z.literal(1),
+    template_version: z.number().int().positive(),
     active: z.number().int().min(0).max(1),
     actor_role: z.string().min(1),
     actor_id: z.string().min(1),
@@ -259,7 +263,8 @@ export interface AutomationWriteInput {
   action: string;
   recipient_ref: string;
   template_key: string;
-  template_version: 1;
+  /** Whatever version the catalog offered for the chosen template; the server re-checks the pair. */
+  template_version: number;
   active: boolean;
   expected_version?: number;
 }

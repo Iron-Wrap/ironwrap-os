@@ -743,6 +743,64 @@ describe("owner configuration route and state matrix", () => {
     expect(screen.getByRole("button", { name: "New rule" })).toBeDisabled();
   });
 
+  it("offers a newly registered server action and a revised document template with no client release", async () => {
+    // The builder renders whatever the server catalog holds. Registering an action and authoring a
+    // document template server-side is the whole change: nothing below is action-specific code.
+    const pipelines = [pipeline("pipeline_one", "One", 0)];
+    const data = automationResponse(pipelines, {
+      actions: [
+        { action: "operations.email.send", label: "Stage-change email" },
+        {
+          action: "operations.document.generate_and_send",
+          label: "Generate a document and email it",
+        },
+      ],
+      templates: [
+        {
+          template_key: "pipeline.stage-change-summary",
+          version: 1,
+          label: "Stage-change summary",
+        },
+        // A template an administrator has already revised once, so its version is not 1.
+        {
+          template_key: "template:0000000000000000000000000000000000000abc",
+          version: 2,
+          label: "Handoff packet",
+        },
+      ],
+    });
+    vi.mocked(loadAdminPipelines).mockResolvedValue(pipelineResponse(pipelines));
+    vi.mocked(loadAutomationRules).mockResolvedValue(data);
+    vi.mocked(createAutomationRule).mockResolvedValue({
+      rule: undefined as never,
+      catalog: data.catalog,
+    });
+    const user = userEvent.setup();
+    renderWithSession(<AutomationConfigurationPage />, sessionFor("owner"));
+    await user.click(await screen.findByRole("button", { name: "New rule" }));
+
+    const action = screen.getByLabelText("Action");
+    expect([...(action as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      "operations.email.send",
+      "operations.document.generate_and_send",
+    ]);
+    await user.selectOptions(action, "operations.document.generate_and_send");
+    const template = screen.getByLabelText("Template");
+    expect(
+      [...(template as HTMLSelectElement).options].map((option) => option.textContent),
+    ).toEqual(["Stage-change summary · v1", "Handoff packet · v2"]);
+    await user.selectOptions(template, "template:0000000000000000000000000000000000000abc");
+    await user.click(screen.getByRole("button", { name: "Save automation" }));
+
+    // The rule the builder submits is exactly the pair the server offered, revised version included.
+    await waitFor(() => expect(createAutomationRule).toHaveBeenCalledOnce());
+    expect(vi.mocked(createAutomationRule).mock.calls[0]?.[2]).toMatchObject({
+      action: "operations.document.generate_and_send",
+      template_key: "template:0000000000000000000000000000000000000abc",
+      template_version: 2,
+    });
+  });
+
   it("refreshes automation rules after a successful governed create", async () => {
     const pipelines = [pipeline("pipeline_one", "One", 0)];
     const data = automationResponse(pipelines);

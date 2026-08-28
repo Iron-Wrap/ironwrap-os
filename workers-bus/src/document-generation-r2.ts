@@ -11,6 +11,7 @@ import {
   renderDocumentTemplate,
   type DocumentGenerationAttempt,
   type DocumentGenerationReceipt,
+  type DocumentGenerationServiceAuthority,
 } from "./document-templates.ts";
 import {
   assertEffectLedgerReady,
@@ -53,14 +54,46 @@ export interface GenerateR2DocumentInput {
   expectedInputSnapshotDigest?: string | null;
   outputFieldId?: string | null;
   expectedOutputFieldVersion?: number | null;
-  actor: SchemaFieldActor;
+  /** Exactly one of `actor` (a signed-in human) or `serviceAuthority` (a scoped permit). */
+  actor?: SchemaFieldActor;
+  serviceAuthority?: DocumentGenerationServiceAuthority;
   idempotencyKey: string;
+}
+
+/** The authority half of a generation request, threaded verbatim into every governed call. */
+type GenerationAuthorityInput =
+  | { actor: SchemaFieldActor }
+  | { serviceAuthority: DocumentGenerationServiceAuthority };
+
+function authorityInput(input: {
+  actor?: SchemaFieldActor;
+  serviceAuthority?: DocumentGenerationServiceAuthority;
+}): GenerationAuthorityInput {
+  if (input.serviceAuthority && input.actor) throw new DocumentTemplatesError("document_generation_authority_invalid");
+  if (input.serviceAuthority) return { serviceAuthority: input.serviceAuthority };
+  if (input.actor) return { actor: input.actor };
+  throw new DocumentTemplatesError("document_generation_authority_invalid");
+}
+
+/** The acting identity behind either authority - never a role widening, always the permit's own. */
+function actingActor(input: {
+  actor?: SchemaFieldActor;
+  serviceAuthority?: DocumentGenerationServiceAuthority;
+}): SchemaFieldActor {
+  const authority = authorityInput(input);
+  return "serviceAuthority" in authority ? authority.serviceAuthority.actor : authority.actor;
 }
 
 export interface R2DocumentGenerationResult {
   outcome: "succeeded" | "failed" | "unknown" | "manual_exception" | "not_executed";
   receipt: DocumentGenerationReceipt;
   attachment: SchemaFieldValue | null;
+  /**
+   * The exact bytes the effect stored, re-derived from the durable attempt and digest-checked
+   * against the receipt.  A caller that has to hand the document on - a delivery rail, say - uses
+   * this instead of re-rendering, so what leaves the system is what the receipt attests.
+   */
+  document: { providerDocumentId: string | null; outputDigest: string; body: string };
 }
 
 interface GenerationMaterial {
@@ -79,6 +112,8 @@ export async function generateDocumentToR2(
   now = new Date(),
 ): Promise<R2DocumentGenerationResult> {
   assertGenerationEnabled(env);
+  const authority = authorityInput(input);
+  const actor = actingActor(input);
   const ids = await generationIds(input.tenantId, input.idempotencyKey);
   const existingAttempt = await getDocumentGenerationAttempt(env, input.tenantId, ids.attemptId);
   const existingEffect = await getExternalEffect(env, ids.effectId);
@@ -89,13 +124,13 @@ export async function generateDocumentToR2(
   const providerDocumentId = providerId(input.tenantId, material.attemptId, material.outputDigest);
   const expectedReadback = expectedReadbackFor(input, material, providerDocumentId);
   const deadlineAt = existingEffect?.deadline_at ?? new Date(now.getTime() + DEADLINE_MS).toISOString();
-  const authority = effectAuthority(input.actor, input.tenantId, deadlineAt);
+  const effectPermit = effectAuthority(input, actor, input.tenantId, deadlineAt);
   let effect = await proposeExternalEffect(env, {
     effectId: ids.effectId,
     tenantId: input.tenantId,
-    actor: { type: input.actor.type, id: input.actor.userId },
+    actor: { type: actor.type, id: actor.userId },
     taskId: `task:${material.attemptId}`,
-    authority,
+    authority: effectPermit,
     aggregate: { type: "document_generation", id: material.attemptId, version: material.templateVersion },
     intentId: material.attemptId,
     action: "document.generate",
@@ -121,7 +156,7 @@ export async function generateDocumentToR2(
     generationAttemptId: material.attemptId,
     externalEffectId: ids.effectId,
     provider: PROVIDER,
-    actor: input.actor,
+    ...authority,
     idempotencyKey: input.idempotencyKey,
     expectedInputSnapshotDigest: input.expectedInputSnapshotDigest,
     now,
@@ -132,7 +167,7 @@ export async function generateDocumentToR2(
   if (durableMaterial.outputDigest !== material.outputDigest)
     throw new DocumentTemplatesError("document_generation_output_mismatch");
 
-  if (effect.state === "proposed") effect = await authorizeExternalEffect(env, effect.effect_id, authority, now.toISOString());
+  if (effect.state === "proposed") effect = await authorizeExternalEffect(env, effect.effect_id, effectPermit, now.toISOString());
   if (effect.state === "authorized" || effect.state === "retry") {
     effect = (await executeExternalEffect(
       env,
@@ -141,7 +176,10 @@ export async function generateDocumentToR2(
       now,
     )).effect;
   }
-  return await closeGeneration(env, started.attempt, effect, outputBinding, input.actor, `document-receipt:${input.idempotencyKey}`, now);
+  return await closeGeneration(
+    env, started.attempt, effect, outputBinding, authority, durableMaterial,
+    `document-receipt:${input.idempotencyKey}`, now,
+  );
 }
 
 export async function reconcileDocumentR2(
@@ -172,23 +210,25 @@ export async function reconcileDocumentR2(
   const latest = await getLatestDocumentGenerationReceipt(env, input.tenantId, attempt.generation_attempt_id);
 
   if (effect.state === "succeeded") {
-    if (latest?.terminal_status === "succeeded") return { outcome: "succeeded", receipt: latest, attachment: null };
-    return await closeGeneration(env, attempt, effect, outputBinding, input.actor, receiptKey, now);
+    if (latest?.terminal_status === "succeeded")
+      return { outcome: "succeeded", receipt: latest, attachment: null, document: documentView(material, effect) };
+    return await closeGeneration(env, attempt, effect, outputBinding, { actor: input.actor }, material, receiptKey, now);
   }
   if (effect.state === "manual_exception") {
     if (latest?.reconciliation_outcome === "manual_exception")
-      return { outcome: "manual_exception", receipt: latest, attachment: null };
-    return await closeGeneration(env, attempt, effect, outputBinding, input.actor, receiptKey, now);
+      return { outcome: "manual_exception", receipt: latest, attachment: null, document: documentView(material, effect) };
+    return await closeGeneration(env, attempt, effect, outputBinding, { actor: input.actor }, material, receiptKey, now);
   }
   if (effect.state === "reconciled") {
     if (latest?.reconciliation_outcome === "not_executed")
-      return { outcome: "not_executed", receipt: latest, attachment: null };
-    return await closeGeneration(env, attempt, effect, outputBinding, input.actor, receiptKey, now);
+      return { outcome: "not_executed", receipt: latest, attachment: null, document: documentView(material, effect) };
+    return await closeGeneration(env, attempt, effect, outputBinding, { actor: input.actor }, material, receiptKey, now);
   }
   if (effect.state !== "unknown") throw new DocumentTemplatesError("document_generation_not_reconcilable");
 
   if (!latest) await closeGeneration(
-    env, attempt, effect, outputBinding, input.actor, `document-receipt-recovery:${attempt.generation_attempt_id}`, now,
+    env, attempt, effect, outputBinding, { actor: input.actor }, material,
+    `document-receipt-recovery:${attempt.generation_attempt_id}`, now,
   );
   const readback = await r2Readback(env.RAW, material.renderedOutput, providerDocumentId, expectedReadback);
   if (readback.status === "unavailable") throw new DocumentTemplatesError("document_generation_readback_unavailable");
@@ -199,7 +239,7 @@ export async function reconcileDocumentR2(
       detailCode: "r2_object_not_found",
       now: now.toISOString(),
     });
-    return await closeGeneration(env, attempt, reconciled, outputBinding, input.actor, receiptKey, now);
+    return await closeGeneration(env, attempt, reconciled, outputBinding, { actor: input.actor }, material, receiptKey, now);
   }
   const reconciled = await reconcileExternalEffect(env, effect.effect_id, {
     outcome: readback.status === "match" ? "executed" : "inconclusive",
@@ -207,7 +247,7 @@ export async function reconcileDocumentR2(
     detailCode: readback.status === "match" ? "r2_object_reconciled" : "r2_object_conflict",
     now: now.toISOString(),
   });
-  return await closeGeneration(env, attempt, reconciled, outputBinding, input.actor, receiptKey, now);
+  return await closeGeneration(env, attempt, reconciled, outputBinding, { actor: input.actor }, material, receiptKey, now);
 }
 
 function assertGenerationEnabled(env: AppEnv): void {
@@ -238,7 +278,7 @@ async function materialFromCurrentState(
     entityId: input.entityId,
     templateId: input.templateId,
     templateRevisionId: input.templateRevisionId,
-    actor: input.actor,
+    ...authorityInput(input),
     now,
   });
   return materialFromPrepared(attemptId, prepared);
@@ -307,7 +347,7 @@ async function outputFieldBinding(
   const field = await getSchemaFieldDefinition(env, input.tenantId, input.outputFieldId);
   if (!field || field.entity_type !== input.entityType) throw new DocumentTemplatesError("document_generation_output_field_not_found");
   if (!field.active || field.field_type !== "attachment" || field.evidence_class !== "derived" ||
-      !field.write_roles.includes(input.actor.role))
+      !field.write_roles.includes(actingActor(input).role))
     throw new DocumentTemplatesError("document_generation_output_field_invalid");
   return {
     field_id: field.field_id,
@@ -332,17 +372,23 @@ function bindingFromEffect(effect: ExternalEffectRecord): OutputFieldBinding | n
   }
 }
 
-function effectAuthority(actor: SchemaFieldActor, tenantId: string, deadlineAt: string): EffectAuthority {
+function effectAuthority(
+  input: { serviceAuthority?: DocumentGenerationServiceAuthority },
+  actor: SchemaFieldActor,
+  tenantId: string,
+  deadlineAt: string,
+): EffectAuthority {
+  const permit = input.serviceAuthority;
   return {
-    permitRef: actor.authorityRef ?? `app:${actor.userId}`,
-    policyRef: `role:${actor.role}:document.generate`,
-    policyVersion: "v1",
+    permitRef: permit?.permitRef ?? actor.authorityRef ?? `app:${actor.userId}`,
+    policyRef: permit?.policyRef ?? `role:${actor.role}:document.generate`,
+    policyVersion: permit?.policyVersion ?? "v1",
     tenantId,
     actorType: actor.type,
     actorId: actor.userId,
     expiresAt: deadlineAt,
     allowedActions: ["document.generate"],
-    maxAttempts: 1,
+    maxAttempts: permit?.maxAttempts ?? 1,
   };
 }
 
@@ -453,15 +499,28 @@ async function r2Readback(
   };
 }
 
+function documentView(
+  material: GenerationMaterial,
+  effect: ExternalEffectRecord,
+): R2DocumentGenerationResult["document"] {
+  return {
+    providerDocumentId: effect.provider_external_id,
+    outputDigest: material.outputDigest,
+    body: material.renderedOutput,
+  };
+}
+
 async function closeGeneration(
   env: AppEnv,
   attempt: DocumentGenerationAttempt,
   effect: ExternalEffectRecord,
   outputBinding: OutputFieldBinding | null,
-  actor: SchemaFieldActor,
+  authority: GenerationAuthorityInput,
+  material: GenerationMaterial,
   receiptKey: string,
   now: Date,
 ): Promise<R2DocumentGenerationResult> {
+  const actor = actingActor(authority);
   if (["proposed", "authorized", "executing", "reconciling", "retry"].includes(effect.state))
     throw new DocumentTemplatesError("document_generation_in_flight");
   const terminalStatus = effect.state === "succeeded" ? "succeeded"
@@ -482,7 +541,7 @@ async function closeGeneration(
     providerDocumentId: effect.provider_external_id,
     outputDigest: attempt.output_digest,
     readbackDigest: effect.readback_hash,
-    actor,
+    ...authority,
     idempotencyKey: receiptKey,
     now,
   });
@@ -494,6 +553,7 @@ async function closeGeneration(
     outcome: reconciliationOutcome,
     receipt: result.receipt,
     attachment,
+    document: documentView(material, effect),
   };
 }
 

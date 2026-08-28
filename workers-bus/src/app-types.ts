@@ -118,6 +118,9 @@ export type AppEnv = Env & {
   // Every provider mutation adapter is fail-closed behind the durable universal effect ledger.
   // Unit-only callers may omit this flag; deployed Worker environments set it explicitly.
   EFFECT_RUNTIME_ENABLED?: string;
+  // Immutable document generation is separately activated even when the universal effect ledger
+  // is enabled. Unset or false leaves the owner route fail-closed.
+  APP_DOCUMENT_GENERATION_ENABLED?: string;
   // Governed stage-change automation is independently activated. Its recipient mapping is
   // deployment-owned JSON; rule rows carry only opaque references and digests.
   PIPELINE_AUTOMATION_ENABLED?: string;

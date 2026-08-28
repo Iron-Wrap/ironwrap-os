@@ -202,6 +202,14 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
 | POST | `/api/v1/auth/logout` | session cookie + `X-CSRF-Token` + exact allowed `Origin` | revoke the current hashed session and expire its cookie |
 | POST | `/api/v1/admin/app-users` | office session + `X-CSRF-Token` | steady-state provision/update/deactivate one user on this deployment's configured tenant |
+| GET/POST | `/api/v1/admin/schema-fields[/{field_id}]` | owner session; mutations require CSRF + idempotency | list/create/read/revise current tenant field configuration; the `/revisions` child is immutable history |
+| GET/POST | `/api/v1/admin/document-templates[/{template_id}]` | owner session; mutations require CSRF + idempotency | list/create/read/revise current safe document templates; the `/revisions` child is immutable history |
+| GET | `/api/v1/schema-fields/{entity_type}/{entity_id}` | current session | server-filtered record fields and current values |
+| POST | `/api/v1/schema-fields/{entity_type}/{entity_id}/{field_id}/values` | current session + CSRF + idempotency | append one field value with expected-version CAS |
+| GET | `/api/v1/schema-fields/{entity_type}/{entity_id}/{field_id}/revisions` | current session | authorized immutable value history for one field |
+| POST | `/api/v1/document-generations` | owner session + CSRF + idempotency + `APP_DOCUMENT_GENERATION_ENABLED=true` | snapshot authorized inputs, persist intent/attempt, store deterministic immutable HTML in R2, require exact HEAD readback, and optionally atomically bind a server-minted derived attachment receipt |
+| GET | `/api/v1/document-generations/{receipt_id}` | owner session | reconstruct one browser-safe immutable generation receipt, its durable settled reconciliation outcome, and exact input versions |
+| POST | `/api/v1/document-generations/{generation_attempt_id}/reconcile` | owner session + CSRF + idempotency + enabled generation | perform server-side R2 HEAD reconciliation; no browser-supplied provider evidence or implicit retry |
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
@@ -278,6 +286,11 @@ malformed enabled dependencies.
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local
 development only. `APP_PUBLIC_ORIGIN` must be in the exact comma-separated origin allowlist.
 There is never a wildcard credentialed CORS response.
+
+Document generation is a separate default-off capability. Keep
+`APP_DOCUMENT_GENERATION_ENABLED=false` until the named Worker has the intended `RAW` binding and
+the universal effect ledger is enabled. Activation does not prove runtime success: preserve the
+generation/effect/receipt IDs and exact R2 HEAD evidence from a controlled reference execution.
 
 ### Public instant-estimate activation
 

@@ -126,6 +126,7 @@ import {
 } from "./app-search.ts";
 import { buildOperatingIntakeReadModel } from "./operating-intake.ts";
 import { handleCompanySetupRoute } from "./company-setup-api.ts";
+import { handleSchemaFormsRoute } from "./schema-forms-api.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { handleServiceCaseRoute } from "./service-cases.ts";
 import {
@@ -626,6 +627,8 @@ export async function handleAuthenticatedRoute(
   // preferences. Returns null for anything it does not own, so routing continues.
   const companySetupResponse = await handleCompanySetupRoute(req, env, auth);
   if (companySetupResponse) return companySetupResponse;
+  const schemaFormsResponse = await handleSchemaFormsRoute(req, env, auth);
+  if (schemaFormsResponse) return schemaFormsResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");

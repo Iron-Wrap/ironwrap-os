@@ -1976,11 +1976,11 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function bodySize(body: Blob | string): number {
+export function bodySize(body: Blob | string): number {
   return typeof body === "string" ? byteLength(body) : body.size;
 }
 
-function r2ObjectMatches(
+export function r2ObjectMatches(
   object: R2Object,
   expectedSize: number,
   checksum: string,

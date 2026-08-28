@@ -91,6 +91,14 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
   }
 });
 
+test("document generation stays explicitly disabled in every checked-in Worker environment", async () => {
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  assert.equal(config.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
+  for (const name of ["local", "staging"])
+    assert.equal(config.env[name].vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
+});
+
 test("Wrangler environments declare Newo explicitly and staging keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
@@ -2194,11 +2202,16 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // administration surface an owner configures boards through - per-pipeline role grants, the
     // append-only configuration trail, the stage archive flag, and the request-unique marker that
     // keeps a batched administration command safe against a stale writer. 0123 adds the governed
-    // pipeline stage-automation rule, binding, invocation, and lease ledgers. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // pipeline stage-automation rule, binding, invocation, and lease ledgers. 0124 adds the
+    // append-only schema-field definition/value histories and their server-maintained heads. 0125
+    // adds five template/generation tables, six named indexes, and eighteen append-only, scope,
+    // retention, and effect guards. 0126 preserves the two settled reconciliation outcomes on
+    // immutable generation receipts without changing the final object inventory. The
+    // 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 102);
+    assert.equal(migrations.length, 105);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0123_pipeline_stage_automation.sql");
+    assert.equal(migrations.at(-1), "0126_document_generation_settled_outcomes.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2304,10 +2317,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // pipeline administration surface: two tables (role grants, configuration events), three
     // named indexes, and three guards - two append-only, one grant-identity. Its two forward-added
     // columns are count-neutral. 0123 adds three governed pipeline automation tables, five named
-    // indexes, and seven append-only or lineage guards.
+    // indexes, and seven append-only or lineage guards. 0124 adds four schema-field history
+    // tables plus the generic evidence receipt table, six named indexes, and fourteen head,
+    // lineage, retention, provider, and append-only guards. 0125 adds five template/generation
+    // tables, six named indexes, and eighteen append-only, scope, retention, and effect guards.
+    // 0126 forward-adds the settled outcome column and replaces one guard, so counts are unchanged.
     assert.deepEqual(
       { ...counts },
-      { tables: 222, indexes: 332, triggers: 534 },
+      { tables: 232, indexes: 344, triggers: 566 },
     );
     assert.deepEqual(
       (db.prepare(

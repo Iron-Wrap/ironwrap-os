@@ -121,9 +121,11 @@ test("0085 native photo evidence authority is complete in backup and restore con
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 232);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 352);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 566);
+    // Pinned to the current migration chain; 0128 added the automation recipient catalog
+    // (two tables, two indexes, five guards), and both D1 inventories carry it.
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 234);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 354);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 571);
   }
 
   for (const [name, table] of INDEXES) {

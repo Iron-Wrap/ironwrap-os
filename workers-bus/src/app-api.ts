@@ -127,6 +127,7 @@ import {
 import { buildOperatingIntakeReadModel } from "./operating-intake.ts";
 import { handleCompanySetupRoute } from "./company-setup-api.ts";
 import { handleSchemaFormsRoute } from "./schema-forms-api.ts";
+import { handleAutomationRecipientRoute } from "./automation-recipients-api.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { handleServiceCaseRoute } from "./service-cases.ts";
 import {
@@ -629,6 +630,11 @@ export async function handleAuthenticatedRoute(
   if (companySetupResponse) return companySetupResponse;
   const schemaFormsResponse = await handleSchemaFormsRoute(req, env, auth);
   if (schemaFormsResponse) return schemaFormsResponse;
+  // Where an automation may deliver. It sits beside the other administration surfaces rather than
+  // inside `/api/v1/admin/pipelines` because a recipient is tenant-wide: the same "shop" record is
+  // referenced by rules on every board, so it is not owned by any one of them (ELEC-204).
+  const recipientResponse = await handleAutomationRecipientRoute(req, env, auth);
+  if (recipientResponse) return recipientResponse;
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");

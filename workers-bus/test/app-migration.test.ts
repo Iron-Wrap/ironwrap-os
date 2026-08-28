@@ -2208,11 +2208,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // retention, and effect guards. 0126 preserves the two settled reconciliation outcomes on
     // immutable generation receipts without changing the final object inventory. 0127 rebuilds the
     // two CHECK-constrained automation tables forward to widen the closed action registry, so it
-    // adds a file without adding an object. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
-    // collision numbers, not missing files.
-    assert.equal(migrations.length, 106);
+    // adds a file without adding an object. 0128 moves the automation recipient catalog out of a
+    // deploy secret into tenant data: two append-only tables, two named indexes, and five
+    // head-pointer/lineage/append-only guards. The 0070–0078 and 0083–0089 gaps are reserved or
+    // abandoned collision numbers, not missing files.
+    assert.equal(migrations.length, 107);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0127_pipeline_automation_action_registry.sql");
+    assert.equal(migrations.at(-1), "0128_automation_recipient_catalog.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2325,9 +2327,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0126 forward-adds the settled outcome column and replaces one guard, so counts are unchanged.
     // 0127 rebuilds `pipeline_automation_rule_revisions` and `pipeline_stage_automation_invocations`
     // with a widened action/template CHECK, restoring the same 2 tables, 3 indexes and 6 triggers.
+    // 0128 adds the tenant-administered automation recipient catalog: two tables (head, append-only
+    // revisions), two named indexes, and five head-pointer, lineage, and append-only guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 232, indexes: 344, triggers: 566 },
+      { tables: 234, indexes: 346, triggers: 571 },
     );
     assert.deepEqual(
       (db.prepare(

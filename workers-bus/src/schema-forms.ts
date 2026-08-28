@@ -162,6 +162,20 @@ export interface VerifiedSchemaObjectEvidence {
   evidenceClass: Exclude<SchemaEvidenceClass, "none">;
 }
 
+/** One field of a record read, with the caller-relative write answer the card renders against. */
+export interface AuthorizedSchemaFieldValue {
+  definition: SchemaFieldDefinition;
+  value: SchemaFieldValue | null;
+  /**
+   * Whether a write by THIS caller to THIS field on THIS record would be accepted — derived at read
+   * time from `valueWriteRefusal`, the same predicate the write route enforces, and never stored.
+   * A stored copy would be a second source of truth and would drift. The record view publishes this
+   * answer and still withholds `read_roles` / `write_roles`: a client learns that it may edit a
+   * field, never who else may.
+   */
+  writable: boolean;
+}
+
 export interface SchemaFieldValue {
   value_revision_id: string;
   tenant_id: string;
@@ -862,6 +876,40 @@ function objectEvidenceStatement(
   );
 }
 
+/**
+ * Every condition the value write route enforces, in the order it enforces them, resolved to the
+ * refusal it would raise — or `null` when that caller's write would be accepted.
+ * `assertValueWriteAuthority` raises whatever this returns, and `listAuthorizedSchemaFieldValues`
+ * publishes whether it returned `null` as the derived `writable` flag. One computation serves both,
+ * so what a card renders and what the write route answers cannot drift apart (ELEC-192).
+ *
+ * `resolved` carries facts the caller has ALREADY established on this same request — never assumed
+ * ones. The record read resolves entity presence (`recordReadableByActor`) and evaluates configured
+ * visibility to decide membership at all, and hands those results back rather than paying for them
+ * a second time on every field of the card.
+ */
+async function valueWriteRefusal(
+  env: AppEnv,
+  field: SchemaFieldDefinition,
+  tenantId: string,
+  entityType: string,
+  entityId: string,
+  actor: SchemaFieldActor,
+  resolved: { entityPresent?: boolean; visible?: boolean } = {},
+): Promise<string | null> {
+  if (!field.active) return "schema_field_retired";
+  const entityPresent = resolved.entityPresent
+    ?? (knownEntityType(entityType) && await entityExists(env, tenantId, entityType, entityId));
+  if (!entityPresent) return "schema_field_entity_not_found";
+  if (!field.write_roles.includes(actor.role) || !roleCanWriteField(entityType, actor.role))
+    return "schema_field_write_forbidden";
+  if (!(await assignmentAllowed(env, field, tenantId, entityType, entityId, actor, "write")))
+    return "schema_field_assignment_forbidden";
+  const visible = resolved.visible ?? await fieldVisible(env, field, tenantId, entityType, entityId);
+  if (!visible) return "schema_field_not_visible";
+  return null;
+}
+
 async function assertValueWriteAuthority(
   env: AppEnv,
   field: SchemaFieldDefinition,
@@ -870,14 +918,8 @@ async function assertValueWriteAuthority(
   entityId: string,
   actor: SchemaFieldActor,
 ): Promise<void> {
-  if (!field.active) fail("schema_field_retired");
-  if (!knownEntityType(entityType) || !(await entityExists(env, tenantId, entityType, entityId)))
-    fail("schema_field_entity_not_found");
-  if (!field.write_roles.includes(actor.role) || !roleCanWriteField(entityType, actor.role))
-    fail("schema_field_write_forbidden");
-  if (!(await assignmentAllowed(env, field, tenantId, entityType, entityId, actor, "write")))
-    fail("schema_field_assignment_forbidden");
-  if (!(await fieldVisible(env, field, tenantId, entityType, entityId))) fail("schema_field_not_visible");
+  const refusal = await valueWriteRefusal(env, field, tenantId, entityType, entityId, actor);
+  if (refusal) fail(refusal);
 }
 
 function valueCommand(input: {
@@ -1026,18 +1068,26 @@ export async function listAuthorizedSchemaFieldValues(
   entityType: string,
   entityId: string,
   actor: SchemaFieldActor,
-): Promise<Array<{ definition: SchemaFieldDefinition; value: SchemaFieldValue | null }>> {
+): Promise<AuthorizedSchemaFieldValue[]> {
   const normalizedActor = validateSchemaFieldActor(actor);
+  // Passing this gate IS entity presence: `recordReadableByActor` returns true only for a
+  // registered entity type whose record exists in this tenant. That is what the derived
+  // `writable` below hands back, so it resolves presence once per record and not once per field.
   if (!(await recordReadableByActor(env, tenantId, entityType, entityId, normalizedActor))) return [];
   const definitions = await listSchemaFieldDefinitions(env, tenantId, entityType);
-  const authorized: Array<{ definition: SchemaFieldDefinition; value: SchemaFieldValue | null }> = [];
+  const authorized: AuthorizedSchemaFieldValue[] = [];
   for (const definition of definitions) {
     if (!definition.active || !definition.read_roles.includes(normalizedActor.role)) continue;
     if (!(await assignmentAllowed(env, definition, tenantId, entityType, entityId, normalizedActor, "read"))) continue;
-    if (!(await fieldVisible(env, definition, tenantId, entityType, entityId))) continue;
+    const visible = await fieldVisible(env, definition, tenantId, entityType, entityId);
+    if (!visible) continue;
     authorized.push({
       definition,
       value: await currentValue(env, tenantId, entityType, entityId, definition.field_id),
+      writable: (await valueWriteRefusal(
+        env, definition, tenantId, entityType, entityId, normalizedActor,
+        { entityPresent: true, visible },
+      )) === null,
     });
   }
   return authorized;

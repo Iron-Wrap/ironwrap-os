@@ -15,6 +15,7 @@ import {
 const ADMIN_FIELDS = "/api/v1/admin/schema-fields";
 const ADMIN_TEMPLATES = "/api/v1/admin/document-templates";
 const LEAD_ID = "lead:board:0001";
+const JOB_ID = "job:board:0001";
 
 async function call(
   harness: Harness,
@@ -234,7 +235,11 @@ test("record routes omit unauthorized fields and bind value writes to the authen
   assert.equal(salesRead.body.fields[0].value.value, "Charcoal");
   assert.equal("command_fingerprint" in salesRead.body.fields[0].definition, false);
   assert.equal("read_roles" in salesRead.body.fields[0].definition, false);
+  assert.equal("write_roles" in salesRead.body.fields[0].definition, false);
   assert.equal("idempotency_key_hash" in salesRead.body.fields[0].value, false);
+  // Sales reads the field and may not write it: the derived answer says so without publishing
+  // the role lists it was derived from (ELEC-192).
+  assert.equal(salesRead.body.fields[0].writable, false);
 
   const productionRead = await call(harness, "GET", path, { who: "production" });
   assert.equal(productionRead.status, 200);
@@ -249,6 +254,158 @@ test("record routes omit unauthorized fields and bind value writes to the authen
   assert.equal(salesHistory.body.revisions.length, 1);
   const forbiddenHistory = await call(harness, "GET", historyPath, { who: "production" });
   assert.deepEqual(forbiddenHistory.body.revisions, []);
+  harness.db.close();
+});
+
+/**
+ * Reads the card as `who`, then attempts the exact write that card's `writable` flag predicts, both
+ * through the real routes. Asserting the two against each other in BOTH directions is the point:
+ * the flag is a derivation of `assertValueWriteAuthority`, so a change that moved one without the
+ * other would fail here rather than reach a contractor's phone as a disabled control over a field
+ * they may edit, or an edit control that bounces off a 403.
+ */
+async function writeProbe(
+  harness: Harness,
+  who: Parameters<typeof auth>[0],
+  entityPath: string,
+  field: Record<string, any>,
+  idempotency: string,
+): Promise<{ writable: boolean | null; status: number; error: string | null }> {
+  const read = await call(harness, "GET", entityPath, { who });
+  assert.equal(read.status, 200);
+  const entry = read.body.fields.find(
+    (candidate: Record<string, any>) => candidate.definition.field_id === field.field_id,
+  );
+  const write = await call(harness, "POST", `${entityPath}/${encodeURIComponent(field.field_id)}/values`, {
+    who,
+    idempotency,
+    body: {
+      field_definition_revision_id: field.revision_id,
+      expected_version: entry?.value?.version ?? 0,
+      value: `probe-${idempotency}`,
+    },
+  });
+  const accepted = write.status < 400;
+  const context = `${who} on ${field.field_key}: ${write.status} ${JSON.stringify(write.body)}`;
+  if (entry) {
+    assert.equal(typeof entry.writable, "boolean", context);
+    assert.equal(entry.writable, accepted, context);
+  } else {
+    // A field the caller may not even read must never be writable either.
+    assert.equal(accepted, false, context);
+  }
+  return {
+    writable: entry ? entry.writable as boolean : null,
+    status: write.status,
+    error: (write.body.error as string | undefined) ?? null,
+  };
+}
+
+test("the record read publishes a writable flag that is exactly what the write route accepts", async () => {
+  const harness = setup();
+  const leadPath = `/api/v1/schema-fields/lead/${encodeURIComponent(LEAD_ID)}`;
+  const jobPath = `/api/v1/schema-fields/job/${encodeURIComponent(JOB_ID)}`;
+
+  // The ordinary office grant: sales reads it, owner and ops write it.
+  const officeField = await createField(harness, "writable-office-0001", {
+    field_key: "office-note",
+    read_roles: ["owner", "ops", "sales"],
+    write_roles: ["owner", "ops"],
+  });
+  // A tenant grant the PLATFORM refuses: `sales` is named in write_roles, but no role except
+  // owner and ops carries lead-write authority, so the derivation has to answer false anyway.
+  const grantedButUnpermitted = await createField(harness, "writable-granted-0001", {
+    field_key: "sales-note",
+    read_roles: ["owner", "sales"],
+    write_roles: ["owner", "sales"],
+  });
+  // Both role conditions pass and the SCOPE refuses: an assigned write scope on a lead can never
+  // be satisfied, which is why the flag derives the whole write predicate and not just its roles.
+  const assignedScope = await createField(harness, "writable-scope-0001", {
+    field_key: "scoped-note",
+    read_roles: ["owner", "ops", "sales"],
+    write_roles: ["owner", "ops"],
+    write_scope: "assigned",
+  });
+  // The same divergence on a job, where the owner reads every card and is assigned to none.
+  const jobField = await createField(harness, "writable-job-0001", {
+    entity_type: "job",
+    field_key: "crew-note",
+    read_roles: ["owner", "field"],
+    write_roles: ["owner", "field"],
+    write_scope: "assigned",
+  });
+
+  assert.deepEqual(
+    await writeProbe(harness, "owner", leadPath, officeField, "writable-probe-owner-0001"),
+    { writable: true, status: 201, error: null },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "ops", leadPath, officeField, "writable-probe-ops-0001"),
+    { writable: true, status: 201, error: null },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "sales", leadPath, officeField, "writable-probe-sales-0001"),
+    { writable: false, status: 403, error: "schema_field_write_forbidden" },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "sales", leadPath, grantedButUnpermitted, "writable-probe-granted-0001"),
+    { writable: false, status: 403, error: "schema_field_write_forbidden" },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "owner", leadPath, grantedButUnpermitted, "writable-probe-granted-0002"),
+    { writable: true, status: 201, error: null },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "owner", leadPath, assignedScope, "writable-probe-scope-0001"),
+    { writable: false, status: 403, error: "schema_field_assignment_forbidden" },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "owner", jobPath, jobField, "writable-probe-job-0001"),
+    { writable: false, status: 403, error: "schema_field_assignment_forbidden" },
+  );
+  // Unreadable for this role, so absent from the card and refused at the write route alike.
+  assert.deepEqual(
+    await writeProbe(harness, "production", leadPath, officeField, "writable-probe-production-0001"),
+    { writable: null, status: 403, error: "schema_field_write_forbidden" },
+  );
+  assert.deepEqual(
+    await writeProbe(harness, "field", jobPath, jobField, "writable-probe-field-0001"),
+    { writable: null, status: 403, error: "schema_field_assignment_forbidden" },
+  );
+
+  // Every field of the response carries the flag, and none of them carries the role lists or
+  // scopes it was derived from - #196's posture holds, widened to the write direction.
+  const salesCard = await call(harness, "GET", leadPath, { who: "sales" });
+  assert.deepEqual(
+    salesCard.body.fields.map((entry: Record<string, any>) => entry.definition.field_key).sort(),
+    ["office-note", "sales-note", "scoped-note"],
+  );
+  for (const entry of salesCard.body.fields as Array<Record<string, any>>) {
+    assert.equal(typeof entry.writable, "boolean");
+    assert.equal(entry.writable, false);
+    for (const leaked of ["read_roles", "write_roles", "read_scope", "write_scope"])
+      assert.equal(leaked in entry.definition, false, `${leaked} leaked on ${entry.definition.field_key}`);
+  }
+  assert.equal(JSON.stringify(salesCard.body).includes("_roles"), false);
+  assert.equal(JSON.stringify(salesCard.body).includes("_scope"), false);
+
+  // Tenant isolation is unchanged: no card, and no write, across the boundary.
+  const crossTenant = await call(harness, "GET", leadPath, { tenant: OTHER_TENANT });
+  assert.equal(crossTenant.status, 200);
+  assert.deepEqual(crossTenant.body.fields, []);
+  const crossTenantWrite = await call(
+    harness,
+    "POST",
+    `${leadPath}/${encodeURIComponent(officeField.field_id)}/values`,
+    {
+      tenant: OTHER_TENANT,
+      idempotency: "writable-probe-cross-tenant-0001",
+      body: { field_definition_revision_id: officeField.revision_id, expected_version: 0, value: "leak" },
+    },
+  );
+  assert.equal(crossTenantWrite.status, 404);
+  assert.equal(crossTenantWrite.body.error, "schema_field_not_found");
   harness.db.close();
 });
 

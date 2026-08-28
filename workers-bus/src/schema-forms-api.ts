@@ -407,9 +407,12 @@ async function recordValues(
   return json({
     entity_type: scope.entityType,
     entity_id: scope.entityId,
-    fields: fields.map(({ definition, value }) => ({
+    fields: fields.map(({ definition, value, writable }) => ({
       definition: recordFieldView(definition),
       value: value ? recordValueView(value) : null,
+      // The answer, not the inputs: `recordFieldView` still withholds the role lists this is
+      // derived from, so a card learns it may edit a field without learning who else may.
+      writable,
     })),
   });
 }

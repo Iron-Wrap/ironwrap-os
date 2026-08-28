@@ -7,6 +7,7 @@ import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { Button } from "../components/ui/button";
 import { dateTimeFormatter } from "../lib/intl-cache";
 import { isOutboxActionSafeToRetry, retryOutboxAction } from "../storage/outbox";
+import { outboxFailureGuidance } from "../storage/outbox-failure";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
@@ -71,8 +72,9 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
 
       <ol className="mt-5 space-y-3">
         {actions.map((action) => {
-          const conflict = action.conflict;
+          // A conflict is never safe to retry, so this one call covers both refusal shapes.
           const retryable = isOutboxActionSafeToRetry(action);
+          const guidance = outboxFailureGuidance(action);
           const busy = retryingActionId === action.deviceActionId;
           return (
             <li
@@ -92,22 +94,15 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
               <dl className="mt-4 border-y border-border/80 py-3 text-sm">
                 <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
                   <dt className="font-semibold text-muted">Why it stopped</dt>
-                  <dd className="leading-6">
-                    {conflict
-                      ? "The office copy changed after this item was saved."
-                      : retryable
-                        ? "The server could not take this item yet."
-                        : "The office must check this item before it can send."}
-                  </dd>
+                  <dd className="leading-6">{guidance.reason}</dd>
+                </div>
+                <div className="mt-3 grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
+                  <dt className="font-semibold text-muted">Do this next</dt>
+                  <dd className="leading-6 font-bold">{guidance.nextStep}</dd>
                 </div>
               </dl>
 
-              {conflict ? (
-                <p className="mt-3 text-sm leading-6 text-danger" role="note">
-                  The office copy changed. Keep this item saved. Ask the office to check both copies
-                  before you make a new one.
-                </p>
-              ) : retryable ? (
+              {retryable ? (
                 <div className="mt-4">
                   <Button
                     type="button"
@@ -123,11 +118,7 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
                     This only tries to send the same saved item again. It does not make a copy.
                   </p>
                 </div>
-              ) : (
-                <p className="mt-3 text-sm leading-6 text-muted" role="note">
-                  Do not try again from this phone. Keep the item saved for the office.
-                </p>
-              )}
+              ) : null}
               {retryError[action.deviceActionId] ? (
                 <p className="mt-3 text-sm font-semibold text-danger" role="alert">
                   {retryError[action.deviceActionId]}

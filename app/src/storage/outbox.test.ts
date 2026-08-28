@@ -478,6 +478,101 @@ describe("offline outbox", () => {
     expect((await getOutboxAction("safe-retry-action"))?.state).toBe("queued");
   });
 
+  /**
+   * ELEC-211: a constraint the server can never satisfy on replay must leave the retry loop, keep
+   * its evidence, and stop offering a retry — whatever status carried it. A 502 here is the exact
+   * shape `processFieldSubmission` returns today for the work-package binding trigger.
+   */
+  it("stops retrying a terminal refusal that arrives with a retryable status", async () => {
+    const photo = new Blob(["roof photo bytes"], { type: "image/jpeg" });
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "terminal-binding-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-NO-PLAN/check-ins",
+      payload: { proof_slot: "Production" },
+      attachments: [{ blob: photo, fileName: "north-slope.jpg", attachmentId: "attachment-9" }],
+    });
+    await queueOutboxAction("terminal-binding-action", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          code: "field_action_work_package_binding_invalid",
+          message: "The submission has no released work package to bind to.",
+        },
+        { status: 502 },
+      ),
+    );
+
+    const result = await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      now: () => 3_000,
+    });
+
+    expect(result).toMatchObject({ requeued: 0, needsAttention: 1 });
+    const stopped = await getOutboxAction("terminal-binding-action");
+    expect(stopped).toMatchObject({
+      state: "needs_attention",
+      lastError: { code: "field_action_work_package_binding_invalid", status: 502 },
+    });
+    expect(isOutboxActionSafeToRetry(stopped!)).toBe(false);
+    await expect(retryOutboxAction("terminal-binding-action")).rejects.toThrow(
+      "cannot be retried safely",
+    );
+    // The photo is the crew member's evidence: a refusal never deletes it.
+    expect(
+      (await getOutboxActionWithBlobs("terminal-binding-action"))?.blobs.map(
+        (record) => record.attachmentId,
+      ),
+    ).toEqual(["attachment-9"]);
+  });
+
+  it("stops a terminal 4xx refusal and keeps a transient 5xx retrying", async () => {
+    for (const deviceActionId of ["terminal-4xx-action", "transient-5xx-action"]) {
+      await saveOutboxAction({
+        ...principal,
+        deviceActionId,
+        kind: "field_checkin",
+        endpoint: `/api/v1/jobs/${deviceActionId}/check-ins`,
+        payload: { proof_slot: "Production" },
+      });
+      await queueOutboxAction(deviceActionId, 2_000);
+    }
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            code: "field_action_evidence_requires_work_package",
+            message: "This job has no released work package.",
+          },
+          { status: 422 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ code: "busy" }, { status: 503 }));
+
+    const result = await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      now: () => 3_000,
+      random: () => 0,
+    });
+
+    expect(result).toMatchObject({ processed: 2, requeued: 1, needsAttention: 1 });
+    expect(await getOutboxAction("terminal-4xx-action")).toMatchObject({
+      state: "needs_attention",
+      lastError: { code: "field_action_evidence_requires_work_package", status: 422 },
+    });
+    expect(await getOutboxAction("transient-5xx-action")).toMatchObject({
+      state: "queued",
+      attempts: 1,
+      nextAttemptAt: 8_000,
+    });
+  });
+
   it("requeues transient failures with bounded backoff", async () => {
     await saveOutboxAction({
       ...principal,

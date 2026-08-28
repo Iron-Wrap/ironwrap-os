@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
 
+import { classifyOutboxFailure } from "./outbox-failure";
 import {
   claimNextQueuedAction,
   getOutboxActionWithBlobs,
@@ -332,13 +333,17 @@ async function uploadAction(
       },
     };
   }
-  if (response.status === 408 || response.status === 429 || response.status >= 500) {
+  const code = responseCode(payload) ?? `http_${response.status}`;
+  // Status decides on its own, except where the code says the refusal is a rule this device
+  // cannot satisfy. A constraint violation wrapped in a 5xx would otherwise retry for ever
+  // behind a "Waiting" label the crew member reads as "still trying" (ELEC-211).
+  if (classifyOutboxFailure({ status: response.status, code }) === "retryable") {
     return {
       ok: false,
       failure: {
         kind: "retry",
         error: {
-          code: responseCode(payload) ?? `http_${response.status}`,
+          code,
           message: message ?? "The server is busy. This saved item will retry automatically.",
           status: response.status,
           occurredAt: now,
@@ -350,7 +355,7 @@ async function uploadAction(
   return {
     ok: false,
     failure: attentionFailure(
-      responseCode(payload) ?? `http_${response.status}`,
+      code,
       message ?? "The office needs to review this saved item before it can sync.",
       now,
       response.status,

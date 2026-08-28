@@ -1,4 +1,5 @@
 import { getDatabase } from "./db";
+import { classifyOutboxFailure } from "./outbox-failure";
 import { notifyOutboxChanged } from "./outbox-store";
 import { outboxActionKinds } from "./outbox-types";
 import type {
@@ -236,16 +237,15 @@ export async function getOutboxActionsNeedingAttention(principal: {
 
 /**
  * A preserved conflict or a non-transient server refusal must not be retried
- * blindly. This covers only transient HTTP states which may exist in an older
- * durable item after a client upgrade or manual recovery.
+ * blindly. Only a transient answer is safe to send again, and a code the Worker
+ * marks terminal stays terminal whatever status carried it (`outbox-failure.ts`).
  */
 export function isOutboxActionSafeToRetry(action: OutboxAction): boolean {
-  const status = action.lastError?.status;
-  return (
-    action.state === "needs_attention" &&
-    !action.conflict &&
-    (status === 408 || status === 429 || (typeof status === "number" && status >= 500))
-  );
+  const error = action.lastError;
+  if (action.state !== "needs_attention" || action.conflict || error?.status === undefined) {
+    return false;
+  }
+  return classifyOutboxFailure({ status: error.status, code: error.code }) === "retryable";
 }
 
 export async function transitionOutboxAction(

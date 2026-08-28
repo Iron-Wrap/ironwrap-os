@@ -247,10 +247,14 @@ test("0072 commercial authority is complete in migration, backup, and restore in
     assignment(restore, "COMMERCIAL_REQUIRED_TRIGGER_BINDINGS"),
     TRIGGERS.map(([name, table]) => `${name}=${table}`),
   );
+  // These counts move with the migration chain, and moving them is the point: the backup and
+  // restore scripts must name every object the chain defines, so a migration that adds one and
+  // leaves these pinned is a backup set that would silently restore an incomplete database.
+  // 0128 adds the automation recipient catalog - two tables, two indexes, five guards.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 232],
-    ["REQUIRED_INDEX_COUNT", 352],
-    ["REQUIRED_TRIGGER_COUNT", 566],
+    ["REQUIRED_TABLE_COUNT", 234],
+    ["REQUIRED_INDEX_COUNT", 354],
+    ["REQUIRED_TRIGGER_COUNT", 571],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -284,7 +288,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0126", () => {
+test("the full schema matches the recovery frontier through 0128", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -327,7 +331,10 @@ test("the full schema matches the recovery frontier through 0126", () => {
     // and immutable object-evidence receipt tables, six indexes, and fourteen guards. 0125 adds
     // the document-template and generation-attempt/receipt aggregates, six indexes, and eighteen
     // append-only, scope, and effect/readback guards. 0126 adds the settled generation outcome
-    // column and replaces one receipt guard without changing the recovery object inventory.
+    // column and replaces one receipt guard without changing the recovery object inventory. 0127
+    // rebuilds the two CHECK-constrained automation tables forward, restoring the same inventory.
+    // 0128 adds the tenant-administered automation recipient catalog: the head and append-only
+    // revision tables, two indexes, and five head-pointer, lineage, and append-only guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -335,7 +342,7 @@ test("the full schema matches the recovery frontier through 0126", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 232, indexes: 352, triggers: 566 },
+      { tables: 234, indexes: 354, triggers: 571 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

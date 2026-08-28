@@ -1498,6 +1498,8 @@ const ADMIN_FAILURE_STATUS: Readonly<Record<string, number>> = {
   automation_recipient_config_unavailable: 400,
   automation_recipient_ref_invalid: 400,
   automation_recipient_ref_unknown: 400,
+  // A rule may not be authored against a recipient its tenant has retired (ELEC-204).
+  automation_recipient_ref_retired: 409,
   automation_rule_exists: 409,
   automation_rule_not_found: 404,
   automation_rule_version_conflict: 409,

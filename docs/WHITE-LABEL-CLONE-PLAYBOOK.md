@@ -129,7 +129,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0127_pipeline_automation_action_registry.sql`; `node tools/validate-documentation.mjs`
+   `0128_automation_recipient_catalog.sql`; `node tools/validate-documentation.mjs`
    fails if this filename drifts from the chain on `main`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
@@ -137,8 +137,10 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
    `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `QB_RECONCILIATION_ISSUER_API_KEY`,
    `QB_RECONCILIATION_ISSUER_API_SECRET`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
-   and `APP_AUTH_PEPPER`; add `PIPELINE_AUTOMATION_RECIPIENTS_JSON` only when governed stage
-   automation is enabled, and add each broker shared secret only when its isolated broker is enabled.
+   and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
+   Do NOT set `PIPELINE_AUTOMATION_RECIPIENTS_JSON` for a new tenant: automation recipients are
+   tenant data since ELEC-204, and the owner adds them through the configuration hub. That secret
+   remains readable only as a fallback for a tenant that has never written a recipient record.
    All tokens are NEW values, never reused from another tenant.
 8. Compare the intended Worker runtime values before deployment (this reads supplied env values;
    it does not inspect or change a live Worker):
@@ -332,8 +334,9 @@ recovery boundaries.
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] Governed stage automation is either left disabled, or has `PIPELINE_AUTOMATION_ENABLED=true`
-  and its deployment-owned `PIPELINE_AUTOMATION_RECIPIENTS_JSON` mapping configured.
-- [ ] All 106 D1 migrations through `0127_pipeline_automation_action_registry.sql` applied to the tenant database.
+  and the tenant owner has added at least one recipient through the configuration hub
+  (`POST /api/v1/admin/automation-recipients`). No deploy secret is involved.
+- [ ] All 107 D1 migrations through `0128_automation_recipient_catalog.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

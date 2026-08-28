@@ -15,7 +15,15 @@ interface Env {
   NEWO_CONTROL_SIGNING_SECRET: string;
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
-  /** Deployment-owned recipient reference mapping for governed pipeline automation. */
+  /**
+   * LEGACY deployment-owned recipient mapping for governed pipeline automation.
+   *
+   * Superseded by the tenant-administered catalog in `automation-recipients.ts` (ELEC-204).
+   * It is now read only as a fallback, for a tenant that has never written a recipient record
+   * of its own, so existing deployments keep delivering across the change. Do not add a
+   * destination here for a new deployment - an owner adds one through
+   * `POST /api/v1/admin/automation-recipients`, with no secret rotation and no deploy.
+   */
   PIPELINE_AUTOMATION_RECIPIENTS_JSON: string;
   /** Google Maps Platform key (Solar API cross-check); absence disables the check. */
   GOOGLE_MAPS_API_KEY: string;

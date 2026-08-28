@@ -2,7 +2,9 @@
  * Governed stage-change automation (IRO-244).
  *
  * This module is deliberately a small, CLOSED rail: a fixed registry of actions, a built-in
- * template plus tenant-authored document templates, and deployment-owned recipient references.
+ * template plus tenant-authored document templates, and tenant-administered recipient references
+ * (ELEC-204 - see `automation-recipients.ts`; the deployment secret survives only as a fallback for
+ * tenants that have not yet written a catalog of their own).
  * Pipeline transitions remain the business source of truth; this consumer only binds and drains
  * their durable outbox rows. Provider execution is delegated to the universal effect runtime.
  *
@@ -21,6 +23,12 @@ import {
   type DocumentTemplateRevision,
 } from "./document-templates.ts";
 import { generateDocumentToR2 } from "./document-generation-r2.ts";
+import {
+  AutomationRecipientsError,
+  listAutomationRecipients,
+  resolveTenantRecipient,
+  tenantAdministersRecipients,
+} from "./automation-recipients.ts";
 import { effectLedgerAvailable } from "./effect-runtime.ts";
 import { sendPipelineAutomationEmail, gmailConfigured } from "./google.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
@@ -300,7 +308,15 @@ export interface PipelineAutomationCatalog {
   actions: Array<{ action: PipelineAutomationAction; label: string; template_source: string }>;
   templates: Array<{ template_key: string; version: number; label: string; action: PipelineAutomationAction }>;
   recipient_refs: string[];
+  /** Labels for the same refs, in the same order, so a picker shows what an owner authored. */
+  recipient_labels: Array<{ recipient_ref: string; label: string }>;
   recipient_configured: boolean;
+  /**
+   * `tenant` once this tenant administers its own catalog, `deployment` while it is still running
+   * on the legacy env blob, `none` when neither exists. The rule builder shows the administrator
+   * whether "add a recipient" is a screen they can use or a deployment they have to inherit.
+   */
+  recipient_source: "tenant" | "deployment" | "none";
   document_generation_configured: boolean;
 }
 
@@ -317,7 +333,7 @@ export async function pipelineAutomationCatalog(
   tenantId: string,
   entityType: string,
 ): Promise<PipelineAutomationCatalog> {
-  const config = parseRecipientConfiguration(env);
+  const recipients = await automationRecipientCatalog(env, tenantId);
   const documents = documentGenerationConfigured(env);
   const templates: PipelineAutomationCatalog["templates"] = [{
     template_key: PIPELINE_AUTOMATION_TEMPLATE_KEY,
@@ -342,8 +358,13 @@ export async function pipelineAutomationCatalog(
       .filter((entry) => entry.template_source !== "document_template" || documents)
       .map((entry) => ({ action: entry.action, label: entry.label, template_source: entry.template_source })),
     templates,
-    recipient_refs: config.ok ? [...config.entries.keys()].sort() : [],
-    recipient_configured: config.ok,
+    recipient_refs: recipients.entries.map((entry) => entry.ref),
+    recipient_labels: recipients.entries.map((entry) => ({
+      recipient_ref: entry.ref,
+      label: entry.label,
+    })),
+    recipient_configured: recipients.entries.length > 0,
+    recipient_source: recipients.source,
     document_generation_configured: documents,
   };
 }
@@ -376,7 +397,7 @@ export async function validateAutomationRuleInput(
   const action = validateAction(env, input.action);
   const template = await validateTemplate(env, scope, action, input.templateKey, input.templateVersion);
   const recipientRef = validateRecipientRef(input.recipientRef);
-  const recipient = await resolvePipelineAutomationRecipient(env, recipientRef);
+  const recipient = await resolvePipelineAutomationRecipient(env, scope.tenantId, recipientRef);
   const active = input.active === undefined || input.active === null ? true : input.active;
   if (typeof active !== "boolean") throw new PipelineAutomationError("automation_active_invalid");
   return { action, recipient, active, template };
@@ -448,12 +469,47 @@ export function validateRecipientRef(value: unknown): string {
   return value.trim();
 }
 
-/** Resolve a reference without ever returning it from an API or writing it to D1. */
+/**
+ * Resolve a reference to a destination, without ever returning it from an API or writing it to a
+ * rule or invocation row.
+ *
+ * Precedence, and the answer to "what happens to a deployment that already populated
+ * `PIPELINE_AUTOMATION_RECIPIENTS_JSON`":
+ *
+ *   1. the tenant's own catalog, if the tenant has one;
+ *   2. otherwise the deployment blob, read as a FALLBACK.
+ *
+ * The chosen migration rule is fallback-on-empty, not seed-on-first-boot. A seed would have to run
+ * somewhere, would mint rows nobody authored, and would have to guess an actor for the attribution
+ * this aggregate exists to keep honest. The fallback needs none of that and is reversible: an
+ * existing deployment keeps delivering unchanged, and the first recipient an owner creates takes
+ * the whole catalog over.
+ *
+ * That takeover is deliberately per-TENANT and not per-reference. Once a tenant administers its
+ * own catalog the env blob stops being consulted entirely, so a reference the owner did not carry
+ * across fails loudly here rather than silently resolving to an address an engineer set months ago
+ * and nobody can see. `automationRecipientCatalog` publishes which source is live, so the rule
+ * builder can say so before an administrator writes the first record.
+ */
 export async function resolvePipelineAutomationRecipient(
   env: AppEnv,
+  tenantId: string,
   recipientRef: string,
 ): Promise<AutomationRecipient> {
   const ref = validateRecipientRef(recipientRef);
+  let tenantRecipient: Awaited<ReturnType<typeof resolveTenantRecipient>>;
+  try {
+    tenantRecipient = await resolveTenantRecipient(env, tenantId, ref);
+  } catch (error) {
+    throw new PipelineAutomationError(
+      error instanceof AutomationRecipientsError ? error.code : "automation_recipient_ref_unknown",
+    );
+  }
+  if (tenantRecipient)
+    return { ref, address: tenantRecipient.address, digest: tenantRecipient.digest };
+  if (await tenantAdministersRecipients(env, tenantId))
+    throw new PipelineAutomationError("automation_recipient_ref_unknown");
+
   const config = parseRecipientConfiguration(env);
   if (!config.ok) throw new PipelineAutomationError(config.error);
   const address = config.entries.get(ref);
@@ -465,6 +521,51 @@ export async function resolvePipelineAutomationRecipient(
   };
 }
 
+/**
+ * The refs an administrator may pick from, with the source they came from.
+ *
+ * Same precedence as resolution, and it must stay that way: a picker that offered a deployment ref
+ * the dispatcher would refuse to resolve is exactly the mismatch that made the original defect
+ * invisible until a stage change failed.
+ */
+export async function automationRecipientCatalog(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{
+  source: "tenant" | "deployment" | "none";
+  entries: Array<{ ref: string; label: string }>;
+}> {
+  if (await tenantAdministersRecipients(env, tenantId)) {
+    const records = await listAutomationRecipients(env, tenantId);
+    return {
+      source: "tenant",
+      entries: records
+        .filter((record) => record.active === 1)
+        .map((record) => ({ ref: record.recipient_ref, label: record.label })),
+    };
+  }
+  const config = parseRecipientConfiguration(env);
+  if (!config.ok) return { source: "none", entries: [] };
+  return {
+    source: "deployment",
+    entries: [...config.entries.keys()].sort().map((ref) => ({ ref, label: ref })),
+  };
+}
+
+/**
+ * Whether ANY recipient source can answer a resolution for this tenant. The drain refuses to do
+ * provider work while this is false, exactly as it did when the deployment blob was the only
+ * source.
+ */
+export async function recipientCatalogAvailable(env: AppEnv, tenantId: string): Promise<boolean> {
+  return (await automationRecipientCatalog(env, tenantId)).entries.length > 0;
+}
+
+/**
+ * The legacy deployment blob. It is no longer the catalog - it is the fallback a tenant that has
+ * never written a recipient record still resolves through, so an existing deployment keeps
+ * delivering across this change.
+ */
 type RecipientConfiguration =
   | { ok: true; entries: Map<string, string> }
   | { ok: false; error: "automation_recipient_config_unavailable" | "automation_recipient_config_malformed" };
@@ -753,7 +854,7 @@ export function pipelineAutomationEffectKey(invocationId: string): string {
 }
 
 /**
- * Bounded five-minute drain. It never performs provider work while the feature, recipient config,
+ * Bounded five-minute drain. It never performs provider work while the feature, recipient catalog,
  * Gmail adapter or universal effect ledger is unavailable. A custom sender is test-only plumbing;
  * production's default sender always runs through the governed Gmail adapter.
  */
@@ -789,7 +890,7 @@ export async function drainPipelineStageAutomation(
     report.unavailable = 1;
     return report;
   }
-  if (!parseRecipientConfiguration(env).ok) {
+  if (!(await recipientCatalogAvailable(env, automationTenantId(env)))) {
     report.available = false;
     report.unavailable = 1;
     return report;
@@ -1085,7 +1186,9 @@ async function processClaimedInvocation(
   if (!leaseRef) throw new PipelineAutomationError("automation_lease_missing");
   let recipient: AutomationRecipient;
   try {
-    recipient = await resolvePipelineAutomationRecipient(env, invocation.recipient_ref);
+    recipient = await resolvePipelineAutomationRecipient(
+      env, invocation.tenant_id, invocation.recipient_ref,
+    );
   } catch (error) {
     return await finalizeAutomationInvocation(env, outbox, invocation, leaseRef, {
       outcome: "failed",

@@ -2206,12 +2206,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // append-only schema-field definition/value histories and their server-maintained heads. 0125
     // adds five template/generation tables, six named indexes, and eighteen append-only, scope,
     // retention, and effect guards. 0126 preserves the two settled reconciliation outcomes on
-    // immutable generation receipts without changing the final object inventory. The
-    // 0070–0078 and 0083–0089 gaps are reserved or abandoned
+    // immutable generation receipts without changing the final object inventory. 0127 rebuilds the
+    // two CHECK-constrained automation tables forward to widen the closed action registry, so it
+    // adds a file without adding an object. The 0070–0078 and 0083–0089 gaps are reserved or abandoned
     // collision numbers, not missing files.
-    assert.equal(migrations.length, 105);
+    assert.equal(migrations.length, 106);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0126_document_generation_settled_outcomes.sql");
+    assert.equal(migrations.at(-1), "0127_pipeline_automation_action_registry.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -2322,6 +2323,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // lineage, retention, provider, and append-only guards. 0125 adds five template/generation
     // tables, six named indexes, and eighteen append-only, scope, retention, and effect guards.
     // 0126 forward-adds the settled outcome column and replaces one guard, so counts are unchanged.
+    // 0127 rebuilds `pipeline_automation_rule_revisions` and `pipeline_stage_automation_invocations`
+    // with a widened action/template CHECK, restoring the same 2 tables, 3 indexes and 6 triggers.
     assert.deepEqual(
       { ...counts },
       { tables: 232, indexes: 344, triggers: 566 },

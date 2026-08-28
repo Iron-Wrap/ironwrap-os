@@ -754,7 +754,7 @@ async function handleAdminAutomationList(
     version: 1,
     pipeline_id: pipeline.pipeline_id,
     rules: await listPipelineAutomationRules(env, auth.session.tenant_id, pipeline.pipeline_id),
-    catalog: pipelineAutomationCatalog(env),
+    catalog: await pipelineAutomationCatalog(env, auth.session.tenant_id, pipeline.entity_type),
   });
 }
 
@@ -803,7 +803,7 @@ async function handleAdminAutomationCreate(
     tenantId: auth.session.tenant_id,
     actor: { role: auth.session.role, userId: auth.session.user_id },
   }, now);
-  return json({ rule, catalog: pipelineAutomationCatalog(env) }, 201);
+  return json({ rule, catalog: await automationCatalogForPipeline(env, auth, pipelineId) }, 201);
 }
 
 async function handleAdminAutomationRevision(
@@ -828,7 +828,17 @@ async function handleAdminAutomationRevision(
     expectedVersion,
     actor: { role: auth.session.role, userId: auth.session.user_id },
   }, now);
-  return json({ rule, catalog: pipelineAutomationCatalog(env) });
+  return json({ rule, catalog: await automationCatalogForPipeline(env, auth, pipelineId) });
+}
+
+/** The catalog a rule writer gets back is scoped to the pipeline it just wrote against. */
+async function automationCatalogForPipeline(
+  env: AppEnv,
+  auth: AuthContext,
+  pipelineId: string,
+): Promise<Awaited<ReturnType<typeof pipelineAutomationCatalog>>> {
+  const pipeline = await adminPipeline(env, auth.session.tenant_id, pipelineId);
+  return await pipelineAutomationCatalog(env, auth.session.tenant_id, pipeline?.entity_type ?? "");
 }
 
 function parseAutomationRuleBody(body: Record<string, unknown>): {
@@ -1493,6 +1503,10 @@ const ADMIN_FAILURE_STATUS: Readonly<Record<string, number>> = {
   automation_rule_version_conflict: 409,
   automation_rule_write_failed: 500,
   automation_template_invalid: 400,
+  automation_document_template_not_found: 404,
+  automation_document_template_retired: 409,
+  automation_document_template_entity_mismatch: 400,
+  automation_document_template_version_conflict: 409,
 };
 
 function administrationFailure(error: unknown): Response {

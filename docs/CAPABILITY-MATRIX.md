@@ -64,8 +64,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 105,
-      "latest": "0126_document_generation_settled_outcomes.sql"
+      "count": 106,
+      "latest": "0127_pipeline_automation_action_registry.sql"
     }
   },
   "test_observation_policy": {

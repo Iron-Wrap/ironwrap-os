@@ -1,20 +1,69 @@
 /**
  * Governed stage-change automation (IRO-244).
  *
- * This module is deliberately a small, closed rail: one action, one template and deployment-owned
- * recipient references. Pipeline transitions remain the business source of truth; this consumer
- * only binds and drains their durable outbox rows. Provider execution is delegated to the universal
- * effect runtime through `sendPipelineAutomationEmail`.
+ * This module is deliberately a small, CLOSED rail: a fixed registry of actions, a built-in
+ * template plus tenant-authored document templates, and deployment-owned recipient references.
+ * Pipeline transitions remain the business source of truth; this consumer only binds and drains
+ * their durable outbox rows. Provider execution is delegated to the universal effect runtime.
+ *
+ * Nothing in the registry, the dispatcher or the routes names a trade. An action says "generate a
+ * document and deliver it"; WHICH document is a template row an administrator authors, so every
+ * document a business sends on a stage change - in any industry - is the same code path with
+ * different configuration.
  */
 
 import type { AppEnv } from "./app-types.ts";
+import {
+  getDocumentTemplate,
+  getDocumentTemplateRevision,
+  listDocumentTemplates,
+  type DocumentGenerationServiceAuthority,
+  type DocumentTemplateRevision,
+} from "./document-templates.ts";
+import { generateDocumentToR2 } from "./document-generation-r2.ts";
 import { effectLedgerAvailable } from "./effect-runtime.ts";
 import { sendPipelineAutomationEmail, gmailConfigured } from "./google.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
+/** Deliver the built-in stage-change summary. */
 export const PIPELINE_AUTOMATION_ACTION = "operations.email.send" as const;
+/** Generate a configured document for the card's entity, then deliver it on the same rail. */
+export const PIPELINE_AUTOMATION_DOCUMENT_ACTION = "operations.document.generate_and_send" as const;
 export const PIPELINE_AUTOMATION_TEMPLATE_KEY = "pipeline.stage-change-summary" as const;
 export const PIPELINE_AUTOMATION_TEMPLATE_VERSION = 1 as const;
+
+/**
+ * The whole registry. Adding an entry here is the ONLY way a new action becomes authorable or
+ * executable - there is no formula language, no webhook and no tenant code path. The pickers an
+ * administrator sees are rendered from this list by way of `pipelineAutomationCatalog`, so a new
+ * entry reaches the rule builder without a client release.
+ */
+export const PIPELINE_AUTOMATION_REGISTRY = [
+  {
+    action: PIPELINE_AUTOMATION_ACTION,
+    label: "Stage-change email",
+    template_source: "builtin",
+  },
+  {
+    action: PIPELINE_AUTOMATION_DOCUMENT_ACTION,
+    label: "Generate a document and email it",
+    template_source: "document_template",
+  },
+] as const;
+
+export type PipelineAutomationAction = (typeof PIPELINE_AUTOMATION_REGISTRY)[number]["action"];
+
+export const PIPELINE_AUTOMATION_ACTIONS: readonly PipelineAutomationAction[] =
+  PIPELINE_AUTOMATION_REGISTRY.map((entry) => entry.action);
+
+/** A document permit lives well past the retry ladder but never indefinitely. */
+const DOCUMENT_PERMIT_TTL_MS = 24 * 60 * 60_000;
+/** The generation effect asks the ledger for this much runway; the permit must still cover it. */
+const DOCUMENT_EFFECT_DEADLINE_MS = 5 * 60_000;
+const DOCUMENT_POLICY_REF = "policy:pipeline-automation:document.generate";
+const DOCUMENT_POLICY_VERSION = "v1";
+const DOCUMENT_ACTOR_ID = "pipeline-automation";
+const DOCUMENT_ACTOR_AUTHORITY_REF = "authority:pipeline-automation";
 export const PIPELINE_AUTOMATION_DEFAULT_LIMIT = 25;
 export const PIPELINE_AUTOMATION_MAX_LIMIT = 100;
 const PIPELINE_AUTOMATION_RETRY_LIMIT = 2;
@@ -30,10 +79,10 @@ export interface PipelineAutomationRule {
   revision_id: string;
   version: number;
   prior_revision_id: string | null;
-  action: typeof PIPELINE_AUTOMATION_ACTION;
+  action: PipelineAutomationAction;
   recipient_ref: string;
-  template_key: typeof PIPELINE_AUTOMATION_TEMPLATE_KEY;
-  template_version: typeof PIPELINE_AUTOMATION_TEMPLATE_VERSION;
+  template_key: string;
+  template_version: number;
   active: number;
   actor_role: string;
   actor_id: string;
@@ -129,11 +178,11 @@ interface InvocationRow {
   rule_id: string;
   rule_revision_id: string;
   rule_version: number;
-  action: typeof PIPELINE_AUTOMATION_ACTION;
+  action: PipelineAutomationAction;
   recipient_ref: string;
   recipient_digest: string | null;
-  template_key: typeof PIPELINE_AUTOMATION_TEMPLATE_KEY;
-  template_version: typeof PIPELINE_AUTOMATION_TEMPLATE_VERSION;
+  template_key: string;
+  template_version: number;
   status: "pending" | "claimed" | "retry" | "succeeded" | "failed" | "unknown";
   attempt_count: number;
   lease_ref: string | null;
@@ -186,10 +235,41 @@ export type PipelineAutomationSender = (
   input: AutomationSendInput,
 ) => Promise<AutomationSendResult>;
 
+export interface AutomationDocumentRequest {
+  tenantId: string;
+  entityType: string;
+  entityId: string;
+  templateId: string;
+  serviceAuthority: DocumentGenerationServiceAuthority;
+  idempotencyKey: string;
+  now: string;
+}
+
+export interface AutomationDocumentResult {
+  outcome: "succeeded" | "failed" | "unknown" | "manual_exception" | "not_executed";
+  label: string;
+  body: string;
+  outputDigest: string;
+  providerDocumentId: string | null;
+  receiptId: string;
+  templateRevisionId: string;
+  templateVersion: number;
+  resultCode?: string;
+}
+
+/**
+ * The generation half of the document action. Production always runs the governed R2 generator;
+ * the seam exists so a test can prove the dispatcher's own contract without an object store.
+ */
+export type PipelineAutomationDocumentGenerator = (
+  input: AutomationDocumentRequest,
+) => Promise<AutomationDocumentResult>;
+
 export interface PipelineAutomationDrainOptions {
   now?: Date;
   limit?: number;
   sender?: PipelineAutomationSender;
+  documentGenerator?: PipelineAutomationDocumentGenerator;
 }
 
 export interface PipelineAutomationDrainReport {
@@ -216,24 +296,66 @@ export interface PipelineAutomationLeaseRecoveryReport {
   failures: Array<{ invocation_id: string; error: string }>;
 }
 
-/** The only actions and templates that can be persisted in v1. */
-export function pipelineAutomationCatalog(env: AppEnv): {
-  actions: Array<{ action: typeof PIPELINE_AUTOMATION_ACTION; label: string }>;
-  templates: Array<{ template_key: typeof PIPELINE_AUTOMATION_TEMPLATE_KEY; version: 1; label: string }>;
+export interface PipelineAutomationCatalog {
+  actions: Array<{ action: PipelineAutomationAction; label: string; template_source: string }>;
+  templates: Array<{ template_key: string; version: number; label: string; action: PipelineAutomationAction }>;
   recipient_refs: string[];
   recipient_configured: boolean;
-} {
+  document_generation_configured: boolean;
+}
+
+/**
+ * The actions and templates that can be persisted, published for the administrator's pickers.
+ *
+ * The list is server-owned on purpose: the rule builder renders whatever comes back, so an action
+ * registered here appears in the UI without a client release. Templates are scoped to the
+ * pipeline's own entity type, because a rule can only ever generate a document about the entity its
+ * cards carry.
+ */
+export async function pipelineAutomationCatalog(
+  env: AppEnv,
+  tenantId: string,
+  entityType: string,
+): Promise<PipelineAutomationCatalog> {
   const config = parseRecipientConfiguration(env);
+  const documents = documentGenerationConfigured(env);
+  const templates: PipelineAutomationCatalog["templates"] = [{
+    template_key: PIPELINE_AUTOMATION_TEMPLATE_KEY,
+    version: PIPELINE_AUTOMATION_TEMPLATE_VERSION,
+    label: "Stage-change summary",
+    action: PIPELINE_AUTOMATION_ACTION,
+  }];
+  if (documents)
+    for (const template of await listDocumentTemplates(env, tenantId, entityType)) {
+      if (!template.active) continue;
+      templates.push({
+        template_key: template.template_id,
+        version: template.version,
+        label: template.label,
+        action: PIPELINE_AUTOMATION_DOCUMENT_ACTION,
+      });
+    }
   return {
-    actions: [{ action: PIPELINE_AUTOMATION_ACTION, label: "Stage-change email" }],
-    templates: [{
-      template_key: PIPELINE_AUTOMATION_TEMPLATE_KEY,
-      version: PIPELINE_AUTOMATION_TEMPLATE_VERSION,
-      label: "Stage-change summary",
-    }],
+    // An action whose deployment prerequisites are missing is withheld rather than offered and then
+    // refused: an administrator can only compose a rule this deployment can actually run.
+    actions: PIPELINE_AUTOMATION_REGISTRY
+      .filter((entry) => entry.template_source !== "document_template" || documents)
+      .map((entry) => ({ action: entry.action, label: entry.label, template_source: entry.template_source })),
+    templates,
     recipient_refs: config.ok ? [...config.entries.keys()].sort() : [],
     recipient_configured: config.ok,
+    document_generation_configured: documents,
   };
+}
+
+/**
+ * Document generation is separately activated per deployment (IRO-242). The automation rail never
+ * widens that switch - it reads it, and withholds the document action until an operator sets it.
+ */
+export function documentGenerationConfigured(env: AppEnv): boolean {
+  if (String(env.APP_DOCUMENT_GENERATION_ENABLED ?? "") !== "true") return false;
+  const bucket = (env as { RAW?: { head?: unknown; put?: unknown } }).RAW;
+  return typeof bucket?.head === "function" && typeof bucket.put === "function";
 }
 
 export function pipelineAutomationEnabled(env: AppEnv): boolean {
@@ -244,34 +366,80 @@ export function pipelineAutomationEnabled(env: AppEnv): boolean {
 export async function validateAutomationRuleInput(
   env: AppEnv,
   input: AutomationRuleInput,
-): Promise<{ action: typeof PIPELINE_AUTOMATION_ACTION; recipient: AutomationRecipient; active: boolean }> {
-  const action = validateAction(input.action);
-  validateTemplate(input.templateKey, input.templateVersion);
+  scope: { tenantId: string; entityType: string },
+): Promise<{
+  action: PipelineAutomationAction;
+  recipient: AutomationRecipient;
+  active: boolean;
+  template: { key: string; version: number };
+}> {
+  const action = validateAction(env, input.action);
+  const template = await validateTemplate(env, scope, action, input.templateKey, input.templateVersion);
   const recipientRef = validateRecipientRef(input.recipientRef);
   const recipient = await resolvePipelineAutomationRecipient(env, recipientRef);
   const active = input.active === undefined || input.active === null ? true : input.active;
   if (typeof active !== "boolean") throw new PipelineAutomationError("automation_active_invalid");
-  return { action, recipient, active };
+  return { action, recipient, active, template };
 }
 
-export function validateAction(value: unknown): typeof PIPELINE_AUTOMATION_ACTION {
-  if (value !== PIPELINE_AUTOMATION_ACTION)
+/**
+ * The registry is closed at authoring AND at execution. Anything outside it is refused here before
+ * a row can exist; the same guard runs again when a claimed invocation is dispatched, so a value
+ * that somehow reached D1 still cannot reach a provider.
+ */
+export function validateAction(env: AppEnv, value: unknown): PipelineAutomationAction {
+  const available = PIPELINE_AUTOMATION_REGISTRY.filter(
+    (entry) => entry.template_source !== "document_template" || documentGenerationConfigured(env),
+  );
+  const entry = available.find((candidate) => candidate.action === value);
+  if (!entry)
     throw new PipelineAutomationError("automation_action_invalid", {
-      actions: [PIPELINE_AUTOMATION_ACTION],
+      actions: available.map((candidate) => candidate.action),
     });
-  return PIPELINE_AUTOMATION_ACTION;
+  return entry.action;
 }
 
-export function validateTemplate(
+/**
+ * The built-in action keeps its built-in template. The document action carries a document-template
+ * identifier the administrator authored, checked against the pipeline's own entity type so a rule
+ * cannot ask for a document about something its cards never hold.
+ */
+export async function validateTemplate(
+  env: AppEnv,
+  scope: { tenantId: string; entityType: string },
+  action: PipelineAutomationAction,
   key: unknown,
   version: unknown,
-): { key: typeof PIPELINE_AUTOMATION_TEMPLATE_KEY; version: 1 } {
-  if (key !== PIPELINE_AUTOMATION_TEMPLATE_KEY || version !== PIPELINE_AUTOMATION_TEMPLATE_VERSION)
-    throw new PipelineAutomationError("automation_template_invalid", {
-      template_key: PIPELINE_AUTOMATION_TEMPLATE_KEY,
-      template_version: PIPELINE_AUTOMATION_TEMPLATE_VERSION,
+): Promise<{ key: string; version: number }> {
+  if (action === PIPELINE_AUTOMATION_ACTION) {
+    if (key !== PIPELINE_AUTOMATION_TEMPLATE_KEY || version !== PIPELINE_AUTOMATION_TEMPLATE_VERSION)
+      throw new PipelineAutomationError("automation_template_invalid", {
+        template_key: PIPELINE_AUTOMATION_TEMPLATE_KEY,
+        template_version: PIPELINE_AUTOMATION_TEMPLATE_VERSION,
+      });
+    return { key: PIPELINE_AUTOMATION_TEMPLATE_KEY, version: PIPELINE_AUTOMATION_TEMPLATE_VERSION };
+  }
+  if (typeof key !== "string" || key === PIPELINE_AUTOMATION_TEMPLATE_KEY ||
+      key.trim().length < 12 || key.trim().length > 220 || !/^[A-Za-z0-9._:-]+$/.test(key.trim()))
+    throw new PipelineAutomationError("automation_template_invalid");
+  if (!Number.isInteger(version) || Number(version) < 1)
+    throw new PipelineAutomationError("automation_template_invalid");
+  const templateId = key.trim();
+  const template = await getDocumentTemplate(env, scope.tenantId, templateId);
+  if (!template) throw new PipelineAutomationError("automation_document_template_not_found");
+  if (!template.active) throw new PipelineAutomationError("automation_document_template_retired");
+  if (template.entity_type !== scope.entityType)
+    throw new PipelineAutomationError("automation_document_template_entity_mismatch", {
+      entity_type: scope.entityType,
     });
-  return { key: PIPELINE_AUTOMATION_TEMPLATE_KEY, version: PIPELINE_AUTOMATION_TEMPLATE_VERSION };
+  // The administrator picks the version the catalog offered. Execution follows the template head,
+  // and the immutable generation receipt records the revision actually rendered - so this pin is
+  // provenance for the choice, not a freeze on the document.
+  if (template.version !== Number(version))
+    throw new PipelineAutomationError("automation_document_template_version_conflict", {
+      template_version: template.version,
+    });
+  return { key: templateId, version: template.version };
 }
 
 export function validateRecipientRef(value: unknown): string {
@@ -370,11 +538,11 @@ export async function createPipelineAutomationRule(
   input: CreatePipelineAutomationRuleInput,
   now = new Date(),
 ): Promise<PipelineAutomationRule> {
-  const checked = await validateAutomationRuleInput(env, input);
   const actor = validateActor(input.actor);
   const nowIso = validNow(now);
   const tenantId = input.tenantId ?? env.APP_TENANT_ID ?? "ironwrap";
-  await assertActiveTarget(env, tenantId, input.pipelineId, input.toStageId);
+  const target = await assertActiveTarget(env, tenantId, input.pipelineId, input.toStageId);
+  const checked = await validateAutomationRuleInput(env, input, { tenantId, entityType: target.entityType });
   const ruleId = await stableRuleId(tenantId, input.pipelineId, input.toStageId);
   const revisionId = await stableRevisionId(ruleId, 1);
   const headCreated = await env.DB.prepare(
@@ -412,8 +580,8 @@ export async function createPipelineAutomationRule(
     revisionId,
     checked.action,
     checked.recipient.ref,
-    PIPELINE_AUTOMATION_TEMPLATE_KEY,
-    PIPELINE_AUTOMATION_TEMPLATE_VERSION,
+    checked.template.key,
+    checked.template.version,
     checked.active ? 1 : 0,
     actor.role,
     actor.userId,
@@ -446,13 +614,13 @@ export async function revisePipelineAutomationRule(
   input: RevisePipelineAutomationRuleInput,
   now = new Date(),
 ): Promise<PipelineAutomationRule> {
-  const checked = await validateAutomationRuleInput(env, input);
   const actor = validateActor(input.actor);
   const nowIso = validNow(now);
   if (!Number.isInteger(input.expectedVersion) || input.expectedVersion < 1)
     throw new PipelineAutomationError("automation_expected_version_invalid");
   const tenantId = input.tenantId ?? env.APP_TENANT_ID ?? "ironwrap";
-  await assertActiveTarget(env, tenantId, input.pipelineId, input.toStageId);
+  const target = await assertActiveTarget(env, tenantId, input.pipelineId, input.toStageId);
+  const checked = await validateAutomationRuleInput(env, input, { tenantId, entityType: target.entityType });
   const head = await env.DB.prepare(
     `SELECT * FROM pipeline_automation_rule_heads
       WHERE tenant_id = ? AND rule_id = ? AND pipeline_id = ? AND to_stage_id = ? LIMIT 1`,
@@ -479,8 +647,8 @@ export async function revisePipelineAutomationRule(
     nextVersion,
     checked.action,
     checked.recipient.ref,
-    PIPELINE_AUTOMATION_TEMPLATE_KEY,
-    PIPELINE_AUTOMATION_TEMPLATE_VERSION,
+    checked.template.key,
+    checked.template.version,
     checked.active ? 1 : 0,
     actor.role,
     actor.userId,
@@ -535,17 +703,23 @@ export async function getPipelineAutomationRule(
   ).bind(tenantId, ruleId).first<PipelineAutomationRule>();
 }
 
-async function assertActiveTarget(env: AppEnv, tenantId: string, pipelineId: string, stageId: string): Promise<void> {
+async function assertActiveTarget(
+  env: AppEnv,
+  tenantId: string,
+  pipelineId: string,
+  stageId: string,
+): Promise<{ entityType: string }> {
   const row = await env.DB.prepare(
-    `SELECT p.is_active AS pipeline_active, s.is_active AS stage_active
+    `SELECT p.is_active AS pipeline_active, p.entity_type AS entity_type, s.is_active AS stage_active
        FROM pipelines p
        JOIN pipeline_stages s
          ON s.tenant_id = p.tenant_id AND s.pipeline_id = p.pipeline_id
       WHERE p.tenant_id = ? AND p.pipeline_id = ? AND s.stage_id = ? LIMIT 1`,
-  ).bind(tenantId, pipelineId, stageId).first<{ pipeline_active: number; stage_active: number }>();
+  ).bind(tenantId, pipelineId, stageId).first<{ pipeline_active: number; entity_type: string; stage_active: number }>();
   if (!row) throw new PipelineAutomationError("automation_pipeline_or_stage_not_found");
   if (row.pipeline_active !== 1 || row.stage_active !== 1)
     throw new PipelineAutomationError("automation_pipeline_or_stage_inactive");
+  return { entityType: row.entity_type };
 }
 
 function validateActor(actor: AutomationRuleActor): AutomationRuleActor {
@@ -631,6 +805,7 @@ export async function drainPipelineStageAutomation(
       report.failures.push({ outbox_id: failure.invocation_id, error: failure.error });
 
   const sender = customSender ?? defaultPipelineAutomationSender(env);
+  const documentGenerator = options.documentGenerator ?? defaultAutomationDocumentGenerator(env);
   for (let index = 0; index < limit; index += 1) {
     const candidate = await claimNextPipelineAutomation(env, nowIso);
     if (!candidate) break;
@@ -641,7 +816,9 @@ export async function drainPipelineStageAutomation(
     }
     report.claimed += 1;
     try {
-      const outcome = await processClaimedInvocation(env, candidate.outbox, candidate.invocation, sender, nowIso);
+      const outcome = await processClaimedInvocation(
+        env, candidate.outbox, candidate.invocation, sender, documentGenerator, nowIso,
+      );
       if (outcome === "succeeded") report.sent += 1;
       else if (outcome === "retry") report.retried += 1;
       else if (outcome === "unknown") report.unknown += 1;
@@ -723,10 +900,10 @@ interface ActiveAutomationRule {
   rule_id: string;
   revision_id: string;
   version: number;
-  action: typeof PIPELINE_AUTOMATION_ACTION;
+  action: PipelineAutomationAction;
   recipient_ref: string;
-  template_key: typeof PIPELINE_AUTOMATION_TEMPLATE_KEY;
-  template_version: typeof PIPELINE_AUTOMATION_TEMPLATE_VERSION;
+  template_key: string;
+  template_version: number;
 }
 
 async function claimNextPipelineAutomation(env: AppEnv, nowIso: string): Promise<ClaimedAutomation | null> {
@@ -901,6 +1078,7 @@ async function processClaimedInvocation(
   outbox: OutboxRow,
   invocation: InvocationRow,
   sender: PipelineAutomationSender,
+  documentGenerator: PipelineAutomationDocumentGenerator,
   nowIso: string,
 ): Promise<"succeeded" | "retry" | "failed" | "unknown"> {
   const leaseRef = invocation.lease_ref;
@@ -943,7 +1121,16 @@ async function processClaimedInvocation(
       resultCode: "automation_transition_context_missing",
     }, nowIso);
   }
-  const rendered = renderStageChangeSummary(context);
+  const prepared = await prepareAutomationDelivery(
+    env, leasedInvocation, context, documentGenerator, nowIso,
+  );
+  if ("failure" in prepared) {
+    return await finalizeAutomationInvocation(env, outbox, leasedInvocation, leaseRef, {
+      outcome: prepared.failure.outcome,
+      resultCode: prepared.failure.resultCode,
+    }, nowIso, prepared.failure.terminal);
+  }
+  const rendered = prepared.rendered;
   const idempotencyKey = pipelineAutomationEffectKey(leasedInvocation.invocation_id);
   let result: AutomationSendResult;
   try {
@@ -981,6 +1168,164 @@ async function getDeliveryContext(env: AppEnv, outbox: OutboxRow): Promise<Deliv
         AND fs.stage_id = o.from_stage_id
       WHERE o.tenant_id = ? AND o.outbox_id = ? LIMIT 1`,
   ).bind(outbox.tenant_id, outbox.outbox_id).first<DeliveryContext>();
+}
+
+export interface PreparedDelivery {
+  rendered: { subject: string; html: string };
+}
+
+export interface DeliveryFailure {
+  failure: {
+    outcome: "failed" | "unknown";
+    resultCode: string;
+    /** Provider ambiguity is terminal automation work; it is never redispatched. */
+    terminal: boolean;
+  };
+}
+
+/**
+ * Turn a claimed invocation into the bytes that will be delivered.
+ *
+ * The action decides HOW the payload is produced, never WHAT is in it: the built-in action renders
+ * the stage-change summary, and the document action asks the generation domain for the document its
+ * rule names. A generation that does not settle successfully stops here - the transition is already
+ * committed and stays committed; only the automation is recorded as failed.
+ */
+export async function prepareAutomationDelivery(
+  env: AppEnv,
+  invocation: InvocationRow,
+  context: DeliveryContext,
+  documentGenerator: PipelineAutomationDocumentGenerator,
+  nowIso: string,
+): Promise<PreparedDelivery | DeliveryFailure> {
+  const action = registeredAction(invocation.action);
+  if (!action)
+    return { failure: { outcome: "failed", resultCode: "automation_action_unregistered", terminal: true } };
+  if (action === PIPELINE_AUTOMATION_ACTION) return { rendered: renderStageChangeSummary(context) };
+
+  if (!documentGenerationConfigured(env))
+    return { failure: { outcome: "failed", resultCode: "automation_document_generation_unavailable", terminal: false } };
+  const permit = automationDocumentPermit(invocation, context);
+  if (Date.parse(nowIso) + DOCUMENT_EFFECT_DEADLINE_MS > Date.parse(permit.expiresAt))
+    return { failure: { outcome: "failed", resultCode: "automation_document_permit_expired", terminal: true } };
+
+  let document: AutomationDocumentResult;
+  try {
+    document = await documentGenerator({
+      tenantId: invocation.tenant_id,
+      entityType: context.entity_type,
+      entityId: context.entity_id,
+      templateId: invocation.template_key,
+      serviceAuthority: permit,
+      idempotencyKey: automationDocumentIdempotencyKey(invocation.invocation_id),
+      now: nowIso,
+    });
+  } catch (error) {
+    return { failure: { outcome: "failed", resultCode: automationErrorCode(error), terminal: false } };
+  }
+  if (document.outcome !== "succeeded")
+    return {
+      failure: {
+        outcome: document.outcome === "unknown" || document.outcome === "manual_exception" ? "unknown" : "failed",
+        resultCode: document.resultCode ?? `automation_document_${document.outcome}`,
+        terminal: document.outcome === "unknown" || document.outcome === "manual_exception",
+      },
+    };
+  return { rendered: renderDocumentDelivery(context, document) };
+}
+
+function registeredAction(value: string): PipelineAutomationAction | null {
+  return PIPELINE_AUTOMATION_REGISTRY.find((entry) => entry.action === value)?.action ?? null;
+}
+
+/**
+ * An automation is not a person, so it does not borrow the owner's route or the owner's role.
+ *
+ * It presents a scoped service permit instead: one tenant, one entity, one template, one action,
+ * one attempt, an explicit expiry, and a `worker`/`ops` identity that is never a signed-in user.
+ * Every field is derived from the durable invocation, so a redelivery mints the SAME permit and
+ * replays the same generation attempt rather than authorising a second one.
+ */
+export function automationDocumentPermit(
+  invocation: Pick<InvocationRow, "invocation_id" | "tenant_id" | "template_key" | "created_at">,
+  context: Pick<DeliveryContext, "entity_type" | "entity_id">,
+): DocumentGenerationServiceAuthority {
+  return {
+    kind: "service",
+    permitRef: `permit:pipeline-automation:${invocation.invocation_id}`,
+    policyRef: DOCUMENT_POLICY_REF,
+    policyVersion: DOCUMENT_POLICY_VERSION,
+    tenantId: invocation.tenant_id,
+    entityType: context.entity_type,
+    entityId: context.entity_id,
+    templateId: invocation.template_key,
+    action: "document.generate",
+    expiresAt: new Date(Date.parse(invocation.created_at) + DOCUMENT_PERMIT_TTL_MS).toISOString(),
+    maxAttempts: 1,
+    stopPolicy: "stop_on_unknown",
+    compensationPolicy: "none",
+    actor: {
+      type: "worker",
+      role: "ops",
+      userId: DOCUMENT_ACTOR_ID,
+      authorityRef: DOCUMENT_ACTOR_AUTHORITY_REF,
+    },
+  };
+}
+
+export function automationDocumentIdempotencyKey(invocationId: string): string {
+  return `pipeline-automation-document:${invocationId}`;
+}
+
+function defaultAutomationDocumentGenerator(env: AppEnv): PipelineAutomationDocumentGenerator {
+  return async (request) => {
+    const result = await generateDocumentToR2(env, {
+      tenantId: request.tenantId,
+      entityType: request.entityType,
+      entityId: request.entityId,
+      templateId: request.templateId,
+      serviceAuthority: request.serviceAuthority,
+      idempotencyKey: request.idempotencyKey,
+    }, new Date(request.now));
+    const revision = await getDocumentTemplateRevision(
+      env, request.tenantId, request.templateId, result.receipt.template_revision_id,
+    );
+    return {
+      outcome: result.outcome,
+      label: revision?.label ?? "Document",
+      body: result.document.body,
+      outputDigest: result.document.outputDigest,
+      providerDocumentId: result.document.providerDocumentId,
+      receiptId: result.receipt.receipt_id,
+      templateRevisionId: result.receipt.template_revision_id,
+      templateVersion: result.receipt.template_version,
+    };
+  };
+}
+
+/**
+ * The delivered email carries the document itself, not a claim that one exists: the body is the
+ * exact rendered output the receipt attests, followed by the evidence a reader needs to match the
+ * mail against the immutable receipt.
+ */
+export function renderDocumentDelivery(
+  context: DeliveryContext,
+  document: AutomationDocumentResult,
+): { subject: string; html: string } {
+  const pipeline = escapeHtml(context.pipeline_name);
+  const from = escapeHtml(context.from_stage_name ?? "New");
+  const to = escapeHtml(context.to_stage_name);
+  const entity = escapeHtml(`${context.entity_type}:${context.entity_id}`);
+  const subject = safeHeader(`${document.label}: ${context.pipeline_name} - ${context.to_stage_name}`);
+  const html = `<p>Pipeline <strong>${pipeline}</strong> moved <strong>${from}</strong> &rarr; ` +
+    `<strong>${to}</strong> for <strong>${entity}</strong>, and generated the document below.</p>` +
+    `<hr>${document.body}<hr>` +
+    `<p>Document: <strong>${escapeHtml(document.label)}</strong><br>` +
+    `Receipt: ${escapeHtml(document.receiptId)}<br>` +
+    `Template revision: ${escapeHtml(document.templateRevisionId)} v${document.templateVersion}<br>` +
+    `Stored object: ${escapeHtml(document.providerDocumentId ?? "none")}<br>` +
+    `Output digest: ${escapeHtml(document.outputDigest)}</p>`;
+  return { subject, html };
 }
 
 export function renderStageChangeSummary(context: DeliveryContext): { subject: string; html: string } {

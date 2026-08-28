@@ -47,6 +47,19 @@ export const API_PATHS = {
     `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/automation-rules`,
   adminPipelineAutomationRuleRevisions: (pipelineId: string, ruleId: string) =>
     `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/automation-rules/${encodeURIComponent(ruleId)}/revisions`,
+  // `/revisions` is how the RULE was configured over time. `/activity` is what the rule DID when
+  // it fired - the dispatch outcomes `pipeline_stage_automation_invocations` already records.
+  // Server half tracked separately (ELEC-203 handoff); the client treats its absence as "not
+  // published yet" rather than as a healthy rule.
+  adminPipelineAutomationRuleActivity: (pipelineId: string, ruleId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/automation-rules/${encodeURIComponent(ruleId)}/activity`,
+  // Document templates: the administrator's authoring surface for the layouts the shop and the
+  // crew open on a job, and the same rows the automation catalog offers as a document to generate.
+  adminDocumentTemplates: "/api/v1/admin/document-templates",
+  adminDocumentTemplate: (templateId: string) =>
+    `/api/v1/admin/document-templates/${encodeURIComponent(templateId)}`,
+  adminDocumentTemplateRevisions: (templateId: string) =>
+    `/api/v1/admin/document-templates/${encodeURIComponent(templateId)}/revisions`,
   adminSchemaFields: "/api/v1/admin/schema-fields",
   adminSchemaField: (fieldId: string) =>
     `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}`,

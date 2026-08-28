@@ -6,16 +6,25 @@ import {
   adminPipelineMutationResponseSchema,
   adminPipelineOrderResponseSchema,
   adminPipelineStageMutationResponseSchema,
+  automationActivityResponseSchema,
   automationHistoryResponseSchema,
   automationListResponseSchema,
   automationMutationResponseSchema,
+  documentTemplateHistoryResponseSchema,
+  documentTemplateListResponseSchema,
+  documentTemplateMutationResponseSchema,
   schemaFieldHistoryResponseSchema,
   schemaFieldListResponseSchema,
   schemaFieldMutationResponseSchema,
+  type AdminDocumentTemplate,
   type AdminPipelineListResponse,
+  type AutomationActivityResponse,
   type AutomationHistoryResponse,
   type AutomationListResponse,
   type AutomationWriteInput,
+  type DocumentTemplateHistoryResponse,
+  type DocumentTemplateListResponse,
+  type DocumentTemplateWriteInput,
   type PipelineCreateInput,
   type PipelineRoleGrant,
   type PipelineStageInput,
@@ -317,6 +326,116 @@ export async function loadAutomationHistory(
   });
 }
 
+/**
+ * Document-template authoring. The server owns identity: `create` mints a `template_id` from the
+ * tenant, entity type and human key, and every later command addresses that identifier. A revise
+ * and a retire are the same append-only write with a different `action`, so retiring keeps the
+ * whole revision chain rather than deleting anything.
+ */
+export async function loadDocumentTemplates(
+  entityType = "",
+  fetcher: typeof fetch = fetch,
+): Promise<DocumentTemplateListResponse> {
+  const path = entityType
+    ? `${API_PATHS.adminDocumentTemplates}?entity_type=${encodeURIComponent(entityType)}`
+    : API_PATHS.adminDocumentTemplates;
+  return await apiRequest({ path, schema: documentTemplateListResponseSchema, fetcher });
+}
+
+export async function createDocumentTemplate(
+  session: AuthenticatedSession,
+  input: DocumentTemplateWriteInput,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminDocumentTemplates,
+    method: "POST",
+    body: { ...input, action: "create", active: true },
+    schema: documentTemplateMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("document-template-create"),
+    fetcher,
+  });
+}
+
+export async function reviseDocumentTemplate(
+  session: AuthenticatedSession,
+  templateId: string,
+  input: DocumentTemplateWriteInput,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminDocumentTemplate(templateId),
+    method: "POST",
+    body: { ...input, action: "revise", active: true },
+    schema: documentTemplateMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("document-template-revise"),
+    fetcher,
+  });
+}
+
+/**
+ * Retiring re-sends the stored layout with `active: false`. The server refuses a retire that
+ * carries `active: true`, and it refuses one that lowers the retention policy, so the current
+ * revision is echoed back verbatim rather than reconstructed from form state.
+ */
+export async function retireDocumentTemplate(
+  session: AuthenticatedSession,
+  template: AdminDocumentTemplate,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminDocumentTemplate(template.template_id),
+    method: "POST",
+    body: {
+      entity_type: template.entity_type,
+      template_key: template.template_key,
+      label: template.label,
+      blocks: template.blocks,
+      retention_policy: template.retention_policy,
+      action: "retire",
+      active: false,
+      expected_version: template.version,
+    },
+    schema: documentTemplateMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("document-template-retire"),
+    fetcher,
+  });
+}
+
+export async function loadDocumentTemplateHistory(
+  templateId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DocumentTemplateHistoryResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminDocumentTemplateRevisions(templateId),
+    schema: documentTemplateHistoryResponseSchema,
+    fetcher,
+  });
+}
+
+/**
+ * What a rule actually did when it fired, as opposed to how it was configured.
+ *
+ * SERVER HALF NOT YET IMPLEMENTED (ELEC-203 handoff to `ironwrap-engineer`). The states are
+ * already tracked in `pipeline_stage_automation_invocations`; nothing publishes them yet. The
+ * caller treats a 404 as "this deployment does not serve dispatch outcomes yet" and says so
+ * plainly, rather than reporting a rule as healthy on the strength of a missing route.
+ */
+export async function loadAutomationActivity(
+  pipelineId: string,
+  ruleId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AutomationActivityResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminPipelineAutomationRuleActivity(pipelineId, ruleId),
+    schema: automationActivityResponseSchema,
+    fetcher,
+  });
+}
+
 export function configurationErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError))
     return "That did not go through. Check the connection and try again.";
@@ -351,6 +470,31 @@ export function configurationErrorMessage(error: unknown): string {
     return "Enter a valid validator configuration.";
   if (error.code === "schema_field_visibility_config_invalid")
     return "Enter a valid visibility configuration.";
+  if (error.code === "document_template_binding_required")
+    return "A document needs at least one field block, so it can be filled from the record.";
+  if (error.code === "document_template_binding_invalid")
+    return "One of the chosen fields is not an active field of this record type. Refresh the field list and choose again.";
+  if (error.code === "document_template_field_binding_duplicate")
+    return "The same field is used twice. Each field can appear once in a document.";
+  if (error.code === "document_template_block_markup_invalid")
+    return "Remove the angle brackets from the text. Documents hold plain text, not markup.";
+  if (error.code === "document_template_block_text_invalid")
+    return "Every heading and paragraph needs text.";
+  if (error.code === "document_template_blocks_invalid")
+    return "Add at least one block before saving this document.";
+  if (error.code === "document_template_key_invalid")
+    return "Use a short key of letters, numbers, dots, dashes, colons, or underscores.";
+  if (error.code === "document_template_label_invalid") return "Give this document a name.";
+  if (error.code === "document_template_entity_type_invalid")
+    return "Use a supported record type such as lead or job.";
+  if (error.code === "document_template_retention_hold")
+    return "Retention cannot be reduced once set. Keep the current policy or choose a longer one.";
+  if (error.code === "document_template_retired")
+    return "This document is retired. Its history stays readable, but it cannot be revised.";
+  if (error.code === "document_template_not_found")
+    return "That document no longer exists. Refresh the list.";
+  if (error.code === "document_template_key_exists")
+    return "That document key is already in use for this record type.";
   if (error.code === "csrf_failed") return "Your session moved on. Reload and try again.";
   if (error.code === "invalid_response")
     return "The server returned an invalid configuration response.";

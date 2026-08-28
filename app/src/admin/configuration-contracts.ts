@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { documentBlockSchema, type DocumentBlock } from "../documents/document-contracts";
+
 const nullableText = z.string().min(1).nullable();
 
 export const adminPipelineStageSchema = z
@@ -76,16 +78,34 @@ export const adminPipelineStageMutationResponseSchema = z
 // version the server publishes and echoes back exactly the pair it was offered.
 export const automationCatalogSchema = z
   .object({
-    actions: z.array(z.object({ action: z.string().min(1), label: z.string().min(1) })),
+    actions: z.array(
+      z.object({
+        action: z.string().min(1),
+        label: z.string().min(1),
+        // Which kind of template the action consumes. The server has published it since the
+        // document action was registered; it stays optional so an older deployment still parses.
+        template_source: z.string().min(1).optional(),
+      }),
+    ),
     templates: z.array(
       z.object({
+        // Named `template_key` by the wire contract, but for a document action this carries the
+        // template's IDENTIFIER, not its human key. `automationTemplateOptions` is the only place
+        // that reads it, and it never presents the value to an administrator as a key.
         template_key: z.string().min(1),
         version: z.number().int().positive(),
         label: z.string().min(1),
+        /** The action this entry may be paired with. Absent on a deployment that predates it. */
+        action: z.string().min(1).optional(),
       }),
     ),
     recipient_refs: z.array(z.string().min(1)),
     recipient_configured: z.boolean(),
+    document_generation_configured: z.boolean().optional(),
+    // True when this deployment publishes what a rule DID when it fired, not only how it is
+    // configured. Absent means the outcome route is not served here, and the client shows no
+    // firing surface at all rather than an empty one that reads as "nothing has gone wrong".
+    activity_available: z.boolean().optional(),
   })
   .passthrough();
 
@@ -203,6 +223,127 @@ export const schemaFieldHistoryResponseSchema = z
   })
   .passthrough();
 
+/**
+ * Document templates — the administrator's authoring contract for
+ * `/api/v1/admin/document-templates` (`workers-bus/src/schema-forms-api.ts`).
+ *
+ * A block is the SAME shape the job-card reading surface already renders, so it is imported from
+ * `documents/document-contracts` rather than declared a second time: one model, authored here and
+ * read there, cannot drift apart.
+ *
+ * Two identifiers travel on every row and they are not interchangeable. `template_id` is what the
+ * server addresses a template by — and what an automation rule stores in its `template_key` column.
+ * `template_key` here is the human key an administrator types. Nothing in this client may present
+ * one where the other is meant.
+ */
+export const adminDocumentTemplateSchema = z
+  .object({
+    template_id: z.string().min(1),
+    revision_id: z.string().min(1),
+    version: z.number().int().positive(),
+    prior_revision_id: nullableText,
+    action: z.enum(["create", "revise", "retire"]),
+    entity_type: z.string().min(1),
+    template_key: z.string().min(1),
+    label: z.string().min(1),
+    blocks: z.array(documentBlockSchema),
+    retention_policy: z.string().min(1),
+    active: z.boolean(),
+    actor: z.object({
+      type: z.string().min(1),
+      role: z.string().min(1),
+      id: z.string().min(1),
+      authority_ref: z.string().min(1),
+    }),
+    command_fingerprint: z.string().min(1),
+    effective_at: z.string().min(1),
+    created_at: z.string().min(1),
+  })
+  .passthrough();
+
+export const documentTemplateCatalogSchema = z
+  .object({
+    actions: z.array(z.string().min(1)),
+    block_kinds: z.array(z.string().min(1)),
+    retention_policies: z.array(z.string().min(1)),
+  })
+  .passthrough();
+
+export const documentTemplateListResponseSchema = z
+  .object({
+    version: z.literal(1),
+    catalog: documentTemplateCatalogSchema,
+    templates: z.array(adminDocumentTemplateSchema),
+  })
+  .passthrough();
+
+export const documentTemplateMutationResponseSchema = z
+  .object({ outcome: z.string().min(1), template: adminDocumentTemplateSchema })
+  .passthrough();
+
+export const documentTemplateHistoryResponseSchema = z
+  .object({
+    template_id: z.string().min(1),
+    current_revision_id: z.string().min(1),
+    current_version: z.number().int().positive(),
+    revisions: z.array(adminDocumentTemplateSchema),
+  })
+  .passthrough();
+
+/**
+ * Automation dispatch outcomes — what actually happened when a rule fired.
+ *
+ * `succeeded`, `failed` and `unknown` are three distinct terminal answers, not two. `unknown` is
+ * the effect ledger refusing to claim a delivery it could not verify: the provider may well have
+ * sent the message. Rendering it as either success or failure would be the client inventing an
+ * answer the server deliberately declined to give, so this contract keeps it separate and
+ * `automationOutcomeCopy` gives it its own sentence.
+ */
+export const automationDispatchStatuses = [
+  "pending",
+  "claimed",
+  "retry",
+  "succeeded",
+  "failed",
+  "unknown",
+] as const;
+
+export const automationDispatchSchema = z
+  .object({
+    invocation_id: z.string().min(1),
+    outbox_id: z.string().min(1),
+    transition_id: z.string().min(1),
+    card_id: nullableText,
+    to_stage_id: z.string().min(1),
+    rule_version: z.number().int().positive(),
+    action: z.string().min(1),
+    status: z.enum(automationDispatchStatuses),
+    attempt_count: z.number().int().nonnegative(),
+    result_code: nullableText,
+    created_at: z.string().min(1),
+    updated_at: z.string().min(1),
+    completed_at: nullableText,
+  })
+  .passthrough();
+
+/**
+ * `limit` and `truncated` are how the server refuses to let a WINDOW be mistaken for the whole
+ * record: it publishes the cap it applied and whether it clipped anything, rather than leaving a
+ * client to infer "there is more" from a conveniently full page. Both are optional here only so a
+ * deployment that predates them still parses; when they are absent the client says nothing about
+ * completeness rather than guessing it.
+ */
+export const automationActivityResponseSchema = z
+  .object({
+    version: z.literal(1),
+    pipeline_id: z.string().min(1),
+    rule_id: z.string().min(1),
+    limit: z.number().int().positive().optional(),
+    truncated: z.boolean().optional(),
+    activity: z.array(automationDispatchSchema),
+  })
+  .passthrough();
+
 export type AdminPipelineStage = z.infer<typeof adminPipelineStageSchema>;
 export type PipelineRoleGrant = z.infer<typeof pipelineRoleGrantSchema>;
 export type AdminPipeline = z.infer<typeof adminPipelineSchema>;
@@ -215,6 +356,13 @@ export type SchemaField = z.infer<typeof schemaFieldSchema>;
 export type SchemaFieldCatalog = z.infer<typeof schemaFieldCatalogSchema>;
 export type SchemaFieldListResponse = z.infer<typeof schemaFieldListResponseSchema>;
 export type SchemaFieldHistoryResponse = z.infer<typeof schemaFieldHistoryResponseSchema>;
+export type AdminDocumentTemplate = z.infer<typeof adminDocumentTemplateSchema>;
+export type DocumentTemplateCatalog = z.infer<typeof documentTemplateCatalogSchema>;
+export type DocumentTemplateListResponse = z.infer<typeof documentTemplateListResponseSchema>;
+export type DocumentTemplateHistoryResponse = z.infer<typeof documentTemplateHistoryResponseSchema>;
+export type AutomationDispatch = z.infer<typeof automationDispatchSchema>;
+export type AutomationDispatchStatus = AutomationDispatch["status"];
+export type AutomationActivityResponse = z.infer<typeof automationActivityResponseSchema>;
 
 export interface PipelineStageInput {
   key: string;
@@ -258,6 +406,18 @@ export interface SchemaFieldWriteInput {
   expected_version?: number;
 }
 
+export interface DocumentTemplateWriteInput {
+  entity_type: string;
+  /** The human key. Stable for the life of the template; it is not the identifier a rule stores. */
+  template_key: string;
+  label: string;
+  blocks: DocumentBlock[];
+  retention_policy: string;
+  active?: boolean;
+  action?: "create" | "revise" | "retire";
+  expected_version?: number;
+}
+
 export interface AutomationWriteInput {
   to_stage_id: string;
   action: string;
@@ -292,4 +452,20 @@ export function automationHistoryQueryKey(
 
 export function schemaFieldHistoryQueryKey(tenantId: string, fieldId: string, version: number) {
   return ["admin-schema-field-history", tenantId, fieldId, version] as const;
+}
+
+export function documentTemplateQueryKey(tenantId: string, entityType = "all") {
+  return ["admin-document-templates", tenantId, entityType] as const;
+}
+
+export function documentTemplateHistoryQueryKey(
+  tenantId: string,
+  templateId: string,
+  version: number,
+) {
+  return ["admin-document-template-history", tenantId, templateId, version] as const;
+}
+
+export function automationActivityQueryKey(tenantId: string, pipelineId: string, ruleId: string) {
+  return ["admin-automation-activity", tenantId, pipelineId, ruleId] as const;
 }

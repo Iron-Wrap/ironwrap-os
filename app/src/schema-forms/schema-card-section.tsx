@@ -81,7 +81,11 @@ export function SchemaCardSection({
       </header>
 
       {query.data.offline ? (
-        <p className="text-sm leading-6 text-muted" role="status">
+        <p
+          className="text-sm leading-6 text-muted"
+          role="status"
+          data-testid="schema-card-offline-notice"
+        >
           Showing the copy saved on this device. Values may have changed since you were last online.
         </p>
       ) : null}

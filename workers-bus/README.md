@@ -208,6 +208,7 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/api/v1/schema-fields/{entity_type}/{entity_id}` | current session | server-filtered record fields and current values |
 | POST | `/api/v1/schema-fields/{entity_type}/{entity_id}/{field_id}/values` | current session + CSRF + idempotency | append one field value with expected-version CAS |
 | GET | `/api/v1/schema-fields/{entity_type}/{entity_id}/{field_id}/revisions` | current session | authorized immutable value history for one field |
+| GET | `/api/v1/documents/{entity_type}/{entity_id}` | current session | active current document template LAYOUT for a record the session may read; never values, 404 for an unknown type / another tenant / a role that may not read the record |
 | POST | `/api/v1/document-generations` | owner session + CSRF + idempotency + `APP_DOCUMENT_GENERATION_ENABLED=true` | snapshot authorized inputs, persist intent/attempt, store deterministic immutable HTML in R2, require exact HEAD readback, and optionally atomically bind a server-minted derived attachment receipt |
 | GET | `/api/v1/document-generations/{receipt_id}` | owner session | reconstruct one browser-safe immutable generation receipt, its durable settled reconciliation outcome, and exact input versions |
 | POST | `/api/v1/document-generations/{generation_attempt_id}/reconcile` | owner session + CSRF + idempotency + enabled generation | perform server-side R2 HEAD reconciliation; no browser-supplied provider evidence or implicit retry |

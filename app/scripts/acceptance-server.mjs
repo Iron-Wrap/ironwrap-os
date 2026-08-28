@@ -206,6 +206,37 @@ function schemaCardField(fieldKey, label, position, fieldType, value) {
   };
 }
 
+/**
+ * The documents an administrator authored for a job, as the record document route publishes them
+ * (`GET /api/v1/documents/:entityType/:entityId`). Layout only — headings, prose and bindings.
+ * Values never travel here; the acceptance run joins them from the schema-card fixture above, the
+ * same way the client does, so a binding this reader was not authorized for has nothing to render.
+ *
+ * `fld_margin_band` is deliberately absent from `fixtureJobSchemaCard`: it is the withheld line.
+ */
+const fixtureJobDocuments = {
+  entity_type: "job",
+  entity_id: "roof-job-acceptance",
+  documents: [
+    {
+      template_id: "tpl_materials_list",
+      template_key: "materials_list",
+      label: "Materials list",
+      revision_id: "rev_tpl_materials_1",
+      version: 1,
+      blocks: [
+        { kind: "heading", level: 1, text: "Order for the shop" },
+        { kind: "field", field_id: "fld_roofing.underlayment" },
+        { kind: "field", field_id: "fld_gutters.linear_feet" },
+        { kind: "field", field_id: "fld_gutters.downspouts" },
+        { kind: "field", field_id: "fld_permit_number" },
+        { kind: "field", field_id: "fld_margin_band" },
+        { kind: "text", text: "Confirm counts with the shop before the truck is loaded." },
+      ],
+    },
+  ],
+};
+
 const fixtureJob = {
   ...fixtureEnvelope,
   allowed_actions: ["field.checkin.create", "work_package.acknowledge", "work_package.stop_work"],
@@ -2281,6 +2312,9 @@ const requestListener = async (request, response) => {
   }
   if (requestUrl.pathname === "/api/v1/schema-fields/job/roof-job-acceptance") {
     return sendJson(response, method, 200, fixtureJobSchemaCard);
+  }
+  if (requestUrl.pathname === "/api/v1/documents/job/roof-job-acceptance") {
+    return sendJson(response, method, 200, fixtureJobDocuments);
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
     return sendJson(response, method, 200, buildFixtureJobResponse());

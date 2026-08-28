@@ -74,7 +74,11 @@ test.describe("Schema-driven job card", () => {
     await expect(page.getByRole("heading", { name: "Configured fields" })).toBeVisible();
     await expect(page.getByTestId("schema-field-roofing.underlayment")).toHaveText("Synthetic");
     await expect(page.getByTestId("schema-field-gutters.linear_feet")).toHaveText("142");
-    await expect(page.getByText(/Showing the copy saved on this device/i)).toBeVisible();
+    // Scoped to the card's own section: the documents section below it renders its own offline
+    // notice, and an unscoped page-wide text match resolves to both.
+    await expect(page.getByTestId("schema-card-offline-notice")).toHaveText(
+      /Showing the copy saved on this device/i,
+    );
 
     await testInfo.attach("schema-job-card-offline-390px.png", {
       body: await page.screenshot({

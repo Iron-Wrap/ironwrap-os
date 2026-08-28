@@ -1,5 +1,7 @@
 import { formatFieldDay, formatFieldTimestamp, humanizeFieldName } from "../field/field-formatting";
 import type { FieldDateOptions } from "../field/field-formatting";
+import { ApiError } from "../lib/api";
+import { schemaCardFieldWritable } from "./schema-card-contracts";
 import type {
   SchemaCardEntry,
   SchemaCardFieldDefinition,
@@ -200,4 +202,252 @@ function providerFactLabel(held: unknown): string {
     return provider ? `${rendered} · from ${provider}` : rendered;
   }
   return typeof held === "string" ? held : "Recorded";
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Writing a value back (ELEC-193)
+ * ---------------------------------------------------------------------------
+ *
+ * The same rule governs this half as the read half: the server decides, this file presents. What
+ * follows turns three server-published facts — `writable`, `field_type`, `offline_mode` — into an
+ * affordance, shapes a control's value into the type the field declares, and gives the server's
+ * refusal codes words a crew member can act on. It never decides who may write, and it never
+ * re-implements a validator.
+ */
+
+/** Types whose value is an immutable receipt, produced by a capture flow rather than typed. */
+const EVIDENCE_FIELD_TYPES = new Set(["image", "attachment", "provider_fact"]);
+
+export type SchemaCardReadOnlyReason = "not_writable" | "evidence_capture" | "needs_connection";
+
+export type SchemaCardEditability =
+  | { kind: "editable"; queueable: boolean }
+  | { kind: "read_only"; reason: SchemaCardReadOnlyReason };
+
+/**
+ * Whether to draw an edit control for this field, and why not when the answer is no.
+ *
+ * `writable` is the only authority input, and it is the server's own derivation of the two
+ * conditions the write route enforces. The card does not look at roles, does not draw a control
+ * and let a write bounce off a 403, and treats an absent flag as "no" — the three postures #200
+ * refused to choose between, now settled by the server answering the question.
+ *
+ * The other two refusals are not about authority at all. An evidence field's value is a receipt
+ * the server issues, so there is a real edit path and it is not a text box. An `online_only` or
+ * `offline_read` field is one an administrator marked as needing a live connection to write, so
+ * offline the control says so instead of accepting an entry that could never be queued.
+ */
+export function schemaCardEditability(
+  entry: SchemaCardEntry,
+  options: { online: boolean },
+): SchemaCardEditability {
+  if (!schemaCardFieldWritable(entry)) return { kind: "read_only", reason: "not_writable" };
+  if (EVIDENCE_FIELD_TYPES.has(entry.definition.field_type))
+    return { kind: "read_only", reason: "evidence_capture" };
+  const queueable = entry.definition.offline_mode === "queueable";
+  if (!options.online && !queueable) return { kind: "read_only", reason: "needs_connection" };
+  return { kind: "editable", queueable };
+}
+
+export const schemaCardReadOnlyCopy: Record<SchemaCardReadOnlyReason, string | null> = {
+  // Silence on purpose. A crew member reading a card where some fields carry a control and others
+  // do not has already been told; adding "you may not edit this" to every other row spends a phone
+  // screen restating an absence.
+  not_writable: null,
+  evidence_capture: "Recorded from a photo, a file, or a linked system.",
+  needs_connection: "This field needs a connection before it can be changed.",
+};
+
+/**
+ * Whether changing this field must be recorded as an explicit correction rather than a plain
+ * resubmission, once someone else has moved it underneath.
+ *
+ * Both halves are read off the definition the record view already publishes. An evidence-classed
+ * field carries a claim someone may later have to defend, and a non-standard retention policy is
+ * an administrator saying this record is kept for a reason beyond convenience. Overwriting either
+ * silently would leave the audit trail describing only the last person to type.
+ *
+ * Append-only storage means both values survive either way. What the correction adds is WHY: the
+ * server records `based_on_value_revision_id` and `correction_reason` on the new revision, and the
+ * card renders them (`schemaCardCorrectionNote`) so the trail is visible where the work happens.
+ */
+export function schemaCardRequiresCorrection(definition: SchemaCardFieldDefinition): boolean {
+  return definition.evidence_class !== "none" || definition.retention_policy !== "standard";
+}
+
+/** The correction lineage on a value, when it has one, as one readable line. */
+export function schemaCardCorrectionNote(value: SchemaCardValue | null): string | null {
+  if (!value?.based_on_value_revision_id) return null;
+  const reason = value.correction_reason?.trim();
+  return reason ? `Corrected: ${reason}` : "Corrected";
+}
+
+/**
+ * The value a control should start from — always a string or a string array, because that is what
+ * a DOM control holds. `formatSchemaCardValue` is for reading; this is for editing, and the two
+ * differ deliberately: an editor must round-trip, so it shows `142`, never `142` formatted into a
+ * locale's thousands separators.
+ */
+export function schemaCardControlValue(
+  definition: SchemaCardFieldDefinition,
+  value: SchemaCardValue | null,
+): string | string[] | boolean {
+  const held = schemaValueIsEmpty(value) ? null : (value as SchemaCardValue).value;
+  switch (definition.field_type) {
+    case "boolean":
+      return held === true;
+    case "multiselect":
+      return Array.isArray(held)
+        ? held.filter((item): item is string => typeof item === "string")
+        : [];
+    case "money":
+      return typeof held === "number" && Number.isFinite(held) ? (held / 100).toFixed(2) : "";
+    case "datetime":
+      return typeof held === "string" ? localDateTimeInput(held) : "";
+    default:
+      return typeof held === "string" ? held : typeof held === "number" ? String(held) : "";
+  }
+}
+
+export type SchemaCardWireValue = { ok: true; value: unknown } | { ok: false; message: string };
+
+/**
+ * Turn what a control holds into the JSON the field's type declares.
+ *
+ * This is encoding, not validation. The only way it refuses is when the entry cannot be expressed
+ * as the declared type at all — letters in a number box, a date the calendar could not produce.
+ * Everything a person could reasonably mean but an administrator has ruled out (a required field
+ * left empty, a value outside a configured range, an option not on the list) goes to the server
+ * and comes back as that server's own refusal, because those rules are configuration and change
+ * without this file changing.
+ */
+export function schemaCardWireValue(
+  definition: SchemaCardFieldDefinition,
+  raw: string | string[] | boolean,
+): SchemaCardWireValue {
+  if (definition.field_type === "boolean") return { ok: true, value: raw === true };
+  if (definition.field_type === "multiselect")
+    return { ok: true, value: Array.isArray(raw) ? raw : [] };
+  const text = typeof raw === "string" ? raw.trim() : "";
+  // An emptied control means "this field holds nothing". The server decides whether that is
+  // allowed — a `required` validator refuses it, everything else accepts it.
+  if (text === "") return { ok: true, value: null };
+  switch (definition.field_type) {
+    case "integer": {
+      const parsed = Number(text);
+      if (!Number.isSafeInteger(parsed)) return { ok: false, message: "Enter a whole number." };
+      return { ok: true, value: parsed };
+    }
+    case "number": {
+      const parsed = Number(text);
+      if (!Number.isFinite(parsed)) return { ok: false, message: "Enter a number." };
+      return { ok: true, value: parsed };
+    }
+    case "money": {
+      const parsed = Number(text);
+      if (!Number.isFinite(parsed)) return { ok: false, message: "Enter an amount." };
+      // Money crosses the wire as minor units, matching the server's integer columns.
+      const minorUnits = Math.round(parsed * 100);
+      if (!Number.isSafeInteger(minorUnits))
+        return { ok: false, message: "Enter a smaller amount." };
+      return { ok: true, value: minorUnits };
+    }
+    case "datetime": {
+      const isoValue = canonicalDateTime(text);
+      if (!isoValue) return { ok: false, message: "Enter a date and a time." };
+      return { ok: true, value: isoValue };
+    }
+    default:
+      return { ok: true, value: text };
+  }
+}
+
+/**
+ * The server's refusal, in words that say what to do next.
+ *
+ * The record routes answer a refused command as `{ error: <code>, ...detail }` with no prose, so
+ * the code is the identity of the refusal and this table is only its wording. A code with no entry
+ * falls through to whatever the server did send rather than to a shrug, so a rule added on the
+ * server after this shipped still reaches the person holding the phone.
+ */
+export function schemaCardWriteRefusal(
+  error: unknown,
+  definition: SchemaCardFieldDefinition,
+): string {
+  if (!(error instanceof ApiError)) return "This value could not be saved. Try again.";
+  switch (error.code) {
+    case "schema_field_required":
+      return `${definition.label} cannot be left empty.`;
+    case "schema_field_email_invalid":
+      return "Enter an email address, like name@example.com.";
+    case "schema_field_phone_invalid":
+      return "Enter a phone number with 7 to 32 digits.";
+    case "schema_field_nonnegative_invalid":
+      return "Enter zero or more.";
+    case "schema_field_option_invalid":
+      return "Choose one of the listed options.";
+    case "schema_field_range_invalid":
+      return rangeRefusal(definition);
+    case "schema_field_date_invalid":
+    case "schema_field_datetime_invalid":
+      return "Enter a real date.";
+    case "schema_field_value_type_invalid":
+      return `${definition.label} does not accept what was entered.`;
+    case "schema_field_write_forbidden":
+    case "schema_field_assignment_forbidden":
+      return "Your role cannot change this field. Ask the office to record it.";
+    case "schema_field_not_visible":
+      return "This field no longer applies to this job. Reload the card.";
+    case "schema_field_retired":
+      return "An administrator removed this field. Reload the card.";
+    case "schema_field_definition_stale":
+      return "An administrator changed this field while you were entering it. Reload the card and enter it again.";
+    case "schema_field_correction_reason_required":
+    case "schema_field_correction_reference_required":
+      return "Say what you are correcting and why before saving.";
+    case "schema_field_value_version_conflict":
+      return "Someone else changed this field while you were entering it.";
+    case "csrf_failed":
+      return "Your session expired. Sign in again, then re-enter this value.";
+    default:
+      // The record routes answer `{ error: <code> }` with no prose, so `ApiError.message` on one
+      // of them is only the HTTP reason phrase — "Bad Request" tells a crew member nothing and the
+      // code at least gives the office something to look up. Everything else that can land here
+      // (a dropped connection, a timeout) carries a message written for this app, so it is used.
+      return error.code.startsWith("schema_field_")
+        ? `${definition.label} was refused (${error.code}). Tell the office what you were entering.`
+        : error.message;
+  }
+}
+
+function rangeRefusal(definition: SchemaCardFieldDefinition): string {
+  const { min, max } = definition.validator_config;
+  const low = typeof min === "number" ? min : null;
+  const high = typeof max === "number" ? max : null;
+  if (low !== null && high !== null) return `Enter a number between ${low} and ${high}.`;
+  if (low !== null) return `Enter ${low} or more.`;
+  if (high !== null) return `Enter ${high} or less.`;
+  return "Enter a number inside the allowed range.";
+}
+
+/**
+ * `datetime-local` gives `YYYY-MM-DDTHH:mm`; the server takes canonical UTC to the millisecond.
+ * The device's own zone is what does the conversion, which is right for the crew member standing
+ * on the roof and the reason the card shows the stored value back through the same conversion.
+ */
+function canonicalDateTime(local: string): string | null {
+  const parsed = new Date(local);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function localDateTimeInput(isoValue: string): string {
+  const parsed = new Date(isoValue);
+  if (!Number.isFinite(parsed.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return (
+    `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}` +
+    `T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
+  );
 }

@@ -796,6 +796,59 @@ describe("offline outbox", () => {
     ).rejects.toThrow("Only field check-ins can include attachments.");
   });
 
+  it("accepts a configured-field value only on the governed record-value route", async () => {
+    const value = {
+      field_definition_revision_id: "rev_permit_number_1",
+      expected_version: 1,
+      value: "CAL-2026-8891",
+      based_on_value_revision_id: null,
+      correction_reason: null,
+    };
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "schema_field_value",
+        endpoint: "/api/v1/schema-fields/job/JOB-A",
+        payload: value,
+      }),
+    ).rejects.toThrow("cannot be queued for offline replay");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "schema_field_value",
+        endpoint: "/api/v1/schema-fields/job/JOB-A/fld_permit/values",
+        payload: { ...value, expected_version: "1" },
+      }),
+    ).rejects.toThrow("version is required");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "schema_field_value",
+        endpoint: "/api/v1/schema-fields/job/JOB-A/fld_permit/values",
+        payload: { ...value, tenant_hint: "tenant-a" },
+      }),
+    ).rejects.toThrow("payload is invalid");
+    // A correction without its reason is refused by the server too. Catching it here keeps a
+    // half-formed one from waiting in the queue for a network only to be rejected on arrival.
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "schema_field_value",
+        endpoint: "/api/v1/schema-fields/job/JOB-A/fld_permit/values",
+        payload: { ...value, based_on_value_revision_id: "val_1" },
+      }),
+    ).rejects.toThrow("both the value it replaces and a reason");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "schema_field_value",
+        endpoint: "/api/v1/schema-fields/job/JOB-A/fld_permit/values",
+        payload: value,
+        attachments: [{ blob: new Blob(["photo"]), fileName: "roof.jpg" }],
+      }),
+    ).rejects.toThrow("Only field check-ins can include attachments.");
+  });
+
   it("rejects invalid state jumps and payload secrets", async () => {
     expect(() => assertTransition("saved_locally", "verified")).toThrow(
       "Invalid outbox transition",

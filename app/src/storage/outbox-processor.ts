@@ -27,6 +27,22 @@ const verifiedResponseSchema = z.object({
   cursor: z.string().min(1).optional(),
 });
 
+/**
+ * The governed record-value route answers `{ outcome, value }`, not the field-action envelope
+ * (`workers-bus/src/schema-forms-api.ts:427`). It predates the outbox and is used by online
+ * callers too, so it is not going to grow a second shape to satisfy this client.
+ *
+ * Accepting its own answer costs nothing that the envelope was buying. What the envelope proves is
+ * "the server verified THIS exact saved item", and here the same proof comes from the route's
+ * idempotency: the upload sends `Idempotency-Key: <deviceActionId>`, so a first send and every
+ * replay of it resolve to one value revision. `outcome: "replayed"` is that guarantee answering
+ * out loud, which is why it counts as verified rather than as a duplicate.
+ */
+const schemaFieldValueResponseSchema = z.object({
+  outcome: z.enum(["created", "replayed"]),
+  value: z.object({ value_revision_id: z.string().min(1) }).passthrough(),
+});
+
 export interface FlushOutboxOptions {
   fetcher?: typeof fetch;
   csrfToken?: string | (() => string | undefined);
@@ -188,11 +204,16 @@ async function uploadAction(
   });
   if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
   let body: BodyInit;
-  if (action.kind === "inventory_command" || action.kind === "inventory_scan") {
+  if (
+    action.kind === "inventory_command" ||
+    action.kind === "inventory_scan" ||
+    action.kind === "schema_field_value"
+  ) {
     headers.set("Content-Type", "application/json");
     // Inventory routes accept the durable business-intent body directly.
     // Wrapping it in the generic field-action envelope would hide the
-    // transition and make replay unverifiable.
+    // transition and make replay unverifiable. The record-value route is the
+    // same case: its body IS the governed command the server fingerprints.
     body = JSON.stringify(action.payload);
   } else if (action.attachments.length === 0 && action.kind !== "field_checkin") {
     headers.set("Content-Type", "application/json");
@@ -251,6 +272,21 @@ async function uploadAction(
   }
 
   if (response.ok) {
+    if (action.kind === "schema_field_value") {
+      const value = schemaFieldValueResponseSchema.safeParse(await safeJson(response));
+      if (!value.success) {
+        return {
+          ok: false,
+          failure: attentionFailure(
+            "verification_mismatch",
+            "The server answered, but did not confirm this exact saved value. Nothing was discarded.",
+            now,
+            response.status,
+          ),
+        };
+      }
+      return { ok: true, serverRef: value.data.value.value_revision_id };
+    }
     const parsed = verifiedResponseSchema.safeParse(await safeJson(response));
     if (!parsed.success || parsed.data.device_action_id !== action.deviceActionId) {
       return {

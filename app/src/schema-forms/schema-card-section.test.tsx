@@ -21,8 +21,10 @@ const dateOptions = { locale: "en-CA", timeZone: "America/Edmonton" };
 function entry(
   overrides: Partial<SchemaCardFieldDefinition>,
   value: unknown = undefined,
+  writable = false,
 ): SchemaCardEntry {
   return {
+    writable,
     definition: {
       field_id: `fld_${overrides.field_key ?? "default"}`,
       field_key: "permit_number",

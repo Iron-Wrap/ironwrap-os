@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "../lib/api";
 import type { SchemaCardEntry, SchemaCardFieldDefinition } from "./schema-card-contracts";
 import {
   applyControllingVisibility,
   formatSchemaCardValue,
   groupSchemaCardEntries,
+  schemaCardControlValue,
+  schemaCardCorrectionNote,
+  schemaCardEditability,
+  schemaCardRequiresCorrection,
+  schemaCardWireValue,
+  schemaCardWriteRefusal,
   schemaValueIsEmpty,
 } from "./schema-card-presentation";
 
@@ -265,5 +272,216 @@ describe("presenting a governed value", () => {
     expect(schemaValueIsEmpty(entry({}, []).value)).toBe(true);
     expect(schemaValueIsEmpty(entry({}, "Charcoal").value)).toBe(false);
     expect(formatSchemaCardValue(definition(), null, dateOptions)).toBe("Not recorded");
+  });
+});
+
+/** A field the server said this caller may write. Absent means "no" everywhere else. */
+function writable(
+  definitionOverrides: Partial<SchemaCardFieldDefinition> = {},
+  value: unknown = undefined,
+): SchemaCardEntry {
+  return { ...entry(definitionOverrides, value), writable: true } as SchemaCardEntry;
+}
+
+function wire(
+  definitionOverrides: Partial<SchemaCardFieldDefinition>,
+  raw: string | string[] | boolean,
+) {
+  return schemaCardWireValue(definition(definitionOverrides), raw);
+}
+
+describe("deciding whether to draw an edit control", () => {
+  it("offers an edit only where the server said this caller may write", () => {
+    expect(schemaCardEditability(writable(), { online: true })).toEqual({
+      kind: "editable",
+      queueable: false,
+    });
+  });
+
+  it("draws nothing on a field the server did not mark writable", () => {
+    expect(schemaCardEditability(entry({}), { online: true })).toEqual({
+      kind: "read_only",
+      reason: "not_writable",
+    });
+  });
+
+  it("treats a missing flag as a refusal rather than a permission", () => {
+    // A server that has not shipped the flag, a cached card written by an older client, and a
+    // field this role genuinely may not write are indistinguishable here. Failing closed is the
+    // only reading of all three that never invents an edit the server would reject.
+    const stale = { ...entry({}) } as SchemaCardEntry & { writable?: boolean };
+    delete stale.writable;
+    expect(schemaCardEditability(stale, { online: true }).kind).toBe("read_only");
+  });
+
+  it("reads the flag only where #202 publishes it, and does not honour it anywhere else", () => {
+    // A `writable` on the definition is a different server's idea of the contract. Honouring it
+    // would be guessing at authority, which is the whole thing this flag exists to stop.
+    const misplaced = {
+      ...entry({}),
+      definition: { ...definition({}), writable: true },
+    } as SchemaCardEntry;
+    expect(schemaCardEditability(misplaced, { online: true })).toEqual({
+      kind: "read_only",
+      reason: "not_writable",
+    });
+  });
+
+  it("keeps evidence fields read-only, because their value is a receipt and not something typed", () => {
+    for (const fieldType of ["image", "attachment", "provider_fact"]) {
+      expect(schemaCardEditability(writable({ field_type: fieldType }), { online: true })).toEqual({
+        kind: "read_only",
+        reason: "evidence_capture",
+      });
+    }
+  });
+
+  it("still offers a queueable field with no signal, because that is the whole point", () => {
+    expect(
+      schemaCardEditability(writable({ offline_mode: "queueable" }), { online: false }),
+    ).toEqual({ kind: "editable", queueable: true });
+  });
+
+  it("says a field an administrator marked online-only cannot be entered without signal", () => {
+    expect(
+      schemaCardEditability(writable({ offline_mode: "online_only" }), { online: false }),
+    ).toEqual({ kind: "read_only", reason: "needs_connection" });
+  });
+});
+
+describe("deciding how a change must be recorded once someone else moved the field", () => {
+  it("lets an ordinary field be replaced", () => {
+    expect(schemaCardRequiresCorrection(definition({}))).toBe(false);
+  });
+
+  it("requires an explicit correction on an evidence-classed field", () => {
+    expect(schemaCardRequiresCorrection(definition({ evidence_class: "physical" }))).toBe(true);
+  });
+
+  it("requires an explicit correction on a field an administrator kept beyond standard retention", () => {
+    expect(schemaCardRequiresCorrection(definition({ retention_policy: "legal_hold" }))).toBe(true);
+    expect(schemaCardRequiresCorrection(definition({ retention_policy: "extended" }))).toBe(true);
+  });
+
+  it("renders the correction the server recorded, so the trail is visible on the card", () => {
+    const corrected = entry({}, "18");
+    expect(schemaCardCorrectionNote(corrected.value)).toBeNull();
+    expect(
+      schemaCardCorrectionNote({
+        ...corrected.value!,
+        based_on_value_revision_id: "val_1",
+        correction_reason: "Measured again after the tear-off",
+      }),
+    ).toBe("Corrected: Measured again after the tear-off");
+  });
+});
+
+describe("shaping what a control holds into what the field's type declares", () => {
+  it("round-trips a value into an editor without a reader's formatting", () => {
+    // 1_450_00 minor units reads as "$1,450.00" but must edit as "1450.00".
+    expect(
+      schemaCardControlValue(definition({ field_type: "money" }), entry({}, 145_000).value),
+    ).toBe("1450.00");
+    expect(
+      schemaCardControlValue(definition({ field_type: "integer" }), entry({}, 142).value),
+    ).toBe("142");
+    expect(
+      schemaCardControlValue(definition({ field_type: "boolean" }), entry({}, true).value),
+    ).toBe(true);
+    expect(
+      schemaCardControlValue(
+        definition({ field_type: "multiselect" }),
+        entry({}, ["a", "b"]).value,
+      ),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("sends money as the minor units the server stores", () => {
+    expect(wire({ field_type: "money" }, "1450.55")).toEqual({ ok: true, value: 145_055 });
+  });
+
+  it("sends an emptied control as nothing and lets the server rule on it", () => {
+    // A `required` validator refuses null; anything else accepts it. That is configuration an
+    // administrator can change without this file changing, so it is never decided here.
+    expect(wire({ field_type: "text", validator_key: "required" }, "  ")).toEqual({
+      ok: true,
+      value: null,
+    });
+  });
+
+  it("refuses only what cannot be expressed as the declared type at all", () => {
+    expect(wire({ field_type: "integer" }, "14.5")).toMatchObject({ ok: false });
+    expect(wire({ field_type: "number" }, "not a number")).toMatchObject({ ok: false });
+  });
+
+  it("does not second-guess a configured rule it could have checked locally", () => {
+    // 500 is outside the configured range. The server owns that refusal, so the value goes.
+    expect(
+      wire(
+        { field_type: "integer", validator_key: "range", validator_config: { min: 1, max: 100 } },
+        "500",
+      ),
+    ).toEqual({ ok: true, value: 500 });
+  });
+
+  it("sends a datetime as the canonical UTC the server accepts", () => {
+    const shaped = wire({ field_type: "datetime" }, "2026-08-28T14:30");
+    expect(shaped).toMatchObject({ ok: true });
+    expect(String((shaped as { value: unknown }).value)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+  });
+});
+
+describe("saying what the server refused, in words a crew member can act on", () => {
+  function refusalFor(code: string, definitionOverrides: Partial<SchemaCardFieldDefinition> = {}) {
+    return schemaCardWriteRefusal(
+      new ApiError({ status: 400, code, message: "Bad Request" }),
+      definition(definitionOverrides),
+    );
+  }
+
+  it("names the field an administrator marked required", () => {
+    expect(refusalFor("schema_field_required", { label: "Permit number" })).toContain(
+      "Permit number",
+    );
+  });
+
+  it("quotes the administrator's own range rather than a generic complaint", () => {
+    expect(
+      refusalFor("schema_field_range_invalid", {
+        validator_key: "range",
+        validator_config: { min: 1, max: 100 },
+      }),
+    ).toBe("Enter a number between 1 and 100.");
+  });
+
+  it("tells a crew member to ask the office when their role cannot write the field", () => {
+    expect(refusalFor("schema_field_write_forbidden")).toMatch(/ask the office/i);
+  });
+
+  it("tells them to reload when an administrator changed the field underneath", () => {
+    expect(refusalFor("schema_field_definition_stale")).toMatch(/reload the card/i);
+  });
+
+  it("passes a code it has never seen through instead of shrugging", () => {
+    // A rule added on the server after this shipped still has to reach the person holding the
+    // phone, even if only as the code the office can look up.
+    expect(refusalFor("schema_field_some_future_rule")).toContain("schema_field_some_future_rule");
+  });
+});
+
+describe("saying what stopped a write that never reached a rule", () => {
+  it("keeps the connection message written for this app rather than restating a code", () => {
+    expect(
+      schemaCardWriteRefusal(
+        new ApiError({
+          status: 0,
+          code: "network_error",
+          message: "No connection to IronWrap OS. Your saved work stays on this device.",
+        }),
+        definition({}),
+      ),
+    ).toMatch(/No connection to IronWrap OS/);
   });
 });

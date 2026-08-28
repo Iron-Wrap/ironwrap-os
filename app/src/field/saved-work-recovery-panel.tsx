@@ -151,20 +151,42 @@ const actionNames: Record<OutboxAction["kind"], string> = {
   fleet_pre_trip_inspection: "Pre-trip inspection",
   fleet_post_trip_inspection: "Post-trip inspection",
   fleet_defect_report: "Fault report",
+  schema_field_value: "Configured field",
 };
 
 function actionLabel(action: OutboxAction): string {
   const workPackageId = workPackageIdFromPayload(action);
   const assetId = fleetAssetIdFromEndpoint(action.endpoint);
   const jobId = jobIdFromEndpoint(action.endpoint);
+  const record = schemaRecordFromEndpoint(action.endpoint);
   return [
     actionNames[action.kind],
     workPackageId ? `plan ${workPackageId}` : null,
     assetId ? `vehicle ${assetId}` : null,
     jobId ? `job ${jobId}` : null,
+    record ? `${record.entityType} ${record.entityId}` : null,
   ]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
+}
+
+/**
+ * A saved configured-field value names the record it belongs to, not the field.
+ *
+ * The route carries the field ID, and an ID is not something a crew member can act on — the label
+ * an administrator gave the field lives on the card, which is where the office will look. Naming
+ * the record is what makes "which of my saved items is this" answerable from this panel.
+ */
+function schemaRecordFromEndpoint(
+  endpoint: string,
+): { entityType: string; entityId: string } | undefined {
+  const match = endpoint.match(/^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/[^/]+\/values$/);
+  if (!match?.[1] || !match[2]) return undefined;
+  try {
+    return { entityType: decodeURIComponent(match[1]), entityId: decodeURIComponent(match[2]) };
+  } catch {
+    return { entityType: match[1], entityId: match[2] };
+  }
 }
 
 function workPackageIdFromPayload(action: OutboxAction): string | undefined {

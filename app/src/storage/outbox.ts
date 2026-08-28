@@ -31,12 +31,24 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
   fleet_pre_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/pre-trip-inspections$/,
   fleet_post_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/post-trip-inspections$/,
   fleet_defect_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/defects$/,
+  // /api/v1/schema-fields/{entityType}/{entityId}/{fieldId}/values — the governed record-value
+  // write route (`workers-bus/src/schema-forms-api.ts:65`). The field id is the third segment.
+  schema_field_value: /^\/api\/v1\/schema-fields\/[^/?#]+\/[^/?#]+\/[^/?#]+\/values$/,
 };
 const WORK_PACKAGE_ID_MAX_LENGTH = 140;
 const STOP_WORK_REASON_MAX_LENGTH = 1_000;
 const FLEET_ASSET_ID_MAX_LENGTH = 140;
 const FLEET_TEXT_MAX_LENGTH = 1_200;
 const FLEET_INSPECTION_ITEM_LIMIT = 60;
+const SCHEMA_REVISION_REF_MAX_LENGTH = 220;
+const SCHEMA_CORRECTION_REASON_MAX_LENGTH = 1_000;
+const schemaFieldValueKeys = [
+  "field_definition_revision_id",
+  "expected_version",
+  "value",
+  "based_on_value_revision_id",
+  "correction_reason",
+] as const;
 const fleetInspectionKinds = new Set<OutboxActionKind>([
   "fleet_pre_trip_inspection",
   "fleet_post_trip_inspection",
@@ -176,6 +188,30 @@ export async function retryOutboxAction(
     throw new Error("This saved item needs office review and cannot be retried safely.");
   }
   return queueOutboxAction(deviceActionId, now);
+}
+
+/**
+ * Every saved action of one kind for this device user that has not been verified yet.
+ *
+ * A surface that queued its own work needs to show what it is still holding. The verified ones are
+ * deliberately excluded: they are already facts on the server, and the next read of that record
+ * carries them, so repeating them from the queue would show the same value twice.
+ */
+export async function listOutboxActionsByKind(
+  principal: { tenantId: string; userId: string },
+  kind: OutboxActionKind,
+): Promise<OutboxAction[]> {
+  const database = await getDatabase();
+  const actions = await database.getAll("outbox_actions");
+  return actions
+    .filter(
+      (action) =>
+        action.kind === kind &&
+        action.state !== "verified" &&
+        action.tenantId === principal.tenantId &&
+        action.userId === principal.userId,
+    )
+    .sort((left, right) => left.createdAt - right.createdAt);
 }
 
 /**
@@ -504,10 +540,55 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   }
   if (fleetInspectionKinds.has(input.kind)) assertFleetInspectionPayload(input.payload);
   if (input.kind === "fleet_defect_report") assertFleetDefectPayload(input.payload);
+  if (input.kind === "schema_field_value") assertSchemaFieldValuePayload(input.payload);
   for (const attachment of input.attachments ?? []) {
     if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
   }
   assertNoSessionSecrets(input.payload);
+}
+
+/**
+ * The exact command the record-value route takes, and nothing else.
+ *
+ * This is a shape guard, not a validator: the field's own rules (required, options, range, type)
+ * are configuration the SERVER owns and enforces, and re-deriving them here would let a client
+ * refuse a value an administrator had just made legal. What it does refuse is a payload that could
+ * not possibly replay — a missing concurrency token, a lineage reference without its reason, or an
+ * extra key that would change the command fingerprint the server keys idempotency on.
+ */
+function assertSchemaFieldValuePayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  const keys = Object.keys(value);
+  if (
+    keys.length !== schemaFieldValueKeys.length ||
+    schemaFieldValueKeys.some((key) => !(key in value))
+  ) {
+    throw new Error("Configured field payload is invalid.");
+  }
+  assertBoundedText(
+    value.field_definition_revision_id,
+    "Field definition revision",
+    SCHEMA_REVISION_REF_MAX_LENGTH,
+  );
+  if (
+    typeof value.expected_version !== "number" ||
+    !Number.isInteger(value.expected_version) ||
+    value.expected_version < 0 ||
+    value.expected_version > 1_000_000
+  ) {
+    throw new Error("Configured field version is required.");
+  }
+  const basedOn = value.based_on_value_revision_id;
+  const reason = value.correction_reason;
+  if (basedOn !== null)
+    assertBoundedText(basedOn, "Correction reference", SCHEMA_REVISION_REF_MAX_LENGTH);
+  if (reason !== null)
+    assertBoundedText(reason, "Correction reason", SCHEMA_CORRECTION_REASON_MAX_LENGTH);
+  // The server refuses one without the other. Catching it here keeps a half-formed correction from
+  // sitting in the queue until it reaches a network only to be rejected.
+  if ((basedOn === null) !== (reason === null)) {
+    throw new Error("A correction needs both the value it replaces and a reason.");
+  }
 }
 
 function assertWorkPackageAcknowledgementPayload(payload: unknown, typedScope = false): void {

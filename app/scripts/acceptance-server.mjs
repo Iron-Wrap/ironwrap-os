@@ -151,27 +151,67 @@ const fixtureOperatingIntake = {
  * run exercises more than one service type on a single job, plus a dependent field whose
  * controlling value does not match — the server would omit that one, and this fixture omits it the
  * same way rather than letting the client decide.
+ *
+ * `writable` is the server's derived per-field answer (ELEC-192): computed there from the caller's
+ * role against the field's `write_roles`, published here as the finished boolean. The crew role
+ * this fixture signs in as may write four of these fields and not the fifth, which is what lets
+ * the acceptance run prove both the edit affordance and its absence on one card.
+ *
+ * The values are mutable because the write half needs somewhere to land. State resets per process
+ * or through `POST /__acceptance/schema-card/reset`.
  */
-const fixtureJobSchemaCard = {
-  entity_type: "job",
-  entity_id: "roof-job-acceptance",
-  fields: [
-    schemaCardField(
-      "roofing.deck_condition",
-      "Deck condition",
-      0,
-      "text",
-      "Sound, two soft sheets",
-    ),
-    schemaCardField("roofing.underlayment", "Underlayment", 1, "text", "Synthetic"),
-    schemaCardField("gutters.linear_feet", "Linear feet", 2, "integer", 142),
-    schemaCardField("gutters.downspouts", "Downspouts", 3, "integer", 6),
-    schemaCardField("permit_number", "Permit number", 4, "text", null),
-  ],
-};
-
-function schemaCardField(fieldKey, label, position, fieldType, value) {
+function freshJobSchemaCard() {
   return {
+    entity_type: "job",
+    entity_id: "roof-job-acceptance",
+    fields: [
+      // Evidence-classed: a change to it after someone else moved it must be recorded as an
+      // explicit correction, not a replacement.
+      schemaCardField("roofing.deck_condition", "Deck condition", 0, "text", {
+        value: "Sound, two soft sheets",
+        writable: true,
+        evidenceClass: "physical",
+        offlineMode: "queueable",
+      }),
+      schemaCardField("roofing.underlayment", "Underlayment", 1, "text", {
+        value: "Synthetic",
+        writable: true,
+        offlineMode: "queueable",
+      }),
+      schemaCardField("gutters.linear_feet", "Linear feet", 2, "integer", {
+        value: 142,
+        writable: true,
+        offlineMode: "queueable",
+        validatorKey: "range",
+        validatorConfig: { min: 1, max: 400 },
+      }),
+      schemaCardField("gutters.downspouts", "Downspouts", 3, "integer", { value: 6 }),
+      schemaCardField("permit_number", "Permit number", 4, "text", {
+        value: null,
+        writable: true,
+        offlineMode: "queueable",
+      }),
+      // Readable by the crew, writable only by the office. The card must render it with no edit
+      // control at all rather than one that 403s.
+      schemaCardField("office_notes", "Office notes", 5, "text", {
+        value: "Invoice on completion",
+      }),
+    ],
+  };
+}
+
+function schemaCardField(fieldKey, label, position, fieldType, options = {}) {
+  const {
+    value = null,
+    writable = false,
+    evidenceClass = "none",
+    retentionPolicy = "standard",
+    offlineMode = "offline_read",
+    validatorKey = "none",
+    validatorConfig = {},
+  } = options;
+  return {
+    writable,
     definition: {
       field_id: `fld_${fieldKey}`,
       field_key: fieldKey,
@@ -180,19 +220,19 @@ function schemaCardField(fieldKey, label, position, fieldType, value) {
       label,
       position,
       field_type: fieldType,
-      validator_key: "none",
-      validator_config: {},
+      validator_key: validatorKey,
+      validator_config: validatorConfig,
       visibility_key: "always",
       visibility_config: {},
-      evidence_class: "none",
-      retention_policy: "standard",
-      offline_mode: "offline_read",
+      evidence_class: evidenceClass,
+      retention_policy: retentionPolicy,
+      offline_mode: offlineMode,
     },
     value:
       value === null
         ? null
         : {
-            value_revision_id: `val_${fieldKey}`,
+            value_revision_id: `val_${fieldKey}_1`,
             field_definition_revision_id: `rev_${fieldKey}`,
             version: 1,
             prior_value_revision_id: null,
@@ -212,7 +252,9 @@ function schemaCardField(fieldKey, label, position, fieldType, value) {
  * Values never travel here; the acceptance run joins them from the schema-card fixture above, the
  * same way the client does, so a binding this reader was not authorized for has nothing to render.
  *
- * `fld_margin_band` is deliberately absent from `fixtureJobSchemaCard`: it is the withheld line.
+ * `fld_margin_band` is deliberately absent from the schema-card fixture: it is the withheld line.
+ * `fld_office_notes` is present there but bound by no block here, so a field the crew may read and
+ * not write stays a card concern and never becomes a document line.
  */
 const fixtureJobDocuments = {
   entity_type: "job",
@@ -236,6 +278,69 @@ const fixtureJobDocuments = {
     },
   ],
 };
+
+let jobSchemaCardState = freshJobSchemaCard();
+
+/**
+ * The governed record-value write, close enough to `recordSchemaFieldValue` for the acceptance run
+ * to exercise the client against real refusals: role authority, the administrator's own validator,
+ * and the optimistic-concurrency token. Everything it refuses, it refuses with the server's own
+ * error code, because the client's copy is written against those codes and not against prose.
+ */
+function handleSchemaCardWrite(fieldId, body) {
+  const entry = jobSchemaCardState.fields.find((field) => field.definition.field_id === fieldId);
+  if (!entry) return jsonFixtureResponse(404, { error: "schema_field_not_found" });
+  if (!entry.writable) return jsonFixtureResponse(403, { error: "schema_field_write_forbidden" });
+
+  const currentVersion = entry.value?.version ?? 0;
+  if (body?.expected_version !== currentVersion) {
+    return jsonFixtureResponse(409, {
+      error: "schema_field_value_version_conflict",
+      expected_version: body?.expected_version ?? null,
+      current_version: currentVersion,
+    });
+  }
+
+  const basedOn = body?.based_on_value_revision_id ?? null;
+  const reason = body?.correction_reason ?? null;
+  if ((basedOn === null) !== (reason === null)) {
+    return jsonFixtureResponse(400, {
+      error:
+        basedOn === null
+          ? "schema_field_correction_reference_required"
+          : "schema_field_correction_reason_required",
+    });
+  }
+
+  const { validator_key: validatorKey, validator_config: validatorConfig } = entry.definition;
+  const submitted = body?.value ?? null;
+  if (validatorKey === "required" && (submitted === null || submitted === "")) {
+    return jsonFixtureResponse(400, { error: "schema_field_required" });
+  }
+  if (validatorKey === "range" && submitted !== null) {
+    const numeric = Number(submitted);
+    const belowMinimum = validatorConfig.min !== undefined && numeric < validatorConfig.min;
+    const aboveMaximum = validatorConfig.max !== undefined && numeric > validatorConfig.max;
+    if (!Number.isFinite(numeric) || belowMinimum || aboveMaximum) {
+      return jsonFixtureResponse(400, { error: "schema_field_range_invalid" });
+    }
+  }
+
+  const version = currentVersion + 1;
+  entry.value = {
+    value_revision_id: `val_${entry.definition.field_key}_${version}`,
+    field_definition_revision_id: entry.definition.revision_id,
+    version,
+    prior_value_revision_id: entry.value?.value_revision_id ?? null,
+    based_on_value_revision_id: basedOn,
+    correction_reason: reason,
+    value: submitted,
+    value_digest: `digest_${entry.definition.field_key}_${version}`,
+    provenance_actor_type: "worker",
+    created_at: isoNow(),
+  };
+  return jsonFixtureResponse(201, { outcome: "created", value: entry.value });
+}
 
 const fixtureJob = {
   ...fixtureEnvelope,
@@ -407,6 +512,7 @@ let fieldMutableState = freshFieldMutableState();
 
 function resetFieldMutableState() {
   fieldMutableState = freshFieldMutableState();
+  jobSchemaCardState = freshJobSchemaCard();
 }
 
 function isoNow() {
@@ -1008,6 +1114,16 @@ async function routeFieldMutation(request, requestUrl) {
   }
   if (requestUrl.pathname === "/api/v1/safety/actions") {
     return handleSafetyActionRoute(request);
+  }
+  if (requestUrl.pathname === "/__acceptance/schema-card/reset") {
+    jobSchemaCardState = freshJobSchemaCard();
+    return jsonFixtureResponse(200, { ok: true });
+  }
+  const schemaWrite = requestUrl.pathname.match(
+    /^\/api\/v1\/schema-fields\/job\/roof-job-acceptance\/([^/]+)\/values$/,
+  );
+  if (schemaWrite) {
+    return handleSchemaCardWrite(decodeURIComponent(schemaWrite[1]), await readJsonBody(request));
   }
   return null;
 }
@@ -2311,7 +2427,7 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 200, fixtureOperatingIntake);
   }
   if (requestUrl.pathname === "/api/v1/schema-fields/job/roof-job-acceptance") {
-    return sendJson(response, method, 200, fixtureJobSchemaCard);
+    return sendJson(response, method, 200, jobSchemaCardState);
   }
   if (requestUrl.pathname === "/api/v1/documents/job/roof-job-acceptance") {
     return sendJson(response, method, 200, fixtureJobDocuments);

@@ -15,6 +15,10 @@ const PHONE = { width: 390, height: 844 };
 
 test.describe("Documents on the job workflow surface", () => {
   test.beforeEach(async ({ page }) => {
+    // The card's values are mutable now that the crew can write them back (ELEC-193), and these
+    // assertions read those same values through the document's bindings. Resetting makes this
+    // spec independent of whether a write-back run happened to go first.
+    await page.request.post("/__acceptance/schema-card/reset");
     await seedPairedFieldDevice(page);
   });
 

@@ -9,7 +9,7 @@ import { ApiError } from "../lib/api";
 import { loadPipelineBoard, loadPipelines, moveCardToStage, undoCardMove } from "./pipeline-api";
 import type { BoardStage, PipelineBoardResponse, PipelineListResponse } from "./pipeline-contracts";
 import { SalesPipelineBoardPage } from "./pipeline-board-page";
-import { UNDO_WINDOW_MS } from "./pipeline-board-model";
+import { applyOptimisticMove, UNDO_WINDOW_MS } from "./pipeline-board-model";
 
 vi.mock("./pipeline-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./pipeline-api")>();
@@ -157,8 +157,14 @@ describe("PipelineBoardPage", () => {
   beforeEach(() => {
     vi.mocked(loadPipelines).mockResolvedValue(pipelineList);
     vi.mocked(loadPipelineBoard).mockResolvedValue(boardModel());
-    vi.mocked(moveCardToStage).mockResolvedValue({ transition_id: "tr-1" });
-    vi.mocked(undoCardMove).mockResolvedValue({ transition_id: "tr-2" });
+    // The shape `transitionPayload` actually answers with: flat, and carrying the card's
+    // version AFTER the move — the token the undo route demands back.
+    vi.mocked(moveCardToStage).mockResolvedValue({
+      transition_id: "tr-1",
+      card_version: 8,
+      undo_window_seconds: 30,
+    });
+    vi.mocked(undoCardMove).mockResolvedValue({ transition_id: "tr-2", card_version: 9 });
   });
 
   it("renders every seeded stage as its own column with counts and roll-ups", async () => {
@@ -247,9 +253,38 @@ describe("PipelineBoardPage", () => {
     expect(moveCardToStage).not.toHaveBeenCalled();
   });
 
-  it("rolls the optimistic move back and says why when the server refuses the role", async () => {
+  it("rolls the optimistic move back and renders the exact role the server reserved the stage for", async () => {
     vi.mocked(moveCardToStage).mockRejectedValue(
-      new ApiError({ status: 403, code: "stage_entry_role_required", message: "refused" }),
+      new ApiError({
+        status: 403,
+        code: "stage_entry_role_required",
+        message: "refused",
+        details: { required_role: "production" },
+      }),
+    );
+    renderBoard();
+    const { user, dialog } = await openMoveMenuFor("Naina Tamang");
+
+    await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
+
+    // The server named the stage and the role. Neither is swallowed into "move failed".
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /Your role cannot move a card into Quote Sent — it is reserved for production/,
+    );
+    const needQuote = screen.getByRole("region", { name: "Need Quote column" });
+    expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();
+  });
+
+  // Acceptance criterion 2: a stale-version move renders the server's exact blocker,
+  // including the version the server says the card is actually on.
+  it("rolls back and reports the stale-version blocker with the server's own version", async () => {
+    vi.mocked(moveCardToStage).mockRejectedValue(
+      new ApiError({
+        status: 409,
+        code: "pipeline_card_version_conflict",
+        message: "conflict",
+        details: { card_version: 9 },
+      }),
     );
     renderBoard();
     const { user, dialog } = await openMoveMenuFor("Naina Tamang");
@@ -257,22 +292,8 @@ describe("PipelineBoardPage", () => {
     await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Your role cannot move a card into that stage/,
+      /Someone else changed this card first — it is now at version 9\. The board has been refreshed/,
     );
-    const needQuote = screen.getByRole("region", { name: "Need Quote column" });
-    expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();
-  });
-
-  it("rolls back and reports a version conflict instead of leaving a stale card in place", async () => {
-    vi.mocked(moveCardToStage).mockRejectedValue(
-      new ApiError({ status: 409, code: "pipeline_card_version_conflict", message: "conflict" }),
-    );
-    renderBoard();
-    const { user, dialog } = await openMoveMenuFor("Naina Tamang");
-
-    await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Someone else changed this card/);
     const needQuote = screen.getByRole("region", { name: "Need Quote column" });
     expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();
   });
@@ -307,10 +328,14 @@ describe("PipelineBoardPage", () => {
     await user.click(undo);
 
     await waitFor(() => expect(undoCardMove).toHaveBeenCalledTimes(1));
+    // `expectedVersion` is the card's version AFTER the move. Without it `handleUndo`
+    // answers 400 `invalid_pipeline_transition` before it looks at anything else, so this
+    // assertion is the difference between a working Undo and a button that never worked.
     expect(vi.mocked(undoCardMove).mock.calls[0]?.[1]).toMatchObject({
       pipelineId: "pipe-sales",
       cardId: "card-quote",
       transitionId: "tr-1",
+      expectedVersion: 8,
     });
   });
 
@@ -459,25 +484,175 @@ describe("PipelineBoardPage", () => {
     expect(within(dialog).getByRole("button", { name: /Deposit/ })).toBeDisabled();
   });
 
-  it("keeps the board readable when the pipeline list is empty", async () => {
+  // Acceptance criterion 4. The fail-closed empty state is the SERVER's answer, not a
+  // client-side filter: `GET /api/v1/pipelines` is deny-by-default (`canViewPipeline`), so
+  // a role that owns nothing and was granted nothing gets an empty list, and the board
+  // read is never even attempted.
+  it("renders the fail-closed empty state for a role the server grants no pipeline", async () => {
     vi.mocked(loadPipelines).mockResolvedValue({ ...pipelineList, pipelines: [] });
     renderBoard();
 
     expect(await screen.findByText("No pipeline yet")).toBeVisible();
+    expect(screen.getByText(/An administrator adds one in Settings/)).toBeVisible();
+    expect(loadPipelineBoard).not.toHaveBeenCalled();
   });
 
-  it("keeps sales scoped to an empty board when no returned pipeline is sales-owned", async () => {
+  /**
+   * The counterpart to the criterion above, and the reason the old `owning_role` filter had
+   * to go. Since 0122 an administrator can grant one role write on ONE other pipeline —
+   * "the shop board is read by production and written by ops". The server puts that board
+   * in this session's list; a client that re-filtered by `owning_role` would drop it and
+   * make the administrator's configuration unreachable.
+   */
+  it("opens a board the administrator granted this role, instead of hiding it", async () => {
     const salesPipeline = pipelineList.pipelines[0]!;
     vi.mocked(loadPipelines).mockResolvedValue({
       ...pipelineList,
       pipelines: [
-        { ...salesPipeline, pipeline_id: "pipe-owner", owning_role: "owner" },
-        { ...salesPipeline, pipeline_id: "pipe-ops", owning_role: "ops" },
+        { ...salesPipeline, pipeline_id: "pipe-shop", name: "Shop", owning_role: "production" },
       ],
     });
+    vi.mocked(loadPipelineBoard).mockResolvedValue(
+      boardModel({
+        pipeline: {
+          pipeline_id: "pipe-shop",
+          key: "shop",
+          name: "Shop",
+          owning_role: "production",
+        },
+      }),
+    );
     renderBoard();
 
-    expect(await screen.findByText("No pipeline yet")).toBeVisible();
-    expect(loadPipelineBoard).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "Shop" })).toBeVisible();
+    expect(loadPipelineBoard).toHaveBeenCalledWith("pipe-shop");
+    expect(screen.queryByText("No pipeline yet")).toBeNull();
+  });
+
+  // An account may hold any number of pipelines, so the switcher is not owner-only: a
+  // salesperson who works two boards reaches the second one here.
+  it("switches between every board the server returned for this role", async () => {
+    const salesPipeline = pipelineList.pipelines[0]!;
+    vi.mocked(loadPipelines).mockResolvedValue({
+      ...pipelineList,
+      pipelines: [
+        salesPipeline,
+        { ...salesPipeline, pipeline_id: "pipe-resale", key: "resale", name: "Material resale" },
+      ],
+    });
+    vi.mocked(loadPipelineBoard).mockImplementation(async (pipelineId: string) =>
+      boardModel({
+        pipeline:
+          pipelineId === "pipe-resale"
+            ? { pipeline_id: "pipe-resale", key: "resale", name: "Material resale" }
+            : { pipeline_id: "pipe-sales", key: "sales", name: "Sales · Marketing Pipeline" },
+      }),
+    );
+    const user = userEvent.setup();
+    renderBoard();
+
+    // Sales opens on the board Sales owns, and the other one is one control away.
+    expect(
+      await screen.findByRole("heading", { name: "Sales · Marketing Pipeline" }),
+    ).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Pipeline" }), "pipe-resale");
+
+    expect(await screen.findByRole("heading", { name: "Material resale" })).toBeVisible();
+    expect(loadPipelineBoard).toHaveBeenCalledWith("pipe-resale");
+  });
+
+  /**
+   * `can_enter` is the server's own decision on the stage, folding the move right and
+   * `min_role_to_enter` together. It wins over the client's mirror of the same rule — an
+   * administrator restricting a stage must land on the board without a client release.
+   */
+  it("locks a stage the server closed, even when the client's own rule would open it", async () => {
+    vi.mocked(loadPipelineBoard).mockResolvedValue(
+      boardModel({
+        stages: [
+          stage("new_lead", "New Lead", 0, { card_count: 1 }),
+          stage("visit_booked", "Visit Booked", 1),
+          stage("need_quote", "Need Quote", 2, { card_count: 1, total_amount_cents: 400_000 }),
+          // No `min_role_to_enter`, so the client's fallback would say "open".
+          stage("quote_sent", "Quote Sent", 3, { can_enter: false }),
+        ],
+      }),
+    );
+    renderBoard();
+    const { dialog } = await openMoveMenuFor("Naina Tamang");
+
+    expect(within(dialog).getByRole("button", { name: /Quote Sent/ })).toBeDisabled();
+    expect(within(dialog).getByLabelText("Restricted stage")).toBeVisible();
+  });
+
+  // Acceptance criterion 3, end to end against a server that actually moves the card.
+  it("restores the card to its previous stage when the move is undone", async () => {
+    let state = boardModel();
+    vi.mocked(loadPipelineBoard).mockImplementation(async () => structuredClone(state));
+    vi.mocked(moveCardToStage).mockImplementation(async (_session, input) => {
+      state = applyOptimisticMove(state, input.cardId, input.toStageId);
+      return { transition_id: "tr-1", card_version: 8, undo_window_seconds: 30 };
+    });
+    vi.mocked(undoCardMove).mockImplementation(async (_session, input) => {
+      state = applyOptimisticMove(state, input.cardId, "need_quote");
+      return { transition_id: "tr-2", card_version: 9 };
+    });
+    renderBoard();
+    const { user, dialog } = await openMoveMenuFor("Naina Tamang");
+
+    await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
+    await screen.findByText("Moved to Quote Sent");
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Quote Sent column" })).getByRole("heading", {
+          name: "Naina Tamang",
+        }),
+      ).toBeVisible(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByText("Move undone. Card is back in Need Quote.")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Need Quote column" })).getByRole("heading", {
+          name: "Naina Tamang",
+        }),
+      ).toBeVisible(),
+    );
+  });
+
+  it("renders the undo route's own blocker rather than a generic failure", async () => {
+    vi.mocked(undoCardMove).mockRejectedValue(
+      new ApiError({
+        status: 409,
+        code: "pipeline_undo_window_expired",
+        message: "expired",
+        details: { undo_window_seconds: 30 },
+      }),
+    );
+    renderBoard();
+    const { user, dialog } = await openMoveMenuFor("Naina Tamang");
+    await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
+    await screen.findByText("Moved to Quote Sent");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /undo window of 30 seconds has closed\. Move the card back to Need Quote instead/,
+    );
+  });
+
+  // No version, no undo we could actually perform: offering the button would only produce
+  // a 400 from `handleUndo`.
+  it("offers no Undo when the server's response carried no card version", async () => {
+    vi.mocked(moveCardToStage).mockResolvedValue({ transition_id: "tr-1" });
+    renderBoard();
+    const { user, dialog } = await openMoveMenuFor("Naina Tamang");
+
+    await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
+
+    expect(await screen.findByText("Moved to Quote Sent")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 });

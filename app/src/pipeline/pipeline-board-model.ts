@@ -1,10 +1,13 @@
+import { ApiError } from "../lib/api";
 import type { AppRole } from "../lib/roles";
 import type {
   BoardCard,
   BoardStage,
   CardSummary,
   CardTemplateBinding,
+  CardTransitionResponse,
   PipelineBoardResponse,
+  PipelineSummary,
 } from "./pipeline-contracts";
 
 /**
@@ -52,20 +55,43 @@ export function canMoveCards(allowedActions: readonly string[]): boolean {
 }
 
 /**
- * Whether this actor may enter a stage at all. `min_role_to_enter` is unset on every
- * M1-seeded stage, so this only bites once an administrator restricts one in M3.
+ * Whether this actor may enter a stage at all.
  *
- * The client mirrors the rule; it does not own it. A stage the client thinks is open
- * can still come back `403 stage_entry_role_required`, and the optimistic move is
- * rolled back when it does.
+ * The server answers this question itself on every stage of the board read (`can_enter`,
+ * `buildPipelineBoardReadModel`), and its answer WINS: an administrator who restricts a
+ * stage, or grants a role write on one pipeline only (0122 role grants), must land on the
+ * board without a client release. The role comparison below is only the fallback for a
+ * payload that carried no `can_enter`, and it stays a mirror of the rule, never its owner
+ * — a stage the client thinks is open can still come back `403 stage_entry_role_required`,
+ * and the optimistic move is rolled back when it does.
  */
 export function canEnterStage(
   role: AppRole,
-  stage: Pick<BoardStage, "min_role_to_enter">,
+  stage: Pick<BoardStage, "min_role_to_enter" | "can_enter">,
 ): boolean {
+  if (typeof stage.can_enter === "boolean") return stage.can_enter;
   if (!stage.min_role_to_enter) return true;
   if (role === "owner" || role === "ops") return true;
   return role === stage.min_role_to_enter;
+}
+
+/**
+ * Which board a role app opens on when the account holds several.
+ *
+ * The list route is already role-scoped and deny-by-default (`canViewPipeline`), so this
+ * does NOT filter: hiding a board the administrator deliberately granted to this role
+ * would make a configured grant unreachable, and client-side hiding was never the
+ * authority anyway. It only decides the default selection — a role app opens on the board
+ * this role owns, and reaches the rest through the switcher.
+ */
+export function preferredPipeline(
+  pipelines: readonly PipelineSummary[],
+  role: AppRole,
+  selectedPipelineId: string | null,
+): PipelineSummary | undefined {
+  const selected = pipelines.find((pipeline) => pipeline.pipeline_id === selectedPipelineId);
+  if (selected) return selected;
+  return pipelines.find((pipeline) => pipeline.owning_role === role) ?? pipelines[0];
 }
 
 /**
@@ -108,6 +134,238 @@ function skippedStageCount(fromStage: BoardStage | undefined, toStage: BoardStag
   if (!fromStage) return "a stage";
   const skipped = toStage.position - fromStage.position - 1;
   return skipped === 1 ? "one stage" : `${skipped} stages`;
+}
+
+// ---------------------------------------------------------------------------
+// What the server refused, and what the person holding the phone should do next
+// ---------------------------------------------------------------------------
+
+/**
+ * The card version a committed transition leaves behind.
+ *
+ * The route answers with a flat `card_version` (`transitionPayload`); the nested `card`
+ * shape is read too so an older server still yields a usable token. This is the value the
+ * undo route requires back as `expected_version` — reading it wrong is not a cosmetic
+ * miss, it is an undo that always 400s.
+ */
+export function cardVersionAfterTransition(
+  response: Pick<CardTransitionResponse, "card_version" | "card">,
+): number | undefined {
+  if (typeof response.card_version === "number") return response.card_version;
+  const nested = response.card?.version;
+  return typeof nested === "number" ? nested : undefined;
+}
+
+/**
+ * How long to leave Undo on screen. The client's own window (5s) is deliberately shorter
+ * than the server's, and when the server names its window on the response we clamp to
+ * whichever is shorter so the button can never outlive the acceptance behind it.
+ */
+export function undoWindowMs(serverWindowSeconds?: number): number {
+  if (typeof serverWindowSeconds !== "number" || !Number.isFinite(serverWindowSeconds)) {
+    return UNDO_WINDOW_MS;
+  }
+  return Math.max(0, Math.min(UNDO_WINDOW_MS, Math.round(serverWindowSeconds * 1_000)));
+}
+
+export interface MoveBlocker {
+  /** The server's own blocker code, kept so the surface can branch and a test can assert it. */
+  code: string;
+  /** What the person sees. Always says where the card ended up. */
+  message: string;
+  /** `confirm` means the server wants the explicit confirmation step, not an error toast. */
+  outcome: "confirm" | "refused";
+  /** True when re-reading the board is what makes the next attempt work. */
+  refresh: boolean;
+}
+
+/**
+ * Every refusal the transition route can answer with, rendered as the exact blocker rather
+ * than one generic "something went wrong".
+ *
+ * The codes are transcribed from `workers-bus/src/pipeline-board-api.ts`; the details the
+ * server attaches to them (`required_role`, `card_version`) are read back out of the error
+ * body so the message names the actual reason, not a category of reason.
+ */
+export function describeMoveBlocker(
+  error: unknown,
+  context: { toStageName?: string },
+): MoveBlocker {
+  const stage = context.toStageName ?? "that stage";
+  if (!(error instanceof ApiError)) {
+    return {
+      code: "unknown_error",
+      message: "The move did not go through. The card stayed where it was.",
+      outcome: "refused",
+      refresh: false,
+    };
+  }
+  if (error.code === "confirmation_required") {
+    return { code: error.code, message: "", outcome: "confirm", refresh: false };
+  }
+  switch (error.code) {
+    case "pipeline_card_version_conflict": {
+      const version = error.detailNumber("card_version");
+      return {
+        code: error.code,
+        message: `Someone else changed this card first${
+          version === undefined ? "" : ` — it is now at version ${version}`
+        }. The board has been refreshed; check the card and move it again.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    }
+    case "stage_entry_role_required": {
+      const required = error.detailText("required_role");
+      return {
+        code: error.code,
+        message: `Your role cannot move a card into ${stage}${
+          required === undefined ? "" : ` — it is reserved for ${required}`
+        }. The card stayed where it was.`,
+        outcome: "refused",
+        refresh: false,
+      };
+    }
+    case "pipeline_move_forbidden":
+      return {
+        code: error.code,
+        message:
+          "You can read this board but not move its cards. Ask the office for the move permission on this pipeline.",
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_transition_noop":
+      return {
+        code: error.code,
+        message: `The card is already in ${stage}. Nothing was changed.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_entity_type_mismatch":
+      return {
+        code: error.code,
+        message: "This card does not belong on this board. The card stayed where it was.",
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_entity_not_found":
+    case "not_found":
+      return {
+        code: error.code,
+        message: "This card or stage no longer exists on the board. The board has been refreshed.",
+        outcome: "refused",
+        refresh: true,
+      };
+    case "invalid_pipeline_transition":
+    case "invalid_pipeline_card":
+      return {
+        code: error.code,
+        message:
+          "The board sent a move this server would not accept. Refresh the board and try again.",
+        outcome: "refused",
+        refresh: true,
+      };
+    case "csrf_failed":
+      return {
+        code: error.code,
+        message: "Your session expired. Sign in again — the card stayed where it was.",
+        outcome: "refused",
+        refresh: false,
+      };
+    default:
+      return {
+        code: error.code,
+        message: fallbackMoveMessage(error, "The card stayed where it was."),
+        outcome: "refused",
+        refresh: error.status === 409,
+      };
+  }
+}
+
+/**
+ * The undo route's own refusals. It has more of them than the move does — the window, the
+ * origin stage and the actor are all re-checked at undo time — and every one of them is a
+ * different next step for the person, so none of them may collapse into "could not undo".
+ */
+export function describeUndoBlocker(
+  error: unknown,
+  context: { fromStageName?: string },
+): MoveBlocker {
+  const stage = context.fromStageName ?? "its previous stage";
+  if (!(error instanceof ApiError)) {
+    return {
+      code: "unknown_error",
+      message: "The move could not be undone. The card is still where the move put it.",
+      outcome: "refused",
+      refresh: false,
+    };
+  }
+  switch (error.code) {
+    case "pipeline_undo_window_expired": {
+      const seconds = error.detailNumber("undo_window_seconds");
+      return {
+        code: error.code,
+        message: `The undo window${
+          seconds === undefined ? "" : ` of ${seconds} seconds`
+        } has closed. Move the card back to ${stage} instead.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    }
+    case "pipeline_undo_superseded":
+    case "pipeline_stage_changed":
+      return {
+        code: error.code,
+        message: `This card has moved again since then, so the undo no longer applies. Move it back to ${stage} instead.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_undo_actor_forbidden":
+      return {
+        code: error.code,
+        message:
+          "Only the person who made this move, or the account owner, can undo it. The card stayed where it is.",
+        outcome: "refused",
+        refresh: false,
+      };
+    case "pipeline_undo_not_undoable":
+      return {
+        code: error.code,
+        message: "An undo cannot itself be undone. Move the card if it is in the wrong stage.",
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_undo_origin_unknown":
+      return {
+        code: error.code,
+        message: `This card had no earlier stage to return to. Move it to ${stage} if that is where it belongs.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    case "pipeline_card_version_conflict": {
+      const version = error.detailNumber("card_version");
+      return {
+        code: error.code,
+        message: `Someone else changed this card first${
+          version === undefined ? "" : ` — it is now at version ${version}`
+        }, so the undo was refused. The board has been refreshed.`,
+        outcome: "refused",
+        refresh: true,
+      };
+    }
+    default:
+      return {
+        code: error.code,
+        message: fallbackMoveMessage(error, "The move could not be undone."),
+        outcome: "refused",
+        refresh: error.status === 409,
+      };
+  }
+}
+
+function fallbackMoveMessage(error: ApiError, fallback: string): string {
+  if (error.status === 0) return "No connection to IronWrap OS. The card stayed where it was.";
+  return error.message ? `${error.message} ${fallback}`.trim() : fallback;
 }
 
 export function stageById(stages: readonly BoardStage[], stageId: string): BoardStage | undefined {

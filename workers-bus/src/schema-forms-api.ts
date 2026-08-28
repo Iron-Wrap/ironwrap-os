@@ -11,6 +11,7 @@ import {
   getSchemaFieldDefinition,
   listAuthorizedSchemaFieldValues,
   listSchemaFieldDefinitionRevisions,
+  recordReadableByActor,
   listSchemaFieldDefinitions,
   listSchemaFieldValueRevisions,
   recordSchemaFieldValue,
@@ -54,6 +55,7 @@ import { knownEntityType } from "./pipeline-board-store.ts";
 const ADMIN_FIELDS = "/api/v1/admin/schema-fields";
 const ADMIN_TEMPLATES = "/api/v1/admin/document-templates";
 const RECORD_FIELDS = "/api/v1/schema-fields";
+const RECORD_DOCUMENTS = "/api/v1/documents";
 const DOCUMENT_GENERATIONS = "/api/v1/document-generations";
 const MAX_BODY_BYTES = 32 * 1024;
 
@@ -64,6 +66,7 @@ const ADMIN_TEMPLATE_REVISIONS_ROUTE = /^\/api\/v1\/admin\/document-templates\/(
 const RECORD_VALUES_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)$/;
 const RECORD_VALUE_WRITE_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/values$/;
 const RECORD_VALUE_REVISIONS_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/revisions$/;
+const RECORD_DOCUMENTS_ROUTE = /^\/api\/v1\/documents\/([^/]+)\/([^/]+)$/;
 const DOCUMENT_GENERATION_RECONCILE_ROUTE = /^\/api\/v1\/document-generations\/([^/]+)\/reconcile$/;
 const DOCUMENT_GENERATION_ROUTE = /^\/api\/v1\/document-generations\/([^/]+)$/;
 
@@ -78,8 +81,11 @@ export async function handleSchemaFormsRoute(
   const administration = path === ADMIN_FIELDS || path.startsWith(`${ADMIN_FIELDS}/`) ||
     path === ADMIN_TEMPLATES || path.startsWith(`${ADMIN_TEMPLATES}/`);
   const records = path === RECORD_FIELDS || path.startsWith(`${RECORD_FIELDS}/`);
+  // Record document reads are deliberately NOT part of `generations`: authoring and generating a
+  // document are owner-only commands, reading the layout the owner authored is not.
+  const documents = path === RECORD_DOCUMENTS || path.startsWith(`${RECORD_DOCUMENTS}/`);
   const generations = path === DOCUMENT_GENERATIONS || path.startsWith(`${DOCUMENT_GENERATIONS}/`);
-  if (!administration && !records && !generations) return null;
+  if (!administration && !records && !documents && !generations) return null;
 
   if (administration && auth.session.role !== "owner")
     return json({ error: "schema_configuration_forbidden" }, 403);
@@ -107,6 +113,8 @@ export async function handleSchemaFormsRoute(
     if (valueWrite) return await recordValueWrite(req, env, auth, valueWrite.slice(1), now);
     const values = path.match(RECORD_VALUES_ROUTE);
     if (values) return await recordValues(req, env, auth, values.slice(1));
+    const documentsRead = path.match(RECORD_DOCUMENTS_ROUTE);
+    if (documentsRead) return await recordDocuments(req, env, auth, documentsRead.slice(1));
 
     if (path === DOCUMENT_GENERATIONS) return await documentGenerationRoot(req, env, auth, now);
     const reconcile = path.match(DOCUMENT_GENERATION_RECONCILE_ROUTE);
@@ -404,6 +412,60 @@ async function recordValues(
       value: value ? recordValueView(value) : null,
     })),
   });
+}
+
+/**
+ * The record-scoped document read: what the shop and the crew open on the job.
+ *
+ * It publishes an administrator's document LAYOUT and nothing else.  Values stay on
+ * `GET /api/v1/schema-fields/:entityType/:entityId`, which is the one read that applies per-field
+ * authority; a second route carrying values would be a second, weaker path to the same data.  So a
+ * reader who may read the record receives every active document bound to its entity type - blocks
+ * included - and joins the values their record read already decided they may have.
+ *
+ * Absence is a 404 in three cases that a reader must not be able to tell apart: an entity type
+ * nobody registers, a record in another tenant, and a role that may not read this kind of record
+ * at all.  A record that exists and simply carries no document answers `200` with an empty array.
+ */
+async function recordDocuments(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  segments: string[],
+): Promise<Response> {
+  if (req.method !== "GET") return json({ error: "not_found" }, 404);
+  const scope = recordScope(segments);
+  if (!scope) return json({ error: "not_found" }, 404);
+  const readable = await recordReadableByActor(
+    env,
+    auth.session.tenant_id,
+    scope.entityType,
+    scope.entityId,
+    sessionActor(auth),
+  );
+  if (!readable) return json({ error: "not_found" }, 404);
+  const templates = await listDocumentTemplates(env, auth.session.tenant_id, scope.entityType);
+  return json({
+    entity_type: scope.entityType,
+    entity_id: scope.entityId,
+    documents: templates.filter((template) => template.active).map(recordDocumentView),
+  });
+}
+
+/**
+ * The authoring coordinates a reader has no use for - action, actor, fingerprint, effective_at,
+ * retention - stay on `adminTemplateView`. `blocks` travels verbatim: it is the same
+ * `DocumentTemplateBlock[]` `renderDocumentTemplate` consumes, in authored order.
+ */
+function recordDocumentView(template: DocumentTemplateRevision): Record<string, unknown> {
+  return {
+    template_id: template.template_id,
+    template_key: template.template_key,
+    label: template.label,
+    revision_id: template.revision_id,
+    version: template.version,
+    blocks: template.blocks,
+  };
 }
 
 async function recordValueWrite(

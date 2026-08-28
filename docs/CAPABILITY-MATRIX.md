@@ -887,9 +887,25 @@ Target gaps:
   The owner-only command composes the universal effect ledger with immutable R2 PUT plus exact HEAD
   checksum/size/content-type readback; ambiguous outcomes remain unknown until server reconciliation,
   and verified output can atomically create a server-minted derived attachment receipt/value. The
-  capability is false in every checked-in environment. The document PWA, merge/exact-main evidence,
-  named-environment activation/readback, deployed runtime, business acceptance, and customer proof
-  remain open;
+  capability is false in every checked-in environment. The PWA carries the reader half on the job
+  workflow surface (`app/src/documents/`): it resolves an administrator's template layout against
+  the reader's authority-filtered record values and never renders a value the record read withheld.
+  That reader now has a server source. `GET /api/v1/documents/{entity_type}/{entity_id}`
+  (`recordDocuments`, `workers-bus/src/schema-forms-api.ts`) publishes active current template
+  revisions for the session's tenant to whoever may already read the record, gated by
+  `recordReadableByActor` - the same record-level gate `listAuthorizedSchemaFieldValues` applies,
+  extracted so the two reads cannot drift. It carries LAYOUT only: no block carries a value, so it
+  cannot become a second, weaker path to data that
+  `GET /api/v1/schema-fields/{entity_type}/{entity_id}` already governs per field, and a reader
+  missing authority on a bound field still receives the block for the client to mark withheld. An
+  unknown entity type, a record outside the tenant, and a role that may not read that kind of
+  record are one indistinguishable 404; a record that carries none is `200` with an empty array.
+  `POST /api/v1/document-generations` stays owner-only and unchanged.
+  `workers-bus/test/record-documents-api.test.ts` parses real handler responses with the client's
+  own `entityDocumentsResponseSchema`, so the two halves are proven to agree rather than assumed
+  to; see [`RECORD-DOCUMENTS-READ-CONTRACT.md`](RECORD-DOCUMENTS-READ-CONTRACT.md). Authoring
+  templates in the PWA, merge/exact-main evidence, named-environment activation/readback, deployed
+  runtime, business acceptance, and customer proof remain open;
 - the office command palette itself: `GET /api/v1/search` answers, but no PWA shortcut, grouped
   result list, or keyboard navigation consumes it yet;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;

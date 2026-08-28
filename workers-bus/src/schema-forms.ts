@@ -996,6 +996,30 @@ async function assertProviderEvidenceReceipt(
     fail("schema_field_provider_receipt_required");
 }
 
+/**
+ * The record-level half of the read gate: may this actor read THIS record at all, before any
+ * per-field decision is taken.  `listAuthorizedSchemaFieldValues` applies it and then narrows
+ * field by field; a reader that fails here is told nothing about the record, which is why the
+ * routes above it answer 404 rather than 403.
+ *
+ * It exists as its own export so a second record-scoped read cannot invent a parallel authority
+ * vocabulary: `GET /api/v1/documents/:entityType/:entityId` publishes an administrator's document
+ * LAYOUT to whoever may already read the record, and calls exactly this.  Per-field authority is
+ * deliberately NOT part of it - a layout binding a field the reader may not see still reaches
+ * them, and the value is simply absent from their record read.
+ */
+export async function recordReadableByActor(
+  env: AppEnv,
+  tenantId: string,
+  entityType: string,
+  entityId: string,
+  actor: SchemaFieldActor,
+): Promise<boolean> {
+  if (!knownEntityType(entityType) || !roleCanReadField(entityType, validateSchemaFieldActor(actor).role))
+    return false;
+  return await entityExists(env, tenantId, entityType, entityId);
+}
+
 export async function listAuthorizedSchemaFieldValues(
   env: AppEnv,
   tenantId: string,
@@ -1003,13 +1027,12 @@ export async function listAuthorizedSchemaFieldValues(
   entityId: string,
   actor: SchemaFieldActor,
 ): Promise<Array<{ definition: SchemaFieldDefinition; value: SchemaFieldValue | null }>> {
-  if (!knownEntityType(entityType) || !(await entityExists(env, tenantId, entityType, entityId))) return [];
-  const definitions = await listSchemaFieldDefinitions(env, tenantId, entityType);
   const normalizedActor = validateSchemaFieldActor(actor);
+  if (!(await recordReadableByActor(env, tenantId, entityType, entityId, normalizedActor))) return [];
+  const definitions = await listSchemaFieldDefinitions(env, tenantId, entityType);
   const authorized: Array<{ definition: SchemaFieldDefinition; value: SchemaFieldValue | null }> = [];
   for (const definition of definitions) {
-    if (!definition.active || !definition.read_roles.includes(normalizedActor.role) ||
-        !roleCanReadField(entityType, normalizedActor.role)) continue;
+    if (!definition.active || !definition.read_roles.includes(normalizedActor.role)) continue;
     if (!(await assignmentAllowed(env, definition, tenantId, entityType, entityId, normalizedActor, "read"))) continue;
     if (!(await fieldVisible(env, definition, tenantId, entityType, entityId))) continue;
     authorized.push({

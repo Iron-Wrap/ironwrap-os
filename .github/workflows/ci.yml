@@ -14,8 +14,13 @@ concurrency:
 
 jobs:
   build-and-test:
+    # Green runs on main sit at 19-28 minutes against this cap (33141006840, 33137923650,
+    # 33135289861), so every suite added since #175 raised it to 30 has been spending someone
+    # else's headroom. Raised rather than trimmed: the job died at "Test production-readiness
+    # verifier" with every validator, e2e project and Worker suite already green, which is a
+    # budget problem, not a slow check worth cutting.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

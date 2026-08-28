@@ -37,6 +37,7 @@ import {
   messageFor,
   type FieldDateOptions,
 } from "./field-formatting";
+import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
@@ -291,6 +292,17 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           entityId={model.job.roof_job_id}
           dateOptions={dateOptions}
           headingId="job-configured-details-heading"
+        />
+        {/*
+          The documents this job carries — a materials list, a contract, an estimate — rendered from
+          the same authorized values the card above shows, so the shop and the crew reach them where
+          the work is rather than in a separate documents area (ELEC-182).
+        */}
+        <EntityDocumentsSection
+          entityType="job"
+          entityId={model.job.roof_job_id}
+          dateOptions={dateOptions}
+          headingId="job-documents-heading"
         />
         <CaptureProofPanel
           jobId={model.job.id}

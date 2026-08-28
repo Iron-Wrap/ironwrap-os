@@ -479,6 +479,71 @@ describe("offline outbox", () => {
   });
 
   /**
+   * ELEC-213: the plain, unbound capture path. `processFieldSubmission` refuses a submission only
+   * when it *asserts* a Work Package binding without a package
+   * (`workers-bus/src/field-actions.ts` `carriesEvidenceBinding`), and `0044`'s trigger is a no-op
+   * when none of its 13 columns are set. So a photo check-in on a job production has not planned
+   * yet is a legal send, and the multipart body must carry the file with no binding column in it.
+   */
+  it("uploads a photo check-in that asserts no work package binding", async () => {
+    const photo = new Blob(["north slope bytes"], { type: "image/jpeg" });
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "unplanned-photo-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-NO-PLAN/check-ins",
+      payload: {
+        assignment_id: "ASSIGN-1",
+        proof_slot: "Production",
+        notes: null,
+        blocker: false,
+        work_package_release_attempt_id: null,
+        evidence_correction_of: null,
+        evidence_item_correction_of: null,
+      },
+      attachments: [{ blob: photo, fileName: "north-slope.jpg", attachmentId: "attachment-1" }],
+    });
+    await queueOutboxAction("unplanned-photo-action", 2_000);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json({ device_action_id: "unplanned-photo-action", status: "verified" }),
+      );
+
+    const result = await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      now: () => 3_000,
+    });
+
+    expect(result).toMatchObject({ verified: 1, needsAttention: 0, requeued: 0 });
+    expect((await getOutboxAction("unplanned-photo-action"))?.state).toBe("verified");
+    const body = fetcher.mock.calls[0]?.[1]?.body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    const files = body.getAll("attachments");
+    expect(files).toHaveLength(1);
+    expect((files[0] as File).name).toBe("north-slope.jpg");
+    const metadata = JSON.parse(String(body.get("metadata")));
+    for (const column of [
+      "work_package_id",
+      "work_package_version",
+      "evidence_slot_id",
+      "evidence_requirement",
+      "evidence_source",
+      "evidence_device_id",
+      "evidence_freshness",
+      "evidence_conflict_state",
+      "evidence_verification",
+      "evidence_disposition",
+    ])
+      expect(metadata.payload[column]).toBeUndefined();
+    expect(metadata.payload.work_package_release_attempt_id).toBeNull();
+    expect(metadata.payload.evidence_correction_of).toBeNull();
+    expect(metadata.payload.evidence_item_correction_of).toBeNull();
+  });
+
+  /**
    * ELEC-211: a constraint the server can never satisfy on replay must leave the retry loop, keep
    * its evidence, and stop offering a retry — whatever status carried it. A 502 here is the exact
    * shape `processFieldSubmission` returns today for the work-package binding trigger.

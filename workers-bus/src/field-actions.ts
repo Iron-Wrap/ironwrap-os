@@ -267,22 +267,43 @@ export interface FieldWorkPackageEvidenceD1Row {
   physicalContextId: string;
 }
 
+/**
+ * A saved field action that fails must tell the offline outbox which of two
+ * things happened, because the client cannot tell them apart from the body:
+ *
+ *  - **retryable** - the same bytes may still succeed later (the Worker, D1 or
+ *    R2 was briefly unavailable, or the action is mid-verification elsewhere).
+ *  - **terminal** - the same bytes can never succeed. A constraint or trigger
+ *    refusal is the canonical case: re-sending an identical payload re-runs an
+ *    identical `RAISE(ABORT, ...)`. Retrying it is not resilience, it is an
+ *    infinite queue, and to the crew member it looks like "saved, waiting"
+ *    forever - the offline differentiator failing silently.
+ *
+ * `app/src/storage/outbox.ts` classifies purely by HTTP status (408/429/5xx
+ * retry, everything else stops), so the status carries the decision and
+ * `retryable` states it outright for a client that would rather read it than
+ * infer it.
+ */
 export class FieldActionError extends Error {
   readonly code: string;
   readonly status: number;
   readonly retryAfterSeconds: number | undefined;
+  readonly retryable: boolean;
 
   constructor(
     code: string,
     status: number,
     message: string,
     retryAfterSeconds?: number,
+    retryable?: boolean,
   ) {
     super(message);
     this.name = "FieldActionError";
     this.code = code;
     this.status = status;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.retryable =
+      retryable ?? (status >= 500 || status === 408 || status === 429);
   }
 }
 
@@ -321,20 +342,16 @@ export async function handleFieldAction(
     });
     return fieldJson(response);
   } catch (error) {
-    const failure =
-      error instanceof FieldActionError
-        ? error
-        : new FieldActionError(
-            "field_action_failed",
-            502,
-            "The field action could not be verified yet.",
-            5,
-          );
+    const failure = classifyFieldActionFailure(error);
     const response = fieldJson(
-      { error: failure.code, message: failure.message },
+      {
+        error: failure.code,
+        message: failure.message,
+        retryable: failure.retryable,
+      },
       failure.status,
     );
-    if (failure.retryAfterSeconds)
+    if (failure.retryable && failure.retryAfterSeconds)
       response.headers.set("retry-after", String(failure.retryAfterSeconds));
     return response;
   }
@@ -620,6 +637,12 @@ export async function processFieldSubmission(
   if (typedEvidence && hasCorrectionOf) throw invalidMetadata();
   if (typedEvidence && hasCorrectionReason !== hasEvidenceCorrectionOf)
     throw invalidMetadata();
+  // A payload that asserts a Work Package binding without naming the package is
+  // exactly the row `0044` aborts. Refuse it here, terminally and by name, so
+  // the crew member is told the capture cannot be attributed rather than
+  // watching it sit in the outbox as "saved, waiting" for good.
+  if (!typedEvidence && carriesEvidenceBinding(submission.payload))
+    throw evidenceRequiresWorkPackage();
   if (typedEvidence) {
     // Technical verification is derived only after the Worker has verified the
     // immutable R2 receipts.  A field payload may carry the compatibility value
@@ -759,7 +782,7 @@ export async function processFieldSubmission(
   ).slice(0, 24);
   const started = now();
   const token = randomId();
-  const claim = await dependencies.store.claim({
+  const claimInput: ClaimInput = {
     deviceActionId: submission.deviceActionId,
     tenantId: auth.session.tenant_id,
     userId: auth.session.user_id,
@@ -772,21 +795,52 @@ export async function processFieldSubmission(
     leaseExpiresAt: new Date(
       started.getTime() + FIELD_ACTION_LEASE_MS,
     ).toISOString(),
-    workPackageId: submission.payload.work_package_id ?? null,
-    workPackageVersion: submission.payload.work_package_version ?? null,
-    evidenceSlotId: submission.payload.evidence_slot_id ?? null,
-    evidenceRequirement: submission.payload.evidence_requirement ?? null,
-    evidenceSource: submission.payload.evidence_source ?? null,
-    evidenceDeviceId:
-      auth.session.device_id ?? submission.payload.evidence_device_id ?? null,
-    evidenceFreshness: submission.payload.evidence_freshness ?? null,
-    evidenceConflictState: submission.payload.evidence_conflict_state ?? null,
-    evidenceVerification: submission.payload.evidence_verification ?? null,
-    evidenceDisposition: submission.payload.evidence_disposition ?? null,
-    evidenceCorrectionOf: submission.payload.evidence_correction_of,
-    evidenceItemCorrectionOf: submission.payload.evidence_item_correction_of,
-    workPackageReleaseAttemptId:
-      submission.payload.work_package_release_attempt_id ?? null,
+    // Every column below is governed by `0044`'s binding-shape trigger: one of
+    // them being non-NULL asserts "this row is Work Package evidence" and the
+    // trigger then requires the complete binding. An ordinary Field Check-in
+    // has no package to bind to, so it writes none of them -- previously the
+    // paired session device was stamped into `evidence_device_id` on every
+    // check-in, which asserted a binding no check-in could satisfy and aborted
+    // the INSERT for every field session (they are all device-paired).
+    workPackageId: typedEvidence
+      ? submission.payload.work_package_id ?? null
+      : null,
+    workPackageVersion: typedEvidence
+      ? submission.payload.work_package_version ?? null
+      : null,
+    evidenceSlotId: typedEvidence
+      ? submission.payload.evidence_slot_id ?? null
+      : null,
+    evidenceRequirement: typedEvidence
+      ? submission.payload.evidence_requirement ?? null
+      : null,
+    evidenceSource: typedEvidence
+      ? submission.payload.evidence_source ?? null
+      : null,
+    evidenceDeviceId: typedEvidence
+      ? auth.session.device_id ?? submission.payload.evidence_device_id ?? null
+      : null,
+    evidenceFreshness: typedEvidence
+      ? submission.payload.evidence_freshness ?? null
+      : null,
+    evidenceConflictState: typedEvidence
+      ? submission.payload.evidence_conflict_state ?? null
+      : null,
+    evidenceVerification: typedEvidence
+      ? submission.payload.evidence_verification ?? null
+      : null,
+    evidenceDisposition: typedEvidence
+      ? submission.payload.evidence_disposition ?? null
+      : null,
+    evidenceCorrectionOf: typedEvidence
+      ? submission.payload.evidence_correction_of
+      : null,
+    evidenceItemCorrectionOf: typedEvidence
+      ? submission.payload.evidence_item_correction_of
+      : null,
+    workPackageReleaseAttemptId: typedEvidence
+      ? submission.payload.work_package_release_attempt_id ?? null
+      : null,
     correctionReason: submission.payload.correction_reason,
     workObjectType: submission.scope?.workObjectType ?? null,
     workObjectId: submission.scope?.workObjectId ?? null,
@@ -794,7 +848,13 @@ export async function processFieldSubmission(
     physicalContextId: submission.scope?.physicalContextId ?? null,
     captureStartedAt: submission.payload.capture_started_at,
     captureCompletedAt: submission.payload.capture_completed_at,
-  });
+  };
+  let claim: ClaimResult;
+  try {
+    claim = await dependencies.store.claim(claimInput);
+  } catch (error) {
+    throw classifyFieldActionFailure(error);
+  }
   if (claim.state === "verified") return claim.response;
   if (claim.state === "conflict") {
     throw new FieldActionError(
@@ -908,23 +968,15 @@ export async function processFieldSubmission(
     );
     return response;
   } catch (error) {
-    const code =
-      error instanceof FieldActionError ? error.code : safeErrorCode(error);
+    const failure = classifyFieldActionFailure(error);
     await dependencies.store
-      .fail(submission.deviceActionId, token, code, now().toISOString())
+      .fail(submission.deviceActionId, token, failure.code, now().toISOString())
       .catch(() => {});
-    throw error instanceof FieldActionError
-      ? error
-      : new FieldActionError(
-          code,
-          502,
-          "The action remains queued until D1 and R2 verify it.",
-          5,
-        );
+    throw failure;
   }
 }
 
-function d1FieldActionStore(env: AppEnv): FieldActionStore {
+export function d1FieldActionStore(env: AppEnv): FieldActionStore {
   return {
     async claim(input) {
       await env.DB.prepare(
@@ -2124,6 +2176,110 @@ function payloadTooLarge(): FieldActionError {
     "payload_too_large",
     413,
     "Split field media into smaller saved actions and retry.",
+  );
+}
+
+/**
+ * The `field_actions` columns `0044`'s `field_actions_work_package_binding_shape`
+ * trigger governs. Any one of them being non-NULL asserts "this row is Work
+ * Package evidence", and the trigger then demands the *whole* binding - a
+ * released package, its version, its release attempt, and a declared slot.
+ *
+ * `correction_reason` is deliberately absent: `0044` permits it on an ordinary
+ * check-in, and `app-migration.test.ts` pins that.
+ */
+const EVIDENCE_BINDING_FIELDS = [
+  "work_package_id",
+  "work_package_version",
+  "evidence_slot_id",
+  "evidence_requirement",
+  "evidence_source",
+  "evidence_device_id",
+  "evidence_freshness",
+  "evidence_conflict_state",
+  "evidence_verification",
+  "evidence_disposition",
+  "evidence_correction_of",
+  "evidence_item_correction_of",
+  "work_package_release_attempt_id",
+] as const satisfies ReadonlyArray<keyof FieldActionPayload>;
+
+/** True when the payload asserts a Work Package binding in any column `0044` governs. */
+function carriesEvidenceBinding(payload: FieldActionPayload): boolean {
+  return EVIDENCE_BINDING_FIELDS.some((field) =>
+    hasNonEmptyValue(payload[field]),
+  );
+}
+
+/**
+ * The one refusal a crew member standing on an unreleased job can actually
+ * cause, named so the client can say something true about it. It is terminal:
+ * the package does not exist yet, so the identical capture will be refused
+ * identically for as long as it is re-sent.
+ */
+function evidenceRequiresWorkPackage(): FieldActionError {
+  return new FieldActionError(
+    "field_action_evidence_requires_work_package",
+    422,
+    "This capture is bound to a Work Package evidence slot, but the job has no released Work Package to attribute it to. Send it as a check-in without evidence binding, or capture it again once the package is released.",
+    undefined,
+    false,
+  );
+}
+
+/**
+ * D1 never hands back SQLite's bare text. It wraps it as
+ * `D1_ERROR: <raised message>: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)`,
+ * which is why the in-repo fakes - forwarding `node:sqlite`'s plain message -
+ * kept CI green over a live 502 loop here, the same way they did on the
+ * service-case lane (Multica ELEC-22 section 5).
+ *
+ * @returns the code a constraint/trigger refusal raised, or `null` when the
+ *   failure carries no constraint marker and is therefore a genuine fault.
+ */
+const RAISED_RULE_CODE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+
+function constraintRefusalCode(message: string): string | null {
+  const bare = message.trim();
+  if (!/SQLITE_CONSTRAINT|constraint failed|\bABORT\b/i.test(bare)) return null;
+  const raised = bare.match(
+    /(?:D1_ERROR|ABORT|constraint failed):?\s*([A-Za-z0-9_]{3,80})/,
+  );
+  // Only a snake_case rule code is a code. `CHECK constraint failed: ...` and
+  // `UNIQUE constraint failed: ...` name SQLite's machinery, not a rule the
+  // crew member can be told about, so they fall through to the generic code.
+  if (raised && RAISED_RULE_CODE.test(raised[1])) return raised[1];
+  const anywhere = bare.match(/\b(?:field_action|field_media)_[a-z0-9_]{2,70}\b/);
+  return anywhere?.[0] ?? "field_action_rejected";
+}
+
+/**
+ * Turn any thrown value into the classified refusal the outbox can act on.
+ *
+ * A constraint or trigger refusal is terminal by definition - the same payload
+ * re-runs the same `RAISE(ABORT, ...)`. Everything else stays a retryable 502,
+ * because a transient D1/R2 fault is exactly what the offline queue exists for.
+ */
+export function classifyFieldActionFailure(error: unknown): FieldActionError {
+  if (error instanceof FieldActionError) return error;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const refused = constraintRefusalCode(message);
+  if (refused === null) {
+    return new FieldActionError(
+      safeErrorCode(error),
+      502,
+      "The action remains queued until D1 and R2 verify it.",
+      5,
+    );
+  }
+  if (refused === "field_action_work_package_binding_invalid")
+    return evidenceRequiresWorkPackage();
+  return new FieldActionError(
+    refused,
+    409,
+    "The saved action was refused by a durable data rule and cannot be verified as captured.",
+    undefined,
+    false,
   );
 }
 

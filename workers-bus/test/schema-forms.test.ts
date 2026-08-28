@@ -526,6 +526,8 @@ test("schema field values enforce server-side visibility, CAS correction lineage
     assert.deepEqual(omitted, []);
     const visible = await listAuthorizedSchemaFieldValues(runtime, TENANT, "lead", LEAD_ID, actor("owner"));
     assert.equal(visible.find((entry) => entry.definition.field_id === numberField.definition.field_id)?.value?.version, 2);
+    assert.equal(visible.every((entry) => typeof entry.writable === "boolean"), true);
+    assert.equal(visible.find((entry) => entry.definition.field_id === numberField.definition.field_id)?.writable, true);
     const history = await listSchemaFieldValueRevisions(runtime, TENANT, "lead", LEAD_ID, numberField.definition.field_id, actor("owner"));
     assert.deepEqual(history.map((value) => value.version), [1, 2]);
     const hiddenHistory = await listSchemaFieldValueRevisions(runtime, TENANT, "lead", LEAD_ID, numberField.definition.field_id, actor("sales"));
@@ -587,6 +589,10 @@ test("schema field authority intersects tenant grants with platform permissions 
     );
     const assignedRead = await listAuthorizedSchemaFieldValues(runtime, TENANT, "job", JOB_ID, actor("field"));
     assert.equal(assignedRead[0]?.value?.value, "installed note");
+    // The case ELEC-192 exists for: the assigned crew member just wrote this field, so the card
+    // they read has to say they may. `writable` is derived from the same predicate that accepted
+    // the write above, never stored, so the two cannot disagree.
+    assert.equal(assignedRead[0]?.writable, true);
     assert.deepEqual(
       await listAuthorizedSchemaFieldValues(runtime, TENANT, "job", JOB_ID, actor("owner")),
       [],

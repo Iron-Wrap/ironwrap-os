@@ -112,7 +112,13 @@ describe("AppShell", () => {
     const input = await screen.findByRole("combobox", {
       name: "Search jobs, leads, customers, or workspaces",
     });
-    expect(input).toHaveFocus();
+    // `waitFor`, not a bare assertion, and for the same reason the restore assertion below uses
+    // one: the palette moves focus in `requestAnimationFrame` (`operator-search-palette.tsx`),
+    // because a `<dialog>` has to be laid out by `showModal()` before its input can take focus.
+    // `findByRole` resolves the moment the input is IN the DOM, which is one frame earlier — so a
+    // bare `expect(input).toHaveFocus()` races the frame and loses it on a contended runner.
+    // The guarantee asserted is unchanged: the palette's input receives focus when it opens.
+    await waitFor(() => expect(input).toHaveFocus());
 
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());

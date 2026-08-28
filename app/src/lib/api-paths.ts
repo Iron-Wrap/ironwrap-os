@@ -125,6 +125,8 @@ export const API_PATHS = {
   pipelines: "/api/v1/pipelines",
   pipelineBoard: (pipelineId: string) =>
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/board`,
+  pipelineCards: (pipelineId: string) =>
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/cards`,
   pipelineCardTransitions: (pipelineId: string, cardId: string) =>
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/cards/${encodeURIComponent(cardId)}/transitions`,
   pipelineCardTransitionUndo: (pipelineId: string, cardId: string, transitionId: string) =>

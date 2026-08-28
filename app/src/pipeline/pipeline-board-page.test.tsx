@@ -155,6 +155,7 @@ async function openMoveMenuFor(name: string) {
 
 describe("PipelineBoardPage", () => {
   beforeEach(() => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(loadPipelines).mockResolvedValue(pipelineList);
     vi.mocked(loadPipelineBoard).mockResolvedValue(boardModel());
     // The shape `transitionPayload` actually answers with: flat, and carrying the card's
@@ -654,5 +655,41 @@ describe("PipelineBoardPage", () => {
 
     expect(await screen.findByText("Moved to Quote Sent")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  // A move is committed on the server or not at all — there is no outbox behind it — so an
+  // offline board says so instead of opening a menu that silently drops the command
+  // (ELEC-202 defect 3; the read-only treatment every configuration surface already gives).
+  describe("offline", () => {
+    beforeEach(() => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    });
+
+    it("says the board is read-only rather than letting a move look possible", async () => {
+      renderBoard();
+
+      expect(await screen.findByText("Offline — the board is read-only")).toBeVisible();
+    });
+
+    it("opens the move menu with every stage disabled and the reason on it", async () => {
+      renderBoard();
+      const { dialog } = await openMoveMenuFor("Naina Tamang");
+
+      expect(within(dialog).getByText("Offline — this card cannot be moved")).toBeVisible();
+      expect(within(dialog).getByText(/stays in Need Quote until you reconnect/)).toBeVisible();
+      for (const stageName of ["New Lead", "Visit Booked", "Quote Sent", "Contract signed"]) {
+        expect(within(dialog).getByRole("button", { name: new RegExp(stageName) })).toBeDisabled();
+      }
+    });
+
+    it("posts nothing when a stage row is clicked anyway", async () => {
+      renderBoard();
+      const { user, dialog } = await openMoveMenuFor("Naina Tamang");
+
+      await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
+
+      expect(moveCardToStage).not.toHaveBeenCalled();
+      expect(screen.queryByText("Moved to Quote Sent")).toBeNull();
+    });
   });
 });

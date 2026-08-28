@@ -157,6 +157,11 @@ jobs:
       # was never actually run in CI.
       - name: Run app Playwright e2e (owner configuration, office session)
         run: npm run test:pwa:owner-configuration --prefix app
+      # Putting a lead on a board is the only product path that reaches the card-placement
+      # route, and it spans two role surfaces (sales desk -> board). It needs the same office
+      # session the board does, so it gets its own step rather than silently self-skipping.
+      - name: Run app Playwright e2e (card placement, office session)
+        run: npm run test:pwa:placement --prefix app
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types

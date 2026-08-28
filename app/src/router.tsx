@@ -107,6 +107,10 @@ const SchemaFieldsConfigurationPage = lazy(async () => ({
 const AutomationConfigurationPage = lazy(async () => ({
   default: (await import("./admin/automation-configuration-page")).AutomationConfigurationPage,
 }));
+const DocumentTemplatesConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/document-templates-configuration-page"))
+    .DocumentTemplatesConfigurationPage,
+}));
 const NewLeadPage = lazy(async () => ({
   default: (await import("./sales/new-lead-page")).NewLeadPage,
 }));
@@ -806,6 +810,12 @@ const settingsConfigurationAutomationsRoute = createRoute({
   component: AutomationConfigurationRoute,
 });
 
+const settingsConfigurationDocumentsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration/documents",
+  component: DocumentTemplatesConfigurationRoute,
+});
+
 const newLeadRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/sales/new-lead",
@@ -884,6 +894,14 @@ function AutomationConfigurationRoute() {
   );
 }
 
+function DocumentTemplatesConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <DocumentTemplatesConfigurationPage />
+    </Suspense>
+  );
+}
+
 function NewLeadRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -939,6 +957,7 @@ const routeTree = rootRoute.addChildren([
     settingsConfigurationPipelinesRoute,
     settingsConfigurationFieldsRoute,
     settingsConfigurationAutomationsRoute,
+    settingsConfigurationDocumentsRoute,
   ]),
 ]);
 

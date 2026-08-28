@@ -102,6 +102,38 @@ const seedFields = [
   schemaField("quantity", "Quantity", 1),
 ];
 
+const documentTemplate = {
+  template_id: "template:00000000000000000000000000000000materials",
+  revision_id: "docrev:materials-list:1",
+  version: 1,
+  prior_revision_id: null,
+  action: "create",
+  entity_type: "lead",
+  template_key: "materials-list",
+  label: "Materials list",
+  blocks: [
+    { kind: "heading", level: 2, text: "Materials" },
+    { kind: "field", field_id: "field_material" },
+  ],
+  retention_policy: "standard",
+  active: true,
+  actor: {
+    type: "owner",
+    role: "owner",
+    id: "appu_acceptance_owner",
+    authority_ref: "app:appu_acceptance_owner",
+  },
+  command_fingerprint: "c".repeat(64),
+  effective_at: "2026-08-27T10:00:00.000Z",
+  created_at: "2026-08-27T10:00:00.000Z",
+};
+
+const documentCatalog = {
+  actions: ["create", "revise", "retire"],
+  block_kinds: ["text", "heading", "field"],
+  retention_policies: ["standard", "extended"],
+};
+
 const automationResponse = {
   version: 1,
   pipeline_id: pipeline.pipeline_id,
@@ -118,6 +150,72 @@ const automationResponse = {
     recipient_refs: ["owner"],
     recipient_configured: true,
   },
+};
+
+/**
+ * A deployment that publishes what a rule DID, not only how it is configured. Three outcomes
+ * travel: a confirmed delivery, a failure, and one the effect ledger declined to call either.
+ */
+const automationOutcomeRule = {
+  rule_id: "rule_new",
+  tenant_id: "acceptance",
+  pipeline_id: pipeline.pipeline_id,
+  to_stage_id: pipeline.stages[0]!.stage_id,
+  revision_id: "automationrev_new_1",
+  version: 1,
+  prior_revision_id: null,
+  action: "operations.email.send",
+  recipient_ref: "owner",
+  template_key: "pipeline.stage-change-summary",
+  template_version: 1,
+  active: 1,
+  actor_role: "owner",
+  actor_id: "appu_acceptance_owner",
+  created_at: "2026-08-27T10:00:00.000Z",
+};
+
+const automationWithOutcomesResponse = {
+  ...automationResponse,
+  rules: [automationOutcomeRule],
+  catalog: { ...automationResponse.catalog, activity_available: true },
+};
+
+function firing(
+  invocationId: string,
+  status: string,
+  resultCode: string | null,
+  createdAt: string,
+) {
+  return {
+    invocation_id: invocationId,
+    outbox_id: `outbox_${invocationId}`,
+    transition_id: `transition_${invocationId}`,
+    card_id: "card_one",
+    to_stage_id: pipeline.stages[0]!.stage_id,
+    rule_version: 1,
+    action: "operations.email.send",
+    status,
+    attempt_count: 1,
+    result_code: resultCode,
+    created_at: createdAt,
+    updated_at: createdAt,
+    completed_at: status === "succeeded" ? createdAt : null,
+  };
+}
+
+const automationActivityResponse = {
+  version: 1,
+  pipeline_id: pipeline.pipeline_id,
+  rule_id: "rule_new",
+  // The window the route publishes (PR #212): the cap it applied and whether it clipped anything,
+  // so a client can say "the 20 most recent" instead of implying it is showing everything.
+  limit: 20,
+  truncated: false,
+  activity: [
+    firing("inv_1", "succeeded", "delivered", "2026-08-28T08:00:00.000Z"),
+    firing("inv_2", "unknown", "gmail_readback_id_missing", "2026-08-28T09:00:00.000Z"),
+    firing("inv_3", "failed", "automation_recipient_ref_unknown", "2026-08-28T10:00:00.000Z"),
+  ],
 };
 
 test.describe("Owner configuration mobile acceptance", () => {
@@ -142,6 +240,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         heading: "Fields",
         action: "New field",
         cachedText: "Colour",
+      },
+      {
+        path: "/settings/configuration/documents",
+        heading: "Documents",
+        action: "New document",
+        cachedText: "Materials list",
       },
       {
         path: "/settings/configuration/automations",
@@ -281,6 +385,7 @@ test.describe("Owner configuration mobile acceptance", () => {
       "/settings/configuration",
       "/settings/configuration/pipelines",
       "/settings/configuration/fields",
+      "/settings/configuration/documents",
       "/settings/configuration/automations",
     ]) {
       await page.goto(path);
@@ -320,6 +425,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         kind: "field",
       },
       {
+        path: "/settings/configuration/documents",
+        heading: "Documents",
+        cachedText: "Materials list",
+        kind: "document",
+      },
+      {
         path: "/settings/configuration/automations",
         heading: "Automations",
         cachedText: "Sales board · lead",
@@ -357,6 +468,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         await input.fill("offline_field");
         await page.getByLabel("Label", { exact: true }).fill("Offline field");
         submit = page.getByRole("button", { name: "Save field definition", exact: true });
+      } else if (routeCase.kind === "document") {
+        await page.getByRole("button", { name: "New document", exact: true }).click();
+        input = page.getByLabel("Name", { exact: true });
+        await input.fill("Offline document draft");
+        await page.getByLabel("Key", { exact: true }).fill("offline-draft");
+        submit = page.getByRole("button", { name: "Save document", exact: true });
       } else {
         await page.getByRole("button", { name: "New rule", exact: true }).click();
         input = page.getByLabel("When a card enters", { exact: true });
@@ -404,17 +521,154 @@ test.describe("Owner configuration mobile acceptance", () => {
     }
     await context.setOffline(false);
   });
+
+  test("authors a document out of fields, from a phone, without leaving the product", async ({
+    page,
+  }) => {
+    const server = await routeConfigurationApis(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings/configuration/documents");
+    await expect(page.getByRole("heading", { name: "Documents", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "New document", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("Estimate");
+    await page.getByLabel("Key", { exact: true }).fill("estimate");
+    await page.getByRole("button", { name: "Add heading", exact: true }).click();
+    await page.getByLabel("Heading text", { exact: true }).fill("Scope of work");
+    await page.getByRole("button", { name: "Add field", exact: true }).click();
+
+    // Only this record type's active fields are offered, because that is all the server accepts.
+    const fieldPicker = page.getByLabel("Field", { exact: true });
+    await expect(fieldPicker.locator("option")).toHaveText([
+      "Choose a field",
+      "Material",
+      "Quantity",
+      "Colour",
+    ]);
+    await fieldPicker.selectOption("field_material");
+
+    // Every block control is a real touch target on a 390px screen.
+    for (const name of ["Add field", "Move Field 2 up", "Remove Field 2"]) {
+      const bounds = await page.getByRole("button", { name, exact: true }).boundingBox();
+      expect(bounds?.height, name).toBeGreaterThanOrEqual(44);
+      expect(bounds?.width, name).toBeGreaterThanOrEqual(44);
+    }
+
+    await mkdir(shotDir, { recursive: true });
+    await withoutShellChrome(page, () =>
+      page.screenshot({
+        path: `${shotDir}/owner-configuration-document-editor.png`,
+        fullPage: true,
+      }),
+    );
+
+    const save = page.getByRole("button", { name: "Save document", exact: true });
+    await focusFromKeyboard(page, save);
+    await expectKeyboardFocusVisible(save);
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByText("Document created.")).toBeVisible();
+    expect(server.documentWrites).toEqual([
+      {
+        action: "create",
+        active: true,
+        entity_type: "lead",
+        template_key: "estimate",
+        label: "Estimate",
+        retention_policy: "standard",
+        blocks: [
+          { kind: "heading", level: 2, text: "Scope of work" },
+          { kind: "field", field_id: "field_material" },
+        ],
+      },
+    ]);
+    // The document an administrator just authored is on the list, with no developer involved.
+    await expect(page.getByText("Estimate", { exact: true })).toBeVisible();
+
+    const geometry = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
+
+  test("shows what an automation did, keeping a failure and an unconfirmed firing apart", async ({
+    page,
+  }) => {
+    await routeConfigurationApis(page);
+    await page.route(
+      `**/api/v1/admin/pipelines/${pipeline.pipeline_id}/automation-rules`,
+      (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(automationWithOutcomesResponse),
+        });
+      },
+    );
+    await page.route(
+      `**/api/v1/admin/pipelines/${pipeline.pipeline_id}/automation-rules/rule_new/activity`,
+      (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(automationActivityResponse),
+        });
+      },
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings/configuration/automations");
+    await expect(page.getByRole("heading", { name: "Automations", exact: true })).toBeVisible();
+
+    // Discovery without opening anything: the rule itself says a firing failed.
+    await expect(page.getByText("1 failed", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    const firings = page.getByRole("list", { name: "Recent firings" });
+    await expect(firings.getByText("Failed", { exact: true })).toBeVisible();
+    await expect(firings.getByText("Not confirmed", { exact: true })).toBeVisible();
+    await expect(firings.getByText("Sent", { exact: true })).toBeVisible();
+    await expect(
+      firings.getByText("This rule points at a recipient that is no longer configured."),
+    ).toBeVisible();
+    await expect(
+      firings.getByText(
+        "The email service accepted the message but returned nothing to check it against, so delivery could not be confirmed.",
+      ),
+    ).toBeVisible();
+
+    await mkdir(shotDir, { recursive: true });
+    await withoutShellChrome(page, () =>
+      firings.screenshot({ path: `${shotDir}/owner-configuration-automation-activity.png` }),
+    );
+
+    const geometry = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
 });
 
 interface FieldServer {
   fields: ReturnType<typeof schemaField>[];
   revisions: { field_id: string; action: unknown; position: unknown; expected_version: unknown }[];
+  documents: (typeof documentTemplate)[];
+  documentWrites: Record<string, unknown>[];
 }
 
 async function routeConfigurationApis(page: Page): Promise<FieldServer> {
   const server: FieldServer = {
     fields: seedFields.map((field) => ({ ...field })),
     revisions: [],
+    documents: [{ ...documentTemplate }],
+    documentWrites: [],
   };
   await page.route("**/api/v1/admin/pipelines", (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -477,21 +731,60 @@ async function routeConfigurationApis(page: Page): Promise<FieldServer> {
       });
     },
   );
+  await page.route("**/api/v1/admin/document-templates", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          catalog: documentCatalog,
+          templates: server.documents,
+        }),
+      });
+    }
+    if (route.request().method() !== "POST") return route.fallback();
+    // The fixture accepts a create the way the Worker does: the layout the client sent is what
+    // comes back, so the screen an administrator sees after saving is the one they authored.
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    server.documentWrites.push(body);
+    const created = {
+      ...documentTemplate,
+      template_id: `template:${String(body.template_key ?? "").padEnd(40, "0")}`,
+      template_key: String(body.template_key ?? ""),
+      label: String(body.label ?? ""),
+      entity_type: String(body.entity_type ?? "lead"),
+      blocks: body.blocks,
+    };
+    server.documents.push(created as typeof documentTemplate);
+    return route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ outcome: "created", template: created }),
+    });
+  });
   return server;
 }
 
 /**
- * The field list is taller than a phone screen, so an element screenshot of it scrolls the sticky
- * shell chrome through the middle of the evidence image. Hide the chrome for the shot only, and
- * leave the layout in place so nothing measured after it moves.
+ * A configuration screen is taller than a phone, so a screenshot of it scrolls the sticky shell
+ * chrome through the middle of the evidence image. Hide the chrome for the shot only, and leave
+ * the layout in place so nothing measured after it moves.
  */
-async function screenshotFieldList(page: Page, path: string): Promise<void> {
+async function withoutShellChrome(page: Page, shoot: () => Promise<unknown>): Promise<void> {
   const style = await page.addStyleTag({
     content:
-      "header, [aria-label='Main navigation'], a[href='#main-content'] { visibility: hidden !important; }",
+      // The SHELL chrome only: the page's own header is the evidence, not the thing in its way.
+      "header.safe-top, .safe-bottom, [aria-label='Main navigation'], a[href='#main-content'] { visibility: hidden !important; }",
   });
-  await page.getByRole("list", { name: "Field definitions" }).screenshot({ path });
+  await shoot();
   await style.evaluate((node) => node.remove());
+}
+
+async function screenshotFieldList(page: Page, path: string): Promise<void> {
+  await withoutShellChrome(page, () =>
+    page.getByRole("list", { name: "Field definitions" }).screenshot({ path }),
+  );
 }
 
 /** The order an admin actually reads, taken from the move controls that reorder it. */

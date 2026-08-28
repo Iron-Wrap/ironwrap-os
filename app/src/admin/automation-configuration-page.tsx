@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, History, Link as LinkIcon, Plus, Save } from "lucide-react";
+import { Activity, BellRing, History, Link as LinkIcon, Plus, Save } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -17,22 +17,71 @@ import {
   configurationErrorMessage,
   createAutomationRule,
   loadAdminPipelines,
+  loadAutomationActivity,
   loadAutomationHistory,
   loadAutomationRules,
   reviseAutomationRule,
 } from "./configuration-api";
 import {
   adminPipelineQueryKey,
+  automationActivityQueryKey,
   automationHistoryQueryKey,
   automationQueryKey,
   type AdminPipeline,
+  type AutomationActivityResponse,
   type AutomationCatalog,
   type AutomationHistoryResponse,
   type AutomationListResponse,
   type AutomationRule,
   type AutomationWriteInput,
 } from "./configuration-contracts";
+import {
+  automationActivitySummary,
+  automationOutcomeCopy,
+  sortAutomationActivity,
+  type AutomationOutcomeTone,
+} from "./automation-outcome";
 import { AdminPageHeader } from "./admin-shell";
+
+/**
+ * Which templates an action may be paired with.
+ *
+ * The built-in email action keeps its built-in summary; the document action carries a template an
+ * administrator authored. Offering both lists under both actions produced a picker where most
+ * combinations were refused on save - so the picker is scoped to the action instead, and the
+ * server's own pairing rule is what the UI shows.
+ *
+ * A deployment that predates per-template actions publishes one action and one template. There is
+ * nothing to disambiguate there, so the whole list stands.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function automationTemplateOptions(
+  catalog: AutomationCatalog,
+  action: string,
+): AutomationCatalog["templates"] {
+  if (catalog.templates.every((entry) => entry.action === undefined)) return catalog.templates;
+  return catalog.templates.filter((entry) => entry.action === action);
+}
+
+/**
+ * How a saved rule's template is described.
+ *
+ * The wire field is called `template_key`, but for a document rule it holds the template's
+ * IDENTIFIER - `getDocumentTemplate` indexes by `template_id`. Printing it verbatim showed an
+ * administrator an opaque `template:9f3c...` where they had chosen "Materials list", and invited
+ * them to believe it was the key they had typed. The catalog is the only place that maps the
+ * stored value back to a name, so that is what is shown; nothing here calls the value a key.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function automationTemplateDisplay(
+  catalog: AutomationCatalog,
+  rule: Pick<AutomationRule, "template_key" | "template_version">,
+): string {
+  const entry = catalog.templates.find((candidate) => candidate.template_key === rule.template_key);
+  return entry
+    ? `${entry.label} · v${rule.template_version}`
+    : `A document that is no longer offered · v${rule.template_version}`;
+}
 
 export function AutomationConfigurationPage() {
   return (
@@ -311,8 +360,9 @@ function AutomationCreateForm({
   });
   const selectedStage = stage || stages[0]?.stage_id || "";
   const selectedAction = action || catalog.actions[0]?.action || "";
+  const templateOptions = automationTemplateOptions(catalog, selectedAction);
   const selectedTemplate =
-    catalog.templates.find((entry) => entry.template_key === template) ?? catalog.templates[0];
+    templateOptions.find((entry) => entry.template_key === template) ?? templateOptions[0];
   const selectedRecipient = recipient || catalog.recipient_refs[0] || "";
 
   return (
@@ -383,13 +433,18 @@ function AutomationCreateForm({
                 value: entry.action,
                 label: entry.label,
               }))}
-              onChange={setAction}
+              onChange={(value) => {
+                setAction(value);
+                // Each action has its own templates, so a choice made under the old one cannot
+                // carry over: it would be silently refused on save.
+                setTemplate("");
+              }}
             />
             <CatalogSelect
               id="automation-new-template"
               label="Template"
               value={selectedTemplate?.template_key ?? ""}
-              options={catalog.templates.map((entry) => ({
+              options={templateOptions.map((entry) => ({
                 value: entry.template_key,
                 label: `${entry.label} · v${entry.version}`,
               }))}
@@ -465,7 +520,23 @@ function AutomationRuleCard({
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const targetIsActive = stages.some((stage) => stage.stage_id === rule.to_stage_id);
+  // Whether this deployment publishes firing outcomes at all. When it does not, no firing
+  // surface is rendered: an empty panel would read as "nothing has gone wrong", which is
+  // precisely the claim an unpublished outcome cannot support.
+  const activityAvailable = catalog.activity_available === true;
+  const activityKey = automationActivityQueryKey(session.tenant.id, rule.pipeline_id, rule.rule_id);
+  // Loaded without being asked for, because a failed automation nobody opens the panel for is
+  // still a failed automation. The badge is the discovery; the panel is the detail.
+  const activity = useQuery({
+    queryKey: activityKey,
+    queryFn: () => loadAutomationActivity(rule.pipeline_id, rule.rule_id),
+    enabled: activityAvailable && live,
+  });
+  const activitySummary = activity.data
+    ? automationActivitySummary(activity.data.activity, activity.data.truncated === true)
+    : null;
   const historyKey = automationHistoryQueryKey(
     session.tenant.id,
     rule.pipeline_id,
@@ -498,10 +569,13 @@ function AutomationRuleCard({
               <StatusPill active={rule.active === 1}>
                 {rule.active === 1 ? "Enabled" : "Disabled"}
               </StatusPill>
+              {activitySummary ? (
+                <TonePill tone={activitySummary.tone}>{activitySummary.label}</TonePill>
+              ) : null}
             </CardTitle>
             <CardDescription className="mt-1 break-words">
-              {rule.action} · {rule.template_key} v{rule.template_version} · {rule.recipient_ref} ·
-              revision {rule.version}
+              {actionLabel(catalog, rule.action)} · {automationTemplateDisplay(catalog, rule)} ·{" "}
+              {rule.recipient_ref} · revision {rule.version}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -514,6 +588,17 @@ function AutomationRuleCard({
             >
               {editing ? "Close revise" : "Revise"}
             </Button>
+            {activityAvailable ? (
+              <Button
+                type="button"
+                size="compact"
+                variant="ghost"
+                onClick={() => setActivityOpen((value) => !value)}
+              >
+                <Activity aria-hidden="true" />
+                {activityOpen ? "Hide activity" : "Activity"}
+              </Button>
+            ) : null}
             <Button
               type="button"
               size="compact"
@@ -561,6 +646,14 @@ function AutomationRuleCard({
             onSubmit={(input) => revise.mutate({ ...input, expected_version: rule.version })}
           />
         ) : null}
+        {activityAvailable && activityOpen ? (
+          <AutomationActivityPanel
+            activity={activity}
+            live={live}
+            stageName={stageName}
+            onRetry={() => void activity.refetch()}
+          />
+        ) : null}
         {historyOpen ? (
           <AutomationHistory
             rule={rule}
@@ -602,7 +695,8 @@ function AutomationRuleForm({
   const [template, setTemplate] = useState(rule.template_key);
   const [recipient, setRecipient] = useState(rule.recipient_ref);
   const [active, setActive] = useState(rule.active === 1);
-  const selectedTemplate = catalog.templates.find((entry) => entry.template_key === template);
+  const templateOptions = automationTemplateOptions(catalog, action);
+  const selectedTemplate = templateOptions.find((entry) => entry.template_key === template);
   const canSave = Boolean(
     stages.some((entry) => entry.stage_id === stage) &&
     catalog.actions.some((entry) => entry.action === action) &&
@@ -641,13 +735,16 @@ function AutomationRuleForm({
         label="Action"
         value={action}
         options={catalog.actions.map((entry) => ({ value: entry.action, label: entry.label }))}
-        onChange={setAction}
+        onChange={(value) => {
+          setAction(value);
+          setTemplate(automationTemplateOptions(catalog, value)[0]?.template_key ?? "");
+        }}
       />
       <CatalogSelect
         id={`${rule.rule_id}-template`}
         label="Template"
         value={template}
-        options={catalog.templates.map((entry) => ({
+        options={templateOptions.map((entry) => ({
           value: entry.template_key,
           label: `${entry.label} · v${entry.version}`,
         }))}
@@ -689,6 +786,110 @@ function AutomationRuleForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * What this rule actually did, in the order an administrator asks about it: the last firing first.
+ *
+ * Three outcomes are shown, not two. A failure says what went wrong in plain words and what to do
+ * about it. An UNCONFIRMED firing says so and stops short of claiming either result - the effect
+ * ledger declined to say whether the message went out, and this panel is not entitled to decide
+ * on its behalf. Only a confirmed delivery is called sent.
+ *
+ * The raw result code travels as small print beside the sentence. It is provenance for whoever
+ * has to trace the firing, never the explanation an administrator is asked to interpret.
+ */
+function AutomationActivityPanel({
+  activity,
+  live,
+  stageName,
+  onRetry,
+}: {
+  activity: {
+    data?: AutomationActivityResponse;
+    isPending: boolean;
+    isError: boolean;
+    error: unknown;
+  };
+  live: boolean;
+  stageName: Map<string, string>;
+  onRetry: () => void;
+}) {
+  if (!live && !activity.data)
+    return (
+      <Notice tone="warning" title="Activity is not cached">
+        Reconnect to read what this automation has done.
+      </Notice>
+    );
+  if (activity.isPending && !activity.data)
+    return (
+      <p className="border-t border-border pt-4 text-sm text-muted" role="status">
+        Loading recent firings…
+      </p>
+    );
+  if (activity.isError && !activity.data)
+    return (
+      <Notice tone="danger" title="Activity could not load">
+        {configurationErrorMessage(activity.error)}{" "}
+        <button type="button" className="ml-1 min-h-11 font-bold underline" onClick={onRetry}>
+          Try again
+        </button>
+      </Notice>
+    );
+  if (!activity.data) return null;
+  const entries = sortAutomationActivity(activity.data.activity);
+  // The server caps this read and publishes both the cap and whether it clipped anything. Reading
+  // the window as the whole record would turn "the 20 most recent all landed" into "this rule has
+  // never failed", which is the one thing this panel exists to stop happening.
+  const truncated = activity.data.truncated === true;
+  const window = activity.data.limit ?? entries.length;
+  return (
+    <div className="border-t border-border pt-4">
+      <h3 className="font-bold">{truncated ? `Last ${window} firings` : "Recent firings"}</h3>
+      <p className="mt-1 text-sm text-muted">
+        {truncated
+          ? `The ${window} most recent times this rule ran. Older firings are not shown here.`
+          : "Every time a card entered this stage and the rule ran."}{" "}
+        Successes are listed beside failures, so this is one honest record rather than a hidden
+        failure log.
+      </p>
+      {entries.length === 0 ? (
+        <p className="mt-3 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted">
+          This rule has not run yet.
+        </p>
+      ) : (
+        <ol
+          className="mt-3 space-y-2"
+          aria-label={truncated ? `Last ${window} firings` : "Recent firings"}
+        >
+          {entries.map((entry) => {
+            const copy = automationOutcomeCopy(entry.status, entry.result_code);
+            return (
+              <li
+                key={entry.invocation_id}
+                className="rounded-md border border-border bg-surface-raised p-3 text-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <TonePill tone={copy.tone}>{copy.label}</TonePill>
+                  <span className="text-muted">{formatDate(entry.created_at)}</span>
+                </div>
+                <p className="mt-2 break-words">{copy.reason}</p>
+                {copy.nextStep ? (
+                  <p className="mt-1 break-words font-bold">{copy.nextStep}</p>
+                ) : null}
+                <p className="mt-2 break-words text-xs leading-5 text-muted">
+                  {stageName.get(entry.to_stage_id) ?? entry.to_stage_id} ·{" "}
+                  {entry.attempt_count === 1 ? "1 attempt" : `${entry.attempt_count} attempts`} ·
+                  rule revision {entry.rule_version}
+                  {entry.result_code ? ` · ${entry.result_code}` : ""}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }
 
@@ -823,6 +1024,26 @@ function StatusPill({ active, children }: { active: boolean; children: React.Rea
       {children}
     </span>
   );
+}
+
+const TONE_PILL_CLASSES: Record<AutomationOutcomeTone, string> = {
+  ok: "bg-ok-soft text-ok",
+  danger: "bg-danger-soft text-danger",
+  warning: "bg-warning-soft text-warning",
+  info: "bg-info-soft text-info",
+};
+
+function TonePill({ tone, children }: { tone: AutomationOutcomeTone; children: React.ReactNode }) {
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${TONE_PILL_CLASSES[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+/** The server names its own actions; an unregistered one is shown as it was stored. */
+function actionLabel(catalog: AutomationCatalog, action: string): string {
+  return catalog.actions.find((entry) => entry.action === action)?.label ?? action;
 }
 
 function ReloadButton() {

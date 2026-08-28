@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BellRing, Boxes, FileText, SlidersHorizontal } from "lucide-react";
+import { BellRing, Boxes, FileStack, FileText, SlidersHorizontal } from "lucide-react";
 
 import { RoleGuard } from "../components/role-guard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -22,7 +22,7 @@ export function ConfigurationPage() {
               changes are never queued from an offline session.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-3">
+          <CardContent className="grid gap-3 sm:grid-cols-2">
             <ConfigurationLink
               to="/settings/configuration/pipelines"
               icon={<Boxes className="size-5 text-accent" aria-hidden="true" />}
@@ -36,10 +36,16 @@ export function ConfigurationPage() {
               description="Structured data and its evidence policy."
             />
             <ConfigurationLink
+              to="/settings/configuration/documents"
+              icon={<FileStack className="size-5 text-accent" aria-hidden="true" />}
+              title="Documents"
+              description="Contracts, estimates, and lists built from your fields."
+            />
+            <ConfigurationLink
               to="/settings/configuration/automations"
               icon={<BellRing className="size-5 text-accent" aria-hidden="true" />}
               title="Automations"
-              description="Governed stage-change email rules."
+              description="What happens when a card enters a stage."
             />
           </CardContent>
         </Card>
@@ -57,6 +63,7 @@ function ConfigurationLink({
   to:
     | "/settings/configuration/pipelines"
     | "/settings/configuration/fields"
+    | "/settings/configuration/documents"
     | "/settings/configuration/automations";
   icon: React.ReactNode;
   title: string;

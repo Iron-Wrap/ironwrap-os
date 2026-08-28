@@ -1936,11 +1936,6 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     );
   }
   const activeAssignmentId = assignmentId;
-  // Evidence is only accepted against a released work plan
-  // (`workers-bus/migrations/0044_work_package_evidence_slots.sql`). Until production issues one,
-  // a file attached here is refused by the server and can never be retried into place, so this
-  // surface does not offer the capture at all rather than promising a send it cannot make.
-  const evidenceBindingReady = model.packet.work_package !== null;
 
   function choosePhotos(files: FileList | null) {
     const next = files ? [...files] : [];
@@ -1997,16 +1992,8 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     const files = [...photos, ...(voice ? [voice] : [])];
     const mediaError = validateMedia(files);
     if (mediaError) return setFormError(mediaError);
-    if (files.length > 0 && !evidenceBindingReady)
-      return setFormError(
-        "Files cannot be sent until production issues a work plan. Remove them and save a note or a blocker report.",
-      );
     if (files.length === 0 && !notes.trim() && !blocker)
-      return setFormError(
-        evidenceBindingReady
-          ? "Add a photo, voice note, field note, or blocker before saving."
-          : "Add a field note or a blocker report before saving.",
-      );
+      return setFormError("Add a photo, voice note, field note, or blocker before saving.");
     if (typedEvidence && files.length === 0)
       return setFormError("This proof item needs at least one photo or voice note.");
     if (blocker && !blockerSummary.trim())
@@ -2107,8 +2094,8 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   return (
     <RoleGuard surface="field">
       <section className="mx-auto max-w-3xl space-y-7 pb-16 lg:pb-4">
-        <CheckInHeader model={model} step={step} captureOffered={evidenceBindingReady} />
-        <CheckInProgress step={step} captureOffered={evidenceBindingReady} />
+        <CheckInHeader model={model} step={step} />
+        <CheckInProgress step={step} />
         {formError ? (
           <div
             className="border border-danger/35 bg-danger-soft p-4 font-bold leading-6 text-danger"
@@ -2124,111 +2111,87 @@ function CheckInFlow({ jobId }: { jobId: string }) {
             aria-labelledby="capture-evidence-heading"
           >
             <header className="border-b border-border px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold text-muted">
-                {evidenceBindingReady
-                  ? "Start with a photo or voice note"
-                  : "Photos wait for the work plan"}
-              </p>
+              <p className="text-sm font-semibold text-muted">Start with a photo or voice note</p>
               <h2
                 ref={stepHeadingRef}
                 id="capture-evidence-heading"
                 tabIndex={-1}
                 className="mt-1 text-2xl font-black tracking-[-0.03em]"
               >
-                {evidenceBindingReady ? "Capture what you see" : "Say what is happening"}
+                Capture what you see
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
-              {evidenceBindingReady ? null : (
-                <section
-                  className="border-2 border-warning/45 bg-warning-soft p-4"
-                  aria-labelledby="capture-no-work-package-heading"
-                >
-                  <h3 id="capture-no-work-package-heading" className="font-black">
-                    Photos can be attached once production issues a work plan.
-                  </h3>
-                  <p className="mt-2 leading-6 text-muted">
-                    You can still record what is blocking you, or leave a note. Nothing you write on
-                    the next screen needs a work plan.
-                  </p>
-                </section>
-              )}
-              {evidenceBindingReady ? (
-                <>
-                  <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
-                    <span className="flex items-center gap-2 text-lg font-black">
-                      <Camera aria-hidden="true" />
-                      Take photos
-                    </span>
-                    <span className="mt-1 text-sm font-semibold text-background/75">
-                      Up to 12 files
-                    </span>
-                    <input
-                      className="sr-only"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-                      capture="environment"
-                      multiple
-                      onChange={(event) => choosePhotos(event.target.files)}
-                    />
+              <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+                <span className="flex items-center gap-2 text-lg font-black">
+                  <Camera aria-hidden="true" />
+                  Take photos
+                </span>
+                <span className="mt-1 text-sm font-semibold text-background/75">
+                  Up to 12 files
+                </span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                  capture="environment"
+                  multiple
+                  onChange={(event) => choosePhotos(event.target.files)}
+                />
+              </label>
+              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+                <span className="flex items-center gap-2">
+                  <Mic aria-hidden="true" />
+                  Add voice note
+                </span>
+                <span className="mt-1 text-sm font-semibold text-muted">
+                  Optional voice note for your team
+                </span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept="audio/mpeg,audio/mp4,audio/webm,audio/wav,audio/x-wav"
+                  capture
+                  onChange={(event) => chooseVoice(event.target.files)}
+                />
+              </label>
+              <CaptureReview
+                photos={photos}
+                voice={voice}
+                onRemovePhoto={removePhoto}
+                onRemoveVoice={removeVoice}
+              />
+              <details className="border border-border">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
+                  <span>Proof type</span>
+                  <span className="text-sm text-muted">{proofSlot}</span>
+                </summary>
+                <div className="border-t border-border p-4">
+                  <label className="block text-sm font-bold" htmlFor="proof-slot">
+                    Change proof type
                   </label>
-                  <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
-                    <span className="flex items-center gap-2">
-                      <Mic aria-hidden="true" />
-                      Add voice note
-                    </span>
-                    <span className="mt-1 text-sm font-semibold text-muted">
-                      Optional voice note for your team
-                    </span>
-                    <input
-                      className="sr-only"
-                      type="file"
-                      accept="audio/mpeg,audio/mp4,audio/webm,audio/wav,audio/x-wav"
-                      capture
-                      onChange={(event) => chooseVoice(event.target.files)}
-                    />
-                  </label>
-                  <CaptureReview
-                    photos={photos}
-                    voice={voice}
-                    onRemovePhoto={removePhoto}
-                    onRemoveVoice={removeVoice}
-                  />
-                  <details className="border border-border">
-                    <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
-                      <span>Proof type</span>
-                      <span className="text-sm text-muted">{proofSlot}</span>
-                    </summary>
-                    <div className="border-t border-border p-4">
-                      <label className="block text-sm font-bold" htmlFor="proof-slot">
-                        Change proof type
-                      </label>
-                      <Select
-                        field
-                        id="proof-slot"
-                        className="mt-3 rounded-none bg-surface text-lg font-bold"
-                        value={proofSlot}
-                        onChange={(event) => setProofSlot(event.target.value)}
-                      >
-                        {PROOF_SLOTS.map((slot) => (
-                          <option key={slot}>{slot}</option>
-                        ))}
-                      </Select>
-                    </div>
-                  </details>
-                  <p className="rounded-md border border-info pl-3 text-sm font-semibold leading-6 text-info">
-                    Your files stay in this form until you save them. Keep this page open.
-                  </p>
-                </>
-              ) : null}
+                  <Select
+                    field
+                    id="proof-slot"
+                    className="mt-3 rounded-none bg-surface text-lg font-bold"
+                    value={proofSlot}
+                    onChange={(event) => setProofSlot(event.target.value)}
+                  >
+                    {PROOF_SLOTS.map((slot) => (
+                      <option key={slot}>{slot}</option>
+                    ))}
+                  </Select>
+                </div>
+              </details>
+              <p className="rounded-md border border-info pl-3 text-sm font-semibold leading-6 text-info">
+                Your files stay in this form until you save them. Keep this page open.
+              </p>
             </div>
             <CheckInActionBar
               message={
-                !evidenceBindingReady
-                  ? "Continue to record a note or a blocker report."
-                  : selectedMedia.length
-                    ? "Check your files, then add a note if needed."
-                    : "You can continue with a note or a blocker report instead of media."
+                selectedMedia.length
+                  ? "Check your files, then add a note if needed."
+                  : "You can continue with a note or a blocker report instead of media."
               }
             >
               <Button
@@ -2303,12 +2266,6 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               {blocker ? (
                 <div className="space-y-4 border border-danger/35 bg-danger-soft p-4">
                   <p className="font-black text-danger">Tell the office what stops work.</p>
-                  {evidenceBindingReady ? null : (
-                    <p className="leading-6 text-muted">
-                      This report sends as text. Photos can be attached once production issues a
-                      work plan.
-                    </p>
-                  )}
                   <label className="block font-bold" htmlFor="blocker-category">
                     Blocker type
                   </label>
@@ -2395,15 +2352,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   );
 }
 
-function CheckInHeader({
-  model,
-  step,
-  captureOffered,
-}: {
-  model: JobResponse;
-  step: number;
-  captureOffered: boolean;
-}) {
+function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <p className="text-sm font-semibold text-muted">{model.job.job_number ?? "Assigned job"}</p>
@@ -2412,23 +2361,16 @@ function CheckInHeader({
         {model.job.address ?? "Address unavailable"}
       </p>
       <p className="mt-4 text-sm font-semibold text-muted">
-        Step {step} of 3 ·{" "}
-        {step === 1 ? checkInStepOneLabel(captureOffered) : step === 2 ? "Add details" : "Saved"}
+        Step {step} of 3 · {step === 1 ? "Files" : step === 2 ? "Add details" : "Saved"}
       </p>
     </header>
   );
 }
 
-// Step one carries the file pickers only where the server can accept files, so its label follows
-// the same state rather than promising a step that is not there.
-function checkInStepOneLabel(captureOffered: boolean): string {
-  return captureOffered ? "Files" : "Notes";
-}
-
-function CheckInProgress({ step, captureOffered }: { step: number; captureOffered: boolean }) {
+function CheckInProgress({ step }: { step: number }) {
   return (
     <ol className="grid grid-cols-3 border-y border-border" aria-label="Check-in progress">
-      {[checkInStepOneLabel(captureOffered), "Details", "Saved"].map((label, index) => {
+      {["Files", "Details", "Saved"].map((label, index) => {
         const active = index + 1 === step;
         const complete = index + 1 < step;
         return (

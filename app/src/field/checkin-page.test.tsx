@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
 import { resetDatabaseForTests } from "../storage/db";
-import { getOutboxActionsNeedingAttention } from "../storage/outbox";
+import { getOutboxActionsNeedingAttention, listOutboxActionsByKind } from "../storage/outbox";
 import type { JobResponse } from "./field-contracts";
 import { loadJob } from "./field-cache";
 import { CheckInPage } from "./field-pages";
@@ -65,9 +65,10 @@ const fieldSession = {
   stale_fields: [],
 } satisfies AuthenticatedSession;
 
-// A released work plan is what the server binds field evidence to
-// (`workers-bus/migrations/0044_work_package_evidence_slots.sql`). Only a job that has one may
-// offer photo capture, so the fixture carries both states explicitly.
+// A released work plan is what the server binds *typed* field evidence to
+// (`workers-bus/migrations/0044_work_package_evidence_slots.sql`). A plain check-in binds to
+// nothing and carries its photos through `field_action_media`, so it needs no plan at all --
+// the fixture carries both states because the work-plan panel differs, not the camera.
 const principal = { tenantId: fieldSession.tenant.id, userId: fieldSession.user.id };
 
 function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
@@ -163,6 +164,7 @@ function renderCheckIn(model = jobModel()) {
 
 describe("CheckInPage", () => {
   const originalGeolocation = navigator.geolocation;
+  const originalOnLine = navigator.onLine;
 
   beforeEach(() => vi.clearAllMocks());
 
@@ -171,6 +173,7 @@ describe("CheckInPage", () => {
       configurable: true,
       value: originalGeolocation,
     });
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnLine });
     await resetDatabaseForTests();
   });
 
@@ -222,29 +225,67 @@ describe("CheckInPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  // ELEC-211. A job that is scheduled but not yet planned is the default state right after
-  // scheduling, and the server refuses evidence in it. Offering the camera there promises a send
-  // that can never happen, which is how a crew member's photos went missing silently.
-  it("does not offer photo or voice capture before production issues a work plan, and says why", async () => {
+  // ELEC-213. A job that is scheduled but not yet planned is the default state right after
+  // scheduling, and it is where most field photos are taken. The server accepts a plain check-in
+  // with media there -- only a capture that *asserts* a Work Package binding needs a released plan
+  // (`workers-bus/src/field-actions.ts` `carriesEvidenceBinding`). Withholding the camera in that
+  // state is a capability loss, not a safe default.
+  it("offers photo and voice capture on a job with no work plan", async () => {
     const user = userEvent.setup();
     renderCheckIn();
 
-    expect(await screen.findByRole("heading", { name: "Say what is happening" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Capture what you see" })).toBeVisible();
+    expect(screen.getByLabelText(/Take photos/i)).toBeVisible();
+    expect(screen.getByLabelText(/Add voice note/i)).toBeVisible();
+    expect(screen.getByText(/Change proof type/i)).toBeInTheDocument();
+    // Step one still carries the file pickers, so its label must not be degraded.
+    expect(screen.getByText(/Step 1 of 3 · Files/)).toBeVisible();
     expect(
-      screen.getByText("Photos can be attached once production issues a work plan."),
-    ).toBeVisible();
-    expect(screen.queryByLabelText(/Take photos/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Add voice note/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Change proof type/i)).not.toBeInTheDocument();
+      screen.queryByText(/Photos can be attached once production issues a work plan/i),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Continue to review" }));
     await user.click(screen.getByRole("button", { name: "Report a blocker" }));
     expect(
-      screen.getByText(
-        /This report sends as text\. Photos can be attached once production issues a work plan\./i,
-      ),
-    ).toBeVisible();
+      screen.queryByText(/Photos can be attached once production issues a work plan/i),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("What must happen next?")).toBeVisible();
+  });
+
+  // The send half of this journey cannot run here: fake-indexeddb structured-clones a Blob into a
+  // value happy-dom's `FormData.append` refuses, so no component test can upload media. It is
+  // proven instead where a real multipart body exists -- `src/storage/outbox.test.ts` (node
+  // environment, real FormData) and `e2e/field-checkin-refusals.spec.ts` (real browser, real
+  // acceptance server). What belongs here is the half the component owns: the saved item.
+  it("queues a photo check-in on a job with no work plan, asserting no evidence binding", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    renderCheckIn();
+
+    await user.upload(
+      await screen.findByLabelText(/Take photos/i),
+      new File(["photo"], "north-slope.jpg", { type: "image/jpeg" }),
+    );
+    expect(screen.getByText("north-slope.jpg")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+    // The photo alone is the whole check-in: no note, no blocker, and no work plan.
+    await user.click(screen.getByRole("button", { name: "Save on device" }));
+
+    expect(await screen.findByRole("heading", { name: "Check-in saved" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const [queued] = await listOutboxActionsByKind(principal, "field_checkin");
+    expect(queued).toMatchObject({ kind: "field_checkin", state: "queued" });
+    expect(queued?.endpoint).toBe("/api/v1/jobs/JOB-1/check-ins");
+    expect(queued?.attachments).toHaveLength(1);
+    expect(queued?.attachments[0]?.fileName).toBe("north-slope.jpg");
+    // Every column `0044`'s trigger governs stays absent or null: that is what makes a photo
+    // check-in legal on a job the shop has not planned yet.
+    const payload = queued?.payload as Record<string, unknown>;
+    expect(payload.work_package_id).toBeUndefined();
+    expect(payload.evidence_slot_id).toBeUndefined();
+    expect(payload.evidence_device_id).toBeUndefined();
+    expect(payload.work_package_release_attempt_id).toBeNull();
+    expect(await getOutboxActionsNeedingAttention(principal)).toEqual([]);
   });
 
   it("sends a note-only blocker report on a job with no work plan", async () => {

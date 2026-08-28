@@ -1,14 +1,15 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
- * What a crew member sees when the server cannot take a check-in (ELEC-211).
+ * What a crew member sees on a job production has not planned yet (ELEC-211, ELEC-213).
  *
  * Two states, both on the phone the work is done from:
  *
- * 1. The job is scheduled but production has not issued a work plan yet — the default state right
- *    after scheduling. The server refuses evidence in that state
- *    (`workers-bus/migrations/0044_work_package_evidence_slots.sql`), so the surface does not offer
- *    photo capture and says why, instead of accepting files it can never send.
+ * 1. The job is scheduled but has no work plan — the default state right after scheduling, and
+ *    where most field photos are taken. The server accepts a plain check-in with media there: only
+ *    a payload that *asserts* a Work Package binding needs a released plan
+ *    (`workers-bus/src/field-actions.ts` `carriesEvidenceBinding`), and `0044`'s trigger is a no-op
+ *    when none of its columns are set. So the camera is offered and the photo actually sends.
  * 2. The server refuses a submission terminally. The saved item must leave "Waiting" and read as a
  *    stopped item with a next step, never as an upload still looking for signal.
  */
@@ -25,17 +26,24 @@ test.describe("Check-in refusals on the crew phone", () => {
     await seedPairedFieldDevice(page);
   });
 
-  test("offers no photo capture before production issues a work plan, and says why", async ({
+  test("offers photo and voice capture before production issues a work plan, and sends it", async ({
     page,
   }, testInfo) => {
     await routeJobWithoutWorkPackage(page);
     await page.goto("/check-in/JOB-ACCEPTANCE");
 
-    await expect(page.getByRole("heading", { name: "Say what is happening" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Capture what you see" })).toBeVisible();
+    await expect(page.locator('input[type="file"][accept*="image"]')).toHaveCount(1);
+    await expect(page.locator('input[type="file"][accept*="audio"]')).toHaveCount(1);
+    // Step one still carries the file pickers, so its label must not be degraded.
+    await expect(page.getByText("Step 1 of 3 · Files")).toBeVisible();
     await expect(
       page.getByText("Photos can be attached once production issues a work plan."),
-    ).toBeVisible();
-    await expect(page.locator('input[type="file"]')).toHaveCount(0);
+    ).toHaveCount(0);
+    // A crew member reads this on a roof: nothing may spill sideways off the phone.
+    expect(
+      await page.evaluate(() => globalThis.document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(PHONE.width);
 
     await testInfo.attach("checkin-no-work-plan-390px.png", {
       body: await page.screenshot({
@@ -45,22 +53,32 @@ test.describe("Check-in refusals on the crew phone", () => {
       contentType: "image/png",
     });
 
-    await page.getByRole("button", { name: "Continue to review" }).click();
-    await page.getByRole("button", { name: "Report a blocker" }).click();
-    await expect(
-      page.getByText(
-        "This report sends as text. Photos can be attached once production issues a work plan.",
-      ),
-    ).toBeVisible();
-    // A crew member reads this on a roof: nothing may spill sideways off the phone.
-    expect(
-      await page.evaluate(() => globalThis.document.documentElement.scrollWidth),
-    ).toBeLessThanOrEqual(PHONE.width);
+    await page.setInputFiles('input[type="file"][accept*="image"]', {
+      name: "north-slope.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+    });
+    await expect(page.getByText("north-slope.jpg")).toBeVisible();
 
-    await testInfo.attach("checkin-blocker-no-photos-390px.png", {
+    await testInfo.attach("checkin-no-work-plan-photo-selected-390px.png", {
       body: await page.screenshot({
         fullPage: true,
-        path: "test-results/evidence/checkin-blocker-no-photos-390px.png",
+        path: "test-results/evidence/checkin-no-work-plan-photo-selected-390px.png",
+      }),
+      contentType: "image/png",
+    });
+
+    // The acceptance server applies the same untyped/typed split as the Worker, so a green send
+    // here is proof the photo is accepted rather than refused on a job with no plan.
+    await page.getByRole("button", { name: "Continue to review" }).click();
+    await page.getByRole("button", { name: "Save on device" }).click();
+    await expect(page.getByRole("heading", { name: "Check-in saved" })).toBeVisible();
+    await expect(page.getByText("Sent", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Check-in needs a check" })).toHaveCount(0);
+
+    await testInfo.attach("checkin-no-work-plan-sent-390px.png", {
+      body: await page.getByTestId("checkin-saved").screenshot({
+        path: "test-results/evidence/checkin-no-work-plan-sent-390px.png",
       }),
       contentType: "image/png",
     });

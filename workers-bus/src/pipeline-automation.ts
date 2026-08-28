@@ -74,6 +74,14 @@ const DOCUMENT_ACTOR_ID = "pipeline-automation";
 const DOCUMENT_ACTOR_AUTHORITY_REF = "authority:pipeline-automation";
 export const PIPELINE_AUTOMATION_DEFAULT_LIMIT = 25;
 export const PIPELINE_AUTOMATION_MAX_LIMIT = 100;
+/**
+ * How many recent firings the activity read publishes. An administrator opens it to answer "did the
+ * last one work?", not to audit a year of dispatch, and an unbounded read of an append-only table is
+ * a cost a configuration screen should never be able to impose. The window and whether it clipped
+ * anything both travel in the response, so a client is never left guessing whether it is looking at
+ * the whole record.
+ */
+export const PIPELINE_AUTOMATION_ACTIVITY_LIMIT = 20;
 const PIPELINE_AUTOMATION_RETRY_LIMIT = 2;
 const INVOCATION_LEASE_MS = 2 * 60_000;
 const RECIPIENT_REF_PATTERN = /^[A-Za-z0-9._:-]{1,120}$/;
@@ -177,6 +185,22 @@ interface OutboxRow {
   updated_at: string;
 }
 
+/**
+ * The lifecycle of one firing, as the schema stores it.
+ *
+ * `succeeded`, `failed` and `unknown` are THREE terminal answers, not two. `unknown` is the effect
+ * ledger declining to claim a delivery it could not verify - the message may well have gone out.
+ * Anything that reads this rail (including the administrator's own screen) has to keep it separate:
+ * collapsing it into either neighbour asserts something the server deliberately refused to assert.
+ */
+export type PipelineAutomationDispatchStatus =
+  | "pending"
+  | "claimed"
+  | "retry"
+  | "succeeded"
+  | "failed"
+  | "unknown";
+
 interface InvocationRow {
   invocation_id: string;
   tenant_id: string;
@@ -191,7 +215,7 @@ interface InvocationRow {
   recipient_digest: string | null;
   template_key: string;
   template_version: number;
-  status: "pending" | "claimed" | "retry" | "succeeded" | "failed" | "unknown";
+  status: PipelineAutomationDispatchStatus;
   attempt_count: number;
   lease_ref: string | null;
   lease_expires_at: string | null;
@@ -318,6 +342,14 @@ export interface PipelineAutomationCatalog {
    */
   recipient_source: "tenant" | "deployment" | "none";
   document_generation_configured: boolean;
+  /**
+   * True when this deployment also serves `.../automation-rules/:ruleId/activity`, i.e. publishes
+   * what a rule DID and not only how it is configured. A client keys its whole firing surface off
+   * this flag rather than off an empty list, because an empty panel from a deployment that never
+   * publishes outcomes reads as "nothing has gone wrong" - a claim an unpublished outcome cannot
+   * support. It is a statement about the BUILD, not about the tenant's data or configuration.
+   */
+  activity_available: boolean;
 }
 
 /**
@@ -366,6 +398,11 @@ export async function pipelineAutomationCatalog(
     recipient_configured: recipients.entries.length > 0,
     recipient_source: recipients.source,
     document_generation_configured: documents,
+    // Unconditional, unlike the two flags above: those report deployment configuration, this one
+    // reports that `listPipelineAutomationActivity` is wired to a route in this build. Nothing an
+    // operator can switch off changes the answer, and a rule that has never fired still publishes
+    // an honest empty window rather than no window at all.
+    activity_available: true,
   };
 }
 
@@ -632,6 +669,75 @@ export async function listPipelineAutomationRuleRevisions(
       ORDER BY r.version ASC, r.revision_id ASC`,
   ).bind(tenantId, pipelineId, ruleId).all<PipelineAutomationRule>();
   return rows.results.length > 0 ? rows.results : null;
+}
+
+/**
+ * One firing of one rule, as an administrator is entitled to see it.
+ *
+ * Deliberately NARROWER than `InvocationRow`. The recipient reference and digest, the effect id and
+ * state, the provider's external id and the response/readback hashes all stay server-side: they are
+ * delivery evidence for an operator holding the effect ledger, not something a configuration screen
+ * needs in order to say what happened. `result_code` is the one diagnostic that crosses, and it
+ * crosses as PROVENANCE beside a translated sentence, never as the sentence itself.
+ */
+export interface PipelineAutomationDispatch {
+  invocation_id: string;
+  outbox_id: string;
+  transition_id: string;
+  /** The card whose move fired this rule. */
+  card_id: string | null;
+  to_stage_id: string;
+  rule_version: number;
+  action: PipelineAutomationAction;
+  status: PipelineAutomationDispatchStatus;
+  attempt_count: number;
+  result_code: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+/**
+ * What a rule DID, newest first - the counterpart to `listPipelineAutomationRuleRevisions`, which
+ * answers only how the rule was configured over time.
+ *
+ * A rule that exists and has never fired returns an empty window; that is a different answer from
+ * "this deployment does not publish outcomes" (the catalog's `activity_available`) and from "no such
+ * rule" (a 404 at the route), and all three have to stay distinguishable or an administrator cannot
+ * tell a healthy rule from an invisible failure.
+ *
+ * The join to the outbox is what supplies the card and the stage the card landed on; the invocation
+ * row itself carries no card. `binding_state = 'no_rule'` rows are excluded explicitly: today they
+ * never own an invocation (one is only inserted once the outbox is `bound`), so the predicate costs
+ * nothing and stops a future binding state from quietly renaming somebody else's transition as this
+ * rule's firing.
+ */
+export async function listPipelineAutomationActivity(
+  env: AppEnv,
+  tenantId: string,
+  pipelineId: string,
+  ruleId: string,
+  limit: number = PIPELINE_AUTOMATION_ACTIVITY_LIMIT,
+): Promise<{ activity: PipelineAutomationDispatch[]; limit: number; truncated: boolean }> {
+  const window = boundedLimit(limit);
+  // One row beyond the window, so "there is more" is observed rather than inferred from a full page.
+  const rows = await env.DB.prepare(
+    `SELECT i.invocation_id, i.outbox_id, i.transition_id, o.card_id, o.to_stage_id,
+            i.rule_version, i.action, i.status, i.attempt_count, i.result_code,
+            i.created_at, i.updated_at, i.completed_at
+       FROM pipeline_stage_automation_invocations i
+       JOIN pipeline_stage_automation_outbox o
+         ON o.tenant_id = i.tenant_id AND o.outbox_id = i.outbox_id
+      WHERE i.tenant_id = ? AND i.pipeline_id = ? AND i.rule_id = ?
+        AND o.binding_state != 'no_rule'
+      ORDER BY i.created_at DESC, i.invocation_id DESC
+      LIMIT ?`,
+  ).bind(tenantId, pipelineId, ruleId, window + 1).all<PipelineAutomationDispatch>();
+  return {
+    activity: rows.results.slice(0, window),
+    limit: window,
+    truncated: rows.results.length > window,
+  };
 }
 
 export async function createPipelineAutomationRule(

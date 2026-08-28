@@ -9,6 +9,8 @@ import {
   createPipelineAutomationRule,
   drainPipelineStageAutomation,
   getPipelineAutomationRule,
+  listPipelineAutomationActivity,
+  PIPELINE_AUTOMATION_ACTIVITY_LIMIT,
   pipelineAutomationEffectKey,
   renderStageChangeSummary,
   recoverPipelineAutomationLeases,
@@ -644,5 +646,258 @@ test("rule and invocation identity guards refuse mutable or cross-tenant rewrite
   );
   const hidden = await getPipelineAutomationRule(env, OTHER_TENANT, rule.rule_id);
   assert.equal(hidden, null);
+  harness.db.close();
+});
+
+/* ------------------------------------------------------------------ dispatch activity ---- */
+
+const ACTIVITY = (ruleId: string) => `${ADMIN}/${ruleId}/activity`;
+
+/**
+ * Every key one activity row may carry, and no other.
+ *
+ * Asserted as a whole set rather than field by field, because the risk on this response is an
+ * ADDITION nobody meant. Recipient addresses and digests, effect ids and states, provider external
+ * ids and response/readback hashes are delivery evidence for an operator holding the effect ledger;
+ * a configuration screen handed them will eventually render them at somebody's customer.
+ */
+const DISPATCH_KEYS = [
+  "action",
+  "attempt_count",
+  "card_id",
+  "completed_at",
+  "created_at",
+  "invocation_id",
+  "outbox_id",
+  "result_code",
+  "rule_version",
+  "status",
+  "to_stage_id",
+  "transition_id",
+  "updated_at",
+];
+
+async function moveCard(
+  harness: Harness,
+  cardId: string,
+  toStageKey: string,
+  version: number,
+  options: { key: string; confirmed?: boolean; at?: Date },
+): Promise<Record<string, any>> {
+  const response = await handlePipelineRoute(
+    request("POST", `/api/v1/pipelines/${SALES_PIPELINE_ID}/cards/${cardId}/transitions`, {
+      body: {
+        to_stage_id: stageId(toStageKey),
+        expected_version: version,
+        ...(options.confirmed === undefined ? {} : { confirmed: options.confirmed }),
+      },
+      idempotency: options.key,
+    }),
+    harness.env,
+    auth("owner"),
+    options.at ?? NOW,
+  );
+  assert.ok(response);
+  const body = (await response.json()) as Record<string, any>;
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
+test("a rule's activity publishes each firing's real outcome, newest first, and nothing else", async () => {
+  const harness = setup();
+  const env = automationEnv(harness);
+  const listed = await admin(harness, "GET", ADMIN);
+  // The client renders no firing surface whatsoever until this is true, so an empty panel can never
+  // be read as "nothing has gone wrong" on a deployment that does not publish outcomes at all.
+  assert.equal(listed.body.catalog.activity_available, true, JSON.stringify(listed.body.catalog));
+
+  const rule = await admin(harness, "POST", ADMIN, RULE_BODY(stageId("new_lead")));
+  assert.equal(rule.status, 201, JSON.stringify(rule.body));
+  const ruleId = String(rule.body.rule.rule_id);
+
+  // A rule that exists and has never fired is a 200 with an empty window. "Nothing fired" is a
+  // different answer from "no such rule" (404) and from "outcomes are not published here" (no flag).
+  const quiet = await admin(harness, "GET", ACTIVITY(ruleId));
+  assert.equal(quiet.status, 200, JSON.stringify(quiet.body));
+  assert.deepEqual(quiet.body, {
+    version: 1,
+    pipeline_id: SALES_PIPELINE_ID,
+    rule_id: ruleId,
+    limit: 20,
+    truncated: false,
+    activity: [],
+  });
+
+  // Firing 1: delivery confirmed.
+  const sent = await placeCard(harness, "new_lead", "activity-sent-000000000001");
+  const sentDrain = await drainPipelineStageAutomation(env, {
+    now: NOW,
+    sender: successfulFakeSender(),
+    limit: 5,
+  });
+  assert.equal(sentDrain.sent, 1, JSON.stringify(sentDrain));
+
+  // Firing 2: the ledger declines to confirm. Neither sent nor failed - its own answer.
+  const unconfirmed = await placeCard(
+    harness,
+    "new_lead",
+    "activity-unknown-00000000001",
+    "lead:board:0002",
+    new Date(NOW.getTime() + 1_000),
+  );
+  const unknownDrain = await drainPipelineStageAutomation(env, {
+    now: new Date(NOW.getTime() + 2_000),
+    sender: async () => ({
+      outcome: "unknown",
+      effectState: "unknown",
+      resultCode: "gmail_readback_id_missing",
+    }),
+    limit: 5,
+  });
+  assert.equal(unknownDrain.unknown, 1, JSON.stringify(unknownDrain));
+
+  // Firing 3: the same card returns to the stage and every attempt is refused. The step out to
+  // `visit_booked` matches no rule, so it must never surface here as this rule's firing.
+  const parked = await moveCard(harness, String(sent.card_id), "visit_booked", Number(sent.card_version), {
+    key: "activity-park-000000000001",
+    at: new Date(NOW.getTime() + 3_000),
+  });
+  await moveCard(harness, String(sent.card_id), "new_lead", Number(parked.card_version), {
+    key: "activity-return-00000000001",
+    confirmed: true,
+    at: new Date(NOW.getTime() + 4_000),
+  });
+  const failedDrain = await drainPipelineStageAutomation(env, {
+    now: new Date(NOW.getTime() + 5_000),
+    sender: async () => ({ outcome: "retry", resultCode: "provider_temporarily_unavailable" }),
+    limit: 10,
+  });
+  assert.equal(failedDrain.no_rule, 1, JSON.stringify(failedDrain));
+  assert.equal(failedDrain.failed, 1, JSON.stringify(failedDrain));
+
+  const activity = await admin(harness, "GET", ACTIVITY(ruleId));
+  assert.equal(activity.status, 200, JSON.stringify(activity.body));
+  assert.equal(activity.body.truncated, false);
+  const rows = activity.body.activity as Record<string, any>[];
+  // Newest first, so "did the last one work?" is answered by the first row.
+  assert.deepEqual(
+    rows.map((row) => [row.status, row.result_code, row.attempt_count]),
+    [
+      ["failed", "automation_retry_exhausted", 2],
+      ["unknown", "gmail_readback_id_missing", 1],
+      ["succeeded", "delivered", 1],
+    ],
+  );
+  // Three terminal answers stay three. Folding `unknown` into either neighbour would claim - or
+  // deny - a delivery the effect ledger deliberately refused to rule on.
+  assert.equal(new Set(rows.map((row) => row.status)).size, 3);
+  // The card is per FIRING, not per rule: the same card fired twice here with different outcomes.
+  assert.deepEqual(rows.map((row) => row.card_id), [sent.card_id, unconfirmed.card_id, sent.card_id]);
+  assert.equal(new Set(rows.map((row) => row.invocation_id)).size, 3);
+  assert.equal(new Set(rows.map((row) => row.transition_id)).size, 3);
+
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), DISPATCH_KEYS, JSON.stringify(row));
+    assert.equal(row.action, "operations.email.send");
+    assert.equal(row.rule_version, 1);
+    assert.equal(row.to_stage_id, stageId("new_lead"), "the stage that fired, not the one moved from");
+    assert.match(String(row.invocation_id), /^parinv_[0-9a-f]{48}$/);
+    assert.equal(typeof row.created_at, "string");
+    assert.equal(typeof row.updated_at, "string");
+    assert.notEqual(row.completed_at, null, "every one of these firings reached a terminal answer");
+  }
+
+  const parkedOutbox = harness.db.raw
+    .prepare(
+      `SELECT binding_state, terminal_code FROM pipeline_stage_automation_outbox
+        WHERE tenant_id = ? AND to_stage_id = ?`,
+    )
+    .get(TENANT, stageId("visit_booked")) as { binding_state: string; terminal_code: string };
+  assert.equal(parkedOutbox.binding_state, "no_rule");
+  assert.equal(parkedOutbox.terminal_code, "no_matching_rule");
+  assert.equal(
+    rows.some((row) => row.to_stage_id === stageId("visit_booked")),
+    false,
+    "a transition that matched no rule is not this rule's firing",
+  );
+  harness.db.close();
+});
+
+test("automation activity is owner-only, scoped to its own rule and pipeline, and read-only", async () => {
+  const harness = setup();
+  const env = automationEnv(harness);
+  const rule = await admin(harness, "POST", ADMIN, RULE_BODY(stageId("new_lead")));
+  const ruleId = String(rule.body.rule.rule_id);
+  await placeCard(harness, "new_lead", "activity-authority-0000001");
+  await placeCard(
+    harness,
+    "new_lead",
+    "activity-authority-0000002",
+    "lead:board:0002",
+    new Date(NOW.getTime() + 1_000),
+  );
+  const drained = await drainPipelineStageAutomation(env, {
+    now: new Date(NOW.getTime() + 2_000),
+    sender: successfulFakeSender(),
+    limit: 5,
+  });
+  assert.equal(drained.sent, 2, JSON.stringify(drained));
+
+  const forbidden = await admin(harness, "GET", ACTIVITY(ruleId), undefined, "sales");
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error, "pipeline_admin_forbidden");
+  const otherTenant = await admin(harness, "GET", ACTIVITY(ruleId), undefined, "owner", OTHER_TENANT);
+  assert.equal(otherTenant.status, 404);
+  const missingRule = await admin(harness, "GET", `${ADMIN}/missing-rule/activity`);
+  assert.equal(missingRule.status, 404);
+  const missingPipeline = await admin(
+    harness,
+    "GET",
+    `/api/v1/admin/pipelines/pipe_missing/automation-rules/${ruleId}/activity`,
+  );
+  assert.equal(missingPipeline.status, 404);
+
+  // A real rule read through a real board it does not belong to is a 404, not that board's firings.
+  const otherBoard = await admin(harness, "POST", "/api/v1/admin/pipelines", {
+    key: "shop_production",
+    name: "Shop production",
+    entity_type: "job",
+    owning_role: "production",
+    card_template: { version: 1, slots: [{ slot: "title", sources: ["entity.job_number"] }] },
+    stages: [
+      { key: "queued", name: "Queued", color: "slate" },
+      { key: "ready", name: "Ready", color: "emerald", is_won: true },
+    ],
+  });
+  assert.equal(otherBoard.status, 201, JSON.stringify(otherBoard.body));
+  const crossBoard = await admin(
+    harness,
+    "GET",
+    `/api/v1/admin/pipelines/${otherBoard.body.pipeline.pipeline_id}/automation-rules/${ruleId}/activity`,
+  );
+  assert.equal(crossBoard.status, 404);
+
+  // Nothing here is a command. `Retry now` needs its own authority and idempotency story, so the
+  // path refuses a write rather than growing one by accident.
+  const write = await admin(harness, "POST", ACTIVITY(ruleId), {});
+  assert.equal(write.status, 404);
+
+  // The window is a cap, and the response says so instead of leaving a full page to be mistaken for
+  // the whole record. Newest-first survives the clip, so what is dropped is the oldest.
+  const full = await listPipelineAutomationActivity(env, TENANT, SALES_PIPELINE_ID, ruleId);
+  assert.equal(full.limit, PIPELINE_AUTOMATION_ACTIVITY_LIMIT);
+  assert.equal(full.truncated, false);
+  assert.equal(full.activity.length, 2);
+  const clipped = await listPipelineAutomationActivity(env, TENANT, SALES_PIPELINE_ID, ruleId, 1);
+  assert.equal(clipped.limit, 1);
+  assert.equal(clipped.truncated, true);
+  assert.deepEqual(
+    clipped.activity.map((entry) => entry.invocation_id),
+    [full.activity[0]?.invocation_id],
+  );
+  // Another tenant's owner reads the same rule id and gets nothing, by the query rather than by the
+  // caller.
+  const hidden = await listPipelineAutomationActivity(env, OTHER_TENANT, SALES_PIPELINE_ID, ruleId);
+  assert.deepEqual(hidden.activity, []);
   harness.db.close();
 });

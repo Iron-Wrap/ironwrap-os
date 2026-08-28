@@ -75,6 +75,8 @@ import {
 } from "./pipeline-board-store.ts";
 import {
   createPipelineAutomationRule,
+  getPipelineAutomationRule,
+  listPipelineAutomationActivity,
   listPipelineAutomationRules,
   listPipelineAutomationRuleRevisions,
   pipelineAutomationCatalog,
@@ -624,6 +626,10 @@ const ADMIN_AUTOMATION_RULES_ROUTE = new RegExp(`^${ADMIN_ROOT}/([^/]+)/automati
 const ADMIN_AUTOMATION_REVISIONS_ROUTE = new RegExp(
   `^${ADMIN_ROOT}/([^/]+)/automation-rules/([^/]+)/revisions$`,
 );
+/** `/revisions` is how the rule was configured over time; `/activity` is what it did when it fired. */
+const ADMIN_AUTOMATION_ACTIVITY_ROUTE = new RegExp(
+  `^${ADMIN_ROOT}/([^/]+)/automation-rules/([^/]+)/activity$`,
+);
 
 async function handleAdministrationRoute(
   req: Request,
@@ -643,6 +649,14 @@ async function handleAdministrationRoute(
         auth,
         automationRevision[1] ?? "",
         automationRevision[2] ?? "",
+      );
+    const automationActivity = url.pathname.match(ADMIN_AUTOMATION_ACTIVITY_ROUTE);
+    if (automationActivity)
+      return await handleAdminAutomationActivity(
+        env,
+        auth,
+        automationActivity[1] ?? "",
+        automationActivity[2] ?? "",
       );
     return await handleAdminAutomationList(env, auth, url.pathname);
   }
@@ -784,6 +798,56 @@ async function handleAdminAutomationHistory(
     current_revision_id: current?.revision_id ?? null,
     current_version: current?.version ?? null,
     revisions,
+  });
+}
+
+/**
+ * What the rule DID, as opposed to how it was configured.
+ *
+ * Its neighbour above answers "when did the trigger, action or template change?". This answers "did
+ * the last firing work?" - the only one of the two an administrator can act on, and the one nothing
+ * in the product could answer before: a failed automation was discoverable only by an engineer
+ * querying the outbox. Same owner-only authority and the same 404 shape as every route here, so a
+ * caller learns nothing about the tenant from a path that does not resolve.
+ *
+ * Three answers stay distinguishable on purpose. An unknown rule is a 404. A rule that exists and
+ * has never fired is a 200 with an empty window - it says "nothing fired", not "nothing failed".
+ * And a deployment that does not serve this route at all publishes no `activity_available`, so the
+ * client shows no firing surface rather than an empty one that would read as an all-clear.
+ *
+ * Nothing here is a command. `Retry now` is deliberately absent: re-dispatching a governed effect
+ * needs its own authority and idempotency story, and a dead button would be worse than none.
+ */
+async function handleAdminAutomationActivity(
+  env: AppEnv,
+  auth: AuthContext,
+  encodedPipelineId: string,
+  encodedRuleId: string,
+): Promise<Response> {
+  const pipelineId = decoded(encodedPipelineId);
+  const ruleId = decoded(encodedRuleId);
+  if (!pipelineId || !ruleId) return json({ error: "not_found" }, 404);
+  const pipeline = await adminPipeline(env, auth.session.tenant_id, pipelineId);
+  if (!pipeline) return json({ error: "not_found" }, 404);
+  // The rule is looked up by tenant and then checked against THIS pipeline, so a rule id borrowed
+  // from another board cannot be read through a path that names one the caller may administer.
+  const rule = await getPipelineAutomationRule(env, auth.session.tenant_id, ruleId);
+  if (!rule || rule.pipeline_id !== pipeline.pipeline_id) return json({ error: "not_found" }, 404);
+  const window = await listPipelineAutomationActivity(
+    env,
+    auth.session.tenant_id,
+    pipeline.pipeline_id,
+    rule.rule_id,
+  );
+  return json({
+    version: 1,
+    pipeline_id: pipeline.pipeline_id,
+    rule_id: rule.rule_id,
+    // The cap and whether it clipped anything are published rather than left to be inferred from a
+    // full page, so a client can say "the 20 most recent" honestly instead of implying "all of it".
+    limit: window.limit,
+    truncated: window.truncated,
+    activity: window.activity,
   });
 }
 

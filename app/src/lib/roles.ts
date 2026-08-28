@@ -29,7 +29,8 @@ export type RoleSurface =
   | "field"
   | "fleet"
   | "inventory"
-  | "pairing";
+  | "pairing"
+  | "ownerConfiguration";
 
 export interface NavigationItem {
   label: string;
@@ -273,6 +274,7 @@ export function navigationForRole(role: AppRole): readonly NavigationItem[] {
 }
 
 export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
+  if (surface === "ownerConfiguration") return role === "owner";
   if (surface === "accounting") return role === "owner" || role === "accounting";
   if (role === "accounting") return false;
   // Capturing against a fleet asset is a field-only right: `/api/v1/fleet/*`

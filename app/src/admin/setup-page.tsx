@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Building2, PlugZap, Settings, Smartphone, Users } from "lucide-react";
+import { Building2, PlugZap, Settings, Settings2, Smartphone, Users } from "lucide-react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -104,6 +104,14 @@ function OwnerSetup() {
             title="Integrations and readiness"
             description="See which provider rails are proven, blocked, expired, or safely disabled."
           />
+          {session.user.role === "owner" ? (
+            <SetupLink
+              to="/settings/configuration"
+              icon={Settings2}
+              title="Owner configuration"
+              description="Manage pipelines, structured fields, and governed stage-change automations."
+            />
+          ) : null}
         </CardContent>
       </Card>
     </section>

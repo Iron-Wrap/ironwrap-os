@@ -27,6 +27,31 @@ export const API_PATHS = {
   adminCompanyProfile: "/api/v1/admin/company-profile",
   adminCompanyLogo: "/api/v1/admin/company-profile/logo",
   adminSetupProgress: "/api/v1/admin/setup-progress",
+  adminPipelines: "/api/v1/admin/pipelines",
+  adminPipeline: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}`,
+  adminPipelineOrder: "/api/v1/admin/pipelines/order",
+  adminPipelineCopy: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/copy`,
+  adminPipelineRoles: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/roles`,
+  adminPipelineStages: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/stages`,
+  adminPipelineStageOrder: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/stages/order`,
+  adminPipelineStage: (pipelineId: string, stageId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}`,
+  adminPipelineStageRemove: (pipelineId: string, stageId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}/remove`,
+  adminPipelineAutomationRules: (pipelineId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/automation-rules`,
+  adminPipelineAutomationRuleRevisions: (pipelineId: string, ruleId: string) =>
+    `/api/v1/admin/pipelines/${encodeURIComponent(pipelineId)}/automation-rules/${encodeURIComponent(ruleId)}/revisions`,
+  adminSchemaFields: "/api/v1/admin/schema-fields",
+  adminSchemaField: (fieldId: string) =>
+    `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}`,
+  adminSchemaFieldRevisions: (fieldId: string) =>
+    `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}/revisions`,
   companyLogo: "/public/company-logo",
   salesLeads: "/api/v1/sales/leads",
   devicePairings: "/api/v1/device-pairings",

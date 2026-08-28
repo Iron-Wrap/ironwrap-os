@@ -55,7 +55,12 @@ export function SetupLink({
   description,
   status,
 }: {
-  to: "/settings/company" | "/settings/team" | "/settings/devices" | "/settings/integrations";
+  to:
+    | "/settings/company"
+    | "/settings/team"
+    | "/settings/devices"
+    | "/settings/integrations"
+    | "/settings/configuration";
   icon: LucideIcon;
   title: string;
   description: string;

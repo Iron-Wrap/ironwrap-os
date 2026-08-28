@@ -3,6 +3,7 @@ import { registerSW } from "virtual:pwa-register";
 import { useEffect, useRef, useState } from "react";
 
 import { useInstallPrompt } from "../hooks/use-install-prompt";
+import { useOfflineWriteMode } from "./offline-write-mode";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { cn } from "../lib/cn";
 import { flushOutbox } from "../storage/outbox-processor";
@@ -23,6 +24,13 @@ export function SystemStatus() {
   const deviceProof = session.user.role === "field" ? getDeviceSecret : undefined;
   const canSync = online && Boolean(csrfToken);
   const storage = useStorageDurability();
+  // The queued-work promise below is true of the field surfaces and false of the
+  // read-only configuration screens, where an offline edit is refused and kept
+  // nowhere. Say what this surface actually does rather than promise a sync that
+  // will never happen.
+  const offlineWriteMode = useOfflineWriteMode();
+  const offlineDiscardsWrites =
+    offlineWriteMode === "read_only" && outbox.pending === 0 && outbox.uploading === 0;
   const storageWarning = storage.checked ? storage.warning : undefined;
   const storageNeedsEscalation =
     Boolean(storageWarning) &&
@@ -113,7 +121,9 @@ export function SystemStatus() {
                 : outbox.unclaimed > 0
                   ? `${outbox.unclaimed} older saved ${outbox.unclaimed === 1 ? "item belongs" : "items belong"} to an older sign-in. ${outbox.unclaimed === 1 ? "It stays" : "They stay"} on this device and will not send with this sign-in. Keep this device for the office.`
                   : !online
-                    ? "Offline. New work stays on this device until you go online and keep the app open."
+                    ? offlineDiscardsWrites
+                      ? "Offline. This screen is read-only until you reconnect; nothing here is queued for sending."
+                      : "Offline. New work stays on this device until you go online and keep the app open."
                     : !csrfToken && outbox.pending > 0
                       ? "Go online and confirm this sign-in before sending. Every saved item stays on this device."
                       : outbox.uploading > 0

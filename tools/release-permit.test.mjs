@@ -42,6 +42,8 @@ import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.
 
 const run = promisify(execFile);
 const sha = (value) => createHash("sha256").update(value).digest("hex");
+const CAPABILITY_CONTRACT_START = "<!-- capability-evidence-contract:start -->";
+const CAPABILITY_CONTRACT_END = "<!-- capability-evidence-contract:end -->";
 const COMMIT = "a".repeat(40);
 const BASE = "b".repeat(40);
 const GIT_TREE = "c".repeat(40);
@@ -78,6 +80,20 @@ function affectedScopes() {
     non_applicability_policy_digest: null,
     reason_digest: null,
   }));
+}
+
+async function loadCapabilityContract(repoRoot) {
+  const matrixPath = path.join(repoRoot, "docs", "CAPABILITY-MATRIX.md");
+  const content = await readFile(matrixPath, "utf8");
+  const start = content.indexOf(CAPABILITY_CONTRACT_START);
+  const end = content.indexOf(CAPABILITY_CONTRACT_END);
+  assert.notEqual(start, -1, "docs/CAPABILITY-MATRIX.md must embed capability contract start marker");
+  assert.notEqual(end, -1, "docs/CAPABILITY-MATRIX.md must embed capability contract end marker");
+  assert.ok(end > start, "docs/CAPABILITY-MATRIX.md capability contract markers must be ordered");
+  const between = content.slice(start + CAPABILITY_CONTRACT_START.length, end);
+  const fence = between.match(/```json\s*([\s\S]*?)```/);
+  assert.ok(fence, "docs/CAPABILITY-MATRIX.md capability contract must contain one json fence");
+  return JSON.parse(fence[1]);
 }
 
 function productionRecovery() {
@@ -1364,14 +1380,14 @@ test("supply-chain evidence is deterministic and bound to exact release-source C
 });
 
 test("migration inventory is ordered and expand-contract only", async () => {
-  const migrations = await computeMigrationSet({ repoRoot: path.resolve(import.meta.dirname, "..") });
+  const repoRoot = path.resolve(import.meta.dirname, "..");
+  const migrations = await computeMigrationSet({ repoRoot });
+  const contract = await loadCapabilityContract(repoRoot);
   assert.equal(migrations.compatibility, "expand-contract");
   assert.equal(migrations.no_down_migrations, true);
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
-  assert.equal(
-    migrations.ordered.at(-1),
-    "0128_automation_recipient_catalog.sql",
-  );
+  assert.equal(migrations.ordered.length, contract.expected.d1_migrations.count);
+  assert.equal(migrations.ordered.at(-1), contract.expected.d1_migrations.latest);
 });
 
 test("the permit lifetime remains bounded by the source contract", () => {

@@ -257,7 +257,10 @@ production credentials must be distinct and incapable of cross-environment mutat
 Before the first migration or upload, a second static readiness preflight requires every top-level
 variable to be repeated in a named environment, nonempty notification sender/recipient variables,
 the exact Cloudflare secret-name inventory, and an allowed OCR model plus OCR secret whenever OCR
-is enabled. It does not weaken `/ready`; a missing value or secret stops before mutation.
+is enabled. For an in-scope Frappe release, the workflow also runs a redacted service-adapter
+configuration preflight that requires the exact HTTPS `/v1/frappe` endpoint, bounded bearer token,
+Ed25519 verification key, and explicit issuer/task/run/key identity. It does not weaken `/ready`; a
+missing value, secret, or adapter contract stops before mutation.
 Any failed staging step after traffic deployment restores the captured previous staging revision
 and accepts cleanup only after exact active-deployment readback; that cleanup receipt is not the
 successful compatibility drill. A production deploy that returns failure after changing traffic is
@@ -278,9 +281,12 @@ before production migrations or traffic promotion. Production promotes any enabl
 artifact through its authenticated adapter, promotes the pre-uploaded Worker/PWA version, re-reads
 every applicable identity after smoke, and advances the durable generation only after the exact
 authenticated launch-proof step set is bound into an immutable production-promotion receipt.
-Failure after a compatibility promotion attempt invokes its idempotent rollback plus Worker
-rollback, then verifies the restored Worker/PWA and applicable compatibility identities and
-health/readiness before atomically persisting the rollback outcome.
+Failure after a compatibility promotion attempt invokes its idempotent Frappe rollback when the
+Frappe promotion was attempted, plus Worker rollback when Worker promotion was attempted. It then
+verifies the restored Worker/PWA and applicable compatibility identities and health/readiness before
+atomically persisting the rollback outcome. If that recovery step cannot complete, the workflow
+persists an `automatic_rollback_incomplete` recovery-required outcome and never claims a successful
+rollback.
 An expired permit may record that emergency rollback only when its original durable single-use
 admission claim is read back exactly. If an admitted D1 migration fails before Frappe or Worker/PWA
 promotion, no down migration or false rollback is attempted: the durable ledger records an exact

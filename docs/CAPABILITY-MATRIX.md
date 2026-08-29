@@ -2,11 +2,16 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-27
+Last verified: 2026-08-29
 Latest phase delta verified: 2026-08-27 (IRO-242 branch-local schema fields/templates and the
 default-off R2 generation/effect/readback/reconciliation path pass focused repository tests. This is
 unmerged source evidence only, not exact-main CI, activation, deployment, runtime, business
 acceptance, customer validation, or production proof.)
+Release activation delta verified: 2026-08-29 (branch-local workflow source invokes the trusted-base
+Frappe adapter preflight and promote/readback/rollback commands, binds their signed receipts, and
+persists incomplete automatic rollback as recovery-required evidence. This is unmerged source and
+test evidence only, not configured provider, deployment, runtime, business acceptance, customer
+validation, or production proof.)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -187,11 +192,15 @@ IRO-41 branch-local implementation:
 - release policy hashing includes the executable CI/deploy/permit/promotion boundary, so candidate
   source cannot approve weakening that boundary for its own release.
 
-The current deploy workflow creates `frappe/ironwrap_roofing.whl` and validates its digest, but it
-does not deliver those bytes to an immutable provider-stage revision or invoke the checked-in
-`service-adapter` client. Receipt filenames in an artifact upload list are not execution evidence.
-No reachable adapter, provider command, staging/production Frappe identity, or live receipt is
-proven. That is the exact gap owned by the release-control chain below.
+The current deploy workflow creates `frappe/ironwrap_roofing.whl`, validates its digest, runs a
+redacted service-adapter configuration preflight, and—after the signed permit and exact source
+admission—invokes the trusted-base `service-adapter` client for Frappe promote and readback. The
+production receipt binds those signed receipts; recovery attempts Frappe rollback whenever its
+promotion was attempted and records `automatic_rollback_incomplete` durably if the recovery step
+cannot complete. These are repository-owned source contracts. No reachable adapter, provider
+command, staging/production Frappe identity, or live receipt is proven. Receipt filenames in an
+artifact upload list are not execution evidence; the live adapter/provider proof remains the exact
+gap owned by the release-control chain below.
 
 The checked-in publication evidence snapshot observed at `2026-08-22T23:53:36Z` records the private
 shared codebase `Iron-Wrap/release-control-plane`, default branch `main`, and bootstrap commit
@@ -270,8 +279,11 @@ capabilities or treat a red `/ready` result as acceptable.
 
 The governed workflow also treats a provider command with a lost or nonzero response as unknown
 until active-deployment readback resolves it. Failed post-deploy staging runs restore the captured
-previous revision and emit a cleanup-only receipt; production recovery attempts rollback whenever
-production promotion ran, then requires exact Worker, PWA, health, and readiness proof.
+previous revision and emit a cleanup-only receipt; production recovery attempts Frappe rollback
+when Frappe promotion ran and Worker rollback when Worker promotion ran, then requires exact
+Worker, PWA, applicable Frappe, health, and readiness proof. If that recovery step itself fails,
+the durable ledger records `automatic_rollback_incomplete` as recovery-required evidence rather
+than claiming a successful rollback.
 
 ### Fleet/equipment delta (2026-08-18, IRO-54 merged over the reviewed assembly)
 

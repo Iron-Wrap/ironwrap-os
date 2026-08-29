@@ -33,6 +33,10 @@ env:
   RELEASE_INDEPENDENT_REVIEW_TASK_ID: independent-source-review
   RELEASE_INDEPENDENT_EVIDENCE_TASK_ID: independent-release-evidence
   RELEASE_INDEPENDENT_ISSUER_KEY_VERSION: review-key-2026-08
+  # This workflow builds and promotes the Frappe wheel, so Frappe/VPS scope is
+  # explicit and in-scope. A genuinely D1-only train must use the CLI's
+  # separately tested `out-of-scope` declaration; it is never the default.
+  RELEASE_FRAPPE_SCOPE: in-scope
 
 jobs:
   admission:
@@ -677,11 +681,36 @@ jobs:
           RELEASE_PRODUCTION_ADMIN_TOKEN: ${{ secrets.RELEASE_PRODUCTION_ADMIN_TOKEN }}
           RELEASE_INDEPENDENT_ISSUER_URL: ${{ secrets.RELEASE_INDEPENDENT_ISSUER_URL }}
           RELEASE_INDEPENDENT_ISSUER_TOKEN: ${{ secrets.RELEASE_INDEPENDENT_ISSUER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
+          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
         run: |
           set -euo pipefail
-          for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN RELEASE_INDEPENDENT_ISSUER_URL RELEASE_INDEPENDENT_ISSUER_TOKEN; do
+          for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN RELEASE_INDEPENDENT_ISSUER_URL RELEASE_INDEPENDENT_ISSUER_TOKEN RELEASE_SERVICE_ADAPTER_URL RELEASE_SERVICE_ADAPTER_TOKEN RELEASE_SERVICE_ADAPTER_PUBLIC_KEY RELEASE_SERVICE_ADAPTER_IDENTITY RELEASE_SERVICE_ADAPTER_TASK_ID RELEASE_SERVICE_ADAPTER_RUN_ID RELEASE_SERVICE_ADAPTER_KEY_VERSION; do
             if [[ -z "${!required:-}" ]]; then echo "release_production_missing_external_secret:$required" >&2; exit 1; fi
           done
+
+      - name: Fail closed on the declared Frappe adapter scope and config
+        env:
+          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
+          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
+        run: |
+          set -euo pipefail
+          # This receipt is redacted, non-authoritative configuration evidence.
+          # The preflight itself still runs from the trusted generation-N base;
+          # candidate source never receives production adapter material.
+          node "$RELEASE_ENFORCER" service-adapter-preflight \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
+            --output "$RUNNER_TEMP/service-adapter-preflight.json"
 
       - name: Verify the same immutable artifact bytes
         run: |
@@ -784,6 +813,7 @@ jobs:
             ${{ runner.temp }}/staging-proof/rollback.json
             ${{ runner.temp }}/production.json
             ${{ runner.temp }}/production-environment-preflight.json
+            ${{ runner.temp }}/service-adapter-preflight.json
             ${{ runner.temp }}/production-recovery.json
             ${{ runner.temp }}/production-previous.id
             ${{ runner.temp }}/production-previous-readback.json
@@ -841,7 +871,7 @@ jobs:
           printf '%s' "$RELEASE_REVIEW_PUBLIC_KEY" > "$RUNNER_TEMP/review.pub"
           printf '%s' "$RELEASE_PERMIT_PRIVATE_KEY" > "$RUNNER_TEMP/permit.key"
           node "$RELEASE_ENFORCER" assemble \
-            --frappe-scope out-of-scope \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --repo-root "$GITHUB_WORKSPACE" \
             --context "$RUNNER_TEMP/context-download/context.json" \
             --policy "$RUNNER_TEMP/context-download/policy.json" \
@@ -909,6 +939,61 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
         run: '"$WRANGLER_BIN" d1 migrations apply ironwrap-bus --config workers-bus/wrangler.jsonc --remote'
 
+      - name: Promote the exact Frappe/VPS candidate through the governed adapter
+        id: promote_frappe
+        env:
+          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
+          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          printf '%s' "$RELEASE_SERVICE_ADAPTER_PUBLIC_KEY" > "$RUNNER_TEMP/service-adapter.pub"
+          node "$RELEASE_ENFORCER" service-adapter \
+            --operation promote \
+            --url "$RELEASE_SERVICE_ADAPTER_URL" \
+            --permit "$RUNNER_TEMP/release-permit.txt" \
+            --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
+            --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
+            --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
+            --issuer-run-id "$RELEASE_SERVICE_ADAPTER_RUN_ID" \
+            --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
+            --output "$RUNNER_TEMP/service-promotion.receipt"
+
+      - name: Re-read the exact Frappe/VPS active revision through the governed adapter
+        id: readback_frappe
+        env:
+          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
+          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_PUBLIC_KEY: ${{ secrets.RELEASE_SERVICE_ADAPTER_PUBLIC_KEY }}
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/permit.pub"
+          test -s "$RUNNER_TEMP/service-adapter.pub"
+          node "$RELEASE_ENFORCER" service-adapter \
+            --operation readback \
+            --url "$RELEASE_SERVICE_ADAPTER_URL" \
+            --permit "$RUNNER_TEMP/release-permit.txt" \
+            --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
+            --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
+            --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
+            --issuer-run-id "$RELEASE_SERVICE_ADAPTER_RUN_ID" \
+            --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
+            --output "$RUNNER_TEMP/service-readback.receipt"
+
       - name: Promote the pre-verified immutable production version
         id: promote_production
         env:
@@ -938,10 +1023,15 @@ jobs:
             --output "$RUNNER_TEMP/production-post-smoke.id"
 
       - name: Bind production active revision, readiness, and exact smoke to immutable receipt
+        env:
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
         run: |
           set -euo pipefail
           node "$RELEASE_ENFORCER" production-receipt \
-            --frappe-scope out-of-scope \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --active "$RUNNER_TEMP/production-post-smoke.id" \
             --smoke "$RUNNER_TEMP/production-smoke-evidence.json" \
             --health "$RUNNER_TEMP/production-health.json" --ready "$RUNNER_TEMP/production-ready.json" \
@@ -953,6 +1043,13 @@ jobs:
             --version-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/production.json" --field version_digest)" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \
             --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --service-promotion-receipt "$RUNNER_TEMP/service-promotion.receipt" \
+            --service-readback-receipt "$RUNNER_TEMP/service-readback.receipt" \
+            --service-public-key "$RUNNER_TEMP/service-adapter.pub" \
+            --service-issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
+            --service-issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
+            --service-issuer-run-id "$RELEASE_SERVICE_ADAPTER_RUN_ID" \
+            --service-key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
             --output "$RUNNER_TEMP/production-promotion.json"
 
       - name: Advance the durable generation only after production proof
@@ -972,21 +1069,46 @@ jobs:
             --output "$RUNNER_TEMP/generation-advance.json"
 
       - name: Automatic rollback and immutable readback after a failed promotion
-        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.promote_production.outcome != 'skipped' }}
+        id: rollback_production
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && (steps.promote_production.outcome != 'skipped' || steps.promote_frappe.outcome != 'skipped') }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
           RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+          RELEASE_SERVICE_ADAPTER_URL: ${{ secrets.RELEASE_SERVICE_ADAPTER_URL }}
+          RELEASE_SERVICE_ADAPTER_TOKEN: ${{ secrets.RELEASE_SERVICE_ADAPTER_TOKEN }}
+          RELEASE_SERVICE_ADAPTER_IDENTITY: ${{ secrets.RELEASE_SERVICE_ADAPTER_IDENTITY }}
+          RELEASE_SERVICE_ADAPTER_TASK_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_TASK_ID }}
+          RELEASE_SERVICE_ADAPTER_RUN_ID: ${{ secrets.RELEASE_SERVICE_ADAPTER_RUN_ID }}
+          RELEASE_SERVICE_ADAPTER_KEY_VERSION: ${{ secrets.RELEASE_SERVICE_ADAPTER_KEY_VERSION }}
         run: |
           set -euo pipefail
           previous="${{ steps.capture_production.outputs.previous }}"
           candidate="$(cat "$RUNNER_TEMP/production-version.id")"
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          if [[ "${{ steps.promote_frappe.outcome }}" != "skipped" ]]; then
+            if ! node "$RELEASE_ENFORCER" service-adapter \
+              --operation rollback \
+              --url "$RELEASE_SERVICE_ADAPTER_URL" \
+              --permit "$RUNNER_TEMP/release-permit.txt" \
+              --permit-public-key "$RUNNER_TEMP/permit.pub" \
+              --permit-payload "$RUNNER_TEMP/release-permit.json" \
+              --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+              --adapter-public-key "$RUNNER_TEMP/service-adapter.pub" \
+              --issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
+              --issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
+              --issuer-run-id "$RELEASE_SERVICE_ADAPTER_RUN_ID" \
+              --key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
+              --output "$RUNNER_TEMP/service-rollback.receipt"
+            then
+              echo "release_frappe_rollback_command_nonzero_continuing_worker_rollback" >&2
+            fi
+          fi
           if [[ "${{ steps.promote_production.outcome }}" != "skipped" ]]; then
             if ! "$WRANGLER_BIN" rollback "$previous" --config workers-bus/wrangler.jsonc --message "automatic rollback after failed IRO-41 promotion for git:${RELEASE_SOURCE_COMMIT}" --yes
             then
               echo "release_production_rollback_command_nonzero_reconciling_by_readback" >&2
             fi
           fi
-          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
           "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback.json"
           "$WRANGLER_BIN" versions view "$previous" \
             --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback-version.json"
@@ -998,12 +1120,18 @@ jobs:
           node "$RELEASE_ENFORCER" readiness \
             --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json"
           node "$RELEASE_ENFORCER" production-rollback-receipt \
-            --frappe-scope out-of-scope \
             --input "$RUNNER_TEMP/production-rollback.json" --previous "$previous" --candidate "$candidate" \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \
             --version-readback "$RUNNER_TEMP/production-rollback-version-readback.json" \
             --merge-commit "$(jq -er '.merge_commit' "$RUNNER_TEMP/source-merge-receipt.json")" \
+            --service-receipt "$RUNNER_TEMP/service-rollback.receipt" \
+            --service-public-key "$RUNNER_TEMP/service-adapter.pub" \
+            --service-issuer-identity "$RELEASE_SERVICE_ADAPTER_IDENTITY" \
+            --service-issuer-task-id "$RELEASE_SERVICE_ADAPTER_TASK_ID" \
+            --service-issuer-run-id "$RELEASE_SERVICE_ADAPTER_RUN_ID" \
+            --service-key-version "$RELEASE_SERVICE_ADAPTER_KEY_VERSION" \
             --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json" \
             --output "$RUNNER_TEMP/production-rollback-receipt.json"
           printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
@@ -1013,6 +1141,21 @@ jobs:
             --rollback-receipt "$RUNNER_TEMP/production-rollback-receipt.json" \
             --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
             --output "$RUNNER_TEMP/production-rollback-outcome.json"
+
+      - name: Persist durable recovery-required outcome after incomplete automatic rollback
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.rollback_production.outcome == 'failure' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" persist-recovery-required \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --failure-stage automatic_rollback_incomplete \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --output "$RUNNER_TEMP/production-rollback-recovery-required-outcome.json"
 
       - name: Persist durable recovery-required outcome after an admitted migration failure
         if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.migrate_production.outcome == 'failure' && steps.promote_production.outcome == 'skipped' }}
@@ -1044,6 +1187,7 @@ jobs:
             ${{ runner.temp }}/generation-advance.json
             ${{ runner.temp }}/production-smoke-evidence.json
             ${{ runner.temp }}/production-promotion.json
+            ${{ runner.temp }}/service-adapter-preflight.json
             ${{ runner.temp }}/service-promotion.receipt
             ${{ runner.temp }}/service-readback.receipt
             ${{ runner.temp }}/service-rollback.receipt
@@ -1051,6 +1195,7 @@ jobs:
             ${{ runner.temp }}/production-rollback-receipt.json
             ${{ runner.temp }}/production-rollback-outcome.json
             ${{ runner.temp }}/production-recovery-required-outcome.json
+            ${{ runner.temp }}/production-rollback-recovery-required-outcome.json
             ${{ runner.temp }}/production-rollback-health.json
             ${{ runner.temp }}/production-rollback-ready.json
           if-no-files-found: ignore

@@ -177,6 +177,8 @@ function validateWorkflow(workflow) {
   ordered(production, [
     "provider-targets",
     "Require production provider, smoke, and permit inputs",
+    "Fail closed on the declared Frappe adapter scope and config",
+    "Verify the same immutable artifact bytes",
     "Verify production secret-name inventory before immutable promotion",
     "Fail closed on static production readiness drift before mutation",
     "Upload the same immutable bundle to the production Worker service",
@@ -190,6 +192,8 @@ function validateWorkflow(workflow) {
     "Consume the permit once through the durable D1 replay and policy boundary",
     "Auto-merge the exact admitted PR and verify the resulting main tree",
     "Apply admitted migrations only after exact source admission",
+    "Promote the exact Frappe/VPS candidate through the governed adapter",
+    "Re-read the exact Frappe/VPS active revision through the governed adapter",
     "Promote the pre-verified immutable production version",
     "Verify production identity, health, readiness, and authenticated smoke",
     "Bind production active revision, readiness, and exact smoke to immutable receipt",
@@ -205,8 +209,11 @@ function validateWorkflow(workflow) {
     production,
     /assemble[\s\S]*--artifact-manifest[\s\S]*--release-evidence/,
   );
-  assert.match(production, /assemble[\s\S]*--frappe-scope out-of-scope[\s\S]*--repo-root/);
   assert.match(production, /assemble[\s\S]*--production-recovery/);
+  assert.match(
+    production,
+    /assemble[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/,
+  );
   assert.match(
     production,
     /admit[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus[\s\S]*"\$WRANGLER_BIN" versions deploy/,
@@ -226,35 +233,55 @@ function validateWorkflow(workflow) {
   assert.match(production, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment production/);
   assert.doesNotMatch(production, /npm ci --ignore-scripts --prefix workers-bus/);
   assert.match(production, /environment-preflight[\s\S]*production-environment-preflight\.json/);
+  assert.match(
+    production,
+    /node "\$RELEASE_ENFORCER" service-adapter-preflight[\s\S]*service-adapter-preflight\.json/,
+  );
+  assert.doesNotMatch(
+    production,
+    /node "\$GITHUB_WORKSPACE\/tools\/release-promotion\.mjs" service-adapter-preflight/,
+  );
   assert.match(production, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN/);
   assert.doesNotMatch(production, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.doesNotMatch(production, /--operation promote|--operation readback|--service-promotion-receipt|--service-readback-receipt/);
-  assert.doesNotMatch(production, /id: promote_frappe|Promote the prepared Frappe artifact|Re-read the Frappe provider identity/);
+  assert.match(production, /id: promote_frappe[\s\S]*--operation promote[\s\S]*service-promotion\.receipt/);
+  assert.match(production, /id: readback_frappe[\s\S]*--operation readback[\s\S]*service-readback\.receipt/);
+  assert.match(production, /production-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*--service-promotion-receipt[\s\S]*--service-readback-receipt/);
   assert.match(
     production,
     /production-post-smoke\.json[\s\S]*deployment-revision[\s\S]*production-receipt/,
   );
   assert.match(production, /node "\$RELEASE_ENFORCER" production-receipt/);
-  assert.match(production, /production-receipt[\s\S]*--frappe-scope out-of-scope[\s\S]*--active/);
   assert.match(
     production,
     /advance[\s\S]*--production-receipt[\s\S]*--merge-receipt/,
   );
   assert.match(
     production,
-    /if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.promote_production\.outcome != 'skipped' \}\}/,
+    /if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && \(steps\.promote_production\.outcome != 'skipped' \|\| steps\.promote_frappe\.outcome != 'skipped'\) \}\}/,
   );
+  assert.match(
+    production,
+    /id: rollback_production[\s\S]*steps\.promote_frappe\.outcome \}\}" != "skipped"[\s\S]*if ! node "\$RELEASE_ENFORCER" service-adapter[\s\S]*steps\.promote_production\.outcome \}\}" != "skipped"[\s\S]*"\$WRANGLER_BIN" rollback/,
+  );
+  assert.match(
+    production,
+    /steps\.rollback_production\.outcome == 'failure'[\s\S]*persist-recovery-required[\s\S]*--failure-stage automatic_rollback_incomplete/,
+  );
+  assert.match(production, /production-rollback-recovery-required-outcome\.json/);
   assert.match(
     production,
     /id: migrate_production[\s\S]*if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.migrate_production\.outcome == 'failure' && steps\.promote_production\.outcome == 'skipped' \}\}[\s\S]*persist-recovery-required[\s\S]*--failure-stage d1_migration_failed/,
   );
-  assert.doesNotMatch(production, /promote_frappe|frappe-release-adapter/);
+  assert.match(production, /service-adapter[\s\S]*--operation rollback[\s\S]*service-rollback\.receipt/);
   assert.match(
     production,
     /"\$WRANGLER_BIN" rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*persist-rollback/,
   );
-  assert.match(production, /production-rollback-receipt[\s\S]*--frappe-scope out-of-scope[\s\S]*--input/);
-  assert.equal((production.match(/--frappe-scope out-of-scope/g) ?? []).length, 3);
+  assert.equal(
+    (production.match(/--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/g) ?? [])
+      .length,
+    4,
+  );
   assert.match(
     production,
     /steps\.promote_production\.outcome \}\}" != "skipped"[\s\S]*"\$WRANGLER_BIN" rollback[\s\S]*deployments list[\s\S]*production-rollback-receipt/,
@@ -279,6 +306,13 @@ function validateWorkflow(workflow) {
     "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",
     "RELEASE_INDEPENDENT_ISSUER_URL",
     "RELEASE_INDEPENDENT_ISSUER_TOKEN",
+    "RELEASE_SERVICE_ADAPTER_URL",
+    "RELEASE_SERVICE_ADAPTER_TOKEN",
+    "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
+    "RELEASE_SERVICE_ADAPTER_IDENTITY",
+    "RELEASE_SERVICE_ADAPTER_TASK_ID",
+    "RELEASE_SERVICE_ADAPTER_RUN_ID",
+    "RELEASE_SERVICE_ADAPTER_KEY_VERSION",
   ])
     assert.match(workflow, new RegExp(required));
   assert.match(workflow, /release_admission_missing_external_secret/);

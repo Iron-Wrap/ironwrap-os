@@ -60,6 +60,16 @@ export const API_PATHS = {
     `/api/v1/admin/document-templates/${encodeURIComponent(templateId)}`,
   adminDocumentTemplateRevisions: (templateId: string) =>
     `/api/v1/admin/document-templates/${encodeURIComponent(templateId)}/revisions`,
+  // Automation recipients: the tenant-administered catalog a rule's `recipient_ref` resolves
+  // against. This is what replaced the `PIPELINE_AUTOMATION_RECIPIENTS_JSON` deploy secret, so
+  // "add the shop" is a screen an owner opens rather than a secret an engineer rotates.
+  adminAutomationRecipients: "/api/v1/admin/automation-recipients",
+  adminAutomationRecipient: (recipientId: string) =>
+    `/api/v1/admin/automation-recipients/${encodeURIComponent(recipientId)}`,
+  adminAutomationRecipientRetire: (recipientId: string) =>
+    `/api/v1/admin/automation-recipients/${encodeURIComponent(recipientId)}/retire`,
+  adminAutomationRecipientRevisions: (recipientId: string) =>
+    `/api/v1/admin/automation-recipients/${encodeURIComponent(recipientId)}/revisions`,
   adminSchemaFields: "/api/v1/admin/schema-fields",
   adminSchemaField: (fieldId: string) =>
     `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}`,

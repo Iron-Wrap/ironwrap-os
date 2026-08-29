@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -731,16 +731,50 @@ describe("owner configuration route and state matrix", () => {
     });
   });
 
-  it("renders distinct unavailable automation provider state and only server catalog choices", async () => {
+  // An empty recipient catalog used to be a wall: a warning naming a deployment secret, and a
+  // disabled "New rule" that put the only fix behind the button it had disabled (ELEC-218). It is
+  // now an ordinary empty state an owner can act on without leaving the product.
+  it("turns an empty recipient catalog into an owner-fixable state, not a dead end", async () => {
     const pipelines = [pipeline("pipeline_one", "One", 0)];
     vi.mocked(loadAdminPipelines).mockResolvedValue(pipelineResponse(pipelines));
     vi.mocked(loadAutomationRules).mockResolvedValue(
       automationResponse(pipelines, { recipient_configured: false, recipient_refs: [] }),
     );
+    const user = userEvent.setup();
     renderWithSession(<AutomationConfigurationPage />, sessionFor("owner"));
-    expect(await screen.findByText("Recipient configuration unavailable")).toBeVisible();
-    expect(screen.getByText(/no raw email address can be entered/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "New rule" })).toBeDisabled();
+
+    expect(await screen.findByText("No recipients yet")).toBeVisible();
+    expect(screen.queryByText(/deployment-owned recipient configuration/i)).toBeNull();
+    expect(screen.getAllByRole("link", { name: "Manage recipients" }).length).toBeGreaterThan(0);
+
+    const newRule = screen.getByRole("button", { name: "New rule" });
+    expect(newRule).toBeEnabled();
+    await user.click(newRule);
+    // The rule form opens so the recipient can be added from inside it; the save stays refused
+    // until one exists, because a rule without a recipient is not a rule the server would take.
+    expect(screen.getByRole("button", { name: "Add a recipient" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save automation" })).toBeDisabled();
+  });
+
+  // The catalog carries the name an owner gave a reference. Showing only `shop` made them
+  // remember which inbox it was wired to; the label is the whole reason the catalog carries one.
+  it("names a recipient the way its owner named it, and falls back to the bare reference", async () => {
+    const pipelines = [pipeline("pipeline_one", "One", 0)];
+    vi.mocked(loadAdminPipelines).mockResolvedValue(pipelineResponse(pipelines));
+    vi.mocked(loadAutomationRules).mockResolvedValue(
+      automationResponse(pipelines, {
+        recipient_refs: ["shop", "owner"],
+        recipient_labels: [{ recipient_ref: "shop", label: "The shop" }],
+        recipient_source: "tenant",
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithSession(<AutomationConfigurationPage />, sessionFor("owner"));
+
+    await user.click(await screen.findByRole("button", { name: "New rule" }));
+    const picker = screen.getByLabelText("Recipient");
+    expect(within(picker).getByRole("option", { name: "The shop · shop" })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: "owner" })).toBeInTheDocument();
   });
 
   it("offers a newly registered server action and a revised document template with no client release", async () => {

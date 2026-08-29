@@ -100,6 +100,22 @@ export const automationCatalogSchema = z
       }),
     ),
     recipient_refs: z.array(z.string().min(1)),
+    /**
+     * The name an owner gave each reference, published beside the refs themselves. A picker that
+     * shows only `shop` makes an administrator remember what they wired it to; showing "The shop"
+     * is the whole reason the catalog carries a label. Optional so a deployment that predates the
+     * tenant-administered catalog still parses — the client falls back to the raw reference.
+     */
+    recipient_labels: z
+      .array(z.object({ recipient_ref: z.string().min(1), label: z.string().min(1) }))
+      .optional(),
+    /**
+     * Where this tenant's recipients come from. `tenant` means the account administers its own
+     * catalog and "add a recipient" is a screen. `deployment` means it is still inheriting the
+     * legacy `PIPELINE_AUTOMATION_RECIPIENTS_JSON` blob, and the FIRST record written here takes
+     * that list over — which the recipient screen has to say out loud before it happens.
+     */
+    recipient_source: z.enum(["tenant", "deployment", "none"]).optional(),
     recipient_configured: z.boolean(),
     document_generation_configured: z.boolean().optional(),
     // True when this deployment publishes what a rule DID when it fired, not only how it is
@@ -150,6 +166,76 @@ export const automationHistoryResponseSchema = z
     current_revision_id: nullableText,
     current_version: z.number().int().positive().nullable(),
     revisions: z.array(automationRuleSchema),
+  })
+  .passthrough();
+
+/**
+ * Automation recipients — the administrator's authoring contract for
+ * `/api/v1/admin/automation-recipients` (`workers-bus/src/automation-recipients-api.ts`).
+ *
+ * The destination is deliberately absent from every read. The server keeps the address in
+ * `automation_recipient_revisions` and publishes only a masked form and a digest, so an owner can
+ * recognise the inbox they configured and a stolen owner session still cannot harvest it. Nothing
+ * in this client may treat `destination_masked` as an address: it is display text, never a value
+ * to echo back on a save.
+ */
+export const automationRecipientSchema = z
+  .object({
+    recipient_id: z.string().min(1),
+    recipient_ref: z.string().min(1),
+    revision_id: z.string().min(1),
+    version: z.number().int().positive(),
+    prior_revision_id: nullableText,
+    action: z.enum(["create", "revise", "retire"]),
+    label: z.string().min(1),
+    channel: z.string().min(1),
+    destination_masked: z.string().min(1),
+    destination_digest: z.string().min(1),
+    active: z.boolean(),
+    actor: z.object({ role: z.string().min(1), id: z.string().min(1) }),
+    command_fingerprint: z.string().min(1),
+    created_at: z.string().min(1),
+  })
+  .passthrough();
+
+export const automationRecipientListResponseSchema = z
+  .object({
+    version: z.literal(1),
+    catalog: z.object({ channels: z.array(z.string().min(1)) }).passthrough(),
+    recipients: z.array(automationRecipientSchema),
+  })
+  .passthrough();
+
+export const automationRecipientMutationResponseSchema = z
+  .object({ outcome: z.string().min(1), recipient: automationRecipientSchema })
+  .passthrough();
+
+/**
+ * A single recipient plus what a retirement would strand. `referenced_by` is the server's own
+ * answer to "which live rules still send here", published on the read so the screen can warn
+ * BEFORE an administrator commits to a command the server would refuse.
+ */
+export const automationRecipientDetailResponseSchema = z
+  .object({
+    recipient: automationRecipientSchema,
+    referenced_by: z.array(
+      z
+        .object({
+          rule_id: z.string().min(1),
+          pipeline_id: z.string().min(1),
+          to_stage_id: z.string().min(1),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough();
+
+export const automationRecipientHistoryResponseSchema = z
+  .object({
+    recipient_id: z.string().min(1),
+    current_revision_id: z.string().min(1),
+    current_version: z.number().int().positive(),
+    revisions: z.array(automationRecipientSchema),
   })
   .passthrough();
 
@@ -352,6 +438,14 @@ export type AutomationCatalog = z.infer<typeof automationCatalogSchema>;
 export type AutomationRule = z.infer<typeof automationRuleSchema>;
 export type AutomationListResponse = z.infer<typeof automationListResponseSchema>;
 export type AutomationHistoryResponse = z.infer<typeof automationHistoryResponseSchema>;
+export type AutomationRecipient = z.infer<typeof automationRecipientSchema>;
+export type AutomationRecipientListResponse = z.infer<typeof automationRecipientListResponseSchema>;
+export type AutomationRecipientDetailResponse = z.infer<
+  typeof automationRecipientDetailResponseSchema
+>;
+export type AutomationRecipientHistoryResponse = z.infer<
+  typeof automationRecipientHistoryResponseSchema
+>;
 export type SchemaField = z.infer<typeof schemaFieldSchema>;
 export type SchemaFieldCatalog = z.infer<typeof schemaFieldCatalogSchema>;
 export type SchemaFieldListResponse = z.infer<typeof schemaFieldListResponseSchema>;
@@ -418,6 +512,22 @@ export interface DocumentTemplateWriteInput {
   expected_version?: number;
 }
 
+/**
+ * What a recipient write carries.
+ *
+ * `recipient_ref` travels on a create only: the server refuses to rename a reference, because a
+ * rule is bound to `shop` and renaming the record would silently re-aim every rule that names it.
+ * `destination` is optional on a revise — omitting it keeps the stored address, which is the only
+ * way a re-label can work at all when the client is never told what that address is.
+ */
+export interface AutomationRecipientWriteInput {
+  recipient_ref?: string;
+  label?: string;
+  channel?: string;
+  destination?: string;
+  expected_version?: number;
+}
+
 export interface AutomationWriteInput {
   to_stage_id: string;
   action: string;
@@ -468,4 +578,28 @@ export function documentTemplateHistoryQueryKey(
 
 export function automationActivityQueryKey(tenantId: string, pipelineId: string, ruleId: string) {
   return ["admin-automation-activity", tenantId, pipelineId, ruleId] as const;
+}
+
+export function automationRecipientQueryKey(tenantId: string) {
+  return ["admin-automation-recipients", tenantId] as const;
+}
+
+/**
+ * Keyed on the version as well as the id, because what a retirement would strand changes as rules
+ * are repointed. A stale "no rule uses this" would turn a refused command into a surprise.
+ */
+export function automationRecipientDetailQueryKey(
+  tenantId: string,
+  recipientId: string,
+  version: number,
+) {
+  return ["admin-automation-recipient-detail", tenantId, recipientId, version] as const;
+}
+
+export function automationRecipientHistoryQueryKey(
+  tenantId: string,
+  recipientId: string,
+  version: number,
+) {
+  return ["admin-automation-recipient-history", tenantId, recipientId, version] as const;
 }

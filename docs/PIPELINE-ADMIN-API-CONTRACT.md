@@ -68,9 +68,14 @@ story, so no `Retry now` command exists here and a `POST` to the path is a 404.
 
 Commands require the owner session, CSRF, an active pipeline/stage, and the exact current rule
 version for revisions. v1 publishes only `operations.email.send` and the escaped
-`pipeline.stage-change-summary` template version 1. A rule stores a deployment-owned recipient
-reference, never an address; `PIPELINE_AUTOMATION_RECIPIENTS_JSON` resolves that reference only in
-the Worker and malformed, missing, or unknown mappings fail closed.
+`pipeline.stage-change-summary` template version 1. A rule stores a recipient reference, never an
+address. Since ELEC-204 that reference resolves against the tenant's own catalog
+(`/api/v1/admin/automation-recipients`), administered by the account owner on
+`/settings/configuration/automations/recipients`; `PIPELINE_AUTOMATION_RECIPIENTS_JSON` survives
+only as the fallback for a tenant that has never written a recipient record, and malformed,
+missing, or unknown mappings still fail closed. The rule catalog publishes `recipient_source` so
+the builder can say which of the two is live, and `recipient_labels` so a picker shows the name an
+owner gave a reference rather than the reference alone.
 
 Each committed stage transition has one immutable outbox binding. The five-minute scheduled drain
 binds it to the active revision that pre-dated the transition, records an explicit `no_rule`

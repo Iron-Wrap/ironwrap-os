@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, BellRing, History, Link as LinkIcon, Plus, Save } from "lucide-react";
+import { Activity, BellRing, History, Link as LinkIcon, Plus, Save, Send } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -13,8 +13,10 @@ import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { useOnlineStatus } from "../hooks/use-online-status";
+import { AutomationRecipientForm } from "./automation-recipient-form";
 import {
   configurationErrorMessage,
+  createAutomationRecipient,
   createAutomationRule,
   loadAdminPipelines,
   loadAutomationActivity,
@@ -32,6 +34,7 @@ import {
   type AutomationCatalog,
   type AutomationHistoryResponse,
   type AutomationListResponse,
+  type AutomationRecipientWriteInput,
   type AutomationRule,
   type AutomationWriteInput,
 } from "./configuration-contracts";
@@ -81,6 +84,27 @@ export function automationTemplateDisplay(
   return entry
     ? `${entry.label} · v${rule.template_version}`
     : `A document that is no longer offered · v${rule.template_version}`;
+}
+
+/**
+ * The recipient picker's options.
+ *
+ * A reference is what a rule STORES (`shop`); a label is what an owner called it ("The shop").
+ * Offering only the reference made an administrator remember which inbox they had wired it to, so
+ * the label leads and the reference stays beside it as the identifier the rule will hold. A
+ * deployment that predates `recipient_labels` publishes refs alone; those stand on their own.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function automationRecipientOptions(
+  catalog: AutomationCatalog,
+): Array<{ value: string; label: string }> {
+  const labels = new Map(
+    (catalog.recipient_labels ?? []).map((entry) => [entry.recipient_ref, entry.label]),
+  );
+  return catalog.recipient_refs.map((ref) => {
+    const label = labels.get(ref);
+    return { value: ref, label: label ? `${label} · ${ref}` : ref };
+  });
 }
 
 export function AutomationConfigurationPage() {
@@ -171,7 +195,7 @@ function AutomationConfigurationContent() {
       <AdminPageHeader
         icon={<BellRing className="size-6 text-accent" aria-hidden="true" />}
         title="Automations"
-        description="Send a governed stage-change email when a card enters a configured stage. Actions, templates, and recipient references come from the server catalog."
+        description="Send a governed stage-change email when a card enters a configured stage. Actions and templates come from the server catalog; recipients are yours to add and change."
         action={<ConfigurationLink />}
       />
       {!live ? <OfflineNotice /> : null}
@@ -221,6 +245,7 @@ function AutomationConfigurationContent() {
           message="Reconnect to read this pipeline's rules. Configuration never changes while offline."
         />
       ) : null}
+      {rules.data ? <RecipientsGateway catalog={rules.data.catalog} /> : null}
       {rules.data ? (
         <AutomationWorkspace
           pipeline={pipeline}
@@ -256,24 +281,23 @@ function AutomationWorkspace({
     (stage) => !data.rules.some((rule) => rule.to_stage_id === stage.stage_id),
   );
   const stageName = new Map(pipeline.stages.map((stage) => [stage.stage_id, stage.name]));
-  const hasCatalog =
-    data.catalog.actions.length > 0 &&
-    data.catalog.templates.length > 0 &&
-    data.catalog.recipient_configured &&
-    data.catalog.recipient_refs.length > 0;
+  // A rule cannot be SAVED without a recipient, but "New rule" is still offered when none exists:
+  // the form is where "add a recipient" now lives, and disabling it would put the fix behind the
+  // very button the missing recipient had disabled. The submit stays refused until one is chosen.
+  const composable = data.catalog.actions.length > 0 && data.catalog.templates.length > 0;
 
   return (
     <>
-      {!data.catalog.recipient_configured ? (
-        <Notice tone="warning" title="Recipient configuration unavailable">
-          The deployment did not provide a usable recipient catalog. Rules remain readable, but a
-          new or revised email automation cannot be saved until the configured recipient service is
-          available and valid. No raw email address can be entered in this screen.
+      {data.catalog.recipient_refs.length === 0 ? (
+        <Notice tone="warning" title="No recipients yet">
+          A rule delivers to a recipient you have named, never to an address typed into this form.
+          Add one on the recipients screen and it appears here — no developer, no deploy.{" "}
+          <RecipientsInlineLink />
         </Notice>
-      ) : data.catalog.recipient_refs.length === 0 ? (
-        <Notice tone="warning" title="No recipient references are available">
-          The server catalog has no configured recipients. No raw email address can be entered here;
-          ask an administrator to repair deployment-owned recipient configuration.
+      ) : data.catalog.recipient_source === "deployment" ? (
+        <Notice tone="info" title="These recipients come with the deployment">
+          This account has not added any of its own yet. The first one you add takes the list over,
+          so add every destination your rules need at the same time. <RecipientsInlineLink />
         </Notice>
       ) : null}
       {data.rules.some((rule) => !data.catalog.recipient_refs.includes(rule.recipient_ref)) ? (
@@ -287,7 +311,7 @@ function AutomationWorkspace({
         catalog={data.catalog}
         stages={availableStages}
         live={live && pipeline.is_active}
-        enabled={hasCatalog}
+        composable={composable}
         onCreated={onChanged}
       />
       {activeStages.length > 0 && availableStages.length === 0 ? (
@@ -330,14 +354,15 @@ function AutomationCreateForm({
   catalog,
   stages,
   live,
-  enabled,
+  composable,
   onCreated,
 }: {
   pipeline: AdminPipeline;
   catalog: AutomationCatalog;
   stages: AdminPipeline["stages"];
   live: boolean;
-  enabled: boolean;
+  /** The action and template halves are available; the recipient may still be missing. */
+  composable: boolean;
   onCreated: () => void;
 }) {
   const session = useSession();
@@ -358,12 +383,17 @@ function AutomationCreateForm({
       onCreated();
     },
   });
+  // A recipient created from inside this form is offered immediately, without waiting for the
+  // catalog refetch to land - otherwise the rule an owner was composing loses the recipient they
+  // just added to fix it.
+  const [added, setAdded] = useState<Array<{ value: string; label: string }>>([]);
   const selectedStage = stage || stages[0]?.stage_id || "";
   const selectedAction = action || catalog.actions[0]?.action || "";
   const templateOptions = automationTemplateOptions(catalog, selectedAction);
   const selectedTemplate =
     templateOptions.find((entry) => entry.template_key === template) ?? templateOptions[0];
-  const selectedRecipient = recipient || catalog.recipient_refs[0] || "";
+  const recipientOptions = mergedRecipientOptions(catalog, added);
+  const selectedRecipient = recipient || recipientOptions[0]?.value || "";
 
   return (
     <Card>
@@ -372,8 +402,8 @@ function AutomationCreateForm({
           <div>
             <CardTitle>Create an automation</CardTitle>
             <CardDescription>
-              Choose a stage and a deployment-owned recipient reference. The action is executable
-              email only; no address, webhook, SMS, or formula is accepted.
+              Choose a stage and one of your recipients. The action is executable email only; an
+              address is never typed into a rule — it belongs to the recipient it delivers to.
             </CardDescription>
           </div>
           {!open ? (
@@ -386,7 +416,7 @@ function AutomationCreateForm({
               <Button
                 type="button"
                 variant="outline"
-                disabled={!live || !enabled || stages.length === 0}
+                disabled={!live || !composable || stages.length === 0}
                 onClick={() => {
                   create.reset();
                   setOpen(true);
@@ -450,17 +480,18 @@ function AutomationCreateForm({
               }))}
               onChange={setTemplate}
             />
-            <CatalogSelect
+            <RecipientChoice
               id="automation-new-recipient"
-              label="Recipient reference"
               value={selectedRecipient}
-              options={catalog.recipient_refs.map((value) => ({ value, label: value }))}
+              options={recipientOptions}
+              live={live}
               onChange={setRecipient}
+              onCreated={(created) => {
+                setAdded((current) => [...current, created]);
+                setRecipient(created.value);
+                onCreated();
+              }}
             />
-            <p className="text-xs leading-5 text-muted sm:col-span-2">
-              Recipient references are catalog identifiers. Their addresses stay deployment-owned
-              and are never entered or displayed here.
-            </p>
             {create.isError ? (
               <div className="sm:col-span-2">
                 <Notice tone="danger" title="Automation was not created">
@@ -475,7 +506,7 @@ function AutomationCreateForm({
                 busy={create.isPending}
                 disabled={
                   !live ||
-                  !enabled ||
+                  !composable ||
                   !selectedStage ||
                   !selectedAction ||
                   !selectedTemplate ||
@@ -575,7 +606,7 @@ function AutomationRuleCard({
             </CardTitle>
             <CardDescription className="mt-1 break-words">
               {actionLabel(catalog, rule.action)} · {automationTemplateDisplay(catalog, rule)} ·{" "}
-              {rule.recipient_ref} · revision {rule.version}
+              {recipientDisplay(catalog, rule.recipient_ref)} · revision {rule.version}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -613,9 +644,10 @@ function AutomationRuleCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {unavailableRecipient ? (
-          <Notice tone="warning" title="Recipient reference unavailable">
-            This saved reference is not in the current server catalog. Refresh the catalog before
-            revising it.
+          <Notice tone="warning" title="This rule points at a recipient you no longer offer">
+            {rule.recipient_ref} is retired or gone, so this rule fails rather than delivering
+            somewhere unintended. Restore it, or revise this rule to name a recipient you keep.{" "}
+            <RecipientsInlineLink />
           </Notice>
         ) : null}
         {!targetIsActive ? (
@@ -643,6 +675,7 @@ function AutomationRuleCard({
             busy={revise.isPending}
             error={revise.error}
             onCancel={() => setEditing(false)}
+            onCatalogChanged={onChanged}
             onSubmit={(input) => revise.mutate({ ...input, expected_version: rule.version })}
           />
         ) : null}
@@ -679,6 +712,7 @@ function AutomationRuleForm({
   busy,
   error,
   onCancel,
+  onCatalogChanged,
   onSubmit,
 }: {
   rule: AutomationRule;
@@ -688,6 +722,8 @@ function AutomationRuleForm({
   busy: boolean;
   error: unknown;
   onCancel: () => void;
+  /** A recipient added from inside this form changed the catalog this rule reads. */
+  onCatalogChanged: () => void;
   onSubmit: (input: AutomationWriteInput) => void;
 }) {
   const [stage, setStage] = useState(rule.to_stage_id);
@@ -695,13 +731,15 @@ function AutomationRuleForm({
   const [template, setTemplate] = useState(rule.template_key);
   const [recipient, setRecipient] = useState(rule.recipient_ref);
   const [active, setActive] = useState(rule.active === 1);
+  const [added, setAdded] = useState<Array<{ value: string; label: string }>>([]);
   const templateOptions = automationTemplateOptions(catalog, action);
   const selectedTemplate = templateOptions.find((entry) => entry.template_key === template);
+  const recipientOptions = mergedRecipientOptions(catalog, added);
   const canSave = Boolean(
     stages.some((entry) => entry.stage_id === stage) &&
     catalog.actions.some((entry) => entry.action === action) &&
     selectedTemplate &&
-    catalog.recipient_refs.includes(recipient),
+    recipientOptions.some((entry) => entry.value === recipient),
   );
 
   return (
@@ -750,12 +788,17 @@ function AutomationRuleForm({
         }))}
         onChange={setTemplate}
       />
-      <CatalogSelect
+      <RecipientChoice
         id={`${rule.rule_id}-recipient`}
-        label="Recipient reference"
         value={recipient}
-        options={catalog.recipient_refs.map((value) => ({ value, label: value }))}
+        options={recipientOptions}
+        live={live}
         onChange={setRecipient}
+        onCreated={(created) => {
+          setAdded((current) => [...current, created]);
+          setRecipient(created.value);
+          onCatalogChanged();
+        }}
       />
       <label className="inline-flex min-h-11 items-center gap-3 text-sm font-bold sm:col-span-2">
         <input
@@ -766,8 +809,8 @@ function AutomationRuleForm({
         Enable this automation
       </label>
       <p className="text-xs leading-5 text-muted sm:col-span-2">
-        Saving appends a revision. The recipient remains a server-provided reference; addresses are
-        never accepted by this form.
+        Saving appends a revision. A rule names a recipient; the address that recipient delivers to
+        is never entered here.
       </p>
       {error ? (
         <div className="sm:col-span-2">
@@ -959,6 +1002,160 @@ function AutomationHistory({
   );
 }
 
+/**
+ * A recipient the catalog already carries, plus any added from inside a rule form this session.
+ * The added ones drop out as soon as the refetched catalog carries them, so nothing is listed
+ * twice and nothing depends on the refetch having landed.
+ */
+function mergedRecipientOptions(
+  catalog: AutomationCatalog,
+  added: Array<{ value: string; label: string }>,
+): Array<{ value: string; label: string }> {
+  const options = automationRecipientOptions(catalog);
+  const known = new Set(options.map((entry) => entry.value));
+  return [...options, ...added.filter((entry) => !known.has(entry.value))];
+}
+
+/**
+ * The way to the recipients screen, stated as a fact about this account rather than a bare link.
+ * An owner who cannot find where "the shop" is defined is the defect this row exists to close.
+ */
+function RecipientsGateway({ catalog }: { catalog: AutomationCatalog }) {
+  const total = catalog.recipient_refs.length;
+  return (
+    <Link
+      to="/settings/configuration/automations/recipients"
+      className="flex min-h-16 items-center gap-4 rounded-lg border border-border bg-surface-raised p-4 transition-colors hover:border-border-strong hover:bg-surface-muted focus-visible:outline-offset-2"
+    >
+      <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-surface-muted">
+        <Send className="size-5 text-accent" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-extrabold tracking-[-0.02em]">Manage recipients</span>
+        <span className="mt-0.5 block text-sm leading-5 text-muted">
+          {total === 0
+            ? "Nobody can be emailed yet. Add the shop, an office inbox, or a shared address."
+            : `${total} ${total === 1 ? "recipient" : "recipients"} your rules can email.`}
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+function RecipientsInlineLink() {
+  return (
+    <Link
+      to="/settings/configuration/automations/recipients"
+      className="font-bold underline underline-offset-4 focus-visible:outline-focus"
+    >
+      Manage recipients
+    </Link>
+  );
+}
+
+/**
+ * Choosing a recipient, and adding one without losing the rule being composed.
+ *
+ * Discovering mid-rule that "the shop" does not exist used to end the flow: the only way to add it
+ * was a developer with deploy access. The panel expands in place instead of navigating, so the
+ * stage, action and template already chosen are still there when the new recipient is selected.
+ *
+ * The add affordance is a button beside the picker rather than a trailing "+ Add…" option inside
+ * it. A sentinel option has to be selected to be activated, which momentarily makes the field's
+ * value a thing that is not a recipient - and a keyboard user arrowing through the list would
+ * trigger it on the way past.
+ */
+function RecipientChoice({
+  id,
+  value,
+  options,
+  live,
+  onChange,
+  onCreated,
+}: {
+  id: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  live: boolean;
+  onChange: (value: string) => void;
+  onCreated: (created: { value: string; label: string }) => void;
+}) {
+  const session = useSession();
+  const [adding, setAdding] = useState(false);
+  const create = useMutation({
+    mutationFn: (input: AutomationRecipientWriteInput) =>
+      createAutomationRecipient(session, {
+        recipient_ref: input.recipient_ref ?? "",
+        label: input.label ?? "",
+        channel: input.channel ?? "email",
+        destination: input.destination ?? "",
+      }),
+    onSuccess: (result) => {
+      setAdding(false);
+      onCreated({
+        value: result.recipient.recipient_ref,
+        label: `${result.recipient.label} · ${result.recipient.recipient_ref}`,
+      });
+    },
+  });
+
+  return (
+    <div className="space-y-3 sm:col-span-2">
+      <CatalogSelect
+        id={id}
+        label="Recipient"
+        value={value}
+        options={options}
+        onChange={onChange}
+      />
+      {options.length === 0 ? (
+        <p className="text-xs leading-5 text-muted">
+          No recipient exists yet. Add one here to finish this rule.
+        </p>
+      ) : null}
+      {!adding ? (
+        <Button
+          type="button"
+          size="compact"
+          variant="outline"
+          disabled={!live}
+          onClick={() => {
+            create.reset();
+            setAdding(true);
+          }}
+        >
+          <Plus aria-hidden="true" /> Add a recipient
+        </Button>
+      ) : (
+        // The panel holds a whole form whose hints are muted text; the raised surface is the one
+        // that carries them at contrast, and the border is what separates it from the rule around it.
+        <div className="rounded-lg border border-border-strong bg-surface-raised p-4">
+          <h3 className="font-bold">Add a recipient</h3>
+          <p className="mt-1 text-sm leading-5 text-muted">
+            It is saved to this account's recipients and selected here. The rule you are composing
+            keeps everything you have already chosen.
+          </p>
+          <AutomationRecipientForm
+            idPrefix={`${id}-new`}
+            channels={["email"]}
+            nested
+            live={live}
+            busy={create.isPending}
+            error={create.error}
+            submitLabel="Save recipient"
+            onCancel={() => setAdding(false)}
+            onSubmit={(input) => create.mutate(input)}
+          />
+        </div>
+      )}
+      <p className="text-xs leading-5 text-muted">
+        A rule stores the recipient's reference, never an address. Change where a recipient delivers
+        and every rule naming it follows, with no rule edited.
+      </p>
+    </div>
+  );
+}
+
 function CatalogSelect({
   id,
   label,
@@ -1044,6 +1241,14 @@ function TonePill({ tone, children }: { tone: AutomationOutcomeTone; children: R
 /** The server names its own actions; an unregistered one is shown as it was stored. */
 function actionLabel(catalog: AutomationCatalog, action: string): string {
   return catalog.actions.find((entry) => entry.action === action)?.label ?? action;
+}
+
+/** A rule's recipient, named the way its owner named it, falling back to the stored reference. */
+function recipientDisplay(catalog: AutomationCatalog, recipientRef: string): string {
+  const label = (catalog.recipient_labels ?? []).find(
+    (entry) => entry.recipient_ref === recipientRef,
+  )?.label;
+  return label ? `${label} · ${recipientRef}` : recipientRef;
 }
 
 function ReloadButton() {

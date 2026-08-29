@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BellRing, Boxes, FileStack, FileText, SlidersHorizontal } from "lucide-react";
+import { BellRing, Boxes, FileStack, FileText, Send, SlidersHorizontal } from "lucide-react";
 
 import { RoleGuard } from "../components/role-guard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -47,6 +47,12 @@ export function ConfigurationPage() {
               title="Automations"
               description="What happens when a card enters a stage."
             />
+            <ConfigurationLink
+              to="/settings/configuration/automations/recipients"
+              icon={<Send className="size-5 text-accent" aria-hidden="true" />}
+              title="Recipients"
+              description="Who your automations can email."
+            />
           </CardContent>
         </Card>
       </section>
@@ -64,7 +70,8 @@ function ConfigurationLink({
     | "/settings/configuration/pipelines"
     | "/settings/configuration/fields"
     | "/settings/configuration/documents"
-    | "/settings/configuration/automations";
+    | "/settings/configuration/automations"
+    | "/settings/configuration/automations/recipients";
   icon: React.ReactNode;
   title: string;
   description: string;

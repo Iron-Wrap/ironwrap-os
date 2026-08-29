@@ -107,6 +107,10 @@ const SchemaFieldsConfigurationPage = lazy(async () => ({
 const AutomationConfigurationPage = lazy(async () => ({
   default: (await import("./admin/automation-configuration-page")).AutomationConfigurationPage,
 }));
+const AutomationRecipientsConfigurationPage = lazy(async () => ({
+  default: (await import("./admin/automation-recipients-configuration-page"))
+    .AutomationRecipientsConfigurationPage,
+}));
 const DocumentTemplatesConfigurationPage = lazy(async () => ({
   default: (await import("./admin/document-templates-configuration-page"))
     .DocumentTemplatesConfigurationPage,
@@ -810,6 +814,14 @@ const settingsConfigurationAutomationsRoute = createRoute({
   component: AutomationConfigurationRoute,
 });
 
+// A sub-route of Automations, not a sixth configuration tile: a recipient exists only to be
+// picked by an automation rule, so it is reached from the screen that picks it.
+const settingsConfigurationAutomationRecipientsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/settings/configuration/automations/recipients",
+  component: AutomationRecipientsConfigurationRoute,
+});
+
 const settingsConfigurationDocumentsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/settings/configuration/documents",
@@ -894,6 +906,14 @@ function AutomationConfigurationRoute() {
   );
 }
 
+function AutomationRecipientsConfigurationRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <AutomationRecipientsConfigurationPage />
+    </Suspense>
+  );
+}
+
 function DocumentTemplatesConfigurationRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -957,6 +977,7 @@ const routeTree = rootRoute.addChildren([
     settingsConfigurationPipelinesRoute,
     settingsConfigurationFieldsRoute,
     settingsConfigurationAutomationsRoute,
+    settingsConfigurationAutomationRecipientsRoute,
     settingsConfigurationDocumentsRoute,
   ]),
 ]);

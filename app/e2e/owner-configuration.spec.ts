@@ -148,9 +148,32 @@ const automationResponse = {
       },
     ],
     recipient_refs: ["owner"],
+    recipient_labels: [{ recipient_ref: "owner", label: "Owner" }],
+    recipient_source: "tenant",
     recipient_configured: true,
   },
 };
+
+/** The tenant-administered recipient catalog (ELEC-204) this screen writes to. */
+function recipientRecord(ref: string, label: string, overrides: Record<string, unknown> = {}) {
+  return {
+    recipient_id: `recipient_${ref}`,
+    recipient_ref: ref,
+    revision_id: `recipientrev_${ref}_1`,
+    version: 1,
+    prior_revision_id: null,
+    action: "create",
+    label,
+    channel: "email",
+    destination_masked: `o***@ironwrap.example.invalid`,
+    destination_digest: "d".repeat(64),
+    active: true,
+    actor: { role: "owner", id: "appu_acceptance_owner" },
+    command_fingerprint: "c".repeat(64),
+    created_at: "2026-08-27T10:00:00.000Z",
+    ...overrides,
+  };
+}
 
 /**
  * A deployment that publishes what a rule DID, not only how it is configured. Three outcomes
@@ -252,6 +275,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         heading: "Automations",
         action: "New rule",
         cachedText: "Sales board · lead",
+      },
+      {
+        path: "/settings/configuration/automations/recipients",
+        heading: "Recipients",
+        action: "New recipient",
+        cachedText: "Owner",
       },
     ] as const;
 
@@ -387,6 +416,7 @@ test.describe("Owner configuration mobile acceptance", () => {
       "/settings/configuration/fields",
       "/settings/configuration/documents",
       "/settings/configuration/automations",
+      "/settings/configuration/automations/recipients",
     ]) {
       await page.goto(path);
       await expect(
@@ -436,6 +466,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         cachedText: "Sales board · lead",
         kind: "automation",
       },
+      {
+        path: "/settings/configuration/automations/recipients",
+        heading: "Recipients",
+        cachedText: "Owner",
+        kind: "recipient",
+      },
     ] as const;
 
     for (const routeCase of cases) {
@@ -474,6 +510,12 @@ test.describe("Owner configuration mobile acceptance", () => {
         await input.fill("Offline document draft");
         await page.getByLabel("Key", { exact: true }).fill("offline-draft");
         submit = page.getByRole("button", { name: "Save document", exact: true });
+      } else if (routeCase.kind === "recipient") {
+        await page.getByRole("button", { name: "New recipient", exact: true }).click();
+        input = page.getByLabel("Name", { exact: true });
+        await input.fill("Offline recipient draft");
+        await page.getByLabel("Email address", { exact: true }).fill("draft@example.invalid");
+        submit = page.getByRole("button", { name: "Save recipient", exact: true });
       } else {
         await page.getByRole("button", { name: "New rule", exact: true }).click();
         input = page.getByLabel("When a card enters", { exact: true });
@@ -482,7 +524,7 @@ test.describe("Owner configuration mobile acceptance", () => {
         await page
           .getByLabel("Template", { exact: true })
           .selectOption("pipeline.stage-change-summary");
-        await page.getByLabel("Recipient reference", { exact: true }).selectOption("owner");
+        await page.getByLabel("Recipient", { exact: true }).selectOption("owner");
         submit = page.getByRole("button", { name: "Save automation", exact: true });
       }
 
@@ -654,6 +696,146 @@ test.describe("Owner configuration mobile acceptance", () => {
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(results.violations).toEqual([]);
   });
+
+  /**
+   * The defect ELEC-218 recorded, end to end on a phone: an owner adds "the shop" as an automation
+   * recipient with no developer, no deploy secret, and no Frappe desk.
+   */
+  test("adds an automation recipient from the phone, with no developer and no deploy secret", async ({
+    page,
+  }) => {
+    const server = await routeConfigurationApis(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    // Found from the screen that needs it, not from a URL someone had to be told.
+    await page.goto("/settings/configuration/automations");
+    await expect(page.getByRole("heading", { name: "Automations", exact: true })).toBeVisible();
+    const gateway = page.getByRole("link", { name: /Manage recipients/ });
+    await expect(gateway).toBeVisible();
+    const gatewayBounds = await gateway.boundingBox();
+    expect(gatewayBounds?.height).toBeGreaterThanOrEqual(44);
+    await gateway.click();
+
+    await expect(page.getByRole("heading", { name: "Recipients", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "New recipient", exact: true }).click();
+
+    await page.getByLabel("Name", { exact: true }).fill("The shop");
+    // The permanent reference an owner never has to invent.
+    await expect(page.getByLabel("Reference", { exact: true })).toHaveValue("the-shop");
+    await page.getByLabel("Email address", { exact: true }).fill("shop@example.invalid");
+
+    await mkdir(shotDir, { recursive: true });
+    await withoutShellChrome(page, () =>
+      page.screenshot({ path: `${shotDir}/owner-configuration-recipient-form.png` }),
+    );
+
+    const save = page.getByRole("button", { name: "Save recipient", exact: true });
+    const saveBounds = await save.boundingBox();
+    expect(saveBounds?.height).toBeGreaterThanOrEqual(44);
+    await save.click();
+
+    await expect(page.getByText("The shop", { exact: true })).toBeVisible();
+    expect(server.recipientWrites).toEqual([
+      {
+        recipient_ref: "the-shop",
+        label: "The shop",
+        channel: "email",
+        destination: "shop@example.invalid",
+      },
+    ]);
+    // The address goes in and does not come back out: the list shows the mask the server publishes.
+    await expect(page.getByText("s***@example.invalid", { exact: false })).toBeVisible();
+    await expect(page.getByText("shop@example.invalid", { exact: true })).toHaveCount(0);
+
+    await withoutShellChrome(page, () =>
+      page.screenshot({ path: `${shotDir}/owner-configuration-recipients-list.png` }),
+    );
+
+    const geometry = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
+
+  /**
+   * The other half of the same gap: an owner who discovers mid-rule that "the shop" does not exist
+   * must not have to abandon the rule to create it.
+   */
+  test("adds a recipient from inside the rule builder without losing the rule being composed", async ({
+    page,
+  }) => {
+    const server = await routeConfigurationApis(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings/configuration/automations");
+
+    await page.getByRole("button", { name: "New rule", exact: true }).click();
+    await page.getByLabel("When a card enters", { exact: true }).selectOption("stage_new");
+    await page
+      .getByLabel("Template", { exact: true })
+      .selectOption("pipeline.stage-change-summary");
+
+    await page.getByRole("button", { name: "Add a recipient", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("The shop");
+    await page.getByLabel("Email address", { exact: true }).fill("shop@example.invalid");
+
+    await mkdir(shotDir, { recursive: true });
+    await withoutShellChrome(page, () =>
+      page.screenshot({ path: `${shotDir}/owner-configuration-recipient-inline-create.png` }),
+    );
+
+    await page.getByRole("button", { name: "Save recipient", exact: true }).click();
+
+    // The rule survived the detour and now names the recipient that was missing.
+    const picker = page.getByLabel("Recipient", { exact: true });
+    await expect(picker).toHaveValue("the-shop");
+    await expect(page.getByLabel("When a card enters", { exact: true })).toHaveValue("stage_new");
+    await expect(page.getByRole("button", { name: "Save automation", exact: true })).toBeEnabled();
+    expect(server.recipientWrites).toEqual([
+      {
+        recipient_ref: "the-shop",
+        label: "The shop",
+        channel: "email",
+        destination: "shop@example.invalid",
+      },
+    ]);
+
+    const geometry = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
+
+  /**
+   * Retiring a recipient a live rule still names would turn a configuration change into a delivery
+   * failure discovered by whoever did not get the email. The screen asks first and says who.
+   */
+  test("refuses to retire a recipient a live rule still sends to, and names the rule", async ({
+    page,
+  }) => {
+    await routeConfigurationApis(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings/configuration/automations/recipients");
+
+    await page.getByRole("button", { name: "Retire", exact: true }).click();
+    await expect(page.getByText("One live rule still sends here")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Retire recipient", exact: true }),
+    ).toBeDisabled();
+
+    await mkdir(shotDir, { recursive: true });
+    await withoutShellChrome(page, () =>
+      page.screenshot({ path: `${shotDir}/owner-configuration-recipient-retire-blocked.png` }),
+    );
+
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
 });
 
 interface FieldServer {
@@ -661,6 +843,8 @@ interface FieldServer {
   revisions: { field_id: string; action: unknown; position: unknown; expected_version: unknown }[];
   documents: (typeof documentTemplate)[];
   documentWrites: Record<string, unknown>[];
+  recipients: ReturnType<typeof recipientRecord>[];
+  recipientWrites: Record<string, unknown>[];
 }
 
 async function routeConfigurationApis(page: Page): Promise<FieldServer> {
@@ -669,7 +853,61 @@ async function routeConfigurationApis(page: Page): Promise<FieldServer> {
     revisions: [],
     documents: [{ ...documentTemplate }],
     documentWrites: [],
+    recipients: [recipientRecord("owner", "Owner")],
+    recipientWrites: [],
   };
+  // The recipient catalog the automations screen reads and this screen writes. The fixture
+  // accepts a create the way the Worker does - and answers the read the way it does too: a mask
+  // and a digest, never the address that went in.
+  await page.route("**/api/v1/admin/automation-recipients", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          catalog: { channels: ["email"] },
+          recipients: server.recipients,
+        }),
+      });
+    }
+    if (route.request().method() !== "POST") return route.fallback();
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    server.recipientWrites.push(body);
+    const created = recipientRecord(String(body.recipient_ref ?? ""), String(body.label ?? ""), {
+      destination_masked: maskedForm(String(body.destination ?? "")),
+    });
+    server.recipients.push(created);
+    return route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ outcome: "created", recipient: created }),
+    });
+  });
+  await page.route("**/api/v1/admin/automation-recipients/*", (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const recipientId = new URL(route.request().url()).pathname.split("/").pop()!;
+    const stored = server.recipients.find((entry) => entry.recipient_id === recipientId);
+    if (!stored) return route.fulfill({ status: 404, body: "{}" });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      // `owner` is the reference the seeded automation rule names, so retiring it is refused.
+      body: JSON.stringify({
+        recipient: stored,
+        referenced_by:
+          stored.recipient_ref === "owner"
+            ? [
+                {
+                  rule_id: "rule_new",
+                  pipeline_id: pipeline.pipeline_id,
+                  to_stage_id: pipeline.stages[0]!.stage_id,
+                },
+              ]
+            : [],
+      }),
+    });
+  });
   await page.route("**/api/v1/admin/pipelines", (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({
@@ -764,6 +1002,12 @@ async function routeConfigurationApis(page: Page): Promise<FieldServer> {
     });
   });
   return server;
+}
+
+/** What the Worker publishes in place of an address: enough to recognise, never enough to harvest. */
+function maskedForm(destination: string): string {
+  const at = destination.indexOf("@");
+  return at < 1 ? "***" : `${destination.slice(0, 1)}***${destination.slice(at)}`;
 }
 
 /**

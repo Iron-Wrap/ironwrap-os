@@ -10,6 +10,10 @@ import {
   automationHistoryResponseSchema,
   automationListResponseSchema,
   automationMutationResponseSchema,
+  automationRecipientDetailResponseSchema,
+  automationRecipientHistoryResponseSchema,
+  automationRecipientListResponseSchema,
+  automationRecipientMutationResponseSchema,
   documentTemplateHistoryResponseSchema,
   documentTemplateListResponseSchema,
   documentTemplateMutationResponseSchema,
@@ -21,6 +25,11 @@ import {
   type AutomationActivityResponse,
   type AutomationHistoryResponse,
   type AutomationListResponse,
+  type AutomationRecipient,
+  type AutomationRecipientDetailResponse,
+  type AutomationRecipientHistoryResponse,
+  type AutomationRecipientListResponse,
+  type AutomationRecipientWriteInput,
   type AutomationWriteInput,
   type DocumentTemplateHistoryResponse,
   type DocumentTemplateListResponse,
@@ -327,6 +336,103 @@ export async function loadAutomationHistory(
 }
 
 /**
+ * Automation recipients — who a rule may deliver to, administered by the account rather than
+ * shipped in a deploy secret (`workers-bus/src/automation-recipients-api.ts`, ELEC-204).
+ *
+ * The server never returns a destination, so this client never sends one back on a re-label: a
+ * revise that omits `destination` keeps the stored address. Retire is its own command rather than
+ * an `active: false` write, because the server refuses it while a live rule still names the
+ * reference and answers with the rules that would have broken.
+ */
+export async function loadAutomationRecipients(
+  fetcher: typeof fetch = fetch,
+): Promise<AutomationRecipientListResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipients,
+    schema: automationRecipientListResponseSchema,
+    fetcher,
+  });
+}
+
+export async function loadAutomationRecipientDetail(
+  recipientId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AutomationRecipientDetailResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipient(recipientId),
+    schema: automationRecipientDetailResponseSchema,
+    fetcher,
+  });
+}
+
+export async function loadAutomationRecipientHistory(
+  recipientId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<AutomationRecipientHistoryResponse> {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipientRevisions(recipientId),
+    schema: automationRecipientHistoryResponseSchema,
+    fetcher,
+  });
+}
+
+export async function createAutomationRecipient(
+  session: AuthenticatedSession,
+  input: Required<
+    Pick<AutomationRecipientWriteInput, "recipient_ref" | "label" | "channel" | "destination">
+  >,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipients,
+    method: "POST",
+    body: input,
+    schema: automationRecipientMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("recipient-create"),
+    fetcher,
+  });
+}
+
+/**
+ * Re-label, re-point, or bring a retired recipient back. `destination` is omitted rather than
+ * blanked when an administrator leaves the address field empty — the server reads an absent key as
+ * "keep the stored address", and an empty string as an invalid one.
+ */
+export async function reviseAutomationRecipient(
+  session: AuthenticatedSession,
+  recipientId: string,
+  input: AutomationRecipientWriteInput,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipient(recipientId),
+    method: "POST",
+    body: input,
+    schema: automationRecipientMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("recipient-revise"),
+    fetcher,
+  });
+}
+
+export async function retireAutomationRecipient(
+  session: AuthenticatedSession,
+  recipient: Pick<AutomationRecipient, "recipient_id" | "version">,
+  fetcher: typeof fetch = fetch,
+) {
+  return await apiRequest({
+    path: API_PATHS.adminAutomationRecipientRetire(recipient.recipient_id),
+    method: "POST",
+    body: { expected_version: recipient.version },
+    schema: automationRecipientMutationResponseSchema,
+    csrfToken: session.csrf_token,
+    idempotencyKey: newConfigurationActionKey("recipient-retire"),
+    fetcher,
+  });
+}
+
+/**
  * Document-template authoring. The server owns identity: `create` mints a `template_id` from the
  * tenant, entity type and human key, and every later command addresses that identifier. A revise
  * and a retire are the same append-only write with a different `action`, so retiring keeps the
@@ -499,4 +605,52 @@ export function configurationErrorMessage(error: unknown): string {
   if (error.code === "invalid_response")
     return "The server returned an invalid configuration response.";
   return "That did not go through. Check the connection and try again.";
+}
+
+/**
+ * Recipient-screen refusals, in the words of the administrator who typed them.
+ *
+ * Kept apart from `configurationErrorMessage` on purpose: the two screens mean opposite things by
+ * the same code. In the rule builder `automation_recipient_ref_invalid` means "pick from the list";
+ * here it means "the reference you typed has a character it cannot have". Folding them together
+ * would tell an owner composing a recipient to choose one from a list they are in the middle of
+ * creating. Anything not recipient-specific falls through to the shared configuration copy.
+ */
+export function automationRecipientErrorMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) return configurationErrorMessage(error);
+  if (error.code === "automation_recipient_admin_forbidden")
+    return "Only the account owner can change automation recipients.";
+  if (error.code === "automation_recipient_exists")
+    return "A recipient with that reference already exists. Open it to change its address, or choose a different reference.";
+  if (error.code === "automation_recipient_ref_immutable")
+    return "A reference cannot be renamed. Rules are bound to it, so renaming would silently re-aim them.";
+  if (error.code === "automation_recipient_ref_invalid")
+    return "Use a short reference of letters, numbers, dots, dashes, colons, or underscores.";
+  if (error.code === "automation_recipient_label_invalid") return "Give this recipient a name.";
+  if (error.code === "automation_recipient_destination_invalid")
+    return "Enter one plain email address, such as shop@example.com — no display name, no angle brackets, no list.";
+  if (error.code === "automation_recipient_channel_invalid")
+    return "Choose a delivery channel this deployment can send through.";
+  if (error.code === "automation_recipient_in_use")
+    return `${automationRecipientInUseCount(error)} still send to this recipient. Point them somewhere else or turn them off, then retire it.`;
+  if (error.code === "automation_recipient_already_retired")
+    return "This recipient is already retired. Reload to see its current state.";
+  if (error.code === "automation_recipient_limit_reached")
+    return `This account has reached its limit of ${error.detailNumber("limit") ?? 200} recipients. Retire one you no longer send to.`;
+  if (error.code === "automation_recipient_not_found")
+    return "That recipient no longer exists. Reload the list.";
+  if (error.code === "automation_recipient_version_conflict")
+    return "This recipient changed in another session. Reload before saving.";
+  if (error.code === "automation_recipient_write_failed")
+    return "The recipient was not written. Nothing changed — try again.";
+  return configurationErrorMessage(error);
+}
+
+/** How many live rules a refused retirement named, phrased so it can lead a sentence. */
+function automationRecipientInUseCount(error: ApiError): string {
+  const rules = error.details.rules;
+  const total = Array.isArray(rules) ? rules.length : 0;
+  if (total === 1) return "One automation rule";
+  if (total > 1) return `${total} automation rules`;
+  return "Automation rules";
 }

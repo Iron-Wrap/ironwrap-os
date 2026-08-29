@@ -334,8 +334,9 @@ recovery boundaries.
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] Governed stage automation is either left disabled, or has `PIPELINE_AUTOMATION_ENABLED=true`
-  and the tenant owner has added at least one recipient through the configuration hub
-  (`POST /api/v1/admin/automation-recipients`). No deploy secret is involved.
+  and the tenant owner has added at least one recipient on the Recipients screen
+  (`/settings/configuration/automations/recipients`, backed by
+  `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
 - [ ] All 107 D1 migrations through `0128_automation_recipient_catalog.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound

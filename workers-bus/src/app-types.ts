@@ -62,6 +62,10 @@ export type AppEnv = Env & {
   APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY?: string;
   APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
+  // Per-call bound on outbound Google traffic (token mint, Gmail, Drive, Docs). Unset or
+  // out of range (1000..30000) falls back to google.ts's default; a present-but-wrong Google
+  // credential must cost one bounded wait, never an open-ended one.
+  APP_GOOGLE_REQUEST_TIMEOUT_MS?: string;
   // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.
   // This is deliberately separate from broad `ops` access and defaults to no estimator access.
   APP_INSURANCE_ESTIMATOR_FRAPPE_USERS?: string;

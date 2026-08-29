@@ -31,6 +31,89 @@ export const JOB_SUBFOLDERS = [
   "04 Materials & Suppliers", "05 Contract & Estimates", "06 Completion & Warranty",
 ] as const;
 
+/** Minted access tokens, per isolate. Cleared with the breaker state in tests. */
+const cachedTokens = new Map<string, { token: string; exp: number }>();
+
+// ---------------------------------------------------------------- bounded outbound calls
+//
+// Every call below leaves the Worker for a third party we do not control, so every one of them
+// needs a bound. Without it a credential that is present but wrong — a typo'd key, a revoked
+// service account, a partition between the colo and Google — turns a request into an unbounded
+// wait instead of a fast failure (ELEC-220: a dummy GOOGLE_SERVICE_ACCOUNT_JSON flipped
+// gmailConfigured() true and left the token mint hanging, holding open the effect-ledger work
+// of handlers that had nothing to do with sending mail).
+//
+// The timeout bounds one call. The breaker bounds the sequence: a host that has stopped
+// answering is not asked again until the cooldown lapses, so a bad credential costs one timeout
+// and then fast failures, not one timeout per request for as long as the misconfiguration
+// lasts. It counts only unresponsiveness — a 401/403/5xx is a cheap, prompt answer and must
+// keep reaching the caller, who classifies it.
+
+export const GOOGLE_DEFAULT_TIMEOUT_MS = 10_000;
+/** Consecutive unresponsive calls to one Google host before it is skipped outright. */
+const GOOGLE_BREAKER_THRESHOLD = 3;
+/** How long a tripped host stays skipped before one probe is allowed through. */
+const GOOGLE_BREAKER_COOLDOWN_MS = 30_000;
+
+/** Per-call bound for Google traffic; out-of-range or unset falls back to the default. */
+export function googleRequestTimeout(raw: string | undefined): number {
+  const parsed = Number(raw ?? String(GOOGLE_DEFAULT_TIMEOUT_MS));
+  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= 30_000
+    ? parsed
+    : GOOGLE_DEFAULT_TIMEOUT_MS;
+}
+
+const googleBreakers = new Map<string, { failures: number; openUntil: number }>();
+
+/** Clears the per-isolate token cache and breaker state. Tests only. */
+export function resetGoogleAdapterStateForTest(): void {
+  cachedTokens.clear();
+  googleBreakers.clear();
+}
+
+function googleHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "google";
+  }
+}
+
+function recordGoogleUnresponsive(host: string): void {
+  const failures = (googleBreakers.get(host)?.failures ?? 0) + 1;
+  googleBreakers.set(host, {
+    failures,
+    openUntil: failures >= GOOGLE_BREAKER_THRESHOLD ? Date.now() + GOOGLE_BREAKER_COOLDOWN_MS : 0,
+  });
+}
+
+/**
+ * The one outbound door for this adapter: bounded, breaker-guarded, and labelled with the
+ * operation so a caller's error string still says which call failed and why.
+ */
+async function googleFetch(env: Env, url: string, init: RequestInit, op: string): Promise<Response> {
+  const host = googleHost(url);
+  const breaker = googleBreakers.get(host);
+  const now = Date.now();
+  if (breaker && breaker.openUntil > now) {
+    throw new Error(`${op}_circuit_open_${Math.ceil((breaker.openUntil - now) / 1000)}s`);
+  }
+  const timeoutMs = googleRequestTimeout((env as AppEnv).APP_GOOGLE_REQUEST_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    googleBreakers.delete(host);
+    return response;
+  } catch {
+    recordGoogleUnresponsive(host);
+    if (controller.signal.aborted) throw new Error(`${op}_timeout_${timeoutMs}ms`);
+    throw new Error(`${op}_network_error`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function googleConfigured(env: Env): boolean {
   return !!(env.GOOGLE_SERVICE_ACCOUNT_JSON && env.SHARED_DRIVE_ID_JOBS);
 }
@@ -53,8 +136,6 @@ export function jobFolderName(jobNumber: string, customer?: string | null, brand
 }
 
 // ---------------------------------------------------------------- token (cached per isolate)
-const cachedTokens = new Map<string, { token: string; exp: number }>();
-
 const b64url = (data: string | Uint8Array): string => {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   let bin = "";
@@ -85,11 +166,11 @@ export async function googleToken(env: Env, sub: string, scopes: string = SCOPES
     "pkcs8", pemToPkcs8(sa.private_key), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned)));
 
-  const res = await fetch(TOKEN_URL, {
+  const res = await googleFetch(env, TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${b64url(sig)}` }),
-  });
+  }, "google_token");
   const j = (await res.json()) as { access_token?: string; error?: string; error_description?: string };
   if (!j.access_token) throw new Error(`google_token: ${j.error ?? res.status} ${j.error_description ?? ""}`.slice(0, 200));
   cachedTokens.set(cacheKey, { token: j.access_token, exp: now + 3600 });
@@ -248,9 +329,9 @@ async function sendGmailThroughEffect(
       if (!providerExternalId) return { status: "unavailable" as const, detailCode: "gmail_readback_id_missing" };
       const token = await googleToken(env, env.FROM_EMAIL);
       const query = new URLSearchParams({ format: "raw" });
-      const response = await fetch(`${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
+      const response = await googleFetch(env, `${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
         headers: { authorization: `Bearer ${token}` },
-      });
+      }, "gmail_readback");
       if (response.status === 404) return { status: "not_found" as const, detailCode: "gmail_readback_not_found" };
       if (!response.ok) return { status: "unavailable" as const, detailCode: `gmail_readback_${response.status}` };
       const value = await response.json() as unknown;
@@ -263,9 +344,11 @@ async function sendGmailThroughEffect(
       const providerMessageId = effect.provider_external_id;
       if (!providerMessageId) throw new Error("gmail_replay_id_missing");
       const token = await googleToken(env, env.FROM_EMAIL);
-      const response = await fetch(
+      const response = await googleFetch(
+        env,
         `${GMAIL}/users/me/messages/${encodeURIComponent(providerMessageId)}?format=raw`,
         { headers: { authorization: `Bearer ${token}` } },
+        "gmail_replay",
       );
       const observed = response.ok
         ? await gmailObservedReadback(await response.json())
@@ -295,11 +378,11 @@ async function sendGmailDirect(env: Env, to: string, subject: string, html: stri
     `From: ${env.FROM_EMAIL}`, `To: ${to}`, `Subject: ${subj}`,
     `MIME-Version: 1.0`, `Content-Type: text/html; charset=UTF-8`, ``, html,
   ].join("\r\n"));
-  const res = await fetch(`${GMAIL}/users/me/messages/send`, {
+  const res = await googleFetch(env, `${GMAIL}/users/me/messages/send`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ raw }),
-  });
+  }, "gmail_send");
   if (!res.ok) throw new Error(`gmail_send_${res.status}: ${(await res.text()).slice(0, 200)}`);
   let payload: unknown;
   try {
@@ -349,7 +432,7 @@ async function driveExpectedReadback(
 async function driveFind(env: Env, token: string, q: string): Promise<DriveFile | null> {
   const url = `${DRIVE}/files?q=${encodeURIComponent(q)}&corpora=drive&driveId=${env.SHARED_DRIVE_ID_JOBS}` +
     `&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,webViewLink)&pageSize=5`;
-  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  const res = await googleFetch(env, url, { headers: { authorization: `Bearer ${token}` } }, "drive_list");
   if (!res.ok) throw new Error(`drive_list_${res.status}: ${(await res.text()).slice(0, 200)}`);
   const j = (await res.json()) as { files?: DriveFile[] };
   return j.files?.[0] ?? null;
@@ -391,11 +474,11 @@ async function driveCreateFolder(
       correlationId: idempotencyKey,
     }, {
       async dispatch() {
-        const response = await fetch(`${DRIVE}/files?${driveQS}`, {
+        const response = await googleFetch(env, `${DRIVE}/files?${driveQS}`, {
           method: "POST",
           headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
           body: JSON.stringify(request),
-        });
+        }, "drive_mkdir");
         if (!response.ok) {
           await response.text();
           return { outcome: "rejected" as const, detailCode: `drive_mkdir_${response.status}` };
@@ -407,10 +490,11 @@ async function driveCreateFolder(
         return { outcome: "accepted" as const, value: { id: value.id }, providerExternalId: value.id, providerResponse: value };
       },
       async readback({ providerExternalId }) {
-        return await driveReadback(token, providerExternalId, expectedReadback);
+        return await driveReadback(env, token, providerExternalId, expectedReadback);
       },
       async replay({ effect }) {
         return await replayDriveFile(
+          env,
           token,
           effect.provider_external_id,
           expectedReadback,
@@ -522,6 +606,7 @@ async function ensureSubfolder(env: Env, token: string, parentId: string, name: 
 }
 
 async function driveCopyFileDirect(
+  env: Env,
   token: string,
   templateDocId: string,
   request: {
@@ -530,11 +615,11 @@ async function driveCopyFileDirect(
     appProperties: Record<string, string>;
   },
 ): Promise<{ id: string; webViewLink?: string }> {
-  const response = await fetch(`${DRIVE}/files/${encodeURIComponent(templateDocId)}/copy?${driveQS}&fields=id,webViewLink`, {
+  const response = await googleFetch(env, `${DRIVE}/files/${encodeURIComponent(templateDocId)}/copy?${driveQS}&fields=id,webViewLink`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(request),
-  });
+  }, "docs_copy");
   if (!response.ok) throw new Error(`docs_copy_${response.status}: ${(await response.text()).slice(0, 200)}`);
   const value = await response.json() as { id?: unknown; webViewLink?: unknown };
   if (typeof value.id !== "string" || !value.id) throw new Error("docs_copy_invalid_receipt");
@@ -583,14 +668,14 @@ async function driveCopyFile(
     correlationId: idempotencyKey,
   }, {
     async dispatch() {
-      const value = await driveCopyFileDirect(token, templateDocId, providerRequest);
+      const value = await driveCopyFileDirect(env, token, templateDocId, providerRequest);
       return { outcome: "accepted" as const, value, providerExternalId: value.id, providerResponse: value };
     },
       async readback({ providerExternalId }) {
-      return await driveReadback(token, providerExternalId, expectedReadback);
+      return await driveReadback(env, token, providerExternalId, expectedReadback);
     },
     async replay({ effect }) {
-      return await replayDriveFile(token, effect.provider_external_id, expectedReadback);
+      return await replayDriveFile(env, token, effect.provider_external_id, expectedReadback);
     },
   });
   if (result.effect.state !== "succeeded" || !result.value?.id) throw new Error(result.effect.result_code ?? "docs_copy_outcome_unknown");
@@ -598,15 +683,16 @@ async function driveCopyFile(
 }
 
 async function driveMergeDocDirect(
+  env: Env,
   token: string,
   docId: string,
   requests: Array<{ replaceAllText: { containsText: { text: string; matchCase: true }; replaceText: string } }>,
 ): Promise<void> {
-  const response = await fetch(`${DOCS}/documents/${encodeURIComponent(docId)}:batchUpdate`, {
+  const response = await googleFetch(env, `${DOCS}/documents/${encodeURIComponent(docId)}:batchUpdate`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ requests }),
-  });
+  }, "docs_merge");
   if (!response.ok) throw new Error(`docs_merge_${response.status}: ${(await response.text()).slice(0, 200)}`);
 }
 
@@ -640,14 +726,14 @@ async function driveMergeDoc(
     correlationId: idempotencyKey,
   }, {
     async dispatch() {
-      await driveMergeDocDirect(token, docId, requests);
+      await driveMergeDocDirect(env, token, docId, requests);
       return { outcome: "accepted" as const, value: true, providerExternalId: docId };
     },
     async readback({ providerExternalId }) {
-      return await docsMergeReadback(token, providerExternalId, requests, mergeSha256);
+      return await docsMergeReadback(env, token, providerExternalId, requests, mergeSha256);
     },
     async replay({ effect }) {
-      const readback = await docsMergeReadback(token, effect.provider_external_id, requests, mergeSha256);
+      const readback = await docsMergeReadback(env, token, effect.provider_external_id, requests, mergeSha256);
       if (readback.status !== "match") throw new Error(readback.detailCode ?? "docs_merge_replay_failed");
       return true;
     },
@@ -656,6 +742,7 @@ async function driveMergeDoc(
 }
 
 async function docsMergeReadback(
+  env: Env,
   token: string,
   providerExternalId: string | null,
   requests: Array<{
@@ -674,11 +761,13 @@ async function docsMergeReadback(
   if (!providerExternalId)
     return { status: "unavailable", detailCode: "docs_merge_id_missing" };
   try {
-    const response = await fetch(
+    const response = await googleFetch(
+      env,
       `${DOCS}/documents/${encodeURIComponent(providerExternalId)}`,
       {
         headers: { authorization: `Bearer ${token}` },
       },
+      "docs_merge_readback",
     );
     if (response.status === 404)
       return {
@@ -746,15 +835,16 @@ function googleDocumentText(value: unknown): string | null {
 }
 
 async function driveReadback(
+  env: Env,
   token: string,
   providerExternalId: string | null,
   expected: DriveMaterialReadback,
 ): Promise<{ status: "match" | "conflict" | "unavailable" | "not_found"; providerExternalId?: string; observed?: unknown; detailCode?: string }> {
   if (!providerExternalId) return { status: "unavailable", detailCode: "drive_readback_id_missing" };
   try {
-    const response = await fetch(`${DRIVE}/files/${encodeURIComponent(providerExternalId)}?${driveQS}&fields=id,name,parents,mimeType,trashed,webViewLink,appProperties`, {
+    const response = await googleFetch(env, `${DRIVE}/files/${encodeURIComponent(providerExternalId)}?${driveQS}&fields=id,name,parents,mimeType,trashed,webViewLink,appProperties`, {
       headers: { authorization: `Bearer ${token}` },
-    });
+    }, "drive_readback");
     if (response.status === 404) return { status: "not_found", detailCode: "drive_readback_not_found" };
     if (!response.ok) return { status: "unavailable", detailCode: `drive_readback_${response.status}` };
     const value = await response.json() as {
@@ -794,11 +884,12 @@ async function driveReadback(
 }
 
 async function replayDriveFile(
+  env: Env,
   token: string,
   providerExternalId: string | null,
   expected: DriveMaterialReadback,
 ): Promise<{ id: string; webViewLink?: string }> {
-  const readback = await driveReadback(token, providerExternalId, expected);
+  const readback = await driveReadback(env, token, providerExternalId, expected);
   if (readback.status !== "match" || !providerExternalId || !readback.observed || typeof readback.observed !== "object" || Array.isArray(readback.observed)) {
     throw new Error(readback.detailCode ?? "drive_replay_readback_failed");
   }
@@ -862,6 +953,7 @@ export async function fileToJobFolder(
 }
 
 async function driveUploadDirect(
+  env: Env,
   token: string,
   file: { name: string; bytes: ArrayBuffer; contentType: string },
   meta: string,
@@ -873,11 +965,11 @@ async function driveUploadDirect(
     `--${boundary}\r\nContent-Type: ${file.contentType}\r\n\r\n`;
   const tail = `\r\n--${boundary}--`;
   const body = new Blob([head, file.bytes, tail]);
-  const response = await fetch(`${UPLOAD}/files?uploadType=multipart&${driveQS}&fields=id,webViewLink`, {
+  const response = await googleFetch(env, `${UPLOAD}/files?uploadType=multipart&${driveQS}&fields=id,webViewLink`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": `multipart/related; boundary=${boundary}` },
     body,
-  });
+  }, "drive_upload");
   if (!response.ok) throw new Error(`drive_upload_${response.status}: ${(await response.text()).slice(0, 150)}`);
   const value = await response.json() as { id?: unknown; webViewLink?: unknown };
   if (typeof value.id !== "string" || !value.id) throw new Error("drive_upload_invalid_receipt");
@@ -925,14 +1017,14 @@ async function driveUploadThroughRuntime(
     correlationId: businessKey,
   }, {
     async dispatch() {
-      const value = await driveUploadDirect(token, file, meta);
+      const value = await driveUploadDirect(env, token, file, meta);
       return { outcome: "accepted" as const, value, providerExternalId: value.id, providerResponse: { id: value.id } };
     },
     async readback({ providerExternalId }) {
-      return await driveReadback(token, providerExternalId, expectedReadback);
+      return await driveReadback(env, token, providerExternalId, expectedReadback);
     },
     async replay({ effect }) {
-      return await replayDriveFile(token, effect.provider_external_id, expectedReadback);
+      return await replayDriveFile(env, token, effect.provider_external_id, expectedReadback);
     },
   });
   if (result.effect.state !== "succeeded" || !result.value?.id) throw new Error(result.effect.result_code ?? "drive_upload_outcome_unknown");

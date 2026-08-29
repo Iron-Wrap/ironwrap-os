@@ -60,10 +60,7 @@ function validateWorkflow(workflow) {
     production,
     /permissions:\n\s+actions: read\n\s+contents: write\n\s+pull-requests: write/,
   );
-  assert.equal(
-    (workflow.match(/persist-credentials: false/g) ?? []).length,
-    4,
-  );
+  assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 4);
   assert.doesNotMatch(
     workflow,
     /environment:\s*production|required_reviewers|RELEASE_REVIEW_RECEIPT/,
@@ -85,13 +82,25 @@ function validateWorkflow(workflow) {
     /pr-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*issuer-request[\s\S]*review-wait[\s\S]*policy-genesis[\s\S]*admission-context/,
   );
   assert.match(workflow, /explicit \/v2\/independent-issuer route/);
-  assert.match(workflow, /issuer-request emits a canonical five-minute freshness window/);
+  assert.match(
+    workflow,
+    /issuer-request emits a canonical five-minute freshness window/,
+  );
   assert.match(workflow, /signing\/publication stay external/);
-  assert.match(admission, /id: publish_review_candidate[\s\S]*--artifact-digest "\$\{\{ steps\.publish_review_candidate\.outputs\.artifact-digest \}\}"/);
-  assert.match(admission, /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/);
+  assert.match(
+    admission,
+    /id: publish_review_candidate[\s\S]*--artifact-digest "\$\{\{ steps\.publish_review_candidate\.outputs\.artifact-digest \}\}"/,
+  );
+  assert.match(
+    admission,
+    /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/,
+  );
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
-  assert.match(admission, /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
+  assert.match(
+    admission,
+    /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/,
+  );
   // The push-sourced arm derives generation N from the squash commit's single
   // parent and hands both commits to the enforcer, which re-reads the same
   // lineage from the provider before admitting anything.
@@ -103,13 +112,19 @@ function validateWorkflow(workflow) {
     admission,
     /push-context[\s\S]*--head-commit "\$RELEASE_SOURCE_COMMIT" --base-commit "\$RELEASE_BASE_COMMIT"/,
   );
-  assert.match(admission, /push-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
+  assert.match(
+    admission,
+    /push-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/,
+  );
   assert.match(admission, /\$\{\{ runner\.temp \}\}\/pr-context\.json/);
   assert.match(workflow, /node "\$RELEASE_ENFORCER"/);
   assert.doesNotMatch(workflow, /node tools\/release-promotion\.mjs/);
   assert.equal(
-    (workflow.match(/node "\$\(dirname "\$RELEASE_ENFORCER"\)\/launch-proof\.mjs" --execute/g) ?? [])
-      .length,
+    (
+      workflow.match(
+        /node "\$\(dirname "\$RELEASE_ENFORCER"\)\/launch-proof\.mjs" --execute/g,
+      ) ?? []
+    ).length,
     3,
   );
   assert.doesNotMatch(workflow, /node tools\/launch-proof\.mjs/);
@@ -151,13 +166,25 @@ function validateWorkflow(workflow) {
     /"\$WRANGLER_BIN" versions upload[\s\S]*--env staging[\s\S]*--no-bundle[\s\S]*--strict/,
   );
   assert.match(staging, /"\$WRANGLER_BIN" secret list[\s\S]*secret-readback/);
-  assert.match(staging, /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/);
-  assert.match(staging, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment staging/);
+  assert.match(
+    staging,
+    /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/,
+  );
+  assert.match(
+    staging,
+    /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment staging/,
+  );
   assert.doesNotMatch(staging, /npm ci --ignore-scripts --prefix workers-bus/);
   assert.match(staging, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN/);
-  assert.doesNotMatch(staging, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
+  assert.doesNotMatch(
+    staging,
+    /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/,
+  );
   assert.match(staging, /version-readback/);
-  assert.match(staging, /environment-preflight[\s\S]*staging-environment-preflight\.json/);
+  assert.match(
+    staging,
+    /environment-preflight[\s\S]*staging-environment-preflight\.json/,
+  );
   assert.match(
     staging,
     /d1 export[\s\S]*restore-query[\s\S]*d1 execute[\s\S]*--json[\s\S]*restore-readback/,
@@ -199,11 +226,21 @@ function validateWorkflow(workflow) {
     production,
     /release-evidence-wait[\s\S]*--attempts 80 --interval-ms 15000/,
   );
-  assert.match(production, /id: publish_release_candidate[\s\S]*issuer-request[\s\S]*--artifact-digest "\$\{\{ steps\.publish_release_candidate\.outputs\.artifact-digest \}\}"/);
-  assert.match(production, /release-evidence-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/release-evidence-issuer-ack\.json"/);
+  assert.match(
+    production,
+    /id: publish_release_candidate[\s\S]*issuer-request[\s\S]*--artifact-digest "\$\{\{ steps\.publish_release_candidate\.outputs\.artifact-digest \}\}"/,
+  );
+  assert.match(
+    production,
+    /release-evidence-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/release-evidence-issuer-ack\.json"/,
+  );
   assert.match(
     production,
     /assemble[\s\S]*--artifact-manifest[\s\S]*--release-evidence/,
+  );
+  assert.match(
+    production,
+    /assemble[\s\S]*--frappe-scope out-of-scope[\s\S]*--repo-root/,
   );
   assert.match(production, /assemble[\s\S]*--production-recovery/);
   assert.match(
@@ -221,19 +258,44 @@ function validateWorkflow(workflow) {
     production,
     /admit[\s\S]*merged-source[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus/,
   );
-  assert.match(production, /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/);
-  assert.match(production, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment production/);
-  assert.doesNotMatch(production, /npm ci --ignore-scripts --prefix workers-bus/);
-  assert.match(production, /environment-preflight[\s\S]*production-environment-preflight\.json/);
+  assert.match(
+    production,
+    /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/,
+  );
+  assert.match(
+    production,
+    /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment production/,
+  );
+  assert.doesNotMatch(
+    production,
+    /npm ci --ignore-scripts --prefix workers-bus/,
+  );
+  assert.match(
+    production,
+    /environment-preflight[\s\S]*production-environment-preflight\.json/,
+  );
   assert.match(production, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN/);
-  assert.doesNotMatch(production, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.doesNotMatch(production, /--operation promote|--operation readback|--service-promotion-receipt|--service-readback-receipt/);
-  assert.doesNotMatch(production, /id: promote_frappe|Promote the prepared Frappe artifact|Re-read the Frappe provider identity/);
+  assert.doesNotMatch(
+    production,
+    /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/,
+  );
+  assert.doesNotMatch(
+    production,
+    /--operation promote|--operation readback|--service-promotion-receipt|--service-readback-receipt/,
+  );
+  assert.doesNotMatch(
+    production,
+    /id: promote_frappe|Promote the prepared Frappe artifact|Re-read the Frappe provider identity/,
+  );
   assert.match(
     production,
     /production-post-smoke\.json[\s\S]*deployment-revision[\s\S]*production-receipt/,
   );
   assert.match(production, /node "\$RELEASE_ENFORCER" production-receipt/);
+  assert.match(
+    production,
+    /production-receipt[\s\S]*--frappe-scope out-of-scope[\s\S]*--active/,
+  );
   assert.match(
     production,
     /advance[\s\S]*--production-receipt[\s\S]*--merge-receipt/,
@@ -253,9 +315,20 @@ function validateWorkflow(workflow) {
   );
   assert.match(
     production,
+    /production-rollback-receipt[\s\S]*--frappe-scope out-of-scope[\s\S]*--input/,
+  );
+  assert.equal(
+    (production.match(/--frappe-scope out-of-scope/g) ?? []).length,
+    3,
+  );
+  assert.match(
+    production,
     /steps\.promote_production\.outcome \}\}" != "skipped"[\s\S]*"\$WRANGLER_BIN" rollback[\s\S]*deployments list[\s\S]*production-rollback-receipt/,
   );
-  assert.match(production, /production-previous-version\.json[\s\S]*version-snapshot/);
+  assert.match(
+    production,
+    /production-previous-version\.json[\s\S]*version-snapshot/,
+  );
   assert.equal(
     (production.match(/node "\$RELEASE_ENFORCER" version-snapshot/g) ?? [])
       .length,
@@ -357,7 +430,9 @@ test("workflow rejects candidate toolchain and cross-environment provider creden
     ),
   );
   assert.throws(() =>
-    validateWorkflow(workflow.replace("issuer-request", "issuer-trigger-omitted")),
+    validateWorkflow(
+      workflow.replace("issuer-request", "issuer-trigger-omitted"),
+    ),
   );
   assert.throws(() =>
     validateWorkflow(workflow.replace("--issuer-ack", "--unbound-issuer-ack")),
@@ -412,7 +487,10 @@ test("workflow validation rejects an unpinned or unverified push-sourced admissi
   );
   assert.throws(() =>
     validateWorkflow(
-      workflow.replace("release_admission_push_not_linear", "release_admission_push_assumed_linear"),
+      workflow.replace(
+        "release_admission_push_not_linear",
+        "release_admission_push_assumed_linear",
+      ),
     ),
   );
   assert.throws(() =>
@@ -460,9 +538,7 @@ test("workflow validation rejects missing durable success or rollback outcomes",
     ),
   );
   assert.throws(() =>
-    validateWorkflow(
-      workflow.replace("version-snapshot", "version-id-only"),
-    ),
+    validateWorkflow(workflow.replace("version-snapshot", "version-id-only")),
   );
   assert.throws(() =>
     validateWorkflow(

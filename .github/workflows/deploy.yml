@@ -841,6 +841,7 @@ jobs:
           printf '%s' "$RELEASE_REVIEW_PUBLIC_KEY" > "$RUNNER_TEMP/review.pub"
           printf '%s' "$RELEASE_PERMIT_PRIVATE_KEY" > "$RUNNER_TEMP/permit.key"
           node "$RELEASE_ENFORCER" assemble \
+            --frappe-scope out-of-scope \
             --repo-root "$GITHUB_WORKSPACE" \
             --context "$RUNNER_TEMP/context-download/context.json" \
             --policy "$RUNNER_TEMP/context-download/policy.json" \
@@ -940,6 +941,7 @@ jobs:
         run: |
           set -euo pipefail
           node "$RELEASE_ENFORCER" production-receipt \
+            --frappe-scope out-of-scope \
             --active "$RUNNER_TEMP/production-post-smoke.id" \
             --smoke "$RUNNER_TEMP/production-smoke-evidence.json" \
             --health "$RUNNER_TEMP/production-health.json" --ready "$RUNNER_TEMP/production-ready.json" \
@@ -996,6 +998,7 @@ jobs:
           node "$RELEASE_ENFORCER" readiness \
             --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json"
           node "$RELEASE_ENFORCER" production-rollback-receipt \
+            --frappe-scope out-of-scope \
             --input "$RUNNER_TEMP/production-rollback.json" --previous "$previous" --candidate "$candidate" \
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \

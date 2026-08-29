@@ -2021,6 +2021,40 @@ test("field is denied an unassigned job while office reads it and Today does not
   }
 });
 
+test("assigned field keeps plain check-in authority before a Work Package exists", async () => {
+  const withoutWorkPackage = env({ workPackages: [] });
+
+  const assignedField = await buildJobReadModel(
+    withoutWorkPackage,
+    auth("field", "crew@example.com"),
+    "JOB-A",
+  );
+  assert.ok(assignedField);
+  assert.equal(assignedField.assignment?.id, "ASSIGN-A");
+  assert.equal(assignedField.packet.work_package, null);
+  assert.equal(
+    assignedField.allowed_actions.includes("field.checkin.create"),
+    true,
+  );
+
+  assert.equal(
+    await buildJobReadModel(
+      withoutWorkPackage,
+      auth("field", "unassigned@example.com"),
+      "JOB-A",
+    ),
+    null,
+  );
+
+  const office = await buildJobReadModel(
+    withoutWorkPackage,
+    auth("ops", "ops@example.com"),
+    "JOB-A",
+  );
+  assert.ok(office);
+  assert.equal(office.allowed_actions.includes("field.checkin.create"), false);
+});
+
 test("owner Now is an office-only, exception-first roofing read model", async () => {
   const original = globalThis.fetch;
   let networkCalls = 0;

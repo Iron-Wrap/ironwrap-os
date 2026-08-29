@@ -25,12 +25,29 @@
 //   * `office_waiver` - a governed manual clearance: a named actor, a stated
 //     reason, a recorded time, landing in the gate's own `Waived` state, which is
 //     exactly the shape `domain_policy._validate_gate` asks of a clearance that
-//     carries no evidence. This is the honest v1 for Materials, Safety, Access,
-//     Weather and Crew: none of the five has a product rail that produces a
-//     readiness artifact yet (a weather window has no source at all; a signed-off
-//     material delivery, safety plan acknowledgement and crew confirmation each
-//     have domain records but no rail that binds one to its gate). It is marked as
-//     a waiver everywhere it is shown, precisely so it is never mistaken for proof.
+//     carries no evidence. It is available on all six gates. For Materials,
+//     Safety, Access, Weather and Crew it is the honest v1 and the *only* basis
+//     they have: none of the five has a product rail that produces a readiness
+//     artifact yet (a weather window has no source at all; a signed-off material
+//     delivery, safety plan acknowledgement and crew confirmation each have domain
+//     records but no rail that binds one to its gate). It is marked as a waiver
+//     everywhere it is shown, precisely so it is never mistaken for proof.
+//
+// The asymmetry between the two bases runs one way only, and the enumeration above
+// is a statement about which gates have a *second* basis - not a list of the gates
+// a waiver is allowed on. ELEC-219 read it as the latter and reported Deposit +
+// `office_waiver` as a missing restriction, so: `deposit_settlement` is
+// Deposit-only, because it is made of a deposit invoice and no other gate has one.
+// `office_waiver` is deliberately NOT Deposit-excluded. Jobs legitimately reach
+// production with no deposit to settle - an insurance restoration file where the
+// carrier pays on completion, net-terms commercial work - and refusing to schedule
+// one would be the product asserting that a true fact about the money is
+// impossible. What a waiver must never do is *look* like a settlement, and it does
+// not: it lands in `Waived` and not `Ready`, answers `evidence_item: null`, writes
+// no R2 receipt, stores `clearance_basis = 'office_waiver'`, and is counted apart
+// from the settled gates in the runway's `gate_summary`. Deposit is the one gate
+// where both bases are reachable, so it is also the one place that distinction has
+// to stay legible - which is a visibility requirement, not a reason to refuse.
 //
 // The authority is not invented here. `access_control.DOCTYPE_ROLE_MATRIX` already
 // gives gate authority to IronWrap Production, and the blanket owner grant gives it
@@ -146,7 +163,9 @@ export function parseProductionGateClearance(
   const typedBasis = basis as ProductionGateClearanceBasis;
   // A settlement clearance takes its whole statement from the money lane. Letting
   // the caller attach prose to it would invite a reason that contradicts the
-  // record the receipt is made of.
+  // record the receipt is made of, and the gate check binds it to the only gate a
+  // deposit invoice can speak for. Neither restriction has a mirror below: a
+  // waiver is a valid basis on every clearable gate, Deposit included.
   if (typedBasis === "deposit_settlement") {
     if (body.reason !== undefined) return null;
     if (gate !== "Deposit") return null;

@@ -14,6 +14,7 @@ import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import {
+  CLEARABLE_PRODUCTION_GATES,
   depositSettlementReceipt,
   frappeRefusalCode,
   parseProductionGateClearance,
@@ -498,7 +499,12 @@ test("a job the caller's own runway cannot see has no gate to clear", async () =
   }
 });
 
-test("an office waiver persists on D1 as a waived gate attributed to the app user", async () => {
+// Deposit is the one gate both bases can reach, so this case is also the record of a
+// deliberate product decision: a job with no deposit to settle - here an insurance
+// restoration file the carrier pays on completion - is still schedulable, on a named
+// actor's authority, and the result must stay distinguishable from a settlement
+// (ELEC-219 read the header's five-gate list as forbidding this).
+test("an office waiver on Deposit persists as a waived gate attributed to the app user, never as settlement", async () => {
   const harness = setup();
   try {
     const reason = "No deposit on this insurance restoration file; carrier pays on completion.";
@@ -527,6 +533,9 @@ test("an office waiver persists on D1 as a waived gate attributed to the app use
     assert.equal(row.clearance_basis, "office_waiver");
     assert.equal(row.clearance_decision_id, KEY);
     assert.equal(row.cleared_by_user_id, "appu_owner_0001");
+    // A waiver is never mistaken for settled money: `Waived` and not `Ready`, no
+    // evidence item on the answer, and no receipt in immutable storage.
+    assert.notEqual(row.state, "complete");
     assert.equal(harness.raw.objects.size, 0);
   } finally {
     harness.restore();
@@ -1026,6 +1035,29 @@ test("the receipt is canonical, so the same observation always hashes the same",
     } as AccountingIntentRecord),
     "2026-08-20T12:11:00.000Z",
   );
+});
+
+// The basis/gate matrix, stated once so the asymmetry cannot be "corrected" by
+// reading the module header as an exclusion list (ELEC-219): settlement is bound to
+// the gate that has a deposit invoice, a waiver is bound to nothing.
+test("a waiver is a valid basis on every clearable gate; settlement is Deposit-only", () => {
+  for (const gate of CLEARABLE_PRODUCTION_GATES) {
+    assert.ok(
+      parseProductionGateClearance(gate, JOB_ID, KEY, {
+        basis: "office_waiver",
+        reason: "Recorded by the office against a stated business reason.",
+      }),
+      `${gate} must accept an office waiver`,
+    );
+    const settlement = parseProductionGateClearance(gate, JOB_ID, KEY, {
+      basis: "deposit_settlement",
+    });
+    if (gate === "Deposit") {
+      assert.ok(settlement, "Deposit must accept a settlement clearance");
+    } else {
+      assert.equal(settlement, null, `${gate} must not accept a settlement clearance`);
+    }
+  }
 });
 
 test("parse and refusal-code helpers refuse what they cannot read", () => {

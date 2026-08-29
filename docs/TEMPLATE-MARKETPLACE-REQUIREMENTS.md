@@ -2,9 +2,9 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-28
-Review trigger: any change to the pipeline, schema-field, or automation domains that packaging
-would need to snapshot
+Last verified: 2026-08-29
+Review trigger: any change to the pipeline, schema-field, document-template, or automation domains
+that packaging would need to snapshot
 
 ## Purpose
 
@@ -15,8 +15,10 @@ so it is not lost, states what a template must carry, what "composable" has to m
 — the actual point of this document — what upgrade, rollback, and isolation evidence Stages 1–2
 would still need to produce before the non-goal can responsibly be lifted.
 
-This is a **Target** document (per `docs/DOCUMENTATION-CONTRACT.md`). Nothing here is built. It
-must not be read as a design already accepted for implementation.
+This is a **Target** document (per `docs/DOCUMENTATION-CONTRACT.md`). The marketplace/catalog,
+composition, upgrade, and rollback layers described here are not built; the implemented
+configuration primitives they would package are called out explicitly below. This document must
+not be read as a design already accepted for implementation.
 
 ## The requirement, in the stakeholder's words
 
@@ -29,15 +31,17 @@ templates, enter company details, upload a logo, start working.
 
 ## What a template must be able to carry
 
-Based on what Stages 1–2 actually landed (verified 2026-08-28, this issue's live audit), a
+Based on what Stages 1–2 actually landed (verified from the cited code and tests on 2026-08-29), a
 template package would need to snapshot every layer an admin can now configure by hand:
 
 1. **Pipelines and stages** — `pipelines`, `pipeline_stages` shape (PR #153,
    `0113_pipeline_board_core.sql`; admin CRUD landed in `0122_pipeline_admin_configuration.sql`,
-   `workers-bus/src/pipeline-board-store.ts`). A template's pipeline entry is exactly the shape the
-   "Copy pipeline" action already produces (stages + role grants, no cards, no transition
-   history) — that existing copy operation is the nearest thing to a template instantiator the
-   system has today, and any templating design should treat it as the primitive, not reinvent it.
+   `workers-bus/src/pipeline-board-store.ts`). Two existing primitives serve different scopes:
+   `tools/seed-pipeline.mjs` additively installs a versioned repo-shipped document from
+   `config/pipelines/` as ordinary tenant rows, while the tenant-local "Copy pipeline" action
+   duplicates stages + role grants without cards or transition history. Future packaging should
+   reuse both rather than conflate them: seeding is the operator-controlled baseline path; copy is
+   the per-tenant duplication path. Neither is a marketplace catalog or template-upgrade engine.
 2. **Role grants per pipeline** — `pipeline_role_grants` (owning role + explicit read/write grants
    per role). Confirmed configurable per pipeline via the Role access panel on
    `/settings/configuration/pipelines`.
@@ -45,8 +49,7 @@ template package would need to snapshot every layer an admin can now configure b
    (`workers-bus/src/schema-forms.ts`, `0124_schema_field_history.sql`): field key, type,
    validator + validator config, visibility rule + config, evidence class, retention policy,
    offline mode, read/write scope, and per-role read/write authority. Confirmed configurable via
-   `/settings/configuration/fields`, live-tested end to end (dropdown, image, and multi-field
-   composition all admin-reachable — see this issue's verdict table).
+   `/settings/configuration/fields` and covered by `app/e2e/owner-configuration.spec.ts`.
 4. **Automation rules** — `pipeline_automation_rules`-equivalent domain
    (`workers-bus/src/pipeline-automation.ts`, `0123_pipeline_stage_automation.sql`,
    `0127_pipeline_automation_action_registry.sql`): trigger stage, action (from the registered
@@ -54,12 +57,13 @@ template package would need to snapshot every layer an admin can now configure b
    `/settings/configuration/automations`.
 5. **Document templates** — `document-templates.ts` (`0125_document_templates_and_generation.sql`)
    is a REQUIRED companion layer: an automation rule that generates-and-delivers a document is
-   only meaningful with a template attached, and template authoring currently has **no admin UI
-   at all** (see the "engineer-only" finding on the parent verdict — the automation rule builder's
-   template picker only *selects* from existing templates; nothing in `app/` creates one). A
-   template package's document layer cannot be captured as "what the admin configured," because
-   nothing today lets the admin configure it. This is a **blocking gap**, not a detail — see
-   "Missing prerequisite" below.
+   only meaningful with a template attached. Owners can create, revise, retire, and inspect
+   history at `/settings/configuration/documents` through
+   `app/src/admin/document-templates-configuration-page.tsx` and the
+   `/api/v1/admin/document-templates` endpoints. The automation rule builder selects an existing
+   template rather than authoring one inline; that is a cross-screen workflow constraint, not a
+   missing admin capability. A package therefore can and should treat document templates as
+   catalog content, applying them before rules that reference them.
 6. **Company profile and branding** — name, short name, description, contact details, logo
    (`app/src/admin/company-profile-page.tsx`). Already reachable per-tenant from Setup; a template
    would leave these tenant-specific fields blank/prompted at instantiation time, matching Ilya's
@@ -81,14 +85,16 @@ Ilya's phrase implies two distinct capabilities, and they should not be conflate
   role grants, or skip an automation before it lands — otherwise "templates of templates" degrades
   into "one giant fixed bundle per vertical," which contradicts the generic-core rule this project
   already treats as load-bearing. The existing "Copy pipeline" flow's `Copy key` / `Copy name`
-  inputs are a working precedent for this: instantiation already asks for the two identifiers a
-  copy needs before committing.
+  inputs are a working tenant-local precedent for this: duplication already asks for the two
+  identifiers a copy needs before committing. The repo-shipped `config/pipelines/` seed documents
+  are the separate precedent for a versioned, operator-controlled baseline.
 
-Both of these are unbuilt. Nothing in the current admin surfaces treats a pipeline, field set, or
-automation rule as a *referenceable, versioned unit* independent of the tenant that owns it — every
-one of them is created directly inside a tenant's own rows. Templating would need a tenant-less
-(or platform-tenant) catalog layer that the per-tenant admin surfaces read from, which is new
-schema, not a UI feature on top of what exists.
+Both composition capabilities are unbuilt. Repo-shipped pipeline seed documents are versioned
+configuration inputs, but the current admin surfaces do not expose pipelines, field sets,
+document templates, or automation rules as catalog entries that can be composed, upgraded, or
+rolled back as one unit. Runtime rows remain tenant-owned. A marketplace would therefore need a
+tenant-less (or platform-tenant) catalog layer that per-tenant admin surfaces read from, which is
+new governed state, not just a UI feature on top of existing rows.
 
 ## Upgrade, rollback, and isolation evidence still required before the non-goal can lift
 
@@ -140,22 +146,20 @@ point of this document: the next time someone proposes lifting IRO-209's non-goa
 designed the catalog layer" is the first question, not "have you built a nice UI on top of the
 existing per-tenant admin pages."
 
-## Missing prerequisite found during this audit (2026-08-28)
+## Remaining document-to-automation workflow constraint (2026-08-29)
 
-Document-template authoring (`workers-bus/src/schema-forms-api.ts`'s
-`/api/v1/admin/document-templates/*` routes) has **no `app/` UI** — confirmed by reading
-`app/src/admin/configuration-page.tsx` (exactly three configuration links: Pipelines, Fields,
-Automations; no Documents) and `app/src/admin/automation-configuration-page.tsx` (the automation
-rule builder's Template picker is a read-only `<select>` over an existing catalog — it cannot
-create a new template). This means the "materials list" recipe Ilya specifically demonstrated
-cannot be fully composed by an administrator today: the automation SIDE is configurable, but the
-document CONTENT side needs a direct API call. Any template package that includes an automation
-referencing a document template inherits this same gap — a template cannot travel with a document
-template inside it until an admin can create one without a shell. This is reported as its own
-finding on the parent Multica issue (ELEC-184) for the PO to route; it is repeated here because a
-template catalog design would need to decide whether document templates are catalog content too
-(most likely yes, since they are exactly the kind of "reusable, composable" unit templates exist
-to carry).
+Document-template authoring is available in `app/`: `app/src/admin/configuration-page.tsx` links
+to `/settings/configuration/documents`, and
+`app/src/admin/document-templates-configuration-page.tsx` provides create, revise, retire, and
+history actions backed by `workers-bus/src/schema-forms-api.ts`'s
+`/api/v1/admin/document-templates/*` routes. The automation builder's Template picker remains a
+selection control over that existing catalog; it does not create a document inline.
+
+That separation does not block an administrator from composing the workflow today, but a future
+package apply must preserve referential order and evidence: install or resolve each document
+template first, then install automation rules that reference it, and fail the whole package apply
+if any reference cannot be resolved. Inline document creation inside Automations is a possible UX
+improvement, not a prerequisite for catalog correctness.
 
 ## Non-goals of this document
 

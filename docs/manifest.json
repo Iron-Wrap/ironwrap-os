@@ -117,6 +117,54 @@
       "authority": []
     },
     {
+      "path": "docs/IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.md",
+      "class": "developer",
+      "authority": [
+        "docs/DOCUMENTATION-CONTRACT.md",
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "docs/IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.ru.md",
+      "class": "developer",
+      "authority": [
+        "docs/DOCUMENTATION-CONTRACT.md",
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "docs/IRONWRAP-OS-PRODUCT-TEAM-SPEC.md",
+      "class": "developer",
+      "authority": [
+        "docs/DOCUMENTATION-CONTRACT.md",
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "docs/IRONWRAP-OS-PRODUCT-TEAM-SPEC.ru.md",
+      "class": "developer",
+      "authority": [
+        "docs/DOCUMENTATION-CONTRACT.md",
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
       "path": "docs/JOBNIMBUS-MIGRATION-MAP.md",
       "class": "runbook",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]

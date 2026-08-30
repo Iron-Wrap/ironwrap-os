@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="IronWrap OS product architecture, operating lifecycle, field journey, and derived job phase atlas.">
+  <title>IronWrap OS · Product Atlas</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root {
+      --paper: #e6e8eb;
+      --paper-2: #f5f6f7;
+      --ink: #14181c;
+      --muted: #5a626b;
+      --soft: #5f6871;
+      --rule: rgba(20, 24, 28, 0.18);
+      --rule-solid: #b0b7be;
+      --accent: #c81d25;
+      --accent-tint: rgba(200, 29, 37, 0.08);
+      --link: #1f4e66;
+      --white: #ffffff;
+      --sans: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: "Instrument Serif", Georgia, serif;
+      --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+
+    a { color: var(--link); text-underline-offset: 0.18em; }
+    a:hover { color: var(--accent); }
+    a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+
+    .skip-link {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 10;
+      padding: 8px 12px;
+      color: var(--white);
+      background: var(--ink);
+      transform: translateY(-160%);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .page {
+      width: min(1480px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 64px 0 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
+      gap: 48px;
+      align-items: end;
+      padding-bottom: 48px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .eyebrow,
+    .meta dt,
+    .status-key dt,
+    .footer {
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    h1, h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-weight: 400;
+      letter-spacing: -0.025em;
+    }
+
+    h1 { font-size: clamp(48px, 7vw, 92px); line-height: 0.94; }
+    h2 { font-size: clamp(34px, 4vw, 54px); line-height: 1; }
+
+    .lede {
+      max-width: 68ch;
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: clamp(16px, 1.6vw, 21px);
+    }
+
+    .meta {
+      display: grid;
+      gap: 16px;
+      margin: 0;
+    }
+
+    .meta div {
+      padding-top: 12px;
+      border-top: 1px solid var(--rule);
+    }
+
+    .meta dt {
+      margin-bottom: 4px;
+      color: var(--soft);
+      font-size: 9px;
+    }
+
+    .meta dd { margin: 0; font-size: 14px; }
+
+    .intro-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 24px;
+      padding: 40px 0 16px;
+    }
+
+    .intro-grid article:nth-of-type(1) { grid-column: span 5; }
+    .intro-grid article:nth-of-type(2) { grid-column: span 4; }
+    .intro-grid article:nth-of-type(3) { grid-column: span 3; }
+
+    .intro-grid article {
+      min-height: 152px;
+      padding: 20px 0;
+      border-top: 3px solid var(--ink);
+    }
+
+    .intro-grid article:first-child { border-color: var(--accent); }
+    .intro-grid h3 { margin: 0 0 8px; font-size: 16px; }
+    .intro-grid p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .figure-section {
+      padding: 72px 0 56px;
+      border-top: 1px solid var(--rule);
+    }
+
+    .figure-header {
+      margin-bottom: 28px;
+    }
+
+    .figure-summary {
+      max-width: 65ch;
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .diagram-frame {
+      overflow-x: auto;
+      border: 1px solid var(--rule);
+      background: var(--paper-2);
+      box-shadow: 0 18px 50px rgba(20, 24, 28, 0.06);
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      min-width: 960px;
+      height: auto;
+      background: var(--paper-2);
+    }
+
+    .figure-notes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 24px;
+      margin-top: 20px;
+    }
+
+    .figure-notes div {
+      padding-top: 12px;
+      border-top: 1px solid var(--rule);
+    }
+
+    .figure-notes strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .figure-notes span { color: var(--muted); font-size: 13px; }
+
+    .status-key {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 24px;
+      margin: 40px 0 0;
+    }
+
+    .status-key div { padding-top: 12px; border-top: 1px solid var(--rule); }
+    .status-key dt { color: var(--soft); font-size: 9px; }
+    .status-key dd { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      padding-top: 28px;
+      border-top: 1px solid var(--rule);
+      color: var(--soft);
+      font-size: 10px;
+    }
+
+    /* Shared SVG language */
+    .svg-bg { fill: #f5f6f7; }
+    .zone { fill: rgba(20, 24, 28, 0.02); stroke: rgba(20, 24, 28, 0.18); stroke-width: 1; }
+    .zone-accent { fill: rgba(200, 29, 37, 0.025); stroke: rgba(200, 29, 37, 0.36); stroke-width: 1; }
+    .lane { fill: rgba(20, 24, 28, 0.015); stroke: rgba(20, 24, 28, 0.16); stroke-width: 1; }
+    .lane-alt { fill: rgba(31, 78, 102, 0.025); stroke: rgba(20, 24, 28, 0.16); stroke-width: 1; }
+    .node { fill: #ffffff; stroke: #14181c; stroke-width: 1; }
+    .node-muted { fill: rgba(20, 24, 28, 0.04); stroke: #5a626b; stroke-width: 1; }
+    .node-external { fill: rgba(20, 24, 28, 0.025); stroke: rgba(20, 24, 28, 0.34); stroke-width: 1; }
+    .node-accent { fill: rgba(200, 29, 37, 0.08); stroke: #c81d25; stroke-width: 1.2; }
+    .node-optional { fill: rgba(20, 24, 28, 0.018); stroke: rgba(20, 24, 28, 0.28); stroke-width: 1; stroke-dasharray: 5 4; }
+    .connector { fill: none; stroke: #5a626b; stroke-width: 1.4; stroke-linejoin: round; }
+    .connector-link { fill: none; stroke: #1f4e66; stroke-width: 1.4; stroke-linejoin: round; }
+    .connector-accent { fill: none; stroke: #c81d25; stroke-width: 1.5; stroke-linejoin: round; }
+    .connector-block { fill: none; stroke: #c81d25; stroke-width: 1.2; stroke-dasharray: 6 5; stroke-linejoin: round; }
+    .zone-label { fill: #5f6871; font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.14em; }
+    .node-name { fill: #14181c; font-family: var(--sans); font-size: 12px; font-weight: 600; }
+    .node-sub { fill: #5a626b; font-family: var(--mono); font-size: 9px; }
+    .edge-label { fill: #5a626b; font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em; }
+    .edge-label-link { fill: #1f4e66; font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em; }
+    .edge-label-accent { fill: #c81d25; font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em; }
+    .label-mask { fill: #f5f6f7; }
+    .legend-title { fill: #14181c; font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.12em; }
+    .legend-text { fill: #5a626b; font-family: var(--sans); font-size: 9px; }
+    .cell-label { fill: #5f6871; font-family: var(--mono); font-size: 8px; font-weight: 600; letter-spacing: 0.11em; }
+    .cell-copy { fill: #14181c; font-family: var(--sans); font-size: 11px; }
+    .callout { fill: #14181c; font-family: var(--serif); font-size: 15px; font-style: italic; }
+
+    @media (max-width: 840px) {
+      .page { width: min(100% - 20px, 1480px); padding-top: 36px; }
+      .hero { grid-template-columns: 1fr; gap: 24px; }
+      .intro-grid, .figure-notes, .status-key { grid-template-columns: 1fr; }
+      .intro-grid article:nth-of-type(n) { grid-column: auto; }
+      .figure-section { padding: 52px 0 40px; }
+      .footer { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+
+    @media print {
+      body { background: #ffffff; }
+      .page { width: 100%; padding: 0; }
+      .figure-section { break-before: page; }
+      .diagram-frame { box-shadow: none; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#atlas">Skip to diagrams</a>
+  <main class="page" id="atlas">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">IronWrap OS / Product system / 2026-08-30</p>
+        <h1>One governed thread<br>from lead to proof.</h1>
+        <p class="lede">Four views for product, operations, engineering, risk, and delivery teams.</p>
+      </div>
+      <dl class="meta">
+        <div>
+          <dt>Source snapshot</dt>
+          <dd><code>main @ 1e1d7ab0</code></dd>
+        </div>
+        <div>
+          <dt>Output profile</dt>
+          <dd>HTML, doc-wide, balanced, mixed audience</dd>
+        </div>
+        <div>
+          <dt>Authority</dt>
+          <dd>Developer synthesis; canonical contracts win on conflict.</dd>
+        </div>
+        <div>
+          <dt>Operational catalog</dt>
+          <dd><a href="../IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.md">Roles, processes, integrations, scenarios, and UI</a></dd>
+        </div>
+        <div>
+          <dt>Language</dt>
+          <dd><a href="./ironwrap-os-product-atlas.ru.html">Русская версия</a></dd>
+        </div>
+      </dl>
+    </header>
+
+    <section class="intro-grid" aria-label="Atlas reading guide">
+      <h2 class="sr-only">Atlas reading guide</h2>
+      <article>
+        <h3>Why the product exists</h3>
+        <p>Coordinate roofing, exteriors, service, shop, supply, field, finance, and compliance without turning a vendor status or AI answer into business truth.</p>
+      </article>
+      <article>
+        <h3>What makes it different</h3>
+        <p>Every consequential action binds actor, authority, current evidence, policy, idempotency, provider readback, and reconciliation.</p>
+      </article>
+      <article>
+        <h3>How to read the maps</h3>
+        <p>Red marks the focal gate or risk. Blue marks a bounded external/API path. Dashed paths are optional, blocked, or compatibility-only.</p>
+      </article>
+    </section>
+
+    <section class="figure-section" aria-labelledby="architecture-heading">
+      <header class="figure-header">
+        <div>
+          <h2 id="architecture-heading">Trust architecture</h2>
+        </div>
+        <p class="figure-summary">People and AI may request or propose. Only the deterministic policy gate commits owned facts or permits a bounded effect. External systems remain authorities for their exact scope.</p>
+      </header>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-title arch-desc">
+          <title id="arch-title">IronWrap OS secure trust architecture</title>
+          <desc id="arch-desc">People, devices, and AI proposals enter through the PWA and deterministic Worker policy gate. D1 and R2 hold owned facts and evidence. A separate effect ledger reaches bounded providers and reconciles readback. Facet supplies design evidence and Frappe is a non-authoritative compatibility projection. Direct browser mutation is blocked.</desc>
+          <defs>
+            <marker id="arch-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#5a626b"/>
+            </marker>
+            <marker id="arch-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#1f4e66"/>
+            </marker>
+            <marker id="arch-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#c81d25"/>
+            </marker>
+          </defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+
+          <!-- Zones -->
+          <rect class="zone" x="40" y="64" width="240" height="560" rx="8"/>
+          <rect class="zone-accent" x="320" y="64" width="600" height="560" rx="8"/>
+          <rect class="zone" x="960" y="64" width="280" height="560" rx="8"/>
+          <text class="zone-label" x="56" y="88">HUMANS + CHANNELS</text>
+          <text class="zone-label" x="336" y="88">OWNED CONTROL PLANE · DETERMINISTIC</text>
+          <text class="zone-label" x="976" y="88">BOUNDED AUTHORITIES</text>
+
+          <!-- Connectors, painted before nodes -->
+          <line class="connector" x1="160" y1="216" x2="160" y2="316" marker-end="url(#arch-arrow)"/>
+          <path class="connector-accent" d="M 240 356 H 312 V 184 H 372" marker-end="url(#arch-arrow-accent)"/>
+          <path class="connector" d="M 240 532 H 292 V 216 H 372" marker-end="url(#arch-arrow)"/>
+          <line class="connector-accent" x1="476" y1="224" x2="476" y2="316" marker-end="url(#arch-arrow-accent)"/>
+          <line class="connector" x1="476" y1="400" x2="476" y2="492" marker-end="url(#arch-arrow)"/>
+          <path class="connector-accent" d="M 576 184 H 620 V 280 H 668" marker-end="url(#arch-arrow-accent)"/>
+          <path class="connector-link" d="M 872 280 H 936 V 196 H 996" marker-end="url(#arch-arrow-link)"/>
+          <path class="connector-link" d="M 996 220 H 948 V 304 H 876" marker-end="url(#arch-arrow-link)"/>
+          <path class="connector-link" d="M 996 404 H 920 V 380 H 580" marker-end="url(#arch-arrow-link)"/>
+          <path class="connector" d="M 576 368 H 896 V 564 H 996" marker-end="url(#arch-arrow)"/>
+          <path class="connector-block" d="M 240 380 H 268 V 112 H 1080 V 152"/>
+          <line x1="1072" y1="144" x2="1088" y2="160" stroke="#c81d25" stroke-width="2"/>
+          <line x1="1088" y1="144" x2="1072" y2="160" stroke="#c81d25" stroke-width="2"/>
+
+          <!-- Connector labels with masks -->
+          <rect class="label-mask" x="268" y="260" width="88" height="18"/>
+          <text class="edge-label-accent" x="312" y="272" text-anchor="middle">typed command</text>
+          <rect class="label-mask" x="248" y="420" width="88" height="18"/>
+          <text class="edge-label" x="292" y="432" text-anchor="middle">proposal only</text>
+          <rect class="label-mask" x="448" y="260" width="56" height="18"/>
+          <text class="edge-label-accent" x="476" y="272" text-anchor="middle">commits</text>
+          <rect class="label-mask" x="440" y="440" width="72" height="18"/>
+          <text class="edge-label" x="476" y="452" text-anchor="middle">binds raw</text>
+          <rect class="label-mask" x="584" y="224" width="72" height="18"/>
+          <text class="edge-label-accent" x="620" y="236" text-anchor="middle">exact permit</text>
+          <rect class="label-mask" x="900" y="248" width="72" height="18"/>
+          <text class="edge-label-link" x="936" y="260" text-anchor="middle">executes</text>
+          <rect class="label-mask" x="908" y="292" width="80" height="18"/>
+          <text class="edge-label-link" x="948" y="304" text-anchor="middle">readback</text>
+          <rect class="label-mask" x="724" y="370" width="104" height="18"/>
+          <text class="edge-label-link" x="776" y="382" text-anchor="middle">signed evidence</text>
+          <rect class="label-mask" x="736" y="554" width="112" height="18"/>
+          <text class="edge-label" x="792" y="566" text-anchor="middle">projection only</text>
+          <rect class="label-mask" x="624" y="102" width="200" height="18"/>
+          <text class="edge-label-accent" x="724" y="114" text-anchor="middle">blocked · no direct browser mutation</text>
+
+          <!-- Nodes -->
+          <rect class="node-muted" x="80" y="144" width="160" height="72" rx="6"/>
+          <text class="node-name" x="160" y="174" text-anchor="middle">People + devices</text>
+          <text class="node-sub" x="160" y="194" text-anchor="middle">owner, office, field, customer</text>
+
+          <rect class="node" x="80" y="320" width="160" height="72" rx="6"/>
+          <text class="node-name" x="160" y="350" text-anchor="middle">PWA + portal</text>
+          <text class="node-sub" x="160" y="370" text-anchor="middle">role views / offline outbox</text>
+
+          <rect class="node-optional" x="80" y="496" width="160" height="72" rx="6"/>
+          <text class="node-name" x="160" y="526" text-anchor="middle">AI proposal tools</text>
+          <text class="node-sub" x="160" y="546" text-anchor="middle">observe / derive / propose</text>
+
+          <rect class="node-accent" x="376" y="144" width="200" height="80" rx="6"/>
+          <text class="node-name" x="476" y="176" text-anchor="middle">Worker policy gate</text>
+          <text class="node-sub" x="476" y="196" text-anchor="middle">identity / version / evidence / policy</text>
+
+          <rect class="node" x="376" y="320" width="200" height="80" rx="6"/>
+          <text class="node-name" x="476" y="352" text-anchor="middle">D1 owned state</text>
+          <text class="node-sub" x="476" y="372" text-anchor="middle">aggregates / events / audit</text>
+
+          <rect class="node-muted" x="376" y="496" width="200" height="72" rx="6"/>
+          <text class="node-name" x="476" y="526" text-anchor="middle">R2 evidence</text>
+          <text class="node-sub" x="476" y="546" text-anchor="middle">immutable bytes / generated objects</text>
+
+          <rect class="node-accent" x="672" y="240" width="200" height="80" rx="6"/>
+          <text class="node-name" x="772" y="272" text-anchor="middle">Effect + readback ledger</text>
+          <text class="node-sub" x="772" y="292" text-anchor="middle">idempotency / receipt / reconcile</text>
+
+          <rect class="node-external" x="1000" y="160" width="200" height="72" rx="6"/>
+          <text class="node-name" x="1100" y="190" text-anchor="middle">QuickBooks + providers</text>
+          <text class="node-sub" x="1100" y="210" text-anchor="middle">bounded external truth / effects</text>
+
+          <rect class="node-external" x="1000" y="360" width="200" height="88" rx="6"/>
+          <text class="node-name" x="1100" y="390" text-anchor="middle">Facet + authorities</text>
+          <text class="node-sub" x="1100" y="410" text-anchor="middle">design evidence / issuer scope</text>
+          <text class="node-sub" x="1100" y="428" text-anchor="middle">never commercial mutation</text>
+
+          <rect class="node-optional" x="1000" y="528" width="200" height="72" rx="6"/>
+          <text class="node-name" x="1100" y="558" text-anchor="middle">Frappe compatibility</text>
+          <text class="node-sub" x="1100" y="578" text-anchor="middle">read-only / rebuildable / retiring</text>
+
+          <!-- Legend -->
+          <text class="legend-title" x="40" y="664">LEGEND</text>
+          <rect class="node-accent" x="120" y="648" width="20" height="14" rx="2"/>
+          <text class="legend-text" x="148" y="660">focal control</text>
+          <rect class="node" x="268" y="648" width="20" height="14" rx="2"/>
+          <text class="legend-text" x="296" y="660">owned authority</text>
+          <rect class="node-external" x="432" y="648" width="20" height="14" rx="2"/>
+          <text class="legend-text" x="460" y="660">bounded external</text>
+          <line class="connector-link" x1="620" y1="656" x2="648" y2="656" marker-end="url(#arch-arrow-link)"/>
+          <text class="legend-text" x="660" y="660">API / evidence / readback</text>
+          <line class="connector-block" x1="844" y1="656" x2="872" y2="656"/>
+          <text class="legend-text" x="884" y="660">blocked or compatibility-only</text>
+        </svg>
+      </div>
+
+      <div class="figure-notes">
+        <div><strong>Authority</strong><span>D1 and the Worker control plane own internal operating truth.</span></div>
+        <div><strong>External truth</strong><span>QuickBooks, Facet, issuers, and providers are authoritative only for exact scope.</span></div>
+        <div><strong>AI boundary</strong><span>Models propose; deterministic code evaluates, permits, executes, and reconciles.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="lifecycle-heading">
+      <header class="figure-header">
+        <div>
+          <h2 id="lifecycle-heading">Lead-to-proof lifecycle</h2>
+        </div>
+        <p class="figure-summary">One ordinary journey crosses roles, but every handoff remains a governed transition. The line continues only when the stage’s authoritative predicate is satisfied.</p>
+      </header>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title flow-desc">
+          <title id="flow-title">IronWrap OS end-to-end operating lifecycle swimlane</title>
+          <desc id="flow-desc">A lead moves across customer and sales, the control plane, operations and production, field and quality, and finance and aftercare. It becomes a qualified job, current commercial revision, accepted customer decision, reconciled deposit, ready work package, attributable field evidence, completion packet, financial close, and service-ready history.</desc>
+          <defs>
+            <marker id="flow-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#5a626b"/>
+            </marker>
+            <marker id="flow-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#c81d25"/>
+            </marker>
+          </defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+
+          <!-- Lanes -->
+          <rect class="lane" x="40" y="64" width="1200" height="92"/>
+          <rect class="lane-alt" x="40" y="164" width="1200" height="92"/>
+          <rect class="lane" x="40" y="264" width="1200" height="92"/>
+          <rect class="lane-alt" x="40" y="364" width="1200" height="92"/>
+          <rect class="lane" x="40" y="464" width="1200" height="120"/>
+          <text class="zone-label" x="52" y="80">CUSTOMER + SALES</text>
+          <text class="zone-label" x="52" y="180">CONTROL PLANE</text>
+          <text class="zone-label" x="52" y="280">OPS + PRODUCTION</text>
+          <text class="zone-label" x="52" y="380">FIELD + QUALITY</text>
+          <text class="zone-label" x="52" y="480">FINANCE + AFTERCARE</text>
+
+          <!-- Connectors -->
+          <path class="connector" d="M 160 116 H 172 V 216 H 180" marker-end="url(#flow-arrow)"/>
+          <path class="connector" d="M 288 216 H 300 V 116 H 308" marker-end="url(#flow-arrow)"/>
+          <line class="connector" x1="416" y1="116" x2="436" y2="116" marker-end="url(#flow-arrow)"/>
+          <path class="connector-accent" d="M 544 116 H 556 V 520 H 564" marker-end="url(#flow-arrow-accent)"/>
+          <path class="connector-accent" d="M 672 520 H 684 V 316 H 692" marker-end="url(#flow-arrow-accent)"/>
+          <line class="connector" x1="800" y1="316" x2="820" y2="316" marker-end="url(#flow-arrow)"/>
+          <path class="connector" d="M 928 316 H 940 V 416 H 948" marker-end="url(#flow-arrow)"/>
+          <line class="connector" x1="1056" y1="416" x2="1076" y2="416" marker-end="url(#flow-arrow)"/>
+          <line class="connector-accent" x1="1148" y1="440" x2="1148" y2="516" marker-end="url(#flow-arrow-accent)"/>
+          <path class="connector" d="M 1080 416 H 1068 V 544 H 1060" marker-end="url(#flow-arrow)"/>
+
+          <!-- Labels -->
+          <rect class="label-mask" x="140" y="156" width="72" height="18"/>
+          <text class="edge-label" x="176" y="168" text-anchor="middle">triage</text>
+          <rect class="label-mask" x="268" y="156" width="72" height="18"/>
+          <text class="edge-label" x="304" y="168" text-anchor="middle">inspect</text>
+          <rect class="label-mask" x="420" y="102" width="16" height="18"/>
+          <text class="edge-label" x="428" y="114" text-anchor="middle">v+</text>
+          <rect class="label-mask" x="520" y="300" width="72" height="18"/>
+          <text class="edge-label-accent" x="556" y="312" text-anchor="middle">accepts</text>
+          <rect class="label-mask" x="648" y="400" width="72" height="18"/>
+          <text class="edge-label-accent" x="684" y="412" text-anchor="middle">reconciles</text>
+          <rect class="label-mask" x="804" y="302" width="16" height="18"/>
+          <text class="edge-label" x="812" y="314" text-anchor="middle">ok</text>
+          <rect class="label-mask" x="904" y="356" width="72" height="18"/>
+          <text class="edge-label" x="940" y="368" text-anchor="middle">releases</text>
+          <rect class="label-mask" x="1060" y="402" width="16" height="18"/>
+          <text class="edge-label" x="1068" y="414" text-anchor="middle">QC</text>
+          <rect class="label-mask" x="1112" y="472" width="72" height="18"/>
+          <text class="edge-label-accent" x="1148" y="484" text-anchor="middle">invoice</text>
+          <rect class="label-mask" x="1028" y="476" width="80" height="18"/>
+          <text class="edge-label" x="1068" y="488" text-anchor="middle">aftercare</text>
+
+          <!-- Nodes -->
+          <rect class="node-muted" x="56" y="92" width="104" height="48" rx="6"/>
+          <text class="node-name" x="108" y="112" text-anchor="middle">Lead captured</text>
+          <text class="node-sub" x="108" y="128" text-anchor="middle">identity + consent</text>
+
+          <rect class="node" x="184" y="192" width="104" height="48" rx="6"/>
+          <text class="node-name" x="236" y="212" text-anchor="middle">Qualified job</text>
+          <text class="node-sub" x="236" y="228" text-anchor="middle">owned IDs</text>
+
+          <rect class="node" x="312" y="92" width="104" height="48" rx="6"/>
+          <text class="node-name" x="364" y="112" text-anchor="middle">Measure + quote</text>
+          <text class="node-sub" x="364" y="128" text-anchor="middle">evidence lineage</text>
+
+          <rect class="node-accent" x="440" y="92" width="104" height="48" rx="6"/>
+          <text class="node-name" x="492" y="112" text-anchor="middle">Exact decision</text>
+          <text class="node-sub" x="492" y="128" text-anchor="middle">published revision</text>
+
+          <rect class="node-muted" x="568" y="496" width="104" height="48" rx="6"/>
+          <text class="node-name" x="620" y="516" text-anchor="middle">Deposit intent</text>
+          <text class="node-sub" x="620" y="532" text-anchor="middle">provider readback</text>
+
+          <rect class="node-accent" x="696" y="292" width="104" height="48" rx="6"/>
+          <text class="node-name" x="748" y="312" text-anchor="middle">Production gates</text>
+          <text class="node-sub" x="748" y="328" text-anchor="middle">all current</text>
+
+          <rect class="node" x="824" y="292" width="104" height="48" rx="6"/>
+          <text class="node-name" x="876" y="312" text-anchor="middle">Work package</text>
+          <text class="node-sub" x="876" y="328" text-anchor="middle">assigned + acked</text>
+
+          <rect class="node" x="952" y="392" width="104" height="48" rx="6"/>
+          <text class="node-name" x="1004" y="412" text-anchor="middle">Work + evidence</text>
+          <text class="node-sub" x="1004" y="428" text-anchor="middle">stop / hold / change</text>
+
+          <rect class="node" x="1080" y="392" width="136" height="48" rx="6"/>
+          <text class="node-name" x="1148" y="412" text-anchor="middle">Completion packet</text>
+          <text class="node-sub" x="1148" y="428" text-anchor="middle">quality + closeout</text>
+
+          <rect class="node-muted" x="928" y="520" width="128" height="48" rx="6"/>
+          <text class="node-name" x="992" y="540" text-anchor="middle">Warranty + service</text>
+          <text class="node-sub" x="992" y="556" text-anchor="middle">history preserved</text>
+
+          <rect class="node" x="1080" y="520" width="136" height="48" rx="6"/>
+          <text class="node-name" x="1148" y="540" text-anchor="middle">Financial close</text>
+          <text class="node-sub" x="1148" y="556" text-anchor="middle">reconciled balance</text>
+
+          <!-- Legend -->
+          <text class="legend-title" x="40" y="636">PASS CONDITION</text>
+          <text class="legend-text" x="152" y="636">Each arrow means the owning transition committed with current authority and evidence.</text>
+          <text class="legend-title" x="40" y="668">STOP CONDITION</text>
+          <text class="legend-text" x="152" y="668">Missing, stale, conflicting, unsafe, unauthorized, or unreconciled facts remain visible exceptions.</text>
+        </svg>
+      </div>
+
+      <div class="figure-notes">
+        <div><strong>Commercial integrity</strong><span>Approval, publication, customer view, and acceptance bind one exact revision.</span></div>
+        <div><strong>Physical integrity</strong><span>Ready, assigned, started, and complete are different facts with different evidence.</span></div>
+        <div><strong>Financial integrity</strong><span>Intent and webhook are not posting or payment; provider detail must reconcile.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="field-heading">
+      <header class="figure-header">
+        <div>
+          <h2 id="field-heading">Field worker: one safe day</h2>
+        </div>
+        <p class="figure-summary">The field experience is intentionally narrow: know today’s exact work, keep stop authority, capture evidence once, and recover safely when the network or upstream facts change.</p>
+      </header>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="field-title field-desc">
+          <title id="field-title">IronWrap OS field worker journey</title>
+          <desc id="field-desc">Six stages show a worker loading the day, verifying the package, checking in and starting, working and capturing evidence, stopping or replaying offline work, and completing and syncing. Actions, system response, failure recovery, and an experience sentiment line are shown.</desc>
+          <rect class="svg-bg" width="1280" height="720"/>
+
+          <!-- Column backgrounds -->
+          <rect class="zone" x="40" y="64" width="176" height="560"/>
+          <rect class="zone" x="240" y="64" width="176" height="560"/>
+          <rect class="zone" x="440" y="64" width="176" height="560"/>
+          <rect class="zone" x="640" y="64" width="176" height="560"/>
+          <rect class="zone-accent" x="840" y="64" width="176" height="560"/>
+          <rect class="zone" x="1040" y="64" width="176" height="560"/>
+
+          <!-- Row rules -->
+          <line x1="40" y1="128" x2="1216" y2="128" stroke="#b0b7be" stroke-width="1"/>
+          <line x1="40" y1="268" x2="1216" y2="268" stroke="rgba(20,24,28,0.18)" stroke-width="1"/>
+          <line x1="40" y1="384" x2="1216" y2="384" stroke="rgba(20,24,28,0.18)" stroke-width="1"/>
+          <line x1="40" y1="508" x2="1216" y2="508" stroke="rgba(20,24,28,0.18)" stroke-width="1"/>
+
+          <!-- Stage headers -->
+          <text class="zone-label" x="56" y="84">LOAD DAY</text>
+          <text class="node-name" x="56" y="108">Know what is mine</text>
+          <text class="zone-label" x="256" y="84">VERIFY PACKAGE</text>
+          <text class="node-name" x="256" y="108">Trust the package</text>
+          <text class="zone-label" x="456" y="84">CHECK IN + START</text>
+          <text class="node-name" x="456" y="108">Check in safely</text>
+          <text class="zone-label" x="656" y="84">EXECUTE + CAPTURE</text>
+          <text class="node-name" x="656" y="108">Work and prove</text>
+          <text class="zone-label" x="856" y="84">STOP / REPLAY</text>
+          <text class="node-name" x="856" y="108">Stay safe under friction</text>
+          <text class="zone-label" x="1056" y="84">COMPLETE + SYNC</text>
+          <text class="node-name" x="1056" y="108">Close once</text>
+
+          <!-- Action row -->
+          <text class="cell-label" x="56" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="56" y="180"><tspan x="56" dy="0">Open Now / Today</tspan><tspan x="56" dy="20">on paired device.</tspan><tspan x="56" dy="20">Review route, crew,</tspan><tspan x="56" dy="20">asset, contacts.</tspan></text>
+
+          <text class="cell-label" x="256" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="256" y="180"><tspan x="256" dy="0">Read exact scope,</tspan><tspan x="256" dy="20">hazards, holds,</tspan><tspan x="256" dy="20">evidence slots,</tspan><tspan x="256" dy="20">package expiry.</tspan></text>
+
+          <text class="cell-label" x="456" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="456" y="180"><tspan x="456" dy="0">Acknowledge current</tspan><tspan x="456" dy="20">package. Check in.</tspan><tspan x="456" dy="20">Request start after</tspan><tspan x="456" dy="20">hold verification.</tspan></text>
+
+          <text class="cell-label" x="656" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="656" y="180"><tspan x="656" dy="0">Follow work steps.</tspan><tspan x="656" dy="20">Capture required</tspan><tspan x="656" dy="20">photos, quantities,</tspan><tspan x="656" dy="20">changes and quality.</tspan></text>
+
+          <text class="cell-label" x="856" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="856" y="180"><tspan x="856" dy="0">Stop immediately on</tspan><tspan x="856" dy="20">hazard or conflict.</tspan><tspan x="856" dy="20">Keep capturing safe</tspan><tspan x="856" dy="20">offline evidence.</tspan></text>
+
+          <text class="cell-label" x="1056" y="152">WORKER ACTION</text>
+          <text class="cell-copy" x="1056" y="180"><tspan x="1056" dy="0">Resolve required</tspan><tspan x="1056" dy="20">slots and holds.</tspan><tspan x="1056" dy="20">Submit completion</tspan><tspan x="1056" dy="20">for verification.</tspan></text>
+
+          <!-- System row -->
+          <text class="cell-label" x="56" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="56" y="320"><tspan x="56" dy="0">Shows only current</tspan><tspan x="56" dy="20">assigned work and</tspan><tspan x="56" dy="20">sync/readiness state.</tspan></text>
+
+          <text class="cell-label" x="256" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="256" y="320"><tspan x="256" dy="0">Caches the last valid</tspan><tspan x="256" dy="20">package, emergency</tspan><tspan x="256" dy="20">contacts and stops.</tspan></text>
+
+          <text class="cell-label" x="456" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="456" y="320"><tspan x="456" dy="0">Rechecks assignment,</tspan><tspan x="456" dy="20">gates and package</tspan><tspan x="456" dy="20">version online.</tspan></text>
+
+          <text class="cell-label" x="656" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="656" y="320"><tspan x="656" dy="0">Binds every item to</tspan><tspan x="656" dy="20">actor, device, job,</tspan><tspan x="656" dy="20">slot, order and hash.</tspan></text>
+
+          <text class="cell-label" x="856" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="856" y="320"><tspan x="856" dy="0">Persists stop locally.</tspan><tspan x="856" dy="20">Queues allowed work;</tspan><tspan x="856" dy="20">blocks new authority.</tspan></text>
+
+          <text class="cell-label" x="1056" y="292">SYSTEM RESPONSE</text>
+          <text class="cell-copy" x="1056" y="320"><tspan x="1056" dy="0">Replays once, checks</tspan><tspan x="1056" dy="20">versions, then accepts</tspan><tspan x="1056" dy="20">or names exact gaps.</tspan></text>
+
+          <!-- Recovery row -->
+          <text class="cell-label" x="56" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="56" y="436"><tspan x="56" dy="0">No assignment?</tspan><tspan x="56" dy="20">Show dispatcher and</tspan><tspan x="56" dy="20">safe waiting state.</tspan></text>
+
+          <text class="cell-label" x="256" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="256" y="436"><tspan x="256" dy="0">Superseded package?</tspan><tspan x="256" dy="20">Require new review</tspan><tspan x="256" dy="20">and acknowledgement.</tspan></text>
+
+          <text class="cell-label" x="456" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="456" y="436"><tspan x="456" dy="0">Gate stale or blocked?</tspan><tspan x="456" dy="20">Explain owner and</tspan><tspan x="456" dy="20">do not start.</tspan></text>
+
+          <text class="cell-label" x="656" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="656" y="436"><tspan x="656" dy="0">Hidden condition?</tspan><tspan x="656" dy="20">Stop affected scope;</tspan><tspan x="656" dy="20">open change workflow.</tspan></text>
+
+          <text class="cell-label" x="856" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="856" y="436"><tspan x="856" dy="0">Network or conflict?</tspan><tspan x="856" dy="20">Preserve queue; replay</tspan><tspan x="856" dy="20">or create exception.</tspan></text>
+
+          <text class="cell-label" x="1056" y="408">FRICTION / RECOVERY</text>
+          <text class="cell-copy" x="1056" y="436"><tspan x="1056" dy="0">Evidence incomplete?</tspan><tspan x="1056" dy="20">Keep job open with</tspan><tspan x="1056" dy="20">specific missing slots.</tspan></text>
+
+          <!-- Sentiment, intentionally not an arrow/authority flow -->
+          <text class="cell-label" x="56" y="536">WORKER CONFIDENCE</text>
+          <line x1="56" y1="580" x2="1200" y2="580" stroke="rgba(20,24,28,0.18)" stroke-width="1" stroke-dasharray="4 4"/>
+          <path d="M 128 584 C 200 584, 256 552, 328 552 S 456 532, 528 532 S 656 556, 728 556 S 856 608, 928 608 S 1056 548, 1128 548" fill="none" stroke="#1f4e66" stroke-width="2"/>
+          <circle cx="128" cy="584" r="5" fill="#1f4e66"/>
+          <circle cx="328" cy="552" r="5" fill="#1f4e66"/>
+          <circle cx="528" cy="532" r="5" fill="#1f4e66"/>
+          <circle cx="728" cy="556" r="5" fill="#1f4e66"/>
+          <circle cx="928" cy="608" r="7" fill="#c81d25"/>
+          <circle cx="1128" cy="548" r="5" fill="#1f4e66"/>
+          <text class="edge-label-accent" x="928" y="596" text-anchor="middle">friction peaks here</text>
+
+          <text class="legend-title" x="40" y="668">DESIGN RULE</text>
+          <text class="legend-text" x="132" y="668">Never trade a clear stop, safe waiting state, or preserved offline evidence for optimistic progress.</text>
+        </svg>
+      </div>
+
+      <div class="figure-notes">
+        <div><strong>Primary need</strong><span>“Tell me the exact safe work I own today, even when the network fails.”</span></div>
+        <div><strong>Critical trough</strong><span>Stops, stale gates, conflicts, and replay are where explanation and preservation matter most.</span></div>
+        <div><strong>Success signal</strong><span>The worker captures once; the system reconciles without duplicate work or lost evidence.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="phase-heading">
+      <header class="figure-header">
+        <div>
+          <h2 id="phase-heading">Derived job phase</h2>
+        </div>
+        <p class="figure-summary">The phase is a deterministic explanation of independent facts, never a command target. Blocking and cancellation win by predicate; clearing them recomputes from source facts.</p>
+      </header>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="phase-title phase-desc">
+          <title id="phase-title">IronWrap OS derived commercial job phase state machine</title>
+          <desc id="phase-desc">The current executable phase projection moves from qualification pending to qualified, commercial in progress, deposit pending, production ready, scheduled, in progress, substantially complete, and financially closed. Production blocked branches from deposit reconciliation when gates are not ready. Cancelled and safety blocked are priority predicates. The current source does not emit the canonical contracted label.</desc>
+          <defs>
+            <marker id="phase-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#5a626b"/>
+            </marker>
+            <marker id="phase-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#c81d25"/>
+            </marker>
+          </defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+
+          <!-- Connectors -->
+          <line class="connector" x1="52" y1="144" x2="68" y2="144" marker-end="url(#phase-arrow)"/>
+          <line class="connector" x1="224" y1="144" x2="260" y2="144" marker-end="url(#phase-arrow)"/>
+          <line class="connector" x1="416" y1="144" x2="452" y2="144" marker-end="url(#phase-arrow)"/>
+          <line class="connector" x1="632" y1="144" x2="668" y2="144" marker-end="url(#phase-arrow)"/>
+          <line class="connector-accent" x1="824" y1="144" x2="860" y2="144" marker-end="url(#phase-arrow-accent)"/>
+          <line class="connector" x1="1016" y1="144" x2="1052" y2="144" marker-end="url(#phase-arrow)"/>
+          <line class="connector" x1="1132" y1="176" x2="1132" y2="328" marker-end="url(#phase-arrow)"/>
+          <line class="connector" x1="1056" y1="360" x2="1020" y2="360" marker-end="url(#phase-arrow)"/>
+          <path class="connector-accent" d="M 864 360 H 852 V 416 H 644 V 360 H 636" marker-end="url(#phase-arrow-accent)"/>
+          <line class="connector" x1="748" y1="176" x2="748" y2="328" marker-end="url(#phase-arrow)"/>
+          <path class="connector" d="M 840 360 H 844 V 144 H 860" marker-end="url(#phase-arrow)"/>
+          <line class="connector-accent" x1="456" y1="360" x2="444" y2="360"/>
+
+          <!-- Transition labels -->
+          <rect class="label-mask" x="224" y="130" width="36" height="18"/>
+          <text class="edge-label" x="242" y="142" text-anchor="middle">qualify</text>
+          <rect class="label-mask" x="416" y="130" width="36" height="18"/>
+          <text class="edge-label" x="434" y="142" text-anchor="middle">revise</text>
+          <rect class="label-mask" x="632" y="130" width="36" height="18"/>
+          <text class="edge-label" x="650" y="142" text-anchor="middle">accept</text>
+          <rect class="label-mask" x="824" y="130" width="36" height="18"/>
+          <text class="edge-label-accent" x="842" y="142" text-anchor="middle">ready</text>
+          <rect class="label-mask" x="1016" y="130" width="36" height="18"/>
+          <text class="edge-label" x="1034" y="142" text-anchor="middle">assign</text>
+          <rect class="label-mask" x="1088" y="240" width="88" height="18"/>
+          <text class="edge-label" x="1132" y="252" text-anchor="middle">package starts</text>
+          <rect class="label-mask" x="1016" y="346" width="40" height="18"/>
+          <text class="edge-label" x="1036" y="358" text-anchor="middle">complete</text>
+          <rect class="label-mask" x="676" y="404" width="144" height="18"/>
+          <text class="edge-label-accent" x="748" y="416" text-anchor="middle">completion + invoice reconcile</text>
+          <rect class="label-mask" x="700" y="244" width="96" height="18"/>
+          <text class="edge-label" x="748" y="256" text-anchor="middle">gates not ready</text>
+          <rect class="label-mask" x="804" y="244" width="80" height="18"/>
+          <text class="edge-label" x="844" y="256" text-anchor="middle">all gates ready</text>
+
+          <!-- Start and end -->
+          <circle cx="44" cy="144" r="6" fill="#14181c"/>
+          <circle cx="432" cy="360" r="8" fill="none" stroke="#c81d25" stroke-width="1.5"/>
+          <circle cx="432" cy="360" r="5" fill="#c81d25"/>
+
+          <!-- States -->
+          <rect class="node-muted" x="72" y="112" width="152" height="64" rx="8"/>
+          <text class="node-name" x="148" y="138" text-anchor="middle">qualification_pending</text>
+          <text class="node-sub" x="148" y="158" text-anchor="middle">lead not qualified</text>
+
+          <rect class="node" x="264" y="112" width="152" height="64" rx="8"/>
+          <text class="node-name" x="340" y="138" text-anchor="middle">qualified</text>
+          <text class="node-sub" x="340" y="158" text-anchor="middle">no commercial work yet</text>
+
+          <rect class="node" x="456" y="112" width="176" height="64" rx="8"/>
+          <text class="node-name" x="544" y="138" text-anchor="middle">commercial_in_progress</text>
+          <text class="node-sub" x="544" y="158" text-anchor="middle">revision or decision open</text>
+
+          <rect class="node" x="672" y="112" width="152" height="64" rx="8"/>
+          <text class="node-name" x="748" y="138" text-anchor="middle">deposit_pending</text>
+          <text class="node-sub" x="748" y="158" text-anchor="middle">not yet reconciled</text>
+
+          <rect class="node" x="864" y="112" width="152" height="64" rx="8"/>
+          <text class="node-name" x="940" y="138" text-anchor="middle">production_ready</text>
+          <text class="node-sub" x="940" y="158" text-anchor="middle">all gates ready</text>
+
+          <rect class="node" x="1056" y="112" width="152" height="64" rx="8"/>
+          <text class="node-name" x="1132" y="138" text-anchor="middle">scheduled</text>
+          <text class="node-sub" x="1132" y="158" text-anchor="middle">assignment current</text>
+
+          <rect class="node-muted" x="72" y="328" width="152" height="64" rx="8"/>
+          <text class="node-name" x="148" y="354" text-anchor="middle">cancelled</text>
+          <text class="node-sub" x="148" y="374" text-anchor="middle">priority job predicate</text>
+
+          <rect class="node-accent" x="264" y="328" width="152" height="64" rx="8"/>
+          <text class="node-name" x="340" y="354" text-anchor="middle">safety_blocked</text>
+          <text class="node-sub" x="340" y="374" text-anchor="middle">active stop exists</text>
+
+          <rect class="node-accent" x="456" y="328" width="176" height="64" rx="8"/>
+          <text class="node-name" x="544" y="354" text-anchor="middle">financially_closed</text>
+          <text class="node-sub" x="544" y="374" text-anchor="middle">completion + invoice reconcile</text>
+
+          <rect class="node-muted" x="672" y="328" width="168" height="64" rx="8"/>
+          <text class="node-name" x="756" y="354" text-anchor="middle">production_blocked</text>
+          <text class="node-sub" x="756" y="374" text-anchor="middle">a required gate is not ready</text>
+
+          <rect class="node" x="864" y="328" width="152" height="64" rx="8"/>
+          <text class="node-name" x="940" y="354" text-anchor="middle">substantially_complete</text>
+          <text class="node-sub" x="940" y="374" text-anchor="middle">completion packet exists</text>
+
+          <rect class="node" x="1056" y="328" width="152" height="64" rx="8"/>
+          <text class="node-name" x="1132" y="354" text-anchor="middle">in_progress</text>
+          <text class="node-sub" x="1132" y="374" text-anchor="middle">work package active</text>
+
+          <!-- Priority and drift annotations -->
+          <rect x="72" y="444" width="344" height="80" rx="6" fill="rgba(20,24,28,0.025)" stroke="rgba(20,24,28,0.18)"/>
+          <text class="callout" x="92" y="472">Priority predicates</text>
+          <text class="node-sub" x="92" y="494">* → cancelled when the authoritative job status cancels</text>
+          <text class="node-sub" x="92" y="510">* → safety_blocked while any active safety stop exists</text>
+
+          <rect x="456" y="444" width="752" height="80" rx="6" fill="rgba(200,29,37,0.05)" stroke="rgba(200,29,37,0.34)"/>
+          <text class="callout" x="476" y="472">Vocabulary decision required</text>
+          <text class="node-sub" x="476" y="494">The canonical operating document describes “contracted”; current derivePhase does not emit it.</text>
+          <text class="node-sub" x="476" y="510">Accepted work without reconciled deposit resolves directly to deposit_pending.</text>
+
+          <rect x="72" y="548" width="1136" height="56" rx="6" fill="#ffffff" stroke="rgba(20,24,28,0.18)"/>
+          <text class="legend-title" x="92" y="572">NON-WRITABLE</text>
+          <text class="legend-text" x="196" y="572">Commands update the independent lead, revision, gate, assignment, work, safety, accounting, and closeout facts.</text>
+          <text class="legend-text" x="196" y="588">The projector recomputes this view; clearing a block never advances work by itself.</text>
+
+          <text class="legend-title" x="40" y="668">CURRENT SOURCE</text>
+          <text class="legend-text" x="152" y="668">workers-bus/src/commercial-job-phase.ts, reviewed at 1e1d7ab0</text>
+        </svg>
+      </div>
+
+      <div class="figure-notes">
+        <div><strong>Projection</strong><span>The phase explains the most relevant current outcome; it does not own any transition.</span></div>
+        <div><strong>Priority</strong><span>Cancellation and active safety stops override ordinary lifecycle display.</span></div>
+        <div><strong>Open decision</strong><span>Align the canonical “contracted” vocabulary before exposing phase names as a stable external contract.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="truth-heading">
+      <header class="figure-header">
+        <div>
+          <h2 id="truth-heading">Do not flatten proof.</h2>
+        </div>
+        <p class="figure-summary">A source-visible route is useful evidence, but it is not the same claim as a configured provider, deployed runtime, accepted business journey, or real customer result.</p>
+      </header>
+      <dl class="status-key">
+        <div><dt>Source-present</dt><dd>Executable implementation exists in the named checkout.</dd></div>
+        <div><dt>Configured/runtime</dt><dd>Named environment and dependencies pass real readback.</dd></div>
+        <div><dt>Business-proven</dt><dd>Controlled end-to-end operating scenario has accountable acceptance.</dd></div>
+        <div><dt>Customer-validated</dt><dd>Separate real-customer, legal, operational, and experience gate passes.</dd></div>
+      </dl>
+    </section>
+
+    <footer class="footer">
+      <span>IronWrap OS / Product Atlas / Developer synthesis</span>
+      <span>Canonical sources: Architecture, Operating System, Authority &amp; Evidence, Capability Matrix, Compliance Register</span>
+    </footer>
+  </main>
+</body>
+</html>

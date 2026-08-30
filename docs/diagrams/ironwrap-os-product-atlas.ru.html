@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Атлас архитектуры, операционного цикла, полевого пути и производной фазы IronWrap OS.">
+  <title>IronWrap OS: атлас продукта</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --paper: #e6e8eb;
+      --paper-2: #f5f6f7;
+      --ink: #14181c;
+      --muted: #5a626b;
+      --soft: #5f6871;
+      --rule: rgba(20, 24, 28, 0.18);
+      --rule-solid: #b0b7be;
+      --accent: #c81d25;
+      --link: #1f4e66;
+      --white: #ffffff;
+      --sans: "Geist", Arial, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: "Instrument Serif", Georgia, "Times New Roman", serif;
+      --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: var(--sans); line-height: 1.55; }
+    a { color: var(--link); text-underline-offset: 0.18em; }
+    a:hover { color: var(--accent); }
+    a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+    .skip-link { position: absolute; top: 8px; left: 8px; z-index: 10; padding: 8px 12px; color: var(--white); background: var(--ink); transform: translateY(-160%); }
+    .skip-link:focus { transform: translateY(0); }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .page { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0 48px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr); gap: 48px; align-items: end; padding-bottom: 48px; border-bottom: 1px solid var(--rule); }
+    .eyebrow, .meta dt, .status-key dt, .footer { font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.14em; }
+    .eyebrow { margin: 0 0 12px; color: var(--muted); font-size: 11px; font-weight: 600; }
+    h1, h2 { margin: 0; font-family: var(--serif); font-weight: 400; letter-spacing: -0.025em; }
+    h1 { font-size: clamp(48px, 7vw, 92px); line-height: 0.94; }
+    h2 { font-size: clamp(34px, 4vw, 54px); line-height: 1; }
+    .lede { max-width: 68ch; margin: 24px 0 0; color: var(--muted); font-size: clamp(16px, 1.6vw, 21px); }
+    .meta { display: grid; gap: 16px; margin: 0; }
+    .meta div { padding-top: 12px; border-top: 1px solid var(--rule); }
+    .meta dt { margin-bottom: 4px; color: var(--soft); font-size: 9px; }
+    .meta dd { margin: 0; font-size: 14px; }
+    .intro-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 24px; padding: 40px 0 16px; }
+    .intro-grid article:nth-of-type(1) { grid-column: span 5; }
+    .intro-grid article:nth-of-type(2) { grid-column: span 4; }
+    .intro-grid article:nth-of-type(3) { grid-column: span 3; }
+    .intro-grid article { min-height: 152px; padding: 20px 0; border-top: 3px solid var(--ink); }
+    .intro-grid article:first-child { border-color: var(--accent); }
+    .intro-grid h3 { margin: 0 0 8px; font-size: 16px; }
+    .intro-grid p { margin: 0; color: var(--muted); font-size: 14px; }
+    .figure-section { padding: 72px 0 56px; border-top: 1px solid var(--rule); }
+    .figure-header { margin-bottom: 28px; }
+    .figure-summary { max-width: 70ch; margin: 16px 0 0; color: var(--muted); font-size: 15px; }
+    .diagram-frame { overflow-x: auto; border: 1px solid var(--rule); background: var(--paper-2); box-shadow: 0 18px 50px rgba(20, 24, 28, 0.06); }
+    svg { display: block; width: 100%; min-width: 960px; height: auto; background: var(--paper-2); }
+    .figure-notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 20px; }
+    .figure-notes div, .status-key div { padding-top: 12px; border-top: 1px solid var(--rule); }
+    .figure-notes strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .figure-notes span { color: var(--muted); font-size: 13px; }
+    .status-key { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; margin: 40px 0 0; }
+    .status-key dt { color: var(--soft); font-size: 9px; }
+    .status-key dd { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .footer { display: flex; justify-content: space-between; gap: 24px; padding-top: 28px; border-top: 1px solid var(--rule); color: var(--soft); font-size: 10px; }
+    .svg-bg { fill: #f5f6f7; }
+    .zone { fill: rgba(20, 24, 28, 0.02); stroke: rgba(20, 24, 28, 0.18); stroke-width: 1; }
+    .zone-accent { fill: rgba(200, 29, 37, 0.025); stroke: rgba(200, 29, 37, 0.36); stroke-width: 1; }
+    .lane { fill: rgba(20, 24, 28, 0.015); stroke: rgba(20, 24, 28, 0.16); stroke-width: 1; }
+    .lane-alt { fill: rgba(31, 78, 102, 0.025); stroke: rgba(20, 24, 28, 0.16); stroke-width: 1; }
+    .node { fill: #ffffff; stroke: #14181c; stroke-width: 1; }
+    .node-muted { fill: rgba(20, 24, 28, 0.04); stroke: #5a626b; stroke-width: 1; }
+    .node-external { fill: rgba(20, 24, 28, 0.025); stroke: rgba(20, 24, 28, 0.34); stroke-width: 1; }
+    .node-accent { fill: rgba(200, 29, 37, 0.08); stroke: #c81d25; stroke-width: 1.2; }
+    .node-optional { fill: rgba(20, 24, 28, 0.018); stroke: rgba(20, 24, 28, 0.28); stroke-width: 1; stroke-dasharray: 5 4; }
+    .connector { fill: none; stroke: #5a626b; stroke-width: 1.4; stroke-linejoin: round; }
+    .connector-link { fill: none; stroke: #1f4e66; stroke-width: 1.4; stroke-linejoin: round; }
+    .connector-accent { fill: none; stroke: #c81d25; stroke-width: 1.5; stroke-linejoin: round; }
+    .connector-block { fill: none; stroke: #c81d25; stroke-width: 1.2; stroke-dasharray: 6 5; stroke-linejoin: round; }
+    .zone-label { fill: #5f6871; font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em; }
+    .node-name { fill: #14181c; font-family: var(--sans); font-size: 12px; font-weight: 600; }
+    .node-sub { fill: #5a626b; font-family: var(--mono); font-size: 9px; }
+    .edge-label { fill: #5a626b; font-family: var(--mono); font-size: 8px; letter-spacing: 0.03em; }
+    .edge-label-link { fill: #1f4e66; font-family: var(--mono); font-size: 8px; }
+    .edge-label-accent { fill: #c81d25; font-family: var(--mono); font-size: 8px; }
+    .label-mask { fill: #f5f6f7; }
+    .legend-title { fill: #14181c; font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em; }
+    .legend-text { fill: #5a626b; font-family: var(--sans); font-size: 9px; }
+    .cell-label { fill: #5f6871; font-family: var(--mono); font-size: 8px; font-weight: 600; letter-spacing: 0.06em; }
+    .cell-copy { fill: #14181c; font-family: var(--sans); font-size: 11px; }
+    .callout { fill: #14181c; font-family: var(--serif); font-size: 15px; font-style: italic; }
+    @media (max-width: 840px) {
+      .page { width: min(100% - 20px, 1480px); padding-top: 36px; }
+      .hero { grid-template-columns: 1fr; gap: 24px; }
+      .intro-grid, .figure-notes, .status-key { grid-template-columns: 1fr; }
+      .intro-grid article:nth-of-type(n) { grid-column: auto; }
+      .figure-section { padding: 52px 0 40px; }
+      .footer { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      body { background: #ffffff; }
+      .page { width: 100%; padding: 0; }
+      .figure-section { break-before: page; }
+      .diagram-frame { box-shadow: none; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#atlas">К диаграммам</a>
+  <main class="page" id="atlas">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">IronWrap OS / система продукта / 2026-08-30</p>
+        <h1>Одна управляемая нить<br>от лида до доказательства.</h1>
+        <p class="lede">Четыре взаимосвязанных вида для команд продукта, операций, разработки, рисков и поставки.</p>
+      </div>
+      <dl class="meta">
+        <div><dt>Снимок source</dt><dd><code>main @ 1e1d7ab0</code></dd></div>
+        <div><dt>Профиль вывода</dt><dd>HTML, весь документ, сбалансированная детализация, смешанная аудитория</dd></div>
+        <div><dt>Полномочия</dt><dd>Разработческое обобщение; при конфликте побеждают канонические контракты.</dd></div>
+        <div><dt>Операционный каталог</dt><dd><a href="../IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.ru.md">Роли, процессы, интеграции, сценарии и UI</a></dd></div>
+        <div><dt>Язык</dt><dd><a href="./ironwrap-os-product-atlas.html">English version</a></dd></div>
+      </dl>
+    </header>
+
+    <section class="intro-grid" aria-label="Как читать атлас">
+      <h2 class="sr-only">Как читать атлас</h2>
+      <article><h3>Зачем существует продукт</h3><p>Координировать кровельные и фасадные работы, сервис, цех, снабжение, полевые операции, финансы и нормативные требования, не превращая статус провайдера или ответ AI в деловую истину.</p></article>
+      <article><h3>Что делает его особым</h3><p>Каждое значимое действие связывает участника, полномочие, текущее доказательство, политику, идемпотентность, контрольное чтение провайдера и сверку.</p></article>
+      <article><h3>Как читать карты</h3><p>Красный показывает главный контроль или риск. Синий обозначает ограниченный внешний или API-путь. Пунктир обозначает необязательный, заблокированный или совместимостный путь.</p></article>
+    </section>
+
+    <section class="figure-section" aria-labelledby="architecture-heading">
+      <header class="figure-header"><h2 id="architecture-heading">Архитектура доверия</h2><p class="figure-summary">Люди и AI могут запрашивать и предлагать. Только deterministic policy gate фиксирует owned facts или разрешает bounded effect.</p></header>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ru-arch-title ru-arch-desc">
+          <title id="ru-arch-title">Защищённая trust architecture IronWrap OS</title>
+          <desc id="ru-arch-desc">Люди, устройства и AI входят через PWA и deterministic policy gate. D1 и R2 хранят owned facts и evidence. Effect ledger вызывает внешние providers и reconciles readback. Facet поставляет design evidence, Frappe остаётся non-authoritative projection.</desc>
+          <defs>
+            <marker id="ru-arch-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5a626b"/></marker>
+            <marker id="ru-arch-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1f4e66"/></marker>
+            <marker id="ru-arch-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c81d25"/></marker>
+          </defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+          <rect class="zone" x="40" y="64" width="240" height="560" rx="8"/>
+          <rect class="zone-accent" x="320" y="64" width="600" height="560" rx="8"/>
+          <rect class="zone" x="960" y="64" width="280" height="560" rx="8"/>
+          <text class="zone-label" x="56" y="88">ЛЮДИ И КАНАЛЫ</text>
+          <text class="zone-label" x="336" y="88">OWNED CONTROL PLANE, DETERMINISTIC</text>
+          <text class="zone-label" x="976" y="88">ОГРАНИЧЕННЫЕ ИСТОЧНИКИ</text>
+
+          <line class="connector" x1="160" y1="216" x2="160" y2="316" marker-end="url(#ru-arch-arrow)"/>
+          <path class="connector-accent" d="M 240 356 H 312 V 184 H 372" marker-end="url(#ru-arch-accent)"/>
+          <path class="connector" d="M 240 532 H 292 V 216 H 372" marker-end="url(#ru-arch-arrow)"/>
+          <line class="connector-accent" x1="476" y1="224" x2="476" y2="316" marker-end="url(#ru-arch-accent)"/>
+          <line class="connector" x1="476" y1="400" x2="476" y2="492" marker-end="url(#ru-arch-arrow)"/>
+          <path class="connector-accent" d="M 576 184 H 620 V 280 H 668" marker-end="url(#ru-arch-accent)"/>
+          <path class="connector-link" d="M 872 280 H 936 V 196 H 996" marker-end="url(#ru-arch-link)"/>
+          <path class="connector-link" d="M 996 220 H 948 V 304 H 876" marker-end="url(#ru-arch-link)"/>
+          <path class="connector-link" d="M 996 404 H 920 V 380 H 580" marker-end="url(#ru-arch-link)"/>
+          <path class="connector" d="M 576 368 H 896 V 564 H 996" marker-end="url(#ru-arch-arrow)"/>
+          <path class="connector-block" d="M 240 380 H 268 V 112 H 1080 V 152"/>
+          <line x1="1072" y1="144" x2="1088" y2="160" stroke="#c81d25" stroke-width="2"/>
+          <line x1="1088" y1="144" x2="1072" y2="160" stroke="#c81d25" stroke-width="2"/>
+
+          <rect class="label-mask" x="266" y="260" width="92" height="18"/><text class="edge-label-accent" x="312" y="272" text-anchor="middle">typed command</text>
+          <rect class="label-mask" x="246" y="420" width="92" height="18"/><text class="edge-label" x="292" y="432" text-anchor="middle">только proposal</text>
+          <rect class="label-mask" x="438" y="260" width="76" height="18"/><text class="edge-label-accent" x="476" y="272" text-anchor="middle">commit</text>
+          <rect class="label-mask" x="432" y="440" width="88" height="18"/><text class="edge-label" x="476" y="452" text-anchor="middle">связь с raw</text>
+          <rect class="label-mask" x="572" y="224" width="96" height="18"/><text class="edge-label-accent" x="620" y="236" text-anchor="middle">точный permit</text>
+          <rect class="label-mask" x="896" y="248" width="80" height="18"/><text class="edge-label-link" x="936" y="260" text-anchor="middle">execution</text>
+          <rect class="label-mask" x="904" y="292" width="88" height="18"/><text class="edge-label-link" x="948" y="304" text-anchor="middle">readback</text>
+          <rect class="label-mask" x="716" y="370" width="120" height="18"/><text class="edge-label-link" x="776" y="382" text-anchor="middle">signed evidence</text>
+          <rect class="label-mask" x="724" y="554" width="136" height="18"/><text class="edge-label" x="792" y="566" text-anchor="middle">только projection</text>
+          <rect class="label-mask" x="600" y="102" width="248" height="18"/><text class="edge-label-accent" x="724" y="114" text-anchor="middle">прямая browser mutation запрещена</text>
+
+          <rect class="node-muted" x="80" y="144" width="160" height="72" rx="6"/><text class="node-name" x="160" y="174" text-anchor="middle">Люди и устройства</text><text class="node-sub" x="160" y="194" text-anchor="middle">owner, office, field, customer</text>
+          <rect class="node" x="80" y="320" width="160" height="72" rx="6"/><text class="node-name" x="160" y="350" text-anchor="middle">PWA и портал</text><text class="node-sub" x="160" y="370" text-anchor="middle">role views / offline outbox</text>
+          <rect class="node-optional" x="80" y="496" width="160" height="72" rx="6"/><text class="node-name" x="160" y="526" text-anchor="middle">Инструменты AI</text><text class="node-sub" x="160" y="546" text-anchor="middle">observe / derive / propose</text>
+          <rect class="node-accent" x="376" y="144" width="200" height="80" rx="6"/><text class="node-name" x="476" y="176" text-anchor="middle">Worker policy gate</text><text class="node-sub" x="476" y="196" text-anchor="middle">identity / version / evidence / policy</text>
+          <rect class="node" x="376" y="320" width="200" height="80" rx="6"/><text class="node-name" x="476" y="352" text-anchor="middle">D1 owned state</text><text class="node-sub" x="476" y="372" text-anchor="middle">aggregates / events / audit</text>
+          <rect class="node-muted" x="376" y="496" width="200" height="72" rx="6"/><text class="node-name" x="476" y="526" text-anchor="middle">R2 evidence</text><text class="node-sub" x="476" y="546" text-anchor="middle">immutable bytes / generated objects</text>
+          <rect class="node-accent" x="672" y="240" width="200" height="80" rx="6"/><text class="node-name" x="772" y="272" text-anchor="middle">Effect и readback ledger</text><text class="node-sub" x="772" y="292" text-anchor="middle">idempotency / receipt / reconcile</text>
+          <rect class="node-external" x="1000" y="160" width="200" height="72" rx="6"/><text class="node-name" x="1100" y="190" text-anchor="middle">QuickBooks и providers</text><text class="node-sub" x="1100" y="210" text-anchor="middle">bounded external truth / effects</text>
+          <rect class="node-external" x="1000" y="360" width="200" height="88" rx="6"/><text class="node-name" x="1100" y="390" text-anchor="middle">Facet и authorities</text><text class="node-sub" x="1100" y="410" text-anchor="middle">design evidence / issuer scope</text><text class="node-sub" x="1100" y="428" text-anchor="middle">не меняют commercial state</text>
+          <rect class="node-optional" x="1000" y="528" width="200" height="72" rx="6"/><text class="node-name" x="1100" y="558" text-anchor="middle">Frappe compatibility</text><text class="node-sub" x="1100" y="578" text-anchor="middle">read-only / rebuildable / retiring</text>
+
+          <text class="legend-title" x="40" y="664">ЛЕГЕНДА</text>
+          <rect class="node-accent" x="120" y="648" width="20" height="14" rx="2"/><text class="legend-text" x="148" y="660">главный контроль</text>
+          <rect class="node" x="280" y="648" width="20" height="14" rx="2"/><text class="legend-text" x="308" y="660">внутренняя authority</text>
+          <rect class="node-external" x="452" y="648" width="20" height="14" rx="2"/><text class="legend-text" x="480" y="660">внешний источник</text>
+          <line class="connector-link" x1="642" y1="656" x2="670" y2="656" marker-end="url(#ru-arch-link)"/><text class="legend-text" x="682" y="660">API / evidence / readback</text>
+          <line class="connector-block" x1="874" y1="656" x2="902" y2="656"/><text class="legend-text" x="914" y="660">заблокировано или только compatibility</text>
+        </svg>
+      </div>
+      <div class="figure-notes">
+        <div><strong>Authority</strong><span>D1 и Worker control plane владеют internal operating truth.</span></div>
+        <div><strong>External truth</strong><span>QuickBooks, Facet, issuers и providers authoritative только в точном scope.</span></div>
+        <div><strong>Граница AI</strong><span>Модель предлагает; deterministic code проверяет, разрешает, исполняет и reconciles.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="lifecycle-heading">
+      <header class="figure-header"><h2 id="lifecycle-heading">Цикл от лида до доказательства</h2><p class="figure-summary">Один обычный путь проходит через разные роли, но каждая передача остаётся управляемым переходом.</p></header>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ru-flow-title ru-flow-desc">
+          <title id="ru-flow-title">Сквозной operating lifecycle IronWrap OS</title>
+          <desc id="ru-flow-desc">Лид проходит через customer и sales, control plane, operations, field, quality, finance и aftercare. Путь содержит qualified job, commercial revision, customer decision, reconciled deposit, production gates, work package, field evidence, completion packet, financial close и service history.</desc>
+          <defs><marker id="ru-flow-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5a626b"/></marker><marker id="ru-flow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c81d25"/></marker></defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+          <rect class="lane" x="40" y="64" width="1200" height="92"/><rect class="lane-alt" x="40" y="164" width="1200" height="92"/><rect class="lane" x="40" y="264" width="1200" height="92"/><rect class="lane-alt" x="40" y="364" width="1200" height="92"/><rect class="lane" x="40" y="464" width="1200" height="120"/>
+          <text class="zone-label" x="52" y="80">КЛИЕНТ И ПРОДАЖИ</text><text class="zone-label" x="52" y="180">CONTROL PLANE</text><text class="zone-label" x="52" y="280">ОПЕРАЦИИ И PRODUCTION</text><text class="zone-label" x="52" y="380">ПОЛЕ И КАЧЕСТВО</text><text class="zone-label" x="52" y="480">ФИНАНСЫ И СЕРВИС</text>
+          <path class="connector" d="M 160 116 H 172 V 216 H 180" marker-end="url(#ru-flow-arrow)"/><path class="connector" d="M 288 216 H 300 V 116 H 308" marker-end="url(#ru-flow-arrow)"/><line class="connector" x1="416" y1="116" x2="436" y2="116" marker-end="url(#ru-flow-arrow)"/>
+          <path class="connector-accent" d="M 544 116 H 556 V 520 H 564" marker-end="url(#ru-flow-accent)"/><path class="connector-accent" d="M 672 520 H 684 V 316 H 692" marker-end="url(#ru-flow-accent)"/><line class="connector" x1="800" y1="316" x2="820" y2="316" marker-end="url(#ru-flow-arrow)"/>
+          <path class="connector" d="M 928 316 H 940 V 416 H 948" marker-end="url(#ru-flow-arrow)"/><line class="connector" x1="1056" y1="416" x2="1076" y2="416" marker-end="url(#ru-flow-arrow)"/><line class="connector-accent" x1="1148" y1="440" x2="1148" y2="516" marker-end="url(#ru-flow-accent)"/><path class="connector" d="M 1080 416 H 1068 V 544 H 1060" marker-end="url(#ru-flow-arrow)"/>
+          <rect class="label-mask" x="136" y="156" width="80" height="18"/><text class="edge-label" x="176" y="168" text-anchor="middle">разбор</text><rect class="label-mask" x="264" y="156" width="80" height="18"/><text class="edge-label" x="304" y="168" text-anchor="middle">осмотр</text>
+          <rect class="label-mask" x="516" y="300" width="80" height="18"/><text class="edge-label-accent" x="556" y="312" text-anchor="middle">принятие</text><rect class="label-mask" x="640" y="400" width="88" height="18"/><text class="edge-label-accent" x="684" y="412" text-anchor="middle">сверка</text>
+          <rect class="label-mask" x="896" y="356" width="88" height="18"/><text class="edge-label" x="940" y="368" text-anchor="middle">выпуск</text><rect class="label-mask" x="1108" y="472" width="80" height="18"/><text class="edge-label-accent" x="1148" y="484" text-anchor="middle">счёт</text><rect class="label-mask" x="1020" y="476" width="96" height="18"/><text class="edge-label" x="1068" y="488" text-anchor="middle">сервис</text>
+          <rect class="node-muted" x="56" y="92" width="104" height="48" rx="6"/><text class="node-name" x="108" y="112" text-anchor="middle">Лид получен</text><text class="node-sub" x="108" y="128" text-anchor="middle">identity + consent</text>
+          <rect class="node" x="184" y="192" width="104" height="48" rx="6"/><text class="node-name" x="236" y="212" text-anchor="middle">Квалифицирован</text><text class="node-sub" x="236" y="228" text-anchor="middle">owned IDs</text>
+          <rect class="node" x="312" y="92" width="104" height="48" rx="6"/><text class="node-name" x="364" y="112" text-anchor="middle">Замер и цена</text><text class="node-sub" x="364" y="128" text-anchor="middle">линия evidence</text>
+          <rect class="node-accent" x="440" y="92" width="104" height="48" rx="6"/><text class="node-name" x="492" y="112" text-anchor="middle">Точное решение</text><text class="node-sub" x="492" y="128" text-anchor="middle">published revision</text>
+          <rect class="node-muted" x="568" y="496" width="104" height="48" rx="6"/><text class="node-name" x="620" y="516" text-anchor="middle">Намерение оплаты</text><text class="node-sub" x="620" y="532" text-anchor="middle">provider readback</text>
+          <rect class="node-accent" x="696" y="292" width="104" height="48" rx="6"/><text class="node-name" x="748" y="312" text-anchor="middle">Production gates</text><text class="node-sub" x="748" y="328" text-anchor="middle">все актуальны</text>
+          <rect class="node" x="824" y="292" width="104" height="48" rx="6"/><text class="node-name" x="876" y="312" text-anchor="middle">Пакет работ</text><text class="node-sub" x="876" y="328" text-anchor="middle">назначен и принят</text>
+          <rect class="node" x="952" y="392" width="104" height="48" rx="6"/><text class="node-name" x="1004" y="412" text-anchor="middle">Работа и evidence</text><text class="node-sub" x="1004" y="428" text-anchor="middle">stop / hold / change</text>
+          <rect class="node" x="1080" y="392" width="136" height="48" rx="6"/><text class="node-name" x="1148" y="412" text-anchor="middle">Пакет завершения</text><text class="node-sub" x="1148" y="428" text-anchor="middle">качество + closeout</text>
+          <rect class="node-muted" x="928" y="520" width="128" height="48" rx="6"/><text class="node-name" x="992" y="540" text-anchor="middle">Гарантия и сервис</text><text class="node-sub" x="992" y="556" text-anchor="middle">история сохранена</text>
+          <rect class="node" x="1080" y="520" width="136" height="48" rx="6"/><text class="node-name" x="1148" y="540" text-anchor="middle">Финансовое закрытие</text><text class="node-sub" x="1148" y="556" text-anchor="middle">сверенный баланс</text>
+          <text class="legend-title" x="40" y="636">УСЛОВИЕ ПРОХОДА</text><text class="legend-text" x="180" y="636">Каждая стрелка означает зафиксированный переход с актуальными полномочиями и доказательствами.</text>
+          <text class="legend-title" x="40" y="668">УСЛОВИЕ ОСТАНОВКИ</text><text class="legend-text" x="200" y="668">Отсутствующие, устаревшие, конфликтные, небезопасные, несанкционированные или несверенные факты остаются видимыми исключениями.</text>
+        </svg>
+      </div>
+      <div class="figure-notes">
+        <div><strong>Commercial integrity</strong><span>Approval, publication, customer view и acceptance связаны с одной exact revision.</span></div>
+        <div><strong>Physical integrity</strong><span>Ready, assigned, started и complete являются разными facts с разным evidence.</span></div>
+        <div><strong>Financial integrity</strong><span>Intent и webhook не равны posting или payment; provider detail должен reconcile.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="field-heading">
+      <header class="figure-header"><h2 id="field-heading">Полевой сотрудник: один безопасный день</h2><p class="figure-summary">Полевой интерфейс намеренно узок: знать точную работу на сегодня, сохранять право остановки, один раз собирать доказательства и безопасно восстанавливаться.</p></header>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ru-field-title ru-field-desc">
+          <title id="ru-field-title">Путь полевого сотрудника IronWrap OS</title>
+          <desc id="ru-field-desc">Шесть этапов показывают загрузку дня, проверку пакета работ, регистрацию и старт, выполнение и фиксацию доказательств, остановку или повтор после офлайн-режима, завершение и синхронизацию. Для каждого этапа показаны действие, ответ системы и восстановление.</desc>
+          <rect class="svg-bg" width="1280" height="720"/>
+          <rect class="zone" x="40" y="64" width="176" height="560"/><rect class="zone" x="240" y="64" width="176" height="560"/><rect class="zone" x="440" y="64" width="176" height="560"/><rect class="zone" x="640" y="64" width="176" height="560"/><rect class="zone-accent" x="840" y="64" width="176" height="560"/><rect class="zone" x="1040" y="64" width="176" height="560"/>
+          <line x1="40" y1="128" x2="1216" y2="128" stroke="#b0b7be"/><line x1="40" y1="268" x2="1216" y2="268" stroke="rgba(20,24,28,0.18)"/><line x1="40" y1="384" x2="1216" y2="384" stroke="rgba(20,24,28,0.18)"/><line x1="40" y1="508" x2="1216" y2="508" stroke="rgba(20,24,28,0.18)"/>
+          <text class="zone-label" x="56" y="84">ЗАГРУЗИТЬ ДЕНЬ</text><text class="node-name" x="56" y="108">Знать свою работу</text>
+          <text class="zone-label" x="256" y="84">ПРОВЕРИТЬ ПАКЕТ</text><text class="node-name" x="256" y="108">Доверять объёму</text>
+          <text class="zone-label" x="456" y="84">РЕГИСТРАЦИЯ И СТАРТ</text><text class="node-name" x="456" y="108">Начать безопасно</text>
+          <text class="zone-label" x="656" y="84">РАБОТА И ФИКСАЦИЯ</text><text class="node-name" x="656" y="108">Сделать и доказать</text>
+          <text class="zone-label" x="856" y="84">СТОП ИЛИ ПОВТОР</text><text class="node-name" x="856" y="108">Безопасность при сбое</text>
+          <text class="zone-label" x="1056" y="84">ЗАВЕРШИТЬ И СВЕРИТЬ</text><text class="node-name" x="1056" y="108">Закрыть один раз</text>
+
+          <text class="cell-label" x="56" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="56" y="180"><tspan x="56">Открыть Now / Today</tspan><tspan x="56" dy="20">на привязанном</tspan><tspan x="56" dy="20">устройстве. Увидеть</tspan><tspan x="56" dy="20">маршрут и контакты.</tspan></text>
+          <text class="cell-label" x="256" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="256" y="180"><tspan x="256">Прочитать точный объём,</tspan><tspan x="256" dy="20">риски, удержания,</tspan><tspan x="256" dy="20">слоты доказательств</tspan><tspan x="256" dy="20">и срок пакета.</tspan></text>
+          <text class="cell-label" x="456" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="456" y="180"><tspan x="456">Подтвердить текущий</tspan><tspan x="456" dy="20">пакет и отметиться.</tspan><tspan x="456" dy="20">Запросить старт после</tspan><tspan x="456" dy="20">проверки барьеров.</tspan></text>
+          <text class="cell-label" x="656" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="656" y="180"><tspan x="656">Выполнить шаги.</tspan><tspan x="656" dy="20">Снять фото, объёмы,</tspan><tspan x="656" dy="20">изменения и</tspan><tspan x="656" dy="20">доказательства качества.</tspan></text>
+          <text class="cell-label" x="856" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="856" y="180"><tspan x="856">Сразу остановиться</tspan><tspan x="856" dy="20">при риске или конфликте.</tspan><tspan x="856" dy="20">Сохранять безопасные</tspan><tspan x="856" dy="20">офлайн-доказательства.</tspan></text>
+          <text class="cell-label" x="1056" y="152">ДЕЙСТВИЕ</text><text class="cell-copy" x="1056" y="180"><tspan x="1056">Закрыть слоты</tspan><tspan x="1056" dy="20">и удержания.</tspan><tspan x="1056" dy="20">Передать завершение</tspan><tspan x="1056" dy="20">на проверку.</tspan></text>
+
+          <text class="cell-label" x="56" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="56" y="320"><tspan x="56">Только актуальная</tspan><tspan x="56" dy="20">назначенная работа</tspan><tspan x="56" dy="20">и состояние sync.</tspan></text>
+          <text class="cell-label" x="256" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="256" y="320"><tspan x="256">Кэширует последний</tspan><tspan x="256" dy="20">валидный пакет,</tspan><tspan x="256" dy="20">экстренные контакты</tspan><tspan x="256" dy="20">и правила остановки.</tspan></text>
+          <text class="cell-label" x="456" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="456" y="320"><tspan x="456">Перепроверяет</tspan><tspan x="456" dy="20">назначение, барьеры</tspan><tspan x="456" dy="20">и версию пакета.</tspan></text>
+          <text class="cell-label" x="656" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="656" y="320"><tspan x="656">Связывает запись</tspan><tspan x="656" dy="20">с человеком, устройством,</tspan><tspan x="656" dy="20">работой, слотом,</tspan><tspan x="656" dy="20">порядком и хешем.</tspan></text>
+          <text class="cell-label" x="856" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="856" y="320"><tspan x="856">Сохраняет остановку.</tspan><tspan x="856" dy="20">Ставит допустимое</tspan><tspan x="856" dy="20">в очередь; новые</tspan><tspan x="856" dy="20">полномочия закрыты.</tspan></text>
+          <text class="cell-label" x="1056" y="292">ОТВЕТ СИСТЕМЫ</text><text class="cell-copy" x="1056" y="320"><tspan x="1056">Повторяет один раз,</tspan><tspan x="1056" dy="20">проверяет версии</tspan><tspan x="1056" dy="20">и называет пробелы.</tspan></text>
+
+          <text class="cell-label" x="56" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="56" y="436"><tspan x="56">Нет назначения?</tspan><tspan x="56" dy="20">Показать диспетчера</tspan><tspan x="56" dy="20">и безопасное ожидание.</tspan></text>
+          <text class="cell-label" x="256" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="256" y="436"><tspan x="256">Пакет заменён?</tspan><tspan x="256" dy="20">Новая проверка</tspan><tspan x="256" dy="20">и подтверждение.</tspan></text>
+          <text class="cell-label" x="456" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="456" y="436"><tspan x="456">Барьер устарел</tspan><tspan x="456" dy="20">или закрыт?</tspan><tspan x="456" dy="20">Объяснить владельца;</tspan><tspan x="456" dy="20">не начинать.</tspan></text>
+          <text class="cell-label" x="656" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="656" y="436"><tspan x="656">Скрытое условие?</tspan><tspan x="656" dy="20">Остановить участок;</tspan><tspan x="656" dy="20">запустить изменение.</tspan></text>
+          <text class="cell-label" x="856" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="856" y="436"><tspan x="856">Сеть или конфликт?</tspan><tspan x="856" dy="20">Сохранить очередь;</tspan><tspan x="856" dy="20">повторить или</tspan><tspan x="856" dy="20">создать исключение.</tspan></text>
+          <text class="cell-label" x="1056" y="408">СБОЙ И ВОССТАНОВЛЕНИЕ</text><text class="cell-copy" x="1056" y="436"><tspan x="1056">Доказательств мало?</tspan><tspan x="1056" dy="20">Работа открыта;</tspan><tspan x="1056" dy="20">показать пустые слоты.</tspan></text>
+          <text class="cell-label" x="56" y="536">УВЕРЕННОСТЬ РАБОТНИКА</text><line x1="56" y1="580" x2="1200" y2="580" stroke="rgba(20,24,28,0.18)" stroke-dasharray="4 4"/><path d="M 128 584 C 200 584, 256 552, 328 552 S 456 532, 528 532 S 656 556, 728 556 S 856 608, 928 608 S 1056 548, 1128 548" fill="none" stroke="#1f4e66" stroke-width="2"/>
+          <circle cx="128" cy="584" r="5" fill="#1f4e66"/><circle cx="328" cy="552" r="5" fill="#1f4e66"/><circle cx="528" cy="532" r="5" fill="#1f4e66"/><circle cx="728" cy="556" r="5" fill="#1f4e66"/><circle cx="928" cy="608" r="7" fill="#c81d25"/><circle cx="1128" cy="548" r="5" fill="#1f4e66"/><text class="edge-label-accent" x="928" y="596" text-anchor="middle">пик напряжения</text>
+          <text class="legend-title" x="40" y="668">ПРАВИЛО ДИЗАЙНА</text><text class="legend-text" x="176" y="668">Не заменять явную остановку, безопасное ожидание или сохранённые офлайн-доказательства оптимистичным прогрессом.</text>
+        </svg>
+      </div>
+      <div class="figure-notes">
+        <div><strong>Главная потребность</strong><span>«Покажи мне точную безопасную работу на сегодня, даже когда нет сети».</span></div>
+        <div><strong>Критическая точка</strong><span>Остановки, устаревшие барьеры, конфликты и повтор требуют лучшего объяснения и сохранения.</span></div>
+        <div><strong>Сигнал успеха</strong><span>Работник собирает данные один раз; система сверяет их без повторной работы и потери доказательств.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="phase-heading">
+      <header class="figure-header"><h2 id="phase-heading">Производная фаза работы</h2><p class="figure-summary">Фаза детерминированно объясняет независимые факты и не является целью команды. Блокировка и отмена имеют приоритет; после их снятия представление пересчитывается из исходных фактов.</p></header>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ru-phase-title ru-phase-desc">
+          <title id="ru-phase-title">Автомат состояний производной коммерческой фазы работы</title>
+          <desc id="ru-phase-desc">Текущая исполняемая проекция проходит состояния qualification_pending, qualified, commercial_in_progress, deposit_pending, production_ready, scheduled, in_progress, substantially_complete и financially_closed. production_blocked включается при неготовых барьерах. cancelled и safety_blocked являются приоритетными предикатами. Текущий исходный код не выдаёт каноническую метку contracted.</desc>
+          <defs><marker id="ru-phase-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5a626b"/></marker><marker id="ru-phase-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c81d25"/></marker></defs>
+          <rect class="svg-bg" width="1280" height="720"/>
+          <line class="connector" x1="52" y1="144" x2="68" y2="144" marker-end="url(#ru-phase-arrow)"/><line class="connector" x1="224" y1="144" x2="260" y2="144" marker-end="url(#ru-phase-arrow)"/><line class="connector" x1="416" y1="144" x2="452" y2="144" marker-end="url(#ru-phase-arrow)"/><line class="connector" x1="632" y1="144" x2="668" y2="144" marker-end="url(#ru-phase-arrow)"/>
+          <line class="connector-accent" x1="824" y1="144" x2="860" y2="144" marker-end="url(#ru-phase-accent)"/><line class="connector" x1="1016" y1="144" x2="1052" y2="144" marker-end="url(#ru-phase-arrow)"/><line class="connector" x1="1132" y1="176" x2="1132" y2="328" marker-end="url(#ru-phase-arrow)"/><line class="connector" x1="1056" y1="360" x2="1020" y2="360" marker-end="url(#ru-phase-arrow)"/>
+          <path class="connector-accent" d="M 864 360 H 852 V 416 H 644 V 360 H 636" marker-end="url(#ru-phase-accent)"/><line class="connector" x1="748" y1="176" x2="748" y2="328" marker-end="url(#ru-phase-arrow)"/><path class="connector" d="M 840 360 H 844 V 144 H 860" marker-end="url(#ru-phase-arrow)"/><line class="connector-accent" x1="456" y1="360" x2="444" y2="360"/>
+          <rect class="label-mask" x="218" y="130" width="48" height="18"/><text class="edge-label" x="242" y="142" text-anchor="middle">отбор</text><rect class="label-mask" x="410" y="130" width="48" height="18"/><text class="edge-label" x="434" y="142" text-anchor="middle">версия</text><rect class="label-mask" x="624" y="130" width="52" height="18"/><text class="edge-label" x="650" y="142" text-anchor="middle">принято</text>
+          <rect class="label-mask" x="816" y="130" width="52" height="18"/><text class="edge-label-accent" x="842" y="142" text-anchor="middle">готово</text><rect class="label-mask" x="1002" y="130" width="64" height="18"/><text class="edge-label" x="1034" y="142" text-anchor="middle">назначено</text><rect class="label-mask" x="1082" y="240" width="100" height="18"/><text class="edge-label" x="1132" y="252" text-anchor="middle">пакет начат</text>
+          <rect class="label-mask" x="1000" y="346" width="72" height="18"/><text class="edge-label" x="1036" y="358" text-anchor="middle">завершено</text><rect class="label-mask" x="650" y="404" width="196" height="18"/><text class="edge-label-accent" x="748" y="416" text-anchor="middle">завершение + сверка счёта</text><rect class="label-mask" x="684" y="244" width="128" height="18"/><text class="edge-label" x="748" y="256" text-anchor="middle">барьеры не готовы</text><rect class="label-mask" x="786" y="244" width="116" height="18"/><text class="edge-label" x="844" y="256" text-anchor="middle">все барьеры готовы</text>
+          <circle cx="44" cy="144" r="6" fill="#14181c"/><circle cx="432" cy="360" r="8" fill="none" stroke="#c81d25" stroke-width="1.5"/><circle cx="432" cy="360" r="5" fill="#c81d25"/>
+          <rect class="node-muted" x="72" y="112" width="152" height="64" rx="8"/><text class="node-name" x="148" y="138" text-anchor="middle">qualification_pending</text><text class="node-sub" x="148" y="158" text-anchor="middle">лид не квалифицирован</text>
+          <rect class="node" x="264" y="112" width="152" height="64" rx="8"/><text class="node-name" x="340" y="138" text-anchor="middle">qualified</text><text class="node-sub" x="340" y="158" text-anchor="middle">коммерческой работы нет</text>
+          <rect class="node" x="456" y="112" width="176" height="64" rx="8"/><text class="node-name" x="544" y="138" text-anchor="middle">commercial_in_progress</text><text class="node-sub" x="544" y="158" text-anchor="middle">версия или решение открыто</text>
+          <rect class="node" x="672" y="112" width="152" height="64" rx="8"/><text class="node-name" x="748" y="138" text-anchor="middle">deposit_pending</text><text class="node-sub" x="748" y="158" text-anchor="middle">депозит ещё не сверен</text>
+          <rect class="node" x="864" y="112" width="152" height="64" rx="8"/><text class="node-name" x="940" y="138" text-anchor="middle">production_ready</text><text class="node-sub" x="940" y="158" text-anchor="middle">все барьеры готовы</text>
+          <rect class="node" x="1056" y="112" width="152" height="64" rx="8"/><text class="node-name" x="1132" y="138" text-anchor="middle">scheduled</text><text class="node-sub" x="1132" y="158" text-anchor="middle">назначение актуально</text>
+          <rect class="node-muted" x="72" y="328" width="152" height="64" rx="8"/><text class="node-name" x="148" y="354" text-anchor="middle">cancelled</text><text class="node-sub" x="148" y="374" text-anchor="middle">приоритетная отмена</text>
+          <rect class="node-accent" x="264" y="328" width="152" height="64" rx="8"/><text class="node-name" x="340" y="354" text-anchor="middle">safety_blocked</text><text class="node-sub" x="340" y="374" text-anchor="middle">есть активная остановка</text>
+          <rect class="node-accent" x="456" y="328" width="176" height="64" rx="8"/><text class="node-name" x="544" y="354" text-anchor="middle">financially_closed</text><text class="node-sub" x="544" y="374" text-anchor="middle">завершение и счёт сверены</text>
+          <rect class="node-muted" x="672" y="328" width="168" height="64" rx="8"/><text class="node-name" x="756" y="354" text-anchor="middle">production_blocked</text><text class="node-sub" x="756" y="374" text-anchor="middle">обязательный барьер не готов</text>
+          <rect class="node" x="864" y="328" width="152" height="64" rx="8"/><text class="node-name" x="940" y="354" text-anchor="middle">substantially_complete</text><text class="node-sub" x="940" y="374" text-anchor="middle">есть пакет завершения</text>
+          <rect class="node" x="1056" y="328" width="152" height="64" rx="8"/><text class="node-name" x="1132" y="354" text-anchor="middle">in_progress</text><text class="node-sub" x="1132" y="374" text-anchor="middle">пакет работ активен</text>
+          <rect x="72" y="444" width="344" height="80" rx="6" fill="rgba(20,24,28,0.025)" stroke="rgba(20,24,28,0.18)"/><text class="callout" x="92" y="472">Приоритетные предикаты</text><text class="node-sub" x="92" y="494">* cancelled при authoritative status отмены</text><text class="node-sub" x="92" y="510">* safety_blocked, пока действует safety stop</text>
+          <rect x="456" y="444" width="752" height="80" rx="6" fill="rgba(200,29,37,0.05)" stroke="rgba(200,29,37,0.34)"/><text class="callout" x="476" y="472">Нужно решение по словарю</text><text class="node-sub" x="476" y="494">Канонический операционный документ содержит contracted; текущий derivePhase его не выдаёт.</text><text class="node-sub" x="476" y="510">Принятая работа без сверенного депозита сразу даёт deposit_pending.</text>
+          <rect x="72" y="548" width="1136" height="56" rx="6" fill="#ffffff" stroke="rgba(20,24,28,0.18)"/><text class="legend-title" x="92" y="572">ТОЛЬКО ЧТЕНИЕ</text><text class="legend-text" x="216" y="572">Команды меняют независимые факты лида, версии, барьера, назначения, работы, safety, учета и closeout.</text><text class="legend-text" x="216" y="588">Проектор пересчитывает представление; снятие блокировки само не продвигает работу.</text>
+          <text class="legend-title" x="40" y="668">ТЕКУЩИЙ ИСХОДНИК</text><text class="legend-text" x="176" y="668">workers-bus/src/commercial-job-phase.ts, проверено на 1e1d7ab0</text>
+        </svg>
+      </div>
+      <div class="figure-notes">
+        <div><strong>Проекция</strong><span>Фаза объясняет главный текущий результат, но не владеет переходом.</span></div>
+        <div><strong>Приоритет</strong><span>Отмена и активные safety stops перекрывают обычное отображение жизненного цикла.</span></div>
+        <div><strong>Открытое решение</strong><span>Согласовать каноническое состояние contracted до публикации названий фаз как стабильного внешнего контракта.</span></div>
+      </div>
+    </section>
+
+    <section class="figure-section" aria-labelledby="truth-heading">
+      <header class="figure-header"><h2 id="truth-heading">Не сплющивайте уровни proof.</h2><p class="figure-summary">Source-visible route является полезным evidence, но это не то же самое, что configured provider, deployed runtime, accepted business journey или real customer result.</p></header>
+      <dl class="status-key">
+        <div><dt>Source-present</dt><dd>Executable implementation существует в именованном checkout.</dd></div>
+        <div><dt>Configured/runtime</dt><dd>Named environment и dependencies проходят реальный readback.</dd></div>
+        <div><dt>Business-proven</dt><dd>Контролируемый end-to-end operating scenario имеет accountable acceptance.</dd></div>
+        <div><dt>Customer-validated</dt><dd>Отдельно пройдены real-customer, legal, operational и experience gates.</dd></div>
+      </dl>
+    </section>
+
+    <footer class="footer">
+      <span>IronWrap OS / атлас продукта / разработческое обобщение</span>
+      <span>Canonical sources: Architecture, Operating System, Authority &amp; Evidence, Capability Matrix, Compliance Register</span>
+    </footer>
+  </main>
+</body>
+</html>

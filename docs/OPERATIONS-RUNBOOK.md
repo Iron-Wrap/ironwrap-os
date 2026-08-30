@@ -35,6 +35,21 @@ unauthenticated response is deliberately limited to `{ok}`; send `ADMIN_TOKEN` t
 diagnostic check map. Pair it with targeted smoke evidence for every provider or compatibility
 projection enabled during launch and incidents.
 
+### Cross-service correlation proof
+
+For an approved synthetic Facet event, preserve its immutable `event_id` and search the configured
+Facet, Cloudflare Worker, and Frappe log backends for that exact value. A passing trace contains:
+
+1. one Facet delivery outcome keyed by the event id;
+2. one Worker `http_request_completed` record whose `request_id` is the event id; and
+3. one Frappe `http_request_completed` record whose `request_id` and `envelope_id` are the event id.
+
+Every completion record must contain only the route path, never its query string, and must not
+contain request bodies, authorization headers, credentials, customer contact data, or arbitrary
+exception text. Missing, duplicate, or mismatched records fail the trace. Record the exact release
+SHAs, UTC window, event id, and log-backend query receipts; a local test or synthetic trace is not
+customer proof.
+
 The scheduled `0 14 * * *` reconcile email is also a heartbeat. If no digest arrives, check
 `/admin/status`, the D1 heartbeat row, cron execution, and email delivery before assuming the
 reconcile succeeded.

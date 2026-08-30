@@ -626,6 +626,7 @@ function frappeExecutor(
       try {
         const payload = await sendProjectionRequest(
           env,
+          candidate.event_id,
           claimJson,
           timestamp,
           nonce,
@@ -861,6 +862,7 @@ async function currentNativeAuthorityMatches(
 
 async function sendProjectionRequest(
   env: AppEnv,
+  eventId: string,
   claimJson: string,
   timestamp: string,
   nonce: string,
@@ -892,6 +894,9 @@ async function sendProjectionRequest(
           : {}),
         "content-type": "application/json",
         "user-agent": "ironwrap-facet-design-projection/2.0",
+        "x-request-id": eventId,
+        "x-correlation-id": eventId,
+        "x-ironwrap-envelope-id": eventId,
         "x-ironwrap-facet-projection-timestamp": timestamp,
         "x-ironwrap-facet-projection-nonce": nonce,
         "x-ironwrap-facet-projection-signature": signature,

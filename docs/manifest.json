@@ -165,6 +165,14 @@
       ]
     },
     {
+      "path": "docs/PRE-WORK-PACKAGE-FIELD-EVIDENCE-RULING.md",
+      "class": "component",
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
       "path": "docs/RECORD-DOCUMENTS-READ-CONTRACT.md",
       "class": "component",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]

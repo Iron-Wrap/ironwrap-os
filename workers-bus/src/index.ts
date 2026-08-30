@@ -224,13 +224,18 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const requestId = requestIdFor(req);
+    const startedAt = Date.now();
+    let response: Response;
+    let errorCode: string | null = null;
     try {
-      const response = await routeRequest(req, env, ctx);
-      return withResponseHeaders(response, requestId);
-    } catch (err) {
-      log({ at: "fetch", request_id: requestId, error: String(err) });
-      return withResponseHeaders(json({ error: "internal" }, 500), requestId);
+      response = await routeRequest(withRequestId(req, requestId), env, ctx);
+    } catch {
+      errorCode = "unhandled_exception";
+      response = json({ error: "internal" }, 500);
     }
+    const completed = withResponseHeaders(response, requestId);
+    logRequestCompletion(req, env, completed, requestId, startedAt, errorCode);
+    return completed;
   },
 
   async queue(
@@ -796,7 +801,9 @@ async function handleIngest(
     { source, provider, rawText, contentType: req.headers.get("content-type") },
     log,
   );
-  return result.ok ? json(result.body) : json({ error: result.error }, result.status);
+  const response = result.ok ? json(result.body) : json({ error: result.error }, result.status);
+  if (result.ok) response.headers.set("x-ironwrap-envelope-id", result.body.envelope_id);
+  return response;
 }
 
 // ---------------------------------------------------------------------------- queue work
@@ -1393,6 +1400,44 @@ function requestIdFor(req: Request): string {
     if (supplied && /^[A-Za-z0-9._:-]{8,128}$/.test(supplied)) return supplied;
   }
   return crypto.randomUUID();
+}
+
+function withRequestId(req: Request, requestId: string): Request {
+  const headers = new Headers(req.headers);
+  headers.set("x-request-id", requestId);
+  headers.set("x-correlation-id", requestId);
+  return new Request(req, { headers });
+}
+
+function safeLogIdentifier(value: string | null | undefined): string | null {
+  return value && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : null;
+}
+
+function logRequestCompletion(
+  req: Request,
+  env: Env,
+  response: Response,
+  requestId: string,
+  startedAt: number,
+  errorCode: string | null,
+): void {
+  const route = new URL(req.url).pathname.slice(0, 256);
+  const completionErrorCode =
+    errorCode ?? (response.status >= 500 ? "http_5xx" : null);
+  log({
+    ts: new Date().toISOString(),
+    level: completionErrorCode ? "error" : "info",
+    msg: "http_request_completed",
+    service: "ironwrap-worker",
+    request_id: requestId,
+    tenant: safeLogIdentifier((env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID),
+    method: req.method.slice(0, 16),
+    route,
+    status: response.status,
+    duration_ms: Math.max(0, Date.now() - startedAt),
+    envelope_id: safeLogIdentifier(response.headers.get("x-ironwrap-envelope-id")),
+    error_code: completionErrorCode,
+  });
 }
 
 function withResponseHeaders(response: Response, requestId: string): Response {

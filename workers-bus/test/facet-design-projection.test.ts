@@ -1541,9 +1541,11 @@ function compatibilityProvider(options: {
   fetch: typeof fetch;
   calls: () => number;
   claims: () => Array<Record<string, unknown>>;
+  correlationHeaders: () => Array<Record<string, string | null>>;
 } {
   let callCount = 0;
   const captured: Array<Record<string, unknown>> = [];
+  const capturedHeaders: Array<Record<string, string | null>> = [];
   const seenEvents = new Set<string>();
   return {
     fetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -1552,6 +1554,12 @@ function compatibilityProvider(options: {
       const body = JSON.parse(String(init?.body)) as { facet_claim_json: string };
       const claim = JSON.parse(body.facet_claim_json) as Record<string, unknown>;
       captured.push(claim);
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push({
+        request_id: headers.get("x-request-id"),
+        correlation_id: headers.get("x-correlation-id"),
+        envelope_id: headers.get("x-ironwrap-envelope-id"),
+      });
       await options.beforeResponse?.();
       const eventId = String(claim.event_id);
       const idempotentReplay = options.eventIdempotent === true && seenEvents.has(eventId);
@@ -1572,6 +1580,7 @@ function compatibilityProvider(options: {
     },
     calls: () => callCount,
     claims: () => captured,
+    correlationHeaders: () => capturedHeaders,
   };
 }
 
@@ -1661,6 +1670,11 @@ test("compatibility projection sends the exact signed claim and accepts the sign
       "raw_content_length", "raw_key", "raw_sha256", "reason_sha256", "received_at",
       "roof_job_id", "schema_version", "source_environment", "source_issuer", "source_tenant_id",
     ].sort());
+    assert.deepEqual(provider.correlationHeaders(), [{
+      request_id: EVENT,
+      correlation_id: EVENT,
+      envelope_id: EVENT,
+    }]);
     assert.equal(provider.calls(), 1);
     const effect = db.raw
       .prepare("SELECT state, provider_external_id FROM external_effects WHERE provider = ? AND intent_id = ?")

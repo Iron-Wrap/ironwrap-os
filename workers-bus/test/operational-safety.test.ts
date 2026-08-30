@@ -834,6 +834,78 @@ test("request-id selection rejects unsafe correlation ids and preserves a safe f
   assert.equal(response.headers.get("x-correlation-id"), "request-12345678");
 });
 
+test("each request emits one bounded completion record without query or credential data", async () => {
+  const { env } = fakeEnv();
+  Object.assign(env, { APP_TENANT_ID: "tenant-ironwrap" });
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => lines.push(values.map(String).join(" "));
+  try {
+    const response = await worker.fetch(new Request(
+      "https://bus.example/not-found?token=do-not-log-me",
+      {
+        headers: {
+          authorization: "Bearer do-not-log-me",
+          "x-correlation-id": "event-12345678",
+        },
+      },
+    ), env as never, ctx);
+    assert.equal(response.status, 404);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const completions = lines
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((entry) => entry.msg === "http_request_completed");
+  assert.equal(completions.length, 1);
+  assert.deepEqual(completions[0], {
+    ts: completions[0]?.ts,
+    level: "info",
+    msg: "http_request_completed",
+    service: "ironwrap-worker",
+    request_id: "event-12345678",
+    tenant: "tenant-ironwrap",
+    method: "GET",
+    route: "/not-found",
+    status: 404,
+    duration_ms: completions[0]?.duration_ms,
+    envelope_id: null,
+    error_code: null,
+  });
+  assert.match(String(completions[0]?.ts), /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(Number.isInteger(completions[0]?.duration_ms), true);
+  assert.equal(lines.join("\n").includes("do-not-log-me"), false);
+  assert.ok(lines[0]?.length && lines[0].length < 1_024);
+});
+
+test("handled server failures emit an error completion with a stable code", async () => {
+  const { env } = fakeEnv({ d1Throws: true });
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => lines.push(values.map(String).join(" "));
+  try {
+    const response = await worker.fetch(
+      new Request("https://bus.example/ready", {
+        headers: { "x-request-id": "ready-12345678" },
+      }),
+      env as never,
+      ctx,
+    );
+    assert.equal(response.status, 503);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const completions = lines
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((entry) => entry.msg === "http_request_completed");
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0]?.level, "error");
+  assert.equal(completions[0]?.status, 503);
+  assert.equal(completions[0]?.error_code, "http_5xx");
+});
+
 test("admin status reports heartbeat, operational counts, audit failures, and QB freshness", async () => {
   const { env } = fakeEnv();
   const response = await worker.fetch(new Request("https://bus.example/admin/status?audit_limit=5", {

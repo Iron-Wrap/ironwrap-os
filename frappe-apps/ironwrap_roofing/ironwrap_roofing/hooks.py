@@ -13,6 +13,9 @@ after_install = "ironwrap_roofing.install.after_install"
 before_migrate = "ironwrap_roofing.install.before_migrate"
 after_migrate = "ironwrap_roofing.install.after_migrate"
 
+before_request = ["ironwrap_roofing.request_logging.before_request"]
+after_request = ["ironwrap_roofing.request_logging.after_request"]
+
 doc_events = {
     doctype: {
         "on_trash": "ironwrap_roofing.document_validation.deny_business_document_delete"

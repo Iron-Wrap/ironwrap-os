@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-26
+Last verified: 2026-08-30
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -122,6 +122,23 @@ Every state change must produce an immutable envelope equivalent to:
 ```
 
 Free text may explain a transition but cannot supply missing authority or evidence.
+
+## Cross-service request correlation
+
+`X-Request-ID` is the canonical synchronous HTTP correlation header. Services also accept
+`X-Correlation-ID`; when both are valid, `X-Correlation-ID` wins, and both response headers carry
+the selected value. An accepted value matches `[A-Za-z0-9._:-]{8,128}`; every other value is
+discarded and replaced with a UUID.
+
+At an asynchronous delivery boundary, the immutable event or envelope id becomes the request id.
+Facet, the Worker, and Frappe therefore correlate a durable workflow without inventing unrelated
+per-service identities. Each HTTP boundary emits exactly one bounded JSON completion record with
+timestamp, level, message, service, request id, tenant, method, route path, status, duration,
+envelope id, and a stable error code when applicable. Query strings, request/response bodies,
+authorization values, credentials, contact data, and arbitrary exception text are forbidden.
+
+A correlation match proves only that the named services observed the same synthetic or real
+workflow. It does not prove customer acceptance, business completion, or production readiness.
 
 ## Transition rule
 

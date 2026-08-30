@@ -90,9 +90,25 @@ cd workers-bus && npm run dev          # predev provisions identities + writes b
 deploy/local/start-approval-brokers.sh # starts 9104 + 9103, waits until both answer
 ```
 
-`start-local-runtime.sh` starts them too, as one supervised child, so a full local
-runtime needs no separate command. Set `IRONWRAP_LOCAL_APPROVAL_BROKERS=off` to skip
-them (steps 5 and 6 then have no path to Frappe).
+`start-local-runtime.sh` also starts the approval brokers as one supervised child, so
+a full local write-capable runtime needs no separate broker command. The Hermes MCP
+servers are different: they stay as stdio children of their client process and are
+**not** daemonized by `start-local-runtime.sh`. Set
+`IRONWRAP_LOCAL_APPROVAL_BROKERS=off` to skip the brokers (steps 5 and 6 then have no
+path to Frappe).
+
+When a local MCP client must use the Worker bus, pin one known-free port in the
+parent shell so the launcher and client cannot drift if the default port is busy:
+
+```bash
+export HERMES_BUS_PORT=8787
+export IRONWRAP_BUS_BASE_URL="http://localhost:$HERMES_BUS_PORT"
+bash start-local-runtime.sh
+```
+
+The bus MCP still needs the local-development and authentication variables documented
+in `mcp/ironwrap-bus-mcp/README.md`; the client supplies them when it spawns the stdio
+server.
 
 What makes that work:
 

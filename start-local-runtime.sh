@@ -7,30 +7,7 @@ mkdir -p "$LOG_DIR"
 
 ERPNEXT_STUB_PORT="${ERPNEXT_STUB_PORT:-19090}"
 ERPNEXT_STUB_USER="${ERPNEXT_STUB_USER:-owner@example.com}"
-HERMES_BUS_ROLE="${HERMES_BUS_ROLE:-owner-operator}"
-HERMES_ERP_ROLE="${HERMES_ERP_ROLE:-owner-operator}"
 HERMES_BUS_PORT="${HERMES_BUS_PORT:-8787}"
-HERMES_BUS_ALLOW_INSECURE_LOCAL="${HERMES_BUS_ALLOW_INSECURE_LOCAL:-true}"
-ERPNEXT_BASE_URL="${ERPNEXT_BASE_URL:-http://127.0.0.1:$ERPNEXT_STUB_PORT}"
-ERPNEXT_ALLOW_INSECURE_LOCAL="${ERPNEXT_ALLOW_INSECURE_LOCAL:-true}"
-ERPNEXT_API_KEY="${ERPNEXT_API_KEY:-dummy}"
-ERPNEXT_API_SECRET="${ERPNEXT_API_SECRET:-dummy}"
-ERPNEXT_TENANT_ID="${ERPNEXT_TENANT_ID:-ironwrap}"
-
-WORKERS_DEV_VARS="$ROOT_DIR/workers-bus/.dev.vars"
-if [[ -n "${IRONWRAP_ADMIN_TOKEN:-}" ]]; then
-  BUS_ADMIN_TOKEN="$IRONWRAP_ADMIN_TOKEN"
-elif [[ -f "$WORKERS_DEV_VARS" && -r "$WORKERS_DEV_VARS" ]]; then
-  BUS_ADMIN_TOKEN="$(awk -F= '/^ADMIN_TOKEN=/{print $2}' "$WORKERS_DEV_VARS" | tr -d '\r' | head -n1)"
-else
-  BUS_ADMIN_TOKEN=""
-fi
-
-if [[ -z "$BUS_ADMIN_TOKEN" ]]; then
-  echo "ERROR: IRONWRAP_ADMIN_TOKEN not set and workers-bus/.dev.vars does not provide ADMIN_TOKEN."
-  echo "Set IRONWRAP_ADMIN_TOKEN or populate workers-bus/.dev.vars with ADMIN_TOKEN."
-  exit 1
-fi
 
 PIDS=()
 NAMES=()
@@ -166,25 +143,9 @@ start_service "workers-bus" "$ROOT_DIR/workers-bus" "$LOG_DIR/workers-bus.log" \
 start_service "app" "$ROOT_DIR/app" "$LOG_DIR/app.log" \
   npm run dev -- --host 0.0.0.0
 
-# IronWrap bus MCP
-start_service "ironwrap-bus-mcp" "$ROOT_DIR/mcp/ironwrap-bus-mcp" "$LOG_DIR/ironwrap-bus-mcp.log" \
-  env IRONWRAP_BUS_BASE_URL="$HERMES_BUS_BASE_URL" \
-    IRONWRAP_BUS_ALLOW_INSECURE_LOCAL="$HERMES_BUS_ALLOW_INSECURE_LOCAL" \
-    IRONWRAP_ADMIN_TOKEN="$BUS_ADMIN_TOKEN" \
-    HERMES_AGENT_ROLE="$HERMES_BUS_ROLE" \
-    npm start
-
-# Frappe/ERPNext MCP (local-read-safe mode)
-start_service "erpnext-roofing-mcp" "$ROOT_DIR/mcp/erpnext-roofing-mcp" "$LOG_DIR/erpnext-roofing-mcp.log" \
-  env ERPNEXT_BASE_URL="$ERPNEXT_BASE_URL" \
-    ERPNEXT_TENANT_ID="$ERPNEXT_TENANT_ID" \
-    ERPNEXT_ALLOW_INSECURE_LOCAL="$ERPNEXT_ALLOW_INSECURE_LOCAL" \
-    ERPNEXT_API_KEY="$ERPNEXT_API_KEY" \
-    ERPNEXT_API_SECRET="$ERPNEXT_API_SECRET" \
-    HERMES_AGENT_ROLE="$HERMES_ERP_ROLE" \
-    HERMES_ACTOR_USER="$ERPNEXT_STUB_USER" \
-    HERMES_APPROVER_ID="${HERMES_APPROVER_ID:-$ERPNEXT_STUB_USER}" \
-    npm start
+# MCP servers use stdio, so their client owns their process and pipe lifecycle.
+# Launching them as background services gives them closed stdin and makes them
+# exit cleanly before any client can connect.
 
 # Approval brokers (proposal publication + production schedule)
 # These are the only path to steps 5 and 6 of the six-step workflow. They talk to
@@ -208,6 +169,7 @@ echo "- bus:       $HERMES_BUS_BASE_URL"
 echo "- app:       http://localhost:5173"
 echo "- stub ERP:  http://127.0.0.1:$ERPNEXT_STUB_PORT"
 echo "- brokers:   http://127.0.0.1:9104 (proposal publication), http://127.0.0.1:9103 (production schedule)"
+echo "- MCPs:      spawned on demand by their stdio clients"
 echo "- logs:     $LOG_DIR"
 echo "- stop with Ctrl-C (trap will terminate all child processes)."
 

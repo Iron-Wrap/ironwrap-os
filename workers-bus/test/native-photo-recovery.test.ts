@@ -121,11 +121,11 @@ test("0085 native photo evidence authority is complete in backup and restore con
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    // Pinned to the current migration chain; 0128 added the automation recipient catalog
+    // Pinned to the current migration chain; 0131 adds the action-time authority guard
     // (two tables, two indexes, five guards), and both D1 inventories carry it.
     assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 234);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 354);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 571);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 574);
   }
 
   for (const [name, table] of INDEXES) {

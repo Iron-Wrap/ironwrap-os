@@ -25,6 +25,20 @@ test("0073 and 0075 native Work Package authority are included in both recovery 
       ),
       "utf8",
     ),
+    await readFile(
+      new URL(
+        "../migrations/0130_work_package_assignment_snapshot_guard.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    await readFile(
+      new URL(
+        "../migrations/0131_work_package_action_authority_precondition.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
   ].join("\n");
   const backup = await readFile(
     new URL("../../deploy/backup-d1-to-r2.sh", import.meta.url),
@@ -82,6 +96,9 @@ test("0073 and 0075 native Work Package authority are included in both recovery 
     ["work_packages_projection_guard", "work_packages"],
     ["work_packages_no_delete", "work_packages"],
     ["work_package_events_native_identity_guard", "work_package_events"],
+    ["work_packages_assignment_snapshot_guard", "work_packages"],
+    ["work_packages_assignment_snapshot_immutable", "work_packages"],
+    ["work_package_events_authority_precondition_guard", "work_package_events"],
   ];
   for (const table of tables) {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));

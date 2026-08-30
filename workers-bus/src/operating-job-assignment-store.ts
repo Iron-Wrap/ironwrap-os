@@ -1,4 +1,8 @@
 import type { AppEnv } from "./app-types.ts";
+import {
+  parseAuthorityRequirements,
+  type AuthorityRequirement,
+} from "./authority-records.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 export interface RecordOperatingJobAssignmentInput {
@@ -7,6 +11,7 @@ export interface RecordOperatingJobAssignmentInput {
   expectedRoofJobVersion: number;
   crewId: string;
   expectedCrewVersion: number;
+  authorityRequirements: AuthorityRequirement[];
   scheduledStart: string;
   scheduledEnd?: string | null;
   supersedesAssignmentId?: string | null;
@@ -24,6 +29,9 @@ export interface OperatingJobAssignmentRecord {
   crew_id: string;
   crew_version: number;
   assigned_users: string[];
+  authority_requirements: AuthorityRequirement[] | null;
+  authority_requirements_json: string | null;
+  authority_requirements_sha256: string | null;
   scheduled_start: string;
   scheduled_end: string | null;
   supersedes_assignment_id: string | null;
@@ -36,7 +44,7 @@ export interface OperatingJobAssignmentRecord {
 
 interface AssignmentRow extends Omit<
   OperatingJobAssignmentRecord,
-  "assigned_users"
+  "assigned_users" | "authority_requirements"
 > {
   assigned_users_json: string;
 }
@@ -108,9 +116,10 @@ export async function recordOperatingJobAssignment(
       `INSERT INTO operating_job_assignments (
          assignment_id, tenant_id, roof_job_id, assignment_version, roof_job_version,
          crew_id, crew_version, assigned_users_json, scheduled_start, scheduled_end,
+         authority_requirements_json, authority_requirements_sha256,
          supersedes_assignment_id, correction_reason, actor_user_id,
          command_fingerprint, idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         assignmentId,
@@ -123,6 +132,8 @@ export async function recordOperatingJobAssignment(
         canonicalJson(roster),
         command.scheduled_start,
         command.scheduled_end,
+        canonicalJson(command.authority_requirements),
+        await sha256Hex(canonicalJson(command.authority_requirements)),
         command.supersedes_assignment_id,
         command.correction_reason,
         command.actor_user_id,
@@ -168,7 +179,7 @@ export async function getCurrentOperatingJobAssignment(
       roofJobIdValue(roofJobId),
     )
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
 export async function listCurrentOperatingJobAssignments(
@@ -214,7 +225,7 @@ export async function listCurrentOperatingJobAssignments(
   )
     .bind(...bindings)
     .all<AssignmentRow>();
-  return rows.results.map(fromRow);
+  return await Promise.all(rows.results.map(fromRow));
 }
 
 function normalizedCommand(input: RecordOperatingJobAssignmentInput) {
@@ -240,6 +251,9 @@ function normalizedCommand(input: RecordOperatingJobAssignmentInput) {
     expected_crew_version: positiveInteger(
       input.expectedCrewVersion,
       "operating_job_assignment_crew_version_invalid",
+    ),
+    authority_requirements: parseAuthorityRequirements(
+      input.authorityRequirements,
     ),
     scheduled_start: scheduledStart,
     scheduled_end: scheduledEnd,
@@ -294,7 +308,7 @@ async function assignmentByIdempotency(
   )
     .bind(tenantId, idempotencyKeyHash)
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
 async function assignmentById(
@@ -308,15 +322,25 @@ async function assignmentById(
   )
     .bind(tenantId, assignmentId)
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
-function fromRow(row: AssignmentRow): OperatingJobAssignmentRecord {
+async function fromRow(
+  row: AssignmentRow,
+): Promise<OperatingJobAssignmentRecord> {
   let assignedUsers: unknown;
+  let authorityRequirements: AuthorityRequirement[] | null = null;
+  const authorityRequirementsJson = row.authority_requirements_json ?? null;
+  const authorityRequirementsSha256 = row.authority_requirements_sha256 ?? null;
   try {
     assignedUsers = JSON.parse(row.assigned_users_json);
+    if (authorityRequirementsJson !== null) {
+      authorityRequirements = parseAuthorityRequirements(
+        authorityRequirementsJson,
+      );
+    }
   } catch {
-    fail("operating_job_assignment_roster_corrupt");
+    fail("operating_job_assignment_snapshot_corrupt");
   }
   if (
     !Array.isArray(assignedUsers) ||
@@ -324,8 +348,32 @@ function fromRow(row: AssignmentRow): OperatingJobAssignmentRecord {
   ) {
     fail("operating_job_assignment_roster_corrupt");
   }
+  if (
+    (authorityRequirementsJson === null) !==
+    (authorityRequirementsSha256 === null)
+  ) {
+    fail("operating_job_assignment_snapshot_corrupt");
+  }
+  const canonicalRequirements = authorityRequirements
+    ? canonicalJson(authorityRequirements)
+    : null;
+  if (
+    authorityRequirementsJson !== canonicalRequirements ||
+    (authorityRequirementsSha256 !== null &&
+      (!/^[0-9a-f]{64}$/.test(authorityRequirementsSha256) ||
+        authorityRequirementsSha256 !==
+          (await sha256Hex(canonicalRequirements!))))
+  ) {
+    fail("operating_job_assignment_snapshot_corrupt");
+  }
   const { assigned_users_json: _assignedUsersJson, ...record } = row;
-  return { ...record, assigned_users: assignedUsers };
+  return {
+    ...record,
+    assigned_users: assignedUsers,
+    authority_requirements: authorityRequirements,
+    authority_requirements_json: authorityRequirementsJson,
+    authority_requirements_sha256: authorityRequirementsSha256,
+  };
 }
 
 function replay(

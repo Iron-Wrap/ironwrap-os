@@ -30,6 +30,32 @@ const JOB_ID = "job:schedule:0001";
 const CREW_ID = "crew:schedule:0001";
 const OWNER_ID = "appu_owner_schedule";
 const PRODUCTION_ID = "appu_production_schedule";
+const ROOF_AUTHORITY_REQUIREMENTS = [
+  {
+    authority_record_id: "authority:schedule:worker",
+    subject_type: "Person" as const,
+    subject_role: "Worker" as const,
+    subject_ref: "appu_field_schedule_a",
+    authority_kind: "Worker Competency" as const,
+    scope_type: "Roof Job" as const,
+    scope_ref: JOB_ID,
+    version: 1,
+    state_digest_sha256: "c".repeat(64),
+  },
+];
+const TYPED_AUTHORITY_REQUIREMENTS = [
+  {
+    authority_record_id: "authority:schedule:shop-worker",
+    subject_type: "Person" as const,
+    subject_role: "Worker" as const,
+    subject_ref: "appu_field_schedule_a",
+    authority_kind: "Worker Competency" as const,
+    scope_type: "Field" as const,
+    scope_ref: "SHOP-001",
+    version: 1,
+    state_digest_sha256: "d".repeat(64),
+  },
+];
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
@@ -125,6 +151,7 @@ function request(
     expectedRoofJobVersion: 1,
     crewId: CREW_ID,
     expectedCrewVersion: 1,
+    authorityRequirements: ROOF_AUTHORITY_REQUIREMENTS,
     scheduledStart: "2026-08-24T14:00:00.000Z",
     scheduledEnd: "2026-08-24T22:00:00.000Z",
     supersedesAssignmentId: null,
@@ -145,6 +172,7 @@ function typedRequest(
     physicalContextType: "Shop Floor",
     physicalContextId: "SHOP-FLOOR-1",
     assignedUsers: ["appu_field_schedule_a", "appu_field_schedule_b"],
+    authorityRequirements: TYPED_AUTHORITY_REQUIREMENTS,
     scheduledStart: "2026-08-24T14:00:00.000Z",
     scheduledEnd: "2026-08-24T22:00:00.000Z",
     authorityUserId: PRODUCTION_ID,
@@ -169,6 +197,11 @@ test("native scheduling creates, replays, supersedes, and reads the frozen crew 
       "appu_field_schedule_a",
       "appu_field_schedule_b",
     ]);
+    assert.deepEqual(
+      first.assignment.authority_requirements,
+      ROOF_AUTHORITY_REQUIREMENTS,
+    );
+    assert.match(first.assignment.authority_requirements_sha256, /^[0-9a-f]{64}$/);
     assert.deepEqual(
       await recordOperatingJobAssignment(appEnv, firstInput, NOW),
       {
@@ -250,6 +283,29 @@ test("native scheduling creates, replays, supersedes, and reads the frozen crew 
           )
           .run(second.assignment.assignment_id),
       /operating_job_assignments_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("roof assignment read rejects an authority snapshot hash mismatch", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  try {
+    await recordOperatingJobAssignment(appEnv, request(), NOW);
+    db.raw.exec("DROP TRIGGER operating_job_assignments_append_only_update");
+    db.raw
+      .prepare(
+        `UPDATE operating_job_assignments
+            SET authority_requirements_sha256 = ?
+          WHERE tenant_id = ? AND roof_job_id = ?`,
+      )
+      .run("f".repeat(64), TENANT, JOB_ID);
+
+    await assert.rejects(
+      getCurrentOperatingJobAssignment(appEnv, TENANT, JOB_ID),
+      errorCode("operating_job_assignment_snapshot_corrupt"),
     );
   } finally {
     db.close();
@@ -416,6 +472,10 @@ test("typed physical assignments exist before a Work Package and freeze native a
       "appu_field_schedule_b",
     ]);
     assert.deepEqual(
+      first.assignment.authority_requirements,
+      TYPED_AUTHORITY_REQUIREMENTS,
+    );
+    assert.deepEqual(
       await recordOperatingWorkObjectAssignment(appEnv, firstInput, NOW),
       { kind: "replayed", assignment: first.assignment },
     );
@@ -484,6 +544,36 @@ test("typed physical assignments exist before a Work Package and freeze native a
           )
           .run(second.assignment.assignment_id),
       /operating_work_object_assignments_append_only/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("typed assignment read rejects an authority snapshot hash mismatch", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  try {
+    await recordOperatingWorkObjectAssignment(appEnv, typedRequest(), NOW);
+    db.raw.exec(
+      "DROP TRIGGER operating_work_object_assignments_append_only_update",
+    );
+    db.raw
+      .prepare(
+        `UPDATE operating_work_object_assignments
+            SET authority_requirements_sha256 = ?
+          WHERE tenant_id = ? AND work_object_type = ? AND work_object_id = ?`,
+      )
+      .run("e".repeat(64), TENANT, "Shop Order", "SHOP-001");
+
+    await assert.rejects(
+      getCurrentOperatingWorkObjectAssignment(appEnv, TENANT, {
+        workObjectType: "Shop Order",
+        workObjectId: "SHOP-001",
+        physicalContextType: "Shop Floor",
+        physicalContextId: "SHOP-FLOOR-1",
+      }),
+      errorCode("operating_work_object_assignment_snapshot_corrupt"),
     );
   } finally {
     db.close();
@@ -591,6 +681,7 @@ test("authenticated production scheduling writes native authority without Frappe
       expected_roof_job_version: 1,
       crew_id: CREW_ID,
       expected_crew_version: 1,
+      authority_requirements: ROOF_AUTHORITY_REQUIREMENTS,
       scheduled_start: "2026-08-24T14:00:00.000Z",
       scheduled_end: "2026-08-24T22:00:00.000Z",
       supersedes_assignment_id: null,
@@ -667,6 +758,7 @@ test("authenticated typed scheduling writes native authority without Frappe", as
   try {
     const body = JSON.stringify({
       assigned_users: ["appu_field_schedule_a", "appu_field_schedule_b"],
+      authority_requirements: TYPED_AUTHORITY_REQUIREMENTS,
       scheduled_start: "2026-08-24T14:00:00.000Z",
       scheduled_end: "2026-08-24T22:00:00.000Z",
       authority_user_id: PRODUCTION_ID,

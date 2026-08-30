@@ -5,6 +5,14 @@ import type {
   WorkObjectScope,
 } from "./app-types.ts";
 import {
+  authorityCurrentPrecondition,
+  parseAuthorityRequirements,
+  resolveAuthorityRequirement,
+  type AuthorityCurrentPrecondition,
+  type AuthorityLifecycleDenial,
+  type AuthorityRequirement,
+} from "./authority-records.ts";
+import {
   FieldActionError,
   type FieldEvidenceAuthorization,
   type FieldSubmission,
@@ -112,12 +120,77 @@ export interface FieldWorkPackage {
   }>;
   /** Present on current packets. Missing means a legacy fixture/cache; it never grants start. */
   assignedWorkers?: FieldWorkPackageWorker[];
+  /** Frozen at issue time. Missing or invalid state never grants a non-stop action. */
+  authorityRequirements?: AuthorityRequirement[];
+  authorityRequirementsState?: "current" | "missing" | "invalid";
   workerRosterKnown?: boolean;
   acknowledgementLedgerAvailable?: boolean;
   acknowledgements?: FieldWorkPackageAcknowledgement[];
   evidenceLedgerAvailable?: boolean;
   evidence?: FieldWorkPackageEvidence[];
   modified: string | null;
+}
+
+/**
+ * Resolve the immutable package requirements against the current authority
+ * ledger. This single fail-closed helper is shared by write gates and read
+ * projections so the UI never advertises an action the command will deny.
+ */
+export async function currentWorkPackageAuthorityDenials(
+  env: AppEnv,
+  tenantId: string,
+  workPackage: FieldWorkPackage,
+  now: string,
+): Promise<AuthorityLifecycleDenial[]> {
+  return (
+    await currentWorkPackageAuthorityResolution(env, tenantId, workPackage, now)
+  ).denials;
+}
+
+export interface CurrentWorkPackageAuthorityResolution {
+  denials: AuthorityLifecycleDenial[];
+  preconditions: AuthorityCurrentPrecondition[];
+}
+
+/** Resolve current authority and retain the exact accepted D1 lifecycle heads. */
+export async function currentWorkPackageAuthorityResolution(
+  env: AppEnv,
+  tenantId: string,
+  workPackage: FieldWorkPackage,
+  now: string,
+): Promise<CurrentWorkPackageAuthorityResolution> {
+  if (workPackage.authorityRequirementsState === "invalid") {
+    return { denials: ["authority_unverifiable"], preconditions: [] };
+  }
+  if (
+    workPackage.authorityRequirementsState !== "current" ||
+    !workPackage.authorityRequirements?.length
+  ) {
+    return { denials: ["authority_missing"], preconditions: [] };
+  }
+  const denials = new Set<AuthorityLifecycleDenial>();
+  const preconditions: AuthorityCurrentPrecondition[] = [];
+  try {
+    for (const requirement of workPackage.authorityRequirements) {
+      const verdict = await resolveAuthorityRequirement(env, {
+        tenantId,
+        now,
+        requirement,
+      });
+      if (!verdict.ok) {
+        denials.add(verdict.code ?? "authority_unverifiable");
+      } else if (!verdict.current) {
+        denials.add("authority_unverifiable");
+      } else {
+        preconditions.push(
+          authorityCurrentPrecondition(requirement, verdict.current),
+        );
+      }
+    }
+  } catch {
+    return { denials: ["authority_unavailable"], preconditions: [] };
+  }
+  return { denials: [...denials], preconditions };
 }
 
 /** Match the actor against the immutable authority captured by a typed assignment. */
@@ -547,6 +620,8 @@ export function fieldWorkPackageProjection(
      * safety state may make a stop harder to reach than it already is.
      */
     safetyBlockers?: SafetyBlocker[];
+    /** Current fail-closed authority denials; stop_work remains reachable. */
+    authorityDenials?: AuthorityLifecycleDenial[];
   } = {},
 ): {
   work_package: {
@@ -620,6 +695,7 @@ export function fieldWorkPackageProjection(
       released: boolean;
     }>;
     safety_blockers: SafetyBlocker[];
+    authority_denials: AuthorityLifecycleDenial[];
   } | null;
   allowedActions: string[];
 } {
@@ -717,6 +793,8 @@ export function fieldWorkPackageProjection(
   });
   const safetyBlockers = options.safetyBlockers ?? [];
   const safetyBlocked = safetyBlockers.length > 0;
+  const authorityDenials = options.authorityDenials ?? [];
+  const authorityBlocked = authorityDenials.length > 0;
   const allowedActions = [
     ...((workPackage.status === "Released" ||
       workPackage.status === "Acknowledged") &&
@@ -751,7 +829,9 @@ export function fieldWorkPackageProjection(
       : []),
     ...(completionReady ? ["work_package.complete"] : []),
   ].filter(
-    (action) => !safetyBlocked || action === "work_package.stop_work",
+    (action) =>
+      (!safetyBlocked && !authorityBlocked) ||
+      action === "work_package.stop_work",
   );
   return {
     work_package: {
@@ -828,6 +908,7 @@ export function fieldWorkPackageProjection(
         released: holdPoint.released,
       })),
       safety_blockers: safetyBlockers,
+      authority_denials: authorityDenials,
     },
     allowedActions,
   };
@@ -937,6 +1018,7 @@ function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
       return null;
     }
   }
+  const authority = fieldWorkPackageAuthority(row);
   return {
     name,
     id,
@@ -963,6 +1045,8 @@ function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
     steps,
     holdPoints,
     assignedWorkers,
+    authorityRequirements: authority.requirements,
+    authorityRequirementsState: authority.state,
     workerRosterKnown,
     acknowledgementLedgerAvailable: false,
     acknowledgements: [],
@@ -970,6 +1054,31 @@ function fieldWorkPackage(row: FrappeRow): FieldWorkPackage | null {
     evidence: [],
     modified: text(row.modified),
   };
+}
+
+function fieldWorkPackageAuthority(row: FrappeRow): {
+  requirements?: AuthorityRequirement[];
+  state: "current" | "missing" | "invalid";
+} {
+  if (!Object.hasOwn(row, "authority_requirements_json")) {
+    return { state: "missing" };
+  }
+  if (
+    typeof row.authority_requirements_json !== "string" ||
+    !row.authority_requirements_json.trim()
+  ) {
+    return { state: "invalid" };
+  }
+  try {
+    return {
+      requirements: parseAuthorityRequirements(
+        row.authority_requirements_json,
+      ),
+      state: "current",
+    };
+  } catch {
+    return { state: "invalid" };
+  }
 }
 
 async function workPackageSupersession(

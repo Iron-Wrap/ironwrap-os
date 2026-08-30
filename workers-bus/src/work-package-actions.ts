@@ -11,10 +11,13 @@ import {
   type ImmutableObjectStore,
 } from "./field-actions.ts";
 import type { FrappeRow } from "./frappe-read.ts";
+import type { AuthorityCurrentPrecondition } from "./authority-records.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
+import type { SafetyBlocker } from "./safety-lifecycle.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
+  currentWorkPackageAuthorityResolution,
   hasWorkPackageCompletionAuthority,
 } from "./work-package.ts";
 import {
@@ -132,6 +135,7 @@ export interface PersistWorkPackageActionInput {
   physicalContextType: string | null;
   physicalContextId: string | null;
   manifestKey?: string | null;
+  authorityPreconditions: AuthorityCurrentPrecondition[];
 }
 
 export interface WorkPackageCommandWriter {
@@ -146,6 +150,7 @@ export interface ProcessWorkPackageActionDependencies {
   native: WorkPackageCommandWriter;
   now?: () => Date;
   randomId?: () => string;
+  authorityPreconditions?: AuthorityCurrentPrecondition[];
 }
 
 /**
@@ -187,18 +192,36 @@ export async function handleWorkPackageAction(
       scope,
     );
     const store = d1WorkPackageActionStore(env);
-    const existing = await store.find(await actionIdentity(submission, auth));
+    const identity = await actionIdentity(submission, auth);
+    let existing = await store.find(identity);
     if (existing?.state === "verified")
       return workPackageJson(existing.response);
-    // A first submission must be a currently allowed action. Once the same
-    // scoped device action is durable, a lost response can safely replay the
-    // exact native event after that event changed the package state.
-    if (existing?.state !== "matching")
-      await assertCurrentActionAllowed(env, auth, submission, assignment);
+    // Reconcile the native append-only fact first: a response can be lost
+    // after that fact commits but before the receipt becomes verified. A
+    // merely claimed/retryable row has no such authority; it must pass the
+    // current safety and authority gates again before reclamation.
+    if (existing?.state === "matching") {
+      await reconcileNativeWorkPackageActions(
+        env,
+        auth.session.tenant_id,
+        new Date().toISOString(),
+        1,
+        submission.deviceActionId,
+      );
+      existing = await store.find(identity);
+      if (existing?.state === "verified") {
+        return workPackageJson(existing.response);
+      }
+    }
+    const authorityPreconditions =
+      existing?.state !== "mismatch"
+        ? await assertCurrentActionAllowed(env, auth, submission, assignment)
+        : [];
     const response = await processWorkPackageAction(submission, auth, {
       store,
       objects: r2ObjectStore(env.RAW),
       native: nativeWorkPackageWriter(env),
+      authorityPreconditions,
     });
     return workPackageJson(response);
   } catch (error) {
@@ -482,6 +505,7 @@ export async function processWorkPackageAction(
       physicalContextType: submission.payload.physical_context_type ?? null,
       physicalContextId: submission.payload.physical_context_id ?? null,
       manifestKey,
+      authorityPreconditions: dependencies.authorityPreconditions ?? [],
     });
     const response: VerifiedWorkPackageActionResponse = {
       device_action_id: submission.deviceActionId,
@@ -520,11 +544,25 @@ export function nativeWorkPackageWriter(env: AppEnv): WorkPackageCommandWriter {
     async persistAction(input) {
       if (!input.actorRole) throw new Error("work_package_actor_role_missing");
       if (!input.manifestKey) throw new Error("work_package_manifest_missing");
-      return await nativeWorkPackageAction(env, {
-        ...input,
-        actorRole: input.actorRole,
-        manifestKey: input.manifestKey,
-      });
+      try {
+        return await nativeWorkPackageAction(env, {
+          ...input,
+          actorRole: input.actorRole,
+          manifestKey: input.manifestKey,
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "work_package_authority_precondition_stale"
+        ) {
+          throw new FieldActionError(
+            "authority_release_blocked",
+            409,
+            "Authority readiness changed before this action could be committed.",
+          );
+        }
+        throw error;
+      }
     },
   };
 }
@@ -534,7 +572,7 @@ async function assertCurrentActionAllowed(
   auth: AuthContext,
   submission: WorkPackageActionSubmission,
   assignment: FrappeRow,
-): Promise<void> {
+): Promise<AuthorityCurrentPrecondition[]> {
   const workPackage = await fieldWorkPackageForAssignment(
     env,
     submission.jobId,
@@ -559,26 +597,45 @@ async function assertCurrentActionAllowed(
     start_work: "work_package.start",
     complete_work: "work_package.complete",
   } satisfies Record<WorkPackageActionKind, string>;
-  // Stopping work never consults safety readiness. Every other action does, and
-  // a release decision records the immutable snapshot of what it saw.
-  const safetyBlockers =
-    submission.kind === "stop_work"
-      ? []
-      : (
-          await safetyReleaseGate(env, {
-            tenantId: auth.session.tenant_id,
-            scope: {
-              type: "work_package",
-              id: submission.payload.work_package_id,
-            },
-            jobId: submission.jobId,
-            subjectUserIds: [auth.session.user_id],
-            consumer: "work_package_release",
-            evaluatedByUserId: auth.session.user_id,
-            decisionRef: `${submission.deviceActionId}:${submission.kind}`,
-            now: new Date().toISOString(),
-          })
-        ).readiness.blockers;
+  // Stopping work never consults authority or safety readiness. Every other
+  // action re-evaluates both current control planes before any command claim.
+  let safetyBlockers: SafetyBlocker[] = [];
+  let authorityPreconditions: AuthorityCurrentPrecondition[] = [];
+  if (submission.kind !== "stop_work") {
+    const evaluatedAt = new Date().toISOString();
+    const authority = await currentWorkPackageAuthorityResolution(
+      env,
+      auth.session.tenant_id,
+      workPackage,
+      evaluatedAt,
+    );
+    const authorityDenials = authority.denials;
+    if (authorityDenials.length > 0) {
+      const unavailable = authorityDenials.includes("authority_unavailable");
+      throw new FieldActionError(
+        "authority_release_blocked",
+        unavailable ? 503 : 409,
+        `Authority readiness blocks this action: ${authorityDenials.join(", ")}.`,
+        unavailable ? 5 : undefined,
+      );
+    }
+    authorityPreconditions = authority.preconditions;
+    safetyBlockers = (
+      await safetyReleaseGate(env, {
+        tenantId: auth.session.tenant_id,
+        scope: {
+          type: "work_package",
+          id: submission.payload.work_package_id,
+        },
+        jobId: submission.jobId,
+        subjectUserIds: [auth.session.user_id],
+        consumer: "work_package_release",
+        evaluatedByUserId: auth.session.user_id,
+        decisionRef: `${submission.deviceActionId}:${submission.kind}`,
+        now: evaluatedAt,
+      })
+    ).readiness.blockers;
+  }
   const actorUsers = appUserIdentities(auth.session);
   if (
     !fieldWorkPackageProjection(
@@ -592,6 +649,7 @@ async function assertCurrentActionAllowed(
           auth.session.role,
         ),
         safetyBlockers,
+        authorityDenials: [],
       },
     ).allowedActions.includes(capability[submission.kind])
   ) {
@@ -607,6 +665,7 @@ async function assertCurrentActionAllowed(
         : "That work-package action is no longer allowed.",
     );
   }
+  return authorityPreconditions;
 }
 
 function d1WorkPackageActionStore(env: AppEnv): WorkPackageActionStore {

@@ -1,4 +1,8 @@
 import type { AppEnv } from "./app-types.ts";
+import {
+  parseAuthorityRequirements,
+  type AuthorityRequirement,
+} from "./authority-records.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 export type OperatingWorkObjectAuthorityRole = "owner" | "production";
@@ -13,6 +17,7 @@ export interface OperatingWorkObjectScope {
 export interface RecordOperatingWorkObjectAssignmentInput extends OperatingWorkObjectScope {
   tenantId: string;
   assignedUsers: string[];
+  authorityRequirements: AuthorityRequirement[];
   scheduledStart: string;
   scheduledEnd?: string | null;
   authorityUserId: string;
@@ -32,6 +37,9 @@ export interface OperatingWorkObjectAssignmentRecord {
   physical_context_id: string;
   assignment_version: number;
   assigned_users: string[];
+  authority_requirements: AuthorityRequirement[] | null;
+  authority_requirements_json: string | null;
+  authority_requirements_sha256: string | null;
   scheduled_start: string;
   scheduled_end: string | null;
   authority_user_id: string;
@@ -46,7 +54,7 @@ export interface OperatingWorkObjectAssignmentRecord {
 
 interface AssignmentRow extends Omit<
   OperatingWorkObjectAssignmentRecord,
-  "assigned_users"
+  "assigned_users" | "authority_requirements"
 > {
   assigned_users_json: string;
 }
@@ -116,10 +124,11 @@ export async function recordOperatingWorkObjectAssignment(
          assignment_id, tenant_id, work_object_type, work_object_id,
          physical_context_type, physical_context_id, assignment_version,
          assigned_users_json, scheduled_start, scheduled_end,
+         authority_requirements_json, authority_requirements_sha256,
          authority_user_id, authority_role, supersedes_assignment_id,
          correction_reason, actor_user_id, command_fingerprint,
          idempotency_key_hash, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         assignmentId,
@@ -132,6 +141,8 @@ export async function recordOperatingWorkObjectAssignment(
         canonicalJson(command.assigned_users),
         command.scheduled_start,
         command.scheduled_end,
+        canonicalJson(command.authority_requirements),
+        await sha256Hex(canonicalJson(command.authority_requirements)),
         command.authority_user_id,
         command.authority_role,
         command.supersedes_assignment_id,
@@ -186,7 +197,7 @@ export async function getCurrentOperatingWorkObjectAssignment(
       normalized.physical_context_id,
     )
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
 export async function listCurrentOperatingWorkObjectAssignments(
@@ -253,7 +264,7 @@ export async function listCurrentOperatingWorkObjectAssignments(
   )
     .bind(...bindings)
     .all<AssignmentRow>();
-  return rows.results.map(fromRow);
+  return await Promise.all(rows.results.map(fromRow));
 }
 
 function normalizedCommand(input: RecordOperatingWorkObjectAssignmentInput) {
@@ -276,6 +287,9 @@ function normalizedCommand(input: RecordOperatingWorkObjectAssignmentInput) {
     tenant_id: tenant(input.tenantId),
     ...scope,
     assigned_users: assignedUsers,
+    authority_requirements: parseAuthorityRequirements(
+      input.authorityRequirements,
+    ),
     scheduled_start: scheduledStart,
     scheduled_end: scheduledEnd,
     authority_user_id: entityId(
@@ -352,7 +366,7 @@ async function assignmentByIdempotency(
   )
     .bind(tenantId, idempotencyKeyHash)
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
 async function assignmentById(
@@ -366,15 +380,25 @@ async function assignmentById(
   )
     .bind(tenantId, assignmentId)
     .first<AssignmentRow>();
-  return row ? fromRow(row) : null;
+  return row ? await fromRow(row) : null;
 }
 
-function fromRow(row: AssignmentRow): OperatingWorkObjectAssignmentRecord {
+async function fromRow(
+  row: AssignmentRow,
+): Promise<OperatingWorkObjectAssignmentRecord> {
   let assignedUsers: unknown;
+  let authorityRequirements: AuthorityRequirement[] | null = null;
+  const authorityRequirementsJson = row.authority_requirements_json ?? null;
+  const authorityRequirementsSha256 = row.authority_requirements_sha256 ?? null;
   try {
     assignedUsers = JSON.parse(row.assigned_users_json);
+    if (authorityRequirementsJson !== null) {
+      authorityRequirements = parseAuthorityRequirements(
+        authorityRequirementsJson,
+      );
+    }
   } catch {
-    fail("operating_work_object_assignment_roster_corrupt");
+    fail("operating_work_object_assignment_snapshot_corrupt");
   }
   if (
     !Array.isArray(assignedUsers) ||
@@ -382,8 +406,32 @@ function fromRow(row: AssignmentRow): OperatingWorkObjectAssignmentRecord {
   ) {
     fail("operating_work_object_assignment_roster_corrupt");
   }
+  if (
+    (authorityRequirementsJson === null) !==
+    (authorityRequirementsSha256 === null)
+  ) {
+    fail("operating_work_object_assignment_snapshot_corrupt");
+  }
+  const canonicalRequirements = authorityRequirements
+    ? canonicalJson(authorityRequirements)
+    : null;
+  if (
+    authorityRequirementsJson !== canonicalRequirements ||
+    (authorityRequirementsSha256 !== null &&
+      (!/^[0-9a-f]{64}$/.test(authorityRequirementsSha256) ||
+        authorityRequirementsSha256 !==
+          (await sha256Hex(canonicalRequirements!))))
+  ) {
+    fail("operating_work_object_assignment_snapshot_corrupt");
+  }
   const { assigned_users_json: _assignedUsersJson, ...record } = row;
-  return { ...record, assigned_users: assignedUsers };
+  return {
+    ...record,
+    assigned_users: assignedUsers,
+    authority_requirements: authorityRequirements,
+    authority_requirements_json: authorityRequirementsJson,
+    authority_requirements_sha256: authorityRequirementsSha256,
+  };
 }
 
 function replay(

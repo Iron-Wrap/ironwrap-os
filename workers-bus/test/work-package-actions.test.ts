@@ -913,6 +913,7 @@ test("work-package action writes immutable raw evidence before one native comman
     physicalContextType: null,
     physicalContextId: null,
     manifestKey,
+    authorityPreconditions: [],
   });
 });
 

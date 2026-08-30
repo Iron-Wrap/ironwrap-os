@@ -56,6 +56,7 @@ import {
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
+  currentWorkPackageAuthorityDenials,
   hasWorkPackageCompletionAuthority,
   nativeFieldWorkPackageForAssignment,
   type FieldWorkPackage,
@@ -1147,6 +1148,24 @@ export async function buildUniversalWorkPackageReadModel(
   ) {
     return null;
   }
+  const evaluatedAt = new Date().toISOString();
+  const [safetyBlockers, authorityDenials] = workPackage
+    ? await Promise.all([
+        safetyReadinessForScope(env, {
+          tenantId: auth.session.tenant_id,
+          scope: { type: "work_package", id: workPackage.id },
+          jobId: scope.workObjectId,
+          subjectUserIds: [auth.session.user_id],
+          now: evaluatedAt,
+        }).then((readiness) => readiness.blockers),
+        currentWorkPackageAuthorityDenials(
+          env,
+          auth.session.tenant_id,
+          workPackage,
+          evaluatedAt,
+        ),
+      ])
+    : [[], []];
   const projection = fieldWorkPackageProjection(
     workPackage,
     jobReadMode(auth) === "assigned" ? appUserIdentities(auth.session) : null,
@@ -1160,17 +1179,8 @@ export async function buildUniversalWorkPackageReadModel(
       completionActorUser: appUserIdentities(auth.session),
       // The device must see the same verdict the action endpoint will apply, so
       // a blocked crew is told why instead of being refused after tapping.
-      safetyBlockers: workPackage
-        ? (
-            await safetyReadinessForScope(env, {
-              tenantId: auth.session.tenant_id,
-              scope: { type: "work_package", id: workPackage.id },
-              jobId: scope.workObjectId,
-              subjectUserIds: [auth.session.user_id],
-              now: new Date().toISOString(),
-            })
-          ).blockers
-        : [],
+      safetyBlockers,
+      authorityDenials,
     },
   );
   const allowedActions = [...projection.allowedActions];
@@ -1587,6 +1597,24 @@ export async function buildJobReadModel(
     .map(evidenceProofItem)
     .filter(notNull)
     .sort(compareProofItems);
+  const workPackageEvaluatedAt = new Date().toISOString();
+  const [workPackageSafetyBlockers, workPackageAuthorityDenials] = workPackage
+    ? await Promise.all([
+        safetyReadinessForScope(env, {
+          tenantId: auth.session.tenant_id,
+          scope: { type: "work_package", id: workPackage.id },
+          jobId: jobName,
+          subjectUserIds: [auth.session.user_id],
+          now: workPackageEvaluatedAt,
+        }).then((readiness) => readiness.blockers),
+        currentWorkPackageAuthorityDenials(
+          env,
+          auth.session.tenant_id,
+          workPackage,
+          workPackageEvaluatedAt,
+        ),
+      ])
+    : [[], []];
   const workPackagePacket = fieldWorkPackageProjection(
     workPackage,
     readMode === "assigned" ? appUserIdentities(auth.session) : null,
@@ -1598,17 +1626,8 @@ export async function buildJobReadModel(
         auth.session.role,
       ),
       completionActorUser: appUserIdentities(auth.session),
-      safetyBlockers: workPackage
-        ? (
-            await safetyReadinessForScope(env, {
-              tenantId: auth.session.tenant_id,
-              scope: { type: "work_package", id: workPackage.id },
-              jobId: jobName,
-              subjectUserIds: [auth.session.user_id],
-              now: new Date().toISOString(),
-            })
-          ).blockers
-        : [],
+      safetyBlockers: workPackageSafetyBlockers,
+      authorityDenials: workPackageAuthorityDenials,
     },
   );
   const stale = [
@@ -3272,6 +3291,9 @@ function nativeOperatingAssignmentRow(
       worker_role: "Field Worker",
       required: 1,
     })),
+    authority_requirements_json: row.authority_requirements_json,
+    authority_requirements_sha256: row.authority_requirements_sha256,
+    assignment_command_fingerprint: row.command_fingerprint,
     scheduled_start: row.scheduled_start,
     scheduled_end: row.scheduled_end,
     blocker_reason: null,
@@ -3331,6 +3353,9 @@ function nativeOperatingWorkObjectAssignmentRow(
       worker_role: "Field Worker",
       required: 1,
     })),
+    authority_requirements_json: row.authority_requirements_json,
+    authority_requirements_sha256: row.authority_requirements_sha256,
+    assignment_command_fingerprint: row.command_fingerprint,
     work_object_type: row.work_object_type,
     work_object_id: row.work_object_id,
     physical_context_type: row.physical_context_type,

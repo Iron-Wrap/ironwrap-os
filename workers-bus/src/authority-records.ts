@@ -36,6 +36,55 @@ export type AuthorityLifecycleDenial =
   | "authority_jurisdiction_mismatch"
   | "authority_unverifiable";
 
+export interface AuthorityRequirement {
+  authority_record_id?: string;
+  subject_type: "Person" | "Organization";
+  subject_role?: "Worker" | "Subcontractor";
+  subject_ref: string;
+  authority_kind:
+    | "Worker Competency"
+    | "Trade Licence"
+    | "WCB Clearance"
+    | "Insurance Certificate"
+    | "Permit"
+    | "Inspection"
+    | "Manufacturer Certification"
+    | "Manufacturer Bulletin";
+  authority_scope?: string;
+  scope_type:
+    | "Tenant"
+    | "Roof Job"
+    | "Assignment"
+    | "Work Package"
+    | "Shop"
+    | "Field"
+    | "Trade"
+    | "Manufacturer System";
+  scope_ref: string;
+  issuer_name?: string;
+  issuer_jurisdiction?: string;
+  issuer_reference?: string;
+  source_version?: string;
+  version?: number;
+  state_digest_sha256?: string;
+}
+
+/**
+ * Exact authority fact accepted for one frozen requirement. Commands carry
+ * this bounded witness to D1 so the event trigger can prove that the same
+ * lifecycle head is still current at append time.
+ */
+export interface AuthorityCurrentPrecondition {
+  requirement: AuthorityRequirement;
+  current: {
+    readback_id: string;
+    authority_record_id: string;
+    authority_version: number;
+    authority_state_digest_sha256: string;
+    observation_fingerprint_sha256: string;
+  };
+}
+
 export const EXTERNAL_ISSUER_AUTHORITY_KINDS = new Set([
   "Trade Licence",
   "WCB Clearance",
@@ -63,6 +112,44 @@ export const AUTHORITY_VERIFICATION_METHODS = new Set([
 ]);
 
 const MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS = 32;
+const MAX_AUTHORITY_REQUIREMENTS = 20;
+const MAX_AUTHORITY_REQUIREMENTS_BYTES = 20_000;
+const AUTHORITY_REQUIREMENT_KEYS = new Set([
+  "authority_record_id",
+  "subject_type",
+  "subject_role",
+  "subject_ref",
+  "authority_kind",
+  "authority_scope",
+  "scope_type",
+  "scope_ref",
+  "issuer_name",
+  "issuer_jurisdiction",
+  "issuer_reference",
+  "source_version",
+  "version",
+  "state_digest_sha256",
+]);
+const AUTHORITY_REQUIREMENT_KINDS = new Set<AuthorityRequirement["authority_kind"]>([
+  "Worker Competency",
+  "Trade Licence",
+  "WCB Clearance",
+  "Insurance Certificate",
+  "Permit",
+  "Inspection",
+  "Manufacturer Certification",
+  "Manufacturer Bulletin",
+]);
+const AUTHORITY_REQUIREMENT_SCOPE_TYPES = new Set<AuthorityRequirement["scope_type"]>([
+  "Tenant",
+  "Roof Job",
+  "Assignment",
+  "Work Package",
+  "Shop",
+  "Field",
+  "Trade",
+  "Manufacturer System",
+]);
 
 export interface AuthorityRecordAction {
   action_id: string;
@@ -215,9 +302,37 @@ export interface AuthorityLifecycleExpectation {
   scopeRef?: string | null;
   roofJob?: string | null;
   scopeJson?: string | null;
+  issuerName?: string | null;
   issuerReference?: string | null;
   issuerSourceVersion?: string | null;
   issuerJurisdiction?: string | null;
+}
+
+export function parseAuthorityRequirements(value: unknown): AuthorityRequirement[] {
+  let parsed = value;
+  if (typeof value === "string") {
+    if (new TextEncoder().encode(value).byteLength > MAX_AUTHORITY_REQUIREMENTS_BYTES) {
+      throw new Error("authority_requirements_invalid");
+    }
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch {
+      throw new Error("authority_requirements_invalid");
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > MAX_AUTHORITY_REQUIREMENTS) {
+    throw new Error("authority_requirements_invalid");
+  }
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(parsed);
+  } catch {
+    throw new Error("authority_requirements_invalid");
+  }
+  if (new TextEncoder().encode(encoded).byteLength > MAX_AUTHORITY_REQUIREMENTS_BYTES) {
+    throw new Error("authority_requirements_invalid");
+  }
+  return parsed.map((raw) => parseAuthorityRequirement(raw));
 }
 
 export interface AuthorityLifecycleVerdict {
@@ -225,6 +340,22 @@ export interface AuthorityLifecycleVerdict {
   code: null | AuthorityLifecycleDenial;
   current: AuthorityRecordReadback | null;
   requested: AuthorityRecordReadback | null;
+}
+
+export function authorityCurrentPrecondition(
+  requirement: AuthorityRequirement,
+  current: AuthorityRecordReadback,
+): AuthorityCurrentPrecondition {
+  return {
+    requirement: parseAuthorityRequirements([requirement])[0]!,
+    current: {
+      readback_id: current.readback_id,
+      authority_record_id: current.authority_record_id,
+      authority_version: current.authority_version,
+      authority_state_digest_sha256: current.authority_state_digest_sha256,
+      observation_fingerprint_sha256: current.observation_fingerprint_sha256,
+    },
+  };
 }
 
 const TENANT_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -579,6 +710,107 @@ export async function currentAuthorityReadback(
   return verdict.ok ? verdict.current : null;
 }
 
+export async function resolveAuthorityRequirement(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    now: string;
+    requirement: AuthorityRequirement;
+  },
+): Promise<AuthorityLifecycleVerdict> {
+  const requirement = parseAuthorityRequirements([input.requirement])[0]!;
+  validateLifecycleExpectation({ tenantId: input.tenantId, now: input.now });
+  const roots = await authorityReadbacksByRequirement(
+    env,
+    input.tenantId,
+    requirement,
+  );
+  if (roots.length === 0) {
+    return { ok: false, code: "authority_missing", current: null, requested: null };
+  }
+  if (roots.length > MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS) {
+    return { ok: false, code: "authority_ambiguous", current: null, requested: null };
+  }
+
+  const latestByRecord = new Map<string, AuthorityRecordReadback>();
+  for (const root of roots) {
+    if (!latestByRecord.has(root.authority_record_id)) {
+      latestByRecord.set(root.authority_record_id, root);
+    }
+  }
+  const expectation: AuthorityLifecycleExpectation = {
+    tenantId: input.tenantId,
+    now: input.now,
+    subjectType: requirement.subject_type,
+    subjectRole: requirement.subject_role,
+    ...(requirement.subject_type === "Person"
+      ? { personUser: requirement.subject_ref }
+      : { organization: requirement.subject_ref }),
+    authorityKind: requirement.authority_kind,
+    authorityScope: requirement.authority_scope,
+    scopeType: requirement.scope_type,
+    scopeRef: requirement.scope_ref,
+    issuerName: requirement.issuer_name,
+    issuerReference: requirement.issuer_reference,
+    issuerSourceVersion: requirement.source_version,
+    issuerJurisdiction: requirement.issuer_jurisdiction,
+  };
+  const verdicts: AuthorityLifecycleVerdict[] = [];
+  for (const root of latestByRecord.values()) {
+    verdicts.push(
+      await resolveAuthorityLifecycle(env, {
+        ...expectation,
+        readbackId: root.readback_id,
+      }),
+    );
+  }
+  const currentByReadback = new Map<string, AuthorityRecordReadback>();
+  for (const verdict of verdicts) {
+    if (verdict.current) currentByReadback.set(verdict.current.readback_id, verdict.current);
+  }
+  if (currentByReadback.size !== 1) {
+    return currentByReadback.size > 1
+      ? { ok: false, code: "authority_ambiguous", current: null, requested: null }
+      : {
+          ok: false,
+          code: preferredAuthorityDenial(verdicts) ?? "authority_missing",
+          current: null,
+          requested: verdicts[0]?.requested ?? null,
+        };
+  }
+  const current = currentByReadback.values().next().value!;
+  const requested = verdicts.find(
+    (verdict) => verdict.current?.readback_id === current.readback_id,
+  )?.requested ?? null;
+  const accepted = verdicts.find(
+    (verdict) => verdict.ok && verdict.current?.readback_id === current.readback_id,
+  );
+  if (!accepted) {
+    return {
+      ok: false,
+      code: preferredAuthorityDenial(verdicts) ?? "authority_unverifiable",
+      current,
+      requested,
+    };
+  }
+  if (
+    requirement.authority_record_id &&
+    current.authority_record_id !== requirement.authority_record_id
+  ) {
+    return { ok: false, code: "authority_superseded", current, requested };
+  }
+  if (requirement.version !== undefined && current.authority_version !== requirement.version) {
+    return { ok: false, code: "authority_stale", current, requested };
+  }
+  if (
+    requirement.state_digest_sha256 &&
+    current.authority_state_digest_sha256 !== requirement.state_digest_sha256
+  ) {
+    return { ok: false, code: "authority_unverifiable", current, requested };
+  }
+  return accepted;
+}
+
 async function authorityActionById(
   env: AppEnv,
   tenantId: string,
@@ -650,6 +882,47 @@ async function authorityReadbackByEvidence(
         AND authority_version = ? AND evidence_sha256 = ?
       LIMIT 1`,
   ).bind(tenantId, authorityRecordId, authorityVersion, evidenceSha256).first<AuthorityRecordReadback>();
+}
+
+async function authorityReadbacksByRequirement(
+  env: AppEnv,
+  tenantId: string,
+  requirement: AuthorityRequirement,
+): Promise<AuthorityRecordReadback[]> {
+  const subjectColumn = requirement.subject_type === "Person" ? "person_user" : "organization";
+  const authorityRecordClause = requirement.authority_record_id
+    ? "AND authority_record_id = ?"
+    : "";
+  const rows = await env.DB.prepare(
+    `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
+            observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
+       FROM authority_record_readbacks
+      WHERE tenant_id = ?
+        AND subject_type = ?
+        AND ${subjectColumn} = ?
+        AND authority_kind = ?
+        AND scope_type = ?
+        AND scope_ref = ?
+        ${authorityRecordClause}
+      ORDER BY authority_record_id ASC, authority_version DESC, observed_at DESC, readback_id DESC
+      LIMIT ?`,
+  ).bind(
+    tenantId,
+    requirement.subject_type,
+    requirement.subject_ref,
+    requirement.authority_kind,
+    requirement.scope_type,
+    requirement.scope_ref,
+    ...(requirement.authority_record_id ? [requirement.authority_record_id] : []),
+    MAX_AUTHORITY_LINEAGE_COMPONENT_ROWS + 1,
+  ).all<AuthorityRecordReadback>();
+  return rows.results;
 }
 
 async function authorityReadbacksByBinding(
@@ -865,11 +1138,124 @@ function validateLifecycleExpectation(input: AuthorityLifecycleExpectation): voi
       input.scopeRef !== undefined && !nullableBoundedText(input.scopeRef, 240) ||
       input.roofJob !== undefined && !nullableBoundedText(input.roofJob, 200) ||
       input.scopeJson !== undefined && !nullableBoundedText(input.scopeJson, 20_000) ||
+      input.issuerName !== undefined && !nullableBoundedText(input.issuerName, 200) ||
       input.issuerReference !== undefined && !nullableBoundedText(input.issuerReference, 240) ||
       input.issuerSourceVersion !== undefined && !nullableBoundedText(input.issuerSourceVersion, 120) ||
       input.issuerJurisdiction !== undefined && !nullableBoundedText(input.issuerJurisdiction, 160)) {
     throw new Error("authority_record_lifecycle_input_invalid");
   }
+}
+
+function parseAuthorityRequirement(value: unknown): AuthorityRequirement {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !AUTHORITY_REQUIREMENT_KEYS.has(key))
+  ) {
+    throw new Error("authority_requirements_invalid");
+  }
+  const subjectType = requirementText(value.subject_type, 1, 120);
+  const subjectRef = requirementText(value.subject_ref, 1, 140);
+  const authorityKind = requirementText(value.authority_kind, 1, 200);
+  const scopeType = requirementText(value.scope_type, 1, 120);
+  const scopeRef = requirementText(value.scope_ref, 1, 140);
+  if (
+    (subjectType !== "Person" && subjectType !== "Organization") ||
+    !AUTHORITY_REQUIREMENT_KINDS.has(authorityKind as AuthorityRequirement["authority_kind"]) ||
+    !AUTHORITY_REQUIREMENT_SCOPE_TYPES.has(scopeType as AuthorityRequirement["scope_type"])
+  ) {
+    throw new Error("authority_requirements_invalid");
+  }
+  const subjectRole = optionalRequirementText(value, "subject_role", 1, 200);
+  if (subjectRole !== undefined && subjectRole !== "Worker" && subjectRole !== "Subcontractor") {
+    throw new Error("authority_requirements_invalid");
+  }
+  const authorityRecordId = optionalRequirementText(value, "authority_record_id", 3, 140);
+  if (authorityRecordId !== undefined && !OPAQUE_ID.test(authorityRecordId)) {
+    throw new Error("authority_requirements_invalid");
+  }
+  const version = Object.hasOwn(value, "version") ? value.version : undefined;
+  if (
+    version !== undefined &&
+    (!Number.isInteger(version) || Number(version) < 1 || Number(version) > 1_000_000)
+  ) {
+    throw new Error("authority_requirements_invalid");
+  }
+  const stateDigest = optionalRequirementText(value, "state_digest_sha256", 64, 64)?.toLowerCase();
+  if (stateDigest !== undefined && !SHA256.test(stateDigest)) {
+    throw new Error("authority_requirements_invalid");
+  }
+  return {
+    subject_type: subjectType,
+    subject_ref: subjectRef,
+    authority_kind: authorityKind as AuthorityRequirement["authority_kind"],
+    scope_type: scopeType as AuthorityRequirement["scope_type"],
+    scope_ref: scopeRef,
+    ...(authorityRecordId === undefined ? {} : { authority_record_id: authorityRecordId }),
+    ...(subjectRole === undefined ? {} : { subject_role: subjectRole }),
+    ...optionalRequirementField(value, "authority_scope", 1, 240),
+    ...optionalRequirementField(value, "issuer_name", 2, 200),
+    ...optionalRequirementField(value, "issuer_jurisdiction", 2, 160),
+    ...optionalRequirementField(value, "issuer_reference", 3, 240),
+    ...optionalRequirementField(value, "source_version", 1, 120),
+    ...(version === undefined ? {} : { version: Number(version) }),
+    ...(stateDigest === undefined ? {} : { state_digest_sha256: stateDigest }),
+  };
+}
+
+function optionalRequirementField<K extends keyof AuthorityRequirement>(
+  value: Record<string, unknown>,
+  key: K,
+  min: number,
+  max: number,
+): Partial<Pick<AuthorityRequirement, K>> {
+  const parsed = optionalRequirementText(value, key, min, max);
+  return parsed === undefined ? {} : { [key]: parsed } as Partial<Pick<AuthorityRequirement, K>>;
+}
+
+function optionalRequirementText(
+  value: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): string | undefined {
+  return Object.hasOwn(value, key)
+    ? requirementText(value[key], min, max)
+    : undefined;
+}
+
+function requirementText(value: unknown, min: number, max: number): string {
+  if (typeof value !== "string") throw new Error("authority_requirements_invalid");
+  const parsed = value.trim();
+  if (
+    parsed.length < min ||
+    parsed.length > max ||
+    /[\u0000-\u001f]/.test(parsed)
+  ) {
+    throw new Error("authority_requirements_invalid");
+  }
+  return parsed;
+}
+
+function preferredAuthorityDenial(
+  verdicts: AuthorityLifecycleVerdict[],
+): AuthorityLifecycleDenial | null {
+  const codes = new Set(verdicts.map((verdict) => verdict.code).filter((code) => code !== null));
+  for (const code of [
+    "authority_ambiguous",
+    "authority_contradictory",
+    "authority_revoked",
+    "authority_unavailable",
+    "authority_expired",
+    "authority_jurisdiction_mismatch",
+    "authority_scope_mismatch",
+    "authority_unverifiable",
+    "authority_superseded",
+    "authority_stale",
+    "authority_missing",
+  ] as const) {
+    if (codes.has(code)) return code;
+  }
+  return null;
 }
 
 function validEvidenceRefsJson(value: string): boolean {
@@ -1175,6 +1561,7 @@ function bindingMismatch(
     fieldMismatch(row.scope_ref, input.scopeRef) ||
     fieldMismatch(row.roof_job, input.roofJob) ||
     fieldMismatch(row.scope_json, input.scopeJson) ||
+    fieldMismatch(row.issuer_name, input.issuerName) ||
     fieldMismatch(row.issuer_reference, input.issuerReference) ||
     fieldMismatch(row.issuer_source_version, input.issuerSourceVersion)
   );

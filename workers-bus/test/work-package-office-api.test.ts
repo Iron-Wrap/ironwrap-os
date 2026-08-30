@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import {
+  recordAuthorityReadback,
+  type RecordAuthorityReadbackInput,
+} from "../src/authority-records.ts";
 import {
   permissionsForRole,
   type AppEnv,
@@ -11,16 +16,76 @@ import {
   type AuthContext,
 } from "../src/app-types.ts";
 import {
-  issueNativeWorkPackage,
+  issueNativeWorkPackage as issueNativeWorkPackageStore,
+  nativeWorkPackageAction,
   type NativeWorkPackageDefinition,
 } from "../src/work-package-store.ts";
-import { recordOperatingJobAssignment } from "../src/operating-job-assignment-store.ts";
+import { handleWorkPackageAction } from "../src/work-package-actions.ts";
+import {
+  currentWorkPackageAuthorityResolution,
+  currentWorkPackageAuthorityDenials,
+  fieldWorkPackageForAssignment,
+  fieldWorkPackageProjection,
+} from "../src/work-package.ts";
+import {
+  getCurrentOperatingJobAssignment,
+  recordOperatingJobAssignment,
+} from "../src/operating-job-assignment-store.ts";
+import { recordOperatingWorkObjectAssignment } from "../src/operating-work-object-assignment-store.ts";
+
+const OFFICE_ASSIGNMENT_ID = (() => {
+  const idempotencyHash = sha256("office-native-assignment-0001");
+  return `assignment:${sha256(`ironwrap:${idempotencyHash}`).slice(0, 40)}`;
+})();
+const OFFICE_WORK_PACKAGE_ID = `wp_${sha256(
+  `ironwrap:JOB-NATIVE-OFFICE:${OFFICE_ASSIGNMENT_ID}:1`,
+).slice(0, 32)}`;
+const TYPED_ASSIGNMENT_ID = (() => {
+  const idempotencyHash = sha256("office-native-typed-assignment-0001");
+  return `assignment:${sha256(`ironwrap:${idempotencyHash}`).slice(0, 40)}`;
+})();
+const TYPED_WORK_PACKAGE_ID = `wp_${sha256(
+  `ironwrap:SHOP-NATIVE-OFFICE:${TYPED_ASSIGNMENT_ID}:1`,
+).slice(0, 32)}`;
+
+function authorityRequirements(
+  workPackageId = OFFICE_WORK_PACKAGE_ID,
+  subjectRef = "crew@example.com",
+) {
+  return [
+    {
+      subject_type: "Person" as const,
+      subject_role: "Worker" as const,
+      subject_ref: subjectRef,
+      authority_kind: "Worker Competency" as const,
+      authority_scope: "field installation",
+      scope_type: "Work Package" as const,
+      scope_ref: workPackageId,
+      issuer_name: "IronWrap Production",
+      issuer_jurisdiction: "AB-CA",
+      issuer_reference: `internal:competency:${subjectRef}`,
+      source_version: "2026-08-20",
+    },
+  ];
+}
 
 class TestD1 {
   readonly sqlite = new DatabaseSync(":memory:");
+  private beforeEventInsert: {
+    deviceActionId: string;
+    callback: () => Promise<void>;
+  } | null = null;
+
+  beforeEventInsertOnce(
+    deviceActionId: string,
+    callback: () => Promise<void>,
+  ): void {
+    this.beforeEventInsert = { deviceActionId, callback };
+  }
 
   prepare(sql: string) {
     const sqlite = this.sqlite;
+    const database = this;
     return {
       bind(...values: unknown[]) {
         return {
@@ -33,8 +98,20 @@ class TestD1 {
             );
           },
           run() {
-            const result = sqlite.prepare(sql).run(...values);
-            return { meta: { changes: Number(result.changes) } };
+            const execute = () => {
+              const result = sqlite.prepare(sql).run(...values);
+              return { meta: { changes: Number(result.changes) } };
+            };
+            const hook = database.beforeEventInsert;
+            if (
+              hook &&
+              /INSERT INTO work_package_events/.test(sql) &&
+              values[14] === hook.deviceActionId
+            ) {
+              database.beforeEventInsert = null;
+              return hook.callback().then(execute);
+            }
+            return execute();
           },
         };
       },
@@ -211,6 +288,12 @@ function auth(role: AppRole): AuthContext {
 }
 
 async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
+  const existing = await getCurrentOperatingJobAssignment(
+    appEnv,
+    "ironwrap",
+    "JOB-NATIVE-OFFICE",
+  );
+  if (existing) return existing;
   const sqlite = appEnv.DB.sqlite;
   const now = "2026-08-20T07:59:00.000Z";
   sqlite
@@ -299,6 +382,7 @@ async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
         expectedRoofJobVersion: 1,
         crewId: "crew:native:office",
         expectedCrewVersion: 1,
+        authorityRequirements: authorityRequirements(),
         scheduledStart: "2026-08-20T08:00:00.000Z",
         actorUserId: "appu_owner_native",
         idempotencyKey: "office-native-assignment-0001",
@@ -309,14 +393,21 @@ async function seedOperatingAssignment(appEnv: ReturnType<typeof env>) {
 }
 
 function definition(): NativeWorkPackageDefinition {
+  const frozenAuthorityRequirements = authorityRequirements();
   return {
     tenantId: "ironwrap",
-    workPackageId: "wp_native_office_api",
+    workPackageId: OFFICE_WORK_PACKAGE_ID,
     version: 1,
     deviceActionId: "issue-native-office-api-1",
     manifestKey: "work-packages/issue-native-office-api-1.json",
     jobId: "JOB-NATIVE-OFFICE",
-    assignmentId: "ASSIGN-NATIVE-OFFICE",
+    assignmentId: OFFICE_ASSIGNMENT_ID,
+    assignmentVersion: 1,
+    assignmentCommandFingerprint: "a".repeat(64),
+    assignmentAuthorityRequirementsSha256: sha256(
+      canonicalJson(frozenAuthorityRequirements),
+    ),
+    issueRequestSha256: "b".repeat(64),
     workObjectType: "Roof Job",
     workObjectId: "JOB-NATIVE-OFFICE",
     physicalContextType: "Roof Site",
@@ -334,6 +425,7 @@ function definition(): NativeWorkPackageDefinition {
     expiresAt: "2026-08-21T08:00:00.000Z",
     releasedAt: "2026-08-20T08:00:00.000Z",
     releaseAttemptId: "attempt-native-office-api",
+    authorityRequirements: frozenAuthorityRequirements,
     steps: [
       {
         sequence: 1,
@@ -363,6 +455,179 @@ function definition(): NativeWorkPackageDefinition {
     issuedByUser: "owner@example.com",
     issuedByRole: "IronWrap Owner",
   } as NativeWorkPackageDefinition;
+}
+
+async function issueNativeWorkPackage(
+  appEnv: ReturnType<typeof env>,
+  packet: NativeWorkPackageDefinition,
+) {
+  const assignment = await seedOperatingAssignment(appEnv);
+  packet.assignmentId = assignment.assignment_id;
+  packet.assignmentVersion = assignment.assignment_version;
+  packet.assignmentCommandFingerprint = assignment.command_fingerprint;
+  packet.assignmentAuthorityRequirementsSha256 =
+    assignment.authority_requirements_sha256!;
+  packet.authorityRequirements = assignment.authority_requirements!;
+  return await issueNativeWorkPackageStore(appEnv, packet);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function recordPacketAuthority(
+  appEnv: ReturnType<typeof env>,
+  packet: NativeWorkPackageDefinition,
+  overrides: Partial<RecordAuthorityReadbackInput> = {},
+) {
+  return await recordAuthorityReadback(appEnv, {
+    readbackId: "Authority-Readback-Work-Package-01",
+    tenantId: packet.tenantId,
+    authorityRecordId: "Authority-Record-Work-Package-01",
+    authorityVersion: 1,
+    subjectType: "Person",
+    subjectRole: "Worker",
+    personUser: "crew@example.com",
+    organization: null,
+    authorityKind: "Worker Competency",
+    authorityScope: "field installation",
+    scopeType: "Work Package",
+    scopeRef: packet.workPackageId,
+    roofJob: packet.jobId,
+    scopeJson: "{}",
+    issuerName: "IronWrap Production",
+    issuerJurisdiction: "AB-CA",
+    issuerReference: "internal:competency:crew@example.com",
+    issuerSourceVersion: "2026-08-20",
+    verificationState: "verified",
+    evidenceRefsJson: JSON.stringify([
+      {
+        ref: "r2://authority/work-package-crew.json",
+        sha256: "c".repeat(64),
+      },
+    ]),
+    evidenceSha256: "c".repeat(64),
+    authorityStateDigestSha256: "e".repeat(64),
+    authorityEffectiveFrom: "2026-08-01",
+    authorityExpiresAt: "2027-12-31",
+    authorityRevokedAt: null,
+    supersedesAuthorityRecordId: null,
+    authorityVerificationMethod: "Internal Competency Assessment",
+    issuerReceiptSha256: null,
+    observedByUserId: "appu_owner_native",
+    observedAt: "2026-08-20T08:00:00.000Z",
+    actionId: null,
+    ...overrides,
+  });
+}
+
+async function revokePacketAuthority(
+  appEnv: ReturnType<typeof env>,
+  packet: NativeWorkPackageDefinition,
+  suffix: string,
+) {
+  return await recordPacketAuthority(appEnv, packet, {
+    readbackId: `Authority-Readback-Work-Package-Revoked-${suffix}`,
+    authorityVersion: 2,
+    verificationState: "revoked",
+    authorityRevokedAt: "2026-08-21T08:00:00.000Z",
+    authorityVerificationMethod: null,
+    evidenceRefsJson: JSON.stringify([
+      {
+        ref: `r2://authority/work-package-crew-revoked-${suffix}.json`,
+        sha256: "d".repeat(64),
+      },
+    ]),
+    evidenceSha256: "d".repeat(64),
+    authorityStateDigestSha256: "f".repeat(64),
+    observedAt: "2026-08-21T08:00:00.000Z",
+  });
+}
+
+function fieldWorkPackageActionRequest(
+  packet: NativeWorkPackageDefinition,
+  kind: "acknowledge" | "start_work" | "stop_work",
+  deviceActionId: string,
+): Request {
+  return new Request("https://app.example.com/api/v1/work-package-action", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": deviceActionId,
+      "x-device-action-id": deviceActionId,
+    },
+    body: JSON.stringify({
+      device_action_id: deviceActionId,
+      payload: {
+        work_package_id: packet.workPackageId,
+        work_package_version: packet.version,
+        release_attempt_id: packet.releaseAttemptId,
+        ...(kind === "stop_work"
+          ? { blocker_reason: "Authority state requires a safe stop" }
+          : {}),
+      },
+    }),
+  });
+}
+
+function rewriteAuthorityFixture(
+  appEnv: ReturnType<typeof env>,
+  packet: NativeWorkPackageDefinition,
+  state: "missing" | "corrupt",
+): void {
+  appEnv.DB.sqlite.exec("DROP TRIGGER work_packages_projection_guard");
+  const row = appEnv.DB.sqlite
+    .prepare(
+      `SELECT definition_json FROM work_packages
+        WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+    )
+    .get(packet.tenantId, packet.workPackageId, packet.version) as {
+    definition_json: string;
+  };
+  const definition = JSON.parse(row.definition_json) as Record<string, unknown>;
+  if (state === "missing") delete definition.authority_requirements;
+  else definition.authority_requirements = { corrupt: true };
+  appEnv.DB.sqlite
+    .prepare(
+      `UPDATE work_packages SET definition_json = ?
+        WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+    )
+    .run(
+      JSON.stringify(definition),
+      packet.tenantId,
+      packet.workPackageId,
+      packet.version,
+    );
+}
+
+function authorityReadFailureEnv(
+  appEnv: ReturnType<typeof env>,
+): ReturnType<typeof env> {
+  const source = appEnv.DB;
+  const DB = {
+    prepare(sql: string) {
+      if (sql.includes("FROM authority_record_readbacks")) {
+        throw new Error("authority_store_unreadable");
+      }
+      return source.prepare(sql);
+    },
+    batch(statements: Array<{ run(): unknown }>) {
+      return source.batch(statements);
+    },
+  };
+  return { ...appEnv, DB } as unknown as ReturnType<typeof env>;
 }
 
 function insertCapture(
@@ -439,10 +704,10 @@ function insertCapture(
       "image/jpeg",
       128,
       now,
-  );
+    );
 }
 
-test("office issue route derives authority and roster, then replays one immutable package", async () => {
+test("office issue freezes governed assignment authority and exact replay survives assignment drift", async () => {
   const appEnv = env();
   const assignment = await seedOperatingAssignment(appEnv);
   const issuedAt = new Date().toISOString();
@@ -479,7 +744,10 @@ test("office issue route derives authority and roster, then replays one immutabl
       },
     ],
   };
-  const request = (value: Record<string, unknown>) =>
+  const request = (
+    value: Record<string, unknown>,
+    deviceActionId = "office-work-package-issue-1",
+  ) =>
     new Request(
       "https://app.example.com/api/v1/jobs/JOB-NATIVE-OFFICE/work-package",
       {
@@ -487,8 +755,8 @@ test("office issue route derives authority and roster, then replays one immutabl
         headers: {
           "content-type": "application/json",
           "x-csrf-token": "csrf",
-          "idempotency-key": "office-work-package-issue-1",
-          "x-device-action-id": "office-work-package-issue-1",
+          "idempotency-key": deviceActionId,
+          "x-device-action-id": deviceActionId,
         },
         body: JSON.stringify(value),
       },
@@ -501,14 +769,7 @@ test("office issue route derives authority and roster, then replays one immutabl
   const firstBody = (await first.json()) as Record<string, unknown>;
   assert.equal(first.status, 200, JSON.stringify(firstBody));
   assert.equal(firstBody.status, "verified");
-  assert.match(String(firstBody.server_ref), /^wp_[0-9a-f]{32}$/);
-
-  const replay = await handleAuthenticatedRoute(
-    request(body),
-    appEnv,
-    auth("owner"),
-  );
-  assert.equal(replay.status, 200, await replay.clone().text());
+  assert.equal(firstBody.server_ref, OFFICE_WORK_PACKAGE_ID);
   assert.equal(
     appEnv.DB.sqlite
       .prepare("SELECT COUNT(*) AS count FROM work_packages")
@@ -523,32 +784,56 @@ test("office issue route derives authority and roster, then replays one immutabl
       .get().count,
     1,
   );
-  const stored = appEnv.DB.sqlite
-    .prepare("SELECT definition_json FROM work_packages")
-    .get() as { definition_json: string };
-  const definition = JSON.parse(stored.definition_json) as {
-    assigned_workers: Array<{ worker_user: string; worker_role: string }>;
-  };
-  assert.deepEqual(definition.assigned_workers, [
-    {
-      sequence: 1,
-      worker_user: "appu_crew_native",
-      worker_role: "Field Worker",
-      required: true,
-    },
-  ]);
-  assert.ok(
-    appEnv.RAW.objects.has(
-      "work-packages/office-actions/ironwrap/office-work-package-issue-1.json",
-    ),
+  const frozen = appEnv.DB.sqlite
+    .prepare(
+      "SELECT definition_json FROM work_packages WHERE work_package_id = ?",
+    )
+    .get(OFFICE_WORK_PACKAGE_ID) as { definition_json: string };
+  assert.deepEqual(
+    JSON.parse(frozen.definition_json).authority_requirements,
+    authorityRequirements(),
   );
 
-  const drift = await handleAuthenticatedRoute(
-    request({ ...body, objective: "A different immutable objective" }),
+  const replay = await handleAuthenticatedRoute(
+    request(body),
     appEnv,
     auth("owner"),
   );
-  assert.equal(drift.status, 409);
+  assert.equal(replay.status, 200, await replay.clone().text());
+  assert.deepEqual(await replay.json(), firstBody);
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare("SELECT COUNT(*) AS count FROM work_packages")
+      .get().count,
+    1,
+  );
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE event_kind = 'issued'",
+      )
+      .get().count,
+    1,
+  );
+  assert.equal(
+    appEnv.RAW.objects.has(
+      "work-packages/office-actions/ironwrap/office-work-package-issue-1.json",
+    ),
+    true,
+  );
+
+  const browserAuthority = await handleAuthenticatedRoute(
+    request({
+      ...body,
+      authority_requirements: definition().authorityRequirements,
+    }),
+    appEnv,
+    auth("owner"),
+  );
+  assert.equal(browserAuthority.status, 400);
+  assert.deepEqual(await browserAuthority.json(), {
+    error: "invalid_work_package_issue",
+  });
 
   const browserRoster = await handleAuthenticatedRoute(
     request({ ...body, assigned_workers: [] }),
@@ -561,16 +846,605 @@ test("office issue route derives authority and roster, then replays one immutabl
   });
 
   const staleAssignment = await handleAuthenticatedRoute(
-    request({
-      ...body,
-      assignment_modified: "2026-08-20T07:58:00.000Z",
-    }),
+    request(
+      {
+        ...body,
+        assignment_modified: "2026-08-20T07:58:00.000Z",
+      },
+      "office-work-package-issue-stale",
+    ),
     appEnv,
     auth("owner"),
   );
   assert.equal(staleAssignment.status, 409);
   assert.deepEqual(await staleAssignment.json(), {
     error: "work_package_assignment_changed",
+  });
+
+  appEnv.DB.sqlite.exec(
+    "DROP TRIGGER operating_job_assignments_append_only_update",
+  );
+  appEnv.DB.sqlite
+    .prepare(
+      `UPDATE operating_job_assignments
+          SET authority_requirements_json = NULL,
+              authority_requirements_sha256 = NULL
+        WHERE tenant_id = 'ironwrap' AND assignment_id = ?`,
+    )
+    .run(assignment.assignment_id);
+  const exactAfterDrift = await handleAuthenticatedRoute(
+    request(body),
+    appEnv,
+    auth("owner"),
+  );
+  assert.equal(
+    exactAfterDrift.status,
+    200,
+    await exactAfterDrift.clone().text(),
+  );
+  assert.deepEqual(await exactAfterDrift.json(), firstBody);
+
+  const missingRequirements = await handleAuthenticatedRoute(
+    request(body, "office-work-package-issue-missing-authority"),
+    appEnv,
+    auth("owner"),
+  );
+  assert.equal(missingRequirements.status, 409);
+  assert.deepEqual(await missingRequirements.json(), {
+    error: "work_package_authority_requirements_invalid",
+  });
+});
+
+test("typed office issue freezes the governed physical assignment authority", async () => {
+  const appEnv = env();
+  const requirements = authorityRequirements(
+    TYPED_WORK_PACKAGE_ID,
+    "appu_crew_native",
+  );
+  const assignment = (
+    await recordOperatingWorkObjectAssignment(
+      appEnv,
+      {
+        tenantId: "ironwrap",
+        workObjectType: "Shop Order",
+        workObjectId: "SHOP-NATIVE-OFFICE",
+        physicalContextType: "Shop Floor",
+        physicalContextId: "SHOP-FLOOR-NATIVE-OFFICE",
+        assignedUsers: ["appu_crew_native"],
+        authorityRequirements: requirements,
+        scheduledStart: "2026-08-20T08:00:00.000Z",
+        authorityUserId: "appu_owner_native",
+        authorityRole: "owner",
+        actorUserId: "appu_production_native",
+        idempotencyKey: "office-native-typed-assignment-0001",
+      },
+      new Date("2026-08-20T07:59:00.000Z"),
+    )
+  ).assignment;
+  assert.equal(assignment.assignment_id, TYPED_ASSIGNMENT_ID);
+  const issuedAt = new Date().toISOString();
+  const response = await handleAuthenticatedRoute(
+    new Request(
+      "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-NATIVE-OFFICE/physical-contexts/Shop%20Floor/SHOP-FLOOR-NATIVE-OFFICE/work-package",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": "csrf",
+          "idempotency-key": "office-typed-work-package-issue-1",
+          "x-device-action-id": "office-typed-work-package-issue-1",
+        },
+        body: JSON.stringify({
+          assignment_id: assignment.assignment_id,
+          assignment_modified: assignment.created_at,
+          version: 1,
+          issued_at: issuedAt,
+          expires_at: new Date(
+            Date.parse(issuedAt) + 8 * 60 * 60 * 1_000,
+          ).toISOString(),
+          title: "Native typed office package",
+          objective: "Complete the released shop scope safely",
+          boundaries: "Only the issued shop order scope",
+          prerequisites: "Crew and materials are present",
+          expected_result: "Shop order is ready for review",
+          stop_conditions: "Stop on unsafe conditions",
+          make_safe_procedure: "Secure the area and notify production",
+          correction_reason: null,
+          steps: [
+            {
+              instruction: "Inspect the shop work area",
+              required_evidence: "Current work-area photographs",
+              acceptance_criteria: "Work area is safe",
+            },
+          ],
+          hold_points: [
+            {
+              hold_point: "Pre-start safety release",
+              release_phase: "Pre-start",
+              release_authority: "IronWrap Production",
+              required_evidence: "Safety inspection evidence",
+              acceptance_criteria: "Safety is released",
+            },
+          ],
+        }),
+      },
+    ),
+    appEnv,
+    auth("owner"),
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.server_ref, TYPED_WORK_PACKAGE_ID);
+  const row = appEnv.DB.sqlite
+    .prepare(
+      `SELECT work_object_type, work_object_id, physical_context_type,
+              physical_context_id, definition_json
+         FROM work_packages WHERE work_package_id = ?`,
+    )
+    .get(TYPED_WORK_PACKAGE_ID) as Record<string, unknown>;
+  assert.deepEqual(
+    {
+      work_object_type: row.work_object_type,
+      work_object_id: row.work_object_id,
+      physical_context_type: row.physical_context_type,
+      physical_context_id: row.physical_context_id,
+    },
+    {
+      work_object_type: "Shop Order",
+      work_object_id: "SHOP-NATIVE-OFFICE",
+      physical_context_type: "Shop Floor",
+      physical_context_id: "SHOP-FLOOR-NATIVE-OFFICE",
+    },
+  );
+  assert.deepEqual(
+    JSON.parse(String(row.definition_json)).authority_requirements,
+    requirements,
+  );
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE event_kind = 'issued'",
+      )
+      .get().count,
+    1,
+  );
+});
+
+test("native field actions re-evaluate current authority while exact replay and stop stay safe", async () => {
+  const appEnv = env();
+  const packet = definition();
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  const assignment = { name: packet.assignmentId };
+
+  const acknowledged = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      packet,
+      "acknowledge",
+      "field-authority-ack-01",
+    ),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "acknowledge",
+  );
+  assert.equal(acknowledged.status, 200, await acknowledged.clone().text());
+
+  await revokePacketAuthority(appEnv, packet, "02");
+
+  const replay = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      packet,
+      "acknowledge",
+      "field-authority-ack-01",
+    ),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "acknowledge",
+  );
+  assert.equal(replay.status, 200, await replay.clone().text());
+  assert.deepEqual(await replay.json(), await acknowledged.json());
+
+  const start = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      packet,
+      "start_work",
+      "field-authority-start-01",
+    ),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "start_work",
+  );
+  assert.equal(start.status, 409);
+  assert.deepEqual(await start.json(), {
+    error: "authority_release_blocked",
+    message: "Authority readiness blocks this action: authority_revoked.",
+  });
+
+  const stopped = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      packet,
+      "stop_work",
+      "field-authority-stop-01",
+    ),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "stop_work",
+  );
+  assert.equal(stopped.status, 200, await stopped.clone().text());
+  const stopReplay = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      packet,
+      "stop_work",
+      "field-authority-stop-01",
+    ),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    assignment,
+    "stop_work",
+  );
+  assert.equal(stopReplay.status, 200, await stopReplay.clone().text());
+  assert.deepEqual(await stopReplay.json(), await stopped.json());
+});
+
+test("retryable action without a native event re-runs current authority before reclaim", async () => {
+  const appEnv = env();
+  const packet = definition();
+  const deviceActionId = "field-authority-retry-pre-native";
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  appEnv.DB.sqlite.exec(`
+    CREATE TRIGGER test_fail_native_work_package_event
+    BEFORE INSERT ON work_package_events
+    WHEN NEW.device_action_id = '${deviceActionId}'
+    BEGIN
+      SELECT RAISE(ABORT, 'test_native_event_failure');
+    END
+  `);
+
+  const first = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", deviceActionId),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+  assert.equal(first.status, 502, await first.clone().text());
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT status FROM field_work_package_actions WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).status,
+    "retryable_error",
+  );
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).count,
+    0,
+  );
+  appEnv.DB.sqlite.exec("DROP TRIGGER test_fail_native_work_package_event");
+  await revokePacketAuthority(appEnv, packet, "retry-pre-native");
+
+  const retry = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", deviceActionId),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+  assert.equal(retry.status, 409, await retry.clone().text());
+  assert.deepEqual(await retry.json(), {
+    error: "authority_release_blocked",
+    message: "Authority readiness blocks this action: authority_revoked.",
+  });
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).count,
+    0,
+  );
+});
+
+test("authority revoked after the command gate aborts the native event append", async () => {
+  const appEnv = env();
+  const packet = definition();
+  const deviceActionId = "field-authority-toctou-revoked";
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  appEnv.DB.beforeEventInsertOnce(deviceActionId, async () => {
+    await revokePacketAuthority(appEnv, packet, "between-gate-and-append");
+  });
+
+  const response = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", deviceActionId),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+
+  assert.equal(response.status, 409, await response.clone().text());
+  assert.deepEqual(await response.json(), {
+    error: "authority_release_blocked",
+    message:
+      "Authority readiness changed before this action could be committed.",
+  });
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).count,
+    0,
+  );
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT status FROM work_packages WHERE tenant_id = ? AND work_package_id = ?",
+      )
+      .get(packet.tenantId, packet.workPackageId).status,
+    "Released",
+  );
+});
+
+test("retry reconciles a committed native event before current authority denial", async () => {
+  const appEnv = env();
+  const packet = definition();
+  const deviceActionId = "field-authority-retry-post-native";
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  appEnv.DB.sqlite.exec(`
+    CREATE TRIGGER test_fail_native_work_package_event
+    BEFORE INSERT ON work_package_events
+    WHEN NEW.device_action_id = '${deviceActionId}'
+    BEGIN
+      SELECT RAISE(ABORT, 'test_native_event_failure');
+    END
+  `);
+
+  const first = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", deviceActionId),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+  assert.equal(first.status, 502, await first.clone().text());
+  appEnv.DB.sqlite.exec("DROP TRIGGER test_fail_native_work_package_event");
+  const receipt = appEnv.DB.sqlite
+    .prepare(
+      `SELECT manifest_key FROM field_work_package_actions
+        WHERE device_action_id = ?`,
+    )
+    .get(deviceActionId) as { manifest_key: string };
+  const workPackage = await fieldWorkPackageForAssignment(
+    appEnv,
+    packet.jobId,
+    packet.assignmentId,
+    packet.tenantId,
+  );
+  assert.ok(workPackage);
+  const authority = await currentWorkPackageAuthorityResolution(
+    appEnv,
+    packet.tenantId,
+    workPackage,
+    "2026-08-20T08:00:00.000Z",
+  );
+  assert.deepEqual(authority.denials, []);
+  const native = await nativeWorkPackageAction(appEnv, {
+    kind: "acknowledge",
+    workPackageId: packet.workPackageId,
+    workPackageVersion: packet.version,
+    jobId: packet.jobId,
+    assignmentId: packet.assignmentId,
+    actorUser: "appu_crew_native",
+    actorRole: "field",
+    deviceActionId,
+    blockerReason: null,
+    releaseAttemptId: packet.releaseAttemptId,
+    workObjectType: null,
+    workObjectId: null,
+    physicalContextType: null,
+    physicalContextId: null,
+    manifestKey: receipt.manifest_key,
+    authorityPreconditions: authority.preconditions,
+  });
+  assert.match(native.eventName, /^wpe_[0-9a-f]{32}$/);
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT status FROM field_work_package_actions WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).status,
+    "retryable_error",
+  );
+  await revokePacketAuthority(appEnv, packet, "retry-post-native");
+
+  const replay = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(packet, "acknowledge", deviceActionId),
+    appEnv,
+    auth("field"),
+    packet.jobId,
+    { name: packet.assignmentId },
+    "acknowledge",
+  );
+  assert.equal(replay.status, 200, await replay.clone().text());
+  assert.deepEqual(await replay.json(), {
+    device_action_id: deviceActionId,
+    status: "verified",
+    server_ref: packet.workPackageId,
+    cursor: native.eventName,
+  });
+  assert.equal(
+    appEnv.DB.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count FROM work_package_events WHERE device_action_id = ?",
+      )
+      .get(deviceActionId).count,
+    1,
+  );
+});
+
+test("field projection suppresses non-stop actions on current authority denial", async () => {
+  const appEnv = env();
+  const packet = definition();
+  await issueNativeWorkPackage(appEnv, packet);
+  await recordPacketAuthority(appEnv, packet);
+  const workPackage = await fieldWorkPackageForAssignment(
+    appEnv,
+    packet.jobId,
+    packet.assignmentId,
+    packet.tenantId,
+  );
+  assert.ok(workPackage);
+  const actor = ["appu_crew_native", "crew@example.com"];
+  const currentDenials = await currentWorkPackageAuthorityDenials(
+    appEnv,
+    packet.tenantId,
+    workPackage,
+    new Date().toISOString(),
+  );
+  assert.deepEqual(currentDenials, []);
+  assert.ok(
+    fieldWorkPackageProjection(workPackage, actor, {
+      authorityDenials: currentDenials,
+    }).allowedActions.includes("work_package.acknowledge"),
+  );
+
+  await revokePacketAuthority(appEnv, packet, "projection");
+  const revokedDenials = await currentWorkPackageAuthorityDenials(
+    appEnv,
+    packet.tenantId,
+    workPackage,
+    new Date().toISOString(),
+  );
+  assert.deepEqual(revokedDenials, ["authority_revoked"]);
+  const projection = fieldWorkPackageProjection(workPackage, actor, {
+    authorityDenials: revokedDenials,
+  });
+  assert.deepEqual(projection.allowedActions, ["work_package.stop_work"]);
+  assert.deepEqual(projection.work_package?.authority_denials, [
+    "authority_revoked",
+  ]);
+
+  const unavailable = await currentWorkPackageAuthorityDenials(
+    authorityReadFailureEnv(appEnv),
+    packet.tenantId,
+    workPackage,
+    new Date().toISOString(),
+  );
+  assert.deepEqual(unavailable, ["authority_unavailable"]);
+  assert.deepEqual(
+    fieldWorkPackageProjection(workPackage, actor, {
+      authorityDenials: unavailable,
+    }).allowedActions,
+    ["work_package.stop_work"],
+  );
+});
+
+test("legacy, corrupt, and unreadable authority fail closed without blocking stop work", async (t) => {
+  for (const state of ["missing", "corrupt"] as const) {
+    await t.test(state, async () => {
+      const appEnv = env();
+      const packet = definition();
+      await issueNativeWorkPackage(appEnv, packet);
+      rewriteAuthorityFixture(appEnv, packet, state);
+      const assignment = { name: packet.assignmentId };
+      const blocked = await handleWorkPackageAction(
+        fieldWorkPackageActionRequest(
+          packet,
+          "acknowledge",
+          `field-authority-${state}-ack-01`,
+        ),
+        appEnv,
+        auth("field"),
+        packet.jobId,
+        assignment,
+        "acknowledge",
+      );
+      assert.equal(blocked.status, 409);
+      assert.deepEqual(await blocked.json(), {
+        error: "authority_release_blocked",
+        message: `Authority readiness blocks this action: ${
+          state === "missing" ? "authority_missing" : "authority_unverifiable"
+        }.`,
+      });
+      assert.equal(appEnv.RAW.objects.size, 0);
+
+      const stopped = await handleWorkPackageAction(
+        fieldWorkPackageActionRequest(
+          packet,
+          "stop_work",
+          `field-authority-${state}-stop-01`,
+        ),
+        appEnv,
+        auth("field"),
+        packet.jobId,
+        assignment,
+        "stop_work",
+      );
+      assert.equal(stopped.status, 200, await stopped.clone().text());
+    });
+  }
+
+  await t.test("store read failure", async () => {
+    const appEnv = env();
+    const packet = definition();
+    await issueNativeWorkPackage(appEnv, packet);
+    await recordPacketAuthority(appEnv, packet);
+    const failingEnv = authorityReadFailureEnv(appEnv);
+    const assignment = { name: packet.assignmentId };
+    const blocked = await handleWorkPackageAction(
+      fieldWorkPackageActionRequest(
+        packet,
+        "acknowledge",
+        "field-authority-read-failure-ack-01",
+      ),
+      failingEnv,
+      auth("field"),
+      packet.jobId,
+      assignment,
+      "acknowledge",
+    );
+    assert.equal(blocked.status, 503);
+    assert.equal(blocked.headers.get("retry-after"), "5");
+    assert.deepEqual(await blocked.json(), {
+      error: "authority_release_blocked",
+      message: "Authority readiness blocks this action: authority_unavailable.",
+    });
+    assert.equal(appEnv.RAW.objects.size, 0);
+
+    const stopped = await handleWorkPackageAction(
+      fieldWorkPackageActionRequest(
+        packet,
+        "stop_work",
+        "field-authority-read-failure-stop-01",
+      ),
+      failingEnv,
+      auth("field"),
+      packet.jobId,
+      assignment,
+      "stop_work",
+    );
+    assert.equal(stopped.status, 200, await stopped.clone().text());
   });
 });
 

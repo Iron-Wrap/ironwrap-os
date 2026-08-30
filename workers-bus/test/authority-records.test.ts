@@ -10,8 +10,11 @@ import {
   completeAuthorityRecordAction,
   EXTERNAL_ISSUER_AUTHORITY_KINDS,
   listAuthorityRecordReadbacks,
+  parseAuthorityRequirements,
   recordAuthorityReadback,
   resolveAuthorityLifecycle,
+  resolveAuthorityRequirement,
+  type AuthorityRequirement,
   type AuthorityRecordOperation,
 } from "../src/authority-records.ts";
 import { handleAuthorityRecordRoute } from "../src/authority-record-api.ts";
@@ -351,6 +354,154 @@ function readbackInput(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+function authorityRequirement(
+  overrides: Partial<AuthorityRequirement> = {},
+): AuthorityRequirement {
+  return {
+    subject_type: "Person",
+    subject_role: "Worker",
+    subject_ref: "worker@example.invalid",
+    authority_kind: "Worker Competency",
+    authority_scope: "field installation",
+    scope_type: "Field",
+    scope_ref: "field:job-1",
+    issuer_name: "Alberta issuer",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "https://issuer.example.invalid/record/1",
+    source_version: "2026-08-17",
+    ...overrides,
+  };
+}
+
+test("authority requirements accept only the bounded sparse canonical shape", () => {
+  const parsed = parseAuthorityRequirements(JSON.stringify([authorityRequirement({
+    authority_record_id: `  ${RECORD}  `,
+    version: 1,
+    state_digest_sha256: "E".repeat(64),
+  })]));
+  assert.deepEqual(parsed, [authorityRequirement({
+    authority_record_id: RECORD,
+    version: 1,
+    state_digest_sha256: "e".repeat(64),
+  })]);
+
+  assert.throws(() => parseAuthorityRequirements([]), /authority_requirements_invalid/);
+  assert.throws(
+    () => parseAuthorityRequirements(Array.from({ length: 21 }, () => authorityRequirement())),
+    /authority_requirements_invalid/,
+  );
+  assert.throws(
+    () => parseAuthorityRequirements(`${JSON.stringify([authorityRequirement()])}${" ".repeat(20_001)}`),
+    /authority_requirements_invalid/,
+  );
+  assert.throws(
+    () => parseAuthorityRequirements([{ ...authorityRequirement(), unexpected: true }]),
+    /authority_requirements_invalid/,
+  );
+  assert.throws(
+    () => parseAuthorityRequirements([{ ...authorityRequirement(), issuer_name: null }]),
+    /authority_requirements_invalid/,
+  );
+  assert.throws(
+    () => parseAuthorityRequirements([{ ...authorityRequirement(), authority_scope: "x".repeat(241) }]),
+    /authority_requirements_invalid/,
+  );
+});
+
+test("sparse authority requirements resolve exactly one current verified head", async () => {
+  const db = new SqliteD1();
+  await recordAuthorityReadback(env(db), readbackInput());
+  const verdict = await resolveAuthorityRequirement(env(db), {
+    tenantId: TENANT,
+    now: NOW,
+    requirement: authorityRequirement({
+      authority_record_id: RECORD,
+      version: 1,
+      state_digest_sha256: "e".repeat(64),
+    }),
+  });
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.code, null);
+  assert.equal(verdict.current?.readback_id, "Authority-Readback-0001");
+});
+
+test("sparse authority requirements fail closed for invalid lifecycle heads", async (t) => {
+  await t.test("revoked", async () => {
+    const db = new SqliteD1();
+    await recordAuthorityReadback(env(db), readbackInput({
+      verificationState: "revoked",
+      authorityRevokedAt: NOW,
+    }));
+    const verdict = await resolveAuthorityRequirement(env(db), {
+      tenantId: TENANT,
+      now: NOW,
+      requirement: authorityRequirement(),
+    });
+    assert.equal(verdict.code, "authority_revoked");
+  });
+
+  await t.test("expired", async () => {
+    const db = new SqliteD1();
+    await recordAuthorityReadback(env(db), readbackInput({
+      authorityExpiresAt: "2026-08-16",
+    }));
+    const verdict = await resolveAuthorityRequirement(env(db), {
+      tenantId: TENANT,
+      now: NOW,
+      requirement: authorityRequirement(),
+    });
+    assert.equal(verdict.code, "authority_expired");
+  });
+
+  await t.test("wrong jurisdiction", async () => {
+    const db = new SqliteD1();
+    await recordAuthorityReadback(env(db), readbackInput());
+    const verdict = await resolveAuthorityRequirement(env(db), {
+      tenantId: TENANT,
+      now: NOW,
+      requirement: authorityRequirement({ issuer_jurisdiction: "BC-CA" }),
+    });
+    assert.equal(verdict.code, "authority_jurisdiction_mismatch");
+  });
+
+  await t.test("superseded pinned record", async () => {
+    const db = new SqliteD1();
+    await recordAuthorityReadback(env(db), readbackInput());
+    await recordAuthorityReadback(env(db), readbackInput({
+      readbackId: "Authority-Readback-Successor-01",
+      authorityRecordId: "Authority-Record-Successor-01",
+      supersedesAuthorityRecordId: RECORD,
+      evidenceSha256: "d".repeat(64),
+      authorityStateDigestSha256: "f".repeat(64),
+      observedAt: "2026-08-18T12:00:00.000Z",
+    }));
+    const verdict = await resolveAuthorityRequirement(env(db), {
+      tenantId: TENANT,
+      now: "2026-08-18T13:00:00.000Z",
+      requirement: authorityRequirement({ authority_record_id: RECORD }),
+    });
+    assert.equal(verdict.code, "authority_superseded");
+  });
+
+  await t.test("ambiguous unlinked heads", async () => {
+    const db = new SqliteD1();
+    await recordAuthorityReadback(env(db), readbackInput());
+    await recordAuthorityReadback(env(db), readbackInput({
+      readbackId: "Authority-Readback-Ambiguous-02",
+      authorityRecordId: "Authority-Record-Ambiguous-02",
+      issuerJurisdiction: "BC-CA",
+      evidenceSha256: "d".repeat(64),
+      authorityStateDigestSha256: "f".repeat(64),
+    }));
+    const verdict = await resolveAuthorityRequirement(env(db), {
+      tenantId: TENANT,
+      now: NOW,
+      requirement: authorityRequirement(),
+    });
+    assert.equal(verdict.code, "authority_ambiguous");
+  });
+});
 
 test("authority actions are tenant-bound and replay/idempotency safe", async () => {
   const db = new SqliteD1();

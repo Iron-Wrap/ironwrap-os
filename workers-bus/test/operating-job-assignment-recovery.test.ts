@@ -12,13 +12,22 @@ function assignment(source: string, name: string): string[] {
 }
 
 test("0077 native operating assignments are included in both recovery inventories", async () => {
-  const migration = await readFile(
-    new URL(
-      "../migrations/0098_native_operating_job_assignments.sql",
-      import.meta.url,
+  const migration = [
+    await readFile(
+      new URL(
+        "../migrations/0098_native_operating_job_assignments.sql",
+        import.meta.url,
+      ),
+      "utf8",
     ),
-    "utf8",
-  );
+    await readFile(
+      new URL(
+        "../migrations/0129_operating_assignment_authority_requirements.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ].join("\n");
   const backup = await readFile(
     new URL("../../deploy/backup-d1-to-r2.sh", import.meta.url),
     "utf8",
@@ -83,5 +92,24 @@ test("0077 native operating assignments are included in both recovery inventorie
         `${name}=${table}`,
       ),
     );
+  }
+  for (const table of [
+    "operating_job_assignments",
+    "operating_work_object_assignments",
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(
+        `ALTER TABLE ${table}\\s+ADD COLUMN authority_requirements_json`,
+      ),
+    );
+    assert.match(
+      migration,
+      new RegExp(
+        `ALTER TABLE ${table}\\s+ADD COLUMN authority_requirements_sha256`,
+      ),
+    );
+    assert.ok(assignment(backup, "REQUIRED_TABLES").includes(table));
+    assert.ok(assignment(restore, "REQUIRED_TABLES").includes(table));
   }
 });

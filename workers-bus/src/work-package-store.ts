@@ -1,4 +1,9 @@
 import type { AppEnv, AppRole } from "./app-types.ts";
+import {
+  parseAuthorityRequirements,
+  type AuthorityCurrentPrecondition,
+  type AuthorityRequirement,
+} from "./authority-records.ts";
 import type { FrappeRow } from "./frappe-read.ts";
 
 const CURRENT_STATUSES = ["Released", "Acknowledged", "In Progress", "Blocked"] as const;
@@ -44,6 +49,10 @@ export interface NativeWorkPackageDefinition {
   manifestKey: string;
   jobId: string;
   assignmentId: string;
+  assignmentVersion: number;
+  assignmentCommandFingerprint: string;
+  assignmentAuthorityRequirementsSha256: string;
+  issueRequestSha256: string;
   workObjectType: string;
   workObjectId: string;
   physicalContextType: string;
@@ -61,6 +70,7 @@ export interface NativeWorkPackageDefinition {
   expiresAt: string;
   releasedAt: string;
   releaseAttemptId: string;
+  authorityRequirements: AuthorityRequirement[];
   steps: NativeWorkPackageStep[];
   holdPoints: NativeWorkPackageHoldPoint[];
   assignedWorkers: NativeWorkPackageWorker[];
@@ -102,6 +112,7 @@ export interface NativeWorkPackageActionInput {
   physicalContextType: string | null;
   physicalContextId: string | null;
   manifestKey: string;
+  authorityPreconditions?: AuthorityCurrentPrecondition[];
   occurredAt?: string;
 }
 
@@ -165,6 +176,9 @@ interface NativePackageRow {
   physical_context_id: string;
   assignment_authority_user: string | null;
   assignment_authority_role: string | null;
+  assignment_version: number | null;
+  assignment_command_fingerprint: string | null;
+  assignment_authority_requirements_sha256: string | null;
   status: NativeWorkPackageStatus;
   title: string;
   objective: string;
@@ -257,13 +271,74 @@ interface NativeEvidenceRow {
   evidence_id: string;
 }
 
+export interface NativeWorkPackageIssueReplayInput {
+  tenantId: string;
+  deviceActionId: string;
+  issueRequestSha256: string;
+  workPackageId: string;
+  workPackageVersion: number;
+  jobId: string;
+  assignmentId: string;
+  actorUserId: string;
+}
+
+/**
+ * Replay an already committed issue command before consulting mutable
+ * assignment state. The request hash binds every browser-controlled field;
+ * assignment-derived snapshots stay bound inside the immutable definition.
+ */
+export async function replayNativeWorkPackageIssue(
+  env: AppEnv,
+  input: NativeWorkPackageIssueReplayInput,
+): Promise<NativeWorkPackageRead | null> {
+  const event = await eventByDeviceAction(
+    env,
+    input.tenantId,
+    input.deviceActionId,
+  );
+  if (!event) return null;
+  const payload = parseJson(event.payload_json);
+  if (
+    event.event_kind !== "issued" ||
+    event.work_package_id !== input.workPackageId ||
+    event.work_package_version !== input.workPackageVersion ||
+    event.job_id !== input.jobId ||
+    event.assignment_id !== input.assignmentId ||
+    event.actor_user_id !== input.actorUserId ||
+    payload?.issue_request_sha256 !== input.issueRequestSha256
+  ) {
+    throw new Error("work_package_device_action_conflict");
+  }
+  const row = await packageRow(
+    env,
+    input.tenantId,
+    input.workPackageId,
+    input.workPackageVersion,
+  );
+  const replay = row ? await nativeWorkPackageReadFromRow(env, row) : null;
+  if (!replay) throw new Error("work_package_readback_missing");
+  return replay;
+}
+
 /**
  * Insert an issued, immutable D1 package. Re-issuing the same exact definition
  * is an idempotent read; changing any frozen field is rejected.
  */
 export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWorkPackageDefinition): Promise<NativeWorkPackageRead> {
+  definition = {
+    ...definition,
+    authorityRequirements: parseAuthorityRequirements(
+      definition.authorityRequirements,
+    ),
+  };
   validateDefinition(definition, env);
   definition = await canonicalDefinitionActors(env, definition);
+  if (
+    (await sha256Hex(canonicalJson(definition.authorityRequirements))) !==
+    definition.assignmentAuthorityRequirementsSha256
+  ) {
+    throw new Error("work_package_assignment_snapshot_invalid");
+  }
   const definitionJson = canonicalJson(definitionPayload(definition));
   const definitionHash = await sha256Hex(definitionJson);
   const existingCommand = await eventByDeviceAction(
@@ -282,7 +357,8 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
       existingCommand.actor_user_id !== definition.issuedByUser ||
       existingCommand.manifest_key !== definition.manifestKey ||
       payload?.definition_sha256 !== definitionHash ||
-      payload?.command_sha256 !== definitionHash
+      payload?.command_sha256 !== definitionHash ||
+      payload?.issue_request_sha256 !== definition.issueRequestSha256
     )
       throw new Error("work_package_device_action_conflict");
     const row = await packageRow(
@@ -323,6 +399,7 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
     payload: {
       definition_sha256: definitionHash,
       command_sha256: definitionHash,
+      issue_request_sha256: definition.issueRequestSha256,
     },
   };
   if (existing) {
@@ -345,7 +422,8 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
       event.device_action_id !== definition.deviceActionId ||
       event.manifest_key !== definition.manifestKey ||
       payload?.definition_sha256 !== definitionHash ||
-      payload?.command_sha256 !== definitionHash
+      payload?.command_sha256 !== definitionHash ||
+      payload?.issue_request_sha256 !== definition.issueRequestSha256
     )
       throw new Error("work_package_definition_conflict");
     const replay = await nativeWorkPackageReadFromRow(env, existing);
@@ -358,10 +436,12 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
       (work_package_id, tenant_id, version, job_id, assignment_id,
        work_object_type, work_object_id, physical_context_type, physical_context_id,
        assignment_authority_user, assignment_authority_role, status,
+       assignment_version, assignment_command_fingerprint,
+       assignment_authority_requirements_sha256,
        title, objective, boundaries, prerequisites, expected_result, stop_conditions,
        make_safe_procedure, definition_json, issued_at, expires_at, released_at,
        release_attempt_id, supersedes_id, correction_reason, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Released', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Released', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     definition.workPackageId,
     definition.tenantId,
@@ -374,6 +454,9 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
     definition.physicalContextId,
     definition.assignmentAuthorityUser ?? null,
     definition.assignmentAuthorityRole ?? null,
+    definition.assignmentVersion,
+    definition.assignmentCommandFingerprint,
+    definition.assignmentAuthorityRequirementsSha256,
     definition.title,
     definition.objective,
     definition.boundaries,
@@ -428,7 +511,14 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
       ),
     );
   }
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (String(error).includes("work_package_assignment_snapshot_stale")) {
+      throw new Error("work_package_assignment_snapshot_stale");
+    }
+    throw error;
+  }
   const read = await nativeWorkPackageForAssignment(
     env,
     definition.tenantId,
@@ -450,6 +540,8 @@ export async function nativeWorkPackageForAssignment(
     `SELECT work_package_id, tenant_id, version, job_id, assignment_id,
             work_object_type, work_object_id, physical_context_type, physical_context_id,
             assignment_authority_user, assignment_authority_role, status,
+            assignment_version, assignment_command_fingerprint,
+            assignment_authority_requirements_sha256,
             title, objective, boundaries, prerequisites, expected_result,
             stop_conditions, make_safe_procedure, definition_json, issued_at,
             expires_at, released_at, release_attempt_id, supersedes_id,
@@ -619,6 +711,8 @@ export async function nativeAssignments(
     `SELECT work_package_id, tenant_id, version, job_id, assignment_id,
             work_object_type, work_object_id, physical_context_type, physical_context_id,
             assignment_authority_user, assignment_authority_role, status,
+            assignment_version, assignment_command_fingerprint,
+            assignment_authority_requirements_sha256,
             definition_json, updated_at
        FROM work_packages
       WHERE ${clauses.join(" AND ")}
@@ -675,6 +769,10 @@ function assignmentDocument(row: NativePackageRow): FrappeRow {
     physical_context_id: row.physical_context_id,
     authority_user: row.assignment_authority_user,
     authority_role: row.assignment_authority_role,
+    assignment_version: row.assignment_version,
+    assignment_command_fingerprint: row.assignment_command_fingerprint,
+    assignment_authority_requirements_sha256:
+      row.assignment_authority_requirements_sha256,
     work_package: row.work_package_id,
     work_package_version: row.version,
     status:
@@ -761,6 +859,11 @@ export async function nativeWorkPackageAction(env: AppEnv, input: NativeWorkPack
         blocker_reason: input.blockerReason,
         work_package_id: input.workPackageId,
         work_package_version: input.workPackageVersion,
+        ...(input.kind === "stop_work"
+          ? {}
+          : {
+              authority_preconditions: input.authorityPreconditions ?? [],
+            }),
       },
     });
   } catch (error) {
@@ -778,6 +881,9 @@ export async function nativeWorkPackageAction(env: AppEnv, input: NativeWorkPack
         workPackageName: replay.work_package_id,
         eventName: replay.event_id,
       };
+    }
+    if (String(error).includes("work_package_authority_precondition_stale")) {
+      throw new Error("work_package_authority_precondition_stale");
     }
     throw error;
   }
@@ -1527,6 +1633,8 @@ async function packageRow(env: AppEnv, tenantId: string, workPackageId: string, 
     `SELECT work_package_id, tenant_id, version, job_id, assignment_id,
             work_object_type, work_object_id, physical_context_type, physical_context_id,
             assignment_authority_user, assignment_authority_role, status,
+            assignment_version, assignment_command_fingerprint,
+            assignment_authority_requirements_sha256,
             title, objective, boundaries, prerequisites, expected_result,
             stop_conditions, make_safe_procedure, definition_json, issued_at,
             expires_at, released_at, release_attempt_id, supersedes_id,
@@ -1593,6 +1701,7 @@ function eventStatement(env: AppEnv, event: NativeEventInsert) {
 function packageDocument(row: NativePackageRow, payload: ReturnType<typeof parseDefinitionPayload> & object): FrappeRow {
   return {
     name: row.work_package_id,
+    source_system: "ironwrap-d1",
     work_package_id: row.work_package_id,
     roof_job: row.work_object_type === "Roof Job" ? row.job_id : null,
     job_assignment: row.assignment_id,
@@ -1617,6 +1726,12 @@ function packageDocument(row: NativePackageRow, payload: ReturnType<typeof parse
     acknowledged_at: row.acknowledged_at,
     supersedes: row.supersedes_id,
     correction_reason: row.correction_reason,
+    ...(payload.authority_requirements_json === undefined
+      ? {}
+      : {
+          authority_requirements_json:
+            payload.authority_requirements_json,
+        }),
     assigned_workers: payload.assigned_workers.map((worker) => ({
       sequence: worker.sequence,
       worker_user: worker.workerUser,
@@ -1690,6 +1805,11 @@ function definitionPayload(definition: NativeWorkPackageDefinition) {
     version: definition.version,
     job_id: definition.jobId,
     assignment_id: definition.assignmentId,
+    assignment_version: definition.assignmentVersion,
+    assignment_command_fingerprint: definition.assignmentCommandFingerprint,
+    assignment_authority_requirements_sha256:
+      definition.assignmentAuthorityRequirementsSha256,
+    issue_request_sha256: definition.issueRequestSha256,
     work_object_type: definition.workObjectType,
     work_object_id: definition.workObjectId,
     physical_context_type: definition.physicalContextType,
@@ -1707,6 +1827,7 @@ function definitionPayload(definition: NativeWorkPackageDefinition) {
     expires_at: definition.expiresAt,
     released_at: definition.releasedAt,
     release_attempt_id: definition.releaseAttemptId,
+    authority_requirements: definition.authorityRequirements,
     supersedes_id: definition.supersedesId ?? null,
     supersedes_version: definition.supersedesVersion ?? null,
     correction_reason: definition.correctionReason ?? null,
@@ -1739,6 +1860,7 @@ function parseDefinitionPayload(value: string): {
   assigned_workers: NativeWorkPackageWorker[];
   steps: NativeWorkPackageStep[];
   hold_points: NativeWorkPackageHoldPoint[];
+  authority_requirements_json?: string;
 } | null {
   const parsed = parseJson(value);
   if (!parsed || !Array.isArray(parsed.assigned_workers) || !Array.isArray(parsed.steps) || !Array.isArray(parsed.hold_points)) return null;
@@ -1785,7 +1907,20 @@ function parseDefinitionPayload(value: string): {
     )
   )
     return null;
-  return { assigned_workers: assignedWorkers, steps, hold_points: holdPoints };
+  const authorityRequirementsJson = Object.hasOwn(
+      parsed,
+      "authority_requirements",
+    )
+    ? JSON.stringify(parsed.authority_requirements)
+    : undefined;
+  return {
+    assigned_workers: assignedWorkers,
+    steps,
+    hold_points: holdPoints,
+    ...(authorityRequirementsJson === undefined
+      ? {}
+      : { authority_requirements_json: authorityRequirementsJson }),
+  };
 }
 
 function validateDefinition(definition: NativeWorkPackageDefinition, env: AppEnv): void {
@@ -1833,6 +1968,15 @@ function validateDefinition(definition: NativeWorkPackageDefinition, env: AppEnv
   }
   if (!Number.isInteger(definition.version) || definition.version < 1)
     throw new Error("work_package_definition_invalid");
+  if (
+    !Number.isInteger(definition.assignmentVersion) ||
+    definition.assignmentVersion < 1 ||
+    !/^[0-9a-f]{64}$/.test(definition.assignmentCommandFingerprint) ||
+    !/^[0-9a-f]{64}$/.test(definition.assignmentAuthorityRequirementsSha256) ||
+    !/^[0-9a-f]{64}$/.test(definition.issueRequestSha256)
+  ) {
+    throw new Error("work_package_assignment_snapshot_invalid");
+  }
   if (!text(definition.manifestKey) || definition.manifestKey.length > 1024)
     throw new Error("work_package_definition_invalid");
   if (

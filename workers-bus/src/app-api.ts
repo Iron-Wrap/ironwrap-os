@@ -164,12 +164,14 @@ import {
 import {
   getNativeWorkPackageVersionHead,
   issueNativeWorkPackage,
+  replayNativeWorkPackageIssue,
   releaseNativeWorkPackageHold,
   reviewNativeWorkPackageEvidence,
   type NativeWorkPackageHoldPoint,
   type NativeWorkPackageStep,
   type NativeWorkPackageWorker,
 } from "./work-package-store.ts";
+import { parseAuthorityRequirements } from "./authority-records.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
@@ -2327,7 +2329,60 @@ async function handleOfficeWorkPackageIssueRoute(
   if (!input)
     return privateAppJson({ error: "invalid_work_package_issue" }, 400);
 
+  const workPackageId = `wp_${(
+    await sha256Hex(
+      `${auth.session.tenant_id}:${jobName}:${input.assignmentId}:${input.version}`,
+    )
+  ).slice(0, 32)}`;
+  const issueRequestSha256 = await sha256Hex(
+    canonicalJson({
+      schema_version: "ironwrap.work-package-issue-request.v1",
+      tenant_id: auth.session.tenant_id,
+      actor_user_id: auth.session.user_id,
+      actor_role: auth.session.role,
+      device_action_id: deviceActionId,
+      job_id: jobName,
+      route_scope: scope ?? null,
+      request: input,
+    }),
+  );
+  const manifestKey = workPackageOfficeManifestKey(
+    auth.session.tenant_id,
+    deviceActionId,
+  );
+
   try {
+    const durableReplay = await replayNativeWorkPackageIssue(env, {
+      tenantId: auth.session.tenant_id,
+      deviceActionId,
+      issueRequestSha256,
+      workPackageId,
+      workPackageVersion: input.version,
+      jobId: jobName,
+      assignmentId: input.assignmentId,
+      actorUserId: auth.session.user_id,
+    });
+    if (durableReplay) {
+      await storeWorkPackageOfficeManifest(
+        env,
+        auth.session.tenant_id,
+        deviceActionId,
+        officeWorkPackageIssueManifest(
+          durableReplay.document,
+          auth,
+          deviceActionId,
+          jobName,
+          input,
+          scope,
+        ),
+      );
+      return officeWorkPackageIssueResponse(
+        auth.session.tenant_id,
+        deviceActionId,
+        workPackageId,
+        input.version,
+      );
+    }
     const assignment = scope
       ? await activeAssignmentForWorkObject(env, auth, scope)
       : await activeAssignmentForJob(env, auth, jobName);
@@ -2346,6 +2401,42 @@ async function handleOfficeWorkPackageIssueRoute(
     const assignmentModified = normalizedIso(assignment.modified);
     if (!assignmentModified || assignmentModified !== input.assignmentModified)
       return privateAppJson({ error: "work_package_assignment_changed" }, 409);
+    let authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
+    try {
+      authorityRequirements = parseAuthorityRequirements(
+        assignment.authority_requirements_json,
+      );
+    } catch {
+      return privateAppJson(
+        { error: "work_package_authority_requirements_invalid" },
+        409,
+      );
+    }
+    const assignmentVersion = validVersion(assignment.assignment_version);
+    const assignmentCommandFingerprint = boundedText(
+      assignment.assignment_command_fingerprint,
+      64,
+      64,
+    );
+    const assignmentAuthorityRequirementsSha256 = boundedText(
+      assignment.authority_requirements_sha256,
+      64,
+      64,
+    );
+    if (
+      !assignmentVersion ||
+      !assignmentCommandFingerprint ||
+      !assignmentAuthorityRequirementsSha256 ||
+      !/^[0-9a-f]{64}$/.test(assignmentCommandFingerprint) ||
+      !/^[0-9a-f]{64}$/.test(assignmentAuthorityRequirementsSha256) ||
+      (await sha256Hex(canonicalJson(authorityRequirements))) !==
+        assignmentAuthorityRequirementsSha256
+    ) {
+      return privateAppJson(
+        { error: "work_package_authority_requirements_invalid" },
+        409,
+      );
+    }
 
     const head = await getNativeWorkPackageVersionHead(
       env,
@@ -2353,11 +2444,11 @@ async function handleOfficeWorkPackageIssueRoute(
       jobName,
       assignmentName,
     );
-    const workPackageId = `wp_${(
-      await sha256Hex(
-        `${auth.session.tenant_id}:${jobName}:${assignmentName}:${input.version}`,
-      )
-    ).slice(0, 32)}`;
+    if (assignmentName !== input.assignmentId)
+      return privateAppJson(
+        { error: "work_package_assignment_not_available" },
+        404,
+      );
     const replay =
       head?.version === input.version && head.workPackageId === workPackageId;
     if (!replay) {
@@ -2403,45 +2494,6 @@ async function handleOfficeWorkPackageIssueRoute(
     const releaseAttemptId = `wpr_${(
       await sha256Hex(`${auth.session.tenant_id}:${deviceActionId}:release`)
     ).slice(0, 32)}`;
-    const manifest = {
-      version: 1,
-      tenant_id: auth.session.tenant_id,
-      user_id: auth.session.user_id,
-      role: auth.session.role,
-      device_action_id: deviceActionId,
-      kind: "work_package_issue",
-      job_id: jobName,
-      assignment_id: assignmentName,
-      work_package_id: workPackageId,
-      work_package_version: input.version,
-      release_attempt_id: releaseAttemptId,
-      supersedes_id: priorId,
-      supersedes_version: priorId ? input.version - 1 : null,
-      correction_reason: input.correctionReason,
-      issued_at: input.issuedAt,
-      expires_at: input.expiresAt,
-      scope: nativeScope,
-      assignment_authority: {
-        user: authorityUser,
-        role: authorityRole,
-      },
-      assigned_workers: workers,
-      title: input.title,
-      objective: input.objective,
-      boundaries: input.boundaries,
-      prerequisites: input.prerequisites,
-      expected_result: input.expectedResult,
-      stop_conditions: input.stopConditions,
-      make_safe_procedure: input.makeSafeProcedure,
-      steps: input.steps,
-      hold_points: input.holdPoints,
-    };
-    const manifestKey = await storeWorkPackageOfficeManifest(
-      env,
-      auth.session.tenant_id,
-      deviceActionId,
-      manifest,
-    );
     const result = await issueNativeWorkPackage(env, {
       tenantId: auth.session.tenant_id,
       workPackageId,
@@ -2450,6 +2502,10 @@ async function handleOfficeWorkPackageIssueRoute(
       manifestKey,
       jobId: jobName,
       assignmentId: assignmentName,
+      assignmentVersion,
+      assignmentCommandFingerprint,
+      assignmentAuthorityRequirementsSha256,
+      issueRequestSha256,
       workObjectType: nativeScope.workObjectType,
       workObjectId: nativeScope.workObjectId,
       physicalContextType: nativeScope.physicalContextType,
@@ -2467,6 +2523,7 @@ async function handleOfficeWorkPackageIssueRoute(
       expiresAt: input.expiresAt,
       releasedAt: input.issuedAt,
       releaseAttemptId,
+      authorityRequirements,
       steps: input.steps,
       holdPoints: input.holdPoints,
       assignedWorkers: workers,
@@ -2476,15 +2533,25 @@ async function handleOfficeWorkPackageIssueRoute(
       issuedByUser: auth.session.user_id,
       issuedByRole: officeWorkPackageRoleLabel(auth.session.role),
     });
-    return privateAppJson({
-      device_action_id: deviceActionId,
-      status: "verified",
-      server_ref: result.document.work_package_id,
-      cursor: `wpi_${(
-        await sha256Hex(`${auth.session.tenant_id}:${deviceActionId}`)
-      ).slice(0, 32)}`,
-      work_package_version: input.version,
-    });
+    await storeWorkPackageOfficeManifest(
+      env,
+      auth.session.tenant_id,
+      deviceActionId,
+      officeWorkPackageIssueManifest(
+        result.document,
+        auth,
+        deviceActionId,
+        jobName,
+        input,
+        scope,
+      ),
+    );
+    return officeWorkPackageIssueResponse(
+      auth.session.tenant_id,
+      deviceActionId,
+      workPackageId,
+      input.version,
+    );
   } catch (error) {
     return privateAppJson(
       workPackageOfficeActionError(error),
@@ -3634,6 +3701,7 @@ async function createOperatingJobAssignment(
       expectedRoofJobVersion: input.expectedRoofJobVersion,
       crewId: input.crewId,
       expectedCrewVersion: input.expectedCrewVersion,
+      authorityRequirements: input.authorityRequirements,
       scheduledStart: input.scheduledStart,
       scheduledEnd: input.scheduledEnd,
       supersedesAssignmentId: input.supersedesAssignmentId,
@@ -3653,6 +3721,9 @@ async function createOperatingJobAssignment(
           crew_id: assignment.crew_id,
           crew_version: assignment.crew_version,
           assigned_users: assignment.assigned_users,
+          authority_requirements: assignment.authority_requirements,
+          authority_requirements_sha256:
+            assignment.authority_requirements_sha256,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
           supersedes_assignment_id: assignment.supersedes_assignment_id,
@@ -3702,6 +3773,7 @@ async function createOperatingWorkObjectAssignment(
       tenantId: auth.session.tenant_id,
       ...scope,
       assignedUsers: input.assignedUsers,
+      authorityRequirements: input.authorityRequirements,
       scheduledStart: input.scheduledStart,
       scheduledEnd: input.scheduledEnd,
       authorityUserId: input.authorityUserId,
@@ -3723,6 +3795,9 @@ async function createOperatingWorkObjectAssignment(
           physical_context_type: assignment.physical_context_type,
           physical_context_id: assignment.physical_context_id,
           assigned_users: assignment.assigned_users,
+          authority_requirements: assignment.authority_requirements,
+          authority_requirements_sha256:
+            assignment.authority_requirements_sha256,
           scheduled_start: assignment.scheduled_start,
           scheduled_end: assignment.scheduled_end,
           authority_user_id: assignment.authority_user_id,
@@ -5563,6 +5638,7 @@ function parseOperatingJobAssignment(value: unknown): {
   expectedRoofJobVersion: number;
   crewId: string;
   expectedCrewVersion: number;
+  authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
   scheduledStart: string;
   scheduledEnd: string | null;
   supersedesAssignmentId: string | null;
@@ -5572,6 +5648,7 @@ function parseOperatingJobAssignment(value: unknown): {
     "expected_roof_job_version",
     "crew_id",
     "expected_crew_version",
+    "authority_requirements",
     "scheduled_start",
     "scheduled_end",
     "supersedes_assignment_id",
@@ -5585,6 +5662,14 @@ function parseOperatingJobAssignment(value: unknown): {
   const expectedRoofJobVersion = validVersion(value.expected_roof_job_version);
   const crewId = idText(value.crew_id, 8, 200);
   const expectedCrewVersion = validVersion(value.expected_crew_version);
+  let authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
+  try {
+    authorityRequirements = parseAuthorityRequirements(
+      value.authority_requirements,
+    );
+  } catch {
+    return null;
+  }
   const scheduledStart = normalizedIso(value.scheduled_start);
   const scheduledEnd = value.scheduled_end === null
     ? null
@@ -5610,6 +5695,7 @@ function parseOperatingJobAssignment(value: unknown): {
     expectedRoofJobVersion,
     crewId,
     expectedCrewVersion,
+    authorityRequirements,
     scheduledStart,
     scheduledEnd,
     supersedesAssignmentId,
@@ -5619,6 +5705,7 @@ function parseOperatingJobAssignment(value: unknown): {
 
 function parseOperatingWorkObjectAssignment(value: unknown): {
   assignedUsers: string[];
+  authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
   scheduledStart: string;
   scheduledEnd: string | null;
   authorityUserId: string;
@@ -5628,6 +5715,7 @@ function parseOperatingWorkObjectAssignment(value: unknown): {
 } | null {
   const requiredKeys = [
     "assigned_users",
+    "authority_requirements",
     "scheduled_start",
     "scheduled_end",
     "authority_user_id",
@@ -5648,6 +5736,14 @@ function parseOperatingWorkObjectAssignment(value: unknown): {
   const assignedUsers = value.assigned_users.map((user) =>
     idText(user, 8, 200),
   );
+  let authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
+  try {
+    authorityRequirements = parseAuthorityRequirements(
+      value.authority_requirements,
+    );
+  } catch {
+    return null;
+  }
   const scheduledStart = normalizedIso(value.scheduled_start);
   const scheduledEnd =
     value.scheduled_end === null ? null : normalizedIso(value.scheduled_end);
@@ -5682,6 +5778,7 @@ function parseOperatingWorkObjectAssignment(value: unknown): {
   }
   return {
     assignedUsers: assignedUsers as string[],
+    authorityRequirements,
     scheduledStart,
     scheduledEnd,
     authorityUserId,
@@ -6488,7 +6585,9 @@ function workPackageOfficeActionError(error: unknown): { error: string } {
     error.message === "work_package_supersession_invalid" ||
     error.message === "work_package_sequence_invalid" ||
     error.message === "work_package_required_worker_missing" ||
-    error.message === "work_package_worker_duplicate"
+    error.message === "work_package_worker_duplicate" ||
+    error.message === "work_package_assignment_snapshot_invalid" ||
+    error.message === "work_package_assignment_snapshot_stale"
   ) {
     return { error: code };
   }
@@ -6530,7 +6629,9 @@ function workPackageOfficeActionStatus(error: unknown): number {
     error.message === "work_package_supersession_invalid" ||
     error.message === "work_package_sequence_invalid" ||
     error.message === "work_package_required_worker_missing" ||
-    error.message === "work_package_worker_duplicate"
+    error.message === "work_package_worker_duplicate" ||
+    error.message === "work_package_assignment_snapshot_invalid" ||
+    error.message === "work_package_assignment_snapshot_stale"
   ) {
     return 409;
   }
@@ -6544,7 +6645,7 @@ async function storeWorkPackageOfficeManifest(
   manifest: Record<string, unknown>,
 ): Promise<string> {
   const body = canonicalJson(manifest);
-  const manifestKey = `work-packages/office-actions/${tenantId}/${deviceActionId}.json`;
+  const manifestKey = workPackageOfficeManifestKey(tenantId, deviceActionId);
   await r2ObjectStore(env.RAW).ensure(
     manifestKey,
     body,
@@ -6552,6 +6653,102 @@ async function storeWorkPackageOfficeManifest(
     await sha256Hex(body),
   );
   return manifestKey;
+}
+
+function workPackageOfficeManifestKey(
+  tenantId: string,
+  deviceActionId: string,
+): string {
+  return `work-packages/office-actions/${tenantId}/${deviceActionId}.json`;
+}
+
+function officeWorkPackageIssueManifest(
+  document: FrappeRow,
+  auth: AuthContext,
+  deviceActionId: string,
+  jobName: string,
+  input: NonNullable<ReturnType<typeof parseOfficeWorkPackageIssue>>,
+  routeScope?: WorkObjectScope,
+): Record<string, unknown> {
+  const nativeScope = officeWorkPackageIssueScope(
+    document,
+    jobName,
+    routeScope,
+  );
+  const workers = officeWorkPackageAssignmentRoster(document);
+  const workPackageId = boundedText(document.work_package_id, 1, 140);
+  const assignmentId = boundedText(document.job_assignment, 1, 140);
+  const releaseAttemptId = boundedText(document.release_attempt_id, 1, 140);
+  let authorityRequirements: ReturnType<typeof parseAuthorityRequirements>;
+  try {
+    authorityRequirements = parseAuthorityRequirements(
+      document.authority_requirements_json,
+    );
+  } catch {
+    throw new Error("work_package_definition_invalid");
+  }
+  if (
+    !nativeScope ||
+    !workPackageId ||
+    !assignmentId ||
+    !releaseAttemptId ||
+    !workers?.some((worker) => worker.required)
+  ) {
+    throw new Error("work_package_definition_invalid");
+  }
+  const priorId = boundedText(document.supersedes, 1, 140);
+  return {
+    version: 1,
+    tenant_id: auth.session.tenant_id,
+    user_id: auth.session.user_id,
+    role: auth.session.role,
+    device_action_id: deviceActionId,
+    kind: "work_package_issue",
+    job_id: jobName,
+    assignment_id: assignmentId,
+    work_package_id: workPackageId,
+    work_package_version: input.version,
+    release_attempt_id: releaseAttemptId,
+    supersedes_id: priorId,
+    supersedes_version: priorId ? input.version - 1 : null,
+    correction_reason: input.correctionReason,
+    issued_at: input.issuedAt,
+    expires_at: input.expiresAt,
+    scope: nativeScope,
+    assignment_authority: {
+      user: boundedText(document.authority_user, 1, 140),
+      role: boundedText(document.authority_role, 1, 140),
+    },
+    authority_requirements: authorityRequirements,
+    assigned_workers: workers,
+    title: input.title,
+    objective: input.objective,
+    boundaries: input.boundaries,
+    prerequisites: input.prerequisites,
+    expected_result: input.expectedResult,
+    stop_conditions: input.stopConditions,
+    make_safe_procedure: input.makeSafeProcedure,
+    steps: input.steps,
+    hold_points: input.holdPoints,
+  };
+}
+
+async function officeWorkPackageIssueResponse(
+  tenantId: string,
+  deviceActionId: string,
+  workPackageId: string,
+  version: number,
+): Promise<Response> {
+  return privateAppJson({
+    device_action_id: deviceActionId,
+    status: "verified",
+    server_ref: workPackageId,
+    cursor: `wpi_${(await sha256Hex(`${tenantId}:${deviceActionId}`)).slice(
+      0,
+      32,
+    )}`,
+    work_package_version: version,
+  });
 }
 
 function officeWorkPackageIssueScope(

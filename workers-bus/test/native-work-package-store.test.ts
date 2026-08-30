@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import {
-  issueNativeWorkPackage,
+  authorityCurrentPrecondition,
+  recordAuthorityReadback,
+  type AuthorityCurrentPrecondition,
+} from "../src/authority-records.ts";
+import {
+  issueNativeWorkPackage as issueNativeWorkPackageStore,
   nativeAssignmentForWorkObject,
   nativeWorkPackageAction,
   nativeWorkPackageForAssignment,
@@ -69,6 +75,11 @@ class TestD1 {
     }
   }
 }
+
+const packetAuthorityPreconditions = new WeakMap<
+  TestD1,
+  Map<string, AuthorityCurrentPrecondition[]>
+>();
 
 test("concurrent evidence-review replay rejects correction rationale drift", async () => {
   const env = await testEnv();
@@ -169,6 +180,21 @@ async function testEnv() {
 }
 
 function definition(): NativeWorkPackageDefinition {
+  const authorityRequirements = [
+    {
+      subject_type: "Person" as const,
+      subject_role: "Worker" as const,
+      subject_ref: "crew@example.com",
+      authority_kind: "Worker Competency" as const,
+      authority_scope: "field installation",
+      scope_type: "Work Package" as const,
+      scope_ref: "wp_native_iro195",
+      issuer_name: "IronWrap Production",
+      issuer_jurisdiction: "AB-CA",
+      issuer_reference: "internal:competency:crew@example.com",
+      source_version: "2026-08-20",
+    },
+  ];
   return {
     tenantId: "ironwrap",
     workPackageId: "wp_native_iro195",
@@ -177,6 +203,12 @@ function definition(): NativeWorkPackageDefinition {
     manifestKey: "work-packages/issue-native-195-1.json",
     jobId: "JOB-NATIVE-195",
     assignmentId: "ASSIGN-NATIVE-195",
+    assignmentVersion: 1,
+    assignmentCommandFingerprint: "a".repeat(64),
+    assignmentAuthorityRequirementsSha256: canonicalSha256(
+      authorityRequirements,
+    ),
+    issueRequestSha256: "b".repeat(64),
     workObjectType: "Roof Job",
     workObjectId: "JOB-NATIVE-195",
     physicalContextType: "Roof Site",
@@ -194,6 +226,7 @@ function definition(): NativeWorkPackageDefinition {
     expiresAt: "2026-08-21T08:00:00.000Z",
     releasedAt: "2026-08-20T08:00:00.000Z",
     releaseAttemptId: "attempt-native-195",
+    authorityRequirements,
     steps: [
       {
         sequence: 1,
@@ -223,6 +256,278 @@ function definition(): NativeWorkPackageDefinition {
     issuedByUser: "owner@example.com",
     issuedByRole: "IronWrap Owner",
   };
+}
+
+async function issueNativeWorkPackage(
+  env: any,
+  packet: NativeWorkPackageDefinition,
+) {
+  seedAssignmentSnapshot(env, packet);
+  const issued = await issueNativeWorkPackageStore(env, packet);
+  await seedPacketAuthority(env, packet);
+  return issued;
+}
+
+async function seedPacketAuthority(
+  env: any,
+  packet: NativeWorkPackageDefinition,
+): Promise<void> {
+  const preconditions: AuthorityCurrentPrecondition[] = [];
+  for (const [index, requirement] of packet.authorityRequirements.entries()) {
+    const identity = createHash("sha256")
+      .update(
+        `${packet.tenantId}:${packet.workPackageId}:${canonicalJson(requirement)}`,
+      )
+      .digest("hex")
+      .slice(0, 24);
+    const readback = await recordAuthorityReadback(env, {
+      readbackId: `Authority-Readback-${identity}`,
+      tenantId: packet.tenantId,
+      authorityRecordId: `Authority-Record-${identity}`,
+      authorityVersion: 1,
+      subjectType: requirement.subject_type,
+      subjectRole: requirement.subject_role ?? "Worker",
+      personUser:
+        requirement.subject_type === "Person" ? requirement.subject_ref : null,
+      organization:
+        requirement.subject_type === "Organization"
+          ? requirement.subject_ref
+          : null,
+      authorityKind: requirement.authority_kind,
+      authorityScope: requirement.authority_scope ?? "field installation",
+      scopeType: requirement.scope_type,
+      scopeRef: requirement.scope_ref,
+      roofJob: packet.jobId,
+      scopeJson: "{}",
+      issuerName: requirement.issuer_name ?? "IronWrap Production",
+      issuerJurisdiction: requirement.issuer_jurisdiction ?? "AB-CA",
+      issuerReference:
+        requirement.issuer_reference ?? `internal:authority:${identity}`,
+      issuerSourceVersion: requirement.source_version ?? "2026-08-20",
+      verificationState: "verified",
+      evidenceRefsJson: JSON.stringify([
+        {
+          ref: `r2://authority/${identity}.json`,
+          sha256: createHash("sha256")
+            .update(`evidence:${identity}`)
+            .digest("hex"),
+        },
+      ]),
+      evidenceSha256: createHash("sha256")
+        .update(`evidence:${identity}`)
+        .digest("hex"),
+      authorityStateDigestSha256: createHash("sha256")
+        .update(`state:${identity}:${index}`)
+        .digest("hex"),
+      authorityEffectiveFrom: "2026-08-01",
+      authorityExpiresAt: "2027-12-31",
+      authorityRevokedAt: null,
+      supersedesAuthorityRecordId: null,
+      authorityVerificationMethod: "Internal Competency Assessment",
+      issuerReceiptSha256: null,
+      observedByUserId: "appu_owner_native",
+      observedAt: packet.issuedAt,
+      actionId: null,
+    });
+    preconditions.push(
+      authorityCurrentPrecondition(requirement, readback.readback),
+    );
+  }
+  const byPackage = packetAuthorityPreconditions.get(env.DB) ?? new Map();
+  byPackage.set(packet.workPackageId, preconditions);
+  packetAuthorityPreconditions.set(env.DB, byPackage);
+}
+
+function nativeAction(
+  env: any,
+  packet: NativeWorkPackageDefinition,
+  input: Parameters<typeof nativeWorkPackageAction>[1],
+) {
+  return nativeWorkPackageAction(env, {
+    ...input,
+    ...(input.kind === "stop_work"
+      ? {}
+      : {
+          authorityPreconditions:
+            packetAuthorityPreconditions
+              .get(env.DB)
+              ?.get(packet.workPackageId) ?? [],
+        }),
+  });
+}
+
+function seedAssignmentSnapshot(
+  env: any,
+  packet: NativeWorkPackageDefinition,
+): void {
+  const sqlite = env.DB.sqlite as DatabaseSync;
+  const existing = sqlite
+    .prepare(
+      "SELECT assignment_id FROM operating_job_assignments WHERE tenant_id = ? AND assignment_id = ?",
+    )
+    .get(packet.tenantId, packet.assignmentId);
+  if (existing) return;
+  const suffix = createHash("sha256")
+    .update(`${packet.tenantId}:${packet.assignmentId}`)
+    .digest("hex")
+    .slice(0, 16);
+  const now = packet.issuedAt;
+  const envelopeId = `ow_wp_${suffix}`;
+  const leadId = `lead:wp:${suffix}`;
+  const customerId = `customer:wp:${suffix}`;
+  const crewId = `crew:wp:${suffix}`;
+  const rawKey = `raw/work-package/${suffix}.json`;
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO envelopes
+       (envelope_id, source, contact_name, contact_email, payload_json, raw_key,
+        ts, status, created_at, updated_at)
+     VALUES (?, 'manual', 'Work Package Customer', 'wp@example.invalid', '{}', ?,
+             ?, 'reconciled', ?, ?)`,
+    )
+    .run(envelopeId, rawKey, now, now, now);
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO operating_leads
+       (lead_id, tenant_id, source_envelope_id, source_raw_key, source,
+        contact_name, contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'manual', 'Work Package Customer', 'wp@example.invalid',
+             'qualified', 1, ?, ?)`,
+    )
+    .run(leadId, packet.tenantId, envelopeId, rawKey, now, now);
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO operating_customers
+       (customer_id, tenant_id, source_envelope_id, source_raw_key, display_name,
+        contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'Work Package Customer', 'wp@example.invalid',
+             'active', 1, ?, ?)`,
+    )
+    .run(customerId, packet.tenantId, envelopeId, rawKey, now, now);
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO operating_roof_jobs
+       (roof_job_id, tenant_id, lead_id, customer_id, source_envelope_id,
+        source_raw_key, brand, job_number, service_type, job_status,
+        current_gate_state, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'ironwrap', ?, 'roof_replacement', 'qualified',
+             'ready', 1, ?, ?)`,
+    )
+    .run(
+      packet.jobId,
+      packet.tenantId,
+      leadId,
+      customerId,
+      envelopeId,
+      rawKey,
+      `IW-${suffix.slice(0, 8)}`,
+      now,
+      now,
+    );
+  for (const gate of [
+    "Deposit",
+    "Materials",
+    "Safety",
+    "Access",
+    "Weather",
+    "Crew",
+  ]) {
+    sqlite
+      .prepare(
+        `INSERT OR IGNORE INTO operating_production_gates
+         (gate_id, tenant_id, roof_job_id, source_envelope_id, source_raw_key,
+          gate, state, owner_user, assigned_at, due_at, blocker_reason, version,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'ready', 'appu_owner_native', ?, ?,
+               'No active blocker', 1, ?, ?)`,
+      )
+      .run(
+        `gate:wp:${suffix}:${gate.toLowerCase()}`,
+        packet.tenantId,
+        packet.jobId,
+        envelopeId,
+        rawKey,
+        gate,
+        now,
+        packet.expiresAt,
+        now,
+        now,
+      );
+  }
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO fleet_crews
+       (crew_id, tenant_id, display_name, status, version, created_at, updated_at)
+     VALUES (?, ?, 'Work Package Crew', 'Active', 1, ?, ?)`,
+    )
+    .run(crewId, packet.tenantId, now, now);
+  const workerIds = packet.assignedWorkers.map((worker) =>
+    worker.workerUser === "crew@example.com"
+      ? "appu_crew_native"
+      : worker.workerUser === "crew-b@example.com"
+        ? "appu_crew_native_b"
+        : worker.workerUser,
+  );
+  for (const [index, workerId] of workerIds.entries()) {
+    sqlite
+      .prepare(
+        `INSERT OR IGNORE INTO fleet_crew_members
+         (membership_id, tenant_id, crew_id, user_id, active, version,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
+      )
+      .run(
+        `membership:wp:${suffix}:${index + 1}`,
+        packet.tenantId,
+        crewId,
+        workerId,
+        now,
+        now,
+      );
+  }
+  sqlite
+    .prepare(
+      `INSERT INTO operating_job_assignments
+       (assignment_id, tenant_id, roof_job_id, assignment_version,
+        roof_job_version, crew_id, crew_version, assigned_users_json,
+        scheduled_start, scheduled_end, supersedes_assignment_id,
+        correction_reason, actor_user_id, command_fingerprint,
+        idempotency_key_hash, created_at, authority_requirements_json,
+        authority_requirements_sha256)
+     VALUES (?, ?, ?, ?, 1, ?, 1, ?, ?, ?, NULL, NULL, 'appu_owner_native',
+             ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      packet.assignmentId,
+      packet.tenantId,
+      packet.jobId,
+      packet.assignmentVersion,
+      crewId,
+      JSON.stringify(workerIds),
+      packet.issuedAt,
+      packet.expiresAt,
+      packet.assignmentCommandFingerprint,
+      createHash("sha256").update(packet.assignmentId).digest("hex"),
+      packet.issuedAt,
+      canonicalJson(packet.authorityRequirements),
+      packet.assignmentAuthorityRequirementsSha256,
+    );
+}
+
+function canonicalSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function insertCapture(
@@ -331,6 +636,10 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
   const packet = definition();
   const issued = await issueNativeWorkPackage(env, packet);
   assert.equal(issued.document.status, "Released");
+  assert.deepEqual(
+    JSON.parse(String(issued.document.authority_requirements_json)),
+    packet.authorityRequirements,
+  );
   assert.deepEqual(issued.document.assigned_workers, [
     {
       sequence: 1,
@@ -342,6 +651,19 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
   assert.equal(issued.document.hold_points[0]?.release_phase, "Pre-start");
   assert.equal(issued.holdReleases.length, 0);
   assert.equal(issued.acknowledgements.length, 0);
+  const driftedRequirements = packet.authorityRequirements.map(
+    (requirement) => ({ ...requirement, issuer_jurisdiction: "BC-CA" }),
+  );
+  await assert.rejects(
+    () =>
+      issueNativeWorkPackage(env, {
+        ...packet,
+        authorityRequirements: driftedRequirements,
+        assignmentAuthorityRequirementsSha256:
+          canonicalSha256(driftedRequirements),
+      }),
+    /work_package_device_action_conflict/,
+  );
   insertCapture(
     env,
     packet,
@@ -392,7 +714,7 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
     ...scope(),
   };
   insertCommandReceipt(env, packet, "acknowledge", ackInput.deviceActionId);
-  const ack = await nativeWorkPackageAction(env, ackInput);
+  const ack = await nativeAction(env, packet, ackInput);
   assert.equal(ack.workPackageName, packet.workPackageId);
   assert.equal(await reconcileNativeWorkPackageActions(env, packet.tenantId), 1);
   const boundReceipt = await env.DB.prepare(
@@ -411,13 +733,13 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
     /work_package_action_binding_immutable/,
   );
   assert.equal(await reconcileNativeWorkPackageActions(env, packet.tenantId), 0);
-  assert.deepEqual(await nativeWorkPackageAction(env, ackInput), ack);
+  assert.deepEqual(await nativeAction(env, packet, ackInput), ack);
   const acknowledged = await nativeWorkPackageForAssignment(env, packet.tenantId, packet.jobId, packet.assignmentId);
   assert.equal(acknowledged?.document.status, "Acknowledged");
   assert.equal(acknowledged?.acknowledgements.length, 1);
   assert.equal(acknowledged?.holdReleases.length, 1);
 
-  const started = await nativeWorkPackageAction(env, {
+  const started = await nativeAction(env, packet, {
     ...ackInput,
     kind: "start_work",
     deviceActionId: "start-native-195-1",
@@ -431,7 +753,7 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
   });
   assert.equal(assignment?.assignment_id, packet.assignmentId);
   assert.equal(assignment?.work_package_version, packet.version);
-  const stopped = await nativeWorkPackageAction(env, {
+  const stopped = await nativeAction(env, packet, {
     ...ackInput,
     kind: "stop_work",
     deviceActionId: "stop-native-195-1",
@@ -466,6 +788,7 @@ test("native Work Package issuance is atomic and rejects inactive or wrong-role 
   );
 
   const actorEnv = await testEnv();
+  seedAssignmentSnapshot(actorEnv, definition());
   actorEnv.DB.sqlite
     .prepare("UPDATE app_users SET active = 0 WHERE user_id = 'appu_crew_native'")
     .run();
@@ -479,6 +802,106 @@ test("native Work Package issuance is atomic and rejects inactive or wrong-role 
   await assert.rejects(
     () => issueNativeWorkPackage(actorEnv, definition()),
     /work_package_worker_authority_invalid/,
+  );
+});
+
+test("native Work Package issue aborts atomically when the assignment snapshot is superseded", async () => {
+  const env = await testEnv();
+  const packet = definition();
+  seedAssignmentSnapshot(env, packet);
+  const sqlite = env.DB.sqlite as DatabaseSync;
+  const current = sqlite
+    .prepare(
+      `SELECT crew_id, assigned_users_json, authority_requirements_json,
+              authority_requirements_sha256
+         FROM operating_job_assignments
+        WHERE tenant_id = ? AND assignment_id = ?`,
+    )
+    .get(packet.tenantId, packet.assignmentId) as Record<string, string>;
+  sqlite
+    .prepare(
+      `INSERT INTO operating_job_assignments
+       (assignment_id, tenant_id, roof_job_id, assignment_version,
+        roof_job_version, crew_id, crew_version, assigned_users_json,
+        scheduled_start, scheduled_end, supersedes_assignment_id,
+        correction_reason, actor_user_id, command_fingerprint,
+        idempotency_key_hash, created_at, authority_requirements_json,
+        authority_requirements_sha256)
+     VALUES ('ASSIGN-NATIVE-195-V2', ?, ?, 2, 1, ?, 1, ?, ?, ?, ?,
+             'Replace the frozen assignment before package issue.',
+             'appu_owner_native', ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      packet.tenantId,
+      packet.jobId,
+      current.crew_id,
+      current.assigned_users_json,
+      "2026-08-21T09:00:00.000Z",
+      "2026-08-22T09:00:00.000Z",
+      packet.assignmentId,
+      "c".repeat(64),
+      "d".repeat(64),
+      "2026-08-20T08:30:00.000Z",
+      current.authority_requirements_json,
+      current.authority_requirements_sha256,
+    );
+
+  await assert.rejects(
+    () => issueNativeWorkPackageStore(env, packet),
+    /work_package_assignment_snapshot_stale/,
+  );
+  assert.equal(
+    sqlite.prepare("SELECT COUNT(*) AS count FROM work_packages").get().count,
+    0,
+  );
+  assert.equal(
+    sqlite.prepare("SELECT COUNT(*) AS count FROM work_package_events").get()
+      .count,
+    0,
+  );
+});
+
+test("native Work Package assignment snapshot remains immutable after issuance", async () => {
+  const env = await testEnv();
+  const packet = definition();
+  await issueNativeWorkPackage(env, packet);
+
+  assert.throws(
+    () =>
+      env.DB.sqlite
+        .prepare(
+          `UPDATE work_packages
+              SET assignment_authority_requirements_sha256 = ?
+            WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+        )
+        .run(
+          "f".repeat(64),
+          packet.tenantId,
+          packet.workPackageId,
+          packet.version,
+        ),
+    /work_package_definition_immutable/,
+  );
+  const stored = env.DB.sqlite
+    .prepare(
+      `SELECT assignment_version, assignment_command_fingerprint,
+              assignment_authority_requirements_sha256
+         FROM work_packages
+        WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+    )
+    .get(
+      packet.tenantId,
+      packet.workPackageId,
+      packet.version,
+    ) as Record<string, unknown>;
+  assert.equal(stored.assignment_version, packet.assignmentVersion);
+  assert.equal(
+    stored.assignment_command_fingerprint,
+    packet.assignmentCommandFingerprint,
+  );
+  assert.equal(
+    stored.assignment_authority_requirements_sha256,
+    packet.assignmentAuthorityRequirementsSha256,
   );
 });
 
@@ -624,7 +1047,7 @@ test("native Work Package rejects scope confusion, unauthorized actors, and muta
   );
   await assert.rejects(
     () =>
-      nativeWorkPackageAction(env, {
+      nativeAction(env, packet, {
         kind: "acknowledge",
         workPackageId: packet.workPackageId,
         workPackageVersion: packet.version,
@@ -670,7 +1093,7 @@ test("native Work Package reviews current D1 evidence and completes only after e
     evidenceItem: "evi_native_hold_capture",
     ...scope(),
   });
-  await nativeWorkPackageAction(env, {
+  await nativeAction(env, packet, {
     kind: "acknowledge",
     workPackageId: packet.workPackageId,
     workPackageVersion: packet.version,
@@ -682,7 +1105,7 @@ test("native Work Package reviews current D1 evidence and completes only after e
     blockerReason: null,
     ...scope(),
   });
-  await nativeWorkPackageAction(env, {
+  await nativeAction(env, packet, {
     kind: "start_work",
     workPackageId: packet.workPackageId,
     workPackageVersion: packet.version,
@@ -758,7 +1181,7 @@ test("native Work Package reviews current D1 evidence and completes only after e
   assert.equal(holdReview.workPackageName, packet.workPackageId);
   await assert.rejects(
     () =>
-      nativeWorkPackageAction(env, {
+      nativeAction(env, packet, {
         kind: "complete_work",
         workPackageId: packet.workPackageId,
         workPackageVersion: packet.version,
@@ -799,7 +1222,7 @@ test("native Work Package reviews current D1 evidence and completes only after e
     ...scope(),
   });
   assert.equal(correctedReview.workPackageName, packet.workPackageId);
-  const complete = await nativeWorkPackageAction(env, {
+  const complete = await nativeAction(env, packet, {
     kind: "complete_work",
     workPackageId: packet.workPackageId,
     workPackageVersion: packet.version,
@@ -892,9 +1315,9 @@ test("two required workers each acknowledge before start, and the snapshot ledge
     manifestKey: "work-packages/native-multi.json",
   };
   insertCommandReceipt(env, packet, "acknowledge", ackA.deviceActionId);
-  await nativeWorkPackageAction(env, ackA);
+  await nativeAction(env, packet, ackA);
   await assert.rejects(
-    nativeWorkPackageAction(env, {
+    nativeAction(env, packet, {
       ...ackA,
       kind: "start_work",
       deviceActionId: "start-native-multi-too-soon",
@@ -919,7 +1342,7 @@ test("two required workers each acknowledge before start, and the snapshot ledge
     packet.issuedAt,
     packet.issuedAt,
   );
-  await nativeWorkPackageAction(env, {
+  await nativeAction(env, packet, {
     ...ackA,
     actorUser: "crew-b@example.com",
     deviceActionId: "ack-native-multi-b",
@@ -936,7 +1359,7 @@ test("two required workers each acknowledge before start, and the snapshot ledge
     ["appu_crew_native", "appu_crew_native_b"].sort(),
   );
 
-  const started = await nativeWorkPackageAction(env, {
+  const started = await nativeAction(env, packet, {
     ...ackA,
     kind: "start_work",
     deviceActionId: "start-native-multi-1",

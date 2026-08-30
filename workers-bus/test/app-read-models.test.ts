@@ -206,8 +206,52 @@ function nativeAccountingReconciliation(
 function nativeWorkPackageRow(
   overrides: Partial<Record<string, unknown>> = {},
 ): Record<string, unknown> {
+  const workPackageId = String(overrides.work_package_id ?? "work_package_a");
+  const suppliedDefinition = overrides.definition_json
+    ? (JSON.parse(String(overrides.definition_json)) as Record<string, unknown>)
+    : null;
+  const definition = suppliedDefinition ?? {
+    assigned_workers: [
+      {
+        sequence: 1,
+        worker_user: "crew@example.com",
+        worker_role: "Installer",
+        required: true,
+      },
+    ],
+    steps: [
+      {
+        sequence: 1,
+        instruction: "Verify the roof zone.",
+        required_evidence: "Zone photo",
+        acceptance_criteria: "Zone matches package.",
+      },
+    ],
+    hold_points: [
+      {
+        sequence: 1,
+        hold_point: "Deck condition",
+        release_phase: "Pre-start",
+        release_authority: "Supervisor",
+        required_evidence: "Deck photo",
+        acceptance_criteria: "Supervisor release.",
+      },
+    ],
+  };
+  const workers = Array.isArray(definition.assigned_workers)
+    ? definition.assigned_workers
+    : [];
+  const firstWorker = workers[0] as Record<string, unknown> | undefined;
+  if (!Object.hasOwn(definition, "authority_requirements")) {
+    definition.authority_requirements = [
+      nativeAuthorityRequirement(
+        workPackageId,
+        String(firstWorker?.worker_user ?? "crew@example.com"),
+      ),
+    ];
+  }
   return {
-    work_package_id: "work_package_a",
+    work_package_id: workPackageId,
     tenant_id: "ironwrap",
     version: 1,
     job_id: "JOB-A",
@@ -226,34 +270,7 @@ function nativeWorkPackageRow(
     expected_result: "Released roof section complete.",
     stop_conditions: "Stop for unsafe weather or missing controls.",
     make_safe_procedure: "Secure the work area and notify the supervisor.",
-    definition_json: JSON.stringify({
-      assigned_workers: [
-        {
-          sequence: 1,
-          worker_user: "crew@example.com",
-          worker_role: "Installer",
-          required: true,
-        },
-      ],
-      steps: [
-        {
-          sequence: 1,
-          instruction: "Verify the roof zone.",
-          required_evidence: "Zone photo",
-          acceptance_criteria: "Zone matches package.",
-        },
-      ],
-      hold_points: [
-        {
-          sequence: 1,
-          hold_point: "Deck condition",
-          release_phase: "Pre-start",
-          release_authority: "Supervisor",
-          required_evidence: "Deck photo",
-          acceptance_criteria: "Supervisor release.",
-        },
-      ],
-    }),
+    definition_json: JSON.stringify(definition),
     issued_at: "2026-07-10T07:00:00.000Z",
     expires_at: "2026-07-11T07:00:00.000Z",
     released_at: "2026-07-10T07:05:00.000Z",
@@ -265,6 +282,66 @@ function nativeWorkPackageRow(
     created_at: MODIFIED,
     updated_at: MODIFIED,
     ...overrides,
+    definition_json: JSON.stringify(definition),
+  };
+}
+
+function nativeAuthorityRequirement(
+  workPackageId: string,
+  subjectRef: string,
+): Record<string, unknown> {
+  return {
+    subject_type: "Person",
+    subject_role: "Worker",
+    subject_ref: subjectRef,
+    authority_kind: "Worker Competency",
+    authority_scope: "field installation",
+    scope_type: "Work Package",
+    scope_ref: workPackageId,
+    issuer_name: "IronWrap Production",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: `internal:competency:${subjectRef}`,
+    source_version: "2026-07-01",
+  };
+}
+
+function nativeAuthorityReadback(
+  requirement: Record<string, unknown>,
+  index: number,
+): Record<string, unknown> {
+  return {
+    readback_id: `authority_readback_${index}`,
+    tenant_id: "ironwrap",
+    authority_record_id: `authority_record_${index}`,
+    authority_version: 1,
+    subject_type: requirement.subject_type,
+    subject_role: requirement.subject_role ?? null,
+    person_user: requirement.subject_ref,
+    organization: null,
+    authority_kind: requirement.authority_kind,
+    authority_scope: requirement.authority_scope ?? null,
+    scope_type: requirement.scope_type,
+    scope_ref: requirement.scope_ref,
+    roof_job: null,
+    scope_json: "{}",
+    issuer_name: requirement.issuer_name ?? null,
+    issuer_jurisdiction: requirement.issuer_jurisdiction ?? null,
+    issuer_reference: requirement.issuer_reference ?? null,
+    issuer_source_version: requirement.source_version ?? null,
+    verification_state: "verified",
+    evidence_refs_json: "[]",
+    evidence_sha256: "e".repeat(64),
+    authority_state_digest_sha256: "f".repeat(64),
+    authority_effective_from: "2026-01-01",
+    authority_expires_at: "2027-12-31",
+    authority_revoked_at: null,
+    supersedes_authority_record_id: null,
+    authority_verification_method: "Internal Competency Assessment",
+    issuer_receipt_sha256: null,
+    observed_by_user_id: "appu_owner",
+    observed_at: MODIFIED,
+    observation_fingerprint_sha256: "a".repeat(64),
+    action_id: null,
   };
 }
 
@@ -530,6 +607,20 @@ function env(
     fieldEvidence: [],
     ...nativeOverrides,
   };
+  const authorityReadbacks = nativeRows.workPackages.flatMap((row) => {
+    const definition = JSON.parse(String(row.definition_json)) as Record<
+      string,
+      unknown
+    >;
+    return Array.isArray(definition.authority_requirements)
+      ? definition.authority_requirements.map((requirement, index) =>
+          nativeAuthorityReadback(
+            requirement as Record<string, unknown>,
+            authorityReadbacksIndex(row, index),
+          ),
+        )
+      : [];
+  });
   return {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "read-key",
@@ -540,20 +631,81 @@ function env(
         return {
           bind(...ids: unknown[]) {
             return {
-              ...(sql.includes("FROM work_packages") &&
-              sql.includes("work_package_id = ?") &&
-              !sql.includes("SELECT version")
+              ...(sql.includes("FROM authority_record_readbacks")
                 ? {
                     first: async () =>
-                      nativeRows.workPackages.find(
+                      authorityReadbacks.find(
                         (row) =>
                           row.tenant_id === ids[0] &&
-                          row.work_package_id === ids[1] &&
-                          row.version === ids[2],
+                          row.readback_id === ids[1],
                       ) ?? null,
                   }
-                : {}),
+                : sql.includes("FROM work_packages") &&
+                    sql.includes("work_package_id = ?") &&
+                    !sql.includes("SELECT version")
+                  ? {
+                      first: async () =>
+                        nativeRows.workPackages.find(
+                          (row) =>
+                            row.tenant_id === ids[0] &&
+                            row.work_package_id === ids[1] &&
+                            row.version === ids[2],
+                        ) ?? null,
+                    }
+                  : {}),
               all: async () => {
+                if (sql.includes("FROM authority_record_readbacks")) {
+                  const tenantRows = authorityReadbacks.filter(
+                    (row) => row.tenant_id === ids[0],
+                  );
+                  if (sql.includes("AND subject_type = ?")) {
+                    return {
+                      results: tenantRows.filter(
+                        (row) =>
+                          row.subject_type === ids[1] &&
+                          row.person_user === ids[2] &&
+                          row.authority_kind === ids[3] &&
+                          row.scope_type === ids[4] &&
+                          row.scope_ref === ids[5],
+                      ),
+                    };
+                  }
+                  if (sql.includes("AND supersedes_authority_record_id = ?")) {
+                    return {
+                      results: tenantRows.filter(
+                        (row) => row.supersedes_authority_record_id === ids[1],
+                      ),
+                    };
+                  }
+                  if (sql.includes("AND authority_record_id = ?")) {
+                    return {
+                      results: tenantRows.filter(
+                        (row) => row.authority_record_id === ids[1],
+                      ),
+                    };
+                  }
+                  if (sql.includes("AND issuer_reference = ?")) {
+                    return {
+                      results: tenantRows.filter(
+                        (row) =>
+                          row.subject_type === ids[2] &&
+                          row.subject_role === ids[4] &&
+                          row.person_user === ids[6] &&
+                          row.organization === ids[8] &&
+                          row.authority_kind === ids[10] &&
+                          row.authority_scope === ids[12] &&
+                          row.scope_type === ids[14] &&
+                          row.scope_ref === ids[16] &&
+                          row.roof_job === ids[18] &&
+                          row.scope_json === ids[20] &&
+                          row.issuer_reference === ids[21] &&
+                          row.issuer_source_version === ids[22] &&
+                          row.issuer_jurisdiction === ids[23],
+                      ),
+                    };
+                  }
+                  return { results: [] };
+                }
                 if (
                   sql.includes("FROM operating_roof_jobs") &&
                   sql.includes("job_status IN ('qualified', 'in_progress')")
@@ -867,6 +1019,18 @@ function env(
       },
     },
   } as never;
+}
+
+function authorityReadbacksIndex(
+  workPackage: Record<string, unknown>,
+  requirementIndex: number,
+): number {
+  const value = `${String(workPackage.work_package_id)}:${requirementIndex}`;
+  let hash = 0;
+  for (const character of value) {
+    hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
+  }
+  return hash;
 }
 
 function envWithNativeJobPacket(
@@ -1715,6 +1879,67 @@ test("typed Shop Order packet is served through the universal BFF route without 
   } finally {
     mock.restore();
   }
+});
+
+test("field read model fails closed on corrupt or unavailable current authority", async (t) => {
+  await t.test("corrupt frozen requirements", async () => {
+    const definition = JSON.parse(
+      String(nativeWorkPackageRow().definition_json),
+    ) as Record<string, unknown>;
+    definition.authority_requirements = null;
+    const model = await buildJobReadModel(
+      env({
+        workPackages: [
+          nativeWorkPackageRow({
+            definition_json: JSON.stringify(definition),
+          }),
+        ],
+      }),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.packet.work_package?.authority_denials, [
+      "authority_unverifiable",
+    ]);
+    assert.equal(
+      model?.allowed_actions.includes("work_package.acknowledge"),
+      false,
+    );
+    assert.equal(
+      model?.allowed_actions.includes("work_package.stop_work"),
+      true,
+    );
+  });
+
+  await t.test("authority store unavailable", async () => {
+    const base = env();
+    const nativeDb = base.DB;
+    const unavailable = {
+      ...base,
+      DB: {
+        prepare(sql: string) {
+          if (sql.includes("FROM authority_record_readbacks")) {
+            throw new Error("authority_store_unavailable");
+          }
+          return nativeDb.prepare(sql);
+        },
+      },
+    } as AppEnv;
+    const model = await buildJobReadModel(
+      unavailable,
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.packet.work_package?.authority_denials, [
+      "authority_unavailable",
+    ]);
+    assert.deepEqual(
+      model?.allowed_actions.filter((action) =>
+        action.startsWith("work_package."),
+      ),
+      ["work_package.stop_work"],
+    );
+  });
 });
 
 test("typed completion capability requires the immutable assignment authority and an independent actor", async () => {
@@ -3466,6 +3691,7 @@ test("field packet contains job-safe contact details and excludes email, financi
       // No safety occurrence, unserviceable PPE, outstanding notification, or
       // overdue high-risk action applies to this package.
       safety_blockers: [],
+      authority_denials: [],
       work_object_type: "Roof Job",
       work_object_id: "JOB-A",
       physical_context_type: "Roof Site",

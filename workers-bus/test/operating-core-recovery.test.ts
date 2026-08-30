@@ -123,11 +123,11 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
   }
 
   for (const [name, expected] of [
-    // Pinned to the current migration chain; 0128 added the automation recipient catalog
+    // Pinned to the current migration chain; 0131 adds the action-time authority guard
     // (two tables, two indexes, five guards), and both D1 inventories carry it.
     ["REQUIRED_TABLE_COUNT", 234],
     ["REQUIRED_INDEX_COUNT", 354],
-    ["REQUIRED_TRIGGER_COUNT", 571],
+    ["REQUIRED_TRIGGER_COUNT", 574],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

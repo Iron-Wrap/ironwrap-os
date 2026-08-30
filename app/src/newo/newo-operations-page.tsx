@@ -485,7 +485,7 @@ function DeliveryRecovery({
           <RecoveryRow
             key={item.event_id}
             type="Call report"
-            details={`${item.event_id} · ${humanize(item.status)} · ${item.attempts} tries · ${humanize(item.event_type)}`}
+            details={`${item.event_id} · ${humanize(item.status)}. ${item.attempts} tries. ${humanize(item.event_type)}.`}
             at={format(item.last_seen_at)}
             icon={Waypoints}
           />
@@ -494,7 +494,7 @@ function DeliveryRecovery({
           <RecoveryRow
             key={item.action_id}
             type="System change"
-            details={`${item.action_id} · ${humanize(item.status)} · ${humanize(item.operation)}`}
+            details={`${item.action_id} · ${humanize(item.status)}. ${humanize(item.operation)}.`}
             at={format(item.updated_at)}
             icon={CircleGauge}
           />

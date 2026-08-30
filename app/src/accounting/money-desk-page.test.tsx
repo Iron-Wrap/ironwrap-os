@@ -132,7 +132,7 @@ describe("money desk", () => {
     expect(health).not.toHaveTextContent("acct-intent:");
   });
 
-  it("says so plainly when there is nothing in a queue", async () => {
+  it("collapses an all-clear desk into one useful state", async () => {
     vi.mocked(loadAccountingSummary).mockResolvedValue(
       summaryResponse({
         summary: {
@@ -163,11 +163,14 @@ describe("money desk", () => {
     );
     renderDesk();
 
-    expect(await screen.findByText("Nothing is waiting on a decision.")).toBeInTheDocument();
-    expect(screen.getByText("Everything we have sent matches QuickBooks.")).toBeInTheDocument();
+    expect(await screen.findByText("Money desk is clear")).toBeInTheDocument();
     expect(
-      screen.getByText("Everything is done. No money item is waiting for a check."),
+      screen.getByText(
+        "No approvals, QuickBooks checks, mismatches, or money issues need attention.",
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Needs approval" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "QuickBooks checks" })).not.toBeInTheDocument();
   });
 
   it("names an exception in words rather than by its reason code", async () => {

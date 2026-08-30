@@ -291,6 +291,28 @@ describe("NowPage", () => {
     expect(screen.queryByRole("link", { name: /open job/i })).toBeNull();
   });
 
+  it("previews a long work section and reveals the rest on demand", async () => {
+    const model = nowModel();
+    const card = model.ui.sections[0]!.cards[0]!;
+    model.ui.sections[0]!.cards = Array.from({ length: 6 }, (_, index) => ({
+      ...card,
+      id: `priority-${index}`,
+      title: `Priority item ${index + 1}`,
+    }));
+    vi.mocked(loadNow).mockResolvedValue(model);
+    renderNow();
+
+    expect(await screen.findByText("Priority item 2")).toBeVisible();
+    expect(screen.queryByText("Priority item 3")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 4 more" }));
+    expect(screen.getByText("Priority item 6")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("delegates field users to the existing Today surface without loading the office read", async () => {
     renderNow(fieldSession);
 

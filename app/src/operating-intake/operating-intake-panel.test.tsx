@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
@@ -64,6 +65,7 @@ describe("OperatingIntakePanel", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
+    expect(screen.getByText("Intake status")).toBeVisible();
     expect(screen.getByText("Intake")).toBeVisible();
     expect(screen.getByText("website")).toBeVisible();
     expect(screen.queryByText(/scheduled|invoice|assigned job/i)).toBeNull();
@@ -77,5 +79,29 @@ describe("OperatingIntakePanel", () => {
 
     expect(await screen.findByText("No website intake leads for this tenant.")).toBeVisible();
     expect(screen.queryByText("Launch Proof")).toBeNull();
+  });
+
+  it("keeps a long intake history scannable until someone asks for it", async () => {
+    const lead = operatingIntakePayload().leads[0]!;
+    vi.mocked(loadOperatingIntake).mockResolvedValue(
+      operatingIntakePayload({
+        leads: Array.from({ length: 8 }, (_, index) => ({
+          ...lead,
+          envelope_id: `ow_${index}`,
+          contact_name: `Website lead ${index + 1}`,
+        })),
+      }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText("Website lead 3")).toBeVisible();
+    expect(screen.queryByText("Website lead 4")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 5 more" }));
+    expect(screen.getByText("Website lead 8")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 });

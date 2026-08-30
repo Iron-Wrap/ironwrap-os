@@ -95,7 +95,7 @@ function ReadinessScreen({
               {ready} of {required.length} ready
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Profile v{model.profile.version ?? "—"}
+              Profile v{model.profile.version ?? "Not reported"}
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
               Live signals are required where the repository has a runtime probe; evidence-only

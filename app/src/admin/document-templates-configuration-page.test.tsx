@@ -331,7 +331,7 @@ describe("document template authoring", () => {
     setOnline(false);
     act(() => window.dispatchEvent(new Event("offline")));
 
-    expect(await screen.findByText("Offline — configuration is read-only")).toBeVisible();
+    expect(await screen.findByText("Offline: configuration is read-only")).toBeVisible();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "New document" })).toBeDisabled(),
     );

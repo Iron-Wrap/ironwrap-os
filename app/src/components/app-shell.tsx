@@ -1,7 +1,7 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { ChevronDown, LayoutGrid, LogOut, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { clearSessionSnapshot, isOfflineSession } from "../auth/session";
 import { getDeviceSecret } from "../auth/device-credential";
@@ -10,6 +10,7 @@ import { sessionQueryKey } from "../auth/session-query";
 import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { cn } from "../lib/cn";
+import { loadPublicEstimateConfig } from "../public-estimate/public-estimate-api";
 import {
   navigationForRole,
   roleLabel,
@@ -21,9 +22,9 @@ import { Button } from "./ui/button";
 import { SystemStatus } from "./system-status";
 
 const desktopActiveClassName =
-  "border-chrome-border bg-chrome-raised !text-chrome-foreground shadow-[inset_0_-2px_0_var(--accent)]";
+  "border-accent/35 bg-chrome-raised !text-chrome-foreground shadow-[0_8px_22px_rgb(0_0_0/0.12)]";
 const mobileActiveClassName =
-  "bg-surface-muted !text-foreground shadow-[inset_0_2px_0_var(--accent)]";
+  "bg-foreground !text-background shadow-[0_7px_20px_color-mix(in_srgb,var(--foreground)_16%,transparent)] [&_svg]:text-accent";
 const OperatorSearchPalette = lazy(async () => ({
   default: (await import("./operator-search-palette")).OperatorSearchPalette,
 }));
@@ -31,22 +32,12 @@ const OperatorSearchPalette = lazy(async () => ({
 /**
  * The company's own logo once an owner has uploaded one, and the product mark until then.
  *
- * It is a plain `<img>` at a fixed public path rather than a query, so no role — including a
- * field device that may be offline — pays a round trip for it, and a company with no logo simply
- * 404s into the fallback.
+ * The public brand configuration already states whether a logo exists. Using that nullable URL
+ * keeps a tenant without a logo on the product mark without probing a known-missing resource.
  */
-function CompanyMark({ className }: { className: string }) {
-  const [hasLogo, setHasLogo] = useState(true);
-  if (!hasLogo) return <ShieldCheck className={className} aria-hidden="true" />;
-  return (
-    <img
-      src={API_PATHS.companyLogo}
-      alt=""
-      aria-hidden="true"
-      className="size-full object-contain p-0.5"
-      onError={() => setHasLogo(false)}
-    />
-  );
+function CompanyMark({ className, logoUrl }: { className: string; logoUrl?: string | null }) {
+  if (!logoUrl) return <ShieldCheck className={className} aria-hidden="true" />;
+  return <img src={logoUrl} alt="" aria-hidden="true" className="size-full object-contain p-0.5" />;
 }
 
 export function AppShell() {
@@ -59,6 +50,12 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoaded, setSearchLoaded] = useState(false);
   const offlineSession = isOfflineSession(session);
+  const brandConfig = useQuery({
+    queryKey: ["public-brand", session.tenant.id],
+    queryFn: () => loadPublicEstimateConfig(),
+    enabled: !offlineSession,
+    staleTime: 5 * 60_000,
+  });
   const groups = groupNavigation(items);
   const currentItem = navigationItemForPath(items, pathname);
   const primaryItems = items.length <= 4 ? items : items.filter((item) => item.mobilePrimary);
@@ -104,7 +101,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="min-h-dvh bg-background lg:grid lg:grid-cols-[15.5rem_minmax(0,1fr)]">
+    <div className="min-h-dvh lg:grid lg:grid-cols-[16.75rem_minmax(0,1fr)]">
       <a
         href="#main-content"
         className="fixed left-4 top-4 z-[60] -translate-y-24 rounded-md bg-foreground px-4 py-3 font-bold text-background transition-transform focus:translate-y-0"
@@ -116,20 +113,23 @@ export function AppShell() {
         className="hidden border-r border-chrome-border bg-chrome text-chrome-foreground lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col"
         aria-label="Main navigation"
       >
-        <div className="border-b border-chrome-border px-4 py-4">
+        <div className="border-b border-chrome-border px-4 py-3.5">
           <Link
             to="/now"
             className="group flex min-h-11 min-w-0 items-center gap-3 rounded-lg focus-visible:outline-offset-4"
           >
-            <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-lg border border-chrome-border bg-chrome-raised transition-transform group-hover:-translate-y-0.5">
-              <CompanyMark className="size-[1.125rem] text-accent" />
+            <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl border border-chrome-border bg-chrome-raised shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] transition-transform group-hover:-translate-y-0.5">
+              <CompanyMark
+                className="size-[1.125rem] text-accent"
+                logoUrl={brandConfig.data?.logo_url}
+              />
             </span>
             <span className="min-w-0">
               <span className="block truncate text-sm font-extrabold tracking-[-0.02em]">
                 {session.tenant.brand}
               </span>
               <span className="block truncate text-xs font-semibold text-chrome-muted">
-                IronWrap OS · {roleLabel(session.user.role)}
+                {roleLabel(session.user.role)} workspace
               </span>
             </span>
           </Link>
@@ -145,42 +145,48 @@ export function AppShell() {
       </aside>
 
       <div className="min-w-0">
-        <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface">
-          <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
+        <header className="safe-top sticky top-0 z-40 border-b border-border/80 bg-surface">
+          <div className="mx-auto grid min-h-16 max-w-[92rem] grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-4 sm:gap-x-3 sm:px-6 lg:px-8">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-3">
               {/* The only "go home" control a phone has, so it carries the 44 px thumb
                   floor the mobile suite enforces; the mark inside stays 20 px. */}
               <Link
                 to="/now"
-                className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-lg border border-foreground/10 bg-foreground text-background lg:hidden"
+                className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-xl border border-foreground/10 bg-foreground text-background shadow-[0_8px_20px_color-mix(in_srgb,var(--foreground)_14%,transparent)] lg:hidden"
                 aria-label={`${session.tenant.brand} home`}
               >
-                <CompanyMark className="size-5 text-accent" />
+                <CompanyMark className="size-5 text-accent" logoUrl={brandConfig.data?.logo_url} />
               </Link>
               {/* The brand was mobile-only here, which put the longest and least
                   useful string on the narrowest screen: it pushed the workspace
                   and page out entirely, so a phone read "IronWrap E…" and never
                   said which screen it was on. The home button beside this
                   already carries the mark and names the brand in its label. */}
-              <p className="truncate text-sm font-bold text-muted">
-                <span className="text-foreground">{currentItem.workspace}</span>
-                <span className="px-1.5 text-border-strong" aria-hidden="true">
-                  /
-                </span>
-                {currentItem.label}
-              </p>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-[720] leading-4 text-muted">
+                  {currentItem.workspace}
+                </p>
+                <p className="truncate text-sm font-[760] tracking-[-0.015em] text-foreground">
+                  {currentItem.label}
+                </p>
+              </div>
             </div>
             <SystemStatus />
             <Button
               type="button"
               size="icon"
               variant="ghost"
+              className="xl:w-auto xl:min-w-28 xl:justify-between xl:px-3"
               aria-label="Open search (Command or Control K)"
               aria-keyshortcuts="Control+K Meta+K"
               title="Search (⌘K / Ctrl+K)"
               onClick={openSearch}
             >
               <Search aria-hidden="true" />
+              <span className="hidden xl:inline">Search</span>
+              <kbd className="hidden rounded-md border border-border bg-surface-muted px-1.5 py-0.5 text-xs font-bold text-muted xl:inline">
+                ⌘K
+              </kbd>
             </Button>
             <Button
               className="col-start-4 row-start-1"
@@ -200,7 +206,7 @@ export function AppShell() {
         <main
           id="main-content"
           tabIndex={-1}
-          className="app-main mx-auto min-w-0 max-w-[100rem] space-y-6 px-4 py-6 pb-28 sm:px-6 sm:py-8 lg:px-8 lg:pb-10 xl:px-10"
+          className="app-main mx-auto min-w-0 max-w-[92rem] space-y-5 px-4 py-5 pb-28 sm:px-6 sm:py-7 lg:px-8 lg:pb-10 xl:px-10"
         >
           <Outlet />
         </main>
@@ -221,10 +227,10 @@ export function AppShell() {
           loading state for its real content: a layout shift on every
           authenticated screen, and a rescue call the worker had to scroll a
           whole run sheet to reach. Fixed, nothing above it can move it. */}
-      <div className="safe-bottom fixed inset-x-0 bottom-0 z-50 bg-surface/96 shadow-[0_-8px_24px_oklch(0_0_0/0.08)] lg:inset-x-auto lg:bottom-3 lg:left-3 lg:w-[13.5rem] lg:rounded-lg lg:border lg:border-danger/25 lg:bg-chrome-raised lg:p-0 lg:text-chrome-foreground lg:shadow-[0_14px_36px_oklch(0_0_0/0.2)]">
-        <div className="flex items-stretch lg:block">
-          <details className="group shrink-0 border-t-2 border-danger/45 lg:w-full lg:border-t-0">
-            <summary className="flex min-h-16 w-16 cursor-pointer list-none flex-col items-center justify-center gap-1 px-2 text-xs font-black transition-colors hover:bg-danger-soft group-open:bg-danger-soft group-open:text-foreground lg:min-h-12 lg:w-full lg:flex-row lg:justify-start lg:gap-2.5 lg:rounded-lg lg:px-3 lg:text-sm [&::-webkit-details-marker]:hidden">
+      <div className="safe-bottom fixed inset-x-0 bottom-0 z-50 px-2 pt-2 lg:inset-x-auto lg:bottom-3 lg:left-3 lg:w-[14.75rem] lg:p-0 lg:text-chrome-foreground">
+        <div className="flex items-stretch overflow-hidden rounded-2xl border border-border/80 bg-surface p-1 shadow-[var(--shadow-floating)] lg:block lg:rounded-xl lg:border-danger/25 lg:bg-chrome-raised lg:p-0">
+          <details className="group shrink-0 lg:w-full">
+            <summary className="flex min-h-16 w-16 cursor-pointer list-none flex-col items-center justify-center gap-1 rounded-xl px-2 text-xs font-[780] transition-colors hover:bg-danger-soft group-open:bg-danger-soft group-open:text-foreground lg:min-h-12 lg:w-full lg:flex-row lg:justify-start lg:gap-2.5 lg:px-3 lg:text-sm [&::-webkit-details-marker]:hidden">
               <ShieldAlert className="size-5 shrink-0 text-danger" aria-hidden="true" />
               <span>Safety</span>
             </summary>
@@ -232,7 +238,10 @@ export function AppShell() {
               <SafetyActionPanel session={session} />
             </div>
           </details>
-          <nav className="min-w-0 flex-1 border-t lg:hidden" aria-label="Main navigation">
+          <nav
+            className="min-w-0 flex-1 border-l border-border/70 lg:hidden"
+            aria-label="Main navigation"
+          >
             <div className="mx-auto flex min-w-full max-w-lg gap-1 px-1">
               {primaryItems.map((item) => (
                 <MobileNavItem key={item.to} item={item} active={item.to === currentItem.to} />
@@ -244,7 +253,7 @@ export function AppShell() {
                     popoverTarget="mobile-workspace-popover"
                     aria-controls="mobile-workspace-popover"
                     className={cn(
-                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold text-muted transition-colors hover:bg-surface-muted active:scale-[0.98]",
+                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-[720] text-muted transition-[background-color,color,transform,box-shadow] hover:bg-surface-muted active:scale-[0.98]",
                       currentItemIsInMore && mobileActiveClassName,
                     )}
                     aria-label="Open all workspaces"
@@ -258,7 +267,7 @@ export function AppShell() {
                     onClick={(event) => {
                       if ((event.target as Element).closest("a")) event.currentTarget.hidePopover();
                     }}
-                    className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] top-auto z-[60] m-0 max-h-[min(72dvh,40rem)] w-auto overflow-y-auto overscroll-contain rounded-xl border border-border bg-surface p-3 text-foreground shadow-[0_24px_72px_oklch(0_0_0/0.28)]"
+                    className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] top-auto z-[60] m-0 max-h-[min(72dvh,40rem)] w-auto overflow-y-auto overscroll-contain rounded-2xl border border-border/80 bg-surface p-3 text-foreground shadow-[var(--shadow-floating)]"
                   >
                     <div className="flex min-h-11 items-center justify-between gap-4 border-b border-border px-1 pb-2">
                       <p className="text-sm font-extrabold">All work</p>
@@ -374,7 +383,7 @@ function MobileNavItem({ item, active }: { item: NavigationItem; active: boolean
     <Link
       to={item.to}
       className={cn(
-        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold text-muted transition-[background-color,color,transform] active:scale-[0.98]",
+        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-[720] text-muted transition-[background-color,color,transform,box-shadow] active:scale-[0.98]",
         active && mobileActiveClassName,
       )}
       aria-current={active ? "page" : undefined}

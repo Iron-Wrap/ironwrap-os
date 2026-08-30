@@ -66,7 +66,9 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // Step 1's slot now reads back captured evidence; hold:1 was never captured, so
     // exactly one "No proof added yet" placeholder remains (the hold point).
     await expect(page.getByText(/No proof added yet/i)).toHaveCount(1);
-    await expect(page.getByText(/Open · Current · None/i)).toBeVisible();
+    await expect(
+      page.getByText("State: Open. Freshness: Current. Conflict: None.", { exact: true }),
+    ).toBeVisible();
 
     // 4. Complete -- only reachable once the server-side ledger (ack + start + evidence) agrees.
     // The "current work package" read model (frappe-read.ts

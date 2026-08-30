@@ -108,7 +108,7 @@ function AutomationRecipientsContent() {
       <AdminPageHeader
         icon={<Send className="size-6 text-accent" aria-hidden="true" />}
         title="Recipients"
-        description="Who your automation rules can email. Add the shop, an office inbox, or a shared address here — no developer and no deployment secret."
+        description="Who your automation rules can email. Add the shop, an office inbox, or a shared address here. No developer or deployment secret is needed."
         action={<AutomationsLink />}
       />
       {!live ? <OfflineNotice /> : null}
@@ -141,7 +141,7 @@ function RecipientList({
     return (
       <EmptyState
         title="No recipients yet"
-        message="Add who should receive automation email — the shop, an office inbox, whoever needs to know a job moved. A rule cannot be saved until at least one exists."
+        message="Add who should receive automation email: the shop, an office inbox, or anyone who needs to know a job moved. A rule cannot be saved until at least one exists."
       />
     );
   return (
@@ -225,7 +225,7 @@ function RecipientCreateCard({
             <Notice tone="warning" title="This is the first recipient this account owns">
               Until now your automations resolve against whatever recipient list this deployment
               shipped with. Saving here takes that list over, so add every destination your rules
-              need — not only this one.
+              need, not only this one.
             </Notice>
           ) : null}
           <AutomationRecipientForm
@@ -384,8 +384,8 @@ function RecipientCard({
             <h3 className="font-bold">Retire this recipient?</h3>
             {/* Not `text-muted`: on the muted panel background it lands under 4.5:1 at this size. */}
             <p className="mt-1 text-sm leading-5">
-              It stops being offered to new rules. Nothing is deleted — every revision stays
-              readable in history, and you can restore it later.
+              It stops being offered to new rules. Nothing is deleted. Every revision stays readable
+              in history, and you can restore it later.
             </p>
             <RetireBlockers
               detail={detail}
@@ -419,7 +419,7 @@ function RecipientCard({
           <>
             {!recipient.active ? (
               <Notice tone="info" title="Saving brings this recipient back">
-                A retired recipient has no separate "restore" command — saving it appends a revision
+                A retired recipient has no separate "restore" command. Saving it appends a revision
                 that turns it on again.
               </Notice>
             ) : null}
@@ -515,7 +515,7 @@ function RetireBlockers({
             : `${rules.length} live rules still send here`
         }
       >
-        Point them at another recipient or turn them off first — retiring is refused while a rule
+        Point them at another recipient or turn them off first. Retirement is refused while a rule
         would break.
         <ul className="mt-2 space-y-1" aria-label="Rules using this recipient">
           {rules.map((rule) => (
@@ -572,7 +572,7 @@ function RecipientHistory({
       <h3 className="font-bold">Immutable history</h3>
       <p className="mt-1 text-sm text-muted">
         Current revision {history.data.current_version ?? recipient.version}. Each entry records who
-        changed the destination and when — the address itself stays masked.
+        changed the destination and when. The address itself stays masked.
       </p>
       <ol className="mt-3 space-y-2">
         {history.data.revisions.map((revision) => (
@@ -611,7 +611,7 @@ function AutomationsLink() {
 
 function OfflineNotice() {
   return (
-    <Notice tone="warning" title="Offline — configuration is read-only">
+    <Notice tone="warning" title="Offline: configuration is read-only">
       Cached recipients remain readable when available. Reconnect before adding, editing, or
       retiring one; no mutation is queued.
     </Notice>

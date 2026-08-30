@@ -145,7 +145,7 @@ export function MoveMenu({
 
         {!live ? (
           <div className="mt-2">
-            <Notice tone="warning" title="Offline — this card cannot be moved">
+            <Notice tone="warning" title="Offline: this card cannot be moved">
               A stage change is saved on the server, not on this device, so nothing here is queued.
               The card stays in {currentStage?.name ?? "its stage"} until you reconnect.
             </Notice>
@@ -172,11 +172,17 @@ export function MoveMenu({
                     )}
                   </p>
                   <div className="mt-3 grid grid-cols-2 gap-2">
-                    <Button variant="outline" onClick={onCancelPending} disabled={busy}>
+                    <Button
+                      className="min-h-12"
+                      variant="outline"
+                      onClick={onCancelPending}
+                      disabled={busy}
+                    >
                       Cancel
                     </Button>
                     <Button
                       data-confirm-move
+                      className="min-h-12"
                       variant="accent"
                       busy={busy}
                       disabled={!live}

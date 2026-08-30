@@ -15,6 +15,7 @@ import { useRef, useState } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
@@ -409,18 +410,12 @@ function QuickBooksSettingsContent() {
 
   return (
     <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
-              QuickBooks connection
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-              IronWrap sends only an approved final-invoice candidate. QuickBooks remains accounting
-              truth, and the server verifies provider readback.
-            </p>
-          </div>
-          {canRefresh ? (
+      <WorkspaceHeader
+        icon={<FileCheck2 aria-hidden="true" />}
+        title="QuickBooks connection"
+        description="IronWrap sends only an approved final-invoice candidate. QuickBooks remains accounting truth, and the server verifies provider readback."
+        actions={
+          canRefresh ? (
             <Button
               type="button"
               variant="outline"
@@ -432,9 +427,9 @@ function QuickBooksSettingsContent() {
               <RefreshCw aria-hidden="true" />
               Refresh state
             </Button>
-          ) : null}
-        </div>
-      </header>
+          ) : undefined
+        }
+      />
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before changing QuickBooks">

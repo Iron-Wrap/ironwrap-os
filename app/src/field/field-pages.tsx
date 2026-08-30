@@ -949,7 +949,7 @@ function WorkPackagePanel({
                     </p>
                     <p className="mt-1 text-sm text-muted">
                       {latest
-                        ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
+                        ? `State: ${latest.disposition}. Freshness: ${latest.freshness}. Conflict: ${latest.conflict_state}.`
                         : "No proof added yet"}
                     </p>
                   </div>
@@ -1014,7 +1014,7 @@ function WorkPackagePanel({
                     </p>
                     <p className="mt-1 text-sm text-muted">
                       {latest
-                        ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
+                        ? `State: ${latest.disposition}. Freshness: ${latest.freshness}. Conflict: ${latest.conflict_state}.`
                         : "No proof added yet"}
                     </p>
                   </div>

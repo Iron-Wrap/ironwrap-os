@@ -291,8 +291,8 @@ function AutomationWorkspace({
       {data.catalog.recipient_refs.length === 0 ? (
         <Notice tone="warning" title="No recipients yet">
           A rule delivers to a recipient you have named, never to an address typed into this form.
-          Add one on the recipients screen and it appears here — no developer, no deploy.{" "}
-          <RecipientsInlineLink />
+          Add one on the recipients screen and it appears here. No developer or deployment is
+          needed. <RecipientsInlineLink />
         </Notice>
       ) : data.catalog.recipient_source === "deployment" ? (
         <Notice tone="info" title="These recipients come with the deployment">
@@ -403,7 +403,7 @@ function AutomationCreateForm({
             <CardTitle>Create an automation</CardTitle>
             <CardDescription>
               Choose a stage and one of your recipients. The action is executable email only; an
-              address is never typed into a rule — it belongs to the recipient it delivers to.
+              address is never typed into a rule. It belongs to the recipient it delivers to.
             </CardDescription>
           </div>
           {!open ? (
@@ -1206,7 +1206,7 @@ function ConfigurationLink() {
 
 function OfflineNotice() {
   return (
-    <Notice tone="warning" title="Offline — configuration is read-only">
+    <Notice tone="warning" title="Offline: configuration is read-only">
       Cached rules remain readable when available. Reconnect before creating, revising, enabling, or
       disabling an automation; no mutation is queued.
     </Notice>

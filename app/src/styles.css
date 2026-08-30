@@ -70,37 +70,37 @@
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
 
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
 }
 
 :root {
   color-scheme: light;
   --background: #e6e8eb;
   --surface: #f5f6f7;
-  --surface-raised: #f2f3f5;
-  --surface-muted: #d8dce0;
-  --foreground: #14181c;
-  --muted: #5a626b;
-  --border: #b0b7be;
-  --border-strong: #5a626b;
+  --surface-raised: #fcfdfd;
+  --surface-muted: #e4e9ed;
+  --foreground: #11171c;
+  --muted: #5b6670;
+  --border: #ccd3d9;
+  --border-strong: #7f8a94;
   --chrome: #161b21;
-  --chrome-raised: #222830;
-  --chrome-foreground: #eef1f3;
-  --chrome-muted: #c5cbd1;
-  --chrome-border: #4a525b;
+  --chrome-raised: #192128;
+  --chrome-foreground: #f1f4f5;
+  --chrome-muted: #aeb8c0;
+  --chrome-border: #2e3942;
   --accent: #c81d25;
-  --accent-hover: #a9171e;
-  --accent-active: #821219;
+  --accent-hover: #ad1d24;
+  --accent-active: #8c171d;
   --accent-foreground: #ffffff;
-  --focus: #e13b43;
-  --ok: #326548;
+  --focus: #d52b33;
+  --ok: #2f6849;
   --ok-soft: color-mix(in srgb, var(--ok) 9%, var(--surface-raised));
-  --warning: #725d20;
+  --warning: #755d18;
   --warning-soft: color-mix(in srgb, var(--warning) 9%, var(--surface-raised));
-  --danger: #a9171e;
+  --danger: #a91d24;
   --danger-foreground: #ffffff;
   --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
   /* Committed danger surface for filled controls. `--danger` is tuned so that
@@ -108,13 +108,15 @@
      in dark. A stop-work, rescue, or revoke button must not go pale with it, so
      this pair stays oxide with white text in both schemes and the dark block
      deliberately leaves it alone. */
-  --danger-strong: #a9171e;
+  --danger-strong: #a91d24;
   --danger-strong-foreground: #ffffff;
-  --info: #1f4e66;
+  --info: #235c73;
   --info-soft: color-mix(in srgb, var(--info) 9%, var(--surface-raised));
   --motion-fast: 140ms;
   --motion-standard: 220ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-card: 0 1px 1px rgb(23 34 43 / 0.04), 0 10px 28px rgb(23 34 43 / 0.055);
+  --shadow-floating: 0 18px 50px rgb(8 14 19 / 0.18);
   /* Hoisted from `.safe-bottom` so anything anchored above the mobile bottom nav can
      reuse the one inset rather than re-deriving it. `.safe-bottom` keeps its own
      declaration; the value is identical. */
@@ -124,28 +126,35 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --background: #101418;
-    --surface: #161b21;
-    --surface-raised: #222830;
-    --surface-muted: #222830;
-    --foreground: #eef1f3;
-    --muted: #c5cbd1;
-    --border: #4a525b;
-    --border-strong: #6d767f;
-    --accent: #c81d25;
-    --accent-hover: #a9171e;
-    --accent-active: #821219;
+    --background: #0a0f13;
+    --surface: #10161b;
+    --surface-raised: #151d23;
+    --surface-muted: #1c252c;
+    --foreground: #eef2f4;
+    --muted: #9da8b1;
+    --border: #2a353e;
+    --border-strong: #52606b;
+    --chrome: #0d1317;
+    --chrome-raised: #171f25;
+    --chrome-foreground: #f2f5f6;
+    --chrome-muted: #9ca7af;
+    --chrome-border: #29343c;
+    --accent: #d22a32;
+    --accent-hover: #b82028;
+    --accent-active: #971a20;
     --accent-foreground: #ffffff;
-    --focus: #e13b43;
-    --ok: #6fb98c;
+    --focus: #e14a51;
+    --ok: #72c293;
     --ok-soft: color-mix(in srgb, var(--ok) 16%, var(--surface-raised));
-    --warning: #d9b45c;
+    --warning: #dfba61;
     --warning-soft: color-mix(in srgb, var(--warning) 16%, var(--surface-raised));
-    --danger: #f19499;
+    --danger: #f08e94;
     --danger-foreground: #1a1d20;
     --danger-soft: color-mix(in srgb, var(--danger) 16%, var(--surface-raised));
-    --info: #7fb6ce;
+    --info: #7ebbd3;
     --info-soft: color-mix(in srgb, var(--info) 16%, var(--surface-raised));
+    --shadow-card: 0 1px 0 rgb(255 255 255 / 0.025), 0 14px 34px rgb(0 0 0 / 0.22);
+    --shadow-floating: 0 24px 64px rgb(0 0 0 / 0.42);
   }
 }
 
@@ -171,10 +180,18 @@ html {
 body {
   min-height: 100dvh;
   margin: 0;
-  background: var(--background);
+  background:
+    radial-gradient(
+      80rem 34rem at 55% -18rem,
+      color-mix(in srgb, var(--surface-raised) 82%, transparent),
+      transparent 72%
+    ),
+    var(--background);
+  background-attachment: fixed;
   color: var(--foreground);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   font-variant-numeric: tabular-nums;
+  font-optical-sizing: auto;
   line-height: 1.5;
 }
 
@@ -235,7 +252,7 @@ select {
 @keyframes page-enter {
   from {
     opacity: 0;
-    transform: translateY(0.375rem);
+    transform: translateY(0.25rem);
   }
 }
 
@@ -247,6 +264,10 @@ select {
 
 .app-main > * {
   animation: page-enter var(--motion-standard) var(--motion-ease) both;
+}
+
+.app-main {
+  container-type: inline-size;
 }
 
 .ui-skeleton {
@@ -303,7 +324,7 @@ select {
 }
 
 .safety-action-drawer {
-  bottom: calc(4rem + var(--safe-bottom-inset));
+  bottom: calc(5rem + var(--safe-bottom-inset));
 }
 
 .safe-top {

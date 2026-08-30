@@ -628,7 +628,7 @@ export function automationRecipientErrorMessage(error: unknown): string {
     return "Use a short reference of letters, numbers, dots, dashes, colons, or underscores.";
   if (error.code === "automation_recipient_label_invalid") return "Give this recipient a name.";
   if (error.code === "automation_recipient_destination_invalid")
-    return "Enter one plain email address, such as shop@example.com — no display name, no angle brackets, no list.";
+    return "Enter one plain email address, such as shop@example.com. Do not add a display name, angle brackets, or a list.";
   if (error.code === "automation_recipient_channel_invalid")
     return "Choose a delivery channel this deployment can send through.";
   if (error.code === "automation_recipient_in_use")
@@ -642,7 +642,7 @@ export function automationRecipientErrorMessage(error: unknown): string {
   if (error.code === "automation_recipient_version_conflict")
     return "This recipient changed in another session. Reload before saving.";
   if (error.code === "automation_recipient_write_failed")
-    return "The recipient was not written. Nothing changed — try again.";
+    return "The recipient was not written. Nothing changed. Try again.";
   return configurationErrorMessage(error);
 }
 

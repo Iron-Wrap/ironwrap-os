@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -422,22 +423,11 @@ function InventoryDesk({
 
   return (
     <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <Warehouse className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Inventory
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                Scan a stock identity, choose what happened, and submit one governed warehouse
-                action.
-              </p>
-            </div>
-          </div>
+      <WorkspaceHeader
+        icon={<Warehouse aria-hidden="true" />}
+        title="Inventory"
+        description="Scan a stock identity, choose what happened, and submit one governed warehouse action."
+        actions={
           <Button
             type="button"
             variant="outline"
@@ -448,8 +438,8 @@ function InventoryDesk({
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before changing inventory">
@@ -466,7 +456,7 @@ function InventoryDesk({
         />
         <IdentityTile
           label="Command policy"
-          value={overview.policy_ref}
+          value="Inventory command rules"
           detail={`Version ${overview.policy_version}`}
         />
       </section>
@@ -782,7 +772,7 @@ function InventoryDesk({
                     {commandState.phase === "uncertain" ? "Retry same action" : "Record action"}
                   </Button>
                   <span className="text-sm text-muted">
-                    Policy {overview.policy_ref} · version {overview.policy_version}
+                    Inventory command rules, version {overview.policy_version}
                   </span>
                 </div>
               </form>
@@ -1499,7 +1489,7 @@ function humanizeCode(code: string): string {
 }
 
 function positionLabel(position: Position): string {
-  return `${position.item_code} · lot ${position.lot_code} · ${position.location_name} / bin ${position.bin_code}`;
+  return `${position.item_code} · lot ${position.lot_code}, ${position.location_name} / bin ${position.bin_code}`;
 }
 
 function formatQuantity(value: number, scale: number): string {

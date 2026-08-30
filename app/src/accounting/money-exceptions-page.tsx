@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
@@ -129,23 +130,12 @@ function MoneyExceptionsContent() {
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 pb-4">
-      <BackToDesk />
-
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <TriangleAlert className="size-5 text-warning" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Money issues
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                See what needs your help. Each issue shows only safe choices.
-              </p>
-            </div>
-          </div>
+      <WorkspaceHeader
+        icon={<TriangleAlert aria-hidden="true" />}
+        title="Money issues"
+        description="See what needs your help. Each issue shows only safe choices."
+        back={<BackToDesk />}
+        actions={
           <Button
             type="button"
             variant="outline"
@@ -157,8 +147,8 @@ function MoneyExceptionsContent() {
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before you decide">

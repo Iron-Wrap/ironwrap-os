@@ -228,6 +228,27 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByText("JOB-A")).toBeVisible();
   });
 
+  it("previews a crowded production lane and reveals the remaining jobs on demand", async () => {
+    vi.mocked(loadProductionRunway).mockResolvedValue(
+      model({
+        jobs: Array.from({ length: 5 }, (_, index) =>
+          job(`JOB-${index + 1}`, `IW-20${index + 1}`, "blocked"),
+        ),
+      }),
+    );
+    renderRunway();
+
+    expect(await screen.findByText("IW-203")).toBeVisible();
+    expect(screen.queryByText("IW-204")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    expect(screen.getByText("IW-205")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("makes incomplete source coverage explicit", async () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(
       model({
@@ -260,6 +281,7 @@ describe("ProductionRunwayPage", () => {
     );
     renderRunway();
 
+    await userEvent.setup().click(await screen.findByText("1 lock still blocks this schedule"));
     expect(await screen.findByRole("button", { name: "Clear Materials" })).toBeVisible();
   });
 

@@ -313,7 +313,7 @@ describe("automation recipient administration", () => {
 
     setOnline(false);
 
-    expect(await screen.findByText("Offline — configuration is read-only")).toBeVisible();
+    expect(await screen.findByText("Offline: configuration is read-only")).toBeVisible();
     expect(screen.getByText("The shop")).toBeVisible();
     expect(screen.getByRole("button", { name: "New recipient" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();

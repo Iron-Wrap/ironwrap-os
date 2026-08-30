@@ -173,7 +173,11 @@ function formatMoney(
 }
 
 function labelOfOption(option: unknown): string {
-  return typeof option === "string" ? option : typeof option === "number" ? String(option) : "—";
+  return typeof option === "string"
+    ? option
+    : typeof option === "number"
+      ? String(option)
+      : "Not set";
 }
 
 /**

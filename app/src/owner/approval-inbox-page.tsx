@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   Clock3,
   FileCheck2,
@@ -15,8 +16,9 @@ import { useRef, useState } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { ErrorState } from "../components/ui/state-panel";
@@ -41,6 +43,8 @@ type ApprovalAction =
       outcome: "executed" | "not_executed" | "inconclusive";
       evidence: string;
     };
+
+const APPROVAL_HISTORY_PREVIEW_LIMIT = 3;
 
 export function ApprovalInboxPage() {
   return (
@@ -70,6 +74,7 @@ function ApprovalInboxContent() {
   const [reconciliationEvidence, setReconciliationEvidence] = useState("");
   const [actionError, setActionError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [showAllApprovals, setShowAllApprovals] = useState(false);
 
   const mutation = useMutation({
     retry: false,
@@ -148,6 +153,19 @@ function ApprovalInboxContent() {
   const canReconcile = !offline && model.allowed_actions.includes("approval.reconcile");
   const locale = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
   const actingId = mutation.isPending ? mutation.variables?.approval.id : undefined;
+  const history = model.approvals.filter(
+    (approval) =>
+      approval.state === "executed" || approval.state === "denied" || approval.state === "expired",
+  );
+  const previewHistoryIds = new Set(
+    history.slice(0, APPROVAL_HISTORY_PREVIEW_LIMIT).map((approval) => approval.id),
+  );
+  const visibleApprovals = showAllApprovals
+    ? model.approvals
+    : model.approvals.filter(
+        (approval) => !history.includes(approval) || previewHistoryIds.has(approval.id),
+      );
+  const remainingApprovals = history.length - APPROVAL_HISTORY_PREVIEW_LIMIT;
 
   function approve(approval: ApprovalRequest) {
     if (!canApprove || mutation.isPending) return;
@@ -171,25 +189,12 @@ function ApprovalInboxContent() {
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-6">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <ShieldCheck className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Lead reviews
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Check one lead note before IronWrap saves it. Customer messages, quotes, and money
-                  records stay out.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+      <WorkspaceHeader
+        icon={<ShieldCheck aria-hidden="true" />}
+        title="Lead reviews"
+        description="Check one lead note before IronWrap saves it. Customer messages, quotes, and money records stay out."
+        aside={
+          <>
             <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.approvals.length === 0
@@ -211,9 +216,9 @@ function ApprovalInboxContent() {
               <RefreshCw aria-hidden="true" />
               Load again
             </Button>
-          </div>
-        </header>
-      </Card>
+          </>
+        }
+      />
 
       <Card className="overflow-hidden">
         <ApprovalSummary approvals={model.approvals} />
@@ -251,54 +256,69 @@ function ApprovalInboxContent() {
           </p>
         </Card>
       ) : (
-        <ol
-          className="divide-y divide-border overflow-hidden border border-border bg-surface"
-          aria-label="Lead review requests"
-        >
-          {model.approvals.map((approval) => (
-            <li key={approval.id}>
-              <ApprovalCard
-                approval={approval}
-                locale={locale}
-                canApprove={canApprove}
-                canReject={canReject}
-                canReconcile={canReconcile}
-                offline={offline}
-                rejecting={rejectingId === approval.id}
-                rejectionReason={reason}
-                reconciling={reconcilingId === approval.id}
-                reconciliationOutcome={reconciliationOutcome}
-                reconciliationEvidence={reconciliationEvidence}
-                acting={actingId === approval.id}
-                onApprove={() => approve(approval)}
-                onOpenReject={() => {
-                  setActionError(undefined);
-                  setRejectingId(approval.id);
-                  setReason("");
-                }}
-                onCancelReject={() => {
-                  setRejectingId(undefined);
-                  setReason("");
-                }}
-                onReasonChange={setReason}
-                onReject={() => reject(approval)}
-                onOpenReconcile={() => {
-                  setActionError(undefined);
-                  setReconcilingId(approval.id);
-                  setReconciliationOutcome("inconclusive");
-                  setReconciliationEvidence("");
-                }}
-                onCancelReconcile={() => {
-                  setReconcilingId(undefined);
-                  setReconciliationEvidence("");
-                }}
-                onReconciliationOutcomeChange={setReconciliationOutcome}
-                onReconciliationEvidenceChange={setReconciliationEvidence}
-                onReconcile={() => reconcile(approval)}
-              />
-            </li>
-          ))}
-        </ol>
+        <div className="space-y-3">
+          <ol
+            id="lead-review-requests"
+            className="divide-y divide-border overflow-hidden border border-border bg-surface"
+            aria-label="Lead review requests"
+          >
+            {visibleApprovals.map((approval) => (
+              <li key={approval.id}>
+                <ApprovalCard
+                  approval={approval}
+                  locale={locale}
+                  canApprove={canApprove}
+                  canReject={canReject}
+                  canReconcile={canReconcile}
+                  offline={offline}
+                  rejecting={rejectingId === approval.id}
+                  rejectionReason={reason}
+                  reconciling={reconcilingId === approval.id}
+                  reconciliationOutcome={reconciliationOutcome}
+                  reconciliationEvidence={reconciliationEvidence}
+                  acting={actingId === approval.id}
+                  onApprove={() => approve(approval)}
+                  onOpenReject={() => {
+                    setActionError(undefined);
+                    setRejectingId(approval.id);
+                    setReason("");
+                  }}
+                  onCancelReject={() => {
+                    setRejectingId(undefined);
+                    setReason("");
+                  }}
+                  onReasonChange={setReason}
+                  onReject={() => reject(approval)}
+                  onOpenReconcile={() => {
+                    setActionError(undefined);
+                    setReconcilingId(approval.id);
+                    setReconciliationOutcome("inconclusive");
+                    setReconciliationEvidence("");
+                  }}
+                  onCancelReconcile={() => {
+                    setReconcilingId(undefined);
+                    setReconciliationEvidence("");
+                  }}
+                  onReconciliationOutcomeChange={setReconciliationOutcome}
+                  onReconciliationEvidenceChange={setReconciliationEvidence}
+                  onReconcile={() => reconcile(approval)}
+                />
+              </li>
+            ))}
+          </ol>
+          {remainingApprovals > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="compact"
+              aria-controls="lead-review-requests"
+              aria-expanded={showAllApprovals}
+              onClick={() => setShowAllApprovals((current) => !current)}
+            >
+              {showAllApprovals ? "Show fewer" : `Show ${remainingApprovals} more`}
+            </Button>
+          ) : null}
+        </div>
       )}
     </section>
   );
@@ -409,6 +429,7 @@ function ApprovalCard({
   const titleId = `approval-${approval.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const expiration = formatOwnerDate(approval.expires_at, locale);
   const created = formatOwnerDate(approval.created_at, locale);
+  const reviewSummary = approval.preview?.patch.triage_summary ?? approval.request_text;
   const approveVisible = approval.state === "pending" && canApprove;
   const rejectVisible = approval.state === "pending" && canReject;
   const reconcileVisible =
@@ -421,8 +442,11 @@ function ApprovalCard({
         approval.state === "execution_uncertain" ? "border-warning bg-warning-soft/35" : undefined
       }
     >
-      <CardHeader className="border-b border-border">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <details className="group">
+        <summary
+          className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 sm:px-6 [&::-webkit-details-marker]:hidden"
+          aria-label={`Review lead check: ${state.label}. ${reviewSummary}. Asked ${created}`}
+        >
           <div className="flex min-w-0 gap-3">
             <span
               className={`grid size-10 shrink-0 place-items-center rounded-md ${state.iconSurface}`}
@@ -431,7 +455,9 @@ function ApprovalCard({
             </span>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <CardTitle id={titleId}>Lead check</CardTitle>
+                <h2 id={titleId} className="text-lg font-extrabold tracking-[-0.025em] sm:text-xl">
+                  Lead check
+                </h2>
                 <span
                   className={`inline-flex items-center gap-1.5 text-sm font-bold ${state.labelTone}`}
                 >
@@ -439,183 +465,190 @@ function ApprovalCard({
                   {state.label}
                 </span>
               </div>
-              <CardDescription className="mt-1">
-                Check one saved note before it is added.
-              </CardDescription>
+              <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted">{reviewSummary}</p>
+              <p className="mt-1 text-xs font-semibold text-muted">Asked {created}</p>
             </div>
           </div>
-          <p className="text-sm font-semibold text-muted">Asked {created}</p>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-5 pt-5">
-        <ScopeFence />
-        {approval.preview ? <TriageDiff preview={approval.preview} /> : <PreviewUnavailable />}
-        <ApprovalSystemDetails approval={approval} locale={locale} expiration={expiration} />
-        <ApprovalStateNotice approval={approval} />
+          <ChevronRight
+            className="mt-3 size-4 shrink-0 text-muted transition-transform group-open:rotate-90"
+            aria-hidden="true"
+          />
+        </summary>
+        <CardContent className="space-y-5 border-t border-border pt-5">
+          <ScopeFence />
+          {approval.preview ? <TriageDiff preview={approval.preview} /> : <PreviewUnavailable />}
+          <ApprovalSystemDetails approval={approval} locale={locale} expiration={expiration} />
+          <ApprovalStateNotice approval={approval} />
 
-        {approval.state === "pending" && !approveVisible && !rejectVisible ? (
-          <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
-            {offline
-              ? "Go online before you choose. IronWrap will not save this choice on this device."
-              : "Waiting for the right owner. You can read this request, but you cannot choose."}
-          </p>
-        ) : null}
+          {approval.state === "pending" && !approveVisible && !rejectVisible ? (
+            <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
+              {offline
+                ? "Go online before you choose. IronWrap will not save this choice on this device."
+                : "Waiting for the right owner. You can read this request, but you cannot choose."}
+            </p>
+          ) : null}
 
-        {approval.state === "pending" && !rejecting ? (
-          <div className="grid gap-3 border-t border-border pt-5 sm:grid-cols-[minmax(0,1fr)_auto]">
-            {approveVisible ? (
-              <Button
-                type="button"
-                variant="accent"
-                size="field"
-                fullWidth
-                busy={acting}
-                disabled={acting || offline}
-                onClick={onApprove}
+          {approval.state === "pending" && !rejecting ? (
+            <div className="grid gap-3 border-t border-border pt-5 sm:grid-cols-[minmax(0,1fr)_auto]">
+              {approveVisible ? (
+                <Button
+                  type="button"
+                  variant="accent"
+                  size="field"
+                  fullWidth
+                  busy={acting}
+                  disabled={acting || offline}
+                  onClick={onApprove}
+                >
+                  <CheckCircle2 aria-hidden="true" />
+                  Save lead check
+                </Button>
+              ) : null}
+              {rejectVisible ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size={approveVisible ? "field" : "default"}
+                  fullWidth={!approveVisible}
+                  disabled={acting || offline}
+                  onClick={onOpenReject}
+                >
+                  <XCircle aria-hidden="true" />
+                  Turn down
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {approval.state === "pending" && rejecting ? (
+            <section className="border-t border-border pt-5" aria-label="Turn down lead check">
+              <label
+                className="block text-sm font-extrabold"
+                htmlFor={`reject-reason-${approval.id}`}
               >
-                <CheckCircle2 aria-hidden="true" />
-                Save lead check
-              </Button>
-            ) : null}
-            {rejectVisible ? (
+                Why should we stop this lead check?
+              </label>
+              <Textarea
+                id={`reject-reason-${approval.id}`}
+                className="mt-3 min-h-28 focus-visible:border-danger focus-visible:outline-danger"
+                value={rejectionReason}
+                maxLength={1_000}
+                placeholder="Say what must be fixed before someone asks again."
+                onChange={(event) => onReasonChange(event.target.value)}
+              />
+              <p className="mt-2 text-sm text-muted">
+                Turning it down does not contact the customer or change the lead.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <Button type="button" variant="outline" disabled={acting} onClick={onCancelReject}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  busy={acting}
+                  disabled={acting || rejectionReason.trim().length < 3}
+                  onClick={onReject}
+                >
+                  <XCircle aria-hidden="true" />
+                  Turn down lead check
+                </Button>
+              </div>
+            </section>
+          ) : null}
+
+          {reconcileVisible && !reconciling ? (
+            <div className="border-t border-border pt-5">
               <Button
                 type="button"
                 variant="outline"
-                size={approveVisible ? "field" : "default"}
-                fullWidth={!approveVisible}
+                size="field"
+                fullWidth
                 disabled={acting || offline}
-                onClick={onOpenReject}
-              >
-                <XCircle aria-hidden="true" />
-                Turn down
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {approval.state === "pending" && rejecting ? (
-          <section className="border-t border-border pt-5" aria-label="Turn down lead check">
-            <label
-              className="block text-sm font-extrabold"
-              htmlFor={`reject-reason-${approval.id}`}
-            >
-              Why should we stop this lead check?
-            </label>
-            <Textarea
-              id={`reject-reason-${approval.id}`}
-              className="mt-3 min-h-28 focus-visible:border-danger focus-visible:outline-danger"
-              value={rejectionReason}
-              maxLength={1_000}
-              placeholder="Say what must be fixed before someone asks again."
-              onChange={(event) => onReasonChange(event.target.value)}
-            />
-            <p className="mt-2 text-sm text-muted">
-              Turning it down does not contact the customer or change the lead.
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <Button type="button" variant="outline" disabled={acting} onClick={onCancelReject}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                busy={acting}
-                disabled={acting || rejectionReason.trim().length < 3}
-                onClick={onReject}
-              >
-                <XCircle aria-hidden="true" />
-                Turn down lead check
-              </Button>
-            </div>
-          </section>
-        ) : null}
-
-        {reconcileVisible && !reconciling ? (
-          <div className="border-t border-border pt-5">
-            <Button
-              type="button"
-              variant="outline"
-              size="field"
-              fullWidth
-              disabled={acting || offline}
-              onClick={onOpenReconcile}
-            >
-              <FileCheck2 aria-hidden="true" />
-              Check saved result
-            </Button>
-          </div>
-        ) : null}
-
-        {reconcileVisible && reconciling ? (
-          <section className="border-t border-border pt-5" aria-label="Check saved result">
-            <label
-              className="block text-sm font-extrabold"
-              htmlFor={`reconciliation-outcome-${approval.id}`}
-            >
-              What happened?
-            </label>
-            <Select
-              id={`reconciliation-outcome-${approval.id}`}
-              className="mt-3 min-h-14 px-4 font-semibold"
-              value={reconciliationOutcome}
-              onChange={(event) => {
-                const outcome = event.target.value;
-                if (
-                  outcome === "executed" ||
-                  outcome === "not_executed" ||
-                  outcome === "inconclusive"
-                ) {
-                  onReconciliationOutcomeChange(outcome);
-                }
-              }}
-            >
-              <option value="inconclusive">Not sure</option>
-              <option value="executed">Lead check was saved</option>
-              <option value="not_executed">Lead check was not saved</option>
-            </Select>
-            <label
-              className="mt-4 block text-sm font-extrabold"
-              htmlFor={`reconciliation-evidence-${approval.id}`}
-            >
-              What did you check?
-            </label>
-            <Textarea
-              id={`reconciliation-evidence-${approval.id}`}
-              className="mt-3 min-h-28 focus-visible:border-warning focus-visible:outline-warning"
-              value={reconciliationEvidence}
-              maxLength={1_000}
-              placeholder="Say what you checked and why no new lead change is needed."
-              onChange={(event) => onReconciliationEvidenceChange(event.target.value)}
-            />
-            <p className="mt-2 text-sm text-muted">
-              This saves your check only. It does not try the lead change again.
-            </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <Button type="button" variant="outline" disabled={acting} onClick={onCancelReconcile}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="accent"
-                busy={acting}
-                disabled={acting || reconciliationEvidence.trim().length < 3}
-                onClick={onReconcile}
+                onClick={onOpenReconcile}
               >
                 <FileCheck2 aria-hidden="true" />
-                Save result check
+                Check saved result
               </Button>
             </div>
-          </section>
-        ) : null}
+          ) : null}
 
-        {approval.state === "execution_uncertain" &&
-        !approval.reconciliation &&
-        !reconcileVisible ? (
-          <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
-            Only the right owner can save this result check.
-          </p>
-        ) : null}
-      </CardContent>
+          {reconcileVisible && reconciling ? (
+            <section className="border-t border-border pt-5" aria-label="Check saved result">
+              <label
+                className="block text-sm font-extrabold"
+                htmlFor={`reconciliation-outcome-${approval.id}`}
+              >
+                What happened?
+              </label>
+              <Select
+                id={`reconciliation-outcome-${approval.id}`}
+                className="mt-3 min-h-14 px-4 font-semibold"
+                value={reconciliationOutcome}
+                onChange={(event) => {
+                  const outcome = event.target.value;
+                  if (
+                    outcome === "executed" ||
+                    outcome === "not_executed" ||
+                    outcome === "inconclusive"
+                  ) {
+                    onReconciliationOutcomeChange(outcome);
+                  }
+                }}
+              >
+                <option value="inconclusive">Not sure</option>
+                <option value="executed">Lead check was saved</option>
+                <option value="not_executed">Lead check was not saved</option>
+              </Select>
+              <label
+                className="mt-4 block text-sm font-extrabold"
+                htmlFor={`reconciliation-evidence-${approval.id}`}
+              >
+                What did you check?
+              </label>
+              <Textarea
+                id={`reconciliation-evidence-${approval.id}`}
+                className="mt-3 min-h-28 focus-visible:border-warning focus-visible:outline-warning"
+                value={reconciliationEvidence}
+                maxLength={1_000}
+                placeholder="Say what you checked and why no new lead change is needed."
+                onChange={(event) => onReconciliationEvidenceChange(event.target.value)}
+              />
+              <p className="mt-2 text-sm text-muted">
+                This saves your check only. It does not try the lead change again.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={acting}
+                  onClick={onCancelReconcile}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="accent"
+                  busy={acting}
+                  disabled={acting || reconciliationEvidence.trim().length < 3}
+                  onClick={onReconcile}
+                >
+                  <FileCheck2 aria-hidden="true" />
+                  Save result check
+                </Button>
+              </div>
+            </section>
+          ) : null}
+
+          {approval.state === "execution_uncertain" &&
+          !approval.reconciliation &&
+          !reconcileVisible ? (
+            <p className="border-t border-border pt-4 text-sm leading-6 text-muted">
+              Only the right owner can save this result check.
+            </p>
+          ) : null}
+        </CardContent>
+      </details>
     </Card>
   );
 }

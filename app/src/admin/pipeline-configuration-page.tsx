@@ -87,7 +87,7 @@ function PipelineConfigurationContent() {
         description="Shape the boards your team works from. Changes are versioned and every stage keeps its history."
       />
       {!live ? (
-        <Notice tone="warning" title="Offline — configuration is read-only">
+        <Notice tone="warning" title="Offline: configuration is read-only">
           Cached pipelines remain readable. Reconnect before creating, renaming, reordering,
           archiving, or changing stages and role access.
         </Notice>
@@ -217,7 +217,7 @@ function PipelineCreateForm({
                 value={owningRole}
                 onChange={(event) => setOwningRole(event.target.value)}
               >
-                <option value="">No owner — use explicit grants</option>
+                <option value="">No owner; use explicit grants</option>
                 {data.roles.map((role) => (
                   <option key={role} value={role}>
                     {roleLabel(role)}

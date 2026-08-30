@@ -270,7 +270,7 @@ describe("PipelineBoardPage", () => {
 
     // The server named the stage and the role. Neither is swallowed into "move failed".
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Your role cannot move a card into Quote Sent — it is reserved for production/,
+      /Your role cannot move a card into Quote Sent\. It is reserved for production/,
     );
     const needQuote = screen.getByRole("region", { name: "Need Quote column" });
     expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();
@@ -293,7 +293,7 @@ describe("PipelineBoardPage", () => {
     await user.click(within(dialog).getByRole("button", { name: /Quote Sent/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Someone else changed this card first — it is now at version 9\. The board has been refreshed/,
+      /Someone else changed this card first\. It is now at version 9\. The board has been refreshed/,
     );
     const needQuote = screen.getByRole("region", { name: "Need Quote column" });
     expect(within(needQuote).getByRole("heading", { name: "Naina Tamang" })).toBeVisible();
@@ -668,14 +668,14 @@ describe("PipelineBoardPage", () => {
     it("says the board is read-only rather than letting a move look possible", async () => {
       renderBoard();
 
-      expect(await screen.findByText("Offline — the board is read-only")).toBeVisible();
+      expect(await screen.findByText("Offline: the board is read-only")).toBeVisible();
     });
 
     it("opens the move menu with every stage disabled and the reason on it", async () => {
       renderBoard();
       const { dialog } = await openMoveMenuFor("Naina Tamang");
 
-      expect(within(dialog).getByText("Offline — this card cannot be moved")).toBeVisible();
+      expect(within(dialog).getByText("Offline: this card cannot be moved")).toBeVisible();
       expect(within(dialog).getByText(/stays in Need Quote until you reconnect/)).toBeVisible();
       for (const stageName of ["New Lead", "Visit Booked", "Quote Sent", "Contract signed"]) {
         expect(within(dialog).getByRole("button", { name: new RegExp(stageName) })).toBeDisabled();

@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, Banknote, RefreshCw } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
@@ -154,27 +155,46 @@ function MoneyIntentContent() {
 
   return (
     <section className="mx-auto max-w-3xl space-y-6 pb-4">
-      <BackToDesk />
-
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <MoneyBadge badge={intent.badge} />
-          <span className="text-sm font-bold text-muted">{ageLabel(intent.age_seconds)} old</span>
-        </div>
-        <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-          {kindLabel(intent.kind)}
-        </h1>
-        <p className="mt-1 text-2xl font-black tabular-nums">
-          {amountLabel(intent.total_amount, intent.currency)}
-        </p>
-        <p className="mt-2 text-sm leading-6 text-muted sm:text-base">
-          {intent.customer_ref ? `${intent.customer_ref} · ` : ""}
-          {intent.roof_job_id}
-        </p>
-        <p className="mt-3 border border-border bg-surface-muted/60 px-4 py-3 text-sm leading-6">
-          {intent.next_step}
-        </p>
-      </header>
+      <WorkspaceHeader
+        icon={<Banknote aria-hidden="true" />}
+        title={kindLabel(intent.kind)}
+        description={
+          <>
+            {intent.customer_ref ? `${intent.customer_ref} · ` : ""}
+            {intent.roof_job_id}
+            <span className="mt-3 block rounded-lg border border-border bg-surface-muted/60 px-4 py-3 text-foreground">
+              {intent.next_step}
+            </span>
+          </>
+        }
+        back={<BackToDesk />}
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            size="compact"
+            busy={query.isFetching}
+            disabled={query.isFetching || busy}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            Refresh
+          </Button>
+        }
+        aside={
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <MoneyBadge badge={intent.badge} />
+              <span className="text-sm font-bold text-muted">
+                {ageLabel(intent.age_seconds)} old
+              </span>
+            </div>
+            <p className="mt-3 text-2xl font-black tabular-nums tracking-[-0.03em]">
+              {amountLabel(intent.total_amount, intent.currency)}
+            </p>
+          </>
+        }
+      />
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before you decide">

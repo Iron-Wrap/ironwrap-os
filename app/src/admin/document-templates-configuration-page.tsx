@@ -132,7 +132,7 @@ function DocumentTemplatesContent() {
         action={<ConfigurationLink />}
       />
       {!live ? (
-        <Notice tone="warning" title="Offline — configuration is read-only">
+        <Notice tone="warning" title="Offline: configuration is read-only">
           Cached documents remain readable. Reconnect before creating, revising, or retiring one.
         </Notice>
       ) : null}
@@ -327,7 +327,7 @@ function DocumentList({
     return (
       <EmptyState
         title="No documents yet"
-        message="Create one above. A document is the layout your team sends — the values come from the record it is opened on."
+        message="Create one above. A document is the layout your team sends. Its values come from the record it is opened on."
       />
     );
   return (
@@ -708,7 +708,7 @@ function DocumentTemplateForm({
         <legend className="text-sm font-bold">Layout</legend>
         <p className="text-sm leading-5 text-muted">
           Headings and paragraphs read the same on every record. A field is filled from the record
-          the document is opened on — that is what makes this a document and not a file.
+          the document is opened on. That is what makes this a document and not a file.
         </p>
         {entityFields.length === 0 ? (
           <Notice tone="warning" title="No fields for this record type">

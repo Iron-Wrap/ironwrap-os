@@ -209,8 +209,8 @@ export function describeMoveBlocker(
       return {
         code: error.code,
         message: `Someone else changed this card first${
-          version === undefined ? "" : ` — it is now at version ${version}`
-        }. The board has been refreshed; check the card and move it again.`,
+          version === undefined ? "." : `. It is now at version ${version}.`
+        } The board has been refreshed; check the card and move it again.`,
         outcome: "refused",
         refresh: true,
       };
@@ -220,8 +220,8 @@ export function describeMoveBlocker(
       return {
         code: error.code,
         message: `Your role cannot move a card into ${stage}${
-          required === undefined ? "" : ` — it is reserved for ${required}`
-        }. The card stayed where it was.`,
+          required === undefined ? "." : `. It is reserved for ${required}.`
+        } The card stayed where it was.`,
         outcome: "refused",
         refresh: false,
       };
@@ -268,7 +268,7 @@ export function describeMoveBlocker(
     case "csrf_failed":
       return {
         code: error.code,
-        message: "Your session expired. Sign in again — the card stayed where it was.",
+        message: "Your session expired. Sign in again. The card stayed where it was.",
         outcome: "refused",
         refresh: false,
       };
@@ -347,8 +347,8 @@ export function describeUndoBlocker(
       return {
         code: error.code,
         message: `Someone else changed this card first${
-          version === undefined ? "" : ` — it is now at version ${version}`
-        }, so the undo was refused. The board has been refreshed.`,
+          version === undefined ? "." : `. It is now at version ${version}.`
+        } The undo was refused. The board has been refreshed.`,
         outcome: "refused",
         refresh: true,
       };
@@ -713,13 +713,13 @@ export function describePlacementBlocker(
     case "idempotency_key_required":
       return {
         code: error.code,
-        message: `The app sent something this server would not accept. Refresh and try again — ${entity.toLowerCase()} was not added.`,
+        message: `The app sent something this server would not accept. Refresh and try again. ${entity} was not added.`,
         alreadyPlaced: false,
       };
     case "csrf_failed":
       return {
         code: error.code,
-        message: `Your session expired. Sign in again — ${entity.toLowerCase()} was not added.`,
+        message: `Your session expired. Sign in again. ${entity} was not added.`,
         alreadyPlaced: false,
       };
     default:

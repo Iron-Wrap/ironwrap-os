@@ -12,8 +12,10 @@ import {
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { RoleGuard } from "../components/role-guard";
@@ -35,6 +37,8 @@ import {
   severityPriority,
   type OwnerDateFormatOptions,
 } from "./owner-now-utils";
+
+const DECISION_LANE_PREVIEW_LIMIT = 3;
 
 export function OwnerNowPage() {
   return (
@@ -122,24 +126,12 @@ function OwnerNowScreen({
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-6">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <CircleGauge className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Now
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  See work that needs a choice. IronWrap does not guess when a fact is missing.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+      <WorkspaceHeader
+        icon={<CircleGauge aria-hidden="true" />}
+        title="Now"
+        description="See work that needs a choice. IronWrap does not guess when a fact is missing."
+        aside={
+          <>
             <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {stoppedCount > 0
@@ -152,9 +144,9 @@ function OwnerNowScreen({
               {model.summary.active_jobs} open {model.summary.active_jobs === 1 ? "job" : "jobs"}
               {generatedAt ? ` · List made ${generatedAt}` : ""}
             </p>
-          </div>
-        </header>
-      </Card>
+          </>
+        }
+      />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -652,6 +644,11 @@ function DecisionLane({
   locale: OwnerDateFormatOptions;
 }) {
   const headingId = `owner-decision-lane-${lane.id}`;
+  const [expanded, setExpanded] = useState(false);
+  const visibleExceptions = expanded
+    ? lane.exceptions
+    : lane.exceptions.slice(0, DECISION_LANE_PREVIEW_LIMIT);
+  const remaining = lane.exceptions.length - DECISION_LANE_PREVIEW_LIMIT;
   return (
     <Card className="overflow-hidden" aria-labelledby={headingId}>
       <header className="flex flex-wrap items-end justify-between gap-3 p-5 sm:p-6">
@@ -668,8 +665,11 @@ function DecisionLane({
           {lane.exceptions.length} {lane.exceptions.length === 1 ? "item" : "items"}
         </p>
       </header>
-      <ol className="border-t border-border divide-y divide-border px-5 sm:px-6">
-        {lane.exceptions.map((exception) => (
+      <ol
+        id={`${headingId}-items`}
+        className="border-t border-border divide-y divide-border px-5 sm:px-6"
+      >
+        {visibleExceptions.map((exception) => (
           <DecisionRow
             key={`${lane.id}:${exception.id}`}
             exception={exception}
@@ -679,6 +679,20 @@ function DecisionLane({
           />
         ))}
       </ol>
+      {remaining > 0 ? (
+        <footer className="border-t border-border px-5 py-3 sm:px-6">
+          <Button
+            type="button"
+            variant="ghost"
+            size="compact"
+            aria-controls={`${headingId}-items`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "Show fewer" : `Show ${remaining} more`}
+          </Button>
+        </footer>
+      ) : null}
     </Card>
   );
 }
@@ -700,6 +714,8 @@ function DecisionRow({
   const occurredAt = safeFormattedDate(exception.occurred_at, locale);
   const dueAt = dueTimingAvailable ? safeFormattedDate(exception.due_at, locale) : null;
   const receivedAt = safeFormattedDate(exception.received_at, locale);
+  const jobLabel = exception.job_id?.startsWith("job:") ? "Attached" : (exception.job_id ?? "");
+  const openJobLabel = jobLabel === "Attached" ? "Open attached job" : `Open job ${jobLabel}`;
 
   return (
     <li className="py-4 sm:py-5">
@@ -724,7 +740,7 @@ function DecisionRow({
               <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted">{exception.why}</p>
             ) : null}
             <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm leading-5 text-muted">
-              {jobIsAvailable ? <Metadata label="Job" value={exception.job_id} /> : null}
+              {jobIsAvailable ? <Metadata label="Job" value={jobLabel} /> : null}
               {occurredAt ? <Metadata label="Recorded" value={occurredAt} /> : null}
               {receivedAt && receivedAt !== occurredAt ? (
                 <Metadata label="Received" value={receivedAt} />
@@ -739,7 +755,7 @@ function DecisionRow({
             to="/jobs/$jobId"
             params={{ jobId: exception.job_id }}
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-bold text-background transition-colors hover:bg-foreground/88 focus-visible:outline-offset-3 sm:mt-0"
-            aria-label={`Open job ${exception.job_id}`}
+            aria-label={openJobLabel}
           >
             Open job
             <ChevronRight className="size-5" aria-hidden="true" />

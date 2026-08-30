@@ -331,7 +331,7 @@ test.describe("Owner configuration mobile acceptance", () => {
       };
       page.on("request", onRequest);
       await context.setOffline(true);
-      await expect(page.getByText("Offline — configuration is read-only")).toBeVisible();
+      await expect(page.getByText("Offline: configuration is read-only")).toBeVisible();
       // The app-wide banner is what an admin sees once they scroll past the page notice,
       // so it has to describe this surface: configuration queues nothing.
       await expect(
@@ -535,7 +535,7 @@ test.describe("Owner configuration mobile acceptance", () => {
       await expectKeyboardFocusVisible(input);
 
       await context.setOffline(true);
-      await expect(page.getByText("Offline — configuration is read-only")).toBeVisible();
+      await expect(page.getByText("Offline: configuration is read-only")).toBeVisible();
       await expectCachedContent(page, routeCase);
       await expect(submit).toBeDisabled();
       await focusFromKeyboard(page, input);

@@ -3,13 +3,17 @@ import { Inbox } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
 
 import { useSession } from "../auth/session-context";
+import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { loadOperatingIntake } from "./operating-intake-api";
 import type { OperatingIntakeLead } from "./operating-intake-contracts";
 
+const INTAKE_PREVIEW_LIMIT = 3;
+
 export function OperatingIntakePanel(): JSX.Element | null {
   const session = useSession();
   const [ready, setReady] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setReady(true));
     return () => window.cancelAnimationFrame(frame);
@@ -35,6 +39,8 @@ export function OperatingIntakePanel(): JSX.Element | null {
 
   const model = query.data;
   if (!model) return null;
+  const visibleLeads = expanded ? model.leads : model.leads.slice(0, INTAKE_PREVIEW_LIMIT);
+  const remaining = model.leads.length - INTAKE_PREVIEW_LIMIT;
 
   return (
     <section aria-labelledby="operating-intake-heading">
@@ -58,12 +64,30 @@ export function OperatingIntakePanel(): JSX.Element | null {
             No website intake leads for this tenant.
           </p>
         ) : (
-          <ul className="mt-5 divide-y divide-border" aria-label="Website intake leads">
-            {model.leads.map((lead) => (
+          <ul
+            id="operating-intake-leads"
+            className="mt-5 divide-y divide-border"
+            aria-label="Website intake leads"
+          >
+            {visibleLeads.map((lead) => (
               <IntakeLeadRow key={lead.envelope_id} lead={lead} />
             ))}
           </ul>
         )}
+        {remaining > 0 ? (
+          <footer className="mt-4 border-t border-border pt-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="compact"
+              aria-controls="operating-intake-leads"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? "Show fewer" : `Show ${remaining} more`}
+            </Button>
+          </footer>
+        ) : null}
       </Card>
     </section>
   );
@@ -75,7 +99,7 @@ function IntakeLeadRow({ lead }: { lead: OperatingIntakeLead }): JSX.Element {
       <p className="font-black tracking-[-0.02em]">{lead.contact_name ?? "Name not recorded"}</p>
       <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
         <div>
-          <dt className="text-xs font-extrabold text-muted">Desk state</dt>
+          <dt className="text-xs font-extrabold text-muted">Intake status</dt>
           <dd className="mt-1 font-semibold">Intake</dd>
         </div>
         <div>

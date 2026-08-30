@@ -244,6 +244,31 @@ describe("SalesDeskPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("previews a crowded lead queue and reveals the remaining leads on demand", async () => {
+    const lead = salesModel().leads[0]!;
+    vi.mocked(loadSales).mockResolvedValue(
+      salesModel({
+        leads: Array.from({ length: 5 }, (_, index) => ({
+          ...lead,
+          id: `LEAD-${index + 1}`,
+          envelope_id: `lead_${index + 1}`,
+          contact: { ...lead.contact, display_name: `Prospect ${index + 1}` },
+        })),
+      }),
+    );
+    renderSales();
+
+    expect(await screen.findByText("Prospect 3")).toBeVisible();
+    expect(screen.queryByText("Prospect 4")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    expect(screen.getByText("Prospect 5")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("filters the queue without masking source records and keeps the no-consent state precise", async () => {
     const user = userEvent.setup();
     renderSales();

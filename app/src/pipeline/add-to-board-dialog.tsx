@@ -181,7 +181,7 @@ export function AddToBoardDialog({
           ) : (
             <>
               {!live ? (
-                <Notice tone="warning" title="Offline — a card cannot be added">
+                <Notice tone="warning" title="Offline: a card cannot be added">
                   A card is saved on the server, not on this device, so nothing here is queued.
                   Reconnect and add it then.
                 </Notice>

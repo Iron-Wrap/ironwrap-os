@@ -11,9 +11,11 @@ import {
   UserRoundPlus,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ErrorState } from "../components/ui/state-panel";
@@ -35,6 +37,8 @@ const laneOrder: readonly ProductionRunwayLane[] = [
   "ready_for_review",
   "needs_verification",
 ];
+
+const RUNWAY_LANE_PREVIEW_LIMIT = 3;
 
 const laneCopy: Record<
   ProductionRunwayLane,
@@ -141,25 +145,12 @@ function ProductionRunwayScreen({
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <CalendarClock className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Production plan
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Check crews, start dates, safety steps, and material needs. This page does not
-                  change a job.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+      <WorkspaceHeader
+        icon={<CalendarClock aria-hidden="true" />}
+        title="Production plan"
+        description="Check crews, start dates, safety steps, and material needs. This page does not change a job."
+        aside={
+          <>
             <p className="text-sm font-bold text-muted">Today</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {model.summary.active_jobs}{" "}
@@ -171,9 +162,9 @@ function ProductionRunwayScreen({
                 : "List time not found"}
             </p>
             <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
-          </div>
-        </header>
-      </Card>
+          </>
+        }
+      />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -297,6 +288,9 @@ function RunwayLane({
   const copy = laneCopy[lane];
   const Icon = copy.icon;
   const headingId = `production-lane-${lane}`;
+  const [expanded, setExpanded] = useState(false);
+  const visibleJobs = expanded ? jobs : jobs.slice(0, RUNWAY_LANE_PREVIEW_LIMIT);
+  const remaining = jobs.length - RUNWAY_LANE_PREVIEW_LIMIT;
   return (
     <Card className={cn("scroll-mt-28 overflow-hidden", copy.tone)}>
       <section aria-labelledby={headingId}>
@@ -317,8 +311,8 @@ function RunwayLane({
           </p>
         </header>
         {jobs.length > 0 ? (
-          <ol className="grid gap-3 p-3 sm:p-4 lg:grid-cols-2">
-            {jobs.map((job) => (
+          <ol id={`${headingId}-jobs`} className="grid gap-3 p-3 sm:p-4 lg:grid-cols-2">
+            {visibleJobs.map((job) => (
               <li key={job.id}>
                 <RunwayJobCard
                   job={job}
@@ -333,6 +327,20 @@ function RunwayLane({
         ) : (
           <div className="p-5 text-sm leading-6 text-muted sm:p-6">No jobs are in this group.</div>
         )}
+        {remaining > 0 ? (
+          <footer className="border-t border-border px-4 py-3 sm:px-5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="compact"
+              aria-controls={`${headingId}-jobs`}
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? "Show fewer" : `Show ${remaining} more`}
+            </Button>
+          </footer>
+        ) : null}
       </section>
     </Card>
   );
@@ -364,7 +372,12 @@ function RunwayJobCard({
       <div className="flex gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-muted">{job.brand ?? "Unbranded job"}</p>
-          <h3 className="mt-1 text-lg font-black tracking-[-0.02em]">{job.job_number ?? job.id}</h3>
+          <h3
+            className="mt-1 truncate text-lg font-black tracking-[-0.02em]"
+            title={job.job_number ?? job.id}
+          >
+            {job.job_number ?? job.id}
+          </h3>
           <p className="mt-1 text-sm text-muted">{job.service_type ?? "Work type not found"}</p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">

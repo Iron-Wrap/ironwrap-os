@@ -467,7 +467,7 @@ test.describe("Pipeline board acceptance", () => {
       .click();
 
     await expect(page.getByRole("alert")).toContainText(
-      /Someone else changed this card first — it is now at version 9/,
+      /Someone else changed this card first\. It is now at version 9\. The board has been refreshed/,
     );
     await page.screenshot({ path: `${shotDir}/pipeline-board-version-conflict.png` });
     // Rolled back: the card is still in the column it started in.
@@ -627,7 +627,7 @@ test.describe("Pipeline board acceptance", () => {
       .click();
 
     await expect(page.getByRole("alert")).toContainText(
-      /cannot move a card into Quote Sent — it is reserved for production/,
+      /Your role cannot move a card into Quote Sent\. It is reserved for production/,
     );
     await expect(
       page.getByRole("region", { name: "Need Quote column" }).getByRole("article", {

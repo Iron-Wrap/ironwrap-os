@@ -5,6 +5,7 @@ import { Banknote, RefreshCw } from "lucide-react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
@@ -53,25 +54,27 @@ function MoneyDeskContent() {
 
   const { summary, queues } = query.data;
   const health = summary.reconciliation_health;
+  const allClear =
+    summary.queues.needs_approval.count === 0 &&
+    summary.queues.awaiting_provider.count === 0 &&
+    summary.queues.mismatched.count === 0 &&
+    summary.queues.exceptions.count === 0 &&
+    queues.needs_approval.length === 0 &&
+    queues.awaiting_provider.length === 0 &&
+    queues.mismatched.length === 0 &&
+    queues.exceptions.length === 0 &&
+    health.open_exceptions === 0 &&
+    health.stale_observation_count === 0 &&
+    health.unobserved_intent_count === 0 &&
+    !health.oldest_unreconciled_intent_id;
 
   return (
     <section className="mx-auto max-w-4xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-              <Banknote className="size-5 text-accent" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                Money desk
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                See what needs a check, what QuickBooks is doing, and what to do next. Nothing moves
-                without a person.
-              </p>
-            </div>
-          </div>
+      <WorkspaceHeader
+        icon={<Banknote aria-hidden="true" />}
+        title="Money desk"
+        description="See what needs a check, what QuickBooks is doing, and what to do next. Nothing moves without a person."
+        actions={
           <Button
             type="button"
             variant="outline"
@@ -83,8 +86,8 @@ function MoneyDeskContent() {
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {offline ? (
         <Notice tone="warning" title="Reconnect before you decide">
@@ -100,117 +103,128 @@ function MoneyDeskContent() {
         <Tile label="Money issues" value={summary.queues.exceptions.count} tone="danger" />
       </dl>
 
-      <MoneyQueueSection
-        title="Needs approval"
-        description="Check the amount against the approved paperwork before anything is sent."
-        count={summary.queues.needs_approval.count}
-      >
-        {queues.needs_approval.length === 0 ? (
-          <EmptyQueue message="Nothing is waiting on a decision." />
-        ) : (
-          <ul>
-            {queues.needs_approval.map((intent) => (
-              <MoneyQueueRow key={intent.intent_id} intent={intent} />
-            ))}
-          </ul>
-        )}
-      </MoneyQueueSection>
-
-      <MoneyQueueSection
-        title="Waiting for QuickBooks"
-        description="These were sent. IronWrap will keep checking until QuickBooks answers."
-        count={summary.queues.awaiting_provider.count}
-      >
-        {queues.awaiting_provider.length === 0 ? (
-          <EmptyQueue message="Nothing is in flight." />
-        ) : (
-          <ul>
-            {queues.awaiting_provider.map((intent) => (
-              <MoneyQueueRow key={intent.intent_id} intent={intent} />
-            ))}
-          </ul>
-        )}
-      </MoneyQueueSection>
-
-      <MoneyQueueSection
-        title="Does not match"
-        description="QuickBooks has different numbers. Open an item to see what changed."
-        count={summary.queues.mismatched.count}
-      >
-        {queues.mismatched.length === 0 ? (
-          <EmptyQueue message="Everything we have sent matches QuickBooks." />
-        ) : (
-          <ul>
-            {queues.mismatched.map((intent) => (
-              <MoneyQueueRow key={intent.intent_id} intent={intent} />
-            ))}
-          </ul>
-        )}
-      </MoneyQueueSection>
-
-      <MoneyQueueSection
-        title="Money issues"
-        description="These need a person. Open an issue to see the safe choices."
-        count={summary.queues.exceptions.count}
-      >
-        {queues.exceptions.length === 0 ? (
-          <EmptyQueue message="There are no open money issues." />
-        ) : (
-          <ul>
-            {queues.exceptions.map((exception) => (
-              <li key={exception.exception_id} className="border-b border-border last:border-b-0">
-                <Link
-                  to="/accounting/exceptions"
-                  className="flex min-h-16 flex-col gap-1 px-4 py-4 hover:bg-surface-muted sm:px-6"
-                >
-                  <span className="font-bold tracking-[-0.01em]">
-                    {reasonLabel(exception.reason_code)}
-                  </span>
-                  <span className="text-sm text-muted">
-                    Open for {ageLabel(exception.age_seconds)}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </MoneyQueueSection>
-
-      <section
-        aria-label="QuickBooks checks"
-        className="border border-border bg-surface px-4 py-5 sm:px-6"
-      >
-        <h2 className="text-lg font-bold tracking-[-0.02em]">QuickBooks checks</h2>
-        <p className="mt-1 text-sm leading-6 text-muted">
-          See what still needs a fresh check against QuickBooks.
-        </p>
-        <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Tile label="Open issues" value={health.open_exceptions} />
-          <Tile label="Not checked lately" value={health.stale_observation_count} />
-          <Tile label="Never checked" value={health.unobserved_intent_count} />
-        </dl>
-        {health.oldest_unreconciled_intent_id ? (
-          // A block target, not an id wrapped in an inline link. Inline, this rendered 41 px tall
-          // on a Pixel 5 - under the 44 px thumb floor the mobile acceptance suite enforces.
-          <Link
-            to="/accounting/intents/$intentId"
-            params={{ intentId: health.oldest_unreconciled_intent_id }}
-            className="mt-4 flex min-h-14 flex-col justify-center gap-0.5 border border-border px-4 py-3 hover:bg-surface-muted"
+      {allClear ? (
+        <Notice tone="success" title="Money desk is clear">
+          No approvals, QuickBooks checks, mismatches, or money issues need attention.
+        </Notice>
+      ) : (
+        <>
+          <MoneyQueueSection
+            title="Needs approval"
+            description="Check the amount against the approved paperwork before anything is sent."
+            count={summary.queues.needs_approval.count}
           >
-            <span className="text-xs font-extrabold text-muted">Oldest unfinished item</span>
-            <span className="text-sm font-bold leading-6 underline underline-offset-4">
-              Open item
-            </span>
-            <span className="text-sm text-muted">
-              {ageLabel(health.oldest_unreconciled_age_seconds ?? 0)} old
-            </span>
-          </Link>
-        ) : (
-          <p className="mt-4 text-sm leading-6 text-muted">
-            Everything is done. No money item is waiting for a check.
-          </p>
-        )}
-      </section>
+            {queues.needs_approval.length === 0 ? (
+              <EmptyQueue message="Nothing is waiting on a decision." />
+            ) : (
+              <ul>
+                {queues.needs_approval.map((intent) => (
+                  <MoneyQueueRow key={intent.intent_id} intent={intent} />
+                ))}
+              </ul>
+            )}
+          </MoneyQueueSection>
+
+          <MoneyQueueSection
+            title="Waiting for QuickBooks"
+            description="These were sent. IronWrap will keep checking until QuickBooks answers."
+            count={summary.queues.awaiting_provider.count}
+          >
+            {queues.awaiting_provider.length === 0 ? (
+              <EmptyQueue message="Nothing is in flight." />
+            ) : (
+              <ul>
+                {queues.awaiting_provider.map((intent) => (
+                  <MoneyQueueRow key={intent.intent_id} intent={intent} />
+                ))}
+              </ul>
+            )}
+          </MoneyQueueSection>
+
+          <MoneyQueueSection
+            title="Does not match"
+            description="QuickBooks has different numbers. Open an item to see what changed."
+            count={summary.queues.mismatched.count}
+          >
+            {queues.mismatched.length === 0 ? (
+              <EmptyQueue message="Everything we have sent matches QuickBooks." />
+            ) : (
+              <ul>
+                {queues.mismatched.map((intent) => (
+                  <MoneyQueueRow key={intent.intent_id} intent={intent} />
+                ))}
+              </ul>
+            )}
+          </MoneyQueueSection>
+
+          <MoneyQueueSection
+            title="Money issues"
+            description="These need a person. Open an issue to see the safe choices."
+            count={summary.queues.exceptions.count}
+          >
+            {queues.exceptions.length === 0 ? (
+              <EmptyQueue message="There are no open money issues." />
+            ) : (
+              <ul>
+                {queues.exceptions.map((exception) => (
+                  <li
+                    key={exception.exception_id}
+                    className="border-b border-border last:border-b-0"
+                  >
+                    <Link
+                      to="/accounting/exceptions"
+                      className="flex min-h-16 flex-col gap-1 px-4 py-4 hover:bg-surface-muted sm:px-6"
+                    >
+                      <span className="font-bold tracking-[-0.01em]">
+                        {reasonLabel(exception.reason_code)}
+                      </span>
+                      <span className="text-sm text-muted">
+                        Open for {ageLabel(exception.age_seconds)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </MoneyQueueSection>
+
+          <section
+            aria-label="QuickBooks checks"
+            className="border border-border bg-surface px-4 py-5 sm:px-6"
+          >
+            <h2 className="text-lg font-bold tracking-[-0.02em]">QuickBooks checks</h2>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              See what still needs a fresh check against QuickBooks.
+            </p>
+            <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Tile label="Open issues" value={health.open_exceptions} />
+              <Tile label="Not checked lately" value={health.stale_observation_count} />
+              <Tile label="Never checked" value={health.unobserved_intent_count} />
+            </dl>
+            {health.oldest_unreconciled_intent_id ? (
+              // A block target, not an id wrapped in an inline link. Inline, this rendered 41 px tall
+              // on a Pixel 5 - under the 44 px thumb floor the mobile acceptance suite enforces.
+              <Link
+                to="/accounting/intents/$intentId"
+                params={{ intentId: health.oldest_unreconciled_intent_id }}
+                className="mt-4 flex min-h-14 flex-col justify-center gap-0.5 border border-border px-4 py-3 hover:bg-surface-muted"
+              >
+                <span className="text-xs font-extrabold text-muted">Oldest unfinished item</span>
+                <span className="text-sm font-bold leading-6 underline underline-offset-4">
+                  Open item
+                </span>
+                <span className="text-sm text-muted">
+                  {ageLabel(health.oldest_unreconciled_age_seconds ?? 0)} old
+                </span>
+              </Link>
+            ) : (
+              <p className="mt-4 text-sm leading-6 text-muted">
+                Everything is done. No money item is waiting for a check.
+              </p>
+            )}
+          </section>
+        </>
+      )}
     </section>
   );
 }

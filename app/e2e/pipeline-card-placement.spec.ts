@@ -322,12 +322,12 @@ test.describe("Lead onto a pipeline board", () => {
     // Routed responses are still served offline, so the board stays readable — which is
     // exactly the state the defect describes: readable board, silently unusable Move.
     await page.context().setOffline(true);
-    await expect(page.getByText("Offline — the board is read-only")).toBeVisible();
+    await expect(page.getByText("Offline: the board is read-only")).toBeVisible();
 
     const card = page.getByRole("article", { name: "Pat Prospect" });
     await card.getByRole("button", { name: /^Move/ }).click();
     const moveDialog = page.getByRole("dialog", { name: /^Move/ });
-    await expect(moveDialog.getByText("Offline — this card cannot be moved")).toBeVisible();
+    await expect(moveDialog.getByText("Offline: this card cannot be moved")).toBeVisible();
     for (const name of stageNames.slice(1)) {
       await expect(moveDialog.getByRole("button", { name: new RegExp(name) })).toBeDisabled();
     }

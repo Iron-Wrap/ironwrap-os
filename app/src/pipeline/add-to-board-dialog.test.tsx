@@ -273,7 +273,7 @@ describe("AddToBoardDialog", () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     renderDialog();
 
-    expect(await screen.findByText("Offline — a card cannot be added")).toBeInTheDocument();
+    expect(await screen.findByText("Offline: a card cannot be added")).toBeInTheDocument();
     await waitFor(() => expect(loadPipelines).not.toHaveBeenCalled());
     expect(placeCardOnPipeline).not.toHaveBeenCalled();
   });

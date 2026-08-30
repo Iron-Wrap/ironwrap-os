@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { CircleGauge, RefreshCw } from "lucide-react";
-import { lazy, Suspense, useId } from "react";
+import { lazy, Suspense, useId, useState } from "react";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
@@ -13,6 +14,8 @@ import { loadNow } from "./now-api";
 import type { NowAction, NowCard, NowResponse, QuickBooksNowCard } from "./now-contracts";
 
 type NowCitation = NowCard["citations"][number];
+
+const NOW_SECTION_PREVIEW_LIMIT = 2;
 
 const FieldTodayPage = lazy(async () => ({
   default: (await import("../field/today-page")).TodayPage,
@@ -114,6 +117,7 @@ function NowScreen({
   refreshFailed: boolean;
   onRefresh: () => void;
 }) {
+  const [expandedSections, setExpandedSections] = useState<string[]>([]);
   const generatedAt = formatDateTime(model.read_model_generated_at, locale, timeZone);
   const primaryCitations = model.ui.primary_action
     ? citationsForAction(
@@ -124,25 +128,13 @@ function NowScreen({
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <CircleGauge className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  {model.ui.title}
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  {model.ui.explanation}
-                </p>
-              </div>
-            </div>
-          </div>
-          {model.ui.primary_action ? (
-            <aside className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+      <WorkspaceHeader
+        icon={<CircleGauge aria-hidden="true" />}
+        title={model.ui.title}
+        description={model.ui.explanation}
+        aside={
+          model.ui.primary_action ? (
+            <>
               <p className="mb-3 text-sm font-bold text-muted">Next step</p>
               <ActionWithContext
                 action={model.ui.primary_action}
@@ -151,10 +143,10 @@ function NowScreen({
                 refreshing={refreshing}
                 onRefresh={onRefresh}
               />
-            </aside>
-          ) : null}
-        </header>
-      </Card>
+            </>
+          ) : undefined
+        }
+      />
 
       <OperatingIntakePanel />
 
@@ -178,31 +170,59 @@ function NowScreen({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-start">
         <div className="space-y-8 lg:col-start-1 lg:row-start-1">
-          {model.ui.sections.map((section, sectionIndex) => (
-            <section key={section.id} aria-labelledby={`now-section-${sectionIndex}`}>
-              <header className="mb-4">
-                <h2
-                  id={`now-section-${sectionIndex}`}
-                  className="text-xl font-black tracking-[-0.025em] sm:text-2xl"
-                >
-                  {section.title}
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-muted">{section.summary}</p>
-              </header>
-              {section.cards.length > 0 ? (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {section.cards.map((card) => (
-                    <NowCardView
-                      key={card.id}
-                      card={card}
-                      refreshing={refreshing}
-                      onRefresh={onRefresh}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </section>
-          ))}
+          {model.ui.sections.map((section, sectionIndex) => {
+            const expanded = expandedSections.includes(section.id);
+            const visibleCards = expanded
+              ? section.cards
+              : section.cards.slice(0, NOW_SECTION_PREVIEW_LIMIT);
+            const remaining = section.cards.length - NOW_SECTION_PREVIEW_LIMIT;
+            const cardsId = `now-section-${sectionIndex}-cards`;
+            return (
+              <section key={section.id} aria-labelledby={`now-section-${sectionIndex}`}>
+                <header className="mb-4">
+                  <h2
+                    id={`now-section-${sectionIndex}`}
+                    className="text-xl font-black tracking-[-0.025em] sm:text-2xl"
+                  >
+                    {section.title}
+                  </h2>
+                  <p className="mt-1 text-sm leading-6 text-muted">{section.summary}</p>
+                </header>
+                {section.cards.length > 0 ? (
+                  <div id={cardsId} className="grid gap-4 xl:grid-cols-2">
+                    {visibleCards.map((card) => (
+                      <NowCardView
+                        key={card.id}
+                        card={card}
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {remaining > 0 ? (
+                  <div className="mt-4">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="compact"
+                      aria-controls={cardsId}
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setExpandedSections((current) =>
+                          expanded
+                            ? current.filter((id) => id !== section.id)
+                            : [...current, section.id],
+                        )
+                      }
+                    >
+                      {expanded ? "Show fewer" : `Show ${remaining} more`}
+                    </Button>
+                  </div>
+                ) : null}
+              </section>
+            );
+          })}
         </div>
 
         <aside

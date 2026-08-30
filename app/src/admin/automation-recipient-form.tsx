@@ -83,7 +83,7 @@ export function recipientAddressProblem(value: string): string | null {
 }
 
 const INVALID_ADDRESS =
-  "Enter one plain email address, such as shop@example.com — no display name, no angle brackets, no list.";
+  "Enter one plain email address, such as shop@example.com. Do not add a display name, angle brackets, or a list.";
 
 /**
  * What still stops this form saving, in the order an administrator fills it in. `null` means the
@@ -100,7 +100,7 @@ export function automationRecipientProblem(input: {
   if (!input.existing) {
     const ref = input.recipientRef.trim();
     if (ref.length === 0)
-      return "Give this recipient a reference — the permanent name your rules will store.";
+      return "Give this recipient a permanent reference. Your rules will store this name.";
     if (!RECIPIENT_REF_PATTERN.test(ref))
       return "A reference can hold letters, numbers, dots, dashes, colons, and underscores only.";
   }

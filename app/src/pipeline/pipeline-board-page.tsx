@@ -570,7 +570,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
       </header>
 
       {!live ? (
-        <Notice tone="warning" title="Offline — the board is read-only">
+        <Notice tone="warning" title="Offline: the board is read-only">
           Cards stay readable. A stage change is saved on the server, never queued on this device,
           so reconnect before moving anything.
         </Notice>
@@ -579,7 +579,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
       {board && !movePermitted ? (
         <Notice tone="info" title="Read only">
           You can read this board. Moving a card between stages needs the move permission for this
-          pipeline — ask the office to change your role.
+          pipeline. Ask the office to change your role.
         </Notice>
       ) : null}
 
@@ -741,7 +741,7 @@ function StageColumn({
             {stage.card_count ?? 0}
           </span>
         </div>
-        <p className="text-sm font-bold tabular-nums text-muted">{rollUp ?? "—"}</p>
+        <p className="text-sm font-bold tabular-nums text-muted">{rollUp ?? "No total"}</p>
       </header>
       <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain p-2">
         {cards.length === 0 ? (
@@ -840,7 +840,10 @@ function BoardSkeleton() {
         >
           <div className="flex min-h-16 flex-col justify-center gap-1 border-b border-border px-3 py-2">
             <div className="ui-skeleton h-3.5 w-24 rounded-sm bg-surface-muted" />
-            <p className="text-sm font-bold text-muted">—</p>
+            <div
+              className="ui-skeleton h-3.5 w-16 rounded-sm bg-surface-muted"
+              aria-hidden="true"
+            />
           </div>
           <div className="space-y-2 p-2">
             {[0, 1].map((card) => (

@@ -134,6 +134,29 @@ const officeNavigation = [
     workspace: "Resources",
   },
   {
+    label: "Money desk",
+    mobileLabel: "Money",
+    to: "/accounting",
+    icon: Banknote,
+    activeColor: "ok",
+    workspace: "Finance",
+  },
+  {
+    label: "Money issues",
+    mobileLabel: "Issues",
+    to: "/accounting/exceptions",
+    icon: ShieldCheck,
+    activeColor: "warning",
+    workspace: "Finance",
+  },
+  {
+    label: "QuickBooks",
+    to: "/accounting/quickbooks",
+    icon: Settings,
+    activeColor: "accent",
+    workspace: "Finance",
+  },
+  {
     label: "Approvals",
     mobileLabel: "Approve",
     to: "/approvals",
@@ -158,7 +181,7 @@ const officeNavigation = [
 // in roles.test.ts keeps navigation and `roleCanAccess` from drifting apart again.
 const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   owner: officeNavigation,
-  ops: officeNavigation,
+  ops: officeNavigation.filter((item) => item.workspace !== "Finance"),
   sales: [
     {
       label: "Now",

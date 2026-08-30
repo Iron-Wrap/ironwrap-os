@@ -124,7 +124,11 @@ export function severityPriority(value: string | null): number {
 }
 
 export function humanizeSource(value: string): string {
-  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[._:/-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function humanizeStaleField(value: string): string {
@@ -136,6 +140,10 @@ export function humanizeStaleField(value: string): string {
     case "exceptions.partial_sources":
       return "Some counts may be low.";
     default:
+      if (value.endsWith(".native_unavailable")) {
+        const path = value.slice(0, -".native_unavailable".length).split(".");
+        return `${humanizeSource(path.slice(1).join(".") || path[0] || "Work data")} could not be checked.`;
+      }
       return `${humanizeSource(value)} may be old.`;
   }
 }

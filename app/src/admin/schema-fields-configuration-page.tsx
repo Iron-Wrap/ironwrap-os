@@ -95,7 +95,7 @@ function SchemaFieldsConfigurationContent() {
         description="Define the structured information your team can read and write. A correction adds a reasoned revision; it never erases the previous definition."
       />
       {!live ? (
-        <Notice tone="warning" title="Offline — configuration is read-only">
+        <Notice tone="warning" title="Offline: configuration is read-only">
           Cached definitions remain readable. Reconnect before creating, revising, or retiring a
           field.
         </Notice>
@@ -594,7 +594,7 @@ function FieldRow({
         />
         <Meta
           label="Policy"
-          value={`${field.evidence_class} evidence · ${field.retention_policy} retention · ${field.offline_mode}`}
+          value={`Evidence: ${field.evidence_class}. Retention: ${field.retention_policy}. Offline: ${field.offline_mode}.`}
         />
       </dl>
       {revise.isError ? (

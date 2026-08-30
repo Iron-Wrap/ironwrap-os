@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { loadPublicEstimateConfig } from "../public-estimate/public-estimate-api";
 import { AppShell } from "./app-shell";
 
 const mocks = vi.hoisted(() => ({
@@ -32,6 +33,10 @@ vi.mock("@tanstack/react-query", async () => {
 
 vi.mock("../field/safety-action-panel", () => ({
   SafetyActionPanel: () => <div data-testid="safety-action-panel" />,
+}));
+
+vi.mock("../public-estimate/public-estimate-api", () => ({
+  loadPublicEstimateConfig: vi.fn(),
 }));
 
 vi.mock("./system-status", () => ({
@@ -77,6 +82,29 @@ function renderShell(session: AuthenticatedSession) {
 }
 
 describe("AppShell", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(loadPublicEstimateConfig).mockResolvedValue({ logo_url: null } as never);
+  });
+
+  it("uses the declared company logo without probing a missing image", async () => {
+    renderShell(ownerSession);
+
+    await waitFor(() => expect(loadPublicEstimateConfig).toHaveBeenCalledOnce());
+    expect(document.querySelector('img[src="/public/company-logo"]')).toBeNull();
+
+    vi.mocked(loadPublicEstimateConfig).mockResolvedValue({
+      logo_url: "/public/company-logo?v=brand-1",
+    } as never);
+    renderShell({ ...ownerSession, tenant: { ...ownerSession.tenant, id: "freshco" } });
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('img[src="/public/company-logo?v=brand-1"]')).toHaveLength(
+        2,
+      ),
+    );
+  });
+
   it("shows the operator search surface for an authenticated office session", () => {
     renderShell(ownerSession);
     expect(

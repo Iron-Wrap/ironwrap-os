@@ -6,12 +6,14 @@ import * as React from "react";
 import { cn } from "../../lib/cn";
 
 const buttonVariants = cva(
-  "inline-flex min-h-12 select-none items-center justify-center gap-2 rounded-lg border border-transparent px-4 text-sm font-bold tracking-[-0.01em] transition-[background-color,border-color,color] duration-[var(--motion-fast)] disabled:pointer-events-none disabled:opacity-55 [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+  "inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-transparent px-4 text-sm font-[720] tracking-[-0.01em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-55 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-foreground text-background hover:bg-foreground/88 active:bg-foreground/78",
-        accent: "bg-accent text-accent-foreground hover:bg-accent-hover active:bg-accent-active",
+        default:
+          "bg-foreground text-background shadow-[0_1px_0_color-mix(in_srgb,var(--foreground)_35%,transparent)] hover:bg-foreground/88 active:bg-foreground/78",
+        accent:
+          "bg-accent text-accent-foreground shadow-[0_8px_20px_color-mix(in_srgb,var(--accent)_18%,transparent)] hover:bg-accent-hover active:bg-accent-active",
         outline:
           "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-muted active:bg-border",
         ghost:
@@ -20,8 +22,8 @@ const buttonVariants = cva(
           "bg-danger-strong text-danger-strong-foreground hover:bg-danger-strong/88 active:bg-danger-strong/78",
       },
       size: {
-        default: "min-h-12",
-        field: "min-h-16 px-6 text-lg",
+        default: "min-h-11",
+        field: "min-h-16 whitespace-normal px-4 text-base leading-5",
         icon: "size-11 min-h-11 px-0",
         compact: "min-h-11 px-3.5 text-sm",
       },

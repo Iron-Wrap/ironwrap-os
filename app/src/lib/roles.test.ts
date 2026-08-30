@@ -76,7 +76,7 @@ describe("role-shaped navigation", () => {
   });
 
   it("keeps the complete role map while marking only daily phone destinations as primary", () => {
-    expect(navigationForRole("owner")).toHaveLength(11);
+    expect(navigationForRole("owner")).toHaveLength(14);
     expect(navigationForRole("ops")).toHaveLength(11);
     expect(navigationForRole("field")).toHaveLength(4);
     expect(
@@ -165,9 +165,11 @@ describe("role-shaped navigation", () => {
       "Revenue",
       "Delivery",
       "Resources",
+      "Finance",
       "Control",
     ]);
     expect(ownerNavigation.find((item) => item.to === "/inventory")?.workspace).toBe("Resources");
+    expect(ownerNavigation.find((item) => item.to === "/accounting")?.workspace).toBe("Finance");
     expect(navigationForRole("accounting")[0]?.workspace).toBe("Finance");
   });
 

@@ -21,6 +21,7 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
@@ -37,6 +38,8 @@ import { loadSales } from "./sales-api";
 import type { SalesLead, SalesResponse } from "./sales-contracts";
 
 type SalesFilter = "attention" | "all" | "triage" | "estimate" | "quote";
+
+const LEAD_QUEUE_PREVIEW_LIMIT = 3;
 
 const attentionCopy: Record<
   SalesLead["attention"][number],
@@ -171,25 +174,17 @@ function SalesDeskScreen({
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-6">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
-                <BriefcaseBusiness className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Sales desk
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Check each lead before you call or send anything. Add anyone who called or walked
-                  in with <span className="font-semibold text-foreground">Add a lead</span>.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
+      <WorkspaceHeader
+        icon={<BriefcaseBusiness aria-hidden="true" />}
+        title="Sales desk"
+        description={
+          <>
+            Check each lead before you call or send anything. Add anyone who called or walked in
+            with <span className="font-semibold text-foreground">Add a lead</span>.
+          </>
+        }
+        aside={
+          <>
             <p className="text-sm font-bold text-muted">Next step</p>
             <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
               {attentionCount === 0
@@ -217,9 +212,9 @@ function SalesDeskScreen({
                 </Button>
               ) : null}
             </div>
-          </div>
-        </header>
-      </Card>
+          </>
+        }
+      />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
@@ -372,6 +367,10 @@ function LeadQueue({
   noLeadsAtAll: boolean;
   onAddToBoard: (lead: SalesLead) => void;
 }) {
+  const [expandedFilter, setExpandedFilter] = useState<SalesFilter | null>(null);
+  const expanded = expandedFilter === filter;
+  const visibleLeads = expanded ? leads : leads.slice(0, LEAD_QUEUE_PREVIEW_LIMIT);
+  const remaining = leads.length - LEAD_QUEUE_PREVIEW_LIMIT;
   if (leads.length === 0) {
     // A company that has never had a lead is being set up, not filtering. Send it to the one
     // action that helps instead of to another empty tab.
@@ -416,8 +415,8 @@ function LeadQueue({
           {leads.length} {leads.length === 1 ? "lead" : "leads"}
         </p>
       </header>
-      <ol className="border-t border-border divide-y divide-border">
-        {leads.map((lead) => (
+      <ol id="sales-queue-items" className="border-t border-border divide-y divide-border">
+        {visibleLeads.map((lead) => (
           <li key={lead.id}>
             <LeadRow
               lead={lead}
@@ -431,6 +430,20 @@ function LeadQueue({
           </li>
         ))}
       </ol>
+      {remaining > 0 ? (
+        <footer className="border-t border-border px-5 py-3 sm:px-6">
+          <Button
+            type="button"
+            variant="ghost"
+            size="compact"
+            aria-controls="sales-queue-items"
+            aria-expanded={expanded}
+            onClick={() => setExpandedFilter(expanded ? null : filter)}
+          >
+            {expanded ? "Show fewer" : `Show ${remaining} more`}
+          </Button>
+        </footer>
+      ) : null}
     </Card>
   );
 }

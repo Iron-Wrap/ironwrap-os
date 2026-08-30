@@ -200,6 +200,7 @@ describe("ApprovalInboxPage", () => {
     const { container } = renderInbox();
 
     await screen.findByRole("heading", { name: "Lead reviews" });
+    await user.click(screen.getByLabelText(/Review lead check:/i));
     expect(screen.getByText("What will change")).toBeVisible();
     expect(
       screen.getByText(
@@ -227,6 +228,45 @@ describe("ApprovalInboxPage", () => {
     expect(screen.getByText("run:lead-triage:ui-001")).toBeVisible();
   });
 
+  it("keeps every live review visible while collapsing terminal history", async () => {
+    const settled = Array.from({ length: 5 }, (_, index) => {
+      const approval = executedApproval();
+      return {
+        ...approval,
+        id: `approval:history-${index}`,
+        request_text: `History ${index + 1}`,
+        preview: approval.preview
+          ? {
+              ...approval.preview,
+              patch: {
+                ...approval.preview.patch,
+                triage_summary: `History ${index + 1}`,
+              },
+            }
+          : null,
+      } satisfies ApprovalRequest;
+    });
+    const pending = pendingApproval();
+    pending.id = "approval:pending-visible";
+    pending.preview!.patch.triage_summary = "Needs a decision now";
+    vi.mocked(loadApprovals).mockResolvedValueOnce({
+      ...model(),
+      approvals: [...settled, pending],
+    });
+    renderInbox();
+
+    expect(await screen.findByLabelText(/History 3/i)).toBeVisible();
+    expect(screen.queryByLabelText(/History 4/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Needs a decision now/i)).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    expect(screen.getByLabelText(/History 5/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("keeps operations review-only when the server omits decision capabilities", async () => {
     const opsSession = {
       ...ownerSession,
@@ -236,6 +276,7 @@ describe("ApprovalInboxPage", () => {
     renderInbox({ session: opsSession });
 
     await screen.findByRole("heading", { name: "Lead reviews" });
+    await userEvent.click(screen.getByLabelText(/Review lead check:/i));
     expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
     expect(screen.getByText(/Waiting for the right owner/i)).toBeVisible();
@@ -246,6 +287,7 @@ describe("ApprovalInboxPage", () => {
     renderInbox();
 
     await screen.findByRole("heading", { name: "Lead reviews" });
+    await userEvent.click(screen.getByLabelText(/Review lead check:/i));
     expect(screen.getByText("Do not try this request again")).toBeVisible();
     expect(screen.getByText(/check the save record before you do anything else/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
@@ -261,6 +303,7 @@ describe("ApprovalInboxPage", () => {
     renderInbox();
 
     await screen.findByRole("heading", { name: "Lead reviews" });
+    await user.click(screen.getByLabelText(/Review lead check:/i));
     await user.click(screen.getByRole("button", { name: "Check saved result" }));
     await user.type(
       screen.getByLabelText("What did you check?"),

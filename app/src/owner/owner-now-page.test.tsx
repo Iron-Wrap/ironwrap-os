@@ -347,6 +347,43 @@ describe("OwnerNowPage", () => {
     expect(screen.queryByRole("link", { name: /not-a-job/i })).not.toBeInTheDocument();
   });
 
+  it("keeps long lanes scannable until the owner asks for the remaining work", async () => {
+    const next = ownerNowModel();
+    const blocked = next.exceptions[0]!;
+    next.exceptions = Array.from({ length: 8 }, (_, index) => ({
+      ...blocked,
+      id: `blocked-${index}`,
+      title: `Blocked job ${index + 1}`,
+      job_id: `JOB-${index + 1}`,
+    }));
+    vi.mocked(loadOwnerNow).mockResolvedValueOnce(next);
+    renderOwner();
+
+    await screen.findByText("Blocked job 1");
+    expect(screen.getByText("Blocked job 3")).toBeVisible();
+    expect(screen.queryByText("Blocked job 4")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 5 more" }));
+    expect(screen.getByText("Blocked job 7")).toBeVisible();
+    expect(screen.getByText("Blocked job 8")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("turns missing native facts into an operator-facing data warning", async () => {
+    const next = ownerNowModel();
+    next.stale_fields.push("economics.change_order.native_unavailable");
+    vi.mocked(loadOwnerNow).mockResolvedValueOnce(next);
+    renderOwner();
+
+    expect(
+      (await screen.findAllByText("Change Order could not be checked.")).length,
+    ).toBeGreaterThan(1);
+    expect(screen.queryByText(/economics\.change_order/i)).not.toBeInTheDocument();
+  });
+
   it("gates job access on the server-backed capability rather than showing a disabled control", async () => {
     const noJobAccess = ownerNowModel();
     noJobAccess.allowed_actions = [];

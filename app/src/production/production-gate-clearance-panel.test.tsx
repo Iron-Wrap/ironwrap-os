@@ -98,10 +98,12 @@ describe("GateClearancePanel", () => {
     });
   });
 
-  it("offers a clearing action for every blocking lock and nothing else", () => {
+  it("offers a clearing action for every blocking lock and nothing else", async () => {
+    const user = userEvent.setup();
     renderPanel();
 
     expect(screen.getByText("2 locks still block this schedule")).toBeVisible();
+    await user.click(screen.getByText("2 locks still block this schedule"));
     expect(screen.getByRole("button", { name: "Clear Deposit" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Clear Weather" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Clear Safety" })).not.toBeInTheDocument();
@@ -117,6 +119,7 @@ describe("GateClearancePanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
+    await user.click(screen.getByText("2 locks still block this schedule"));
     await user.click(screen.getByRole("button", { name: "Clear Weather" }));
     const waive = screen.getByRole("button", { name: "Waive Weather on my authority" });
     expect(waive).toBeDisabled();
@@ -142,6 +145,7 @@ describe("GateClearancePanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
+    await user.click(screen.getByText("2 locks still block this schedule"));
     await user.click(screen.getByRole("button", { name: "Clear Weather" }));
 
     expect(screen.getByText(/A waiver is a decision, not a proof\./)).toBeVisible();
@@ -151,6 +155,7 @@ describe("GateClearancePanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
+    await user.click(screen.getByText("2 locks still block this schedule"));
     await user.click(screen.getByRole("button", { name: "Clear Weather" }));
     expect(
       screen.queryByRole("button", { name: "Clear on the settled deposit" }),
@@ -178,6 +183,7 @@ describe("GateClearancePanel", () => {
     );
     renderPanel();
 
+    await user.click(screen.getByText("2 locks still block this schedule"));
     await user.click(screen.getByRole("button", { name: "Clear Deposit" }));
     await user.click(screen.getByRole("button", { name: "Clear on the settled deposit" }));
 
@@ -190,6 +196,7 @@ describe("GateClearancePanel", () => {
     const user = userEvent.setup();
     renderPanel(job(), { csrf_token: "offline-session-no-csrf" });
 
+    await user.click(screen.getByText("2 locks still block this schedule"));
     await user.click(screen.getByRole("button", { name: "Clear Weather" }));
     await user.type(
       screen.getByLabelText("Why is Weather being waived?"),

@@ -22,6 +22,7 @@
  *   node scripts/role-app-audit.mjs
  *   BUS=https://localhost:7100 ADMIN_TOKEN=... node scripts/role-app-audit.mjs
  *   ROLES=owner,sales node scripts/role-app-audit.mjs      # subset
+ *   AUDIT_PROFILE=desktop AUDIT_COLOR_SCHEME=dark node scripts/role-app-audit.mjs
  *
  * Writes `output/role-app-audit/report.json` plus one screenshot per route. `output/` is
  * git-ignored: this produces evidence to read, never a committed artifact.
@@ -34,7 +35,22 @@ import { fileURLToPath } from "node:url";
 const BUS = process.env.BUS ?? "http://localhost:7300";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "local-throwaway-admin-token";
 const TENANT = process.env.TENANT ?? "ironwrap";
-const OUT_DIR = resolve(fileURLToPath(new URL("../output/role-app-audit/", import.meta.url)));
+const AUDIT_PROFILE = process.env.AUDIT_PROFILE ?? "mobile";
+const AUDIT_COLOR_SCHEME = process.env.AUDIT_COLOR_SCHEME ?? "light";
+if (!new Set(["mobile", "desktop"]).has(AUDIT_PROFILE)) {
+  throw new Error(`unsupported AUDIT_PROFILE: ${AUDIT_PROFILE}`);
+}
+if (!new Set(["light", "dark"]).has(AUDIT_COLOR_SCHEME)) {
+  throw new Error(`unsupported AUDIT_COLOR_SCHEME: ${AUDIT_COLOR_SCHEME}`);
+}
+const AUDIT_VARIANT =
+  AUDIT_PROFILE === "mobile" && AUDIT_COLOR_SCHEME === "light"
+    ? ""
+    : `-${AUDIT_PROFILE}-${AUDIT_COLOR_SCHEME}`;
+const TARGET_SIZE = AUDIT_PROFILE === "mobile" ? 44 : 24;
+const OUT_DIR = resolve(
+  fileURLToPath(new URL(`../output/role-app-audit${AUDIT_VARIANT}/`, import.meta.url)),
+);
 
 // The stand serves wrangler's self-signed certificate.
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -71,7 +87,7 @@ const ROLE_APPS = {
     routes: ["/now", "/sales", "/settings", "/production", "/accounting"],
   },
   production: {
-    email: "shop@ironwrap.local",
+    email: "production@ironwrap.local",
     routes: [
       "/now",
       "/production",
@@ -82,7 +98,7 @@ const ROLE_APPS = {
     ],
   },
   accounting: {
-    email: "books@ironwrap.local",
+    email: "accounting@ironwrap.local",
     routes: [
       "/now",
       "/accounting",
@@ -188,10 +204,10 @@ async function mintPairingUrl(session) {
  * Runs inside the page. Everything here is observation — it never clicks, so a walk of a
  * role app cannot change the stand's state.
  */
-const INSPECT = () => {
+const INSPECT = (targetSize) => {
   const viewport = window.innerWidth;
   const doc = document.scrollingElement ?? document.documentElement;
-  const overflowBy = Math.round(doc.scrollWidth - viewport);
+  const overflowBy = Math.max(0, Math.round(doc.scrollWidth - viewport));
 
   const wideElements = [];
   const touchViolations = [];
@@ -238,7 +254,7 @@ const INSPECT = () => {
     const rect = target.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue;
     if (element.closest("[popover]:not(:popover-open)")) continue;
-    if (rect.height >= 44 && rect.width >= 44) continue;
+    if (rect.height >= targetSize && rect.width >= targetSize) continue;
     const described = describe(element);
     const key = `${described.selector}|${described.label}|${Math.round(rect.height)}`;
     if (seenTouch.has(key)) continue;
@@ -293,7 +309,10 @@ const INSPECT = () => {
 
 async function walkRole(browser, role, app, session) {
   const context = await browser.newContext({
-    ...devices["Pixel 5"],
+    ...(AUDIT_PROFILE === "desktop"
+      ? { viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 }
+      : devices["Pixel 5"]),
+    colorScheme: AUDIT_COLOR_SCHEME,
     ignoreHTTPSErrors: true,
     baseURL: BUS,
   });
@@ -327,7 +346,7 @@ async function walkRole(browser, role, app, session) {
     // Role surfaces load their read model after paint; give the query a real window
     // rather than sampling the skeleton and calling it an empty state.
     await page.waitForTimeout(3500);
-    const inspection = await page.evaluate(INSPECT);
+    const inspection = await page.evaluate(INSPECT, TARGET_SIZE);
     const shot = `${role}${route.replaceAll("/", "_") || "_root"}.png`;
     await page.screenshot({ path: resolve(OUT_DIR, shot), fullPage: true });
     results.push({
@@ -340,7 +359,7 @@ async function walkRole(browser, role, app, session) {
     });
     process.stdout.write(
       `  ${role.padEnd(11)} ${route.padEnd(38)} overflow=${String(inspection.overflowBy).padStart(4)}px  ` +
-        `touch<44=${String(inspection.touchViolations.length).padStart(2)}  ` +
+        `target<${TARGET_SIZE}=${String(inspection.touchViolations.length).padStart(2)}  ` +
         `panels=${inspection.statePanels.length}  admin=${inspection.adminVocabulary.join(",") || "-"}\n`,
     );
   }
@@ -357,7 +376,14 @@ async function main() {
 
   const browser = await chromium.launch();
   const session = await ownerSession();
-  const report = { bus: BUS, generated_at: new Date().toISOString(), roles: [] };
+  const report = {
+    bus: BUS,
+    profile: AUDIT_PROFILE,
+    color_scheme: AUDIT_COLOR_SCHEME,
+    target_size: TARGET_SIZE,
+    generated_at: new Date().toISOString(),
+    roles: [],
+  };
   try {
     for (const [role, app] of Object.entries(ROLE_APPS)) {
       if (only && !only.includes(role)) continue;

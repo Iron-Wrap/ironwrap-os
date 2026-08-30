@@ -111,21 +111,7 @@ test("the Worker package owns the one local port argument", () => {
   assert.doesNotMatch(launcher, /npm run dev -- --port/);
 });
 
-test("the ERP MCP receives a stable local tenant", () => {
-  assert.match(
-    launcher,
-    /ERPNEXT_TENANT_ID="\$\{ERPNEXT_TENANT_ID:-ironwrap\}"/,
-  );
-
-  const mcpStart = launcher.indexOf('start_service "erpnext-roofing-mcp"');
-  assert.notEqual(mcpStart, -1);
-  assert.match(
-    launcher.slice(mcpStart),
-    /env ERPNEXT_BASE_URL=.*ERPNEXT_TENANT_ID="\$ERPNEXT_TENANT_ID"/s,
-  );
-});
-
-test("the launcher waits for the stub and forwards one Worker port plus the default tenant", async (t) => {
+test("the launcher waits for the stub, forwards one Worker port, and leaves stdio MCPs to their client", async (t) => {
   const runtime = await launchRuntime(t);
 
   for (
@@ -138,7 +124,7 @@ test("the launcher waits for the stub and forwards one Worker port plus the defa
   }
   assert.match(
     runtime.output(),
-    /erpnext-stub ready[\s\S]*Starting: erpnext-roofing-mcp/,
+    /erpnext-stub ready[\s\S]*Starting: workers-bus/,
   );
   assert.match(runtime.output(), /All services started\./);
 
@@ -149,11 +135,7 @@ test("the launcher waits for the stub and forwards one Worker port plus the defa
     } catch {
       launches = [];
     }
-    if (
-      launches.some((line) =>
-        line.startsWith(`${join(root, "mcp", "erpnext-roofing-mcp")}|`),
-      )
-    ) {
+    if (launches.some((line) => line.startsWith(`${join(root, "app")}|`))) {
       break;
     }
     await delay(50);
@@ -162,12 +144,10 @@ test("the launcher waits for the stub and forwards one Worker port plus the defa
     line.startsWith(`${join(root, "workers-bus")}|`),
   );
   assert.equal(worker, `${join(root, "workers-bus")}|run dev|`);
-  const erpMcp = launches.find((line) =>
-    line.startsWith(`${join(root, "mcp", "erpnext-roofing-mcp")}|`),
-  );
   assert.equal(
-    erpMcp,
-    `${join(root, "mcp", "erpnext-roofing-mcp")}|start|ironwrap`,
+    launches.some((line) => line.startsWith(`${join(root, "mcp")}/`)),
+    false,
+    "stdio MCP servers must be spawned by an MCP client, not supervised as daemons",
   );
 });
 

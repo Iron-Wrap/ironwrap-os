@@ -13,9 +13,9 @@
 //     so a caller cannot bind a remedy to another case's diagnosis.
 //  2. Attribution comes from the session. `decided_by_user_id`, `diagnosed_by_user_id`,
 //     `verified_by_user_id`, and the claim's actor are the authenticated user, never a field.
-//  3. No provider is called. Cost recovery is submitted out of band today, so the lease/result
-//     routes record what an operator did with the single permitted attempt; they never call a
-//     supplier, manufacturer, or insurer.
+//  3. No provider result is accepted from the browser. This surface records the owner's intent and
+//     reconciles an already-unknown historical attempt. New execution is fail-closed until a real
+//     provider adapter and evidence resolver can enter through the canonical effect runtime.
 
 import { validAppCsrf } from "./app-auth.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
@@ -25,8 +25,6 @@ import {
   SERVICE_RESPONSIBILITIES,
   SERVICE_TRIAGE_CATEGORIES,
   closeServiceCase,
-  claimCostRecoveryEffect,
-  finalizeCostRecoveryEffect,
   getServiceCase,
   issueServiceRemedy,
   listCostRecoveryClaims,
@@ -57,9 +55,6 @@ const DEFAULT_LIST_LIMIT = 50;
 const REPORTED_CHANNELS = ["phone", "portal", "email", "field", "partner"] as const;
 const COUNTERPARTY_KINDS = ["supplier", "manufacturer", "insurer"] as const;
 const ADVISORY_SOURCES = ["model", "rule", "none"] as const;
-/** One permitted attempt still needs a bounded lease so a crashed operator can be recovered. */
-const MIN_LEASE_SECONDS = 60;
-const MAX_LEASE_SECONDS = 24 * 60 * 60;
 
 export const SERVICE_CASE_ALLOWED_ACTIONS = [
   "service_case.read",
@@ -127,8 +122,9 @@ export async function handleServiceCaseRoute(
   }
   if (parts.length === 4 && parts[1] === "cost-recovery-claims") {
     const claimId = parts[2] ?? "";
-    if (parts[3] === "lease") return await leaseClaimAttempt(req, env, auth, caseId, claimId);
-    if (parts[3] === "result") return await recordClaimResult(req, env, auth, caseId, claimId);
+    if (parts[3] === "lease" || parts[3] === "result") {
+      return await unavailableCostRecoveryExecution(env, auth, caseId, claimId);
+    }
     if (parts[3] === "reconcile") return await reconcileClaim(req, env, auth, caseId, claimId);
   }
   return json({ error: "not_found" }, 404);
@@ -689,85 +685,29 @@ async function openClaim(
   }
 }
 
-async function leaseClaimAttempt(
-  req: Request,
+/**
+ * Preserve the known provider endpoint shapes without pretending that an operator can execute or
+ * settle a claim. The missing provider/evidence contracts are configuration, not a transient
+ * provider result, so this path creates no attempt and never changes the pending intent.
+ */
+async function unavailableCostRecoveryExecution(
   env: AppEnv,
   auth: AuthContext,
   caseId: string,
   claimId: string,
 ): Promise<Response> {
   if (auth.session.role !== "owner") return json({ error: "owner_role_required" }, 403);
-  const parsed = await readJson(req);
-  if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const body = parsed.value;
-  if (!onlyKeys(body, ["lease_seconds"])) return json({ error: "unexpected_field" }, 400);
-  const leaseSeconds = boundedInteger(body.lease_seconds, MIN_LEASE_SECONDS, MAX_LEASE_SECONDS);
-  if (leaseSeconds === null) return json({ error: "invalid_cost_recovery_lease" }, 400);
-
   try {
     const owned = await claimBelongsToCase(env, auth, caseId, claimId);
     if (!owned) return json({ error: "not_found" }, 404);
-    const now = new Date();
-    const result = await claimCostRecoveryEffect(env, {
-      tenantId: auth.session.tenant_id,
-      claimId,
-      now: now.toISOString(),
-      leaseExpiresAt: new Date(now.getTime() + leaseSeconds * 1_000).toISOString(),
-    });
-    if (result.kind === "missing") return json({ error: "not_found" }, 404);
     return json(
-      envelope(auth, { result: result.kind, claim: projectClaim(result.claim) }),
-      result.kind === "claimed" ? 200 : 409,
+      {
+        error: "service_cost_recovery_execution_not_configured",
+        missing_contracts: ["provider_adapter", "evidence_resolver"],
+        retryable: false,
+      },
+      501,
     );
-  } catch (error) {
-    return storeError(error);
-  }
-}
-
-async function recordClaimResult(
-  req: Request,
-  env: AppEnv,
-  auth: AuthContext,
-  caseId: string,
-  claimId: string,
-): Promise<Response> {
-  if (auth.session.role !== "owner") return json({ error: "owner_role_required" }, 403);
-  const parsed = await readJson(req);
-  if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
-  const body = parsed.value;
-  if (
-    !onlyKeys(body, ["outcome", "result_ref", "result_code", "recovered_amount_cents"])
-  ) {
-    return json({ error: "unexpected_field" }, 400);
-  }
-  const outcome = oneOf(body.outcome, ["succeeded", "failed", "uncertain"] as const);
-  const resultRef = boundedText(body.result_ref, 3, 140);
-  const resultCode = optionalCode(body.result_code, 3, 120);
-  const recoveredAmountCents =
-    body.recovered_amount_cents === undefined || body.recovered_amount_cents === null
-      ? null
-      : boundedInteger(body.recovered_amount_cents, 0, 100_000_000);
-  if (!outcome || !resultRef) return json({ error: "invalid_cost_recovery_result" }, 400);
-  if (outcome === "succeeded" && recoveredAmountCents === null) {
-    return json({ error: "cost_recovery_recovered_amount_required" }, 400);
-  }
-  if (outcome !== "succeeded" && !resultCode) {
-    return json({ error: "cost_recovery_result_code_required" }, 400);
-  }
-
-  try {
-    const owned = await claimBelongsToCase(env, auth, caseId, claimId);
-    if (!owned) return json({ error: "not_found" }, 404);
-    const claim = await finalizeCostRecoveryEffect(env, {
-      tenantId: auth.session.tenant_id,
-      claimId,
-      outcome,
-      resultRef,
-      resultCode,
-      recoveredAmountCents,
-      now: new Date().toISOString(),
-    });
-    return json(envelope(auth, { claim: projectClaim(claim) }));
   } catch (error) {
     return storeError(error);
   }

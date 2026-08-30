@@ -226,13 +226,15 @@ describe("service case", () => {
     expect(await screen.findByRole("form", { name: "Ask for money back" })).toBeInTheDocument();
   });
 
-  it("offers reconciliation as the only exit from an uncertain claim", async () => {
+  it("offers reconciliation as the only exit from a legacy uncertain claim", async () => {
     vi.mocked(loadServiceCase).mockResolvedValue(
       detailResponse({
         allowed_actions: OWNER_ACTIONS,
         triage: [triage()],
         diagnoses: [diagnosis()],
         cost_recovery_claims: [
+          // Historical rows retain the leased attempt mode for read/reconciliation compatibility;
+          // the current Worker cannot create another leased attempt.
           claim({
             state: "uncertain",
             attempt_count: 1,

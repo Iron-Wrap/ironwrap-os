@@ -182,6 +182,8 @@ export const costRecoveryClaimSchema = z
     correlation_id: identifier,
     deadline_at: timestamp,
     idempotency_key: boundedText(8, 160),
+    // `leased` remains a read-compatible historical state so already-uncertain claims can still be
+    // reconciled. The current Worker does not expose a route that creates a new leased attempt.
     state: z.enum(["pending", "leased", "succeeded", "failed", "uncertain", "reconciled"]),
     attempt_count: z.number().int().min(0).max(1),
     attempt_mode: z.enum(["none", "leased", "inferred_terminal"]),
@@ -259,7 +261,7 @@ export const serviceRemedyResponseSchema = envelope
 export const costRecoveryMutationResponseSchema = envelope
   .extend({
     claim: costRecoveryClaimSchema,
-    result: z.enum(["opened", "already_recorded", "claimed", "already_attempted"]).optional(),
+    result: z.enum(["opened", "already_recorded"]).optional(),
   })
   .strict();
 

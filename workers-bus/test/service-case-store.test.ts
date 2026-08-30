@@ -4,9 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { AppEnv } from "../src/app-types.ts";
 import {
-  claimCostRecoveryEffect,
   closeServiceCase,
-  finalizeCostRecoveryEffect,
   getServiceCase,
   issueServiceRemedy,
   listServiceCaseEvents,
@@ -43,7 +41,10 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of ["0011_app_bff_auth.sql", "0056_service_case_lifecycle.sql"]) {
+    for (const migration of [
+      "0011_app_bff_auth.sql",
+      "0056_service_case_lifecycle.sql",
+    ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
     const insertUser = this.raw.prepare(
@@ -83,6 +84,7 @@ class SqliteD1 {
       },
     };
   }
+
 }
 
 function env(db = new SqliteD1()): AppEnv {
@@ -533,7 +535,7 @@ test("a customer dispute is a first-class outcome that preserves the verificatio
   );
 });
 
-test("a manufacturer claim runs on the canonical one-attempt effect shape and calls no provider", async () => {
+test("a manufacturer claim records a governed pending intent while execution is unconfigured", async () => {
   const appEnv = env();
   await openServiceCase(appEnv, intake());
   await triaged(appEnv, { finalCategory: "material_manufacturer", responsibility: "manufacturer" });
@@ -568,39 +570,10 @@ test("a manufacturer claim runs on the canonical one-attempt effect shape and ca
   assert.equal(claim.idempotency_key, `svc-recovery:${claim.request_hash.slice(0, 48)}`);
   assert.equal(claim.deadline_at, "2026-09-19T09:10:00.000Z");
 
-  const leased = await claimCostRecoveryEffect(appEnv, {
-    tenantId: TENANT,
-    claimId: "svc_recovery_0001",
-    now: "2026-08-20T09:20:00.000Z",
-    leaseExpiresAt: "2026-08-20T09:25:00.000Z",
-  });
-  assert.equal(leased.kind, "claimed");
-
-  // A leased claim is never handed out a second time.
-  const second = await claimCostRecoveryEffect(appEnv, {
-    tenantId: TENANT,
-    claimId: "svc_recovery_0001",
-    now: "2026-08-20T09:21:00.000Z",
-    leaseExpiresAt: "2026-08-20T09:26:00.000Z",
-  });
-  assert.equal(second.kind, "already_attempted");
-
-  const settled = await finalizeCostRecoveryEffect(appEnv, {
-    tenantId: TENANT,
-    claimId: "svc_recovery_0001",
-    outcome: "succeeded",
-    resultRef: "manufacturer-claim:MC-0001",
-    recoveredAmountCents: 110_000,
-    now: "2026-08-20T09:30:00.000Z",
-  });
-  assert.equal(settled.state, "succeeded");
-  assert.equal(settled.recovered_amount_cents, 110_000);
-  assert.equal(settled.attempt_count, 1);
-
   const events = await appEnv.DB.prepare(
     `SELECT event_type FROM service_cost_recovery_events WHERE claim_id = ? ORDER BY event_id`,
   ).bind("svc_recovery_0001").all<{ event_type: string }>();
-  assert.deepEqual(events.results.map((row) => row.event_type), ["intent_recorded", "leased", "succeeded"]);
+  assert.deepEqual(events.results.map((row) => row.event_type), ["intent_recorded"]);
 });
 
 test("recovery is refused where triage kept responsibility inside IronWrap's own crews", async () => {
@@ -629,8 +602,9 @@ test("recovery is refused where triage kept responsibility inside IronWrap's own
   );
 });
 
-test("an uncertain recovery attempt leaves that state only through reconciliation", async () => {
-  const appEnv = env();
+test("a legacy uncertain recovery remains safely reconcilable while new execution is disabled", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
   await openServiceCase(appEnv, intake());
   await triaged(appEnv, { finalCategory: "material_manufacturer", responsibility: "supplier" });
   await diagnosed(appEnv);
@@ -649,33 +623,30 @@ test("an uncertain recovery attempt leaves that state only through reconciliatio
     deadlineAt: "2026-09-19T09:10:00.000Z",
     now: "2026-08-20T09:10:00.000Z",
   });
-  await claimCostRecoveryEffect(appEnv, {
-    tenantId: TENANT,
-    claimId: "svc_recovery_0003",
-    now: "2026-08-20T09:20:00.000Z",
-    leaseExpiresAt: "2026-08-20T09:25:00.000Z",
-  });
-  const uncertain = await finalizeCostRecoveryEffect(appEnv, {
-    tenantId: TENANT,
-    claimId: "svc_recovery_0003",
-    outcome: "uncertain",
-    resultRef: "supplier-claim:unknown",
-    resultCode: "submission_timeout",
-    now: "2026-08-20T09:30:00.000Z",
-  });
-  assert.equal(uncertain.state, "uncertain");
 
-  // No retry path exists out of an uncertain attempt.
-  await assert.rejects(
-    finalizeCostRecoveryEffect(appEnv, {
-      tenantId: TENANT,
-      claimId: "svc_recovery_0003",
-      outcome: "succeeded",
-      resultRef: "supplier-claim:SC-0001",
-      recoveredAmountCents: 90_000,
-      now: "2026-08-20T09:35:00.000Z",
-    }),
-    /service_cost_recovery_finalize_conflict/,
+  // Preserve a row an older deployment had already leased and classified as unknown. This is
+  // historical compatibility setup, not a production execution path in the current source.
+  db.raw.prepare(
+    `UPDATE service_cost_recovery_claims
+     SET state = 'leased', attempt_count = 1, attempt_mode = 'leased',
+         lease_ref = idempotency_key, lease_expires_at = ?, attempted_at = ?, updated_at = ?
+     WHERE claim_id = ?`,
+  ).run(
+    "2026-08-20T10:20:00.000Z",
+    "2026-08-20T09:20:00.000Z",
+    "2026-08-20T09:20:00.000Z",
+    "svc_recovery_0003",
+  );
+  db.raw.prepare(
+    `UPDATE service_cost_recovery_claims
+     SET state = 'uncertain', lease_expires_at = NULL, result_ref = ?, result_code = ?,
+         updated_at = ?
+     WHERE claim_id = ?`,
+  ).run(
+    "supplier-claim:unknown",
+    "submission_timeout",
+    "2026-08-20T09:21:00.000Z",
+    "svc_recovery_0003",
   );
 
   const reconciled = await reconcileCostRecoveryEffect(appEnv, {
@@ -689,6 +660,27 @@ test("an uncertain recovery attempt leaves that state only through reconciliatio
   assert.equal(reconciled.state, "reconciled");
   assert.equal(reconciled.reconciliation_outcome, "executed");
   assert.equal(reconciled.recovered_amount_cents, 75_000);
+
+  const replayedReconciliation = await reconcileCostRecoveryEffect(appEnv, {
+    tenantId: TENANT,
+    claimId: "svc_recovery_0003",
+    outcome: "executed",
+    reconciliationRef: "supplier-statement:2026-08",
+    recoveredAmountCents: 75_000,
+    now: "2026-08-21T09:05:00.000Z",
+  });
+  assert.equal(replayedReconciliation.reconciled_at, reconciled.reconciled_at);
+
+  await assert.rejects(
+    reconcileCostRecoveryEffect(appEnv, {
+      tenantId: TENANT,
+      claimId: "svc_recovery_0003",
+      outcome: "not_executed",
+      reconciliationRef: "supplier-statement:corrected",
+      now: "2026-08-21T09:10:00.000Z",
+    }),
+    /service_cost_recovery_reconcile_conflict/,
+  );
 
   const summary = await summarizeServiceCaseCost(appEnv, {
     tenantId: TENANT,

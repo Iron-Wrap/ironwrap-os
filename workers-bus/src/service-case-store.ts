@@ -5,14 +5,16 @@
 // itself: one versioned Service Case bound to customer, property, job, asset, warranty and consent,
 // a triage decision that never lets a model hold final authority, a diagnosis that issues a
 // governed service Work Package, a remedy whose verification and customer acceptance are separate
-// evidence-bound facts, and supplier/manufacturer/insurer cost recovery carried by the same
-// pending -> leased -> terminal -> reconciled effect shape the transition kernel already uses.
+// evidence-bound facts, and supplier/manufacturer/insurer recovery intent. Historical attempts keep
+// their pending -> leased -> terminal -> reconciled shape, while new execution remains fail-closed
+// until a provider adapter and evidence resolver are configured.
 //
 // Every guarantee here is also a D1 constraint or trigger. This module is the ergonomic surface;
 // it is not the enforcement boundary, so a direct writer cannot bypass the lifecycle by skipping
 // these functions.
 
 import type { AppEnv } from "./app-types.ts";
+import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 export const SERVICE_CASE_STATES = [
   "intake",
@@ -858,21 +860,19 @@ export async function costRecoveryRequestHash(input: {
   currency: "CAD";
   evidenceDigest: string;
 }): Promise<string> {
-  const canonical = JSON.stringify([
-    input.tenantId,
-    input.serviceCaseId,
-    input.diagnosisId,
-    input.counterpartyKind,
-    input.counterpartyRef,
-    input.claimBasisCode,
-    input.claimedAmountCents,
-    input.currency,
-    input.evidenceDigest,
-  ]);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return await sha256Hex(
+    canonicalJson([
+      input.tenantId,
+      input.serviceCaseId,
+      input.diagnosisId,
+      input.counterpartyKind,
+      input.counterpartyRef,
+      input.claimBasisCode,
+      input.claimedAmountCents,
+      input.currency,
+      input.evidenceDigest,
+    ]),
+  );
 }
 
 /**
@@ -1002,81 +1002,10 @@ async function insertCostRecoveryClaim(
   ).run();
 }
 
-export type ClaimCostRecoveryEffectResult =
-  | { kind: "claimed"; claim: ServiceCostRecoveryClaimRecord }
-  | { kind: "already_attempted"; claim: ServiceCostRecoveryClaimRecord }
-  | { kind: "missing" };
-
 /**
- * Leases the single permitted submission attempt. Exactly as in the transition kernel, a claim that
- * already carries an attempt is never handed out again, so a crashed dispatcher can resume only a
- * proven no-attempt gap.
- */
-export async function claimCostRecoveryEffect(
-  env: AppEnv,
-  input: { tenantId: string; claimId: string; now: string; leaseExpiresAt: string },
-): Promise<ClaimCostRecoveryEffectResult> {
-  const current = await getCostRecoveryClaim(env, input);
-  if (!current) return { kind: "missing" };
-  if (current.state !== "pending") return { kind: "already_attempted", claim: current };
-  const leased = await env.DB.prepare(
-    `UPDATE service_cost_recovery_claims
-     SET state = 'leased', lease_ref = idempotency_key, lease_expires_at = ?, attempt_count = 1,
-         attempt_mode = 'leased', attempted_at = ?, updated_at = ?
-     WHERE tenant_id = ? AND claim_id = ? AND state = 'pending' AND attempt_count = 0
-       AND due_at <= ?
-     RETURNING claim_id`,
-  ).bind(
-    input.leaseExpiresAt,
-    input.now,
-    input.now,
-    input.tenantId,
-    input.claimId,
-    input.now,
-  ).first<{ claim_id: string }>();
-  if (!leased) {
-    const latest = await getCostRecoveryClaim(env, input);
-    return latest ? { kind: "already_attempted", claim: latest } : { kind: "missing" };
-  }
-  return { kind: "claimed", claim: await requireClaim(env, input.claimId) };
-}
-
-export interface FinalizeCostRecoveryEffectInput {
-  tenantId: string;
-  claimId: string;
-  outcome: "succeeded" | "failed" | "uncertain";
-  resultRef: string;
-  resultCode?: string | null;
-  recoveredAmountCents?: number | null;
-  now: string;
-}
-
-export async function finalizeCostRecoveryEffect(
-  env: AppEnv,
-  input: FinalizeCostRecoveryEffectInput,
-): Promise<ServiceCostRecoveryClaimRecord> {
-  const finalized = await env.DB.prepare(
-    `UPDATE service_cost_recovery_claims
-     SET state = ?, lease_expires_at = NULL, result_ref = ?, result_code = ?,
-         recovered_amount_cents = ?, updated_at = ?
-     WHERE tenant_id = ? AND claim_id = ? AND state = 'leased'
-     RETURNING claim_id`,
-  ).bind(
-    input.outcome,
-    input.resultRef,
-    input.outcome === "succeeded" ? null : (input.resultCode ?? null),
-    input.outcome === "succeeded" ? (input.recoveredAmountCents ?? 0) : null,
-    input.now,
-    input.tenantId,
-    input.claimId,
-  ).first<{ claim_id: string }>();
-  if (!finalized) throw new Error("service_cost_recovery_finalize_conflict");
-  return requireClaim(env, input.claimId);
-}
-
-/**
- * Closes an uncertain attempt with an independently observed outcome. An uncertain claim has
- * exactly one exit and it is this one; the attempt is never retried behind the operator's back.
+ * Closes a legacy uncertain attempt with independently observed evidence. New attempts remain
+ * disabled until a real provider adapter and evidence resolver are configured, but already
+ * recorded uncertainty must remain safely reconcilable rather than being stranded by that gate.
  */
 export async function reconcileCostRecoveryEffect(
   env: AppEnv,
@@ -1089,6 +1018,26 @@ export async function reconcileCostRecoveryEffect(
     now: string;
   },
 ): Promise<ServiceCostRecoveryClaimRecord> {
+  const current = await getCostRecoveryClaim(env, input);
+  if (!current) throw new Error("service_cost_recovery_claim_not_found");
+  const recoveredAmount =
+    input.outcome === "executed"
+      ? requiredRecoveredAmount(input.recoveredAmountCents)
+      : null;
+  if (current.state === "reconciled") {
+    if (
+      current.reconciliation_outcome === input.outcome &&
+      current.reconciliation_ref === input.reconciliationRef &&
+      current.recovered_amount_cents === recoveredAmount
+    ) {
+      return current;
+    }
+    throw new Error("service_cost_recovery_reconcile_conflict");
+  }
+  if (current.state !== "uncertain") {
+    throw new Error("service_cost_recovery_reconcile_conflict");
+  }
+
   const reconciled = await env.DB.prepare(
     `UPDATE service_cost_recovery_claims
      SET state = 'reconciled', reconciled_at = ?, reconciliation_outcome = ?,
@@ -1099,13 +1048,26 @@ export async function reconcileCostRecoveryEffect(
     input.now,
     input.outcome,
     input.reconciliationRef,
-    input.outcome === "executed" ? (input.recoveredAmountCents ?? 0) : null,
+    recoveredAmount,
     input.now,
     input.tenantId,
     input.claimId,
   ).first<{ claim_id: string }>();
   if (!reconciled) throw new Error("service_cost_recovery_reconcile_conflict");
   return requireClaim(env, input.claimId);
+}
+
+function requiredRecoveredAmount(value: number | null | undefined): number {
+  if (
+    value === undefined ||
+    value === null ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 100_000_000
+  ) {
+    throw new Error("service_cost_recovery_recovered_amount_invalid");
+  }
+  return value;
 }
 
 export async function getCostRecoveryClaim(

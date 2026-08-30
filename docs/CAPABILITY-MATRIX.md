@@ -363,8 +363,8 @@ deployment, runtime, or business-acceptance evidence.
 The lifecycle is reachable from the running product: `workers-bus/src/service-cases.ts` owns the
 `/api/v1/service-cases` office routes wired into `workers-bus/src/app-api.ts`, and the PWA serves
 them at `/service` (callback desk) and `/service/$caseId` (one case end to end). Cost recovery
-records intent and an operator-observed result only; no supplier, manufacturer, or insurer is
-called from any code path.
+records intent only. Already-recorded legacy uncertainty can still be reconciled from independent
+evidence, but no supplier, manufacturer, or insurer is called from any code path.
 
 End-to-end evidence (Multica ELEC-21) drove that journey from a real browser against a local stack
 and returned two defects, both fixed on this branch and both now covered by tests: every lifecycle
@@ -411,6 +411,10 @@ IRO-38 branch-local side-effect substrate:
   `EFFECT_RUNTIME_ENABLED=true` boundary is available; otherwise mutation adapters fail closed.
   QuickBooks Pending projection retains its dedicated issuer authority and verifies material
   fields through the issuer-scoped readback command before the effect can succeed.
+- Service-case cost recovery is not an effect-runtime adapter yet. The owner may record a pending
+  intent, but the known lease/result endpoint shapes answer a structured, non-retryable `501` naming
+  the missing provider adapter and evidence resolver. They create no external effect, consume no
+  attempt, and accept no operator settlement; only historical `uncertain` rows remain reconcilable.
 - Writable ERPNext MCP processes require Worker claim/settle configuration. The MCP retains its
   Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
@@ -1006,7 +1010,7 @@ Target gaps:
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
-| Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, evidence-bound supplier/manufacturer/insurer recovery on the one-attempt effect shape, history-preserving reopen, and an office BFF surface (`/api/v1/service-cases`) reachable from the PWA at `/service` | dispatch/scheduling integration, customer portal and mobile service surfaces, re-seat onto the IRO-38 canonical effect runtime, and live recovery settlement | callback end to end |
+| Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, pending supplier/manufacturer/insurer recovery intent, safe reconciliation of historical unknown attempts, and fail-closed owner-only execution/result endpoints; history-preserving reopen and the office BFF surface (`/api/v1/service-cases`) remain reachable from the PWA at `/service` | re-seat cost-recovery execution on the IRO-38 runtime with a configured provider adapter and evidence resolver; add dispatch/scheduling integration, customer portal and mobile service surfaces, and live recovery settlement/readback | intent refusal, duplicate/replay, legacy unknown reconciliation, then configured callback end to end |
 | Finance | Partial: D1 derives native final-invoice intent from completion and now queues/derives the acceptance-bound deposit intent through the same accounting controls; QuickBooks execution is disabled and configured provider mapping/tax/readback remains incomplete; webhook identity alone never establishes payment, posting, or reconciliation truth | configured authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | configured reference journey, provider sandbox/readback, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
 | Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, a driver-scoped read (`/api/v1/fleet/panel`) that reports the release fence's own verdict per asset, a mobile-first field surface at `/vehicle` that files all three captures and states a refusal in plain language, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | photo evidence on a fleet capture (the envelope is JSON-only and `Asset Defect.evidence_item` is never written), telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |

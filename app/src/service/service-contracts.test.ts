@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { claim, detailResponse, listResponse, serviceCase } from "./service-fixtures";
+import {
+  OWNER_ACTIONS,
+  claim,
+  detailResponse,
+  listResponse,
+  serviceCase,
+} from "./service-fixtures";
 import {
   costRecoveryClaimSchema,
+  costRecoveryMutationResponseSchema,
   serviceCaseDetailResponseSchema,
   serviceCaseIntakeInputSchema,
   serviceCaseListResponseSchema,
@@ -37,6 +44,38 @@ describe("service lifecycle contracts", () => {
       delete withoutFact[missing];
       expect(costRecoveryClaimSchema.safeParse(withoutFact).success).toBe(false);
     }
+  });
+
+  it("keeps legacy leased claims readable but refuses removed execution mutation results", () => {
+    expect(
+      costRecoveryClaimSchema.safeParse(
+        claim({
+          state: "leased",
+          attempt_count: 1,
+          attempt_mode: "leased",
+          lease_ref: "svc-recovery:0123456789abcdef",
+          lease_expires_at: "2026-08-20T10:00:00.000Z",
+          attempted_at: "2026-08-20T09:00:00.000Z",
+        }),
+      ).success,
+    ).toBe(true);
+
+    const response = {
+      version: 1,
+      read_model_generated_at: "2026-08-20T09:00:00.000Z",
+      allowed_actions: OWNER_ACTIONS,
+      claim: claim(),
+    };
+    expect(
+      costRecoveryMutationResponseSchema.safeParse({ ...response, result: "opened" }).success,
+    ).toBe(true);
+    expect(
+      costRecoveryMutationResponseSchema.safeParse({ ...response, result: "claimed" }).success,
+    ).toBe(false);
+    expect(
+      costRecoveryMutationResponseSchema.safeParse({ ...response, result: "already_attempted" })
+        .success,
+    ).toBe(false);
   });
 
   it("never lets an emergency intake declare a routine response window", () => {

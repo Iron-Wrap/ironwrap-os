@@ -73,7 +73,12 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of ["0011_app_bff_auth.sql", "0056_service_case_lifecycle.sql"]) {
+    for (const migration of [
+      "0011_app_bff_auth.sql",
+      "0042_external_effect_runtime.sql",
+      "0056_service_case_lifecycle.sql",
+      "0062_external_effect_insert_replace_guards.sql",
+    ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
     const now = "2026-08-18T09:00:00.000Z";
@@ -118,10 +123,28 @@ class SqliteD1 {
       },
     };
   }
+
+  async batch(
+    statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>,
+  ) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 function env(db = new SqliteD1()): AppEnv {
-  return { DB: db as never, APP_ALLOW_INSECURE_LOCAL: "true" } as AppEnv;
+  return {
+    DB: db as never,
+    APP_ALLOW_INSECURE_LOCAL: "true",
+  } as AppEnv;
 }
 
 function auth(role: AppRole): AuthContext {
@@ -446,7 +469,7 @@ test("an emergency callback cannot be filed behind a routine response window", a
   assert.equal(refused.body.error, "service_case_emergency_sla_exceeded");
 });
 
-test("cost recovery is the owner's decision and runs the one-attempt effect shape without a provider", async () => {
+test("cost recovery records intent and fails closed without provider and evidence contracts", async () => {
   const appEnv = env();
   const { id, remedyId } = await throughRemedy(appEnv, "owner");
   await call(
@@ -507,27 +530,27 @@ test("cost recovery is the owner's decision and runs the one-attempt effect shap
   assert.equal((again.body.claim as Record<string, unknown>).claim_id, claim.claim_id);
 
   const claimId = claim.claim_id as string;
-  const leased = await call(
+  const before = await appEnv.DB.prepare(
+    `SELECT state, attempt_count, attempt_mode, lease_ref, lease_expires_at, attempted_at,
+            result_ref, result_code, recovered_amount_cents, reconciled_at,
+            reconciliation_outcome, reconciliation_ref, updated_at
+     FROM service_cost_recovery_claims WHERE claim_id = ?`,
+  ).bind(claimId).first<Record<string, unknown>>();
+  const leaseBypass = await call(
     appEnv,
     "owner",
     "POST",
     `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/lease`,
     { lease_seconds: 3_600 },
   );
-  assert.equal(leased.status, 200);
-  assert.equal((leased.body.claim as Record<string, unknown>).state, "leased");
+  assert.equal(leaseBypass.status, 501);
+  assert.deepEqual(leaseBypass.body, {
+    error: "service_cost_recovery_execution_not_configured",
+    missing_contracts: ["provider_adapter", "evidence_resolver"],
+    retryable: false,
+  });
 
-  const release = await call(
-    appEnv,
-    "owner",
-    "POST",
-    `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/lease`,
-    { lease_seconds: 3_600 },
-  );
-  assert.equal(release.status, 409);
-  assert.equal(release.body.result, "already_attempted");
-
-  const settled = await call(
+  const resultBypass = await call(
     appEnv,
     "owner",
     "POST",
@@ -538,17 +561,43 @@ test("cost recovery is the owner's decision and runs the one-attempt effect shap
       recovered_amount_cents: 110_000,
     },
   );
-  assert.equal(settled.status, 200);
-  assert.equal((settled.body.claim as Record<string, unknown>).state, "succeeded");
+  assert.equal(resultBypass.status, 501);
+  assert.deepEqual(resultBypass.body, leaseBypass.body);
+
+  const opsResultDenied = await call(
+    appEnv,
+    "ops",
+    "POST",
+    `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/result`,
+    { outcome: "succeeded" },
+  );
+  assert.equal(opsResultDenied.status, 403);
+  assert.equal(opsResultDenied.body.error, "owner_role_required");
+
+  const after = await appEnv.DB.prepare(
+    `SELECT state, attempt_count, attempt_mode, lease_ref, lease_expires_at, attempted_at,
+            result_ref, result_code, recovered_amount_cents, reconciled_at,
+            reconciliation_outcome, reconciliation_ref, updated_at
+     FROM service_cost_recovery_claims WHERE claim_id = ?`,
+  ).bind(claimId).first<Record<string, unknown>>();
+  assert.deepEqual(after, before);
 
   const detail = await call(appEnv, "owner", "GET", `/api/v1/service-cases/${id}`);
+  assert.equal(
+    (detail.body.cost_recovery_claims as Record<string, unknown>[])[0]?.state,
+    "pending",
+  );
   const cost = detail.body.cost as Record<string, number>;
-  assert.equal(cost.recovered_cents, 110_000);
-  assert.equal(cost.net_cost_cents, 0);
+  assert.equal(cost.recovered_cents, 0);
+  const external = await appEnv.DB.prepare(
+    `SELECT COUNT(*) AS total FROM external_effects WHERE intent_id = ?`,
+  ).bind(claimId).first<{ total: number }>();
+  assert.equal(external?.total, 0);
 });
 
-test("an uncertain claim is reconciled by the owner and never retried behind their back", async () => {
-  const appEnv = env();
+test("a legacy uncertain claim reconciles idempotently without creating an external effect", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
   const { id } = await throughRemedy(appEnv, "owner");
   const claimed = await call(
     appEnv,
@@ -565,21 +614,30 @@ test("an uncertain claim is reconciled by the owner and never retried behind the
     },
   );
   const claimId = (claimed.body.claim as Record<string, unknown>).claim_id as string;
-  await call(
-    appEnv,
-    "owner",
-    "POST",
-    `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/lease`,
-    { lease_seconds: 3_600 },
+  // Compatibility fixture for a row an older deployment had already leased and marked unknown.
+  // Current production routes cannot create either transition.
+  db.raw.prepare(
+    `UPDATE service_cost_recovery_claims
+     SET state = 'leased', attempt_count = 1, attempt_mode = 'leased',
+         lease_ref = idempotency_key, lease_expires_at = ?, attempted_at = ?, updated_at = ?
+     WHERE claim_id = ?`,
+  ).run(
+    "2026-08-20T10:20:00.000Z",
+    "2026-08-20T09:20:00.000Z",
+    "2026-08-20T09:20:00.000Z",
+    claimId,
   );
-  const uncertain = await call(
-    appEnv,
-    "owner",
-    "POST",
-    `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/result`,
-    { outcome: "uncertain", result_ref: "supplier-claim:unknown", result_code: "submission_timeout" },
+  db.raw.prepare(
+    `UPDATE service_cost_recovery_claims
+     SET state = 'uncertain', lease_expires_at = NULL, result_ref = ?, result_code = ?,
+         updated_at = ?
+     WHERE claim_id = ?`,
+  ).run(
+    "supplier-claim:unknown",
+    "submission_timeout",
+    "2026-08-20T09:21:00.000Z",
+    claimId,
   );
-  assert.equal((uncertain.body.claim as Record<string, unknown>).state, "uncertain");
 
   const reconciled = await call(
     appEnv,
@@ -593,6 +651,24 @@ test("an uncertain claim is reconciled by the owner and never retried behind the
   assert.equal(record.state, "reconciled");
   assert.equal(record.recovered_amount_cents, 40_000);
   assert.equal(record.attempt_count, 1);
+
+  const replayed = await call(
+    appEnv,
+    "owner",
+    "POST",
+    `/api/v1/service-cases/${id}/cost-recovery-claims/${claimId}/reconcile`,
+    { outcome: "executed", reconciliation_ref: "statement:2026-09", recovered_amount_cents: 40_000 },
+  );
+  assert.equal(replayed.status, 200);
+  assert.equal(
+    (replayed.body.claim as Record<string, unknown>).reconciled_at,
+    record.reconciled_at,
+  );
+
+  const effects = await appEnv.DB.prepare(
+    `SELECT COUNT(*) AS total FROM external_effects WHERE intent_id = ?`,
+  ).bind(claimId).first<{ total: number }>();
+  assert.equal(effects?.total, 0);
 });
 
 test("an unknown service path is a 404, not a partially matched route", async () => {

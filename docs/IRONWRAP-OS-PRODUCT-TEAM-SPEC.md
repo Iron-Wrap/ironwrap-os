@@ -208,6 +208,11 @@ table is a product summary, not an authorization implementation.
 - Every screen states the current fact, source, version/freshness, and next valid action.
 - A destructive or external action shows impact, actor, exact target, evidence, and approval state.
 - Disabled actions explain the blocking reason and the accountable resolution path.
+- An unavailable capability is named as absent, switched off, on-but-unconfigured, blocked on a
+  dependency, or indeterminate — never as one "unavailable", and never as an ordinary fault. Every
+  role reads that state from `GET /api/v1/capabilities`, scoped to the capabilities its permissions
+  reach; a reachable capability is never presented as proven. The response shape and the
+  presentation rules are in `docs/CAPABILITY-SIGNAL-CONTRACT.md`.
 - Board movement issues a typed versioned command; it never writes a presentation status directly.
 - Forms declare required evidence, offline policy, sensitivity, correction behavior, and field-level
   authority.
@@ -843,6 +848,9 @@ No command may use the projection as its source of authority.
 - Mutations require exact aggregate version or other explicit precondition.
 - `Idempotency-Key` or equivalent is mandatory for retryable consequential commands.
 - Read models include generation time and stale reasons when facts are incomplete.
+- Capability state is derived per request from live bindings, never from a build-time constant or a
+  cached value that could survive a configuration change, and flag state stays a separate field from
+  configuration readiness.
 - External-effect endpoints return requested/pending/exception state; they do not claim provider
   completion before readback.
 - Pagination, filtering, and search remain permission-scoped and bounded.

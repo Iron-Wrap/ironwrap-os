@@ -4,6 +4,20 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
+// The capability registry and its evaluator are imported, not restated. G1.3 found this verifier
+// covered none of the eight capabilities spec 9.3 names, so a flag flip on QuickBooks, Newo,
+// Postiz, Hermes desktop or the proposal template was caught by nothing. Restating the rules here
+// would have produced a second, silently diverging answer; importing the module the Worker itself
+// serves means the contract gate and the runtime signal cannot disagree (ELEC-240).
+import {
+  CAPABILITY_SIGNAL_IDS,
+  CAPABILITY_SIGNAL_REGISTRY,
+  NAMED_REFERENCE_CAPABILITY_IDS,
+  capabilitySecretBindings,
+  evaluateCapabilitySignals,
+} from "../workers-bus/src/capability-signal.ts";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_REPO_ROOT = path.resolve(HERE, "..");
 
@@ -239,6 +253,39 @@ const EXPECTED_SOURCES = {
   frappe: "https://github.com/frappe/frappe.git",
   frappe_docker: "https://github.com/frappe/frappe_docker.git",
   hermes: "https://github.com/NousResearch/hermes-agent.git",
+};
+
+/**
+ * The capability state the committed reference configuration is in, recorded rather than frozen.
+ *
+ * This is not a ban on changing a flag. It is the requirement that changing one is a visible,
+ * reviewed act: turn `QB_OAUTH_ENABLED` on and this gate fails until the new state is recorded
+ * here, in `docs/CAPABILITY-MATRIX.md`, and in the AI-native configuration contract. That is the
+ * same discipline `workers-bus/test/app-migration.test.ts` applies to the raw defaults, raised to
+ * the state a user is actually shown -- and it is what makes "on but unconfigured" a state the
+ * readiness contract can hold, instead of one it cannot express.
+ *
+ * Values come from `evaluateCapabilitySignals` over `wrangler.jsonc`'s top-level (production)
+ * `vars`, with every secret binding opaque, because a static file genuinely cannot see one.
+ */
+const CAPABILITY_REFERENCE_STATE = {
+  document_generation: "off",
+  effect_runtime: "available",
+  facet_design_ingest: "unconfigured",
+  facet_design_ingest_v1: "absent",
+  facet_frappe_projection: "off",
+  facet_launch: "unconfigured",
+  facet_native_projection: "dependency_blocked",
+  facet_quote_revision_prepare: "absent",
+  hermes_desktop: "off",
+  hermes_hosted_reference: "off",
+  newo: "off",
+  postiz: "off",
+  proposal_publication: "off",
+  proposal_template: "unconfigured",
+  public_estimator: "off",
+  quickbooks_final_invoice: "off",
+  quickbooks_oauth: "off",
 };
 
 function check(id, ok, passMessage, failMessage = passMessage) {
@@ -520,6 +567,34 @@ async function loadLock(repoRoot) {
   } catch {
     return { text, value: null };
   }
+}
+
+/**
+ * Evaluate every registry capability against the deployed reference configuration.
+ *
+ * Only `wrangler.jsonc`'s top-level `vars` -- the production block -- is read. Secrets are opaque
+ * on purpose: this verifier must never report a secret-backed capability as ready from a file that
+ * cannot contain the secret, and G1.3 listed "whether any Worker secret is actually set" as one of
+ * the four unknowns that need a named-environment readback rather than another assumption.
+ */
+function evaluateReferenceCapabilities(wranglerSource) {
+  let vars;
+  try {
+    vars = JSON.parse(stripJsonComments(wranglerSource))?.vars;
+  } catch {
+    return { ok: false, error: "workers-bus/wrangler.jsonc is not parseable", signals: null };
+  }
+  if (!vars || typeof vars !== "object" || Array.isArray(vars)) {
+    return { ok: false, error: "workers-bus/wrangler.jsonc has no top-level vars block", signals: null };
+  }
+  return {
+    ok: true,
+    error: null,
+    signals: evaluateCapabilitySignals({
+      read: (name) => (typeof vars[name] === "string" ? vars[name] : undefined),
+      opaque: capabilitySecretBindings(),
+    }),
+  };
 }
 
 export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
@@ -864,6 +939,48 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     let executable = false;
     try { executable = Boolean((await stat(path.join(repoRoot, relative))).mode & 0o111); } catch { /* missing reported above */ }
     checks.push(check(`contract.executable.${relative}`, executable, `${relative} is executable`, `${relative} must be executable`));
+  }
+
+  const wranglerSource = await readText(repoRoot, "workers-bus/wrangler.jsonc");
+  checks.push(check("contract.capability.wrangler", wranglerSource !== null && wranglerSource.length > 0, "workers-bus/wrangler.jsonc is present", "workers-bus/wrangler.jsonc is missing or empty"));
+
+  // The registry must still name every capability spec 9.3 names, and the recorded table must
+  // still cover every capability the registry carries. Either half going stale is how a capability
+  // silently leaves the readiness contract, which is the exact gap G1.3 found.
+  const registryIds = [...CAPABILITY_SIGNAL_IDS];
+  const recordedIds = Object.keys(CAPABILITY_REFERENCE_STATE).sort();
+  checks.push(check(
+    "contract.capability.registry.named",
+    NAMED_REFERENCE_CAPABILITY_IDS.every((id) => registryIds.includes(id)),
+    "the capability registry names every capability spec 9.3 declares",
+    "the capability registry must name every capability spec 9.3 declares",
+  ));
+  checks.push(check(
+    "contract.capability.registry.recorded",
+    JSON.stringify(recordedIds) === JSON.stringify([...registryIds].sort()),
+    "every registry capability has a recorded reference state",
+    "every registry capability must have a recorded reference state, and the recorded table must name no capability the registry does not",
+  ));
+
+  const referenceCapabilities = evaluateReferenceCapabilities(wranglerSource ?? "");
+  checks.push(check("contract.capability.parse", referenceCapabilities.ok, "reference capability configuration is readable", referenceCapabilities.error ?? "reference capability configuration is unreadable"));
+  for (const id of registryIds) {
+    const observed = referenceCapabilities.signals?.[id];
+    const recorded = CAPABILITY_REFERENCE_STATE[id];
+    checks.push(check(
+      `contract.capability.${id}.state`,
+      observed !== undefined && observed.state === recorded,
+      `${id} is ${recorded} in the reference configuration, as recorded`,
+      `${id} is ${observed ? observed.state : "unreadable"} in the reference configuration but ${recorded} is recorded; record the change in tools/production-readiness.mjs, docs/CAPABILITY-MATRIX.md, and the AI-native configuration contract in the same commit`,
+    ));
+    // A flag that is neither "true" nor "false" nor absent reads as off to every gate in the
+    // Worker while looking, to whoever set it, like it worked. It is never an acceptable state.
+    checks.push(check(
+      `contract.capability.${id}.flag`,
+      observed !== undefined && observed.flag.state !== "invalid",
+      `${id} declares a flag literal the Worker accepts`,
+      `${CAPABILITY_SIGNAL_REGISTRY[id].flagBinding ?? id} must be exactly "true" or "false"`,
+    ));
   }
 
   return finish("contract", checks);

@@ -193,6 +193,11 @@ PWA является основной ролевой пользовательс�
 - Каждый экран показывает текущий факт, источник, версию или freshness и следующее допустимое действие.
 - Разрушительное или внешнее действие показывает влияние, актера, точную цель, доказательства и состояние approval.
 - Недоступное действие объясняет причину блокировки и ответственный путь исправления.
+- Недоступная возможность называется явно: absent, выключена, включена-но-не-настроена, заблокирована зависимостью
+  или indeterminate — никогда одним словом «недоступно» и никогда как обычный сбой. Каждая роль читает это состояние
+  из `GET /api/v1/capabilities` в объёме тех возможностей, до которых дотягиваются её разрешения; достижимая
+  возможность никогда не показывается как доказанная. Форма ответа и правила показа — в
+  `docs/CAPABILITY-SIGNAL-CONTRACT.md`.
 - Перемещение на доске выпускает typed versioned command и никогда напрямую не пишет презентационный статус.
 - Формы объявляют обязательные evidence, offline policy, sensitivity, correction behavior и field-level authority.
 - Существенные решения клиента сохраняют точную ревизию, условия, assumptions, exclusions, цену и показанное содержание.
@@ -734,6 +739,8 @@ external contract. Ни одна command не может использоват�
 - Mutations требуют exact aggregate version или другой explicit precondition.
 - `Idempotency-Key` либо эквивалент обязателен для retryable consequential commands.
 - Read models включают generation time и stale reasons при неполных фактах.
+- Состояние возможности выводится на каждый запрос из живых bindings, никогда из build-time константы или кэша,
+  переживающего изменение конфигурации; состояние флага остаётся отдельным полем от готовности конфигурации.
 - External-effect endpoints возвращают requested, pending или exception state и не заявляют provider completion до readback.
 - Pagination, filtering и search остаются permission-scoped и bounded.
 - Logs и telemetry несут correlation IDs, но редактируют secrets и protected content.

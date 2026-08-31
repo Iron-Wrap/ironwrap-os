@@ -106,9 +106,18 @@ label is therefore not evidence that every depicted workflow is owner-operated i
 | `/inventory` | Yes | Yes | No | Permission-specific | No | Yes |
 | `/settings` company/team/devices/integrations | Yes | Yes within grant | No | No | QuickBooks scope only | No |
 | Public estimator, portal, contract links | Bounded administration | Bounded administration | Commercial preparation only | No | Financial read only as granted | No |
+| `GET /api/v1/capabilities` (capability state) | Full detail | Full detail | State and reason only | State and reason only | State and reason only | State and reason only |
 
 The client route is a usability boundary, not the security boundary. The Worker and storage queries
 must independently enforce tenant, role, action, object, version, and policy scope.
+
+Capability state is its own permission boundary. Every authenticated role reads
+`GET /api/v1/capabilities`, but each receives only the capabilities its permissions actually reach,
+and only `owner`/`ops` receive binding names, declared flag literals, and the dependency graph — a
+capability state leaks commercial and infrastructure facts, so every other role gets the minimum
+that lets its screen be honest. `GET /api/v1/integrations/readiness` stays office-only and
+unchanged; it answers proof, not reachability. See
+[`CAPABILITY-SIGNAL-CONTRACT.md`](CAPABILITY-SIGNAL-CONTRACT.md).
 
 ## 3. Complete business-process catalog
 

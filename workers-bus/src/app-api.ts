@@ -1,5 +1,6 @@
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
 import { handlePipelineRoute } from "./pipeline-board-api.ts";
+import { buildCapabilitySignalReadModel } from "./capability-signal-api.ts";
 import {
   ingestLead,
   officeLeadPayload,
@@ -642,6 +643,14 @@ export async function handleAuthenticatedRoute(
     response.headers.set("cache-control", "private, no-store");
     return response;
   }
+  // Whether a capability is absent, off, on-but-unconfigured or reachable, for the capabilities
+  // this caller's role can actually reach. Every authenticated role, deliberately: before this
+  // route a non-office role learned a capability was unavailable from a 404 or a 503 at first use
+  // (ELEC-232), which is indistinguishable from a fault. The office pair gets the operator detail;
+  // every other role gets state and reason only (ELEC-240).
+  if (req.method === "GET" && url.pathname === "/api/v1/capabilities") {
+    return privateAppJson(buildCapabilitySignalReadModel(env, auth));
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/field/bootstrap") {
     if (!hasPermission(auth, "today:read"))
       return privateAppJson({ error: "today_read_required" }, 403);
@@ -649,6 +658,11 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({
         version: APP_API_VERSION,
         session: sessionPayload(auth, env),
+        // A field device gets one call before it goes offline, so the capability signal rides
+        // with it rather than costing a second round trip on a bad connection. It stays a hint:
+        // the server re-derives and re-enforces on every write, and a cached state never admits
+        // one (docs/CAPABILITY-SIGNAL-CONTRACT.md, "Offline").
+        capabilities: buildCapabilitySignalReadModel(env, auth),
         today: await buildTodayReadModel(env, auth),
       });
     } catch {

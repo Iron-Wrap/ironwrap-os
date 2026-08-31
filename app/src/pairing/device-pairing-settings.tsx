@@ -14,6 +14,8 @@ import { useEffect, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -53,6 +55,10 @@ function OfficeDevicePairingSettings() {
   const session = useSession();
   const queryClient = useQueryClient();
   const canManage = !isOfflineSession(session);
+  // Before this read the desktop pairing button was live whatever the flag said, and a crew lead
+  // learned the pilot was switched off from a generic error after the tap (ELEC-232 audit).
+  const hermesDesktop = useCapability("hermes_desktop");
+  const hermesDesktopUnusable = capabilityPreventsUse(hermesDesktop);
   const fieldUsers = useQuery({
     queryKey: ["field-users", session.tenant.id],
     queryFn: () => listFieldUsers(session),
@@ -174,10 +180,17 @@ function OfficeDevicePairingSettings() {
         </CardHeader>
         <CardContent className="space-y-4">
           {desktopIssueError ? <InlineError message={messageFor(desktopIssueError)} /> : null}
+          <CapabilityUnavailable read={hermesDesktop} />
+          {/*
+            Disabled, never relabelled or hidden: a screen-reader user has to keep hearing WHAT is
+            unavailable, and the panel immediately before it in DOM order supplies WHY. The button
+            also keeps its full height while disabled, so switching the pilot on does not move it.
+          */}
           <Button
             type="button"
             variant="outline"
             busy={desktopIssuing}
+            disabled={hermesDesktopUnusable}
             onClick={() => void issueDesktop()}
           >
             <Laptop aria-hidden="true" />

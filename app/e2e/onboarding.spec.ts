@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import { assertNoFrappeDesk } from "./frappe-desk-guard";
+
 // Mobile-first acceptance for onboarding v0 (ELEC-160, blockers B1/B3/B4 from ELEC-158).
 //
 // The delivery promise is that a non-technical owner sets up their own company from the app: name,
@@ -58,14 +60,6 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
       43.9,
     );
   }
-}
-
-/** The ERPNext desk is never an answer for an end user; catch any link that would lead there. */
-async function assertNoFrappeDesk(page: Page): Promise<void> {
-  const desk = page.locator('a[href*="/app/"], a[href*="/desk"], a[href*="erpnext"]');
-  expect(await desk.count(), "a link into the Frappe administration interface is on screen").toBe(
-    0,
-  );
 }
 
 test.use({ ...devices["Pixel 5"] });

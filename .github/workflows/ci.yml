@@ -164,6 +164,15 @@ jobs:
       # session the board does, so it gets its own step rather than silently self-skipping.
       - name: Run app Playwright e2e (card placement, office session)
         run: npm run test:pwa:placement --prefix app
+      # Honest unavailable-capability presentation is a mobile claim: that the state fits a
+      # phone, that the control it explains is genuinely not tappable, and that "why is this off"
+      # never answers with a link into the Frappe desk. The spec covers an office session and an
+      # accounting one because the two receive different capability projections by design, so a
+      # single run would leave the scoped half unproven (ELEC-236).
+      - name: Run app Playwright e2e (capability honesty, office session)
+        run: npm run test:pwa:capabilities --prefix app
+      - name: Run app Playwright e2e (capability honesty, accounting session)
+        run: npm run test:pwa:capabilities:accounting --prefix app
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types

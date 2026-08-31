@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, ClipboardCheck, ShieldCheck } from "lucide-react";
+import { CheckCircle2, CircleAlert, CircleOff, ClipboardCheck, ShieldCheck } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ZodError } from "zod";
 
@@ -218,33 +218,63 @@ export function PublicEstimatePage() {
     );
   }
 
+  // Turned off, which is a decision somebody made — not a fault and not something the visitor
+  // can wait out. "Try again soon" named no channel and no timeframe, so it read as a promise
+  // this page cannot keep.
+  //
+  // A path to a person is a hard requirement for every unavailable state in this product, and it
+  // is the one requirement this surface cannot meet: `PublicEstimateBrand` carries `id`,
+  // `display_name`, `short_name` and `service_area` and no contact field, so there is nothing
+  // public-safe to put here. Rather than invent a number or imply a channel that is not on
+  // screen, the copy says plainly that no other way to reach the company is shown. The schema and
+  // Worker change that would close it is tracked as ELEC-242.
   if (!config.enabled) {
     return (
       <PublicEstimateFrame brand={brandCopy} logoUrl={config.logo_url}>
         <section className="mx-auto max-w-lg py-10 text-center" aria-live="polite">
-          <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-warning-soft text-warning">
-            <CircleAlert className="size-6" aria-hidden="true" />
+          <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-surface-muted text-muted">
+            <CircleOff className="size-6" aria-hidden="true" />
           </div>
-          <h1 className="mt-5 text-2xl font-black tracking-[-0.035em]">
-            The estimate form is paused
+          <p className="mt-5 text-sm font-[740] text-muted">Turned off</p>
+          <h1 className="mt-1.5 text-2xl font-black tracking-[-0.035em]">
+            This estimate form is turned off
           </h1>
           <p className="mt-3 text-sm leading-6 text-muted">
-            An estimator can still help with your job. Please try this form again soon.
+            {brandCopy?.display_name ?? "This company"} is not taking estimate requests through this
+            form right now. Nothing you typed was sent, and nothing here failed.
+          </p>
+          <p className="mt-3 text-sm leading-6 text-muted">
+            This page cannot show you a phone number or an email address for them yet, so there is
+            no other way to reach them from here.
           </p>
         </section>
       </PublicEstimateFrame>
     );
   }
 
-  // The server accepts no brand for this deployment, so a submitted request could only ever be
-  // rejected. Say so instead of drawing a form that cannot work.
+  // Switched on, setup unfinished: the server accepts no brand for this deployment, so a
+  // submitted request could only ever be rejected. That is a configuration condition, not a
+  // failure — no retry can fix it, so none is offered.
   if (!brandCopy) {
     return (
       <PublicEstimateFrame brand={undefined} logoUrl={config.logo_url}>
-        <ErrorState
-          title="The estimate form is not ready"
-          message="This company has not finished setting up its request form yet. Please call or email instead."
-        />
+        <section className="mx-auto max-w-lg py-10 text-center" aria-live="polite">
+          <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-warning-soft text-warning">
+            <CircleAlert className="size-6" aria-hidden="true" />
+          </div>
+          <p className="mt-5 text-sm font-[740] text-muted">Setup not finished</p>
+          <h1 className="mt-1.5 text-2xl font-black tracking-[-0.035em]">
+            This estimate form is not ready yet
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-muted">
+            The company has not finished setting this form up, so a request sent from here would be
+            turned away. Nothing you typed was sent.
+          </p>
+          <p className="mt-3 text-sm leading-6 text-muted">
+            This page cannot show you a phone number or an email address for them yet, so there is
+            no other way to reach them from here.
+          </p>
+        </section>
       </PublicEstimateFrame>
     );
   }

@@ -19,6 +19,8 @@ import { useRef, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
@@ -1596,6 +1598,12 @@ function QuoteRevisionEntry({
   const session = useSession();
   const online = useOnlineStatus();
   const launchKey = useRef(newFacetLaunchKey());
+  // "Design in Facet" was live whatever the Facet launch configuration said, so an office user
+  // whose deployment has no Facet route for this tenant learned that only from a failed request
+  // after the tap. The permission says the role may launch; the capability says whether launching
+  // can work at all, and both have to be true (ELEC-236 AC3).
+  const facetLaunch = useCapability("facet_launch");
+  const facetLaunchUnusable = capabilityPreventsUse(facetLaunch);
   const canLaunch = model.allowed_actions.includes("facet_launch.create");
   const canRevise = model.allowed_actions.includes("quote_revision_approval.prepare");
   const launch = useMutation({
@@ -1626,7 +1634,7 @@ function QuoteRevisionEntry({
             <Button
               type="button"
               size="default"
-              disabled={launchDisabled}
+              disabled={launchDisabled || facetLaunchUnusable}
               onClick={() => launch.mutate(undefined)}
             >
               <Palette aria-hidden="true" />
@@ -1645,6 +1653,11 @@ function QuoteRevisionEntry({
       </div>
       {canLaunch && (!online || isOfflineSession(session)) ? (
         <p className="mt-3 text-xs font-semibold text-muted">Reconnect to open this design.</p>
+      ) : null}
+      {canLaunch ? (
+        <div className="mt-4">
+          <CapabilityUnavailable read={facetLaunch} />
+        </div>
       ) : null}
       {launch.isError ? (
         <p role="alert" className="mt-3 text-sm font-semibold text-danger">

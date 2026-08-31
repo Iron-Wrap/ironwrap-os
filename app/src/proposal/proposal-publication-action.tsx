@@ -4,7 +4,14 @@ import { useRef, useState, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import {
+  capabilityHasNotice,
+  capabilityPreventsUse,
+  useCapability,
+} from "../capabilities/capability-signal";
 import { Button } from "../components/ui/button";
+import { NoAccessState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
 import {
   approveProposalPublication,
@@ -40,6 +47,12 @@ export function ProposalPublicationAction({
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
   const officeRole = session.user.role === "owner" || session.user.role === "ops";
+  // Two flags with two different fixes: switching publication on, and finishing the proposal
+  // document template. One "not available on this runtime" string hid which one applied, and a
+  // reader could not tell whether to ask for a switch or for a setup step (ELEC-234 §6.8).
+  const publication = useCapability("proposal_publication");
+  const template = useCapability("proposal_template");
+  const publicationUnusable = capabilityPreventsUse(publication) || capabilityPreventsUse(template);
   const [failure, setFailure] = useState<string>();
   const prepareInFlight = useRef(false);
   const decideInFlight = useRef(false);
@@ -142,7 +155,29 @@ export function ProposalPublicationAction({
 
   const busy = prepare.isPending || publish.isPending || discard.isPending;
 
-  if (!officeRole) return null;
+  // Rendering nothing told a crew member or an estimator that publication does not exist, rather
+  // than that it is not theirs. "No access" is its own state in annex §6.1 and never collapses
+  // into "no work" or "no configuration".
+  if (!officeRole) {
+    return (
+      <section
+        className="border-b border-border py-6"
+        aria-labelledby="proposal-publication-heading"
+      >
+        <div className="px-4 sm:px-5">
+          <h2 id="proposal-publication-heading" className="sr-only">
+            Publish to the customer
+          </h2>
+          <NoAccessState
+            title="Publishing to the customer is not your role"
+            message="This proposal can be published to the customer link, but only an owner or operations account may do it. Nothing is missing from your account and nothing here has failed."
+            nextAction="An owner or operations account publishes the reviewed proposal from this job."
+            personPath="Ask your owner or operations lead to publish it once the proposal is ready."
+          />
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="border-b border-border py-6" aria-labelledby="proposal-publication-heading">
@@ -161,6 +196,22 @@ export function ProposalPublicationAction({
             </p>
           </div>
         </div>
+
+        {/*
+          Above the whole branch chain, because it applies to preparing AND to confirming: a flag
+          switched off after an approval was prepared must not leave a live confirm button behind.
+          Publication first when both are unavailable — turning publication on is the blocking
+          step, and finishing the template cannot matter until it is (ELEC-234 §6.8).
+        */}
+        {capabilityHasNotice(publication) ? (
+          <div className="mt-5">
+            <CapabilityUnavailable read={publication} />
+          </div>
+        ) : capabilityHasNotice(template) ? (
+          <div className="mt-5">
+            <CapabilityUnavailable read={template} />
+          </div>
+        ) : null}
 
         {offline ? (
           <PublicationNotice tone="warning" title="Publication is unavailable offline.">
@@ -220,7 +271,7 @@ export function ProposalPublicationAction({
               <Button
                 type="button"
                 busy={publish.isPending}
-                disabled={busy || !canApprove}
+                disabled={busy || !canApprove || publicationUnusable}
                 onClick={() => {
                   if (decideInFlight.current) return;
                   decideInFlight.current = true;
@@ -261,7 +312,7 @@ export function ProposalPublicationAction({
             <Button
               type="button"
               busy={prepare.isPending}
-              disabled={busy || !canPrepare}
+              disabled={busy || !canPrepare || publicationUnusable}
               onClick={() => {
                 if (prepareInFlight.current) return;
                 prepareInFlight.current = true;
@@ -271,9 +322,10 @@ export function ProposalPublicationAction({
               <Send aria-hidden="true" />
               Prepare publication
             </Button>
-            {!canPrepare ? (
+            {!capabilityHasNotice(publication) && !capabilityHasNotice(template) && !canPrepare ? (
               <p className="mt-3 text-sm font-semibold text-warning">
-                Publication is not available on this runtime.
+                This runtime does not offer publication for your account. Ask your owner or
+                operations lead who administers this IronWrap deployment.
               </p>
             ) : null}
           </div>

@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { assertNoFrappeDesk } from "./frappe-desk-guard";
+
 const estimatorMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
 
@@ -94,6 +96,7 @@ test.describe("Facet design acceptance", () => {
       if (box) expect(box.height).toBeGreaterThanOrEqual(44);
     }
 
+    await assertNoFrappeDesk(page);
     await page.screenshot({
       path: `${shotDir}/facet-designs-${testInfo.project.name}.png`,
       fullPage: true,

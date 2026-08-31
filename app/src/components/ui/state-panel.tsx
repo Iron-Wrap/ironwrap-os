@@ -1,8 +1,17 @@
-import { AlertTriangle, CircleOff, LoaderCircle, RotateCcw } from "lucide-react";
+import { AlertTriangle, CircleAlert, CircleOff, Lock, LoaderCircle, RotateCcw } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { cn } from "../../lib/cn";
 import { Button } from "./button";
 import { Card } from "./card";
+
+/**
+ * `neutral` is for a state nobody needs to act on urgently — an intentional administrator choice
+ * reads as calm, not as an incident. `warning` is for a state that genuinely needs someone to do
+ * something before the capability can work. `ErrorState` keeps `danger` for a live failure, which
+ * is the only one of the three where retrying can plausibly help.
+ */
+type PanelTone = "neutral" | "warning";
 
 interface StatePanelProps {
   title: string;
@@ -10,18 +19,40 @@ interface StatePanelProps {
   icon: ReactNode;
   action?: ReactNode;
   live?: "polite" | "assertive";
+  tone?: PanelTone;
+  /** Visible state name. Colour and icon never carry the meaning on their own. */
+  stateLabel?: string;
+  footer?: ReactNode;
 }
 
-function StatePanel({ title, message, icon, action, live = "polite" }: StatePanelProps) {
+function StatePanel({
+  title,
+  message,
+  icon,
+  action,
+  live = "polite",
+  tone = "neutral",
+  stateLabel,
+  footer,
+}: StatePanelProps) {
   return (
     <Card className="mx-auto max-w-xl overflow-hidden" aria-live={live}>
       <div className="grid gap-5 p-5 sm:grid-cols-[3.5rem_minmax(0,1fr)] sm:p-7">
-        <div className="flex size-12 items-center justify-center rounded-xl border border-border/75 bg-surface-muted text-muted shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_4%,transparent)]">
+        <div
+          className={cn(
+            "flex size-12 items-center justify-center rounded-xl border shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_4%,transparent)]",
+            tone === "warning"
+              ? "border-warning/40 bg-warning-soft text-warning"
+              : "border-border/75 bg-surface-muted text-muted",
+          )}
+        >
           {icon}
         </div>
         <div className="min-w-0">
+          {stateLabel ? <p className="mb-1.5 text-sm font-[740] text-muted">{stateLabel}</p> : null}
           <h2 className="text-xl font-[760] tracking-[-0.025em]">{title}</h2>
           <p className="mt-2 max-w-md text-sm leading-6 text-muted">{message}</p>
+          {footer}
           {action ? <div className="mt-5 flex flex-wrap items-center gap-2">{action}</div> : null}
         </div>
       </div>
@@ -96,6 +127,100 @@ export function EmptyState({
       message={message}
       icon={<CircleOff className="size-6" aria-hidden="true" />}
       action={action}
+    />
+  );
+}
+
+/**
+ * The two shapes an unavailable capability takes, and the one a permission gate takes.
+ *
+ * All three carry the same required content: the fact in plain language, the next valid action
+ * naming its actor and prerequisite, and a path to a person. None of them takes an `onRetry`, on
+ * purpose — a control that cannot succeed must not offer to try again (ELEC-236 AC3). A live
+ * failure that retrying could fix is `ErrorState`, and keeping the two apart is the whole point:
+ * "nobody switched this on" and "the call just failed" are different facts with different owners.
+ */
+interface UnavailableStateProps {
+  title: string;
+  message: string;
+  nextAction: string;
+  personPath: string;
+  stateLabel?: string;
+}
+
+function UnavailableDetail({ nextAction, personPath }: { nextAction: string; personPath: string }) {
+  return (
+    <dl className="mt-4 space-y-3 border-t border-border/70 pt-4 text-sm leading-6">
+      <div>
+        <dt className="font-[740] text-foreground">Next step</dt>
+        <dd className="text-muted">{nextAction}</dd>
+      </div>
+      <div>
+        <dt className="font-[740] text-foreground">Who to ask</dt>
+        <dd className="text-muted">{personPath}</dd>
+      </div>
+    </dl>
+  );
+}
+
+/** Present in the build, switched off. An intentional choice, not an incident. */
+export function OffState({
+  title,
+  message,
+  nextAction,
+  personPath,
+  stateLabel = "Turned off",
+}: UnavailableStateProps) {
+  return (
+    <StatePanel
+      title={title}
+      message={message}
+      stateLabel={stateLabel}
+      icon={<CircleOff className="size-6" aria-hidden="true" />}
+      footer={<UnavailableDetail nextAction={nextAction} personPath={personPath} />}
+    />
+  );
+}
+
+/** Switched on, setup unfinished. Needs someone to act; no retry can substitute for that. */
+export function UnconfiguredState({
+  title,
+  message,
+  nextAction,
+  personPath,
+  stateLabel = "Setup not finished",
+}: UnavailableStateProps) {
+  return (
+    <StatePanel
+      title={title}
+      message={message}
+      stateLabel={stateLabel}
+      tone="warning"
+      icon={<CircleAlert className="size-6" aria-hidden="true" />}
+      footer={<UnavailableDetail nextAction={nextAction} personPath={personPath} />}
+    />
+  );
+}
+
+/**
+ * A permission gate, which annex §6.1 keeps as its own axis: "no access" is not "no work", "no
+ * configuration" or "failed dependency". Rendering nothing at all — the pattern this replaces —
+ * tells a reader the capability does not exist rather than that it is not theirs.
+ */
+export function NoAccessState({
+  title,
+  message,
+  nextAction,
+  personPath,
+  stateLabel = "Not your role",
+}: UnavailableStateProps) {
+  return (
+    <StatePanel
+      title={title}
+      message={message}
+      stateLabel={stateLabel}
+      icon={<Lock className="size-6" aria-hidden="true" />}
+      footer={<UnavailableDetail nextAction={nextAction} personPath={personPath} />}
     />
   );
 }

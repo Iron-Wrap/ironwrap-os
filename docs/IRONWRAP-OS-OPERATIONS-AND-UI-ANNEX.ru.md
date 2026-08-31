@@ -107,9 +107,18 @@ Source-present, Locally-validated, Configured, Runtime-proven, Business-accepted
 | `/inventory` | Да | Да | Нет | По permission | Нет | Да |
 | `/settings` company/team/devices/integrations | Да | В пределах grant | Нет | Нет | Только QuickBooks scope | Нет |
 | Public estimator, portal, contract links | Ограниченное администрирование | Ограниченное администрирование | Только commercial preparation | Нет | Financial read в рамках grant | Нет |
+| `GET /api/v1/capabilities` (состояние возможностей) | Полная детализация | Полная детализация | Только state и reason | Только state и reason | Только state и reason | Только state и reason |
 
 Клиентский маршрут является границей удобства, а не границей безопасности. Worker и storage query
 обязаны независимо проверять tenant, role, action, object, version и policy scope.
+
+Состояние возможности само по себе является границей разрешений. `GET /api/v1/capabilities` читает любая
+аутентифицированная роль, но каждая получает только те возможности, до которых дотягиваются её разрешения,
+и только `owner`/`ops` получают имена bindings, объявленные литералы флагов и граф зависимостей — состояние
+возможности раскрывает коммерческие и инфраструктурные факты, поэтому остальные роли получают минимум,
+достаточный для честного экрана. `GET /api/v1/integrations/readiness` остаётся office-only и без изменений:
+он отвечает про доказательство, а не про достижимость. См.
+[`CAPABILITY-SIGNAL-CONTRACT.md`](CAPABILITY-SIGNAL-CONTRACT.md).
 
 ## 3. Полный каталог бизнес-процессов
 

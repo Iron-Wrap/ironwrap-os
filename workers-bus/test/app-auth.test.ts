@@ -1471,10 +1471,21 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
       version: number;
       session: { authenticated: boolean; user: { role: string } };
       today: { jobs: unknown[] };
+      capabilities: { projection: string; proof_claimed: boolean };
     };
     assert.equal(fieldBootstrap.status, 200);
     assert.equal(fieldBootstrap.headers.get("cache-control"), "private, no-store");
-    assert.deepEqual(Object.keys(bootstrap).sort(), ["session", "today", "version"]);
+    // Exact keys on purpose: this payload reaches a paired field device, so a key arriving here
+    // unnoticed is exactly what this assertion exists to catch. `capabilities` is the deliberate
+    // ELEC-240 addition -- the role-scoped capability signal, so an offline device needs one call
+    // rather than two on a bad connection -- and it carries the non-office projection, never the
+    // office one.
+    assert.deepEqual(
+      Object.keys(bootstrap).sort(),
+      ["capabilities", "session", "today", "version"],
+    );
+    assert.equal(bootstrap.capabilities.projection, "scoped");
+    assert.equal(bootstrap.capabilities.proof_claimed, false);
     assert.equal(bootstrap.version, 1);
     assert.equal(bootstrap.session.authenticated, true);
     assert.equal(bootstrap.session.user.role, "field");

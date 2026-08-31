@@ -919,6 +919,12 @@ Target gaps:
   to; see [`RECORD-DOCUMENTS-READ-CONTRACT.md`](RECORD-DOCUMENTS-READ-CONTRACT.md). Authoring
   templates in the PWA, merge/exact-main evidence, named-environment activation/readback, deployed
   runtime, business acceptance, and customer proof remain open;
+- honest presentation of unavailable capabilities: the server half ships
+  (`GET /api/v1/capabilities`, embedded in `GET /api/v1/field/bootstrap`), so every role can now
+  distinguish absent, off, on-but-unconfigured, dependency-blocked and indeterminate from an
+  ordinary fault. No PWA surface consumes it yet, so a user still meets a `404` or a `503` at first
+  use; the presentation rules a surface must follow are in
+  [`CAPABILITY-SIGNAL-CONTRACT.md`](CAPABILITY-SIGNAL-CONTRACT.md);
 - the office command palette itself: `GET /api/v1/search` answers, but no PWA shortcut, grouped
   result list, or keyboard navigation consumes it yet;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
@@ -957,6 +963,15 @@ Implemented or represented:
   proof issuer/evidence reference, and `profile_digest_sha256` has no adopted canonical digest
   contract; the UI therefore labels success as repository checks rather than provider-authenticated
   proof;
+- a per-request runtime capability signal, separate from the proof-fact evaluator above and
+  answering a different question: is a capability absent from the build, switched off, on but
+  unconfigured, blocked on a dependency, indeterminate, or reachable. One registry
+  (`workers-bus/src/capability-signal.ts`) is read by both `GET /api/v1/capabilities` and
+  `tools/production-readiness.mjs`, so the runtime answer and the readiness contract cannot
+  diverge; every role receives the subset its permissions reach, and only `owner`/`ops` receive
+  binding names and dependency detail. It reports reachability and never proof — `proof_claimed` is
+  a constant `false` — so it does not and cannot upgrade any label on this page. See
+  [`CAPABILITY-SIGNAL-CONTRACT.md`](CAPABILITY-SIGNAL-CONTRACT.md);
 - temporary Frappe compatibility projection and Hermes;
 - temporary Make/Jotform/RoofRuler compatibility paths.
 

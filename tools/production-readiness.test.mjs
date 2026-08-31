@@ -1825,6 +1825,72 @@ test("repository deployment contract is complete and Frappe-only", async () => {
   assert.equal(result.summary.failed, 0);
 });
 
+/**
+ * Before ELEC-240 the readiness contract covered none of the eight capabilities spec 9.3 names, so
+ * a flag flip on QuickBooks, Newo, Postiz, Hermes desktop or the proposal template passed every
+ * check. These three prove it no longer does -- in both directions, because a capability quietly
+ * becoming available is as much a state change as one quietly switching off.
+ */
+async function capabilityFixture(t, mutate) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-capability-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "workers-bus"), { recursive: true });
+  const wranglerPath = path.join(root, "workers-bus/wrangler.jsonc");
+  const source = await readFile(
+    path.join(DEFAULT_REPO_ROOT, "workers-bus/wrangler.jsonc"),
+    "utf8",
+  );
+  await writeFile(wranglerPath, mutate(source));
+  const result = await validateContract({ repoRoot: root });
+  return (id) => result.checks.find((item) => item.id === id);
+}
+
+test("contract mode catches a capability flag flipped on without its configuration", async (t) => {
+  const checkFor = await capabilityFixture(t, (source) =>
+    source.replace('"QB_OAUTH_ENABLED": "false"', '"QB_OAUTH_ENABLED": "true"'),
+  );
+  const flipped = checkFor("contract.capability.quickbooks_oauth.state");
+  assert.equal(flipped?.status, "fail");
+  // The message has to name the new state, not just report a mismatch: an operator who flipped the
+  // flag needs to learn that what they produced is "on but unconfigured", not "connected".
+  assert.match(flipped.message, /quickbooks_oauth is unconfigured .* but off is recorded/);
+  assert.equal(checkFor("contract.capability.newo.state")?.status, "pass");
+});
+
+test("contract mode catches a capability quietly becoming available", async (t) => {
+  const route = {
+    version: 1,
+    issuer: "facet",
+    source_product: "facet",
+    source_environment: "production",
+    source_tenant_id: "6b0cbf1d-e0a7-4a1f-9b8b-9f2e4a1c77aa",
+    destination_tenant_id: "ironwrap",
+    destination_url: "https://facet.example.invalid/projects",
+  };
+  const checkFor = await capabilityFixture(t, (source) =>
+    source.replace(
+      '"FACET_V2_ROUTES_JSON": "[]"',
+      `"FACET_V2_ROUTES_JSON": ${JSON.stringify(JSON.stringify([route]))}`,
+    ),
+  );
+  // Routes configured, key set still a secret this file cannot see: `unknown`, with the readback
+  // obligation intact, rather than a confident "ready" the file has not earned.
+  const ingest = checkFor("contract.capability.facet_design_ingest.state");
+  assert.equal(ingest?.status, "fail");
+  assert.match(ingest.message, /facet_design_ingest is unknown .* but unconfigured is recorded/);
+  // Its dependent moves with it, so a state change cannot hide one capability behind another.
+  assert.equal(checkFor("contract.capability.facet_native_projection.state")?.status, "fail");
+});
+
+test("contract mode rejects a flag literal no Worker gate accepts", async (t) => {
+  const checkFor = await capabilityFixture(t, (source) =>
+    source.replace('"POSTIZ_ENABLED": "false"', '"POSTIZ_ENABLED": "1"'),
+  );
+  const flag = checkFor("contract.capability.postiz.flag");
+  assert.equal(flag?.status, "fail");
+  assert.match(flag.message, /POSTIZ_ENABLED must be exactly "true" or "false"/);
+});
+
 test("contract mode rejects a self-consistent D1 allowlist that omits a migration table", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
   t.after(() => rm(root, { recursive: true, force: true }));

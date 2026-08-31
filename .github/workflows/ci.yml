@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # `validate-and-test` is the branch ruleset's only required check, so a merge queue
+  # cannot work without this trigger: queued groups would never receive that check and
+  # would stall until they timed out. Adding it while no queue is configured dispatches
+  # nothing, so it is inert until an owner adds the `merge_queue` rule to the ruleset
+  # (ELEC-245). Every job below is unconditional, so a merge group runs the same four
+  # jobs a pull request does, and `concurrency` keys on `github.ref` - unique per queued
+  # group - so a group never cancels a pull request's run or another group's.
+  merge_group:
 
 permissions:
   contents: read

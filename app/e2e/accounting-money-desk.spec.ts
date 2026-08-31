@@ -52,8 +52,13 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
     expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
       MOBILE_WIDTH + 1,
     );
+    // 43.9 rather than 44: a `min-h-11` control measures 43.99998 after the device pixel ratio.
+    // Same tolerance, same reason, as `onboarding.spec.ts`, `capability-honesty.spec.ts`, and
+    // `pipeline-board.spec.ts` — the three suites that were already CI-gated. A bare 44 here made
+    // this file fail intermittently by 0.00002px, which is a rounding artefact and not a control a
+    // thumb can miss; leaving it in place would have made the new CI step flaky (ELEC-249/251).
     expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
-      44,
+      43.9,
     );
   }
 }
@@ -143,7 +148,13 @@ test.describe("Money desk mobile acceptance", () => {
 
   test("the settings page carries reconciliation health on a phone", async ({ page }) => {
     await page.goto("/accounting/quickbooks");
-    await expect(page.getByRole("heading", { name: "QuickBooks connection" })).toBeVisible();
+    // `exact` matters here: Playwright matches an accessible name as a case-insensitive substring
+    // by default, and since ELEC-236 this page also carries an `h2` reading "QuickBooks connection
+    // is turned off". Without it the locator resolves to two headings and dies on strict mode
+    // before asserting anything (ELEC-249). The page title is what this line is about, so pin it.
+    await expect(
+      page.getByRole("heading", { name: "QuickBooks connection", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Reconciliation health" })).toBeVisible();
     await expect(page.getByText("Not re-read recently")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open the money desk" })).toBeVisible();
@@ -167,8 +178,26 @@ test.describe("Money desk mobile acceptance", () => {
     await expect(page.getByRole("heading", { name: "Evidence citations" })).toBeVisible();
     await expect(page.getByText("Aug 13, 2026")).toBeVisible();
     await expect(page.getByText(/Frappe:/).first()).toBeHidden();
-    await expect(page.getByRole("button", { name: "Approve external invoice" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reject" })).toBeVisible();
+    // The candidate above is always readable. The decision below is not, and that is the product
+    // behaviour rather than a defect: `QB_FINAL_INVOICE_ENABLED` is off in the committed reference
+    // configuration, which ELEC-232 verified and `FIXTURE_CAPABILITY_REFERENCE` in
+    // `app/scripts/acceptance-server.mjs` mirrors on purpose. ELEC-236 then made the page withhold
+    // an approval it could never execute instead of offering one that would fail.
+    //
+    // These two lines used to expect "Approve external invoice" and "Reject" to be visible. They
+    // were written before that landed and have failed on every run since; ELEC-249 read the
+    // symptom as a missing button, but no product code is wrong — the expectation was stale, so it
+    // is corrected here rather than deleted (ELEC-251). Asserting the off state is the stronger
+    // claim for the configuration we actually ship: the money screen cannot offer an action that
+    // has nowhere to go. The enabled decision path stays unproven end to end at phone width, and
+    // §8 of the operations annex says so; proving it needs an acceptance mode that serves a
+    // switched-on capability, which is new harness scope and belongs under G2.
+    await expect(
+      page.getByRole("heading", { name: "QuickBooks final-invoice execution is turned off" }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Decision unavailable" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Approve external invoice" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reject" })).toHaveCount(0);
 
     await assertNoHorizontalScroll(page, "final invoice");
     await assertActionsAreReachable(page, "final invoice");

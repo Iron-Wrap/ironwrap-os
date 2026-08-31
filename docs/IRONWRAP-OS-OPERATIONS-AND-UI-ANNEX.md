@@ -604,7 +604,7 @@ configuration-surface change, not a presentation change.
 2. The add-person form collects name, work email, and role; the captured validation/focus state is visible rather than silently discarded.
 3. Existing accounts show owner immutability and explicit role/removal controls for another person.
 
-**Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5), reconfirmed 2026-08-31 on `9686d80e` (ELEC-237/G1.8). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 is now regenerated on the delivered commit below. Note: this suite runs only when someone invokes `test:pwa:onboarding` directly — no CI step sets `ACCEPTANCE_MODE=onboarding`, so this proof is local-only, never CI-gated (ELEC-251).
+**Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5), reconfirmed 2026-08-31 on `9686d80e` (ELEC-237/G1.8). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 is now regenerated on the delivered commit below. **Updated 2026-08-31 (ELEC-251):** this proof was local-only until then, because no CI step set `ACCEPTANCE_MODE=onboarding`; `.github/workflows/ci.yml` now runs `test:pwa:onboarding` on every push, so it is CI-gated from that change forward.
 
 ### 7.9 Any role: a capability that is switched off
 
@@ -635,11 +635,11 @@ claim than "locally validated" implies for the `app test` step specifically.
 
 | Suite / surface | Result | Interpretation |
 |---|---:|---|
-| Accounting desktop scenarios | 3–4 / 6 passed (non-deterministic) | Two assertions fail every run (`app/e2e/accounting-money-desk.spec.ts:144`, `:156`) — a strict-mode heading collision and a missing "Approve external invoice" button; a third (a 44px touch-target check) failed once in three runs by 0.00002px, likely rendering-precision noise. Filed as ELEC-249. This suite is never run in CI (no step sets `ACCEPTANCE_MODE=accounting`) — filed as ELEC-251. |
+| Accounting desktop scenarios | 6 / 6 passed | **Amended 2026-08-31 (ELEC-251)** from the 3–4 / 6 the ELEC-237 run recorded; re-run 3/3 clean on that change's branch over `56925aa4`. All three findings were in the spec, not on the money desk. The strict-mode collision at `:144` was a non-exact locator matching both the page title and the "QuickBooks connection is turned off" heading ELEC-236 added. The "missing Approve external invoice button" at `:156` was not missing: `QB_FINAL_INVOICE_ENABLED` is off in the committed reference configuration (verified by ELEC-232 and mirrored on purpose by the acceptance fixture), so ELEC-236 correctly withholds a decision that cannot execute; the assertion predated that and now asserts the off state. The 44px touch-target check was the 0.00002px rounding artefact and now carries the 43.9 tolerance the already-CI-gated mobile specs use. ELEC-249 is closed by this disposition. The suite is CI-gated from this change forward. |
 | Customer portal mobile scenarios | 4 / 4 passed | Current portal fixture behavior matched targeted assertions. |
 | Owner/reception/sales/service targeted desktop scenarios | 4 / 4 passed | The selected office views rendered and met their targeted assertions. Ran clean in two isolated repeats; a touch-target check in `service-calls.spec.ts` failed once under concurrent execution (0.00001px short of 44px) but passed in both isolated reruns — the same rendering-precision pattern as the accounting row, not treated as a distinct scenario failure. |
 | Production-plan targeted scenario | 0 / 1 passed | Held failing on purpose: the app offers no route to a schedule check at all, and this is the only harness signal pointing at that gap. Gap owned by **ELEC-241** under G3 (the test file's inline comment at `app/e2e/production-plan.spec.ts:113` still says "owner ELEC-239" — a duplicate filed the same day; the PO confirmed ELEC-241 is the canonical, better-scoped issue and is reconciling the duplicate separately, out of this slice). |
-| Owner onboarding mobile scenarios | 6 / 6 passed | Up from 4/6 on the previous receipt — ELEC-233's fixture repair confirmed on this commit. Never run in CI (ELEC-251), same as the accounting row. |
+| Owner onboarding mobile scenarios | 6 / 6 passed | Up from 4/6 on the previous receipt — ELEC-233's fixture repair confirmed on this commit. **Amended 2026-08-31 (ELEC-251):** CI-gated from that change forward, and re-confirmed 3/3 clean after the suite was moved off acceptance port 4176, which it had shared with `test:pwa:board`. |
 | Field Today capture | 4 / 5 passed | Proves the pictured fixture only; it was not a full-day offline test (that real-device exercise belongs to G3). This run's 5th assertion is a WCAG AA axe scan, and it now fails: a serious color-contrast violation (~3.1–3.2:1 against a required 4.5:1) on the persistent Safety navigation entry. New finding, reproduced in 2/2 isolated runs. Filed as ELEC-250. |
 
 Supplementary suites also exercised on this commit, all green and all CI-gated: `test:pwa:board`
@@ -651,12 +651,18 @@ two complementary runs, matching §7.9's evidence).
 this checkout under a mocked acceptance server, nothing more. It is not merge, deploy,
 configuration, runtime health, business acceptance, or customer validation — none of that exists
 for this commit (see the acceptance bundle in the ELEC-237 evidence comment). CI ran on this exact
-commit (`9686d80e`, run `33425734349`) and is green, but CI's own suite selection does not cover
-the accounting or onboarding scenarios above (ELEC-251), so "CI green" and "this receipt's rows"
-are two different, only partially overlapping claims — do not read one as backing the other.
-Three rows above carry named owners and open dates rather than a closed disposition: ELEC-249
-(accounting, filed 2026-08-31), ELEC-250 (field WCAG, filed 2026-08-31), and ELEC-251 (CI gap,
-filed 2026-08-31). The production-plan row's gap is owned by ELEC-241 under G3 — see above.
+commit (`9686d80e`, run `33425734349`) and is green, but on that commit CI's own suite selection
+did not cover the accounting or onboarding scenarios above, so "CI green" and "this receipt's rows"
+were two different, only partially overlapping claims — do not read the historical run as backing
+the whole table. **Amended 2026-08-31 (ELEC-251):** both suites now have their own CI steps, so
+from that change forward the accounting and onboarding rows are gated on every push rather than on
+whoever last ran the script locally. That is a gate, not a re-proof of `9686d80e`: the rows above
+still carry their own run attribution, and the first CI run to actually execute them is the one on
+the ELEC-251 pull request.
+One row above still carries a named owner and an open date rather than a closed disposition:
+ELEC-250 (field WCAG, filed 2026-08-31). ELEC-249 (accounting, filed 2026-08-31) was closed by
+ELEC-251's disposition — see the accounting row. The production-plan row's gap is owned by
+ELEC-241 under G3 — see above.
 
 ## 9. Process-to-flow-to-UI traceability
 

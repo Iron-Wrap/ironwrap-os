@@ -181,6 +181,18 @@ jobs:
         run: npm run test:pwa:capabilities --prefix app
       - name: Run app Playwright e2e (capability honesty, accounting session)
         run: npm run test:pwa:capabilities:accounting --prefix app
+      # The money desk is the accounting role's whole surface, and its spec self-skips unless it is
+      # handed an accounting session. No step above sets one, so the entire file reported "6 skipped"
+      # under `test:pwa` and the annex §8 "Accounting desktop scenarios" row was only ever proven by
+      # whoever last ran the script on a laptop. Two deterministic failures shipped to `main` through
+      # a green CI run that way (ELEC-249, root-caused and closed as stale assertions in ELEC-251).
+      - name: Run app Playwright e2e (money desk, accounting session)
+        run: npm run test:pwa:accounting --prefix app
+      # Same hole on the onboarding side: a brand-new company that has named nothing yet is a state
+      # only `ACCEPTANCE_MODE=onboarding` serves, so `test:pwa` skipped this file too and the annex's
+      # "Owner onboarding mobile scenarios" row was local-only evidence (ELEC-251).
+      - name: Run app Playwright e2e (owner onboarding, onboarding session)
+        run: npm run test:pwa:onboarding --prefix app
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types

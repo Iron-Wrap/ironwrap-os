@@ -206,6 +206,10 @@ describe("ProductionRunwayPage", () => {
     // The owner's schedule-request entry points were retired with the route they led to: the
     // `/api/v1/production-schedule-approvals` API has answered 404 since the IRO-195 D1 cutover
     // (#132) replaced it with the native `POST /api/v1/jobs/{job}/schedule` (ELEC-157 item 16).
+    // That retirement is half-finished, and this test should not be read as saying otherwise: the
+    // successor shipped its API half (`production-api.ts` `scheduleProductionJob`, unit-tested) and
+    // never its UI half, so nothing in the app currently reaches a schedule check for a job that is
+    // ready for one. ELEC-239 owns the replacement screen.
     expect(screen.queryByRole("link", { name: "Schedule requests" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ready to check" })).toBeVisible();
@@ -221,7 +225,13 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A",
     );
+    // Records today's gap, not a design choice: JOB-D is `ready_for_review` with
+    // `scheduling_preparation_allowed: true` and still offers no way into a schedule check. The
+    // acceptance assertion in `e2e/production-plan.spec.ts` demands that link and stays red until
+    // ELEC-239 ships the destination screen; the two tests describe the same missing UI half from
+    // opposite sides, and this line moves with that issue rather than outliving it.
     expect(screen.queryByRole("link", { name: /Start schedule check/ })).not.toBeInTheDocument();
+    // The retired flow dispatched from buttons; a schedule check is navigation, never a button here.
     expect(screen.queryByRole("button", { name: /schedule|dispatch/i })).not.toBeInTheDocument();
     expect(screen.getByText("JOB-A")).not.toBeVisible();
     await userEvent.setup().click(screen.getAllByText("System details")[0]!);

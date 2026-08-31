@@ -89,7 +89,15 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await expect(page.getByRole("link", { name: /People/ })).toBeVisible();
     await expect(page.getByRole("link", { name: /Crew phones/ })).toBeVisible();
     // The company has not said who it is yet, and the list says so rather than looking finished.
-    await expect(page.getByText("Not set yet")).toBeVisible();
+    // "Later" is the current word for that state: PR #165 replaced the old `Set` / `Not set yet`
+    // pair computed from `profile.updated_at` with the four-state `done | in_progress | skipped |
+    // later` model in `company-setup-store.ts`, which `setup-page.tsx` renders. The locator is
+    // scoped to the Company details row on purpose — People and Crew phones read "Later" too on a
+    // fresh tenant, so an unscoped match would pass without proving anything about the company.
+    await expect(
+      page.getByRole("link", { name: /Company details/ }).getByText("Later"),
+    ).toBeVisible();
+    await expect(page.getByText("0 of 5 setup areas complete.")).toBeVisible();
 
     await assertNoHorizontalScroll(page, "setup");
     await assertActionsAreReachable(page, "setup");

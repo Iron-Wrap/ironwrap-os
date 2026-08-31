@@ -506,7 +506,7 @@ superseded и archived. Empty state обязан различать отсутс
 2. Summary направляет сначала к stopped work и показывает время построения списка.
 3. Failed readiness condition отображается как “Work stopped”; scheduling UI не обходит owning gate.
 
-**Доказательство:** локально отрисованная source surface. **Открытый acceptance finding:** текущая fixture больше не показывает ожидаемую тестом ссылку `Start schedule check for IW-1004`, поэтому targeted assertion падает.
+**Доказательство:** локально отрисованная source surface. **Открытый acceptance finding — владелец ELEC-239, зафиксировано 2026-08-31:** production plan вообще не дает пути к schedule check. Job в “Ready to check” с `scheduling_preparation_allowed: true` показывает только “Open job”, этот флаг нигде не читается, а маршрута `/production/schedule/{job}` не существует. Cutover IRO-195 убрал точку входа эпохи approvals и выпустил API-половину преемника (`POST /api/v1/jobs/{job}/schedule`, покрыта unit-тестами) без его UI-половины. Это product defect, а не design choice и не просто устаревшая fixture: targeted assertion production-plan намеренно оставлен падающим, потому что это единственный сигнал в стенде, указывающий на этот разрыв. Он закроется, когда ELEC-239 выпустит экран назначения и ссылку на него.
 
 ### 7.5 Accounting: разделение intent, provider, mismatch и issue
 
@@ -546,7 +546,7 @@ superseded и archived. Empty state обязан различать отсутс
 2. Форма собирает name, work email и role; captured validation/focus state видим и не теряет данные молча.
 3. Existing accounts показывают immutable owner и явные role/removal controls для другого человека.
 
-**Доказательство:** локально отрисованная source surface. **Открытые acceptance findings:** два onboarding assertions устарели относительно current UI (`Not set yet` отсутствует, `Company name` не найден); прошли 4 из 6 scenarios.
+**Доказательство:** локально отрисованная source surface; прошли 6 из 6 targeted onboarding scenarios (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5). **Закрыто 2026-08-31 (ELEC-233):** оба ранее открытых finding оказались дрейфом acceptance-fixture, а не дефектами UI. Fixture заполняла компанию уже готовым именем, поэтому setup list никогда не доходил до состояния, которое видит новая компания — теперь reset дает компанию без имени, и шаг company читается как “Later”, текущее слово для “здесь еще ничего не сделано”. Ответ fixture по company-profile также не содержал полей, обязательных по клиентскому контракту, поэтому `/settings/company` отрисовывал error state и этот suite вообще не проверял форму; теперь fixture отдает тот же envelope, что и Worker. §8 хранит receipt до ремонта, пока он не будет перегенерирован на поставленном коммите.
 
 ## 8. Receipt приемочного стенда для этого приложения
 

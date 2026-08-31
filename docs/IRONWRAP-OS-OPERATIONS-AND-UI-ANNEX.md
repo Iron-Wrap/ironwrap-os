@@ -506,7 +506,7 @@ configuration, no current data, or a failed dependency; these are not interchang
 2. The summary directs the user to stopped work first and states when the list was made.
 3. A failed readiness condition is rendered as “Work stopped”; scheduling presentation cannot bypass the owning gate.
 
-**Evidence:** locally rendered source surface. **Open acceptance finding:** the current fixture no longer exposes the test-expected `Start schedule check for IW-1004` link, so the targeted production-plan assertion fails.
+**Evidence:** locally rendered source surface. **Open acceptance finding — owner ELEC-239, recorded 2026-08-31:** the production plan offers no route to a schedule check at all. A job in “Ready to check” with `scheduling_preparation_allowed: true` renders only “Open job”, no code reads that flag, and no `/production/schedule/{job}` route exists. The IRO-195 cutover retired the approval-era entry point and shipped the successor’s API half (`POST /api/v1/jobs/{job}/schedule`, unit-tested) without its UI half. This is a product defect, not a design choice and not merely a stale fixture: the targeted production-plan assertion is held failing on purpose, because it is the only signal in the harness that points at the gap. It clears when ELEC-239 delivers the destination screen and the link that reaches it.
 
 ### 7.5 Accounting: intent, provider, mismatch, and issue separation
 
@@ -546,7 +546,7 @@ configuration, no current data, or a failed dependency; these are not interchang
 2. The add-person form collects name, work email, and role; the captured validation/focus state is visible rather than silently discarded.
 3. Existing accounts show owner immutability and explicit role/removal controls for another person.
 
-**Evidence:** locally rendered source surface. **Open acceptance findings:** two onboarding assertions are stale against the current UI (`Not set yet` is absent and `Company name` is not found); four of six targeted onboarding scenarios passed.
+**Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 carries the pre-repair receipt until it is regenerated on the delivered commit.
 
 ## 8. Acceptance-harness receipt for this annex
 

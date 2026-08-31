@@ -392,31 +392,75 @@ KPI, retention rule и exception path.
 
 ### 9.2 Инвентарь возможностей продукта и зрелость
 
+Состояние снимка использует шесть канонических proof classes из
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels) — Source-present,
+Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated — а не прежний
+словарь и не голый квалификатор «Сильно»/«Частично» вместо класса. Там, где для покрытого объема
+возможности есть именованная воспроизводимая проверка, эта проверка процитирована и заслуживает
+Locally-validated для того объема, который она покрывает; здесь записан самый слабый класс, который
+заслуживает любая часть этого покрытого объема. `Partial` — ортогональный квалификатор, описывающий
+объем, а не силу доказательства, и никогда не подменяет класс. На момент этого прохода ни одна
+возможность ниже не цитирует доказательства уровня Configured, Runtime-proven, Business-accepted или
+Customer-validated: ни у одной возможности флаги, секреты и деплой не связаны одновременно в именованной
+среде согласно проверенному аудиту флагов в §9.3 `docs/IRONWRAP-OS-PRODUCT-TEAM-SPEC.md`, и ни одна
+строка в `docs/CAPABILITY-MATRIX.md` или `docs/AI-NATIVE-ARCHITECTURE.md` не утверждает свежий
+аутентифицированный readback, принятие самой возможности именованным accountable человеком или
+реальное использование клиентом.
+
 | Возможность | Пользовательский результат | Состояние снимка | Обязательное доказательство закрытия |
 |---|---|---|---|
-| Identity, session, role navigation, device pairing | Правильный актер попадает в ограниченную поверхность | Реализовано в коде | Deployed tenant isolation, revocation, recovery и real-device proof |
-| Now, Today, approvals, exceptions, search | Каждая роль видит приоритетную допустимую работу | Реализовано в коде; search уже существует, несмотря на старую формулировку matrix | Runtime permission, staleness и exception-resolution scenarios |
-| Intake, lead triage, customer/property/job conversion | Один owned demand thread без duplicate provider identity | Сильная реализация в коде | Real dual-brand intake, import reconciliation, bridge retirement |
-| Survey, measurement, Facet evidence | Атрибутированные geometry/design inputs и uncertainty | Частично | Real-site calibration, conflicting-source tests, configured Facet delivery |
-| Estimate, quote, revisions, proposal publication | Точная проверяемая коммерческая опция | Частично, сильный source path | Configured template/delivery/tax/readback и deterministic reference journey |
-| Customer acceptance и deposit derivation | Точное решение создает правильный financial intent | Реализовано в коде, provider proof открыт | Identity/revision scenarios плюс QuickBooks sandbox/readback |
-| Production gates и derived phase | Readiness объяснима и не обходится | Сильная реализация в коде | Live issuer freshness, stale/conflict injection, решение по phase vocabulary |
-| Assignments и work packages | Field получает точные текущие полномочия | Сильная реализация в коде | Multi-worker и real-device offline full-day proof |
-| Safety | Stops, incidents, readiness и corrective action остаются authoritative | Сильная реализация в коде | Real-device drill и live reporting/readback там, где требуется |
-| Quality, change, closeout | Работа и deviations закрываются независимыми доказательствами | Частично | Defect/hold/change propagation и real closeout/recovery |
-| Inventory, warehouse, procurement | Материалы и custody сохраняются через работу | Частично | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
-| Shop manufacturing | Controlled release, QC, yield и bundle handover | Частично | Physical event capture, tooling/maintenance, dispatch и billing proof |
-| Scheduling/dispatch | Conflict-free assignment из текущих фактов | Частично | Capacity/weather/material inputs и dispatcher acceptance |
-| Fleet/equipment/cargo | Unsafe или wrong-custody assets нельзя выпустить | Частично, mobile route реализован | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
-| Accounting и QuickBooks | Approved intent становится provider-posted reconciled truth | Частично, execution/config proof открыт | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
-| Service/warranty/recovery | Complaint превращается в attributable verified remedy | Сильный частичный lifecycle | Dispatch/portal/mobile integration, provider recovery settlement |
-| Customer portal/public estimator | Клиент безопасно принимает решение и самообслуживается | Частично, поверхности в коде | Accessibility, identity, real customer scenarios, public config proof |
-| Pipeline/form/document configuration | Операционные views меняются без обхода authority | Частично | Merged UI, typed command proof, runtime document generation/readback |
-| Provider manifests и readiness | Capabilities ломаются явно и безопасно | Частично | Named-environment dependency health, proof TTL, degraded/recovery drills |
-| Hermes/MCP/AI coordination | Bounded drafting и proposals уменьшают routine work | Default-off narrow pilot, целевое состояние | Deterministic reference journey до model-assisted trials |
-| Frappe compatibility и retirement | Legacy projection не возвращает себе authority | Retirement in progress | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
-| White label / Operating Packs | Повторяемая безопасная настройка tenant без drift | Частично, целевое состояние | Second real tenant, isolation, upgrade/rollback compatibility |
-| Governance, workforce, facility, insurance, compliance | Whole-company controls соединяются с operating facts | В основном target или partial | Owning objects, issuer readbacks, drills, accountable signoffs |
+| Identity, session, role navigation, device pairing | Правильный актер попадает в ограниченную поверхность | Source-present. Device pairing/invites достигают Locally-validated (`workers-bus/test/app-user-invites.test.ts`, 23 случая); session и role-navigation не цитируют ни одной прошедшей проверки. | Deployed tenant isolation, revocation, recovery и real-device proof |
+| Now, Today, approvals, exceptions, search | Каждая роль видит приоритетную допустимую работу | Source-present. Backend search достигает Locally-validated (`workers-bus/test/app-search.test.ts`), но не подключен ни к одной поверхности PWA; доски Now/Today/approvals/exceptions не цитируют ни одной прошедшей проверки. | Runtime permission, staleness и exception-resolution scenarios |
+| Intake, lead triage, customer/property/job conversion | Один owned demand thread без duplicate provider identity | Source-present. Импорт JobNimbus/CRM достигает Locally-validated только против синтетической fixture; собственный D1 import adapter, реальный dual-brand intake и bridge retirement отсутствуют. | Real dual-brand intake, import reconciliation, bridge retirement |
+| Survey, measurement, Facet evidence | Атрибутированные geometry/design inputs и uncertainty | Source-present. Blank-quote contract Facet v2 достигает Locally-validated (`tools/validate-facet-blank-quote-contract.mjs`); live measurement OCR остается заблокированным на live staging URL, участии owner и рабочем OCR-провайдере, real-site calibration не проверена. | Real-site calibration, conflicting-source tests, configured Facet delivery |
+| Estimate, quote, revisions, proposal publication | Точная проверяемая коммерческая опция | Source-present. Маршруты quote/proposal/publication достижимы; для самого коммерческого пути не процитировано ни одной прошедшей проверки, а configured provider/tax/readback reconciliation явно не доказан. | Configured template/delivery/tax/readback и deterministic reference journey |
+| Customer acceptance и deposit derivation | Точное решение создает правильный financial intent | Source-present. Acceptance и deposit-derivation production-reachable и транзакционно согласованы; provider mapping, tax policy и authority-ceiling конфигурация остаются заблокированы, прошедшая проверка не процитирована. | Identity/revision scenarios плюс QuickBooks sandbox/readback |
+| Production gates и derived phase | Readiness объяснима и не обходится | Source-present. Сообщения об authority-refusal закреплены захватами против live local stack; у PWA вообще нет поверхности approval для production-schedule, поэтому approver остается API-клиентом. | Live issuer freshness, stale/conflict injection, решение по phase vocabulary |
+| Assignments и work packages | Field получает точные текущие полномочия | Source-present. Схема `0028` work-package-actions задеплоена в production (деплой `987ccbc6`, 2026-08-13); её последующее расширение достигает Locally-validated (`workers-bus/test/app-migration.test.ts`), что является доказательством схемы/хранилища, а не самой возможности. Multi-worker acknowledgement, полное evidence-slot enforcement и real-device acceptance остаются открытыми. | Multi-worker и real-device offline full-day proof |
+| Safety | Stops, incidents, readiness и corrective action остаются authoritative | Locally-validated (repository-тесты, включая один emergency drill, покрывающий rescue, failed PPE, дублирующийся offline-отчет, позднее corrective action и independent release — `app/src/field/safety-action-panel.test.tsx` плюс покрытие на стороне Worker). Нет deployment, runtime, business-acceptance или real-device proof. | Real-device drill и live reporting/readback там, где требуется |
+| Quality, change, closeout | Работа и deviations закрываются независимыми доказательствами | Source-present. Нет ни narrative-раздела реализации, ни процитированной прошедшей проверки для quality, change или closeout, кроме строки в сводной таблице зрелости. | Defect/hold/change propagation и real closeout/recovery |
+| Inventory, warehouse, procurement | Материалы и custody сохраняются через работу | Locally-validated (`workers-bus/test/inventory-control.test.ts`, `workers-bus/test/inventory-control-api.test.ts` — инварианты сохранения и conserving movements). Нет поверхности PWA, provider adapter, deployment, business-acceptance proof; supplier-пакеты остаются только внутренними. | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
+| Shop manufacturing | Controlled release, QC, yield и bundle handover | Source-present. Прошедшая проверка нигде в matrix не процитирована; shop travelers и assemblies остаются target-only по собственной honesty-заметке matrix (см. открытый пункт ниже о видимом расхождении с таблицей зрелости). | Physical event capture, tooling/maintenance, dispatch и billing proof |
+| Scheduling/dispatch | Conflict-free assignment из текущих фактов | Source-present. D1 assignment-revision/conflict-check ledger существует; scheduler capacity остается target-only, solver или booking-поверхности нет. Прошедшая проверка не процитирована. | Capacity/weather/material inputs и dispatcher acceptance |
+| Fleet/equipment/cargo | Unsafe или wrong-custody assets нельзя выпустить | Locally-validated (`frappe-apps/ironwrap_roofing/tests/test_fleet_operations_policy.py`, `.../test_fleet_panel_api.py` точно закрепляют release fence). Photo evidence capture отсутствует, а не просто не доказана — ни один code path её не пишет. Нет deployment, runtime, real-vehicle или business-accepted proof. | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
+| Accounting и QuickBooks | Approved intent становится provider-posted reconciled truth | Source-present. QuickBooks OAuth и final-invoice execution выключены во всех средах (машинно-проверяемый снимок `docs/AI-NATIVE-ARCHITECTURE.md`); provider mapping, tax и readback остаются неполными, ни один accountable человек не подписал. | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
+| Service/warranty/recovery | Complaint превращается в attributable verified remedy | Locally-validated (Multica ELEC-21 провел lifecycle сквозным образом из реального браузера против local stack, нашел два дефекта, оба исправлены и теперь покрыты тестами; именованные наборы: 867 Worker-тестов, 337 Frappe-тестов, 474 PWA-теста, 267/267 проверок deployment-контракта). Cost recovery еще не является effect-runtime adapter; ни один supplier, manufacturer или insurer не вызывается ни из одного code path; Playwright/MCP-доказательства не перезапускались на этой ветке. Нет deployment, runtime или business-acceptance proof. | Dispatch/portal/mobile integration, provider recovery settlement |
+| Customer portal/public estimator | Клиент безопасно принимает решение и самообслуживается | Locally-validated (`app/e2e/customer-portal-materials.spec.ts` прогоняет сравнение и decision на viewport Pixel 5 с проверками no-horizontal-scroll и 44px-target). Public estimator выключен в production и staging (машинно-проверяемый снимок `docs/AI-NATIVE-ARCHITECTURE.md`). Нет deployment, runtime, business-acceptance или customer proof. | Accessibility, identity, real customer scenarios, public config proof |
+| Pipeline/form/document configuration | Операционные views меняются без обхода authority | Source-present. Read model документов достигает Locally-validated (`workers-bus/test/record-documents-api.test.ts`); поверхности PWA для администратора — drag-and-drop, schema-form, document-generation — не построены, а флаг document-generation равен false во всех checked-in средах. | Merged UI, typed command proof, runtime document generation/readback |
+| Provider manifests и readiness | Capabilities ломаются явно и безопасно | Source-present. Это repository capability only: ни один tenant не сконфигурирован и не доказан, пока governed внешний путь не добавит approved manifests и свежие provider readbacks; прошедшая проверка для самого readiness evaluator не процитирована. | Named-environment dependency health, proof TTL, degraded/recovery drills |
+| Hermes/MCP/AI coordination | Bounded drafting и proposals уменьшают routine work | Source-present. Hermes — выключенный, single-pilot draft-путь без resident context-plan-policy-permit-action-readback-reconciliation координатора; прошедшая проверка для самого coordination claim не процитирована. | Deterministic reference journey до model-assisted trials |
+| Frappe compatibility и retirement | Legacy projection не возвращает себе authority | Source-present. Frappe остается опциональной, не блокирующей проекцией; release-admission chain прямо называет недоказанными «no reachable adapter, provider command, staging/production Frappe identity, or live receipt»; cutover не завершен. | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
+| White label / Operating Packs | Повторяемая безопасная настройка tenant без drift | Source-present. В matrix есть только одна строка сводной таблицы и одно упоминание DocType; narrative-реализация или прошедшая проверка не процитированы. | Second real tenant, isolation, upgrade/rollback compatibility |
+| Governance, workforce, facility, insurance, compliance | Whole-company controls соединяются с operating facts | Source-present. У legal/licence (Authority Records) и workforce (Crew Profile projections) есть реальный субстрат; governance, facility и insurance остаются почти полностью target/absent. Прошедшая проверка не процитирована ни для одной под-области. | Owning objects, issuer readbacks, drills, accountable signoffs |
+
+Открытые пункты, которые этот проход не смог урегулировать — зафиксированы, а не молча оставлены на
+прежнем значении:
+
+- **Расхождение объема Shop manufacturing.** Заметка «Sep 1 remaining honesty» в
+  `docs/CAPABILITY-MATRIX.md` утверждает, что shop travelers и assemblies остаются target-only, а её же
+  таблица «Capability-by-capability target» описывает signed release/reservation/setup/QC/yield/
+  custody-handover функциональность как уже существующую. Оба утверждения не могут быть полной картиной
+  одной и той же возможности одновременно. Владелец: product owner IronWrap OS (владелец IRO-46/IRO-47).
+  Урегулирующее доказательство: свежее чтение shop DocTypes `frappe-apps/ironwrap_roofing` и их тестового
+  покрытия против обоих утверждений.
+- **Строки production-plan schedule-check и owner-onboarding.** ELEC-233 (G1.4) в процессе и может
+  изменить строку production gates/derived phase (schedule-check) и строку identity/session
+  (owner-onboarding, т.е. поверхность Settings/company-setup). Обе помечены здесь тем, что они
+  заслуживают сегодня; перепроверить против green-подтверждения ELEC-233 после его landing. Владелец:
+  ELEC-233.
+- **Собственная таблица `docs/CAPABILITY-MATRIX.md` «Capability-by-capability target»** (26 строк по
+  доменам) и «Seven-area maturity snapshot» (7 строк) все еще используют прежний словарь свободной прозы
+  («Strong»/«Partial:»/«Mixed») вместо шести канонических классов. Указатель «Status vocabulary» в
+  `DOCUMENTATION-CONTRACT.md` называет relabeling «строк в этом файле» частью G1.6, но Multica-issue этого
+  прохода (ELEC-235) ограничил объем 23 строками выше плюс header-преамбулой matrix. Relabeling этих
+  дополнительных ~33 строк вне объема здесь и отслеживается как fast-follow. Владелец: следующая
+  документационная лейн G1 / PO для назначения. Урегулирующее доказательство: тот же evidence audit,
+  примененный к этим строкам.
+- **Два default-off/unconfigured находки, которые G1.3 (ELEC-232) припарковал под этой целью**: разделение
+  `ERPNEXT_BASE_URL` между `deploy/env.example:19` и `workers-bus/wrangler.jsonc:180`, и
+  `tools/production-readiness.mjs`, не покрывающий ни одну из восьми возможностей, названных G1.3. Ни то,
+  ни другое не является решением о proof-label; обоим нужен инженерный фикс. Владелец: PO для назначения
+  платформенному seat.
 
 ### 9.3 Проверенное состояние флагов возможностей в reference configuration
 

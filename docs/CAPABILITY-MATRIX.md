@@ -2,16 +2,16 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-31
-Latest phase delta verified: 2026-08-27 (IRO-242 branch-local schema fields/templates and the
-default-off R2 generation/effect/readback/reconciliation path pass focused repository tests. This is
-unmerged source evidence only, not exact-main CI, activation, deployment, runtime, business
-acceptance, customer validation, or production proof.)
-Release activation delta verified: 2026-08-29 (branch-local workflow source invokes the trusted-base
-Frappe adapter preflight and promote/readback/rollback commands, binds their signed receipts, and
-persists incomplete automatic rollback as recovery-required evidence. This is unmerged source and
-test evidence only, not configured provider, deployment, runtime, business acceptance, customer
-validation, or production proof.)
+Last verified: 2026-08-31 (Multica G1.6 proof-label relabeling pass)
+Latest phase delta verified: 2026-08-27 — Locally-validated (IRO-242 branch-local schema
+fields/templates and the default-off R2 generation/effect/readback/reconciliation path pass focused
+repository tests on that branch checkout). Not Configured, Runtime-proven, Business-accepted, or
+Customer-validated; not exact-main CI, activation, deployment, or production proof.
+Release activation delta verified: 2026-08-29 — Locally-validated (branch-local workflow source
+invokes the trusted-base Frappe adapter preflight and promote/readback/rollback commands, binds
+their signed receipts, and persists incomplete automatic rollback as recovery-required evidence;
+source and test evidence only on that branch checkout). Not Configured, Runtime-proven,
+Business-accepted, or Customer-validated.
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary

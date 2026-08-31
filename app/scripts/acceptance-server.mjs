@@ -1930,10 +1930,24 @@ const fixtureOwnerSession = {
   session_expires_at: "2036-07-10T12:00:00.000Z",
 };
 
+/**
+ * A tenant nobody has answered for yet.
+ *
+ * `company_name` is empty on purpose: the onboarding suite resets to this state to prove the
+ * setup list tells a brand-new company what it still has to say about itself. Seeding a name here
+ * made the company step read "Done" straight after a reset, so the fresh-company assertions were
+ * being answered by a company that was already named (ELEC-233, disposition on ELEC-231).
+ *
+ * The shape mirrors `companyProfileDefaults` in `workers-bus/src/company-setup-store.ts`:
+ * `profile_version` 0 with `is_default: true` is "these are deployment defaults, nobody has
+ * confirmed them", and the first successful save moves it to 1 / `false`.
+ */
 const onboardingDefaults = () => ({
   profile: {
     tenant_id: "freshco",
-    company_name: "FreshCo Exteriors",
+    profile_version: 0,
+    is_default: true,
+    company_name: "",
     brand_name: "FreshCo",
     service_area: "",
     phone: "",
@@ -1946,9 +1960,14 @@ const onboardingDefaults = () => ({
     postal_code: "",
     country: "",
     brand_labels: {},
+    time_zone: "America/Edmonton",
+    currency: "CAD",
+    week_start: "sunday",
+    logo_ref: null,
     logo: null,
     updated_at: null,
     updated_by: null,
+    updated_by_user_id: null,
   },
   users: [
     {
@@ -2099,10 +2118,44 @@ function onboardingSetupProgressPayload() {
   };
 }
 
+/** The exact fields `missingCompanyFields` requires before the company step can read done. */
+const ONBOARDING_REQUIRED_COMPANY_FIELDS = [
+  "company_name",
+  "brand_name",
+  "phone",
+  "address_line1",
+  "city",
+  "region",
+  "postal_code",
+  "time_zone",
+  "currency",
+  "week_start",
+];
+
+/**
+ * The company-details envelope, in the shape `companyProfileResponseSchema` actually parses.
+ *
+ * This payload used to stop at `version` / `profile` / `logo_url` / `logo_limits` /
+ * `public_brands` and omit everything the contract grew afterwards, so the Zod parse in
+ * `apiRequest` threw and `/settings/company` rendered "Company details could not load" for the
+ * whole harness. The screen was never mounted, which is why the acceptance run reported a missing
+ * `Company name` field: the suite was blind on this surface rather than disagreeing with it
+ * (ELEC-233, disposition on ELEC-231). The real Worker has emitted the full envelope since
+ * `company-setup-api.ts` `companyProfileEnvelope`; this mirrors it.
+ */
 function onboardingProfilePayload() {
   return {
     version: 1,
+    read_model_generated_at: "2026-08-22T12:30:00.000Z",
+    allowed_actions: ["company_profile.read", "setup_progress.read", "company_profile.update"],
     profile: onboardingState.profile,
+    // What the tenant looks like before an owner has confirmed anything: the deployment-time
+    // conventions, with every field only a person can answer left blank.
+    defaults: onboardingDefaults().profile,
+    missing_fields: ONBOARDING_REQUIRED_COMPANY_FIELDS.filter(
+      (field) => String(onboardingState.profile[field] ?? "").trim().length === 0,
+    ),
+    week_starts: ["sunday", "monday", "saturday"],
     logo_url: onboardingState.profile.logo
       ? `/public/company-logo?v=${onboardingState.profile.logo.version}`
       : null,
@@ -2173,12 +2226,19 @@ async function routeOnboarding(request, requestUrl, method) {
       if (body.website && !/^https?:\/\/\S+$/.test(String(body.website))) {
         return { status: 400, body: { error: "invalid_website" } };
       }
+      // `expected_profile_version` is the request's optimistic-concurrency claim, not a profile
+      // field, so it is dropped rather than merged into stored state.
+      const fields = { ...body };
+      delete fields.expected_profile_version;
       onboardingState.profile = {
         ...onboardingState.profile,
-        ...body,
+        ...fields,
         tenant_id: "freshco",
+        profile_version: onboardingState.profile.profile_version + 1,
+        is_default: false,
         updated_at: "2026-08-22T12:30:00.000Z",
         updated_by: "ada@freshco.example",
+        updated_by_user_id: "appu_acceptance_owner",
       };
       return { status: 200, body: onboardingProfilePayload() };
     }
@@ -2191,6 +2251,9 @@ async function routeOnboarding(request, requestUrl, method) {
       }
       onboardingState.profile = {
         ...onboardingState.profile,
+        profile_version: onboardingState.profile.profile_version + 1,
+        is_default: false,
+        logo_ref: "/public/company-logo?v=acceptance",
         logo: {
           content_type: String(body.content_type ?? "image/png"),
           byte_size: String(body.data_base64).length,
@@ -2201,7 +2264,12 @@ async function routeOnboarding(request, requestUrl, method) {
       return { status: 200, body: onboardingProfilePayload() };
     }
     if (method === "DELETE") {
-      onboardingState.profile = { ...onboardingState.profile, logo: null };
+      onboardingState.profile = {
+        ...onboardingState.profile,
+        profile_version: onboardingState.profile.profile_version + 1,
+        logo_ref: null,
+        logo: null,
+      };
       return { status: 200, body: onboardingProfilePayload() };
     }
   }

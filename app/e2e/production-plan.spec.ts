@@ -110,6 +110,21 @@ test.describe("Production plan acceptance", () => {
     await expect(page.getByText("JOB-A", { exact: true })).toBeHidden();
 
     const jobLink = page.getByRole("link", { name: "Open IW-1001" });
+    // KNOWN FAILING — owner ELEC-239, recorded 2026-08-31 (PO decision on ELEC-233/G1).
+    //
+    // IW-1004 sits in "Ready to check" with six ready gates and
+    // `scheduling_preparation_allowed: true`, and the app offers no route to a schedule check at
+    // all: `production-runway-page.tsx` renders only "Open job", nothing reads
+    // `scheduling_preparation_allowed`, and no `/production/schedule/$jobId` route exists. The
+    // successor API `POST /api/v1/jobs/{job}/schedule` shipped and is unit-tested; its UI half
+    // never did.
+    //
+    // The disposition is UI defect, not stale test. The repair needs a destination screen that
+    // does not exist yet — new product behaviour, owned by ELEC-239 under G3 — so this assertion
+    // stays red on purpose. Deleting, skipping or inverting it to assert the affordance's absence
+    // would encode the gap as intended behaviour and destroy the only signal pointing at it.
+    // The absence assertion in `src/production/production-runway-page.test.tsx` is about the
+    // *retired* approval-era affordance and is a different claim; the two agree.
     const scheduleLink = page.getByRole("link", { name: "Start schedule check for IW-1004" });
     await expect(jobLink).toHaveAttribute("href", "/jobs/JOB-A");
     await expect(scheduleLink).toHaveAttribute("href", "/production/schedule/JOB-D");

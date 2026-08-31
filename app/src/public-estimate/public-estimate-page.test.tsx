@@ -180,14 +180,54 @@ describe("PublicEstimatePage", () => {
     expect(screen.queryByText(/IRONWRAP/i)).not.toBeInTheDocument();
   });
 
+  // The three unavailable answers a visitor can get here are different facts, and the page has to
+  // keep them apart: switched off on purpose, switched on with the setup unfinished, and a read
+  // that failed. Only the third can be retried, so only the third offers to (ELEC-236 AC1/AC2).
+  it("says the form is turned off, not broken and not retryable, when the company paused it", async () => {
+    mockFetch(response({ ...config, enabled: false }));
+    render(<PublicEstimatePage />);
+
+    expect(
+      await screen.findByRole("heading", { name: "This estimate form is turned off" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Turned off")).toBeInTheDocument();
+    expect(
+      screen.getByText(/is not taking estimate requests through this form right now/),
+    ).toBeInTheDocument();
+    // The path-to-a-person requirement cannot be met here: `PublicEstimateBrand` carries no
+    // contact field (ELEC-242). Saying so plainly is the honest answer; implying a channel that
+    // is not on screen is not.
+    expect(
+      screen.getByText(/cannot show you a phone number or an email address/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send estimate request" })).not.toBeInTheDocument();
+  });
+
   it("does not offer a form at all when the server accepts no brand", async () => {
     mockFetch(response({ ...config, brands: [], default_brand: null }));
     render(<PublicEstimatePage />);
 
     expect(
+      await screen.findByRole("heading", { name: "This estimate form is not ready yet" }),
+    ).toBeInTheDocument();
+    // Unfinished setup, not a failure: distinct from the paused state above and from the load
+    // error below, and no retry is offered because no retry can fix it.
+    expect(screen.getByText("Setup not finished")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send estimate request" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed read separate from a turned-off form, and offers the retry only there", async () => {
+    mockFetch(response({ error: "unavailable" }, 503));
+    render(<PublicEstimatePage />);
+
+    expect(
       await screen.findByRole("heading", { name: "The estimate form is not ready" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send estimate request" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("Turned off")).not.toBeInTheDocument();
+    expect(screen.queryByText("Setup not finished")).not.toBeInTheDocument();
   });
 
   it("shows the company logo the owner uploaded", async () => {

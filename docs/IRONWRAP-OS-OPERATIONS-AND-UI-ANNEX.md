@@ -466,6 +466,64 @@ configuration, no current data, or a failed dependency; these are not interchang
 - Disable double submission and surface the idempotent in-flight state.
 - Never use color alone for status, never trap keyboard focus, and never hide a person/escalation path.
 
+### 6.3 Unavailable-capability presentation
+
+A capability a screen cannot use is presented at its real state, and the states never collapse
+into one another or into ordinary emptiness. The runtime source is `GET /api/v1/capabilities`, whose
+request/response contract is `docs/CAPABILITY-SIGNAL-CONTRACT.md`; the client half is
+`app/src/capabilities/`.
+
+| State | What the screen shows | Tone | Retry offered |
+|---|---|---|---|
+| `absent` | Nothing. The id names nothing a user gets, so it is not rendered as a capability in any styling — not disabled, not switched off. | — | No |
+| `off` | "Turned off": in the build, nobody switched it on. Expected, not an incident. | Neutral | No |
+| `unconfigured` | "Setup not finished": switched on, the setup it needs is missing, and the first use will fail. Never worded as "unavailable". | Warning | No |
+| `dependency_blocked` | Waiting on the named dependency, not broken. | Warning | No |
+| `unknown` | Neither working nor broken, with a readback obligation outstanding. | Warning | No |
+| `available` | The screen renders normally. Reachable is never rendered as proven, verified or connected. | — | n/a |
+
+Four content rules apply to every one of those panels:
+
+1. **Reason in plain language.** `configuration_incomplete` and `configuration_rejected` get
+   different copy, because they are different jobs: the first names the blank setting, the second
+   says there is no blank to find and the supplied values themselves were refused.
+2. **Next valid action with actor and prerequisite.** These flags are Worker bindings, not screens
+   an administrator can reach in IronWrap, so the copy says exactly that rather than naming a
+   settings path that cannot make the change. Closing that gap is product work, not copy work —
+   see §6.3.1.
+3. **A path to a person**, never a dead link. No capability here exposes an in-app request flow,
+   so the path is stated in words.
+4. **No dead affordance.** A control whose capability is `off`, `unconfigured` or
+   `dependency_blocked` is disabled — keeping its accessible name and its full 44 px height, so
+   switching the capability on does not move it — or, for a financial action that fundamentally
+   cannot execute, withheld entirely rather than offered disabled. `unknown` disables nothing: a
+   state that could not be determined is not evidence that the action fails.
+
+Two boundaries this presentation holds:
+
+- **Reachability is not proof.** `/api/v1/capabilities` answers whether a capability is in the
+  build, switched on and configured. `/api/v1/integrations/readiness` answers whether a rail has
+  been proven against a provider. Where both appear on one screen they are separately headed and
+  the copy says which is which; a capability can be reachable and unproven at the same time and
+  both statements are true.
+- **A state that was never read is not "off".** An offline session does not fetch the signal, and
+  a failed read reports nothing about any capability. Neither is presented as a switched-off
+  capability, and no capability's unavailability is presented as an offline condition when it is a
+  configuration condition.
+
+Roles receive different payloads by design: `owner` and `ops` get the office projection with the
+binding names, and every other role gets state and reason only. Screens must not depend on the
+office fields, and a capability missing from a role's list means "not visible to this role", never
+"off".
+
+#### 6.3.1 Open gap: enabling is not yet a configuration surface
+
+Every capability in this section is switched on by changing a Worker binding and redeploying.
+There is no administrator screen for it, so the honest next action names a person outside the app
+rather than a path inside it. That is a real distance from "the administrator should be able to",
+recorded here rather than hidden behind copy that implies a screen exists. Closing it is a G6
+configuration-surface change, not a presentation change.
+
 ## 7. Annotated UI evidence gallery
 
 ### 7.1 Owner: exception-first command view
@@ -547,6 +605,16 @@ configuration, no current data, or a failed dependency; these are not interchang
 3. Existing accounts show owner immutability and explicit role/removal controls for another person.
 
 **Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 carries the pre-repair receipt until it is regenerated on the delivered commit.
+
+### 7.9 Any role: a capability that is switched off
+
+![Unavailable capability panel at phone width](./diagrams/screenshots/capability-unavailable-mobile.png)
+
+1. The state is named in visible text ("Turned off") as well as by tone and icon, so colour never carries the meaning alone.
+2. The message says what is true and what is not: part of the product, nobody switched it on, nothing failed and nothing is waiting to be retried.
+3. "Next step" names the actor and the prerequisite, and says plainly that this is a deployment setting rather than pointing at a screen that cannot change it (§6.3.1). "Who to ask" follows below the fold; no retry control is offered anywhere on the panel, because no retry can switch a capability on.
+
+**Evidence:** Source-present — locally rendered from the `accounting` acceptance fixture at a Pixel-class viewport, captured by `app/e2e/capability-honesty.spec.ts`. Regenerate with `npm run test:pwa:capabilities:accounting --prefix app`.
 
 ## 8. Acceptance-harness receipt for this annex
 

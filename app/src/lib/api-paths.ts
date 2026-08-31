@@ -2,6 +2,11 @@ export const API_PATHS = {
   publicInstantEstimateConfig: "/public/instant-estimate/config",
   publicInstantEstimate: "/public/instant-estimate",
   session: "/api/v1/session",
+  // Whether a capability is absent, switched off, on-but-unconfigured or reachable, for the
+  // capabilities this role can reach. Every authenticated role; a different question from
+  // `integrationReadiness` below, which answers whether a rail has been PROVEN
+  // (docs/CAPABILITY-SIGNAL-CONTRACT.md).
+  capabilities: "/api/v1/capabilities",
   search: (query: string) => `/api/v1/search?q=${encodeURIComponent(query)}`,
   inventoryOverview: "/api/v1/inventory/overview",
   inventoryLookup: "/api/v1/inventory/lookup",

@@ -4,6 +4,8 @@ import { AlertTriangle, CheckCircle2, Clock3, FileCheck2, Palette, RefreshCw } f
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { capabilityHasNotice, useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -23,6 +25,11 @@ export function FacetDesignPage() {
 function FacetDesignContent() {
   const session = useSession();
   const online = useOnlineStatus();
+  // The empty list looked identical whether Facet delivery is set up and simply has no signed
+  // decisions yet, or was never finished being configured and has nowhere for a design to land
+  // (ELEC-234 6.7). Those are "no current data" and "no configuration", and annex 6.1 keeps them
+  // apart.
+  const ingest = useCapability("facet_design_ingest");
   const query = useQuery({
     queryKey: ["facet-design-evidence-v2", session.tenant.id, session.user.id],
     queryFn: () => loadFacetDesignEvidence(),
@@ -123,7 +130,9 @@ function FacetDesignContent() {
         </section>
       ) : null}
 
-      {query.data.evidence.length === 0 ? (
+      {capabilityHasNotice(ingest) ? (
+        <CapabilityUnavailable read={ingest} />
+      ) : query.data.evidence.length === 0 ? (
         <EmptyState
           title="No signed Facet decisions yet"
           message="A customer-approved v2 decision will appear here after the signed producer delivery is accepted."

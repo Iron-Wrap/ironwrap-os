@@ -14,8 +14,11 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -40,6 +43,10 @@ export function NewoOperationsPage() {
 
 function NewoOperationsContent() {
   const session = useSession();
+  // `readiness.enabled` used to be one row in a fact table, at the same visual weight as every
+  // other fact. Reception staff need "why is nothing happening" before they read a table, and the
+  // table alone could never say whether Newo is off or on-with-unfinished-setup (ELEC-234 §6.5).
+  const newo = useCapability("newo");
   const query = useQuery({
     queryKey: ["newo-operations", session.tenant.id, session.user.id],
     queryFn: () => loadNewoOperations(),
@@ -61,6 +68,8 @@ function NewoOperationsContent() {
   return (
     <NewoOperationsScreen
       model={query.data}
+      capability={<CapabilityUnavailable read={newo} />}
+      capabilityKnown={newo.status === "known"}
       locale={session.tenant.locale}
       timeZone={session.tenant.time_zone}
       refreshFailed={query.isError}
@@ -72,12 +81,16 @@ function NewoOperationsContent() {
 
 function NewoOperationsScreen({
   model,
+  capability,
+  capabilityKnown,
   locale,
   timeZone,
   refreshFailed,
   refreshing,
   onRefresh,
 }: {
+  capability: ReactNode;
+  capabilityKnown: boolean;
   model: NewoOperationsResponse;
   locale: string;
   timeZone: string;
@@ -138,6 +151,19 @@ function NewoOperationsScreen({
       {refreshFailed ? (
         <Notice tone="warning" title="The new list did not load">
           The last saved list is still shown. Try Refresh again.
+        </Notice>
+      ) : null}
+
+      {capability}
+      {/*
+        The capability signal is the honest answer. When it could not be read, this page still has
+        the Worker's own `enabled` flag, which is a real runtime fact — it simply cannot tell off
+        apart from on-with-unfinished-setup, and this says so rather than picking one.
+      */}
+      {!capabilityKnown && !model.readiness.enabled ? (
+        <Notice tone="warning" title="Reception is turned off for this company">
+          Calls are not being answered by Newo. IronWrap could not read the capability signal on
+          this load, so it cannot say whether the setup behind reception is finished either.
         </Notice>
       ) : null}
 

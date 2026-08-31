@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { assertNoFrappeDesk } from "./frappe-desk-guard";
+
 import { postizIntentFixture } from "../src/postiz/postiz-test-fixture";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
@@ -38,6 +40,7 @@ test.describe("Marketing post acceptance", () => {
     await expect(page.getByText("campaign-brief:001", { exact: true })).toBeHidden();
     await expect(page.getByText("evidence:campaign-brief:001")).toBeHidden();
 
+    await assertNoFrappeDesk(page);
     await page.screenshot({
       path: `${shotDir}/marketing-post-${testInfo.project.name}.png`,
       fullPage: true,

@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { loadCapabilitySignal } from "../capabilities/capability-api";
+import { capabilitySignal, officeCapability } from "../capabilities/capability-test-fixture";
 import {
   createFacetLaunch,
   loadEstimatorWorkbench,
@@ -14,6 +16,7 @@ import {
 import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
 
+vi.mock("../capabilities/capability-api", () => ({ loadCapabilitySignal: vi.fn() }));
 vi.mock("./estimator-api", () => ({
   createFacetLaunch: vi.fn(),
   loadEstimatorWorkbench: vi.fn(),
@@ -289,6 +292,9 @@ function openCommercialGroup(name: "Customer quote" | "Proposal" | "Scope and ri
 describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The default is an empty capability list: `facet_launch` is not visible to this role, so
+    // every other test in this file sees exactly the behaviour it saw before the signal existed.
+    vi.mocked(loadCapabilitySignal).mockResolvedValue(capabilitySignal("owner", []));
     vi.mocked(newFacetLaunchKey).mockReturnValue("facet-launch:ui-stable-0001");
     vi.mocked(createFacetLaunch).mockResolvedValue({
       version: 1,
@@ -792,6 +798,38 @@ describe("EstimatorWorkbenchPage", () => {
       screen.getByText(/does not send the address, price, scope, proposal, payment/i),
     ).toBeVisible();
     expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
+  });
+
+  // The permission says this role MAY launch. The capability says whether launching can work at
+  // all — `facet_launch` is `unconfigured` in the reference deployment, with no static route
+  // naming this tenant — and before this the button was live either way and failed after the tap
+  // (ELEC-236 AC3).
+  it("stops offering the Facet launch when the capability behind it is not configured", async () => {
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
+      workbenchModel({
+        allowed_actions: ["job.read", "estimator.read", "facet_launch.create"],
+      }),
+    );
+    vi.mocked(loadCapabilitySignal).mockResolvedValue(
+      capabilitySignal("owner", [
+        officeCapability("facet_launch", "Facet design launch", {
+          state: "unconfigured",
+          reason: "configuration_incomplete",
+          flag_state: "on",
+          configuration_state: "incomplete",
+          missing_configuration: ["FACET_LAUNCH_STATIC_ROUTES_JSON"],
+        }),
+      ]),
+    );
+    renderWorkbench();
+
+    // Wait on the panel, not the button: the button renders before the capability read settles,
+    // and asserting on it first would pass or fail on timing rather than on the state.
+    expect(
+      await screen.findByRole("heading", { name: "Facet design launch is not set up yet" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Design in Facet" })).toBeDisabled();
+    expect(createFacetLaunch).not.toHaveBeenCalled();
   });
 
   it("keeps a failed Facet launch retry on the same idempotency key", async () => {

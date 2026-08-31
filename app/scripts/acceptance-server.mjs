@@ -1159,6 +1159,180 @@ const fixtureEstimatorSession = {
   session_expires_at: "2030-07-18T12:00:00.000Z",
 };
 
+function currentFixtureSession() {
+  if (ACCEPTANCE_MODE === "estimator") return fixtureEstimatorSession;
+  if (ACCEPTANCE_MODE === "accounting") return fixtureAccountingSession;
+  if (ACCEPTANCE_MODE === "onboarding") return fixtureOwnerSession;
+  return fixtureSession;
+}
+
+/**
+ * The runtime capability signal (`GET /api/v1/capabilities`, ELEC-240).
+ *
+ * These are the states the committed `workers-bus/wrangler.jsonc` really produces, copied from
+ * the reference table in `docs/CAPABILITY-SIGNAL-CONTRACT.md` rather than invented: everything
+ * default-off, Facet switched on over an empty route set, the proposal template mounted with no
+ * document id. A fixture that showed these capabilities working would make the mobile evidence
+ * for honest unavailable-capability presentation prove nothing.
+ */
+const FIXTURE_CAPABILITY_REFERENCE = [
+  {
+    id: "quickbooks_oauth",
+    title: "QuickBooks connection",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "QB_OAUTH_ENABLED",
+    audience: ["owner", "ops", "accounting"],
+  },
+  {
+    id: "quickbooks_final_invoice",
+    title: "QuickBooks final-invoice execution",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "QB_FINAL_INVOICE_ENABLED",
+    audience: ["owner", "ops", "accounting"],
+  },
+  {
+    id: "hermes_desktop",
+    title: "Hermes desktop pilot",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "APP_HERMES_DESKTOP_ENABLED",
+    audience: ["owner", "ops"],
+  },
+  {
+    id: "public_estimator",
+    title: "Public website estimator",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "PUBLIC_ESTIMATE_ENABLED",
+    audience: ["owner", "ops", "sales"],
+  },
+  {
+    id: "newo",
+    title: "Newo voice reception",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "NEWO_ENABLED",
+    audience: ["owner", "ops"],
+  },
+  {
+    id: "postiz",
+    title: "Postiz marketing publication",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "POSTIZ_ENABLED",
+    audience: ["owner", "ops"],
+  },
+  {
+    id: "proposal_publication",
+    title: "Proposal publication to the customer",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "APP_PROPOSAL_PUBLICATION_ENABLED",
+    audience: ["owner", "ops", "sales"],
+  },
+  {
+    id: "facet_design_ingest",
+    title: "Facet design delivery",
+    state: "unconfigured",
+    reason: "configuration_incomplete",
+    flag_state: "on",
+    configuration_state: "incomplete",
+    flag_binding: "FACET_V2_INGEST_ENABLED",
+    flag_declared: "true",
+    missing_configuration: ["FACET_V2_ROUTES_JSON", "FACET_V2_KEYS_JSON"],
+    audience: ["owner", "ops", "sales"],
+  },
+  {
+    id: "facet_launch",
+    title: "Facet design launch",
+    state: "unconfigured",
+    reason: "configuration_incomplete",
+    flag_state: "on",
+    configuration_state: "incomplete",
+    flag_binding: "APP_FACET_LAUNCH_ENABLED",
+    flag_declared: "true",
+    missing_configuration: ["FACET_LAUNCH_STATIC_ROUTES_JSON"],
+    audience: ["owner", "ops"],
+  },
+  {
+    id: "proposal_template",
+    title: "Proposal document template",
+    state: "unconfigured",
+    reason: "configuration_incomplete",
+    flag_state: "not_flagged",
+    configuration_state: "incomplete",
+    flag_binding: null,
+    flag_declared: null,
+    missing_configuration: ["PROPOSAL_TEMPLATE_DOC_ID"],
+    audience: ["owner", "ops", "sales"],
+  },
+  {
+    id: "facet_quote_revision_prepare",
+    title: "Facet quote-revision preparation",
+    state: "absent",
+    reason: "no_source_consumer",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED",
+    presence: "absent",
+    audience: ["owner", "ops"],
+  },
+];
+
+function fixtureCapabilities(session) {
+  const role = session.user.role;
+  const office = role === "owner" || role === "ops";
+  const visible = FIXTURE_CAPABILITY_REFERENCE.filter((entry) => entry.audience.includes(role));
+  return {
+    version: 1,
+    tenant_id: session.tenant.id,
+    role,
+    projection: office ? "office" : "scoped",
+    read_model_generated_at: "2026-08-31T00:00:00.000Z",
+    capabilities: visible.map((entry) => {
+      const scoped = {
+        id: entry.id,
+        title: entry.title,
+        presence: entry.presence ?? "present",
+        state: entry.state,
+        reason: entry.reason,
+        flag_state: entry.flag_state,
+        configuration_state: entry.configuration_state,
+        readback_required: false,
+      };
+      if (!office) return scoped;
+      return {
+        ...scoped,
+        flag_binding: entry.flag_binding ?? null,
+        flag_declared: entry.flag_declared ?? "false",
+        missing_configuration: entry.missing_configuration ?? [],
+        indeterminate_configuration: [],
+        dependencies: [],
+      };
+    }),
+    proof_claimed: false,
+    configuration_mutations_available: false,
+    allowed_actions: ["capabilities.read"],
+    readback_obligations: false,
+  };
+}
+
 function fixtureOperatorSearch(query) {
   const normalizedQuery = query.trim();
   const matchesNow = normalizedQuery.toLowerCase().startsWith("no");
@@ -2437,18 +2611,10 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 405, { error: "method_not_allowed" });
   }
   if (requestUrl.pathname === "/api/v1/session") {
-    return sendJson(
-      response,
-      method,
-      200,
-      ACCEPTANCE_MODE === "estimator"
-        ? fixtureEstimatorSession
-        : ACCEPTANCE_MODE === "accounting"
-          ? fixtureAccountingSession
-          : ACCEPTANCE_MODE === "onboarding"
-            ? fixtureOwnerSession
-            : fixtureSession,
-    );
+    return sendJson(response, method, 200, currentFixtureSession());
+  }
+  if (requestUrl.pathname === "/api/v1/capabilities") {
+    return sendJson(response, method, 200, fixtureCapabilities(currentFixtureSession()));
   }
   if (requestUrl.pathname === "/api/v1/search") {
     return sendJson(

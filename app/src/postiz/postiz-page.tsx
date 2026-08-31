@@ -12,6 +12,8 @@ import { useRef, useState } from "react";
 
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
 import { ReturnToNow } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -77,6 +79,10 @@ function PostizContent() {
   const session = useSession();
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
+  // Postiz reaches owner and ops only, so a role that never receives the capability keeps the
+  // Worker's own `enabled` flag below rather than being told the site is off on no evidence.
+  const postiz = useCapability("postiz");
+  const postizUnusable = capabilityPreventsUse(postiz);
   const queryKey = ["postiz-intent", session.tenant.id, session.user.id, intentId] as const;
   const query = useQuery({
     queryKey,
@@ -166,7 +172,7 @@ function PostizContent() {
   const intent = model.intent;
   const decisionReadStale = requiresFreshRead || query.isError;
   const canMutate = (permission: PostizAction) =>
-    !offline && !decisionReadStale && model.allowed_actions.includes(permission);
+    !offline && !decisionReadStale && !postizUnusable && model.allowed_actions.includes(permission);
   const busy = mutation.isPending;
 
   function command(kind: CommandKind) {
@@ -240,9 +246,13 @@ function PostizContent() {
           Load the saved post before you choose again. No extra error from the site is shown.
         </Notice>
       ) : null}
-      {!model.enabled ? (
+      {postiz.status === "known" ? (
+        <CapabilityUnavailable read={postiz} />
+      ) : !model.enabled ? (
         <Notice tone="warning" title="Marketing posting is turned off">
-          You can still read this post, but sending is turned off.
+          You can still read this post, but sending is turned off. An administrator turns it back
+          on; ask your owner or operations lead. IronWrap could not read the capability signal on
+          this load, so it cannot say whether the setup behind it is finished either.
         </Notice>
       ) : null}
 

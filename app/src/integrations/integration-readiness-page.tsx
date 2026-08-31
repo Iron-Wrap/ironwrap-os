@@ -1,7 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, PlugZap, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleOff,
+  PlugZap,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 
 import { useSession } from "../auth/session-context";
+import {
+  capabilityStateLabels,
+  CAPABILITY_AVAILABLE_CAVEAT,
+  capabilityCopy,
+} from "../capabilities/capability-copy";
+import { presentableCapabilities } from "../capabilities/capability-contracts";
+import { useCapabilitySignal } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -64,7 +78,14 @@ function ReadinessScreen({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const required = model.capabilities.filter((capability) => capability.required);
+  // An integration somebody deliberately switched off is not an incident and must not sit in the
+  // "N of M ready" arithmetic as though it were one. This page's own nav entry already promises
+  // "proven, blocked, expired, or safely disabled"; until now the fourth was rendered as the
+  // second (ELEC-234 §6.9).
+  const required = model.capabilities.filter(
+    (capability) => capability.required && !safelyDisabled(capability),
+  );
+  const disabled = model.capabilities.filter(safelyDisabled);
   const ready = required.filter((capability) => capability.state === "ready").length;
   return (
     <section className="mx-auto max-w-6xl space-y-6 pb-6">
@@ -97,6 +118,11 @@ function ReadinessScreen({
             <p className="mt-2 text-sm leading-6 text-muted">
               Profile v{model.profile.version ?? "Not reported"}
             </p>
+            {disabled.length > 0 ? (
+              <p className="mt-2 text-sm leading-6 text-muted">
+                {disabled.length} deliberately switched off, and not counted above.
+              </p>
+            ) : null}
             <p className="mt-2 text-sm leading-6 text-muted">
               Live signals are required where the repository has a runtime probe; evidence-only
               rails use fresh recorded readback proof.
@@ -150,6 +176,8 @@ function ReadinessScreen({
         </CardContent>
       </Card>
 
+      <CapabilityAvailability />
+
       <Notice tone="info" title="Read-only control surface">
         Configuration changes stay unavailable until a separately governed authority and rollback
         path exists. There is no generic hook or integration CRUD endpoint behind this screen.
@@ -158,25 +186,48 @@ function ReadinessScreen({
   );
 }
 
+/**
+ * Deliberately switched off, and nothing else wrong with it.
+ *
+ * Only when `manifest_disabled` is the ONLY blocker. A rail that is both switched off and has
+ * expired proof still has a real problem to show, so it stays blocked.
+ */
+function safelyDisabled(capability: IntegrationCapability): boolean {
+  return (
+    capability.state === "blocked" &&
+    capability.blockers.length === 1 &&
+    (capability.blockers[0] ?? "").split(":", 1)[0] === "manifest_disabled"
+  );
+}
+
 function CapabilityCard({ capability }: { capability: IntegrationCapability }) {
   const ready = capability.state === "ready";
+  const disabled = safelyDisabled(capability);
+  const stateWord = ready ? "ready" : disabled ? "safely disabled" : "blocked";
   return (
     <article
       className={cn(
         "rounded-lg border p-4",
-        ready ? "border-ok/30 bg-ok-soft/55" : "border-warning/35 bg-warning-soft/55",
+        ready
+          ? "border-ok/30 bg-ok-soft/55"
+          : disabled
+            ? "border-border/80 bg-surface-muted/55"
+            : "border-warning/35 bg-warning-soft/55",
       )}
-      aria-label={`${label(capability.id)} ${ready ? "ready" : "blocked"}`}
+      aria-label={`${label(capability.id)} ${stateWord}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-extrabold">{label(capability.id)}</h3>
           <p className="mt-1 text-xs font-bold text-muted">
             {capability.required ? "Required" : "Optional"}
+            {disabled ? " · Turned off on purpose" : ""}
           </p>
         </div>
         {ready ? (
           <CheckCircle2 className="size-5 shrink-0 text-ok" aria-label="Ready" />
+        ) : disabled ? (
+          <CircleOff className="size-5 shrink-0 text-muted" aria-label="Safely disabled" />
         ) : (
           <AlertTriangle className="size-5 shrink-0 text-warning" aria-label="Blocked" />
         )}
@@ -238,6 +289,95 @@ function CapabilityCard({ capability }: { capability: IntegrationCapability }) {
         <p className="mt-3 text-xs leading-5 text-muted">Fallback: {capability.fallback}</p>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * The other question, kept visibly separate.
+ *
+ * The card grid above answers "has this rail been PROVEN against a provider" from append-only
+ * proof rows, and correctly answers `blocked` for everything this company has never proven. That
+ * is useless for explaining why a button does nothing, so this section answers the prior, cheaper
+ * one: is the capability in the build, is its flag on, is its configuration present
+ * (`docs/CAPABILITY-SIGNAL-CONTRACT.md`). The two are never merged into one badge, and the copy
+ * says which is which — a reachable capability can still be unproven, and both statements are
+ * true at the same time.
+ */
+function CapabilityAvailability() {
+  const session = useSession();
+  const { model, isPending, isError, offline } = useCapabilitySignal();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Capability availability</CardTitle>
+        <CardDescription>
+          A different question from the proof above: whether each capability is in this build,
+          switched on, and set up. {CAPABILITY_AVAILABLE_CAVEAT}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {offline ? (
+          <p className="text-sm leading-6 text-muted" role="status">
+            This is a saved session, so capability state was not read. IronWrap will not claim a
+            capability is on or off from a cached answer.
+          </p>
+        ) : isPending ? (
+          <p className="text-sm leading-6 text-muted" role="status">
+            Reading capability state…
+          </p>
+        ) : isError || !model ? (
+          <p className="text-sm leading-6 text-muted" role="status">
+            Capability state could not be read on this load. Nothing here is being reported as
+            switched off — IronWrap simply does not know, and will not guess.
+          </p>
+        ) : (
+          <>
+            {model.readback_obligations ? (
+              <Notice tone="warning" title="At least one state is not settled">
+                One or more capabilities rest on something that has to be read back from the
+                deployment before it can be settled. Those are neither working nor broken.
+              </Notice>
+            ) : null}
+            <ul className="grid gap-3 md:grid-cols-2">
+              {presentableCapabilities(model).map((capability) => {
+                const copy = capabilityCopy(capability, session.user.role);
+                return (
+                  <li
+                    key={capability.id}
+                    className={cn(
+                      "rounded-lg border p-4",
+                      capability.state === "available"
+                        ? "border-border/80 bg-surface-muted/45"
+                        : capability.state === "off"
+                          ? "border-border/80 bg-surface-muted/55"
+                          : "border-warning/35 bg-warning-soft/55",
+                    )}
+                  >
+                    <p className="text-sm font-[740] text-muted">
+                      {capabilityStateLabels[capability.state]}
+                    </p>
+                    <h3 className="mt-1 font-extrabold">{capability.title}</h3>
+                    <p className="mt-1 text-sm leading-6 text-muted">
+                      {copy ? copy.message : CAPABILITY_AVAILABLE_CAVEAT}
+                    </p>
+                    {copy ? (
+                      <p className="mt-2 text-sm leading-6 text-muted">
+                        <span className="font-[740] text-foreground">Next step</span>{" "}
+                        {copy.nextAction}
+                      </p>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="text-xs leading-5 text-muted">
+              Capabilities you cannot reach are not listed. A capability missing from this list is
+              one your role does not receive, never one that is switched off.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

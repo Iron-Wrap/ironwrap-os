@@ -14,6 +14,8 @@ import { useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
 import { RoleGuard } from "../components/role-guard";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
@@ -235,7 +237,9 @@ function ReconciliationHealthCard() {
             <Link
               to="/accounting/intents/$intentId"
               params={{ intentId: health.oldest_unreconciled_intent_id }}
-              className="mt-1 inline-flex min-h-10 items-center font-bold underline decoration-accent decoration-2 underline-offset-4"
+              // 44 px, not 40: the mobile acceptance run for this page measures every control it
+              // offers, and a 40 px link is below the smallest target a thumb reliably hits.
+              className="mt-1 inline-flex min-h-11 items-center font-bold underline decoration-accent decoration-2 underline-offset-4"
             >
               Review the oldest unfinished item
             </Link>
@@ -298,6 +302,8 @@ function QuickBooksSettingsContent() {
     queryFn: () => loadQuickBooksConnection(),
     retry: false,
   });
+  const oauth = useCapability("quickbooks_oauth");
+  const oauthUnusable = capabilityPreventsUse(oauth);
 
   const mutation = useMutation({
     retry: false,
@@ -399,8 +405,13 @@ function QuickBooksSettingsContent() {
   if (!connection.data) return <LoadingState label="Loading QuickBooks connection…" />;
 
   const connectionModel = connection.data;
+  // Three facts that used to look identical here: the OAuth capability is switched off, it is on
+  // with no Intuit credentials, and it is on and set up but this company has not connected yet.
+  // Only the third is ordinary emptiness with a live "Connect QuickBooks" button (ELEC-236).
   const canConnect =
-    session.user.role === "owner" && connectionModel.allowed_actions.includes("connect");
+    session.user.role === "owner" &&
+    connectionModel.allowed_actions.includes("connect") &&
+    !oauthUnusable;
   const canRemove =
     session.user.role === "owner" &&
     connectionModel.allowed_actions.includes("remove_from_ironwrap");
@@ -458,6 +469,8 @@ function QuickBooksSettingsContent() {
           {status}
         </p>
       ) : null}
+
+      <CapabilityUnavailable read={oauth} />
 
       <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
         <Card className="relative overflow-hidden p-5 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-accent sm:p-6">
@@ -734,7 +747,12 @@ function QuickBooksSettingsContent() {
               )}
             </section>
           ) : null}
-          {!canConnect && !canRemove ? (
+          {/*
+            Only when the recorded state is what withholds the change. When the capability itself
+            is off or unconfigured, the panel above already says so with an actor and a person to
+            ask, and this sentence would blame the wrong thing.
+          */}
+          {!canConnect && !canRemove && !oauthUnusable ? (
             <p className="border border-border bg-surface-muted px-4 py-4 text-sm" role="status">
               No connection change is permitted in this recorded state.
             </p>
@@ -762,6 +780,11 @@ function QuickBooksFinalInvoiceContent() {
     queryFn: () => loadQuickBooksFinalInvoice(intentId!),
     retry: false,
   });
+  // Present-but-off is not the same as connected-but-not-yet-authorized: without this read a
+  // tenant whose final-invoice execution is switched off saw the identical `connection_required`
+  // card as one that simply has not connected Intuit yet (ELEC-234 §6.2).
+  const finalInvoice = useCapability("quickbooks_final_invoice");
+  const finalInvoiceUnusable = capabilityPreventsUse(finalInvoice);
   const actionKeys = useRef(new Map<string, string>());
   const [rejecting, setRejecting] = useState(false);
   const [rejectionReason, setRejectionReason] = useState<QuickBooksRejectionReason | "">("");
@@ -855,8 +878,10 @@ function QuickBooksFinalInvoiceContent() {
   const intent = model.intent;
   const stale = requiresFreshRead || query.isError;
   const busy = mutation.isPending;
+  // Approve, reject and reconcile are financial actions on a capability that fundamentally
+  // cannot execute while it is off, so they are withheld entirely rather than offered disabled.
   const permits = (action: QuickBooksAction) =>
-    !offline && !stale && model.allowed_actions.includes(action);
+    !offline && !stale && !finalInvoiceUnusable && model.allowed_actions.includes(action);
   const canApprove = intent.state === "pending_review" && permits("approve");
   const canReject = intent.state === "pending_review" && permits("reject");
   const canReconcile = permits("reconcile");
@@ -935,11 +960,13 @@ function QuickBooksFinalInvoiceContent() {
         </p>
       ) : null}
 
+      <CapabilityUnavailable read={finalInvoice} />
+
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_23rem] xl:gap-8">
         <aside className="space-y-4 xl:sticky xl:top-24 xl:col-start-2 xl:row-start-1">
           <IntentStatus model={model} />
 
-          {intent.state === "connection_required" ? (
+          {intent.state === "connection_required" && !finalInvoiceUnusable ? (
             <section className="rounded-xl border border-warning/40 bg-warning-soft p-5 sm:p-6">
               <h2 className="text-lg font-bold">Connect QuickBooks before review</h2>
               <p className="mt-2 text-sm leading-6 text-muted">

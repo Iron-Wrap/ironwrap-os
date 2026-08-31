@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import { assertNoFrappeDesk } from "./frappe-desk-guard";
+
 import { quickBooksFinalInvoiceFixture } from "../src/accounting/quickbooks-test-fixture";
 
 // Mobile-first acceptance for the money desk (IRO-52 slice S9).
@@ -147,6 +149,7 @@ test.describe("Money desk mobile acceptance", () => {
     await expect(page.getByRole("link", { name: "Open the money desk" })).toBeVisible();
 
     await assertNoHorizontalScroll(page, "quickbooks settings");
+    await assertNoFrappeDesk(page);
     await page.screenshot({ path: `${SHOT_DIR}/money-settings.png`, fullPage: true });
   });
 
@@ -169,6 +172,7 @@ test.describe("Money desk mobile acceptance", () => {
 
     await assertNoHorizontalScroll(page, "final invoice");
     await assertActionsAreReachable(page, "final invoice");
+    await assertNoFrappeDesk(page);
     await page.screenshot({ path: `${SHOT_DIR}/final-invoice.png`, fullPage: true });
   });
 

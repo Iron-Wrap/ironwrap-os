@@ -460,31 +460,69 @@ KPI, retention rule, and exception path.
 
 ### 9.2 Product capability inventory and maturity
 
+Snapshot state uses the six canonical proof classes from
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels) — Source-present,
+Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated — never a prior
+vocabulary and never a bare "Strong"/"Partial" qualifier standing in for a class. Where a capability's
+covered scope has a named, reproducible check, that check is cited and earns Locally-validated for the
+scope it covers; the class recorded here is the weakest class any part of that covered scope earns.
+`Partial` is an orthogonal qualifier describing scope, not proof strength, and never substitutes for a
+class. As of this pass no capability below cites Configured, Runtime-proven, Business-accepted, or
+Customer-validated evidence: no capability's flags, secrets, and deployment are all bound in a named
+environment per `docs/IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag-state audit, and no row in
+`docs/CAPABILITY-MATRIX.md` or `docs/AI-NATIVE-ARCHITECTURE.md` asserts a fresh authenticated readback,
+a named accountable human's acceptance of the capability itself, or real customer use.
+
 | Capability | User outcome | Snapshot state | Required closure evidence |
 |---|---|---|---|
-| Identity, session, role navigation, device pairing | Right actor reaches a bounded surface | Source-present | Deployed tenant isolation, revocation, recovery, real-device proof |
-| Now, Today, approvals, exceptions, search | Each role sees prioritized valid work | Source-present; search now exists despite older matrix wording | Runtime permission, staleness, and exception-resolution scenarios |
-| Intake, lead triage, customer/property/job conversion | One owned demand thread without duplicate provider identity | Strong source-present | Real dual-brand intake, import reconciliation, bridge retirement |
-| Survey, measurement, Facet evidence | Attributable geometry/design inputs and uncertainty | Partial | Real-site calibration, conflicting-source tests, configured Facet delivery |
-| Estimate, quote, revisions, proposal publication | Exact reviewable commercial option | Partial/strong source path | Configured template/delivery/tax/readback and deterministic reference journey |
-| Customer acceptance and deposit derivation | Exact decision creates the right financial intent | Source-present, provider proof open | Identity/revision scenarios plus QuickBooks sandbox/readback |
-| Production gates and derived phase | Readiness is explainable and cannot be bypassed | Strong source-present | Live issuer freshness, stale/conflict injection, phase vocabulary decision |
-| Assignments and work packages | Field receives exact current authority | Strong source-present | Multi-worker, real-device offline full-day proof |
-| Safety | Stops, incidents, readiness, corrective action remain authoritative | Strong source-present | Real-device drill and live reporting/readback where required |
-| Quality, change, closeout | Work and deviations close with independent evidence | Partial | Defect/hold/change propagation and real closeout/recovery |
-| Inventory, warehouse, procurement | Materials and custody conserve through work | Partial | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
-| Shop manufacturing | Controlled release, QC, yield, bundle handover | Partial | Physical event capture, tooling/maintenance, dispatch and billing proof |
-| Scheduling/dispatch | Conflict-free assignment from current facts | Partial | Capacity/weather/material inputs and dispatcher acceptance |
-| Fleet/equipment/cargo | Unsafe or wrong-custody assets cannot release | Partial, mobile route source-present | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
-| Accounting and QuickBooks | Approved intent becomes provider-posted reconciled truth | Partial; execution/config proof open | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
-| Service/warranty/recovery | Complaint becomes attributable verified remedy | Strong partial lifecycle | Dispatch/portal/mobile integration, provider recovery settlement |
-| Customer portal/public estimator | Customer can decide and self-serve safely | Partial/source surfaces | Accessibility, identity, real customer scenarios, public config proof |
-| Pipeline/form/document configuration | Operating views evolve without bypassing authority | Partial | Merged UI, typed command proof, runtime document generation/readback |
-| Provider manifests and readiness | Capabilities fail visibly and safely | Partial | Named-environment dependency health, proof TTL, degraded/recovery drills |
-| Hermes/MCP/AI coordination | Bounded drafting and proposals reduce routine work | Default-off narrow pilot/target | Deterministic reference journey before model-assisted trials |
-| Frappe compatibility and retirement | Legacy projection does not regain authority | Retirement in progress | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
-| White label / Operating Packs | Repeat safe tenant setup without drift | Partial/target | Second real tenant, isolation, upgrade/rollback compatibility |
-| Governance, workforce, facility, insurance, compliance | Whole-company controls join operating facts | Mostly target/partial | Owning objects, issuer readbacks, drills, accountable signoffs |
+| Identity, session, role navigation, device pairing | Right actor reaches a bounded surface | Source-present. Device pairing/invites reach Locally-validated (`workers-bus/test/app-user-invites.test.ts`, 23 cases); session and role-navigation cite no passing check. | Deployed tenant isolation, revocation, recovery, real-device proof |
+| Now, Today, approvals, exceptions, search | Each role sees prioritized valid work | Source-present. The search backend reaches Locally-validated (`workers-bus/test/app-search.test.ts`) but is wired to no PWA surface; Now/Today/approvals/exceptions boards cite no passing check. | Runtime permission, staleness, and exception-resolution scenarios |
+| Intake, lead triage, customer/property/job conversion | One owned demand thread without duplicate provider identity | Source-present. The JobNimbus/CRM import path reaches Locally-validated against a synthetic fixture only; the owned D1 import adapter, real dual-brand intake, and bridge retirement remain absent. | Real dual-brand intake, import reconciliation, bridge retirement |
+| Survey, measurement, Facet evidence | Attributable geometry/design inputs and uncertainty | Source-present. The Facet v2 blank-quote contract reaches Locally-validated (`tools/validate-facet-blank-quote-contract.mjs`); live measurement OCR remains blocked on a live staging URL, owner participation, and a usable OCR provider, and real-site calibration is untested. | Real-site calibration, conflicting-source tests, configured Facet delivery |
+| Estimate, quote, revisions, proposal publication | Exact reviewable commercial option | Source-present. Quote/proposal/publication routes are reachable; no named passing check is cited for the commercial path itself, and configured provider/tax/readback reconciliation is explicitly not proven. | Configured template/delivery/tax/readback and deterministic reference journey |
+| Customer acceptance and deposit derivation | Exact decision creates the right financial intent | Source-present. Acceptance and deposit-derivation are production-reachable and transactionally sound; provider mapping, tax policy, and authority-ceiling configuration remain blocked, and no named passing check is cited. | Identity/revision scenarios plus QuickBooks sandbox/readback |
+| Production gates and derived phase | Readiness is explainable and cannot be bypassed | Source-present. Authority-refusal messaging is pinned by captures against a live local stack; the PWA has no production-schedule approval surface at all, so an approver remains an API client. | Live issuer freshness, stale/conflict injection, phase vocabulary decision |
+| Assignments and work packages | Field receives exact current authority | Source-present. The `0028` work-package-actions schema shipped to production (deploy `987ccbc6`, 2026-08-13); its later widening fix reaches Locally-validated (`workers-bus/test/app-migration.test.ts`), which is schema/storage evidence, not capability proof. Multi-worker acknowledgement, full evidence-slot enforcement, and real-device acceptance remain open. | Multi-worker, real-device offline full-day proof |
+| Safety | Stops, incidents, readiness, corrective action remain authoritative | Locally-validated (repository tests including one emergency drill covering rescue, failed PPE, a duplicate offline report, a late corrective action, and independent release — `app/src/field/safety-action-panel.test.tsx` plus Worker-side coverage). No deployment, runtime, business-acceptance, or real-device proof. | Real-device drill and live reporting/readback where required |
+| Quality, change, closeout | Work and deviations close with independent evidence | Source-present. No narrative implementation section or named passing check exists for quality, change, or closeout beyond the maturity-table summary. | Defect/hold/change propagation and real closeout/recovery |
+| Inventory, warehouse, procurement | Materials and custody conserve through work | Locally-validated (`workers-bus/test/inventory-control.test.ts`, `workers-bus/test/inventory-control-api.test.ts` — conservation invariants and conserving movements). No PWA surface, no provider adapter, no deployment, no business-acceptance proof; supplier packets remain internal-only. | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
+| Shop manufacturing | Controlled release, QC, yield, bundle handover | Source-present. No named passing check is cited anywhere in the matrix; shop travelers and assemblies remain target-only per the matrix's own honesty note (see open item below on the apparent scope mismatch with the maturity table). | Physical event capture, tooling/maintenance, dispatch and billing proof |
+| Scheduling/dispatch | Conflict-free assignment from current facts | Source-present. The D1 assignment-revision/conflict-check ledger exists; scheduler capacity remains target-only and no solver or booking surface exists. No named passing check is cited. | Capacity/weather/material inputs and dispatcher acceptance |
+| Fleet/equipment/cargo | Unsafe or wrong-custody assets cannot release | Locally-validated (`frappe-apps/ironwrap_roofing/tests/test_fleet_operations_policy.py`, `.../test_fleet_panel_api.py` pin the release fence exactly). Photo evidence capture is absent, not merely unproven — no code path writes it. No deployment, runtime, real-vehicle, or business-accepted proof. | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
+| Accounting and QuickBooks | Approved intent becomes provider-posted reconciled truth | Source-present. QuickBooks OAuth and final-invoice execution are off in every environment (`docs/AI-NATIVE-ARCHITECTURE.md` machine-checked snapshot); provider mapping, tax, and readback remain incomplete and no accountable human has signed off. | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
+| Service/warranty/recovery | Complaint becomes attributable verified remedy | Locally-validated (Multica ELEC-21 drove the lifecycle end to end from a real browser against a local stack, found two defects, both fixed and now covered by tests; named suites: 867 Worker tests, 337 Frappe tests, 474 PWA tests, 267/267 deployment-contract checks). Cost recovery is not yet an effect-runtime adapter; no supplier, manufacturer, or insurer is called from any code path; Playwright/MCP evidence was not re-run on this branch. No deployment, runtime, or business-acceptance proof. | Dispatch/portal/mobile integration, provider recovery settlement |
+| Customer portal/public estimator | Customer can decide and self-serve safely | Locally-validated (`app/e2e/customer-portal-materials.spec.ts` drives the comparison and decision on a Pixel 5 viewport with no-horizontal-scroll and 44px-target assertions). Public estimator is off in production and staging (`docs/AI-NATIVE-ARCHITECTURE.md` machine-checked snapshot). No deployment, runtime, business-acceptance, or customer proof. | Accessibility, identity, real customer scenarios, public config proof |
+| Pipeline/form/document configuration | Operating views evolve without bypassing authority | Source-present. The documents read model reaches Locally-validated (`workers-bus/test/record-documents-api.test.ts`); the administrator-facing drag-and-drop, schema-form, and document-generation PWA surfaces are not built, and the document-generation flag is false in every checked-in environment. | Merged UI, typed command proof, runtime document generation/readback |
+| Provider manifests and readiness | Capabilities fail visibly and safely | Source-present. This is repository capability only: no tenant is configured or proven until a governed external path appends approved manifests and fresh provider readbacks, and no named passing check is cited for the readiness evaluator's own claims. | Named-environment dependency health, proof TTL, degraded/recovery drills |
+| Hermes/MCP/AI coordination | Bounded drafting and proposals reduce routine work | Source-present. Hermes is a disabled, single-pilot draft path with no resident context-plan-policy-permit-action-readback-reconciliation coordinator; no named passing check is cited for the coordination claim itself. | Deterministic reference journey before model-assisted trials |
+| Frappe compatibility and retirement | Legacy projection does not regain authority | Source-present. Frappe remains an optional, non-blocking projection; the release-admission chain names "no reachable adapter, provider command, staging/production Frappe identity, or live receipt" as proven; cutover is incomplete. | Consumer inventory, parity/cutover proof, restore/rebuild, disabled writes |
+| White label / Operating Packs | Repeat safe tenant setup without drift | Source-present. Only a single maturity-table line and one DocType mention exist in the matrix; no narrative implementation or named passing check is cited. | Second real tenant, isolation, upgrade/rollback compatibility |
+| Governance, workforce, facility, insurance, compliance | Whole-company controls join operating facts | Source-present. Legal/licence (Authority Records) and workforce (Crew Profile projections) sub-areas have real substrate; governance, facility, and insurance sub-areas are almost entirely target/absent. No named passing check is cited for any sub-area. | Owning objects, issuer readbacks, drills, accountable signoffs |
+
+Open items this pass could not settle, reported per the rule that an unsettled label is filed, not left
+silently at its prior value:
+
+- **Shop manufacturing scope mismatch.** `docs/CAPABILITY-MATRIX.md`'s "Sep 1 remaining honesty" note
+  states shop travelers and assemblies remain target-only, while its "Capability-by-capability target"
+  table describes signed release/reservation/setup/QC/yield/custody-handover functionality as already
+  existing. Both cannot be the full picture for the same capability. Owner: IronWrap OS product owner
+  (whoever owns IRO-46/IRO-47). Settling evidence: a fresh read of `frappe-apps/ironwrap_roofing` shop
+  DocTypes and their test coverage against both claims.
+- **Production-plan schedule-check and owner-onboarding rows.** ELEC-233 (G1.4) is in flight and may
+  move the production gates/derived-phase row (schedule-check) and the identity/session row
+  (owner-onboarding, i.e. the Settings/company-setup surface). Both are labeled here at what they earn
+  today; re-check against ELEC-233's green assertion once it lands. Owner: ELEC-233.
+- **CAPABILITY-MATRIX.md's own "Capability-by-capability target" table** (26 domain rows) and its
+  "Seven-area maturity snapshot" (7 rows) still use the prior free-prose vocabulary
+  ("Strong"/"Partial:"/"Mixed") rather than the six canonical classes. `DOCUMENTATION-CONTRACT.md`'s
+  "Status vocabulary" pointer names relabeling "the rows in this file" as part of G1.6, but this pass's
+  Multica issue (ELEC-235) scoped the 23 rows above plus the matrix's header preamble. Relabeling those
+  additional ~33 rows is out of scope here and is tracked as a fast-follow. Owner: next G1 documentation
+  lane / PO to assign. Settling evidence: the same evidence audit applied to those rows.
+- **Two default-off/unconfigured findings G1.3 (ELEC-232) parked under this goal**: the `ERPNEXT_BASE_URL`
+  split between `deploy/env.example:19` and `workers-bus/wrangler.jsonc:180`, and
+  `tools/production-readiness.mjs` covering none of the eight capabilities G1.3 named. Neither is a
+  proof-label judgment call; both need an engineering fix. Owner: PO to assign to the platform seat.
 
 ### 9.3 Verified capability flag state of the reference configuration
 

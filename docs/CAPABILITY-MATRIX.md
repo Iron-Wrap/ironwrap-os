@@ -2,7 +2,7 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-08-29
+Last verified: 2026-08-31
 Latest phase delta verified: 2026-08-27 (IRO-242 branch-local schema fields/templates and the
 default-off R2 generation/effect/readback/reconciliation path pass focused repository tests. This is
 unmerged source evidence only, not exact-main CI, activation, deployment, runtime, business
@@ -16,18 +16,15 @@ Review trigger: merged capability, changed proof, deployment, or production acce
 
 ## Status vocabulary
 
-- **Implemented**: code/configuration exists in the repository.
-- **Built**: the implementation passes its required repository build and focused checks.
-- **Configured**: required non-secret values and secret identities exist for one named environment.
-- **Provider-reachable**: authenticated reachability and exact provider readback are freshly proven.
-- **Technically proven**: the capability completed its production reference path and failure drills.
-- **Customer-validated**: real customers independently used and accepted the defined workflow or
-  outcome; synthetic/reference operation can never establish this state.
-- **Repository-verified**: a fresh deterministic check passed against the named commit.
-- **Partial**: useful implementation exists but a material target boundary is missing.
-- **Target-only**: required by the autonomous operating system but not implemented.
-- **External proof required**: completion depends on a live provider, device, authority, customer, or
-  physical workflow.
+This file uses the single proof-label vocabulary defined in
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels) — Target,
+Source-present, Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated —
+plus its orthogonal qualifiers (Partial, `<class>, repository-verified <date>`, `Blocked: <reason>`).
+It does not define its own terms. The rows in this file still use the prior ten-term vocabulary
+(Implemented, Built, Provider-reachable, Technically proven, Target-only, External proof required, and
+the rest); relabeling them to the canonical six is Multica G1.6's job, using the migration map in
+`DOCUMENTATION-CONTRACT.md`'s "Migration from prior vocabularies" — do not hand-relabel rows here
+piecemeal ahead of that pass.
 
 This file does not claim current deployment or production state. Fresh live evidence must come from
 the launch/readiness tooling and the named external authority.

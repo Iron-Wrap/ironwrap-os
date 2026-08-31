@@ -693,6 +693,15 @@ access, anti-gaming note и baseline до утверждения target.
 9. Контролируемый non-customer reference journey по полному lifecycle.
 10. Отдельная accountable customer validation после legal, operational и readiness gates.
 
+Эта лестница — не второй словарь доказанности. Она сворачивается в шесть proof classes, определенных в
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels): ступени 1–5 это
+Locally-validated; ступень 6 это Configured, как только sandbox именован и credentialed, и доходит до
+Runtime-proven только если live authenticated вызов и его readback реально выполнились против него;
+ступени 7–9 это Runtime-proven, причем ступень 9 — его самый полный single-capability пример; ступень
+10 это Customer-validated. У Business-accepted нет отдельной ступени — это именованный accountable
+человек, который проверяет и принимает evidence, собранный на ступени 8 или 9, а не одиннадцатая
+ступень.
+
 ### 18.2 Обязательные негативные сценарии
 
 - Cross-tenant identifiers, stale versions, duplicate requests, replayed webhook и revoked device.
@@ -801,7 +810,10 @@ Story считается done, если:
 - учтены schema/migration, API, UI, content, accessibility, telemetry, privacy/retention и support impact;
 - прошли focused tests и broader required gates, а unrelated user work не попала в изменение;
 - документация и диаграммы обновлены без создания competing authority;
-- статусы exact source/test/CI/merge/deploy/runtime/business/customer proof сообщены раздельно;
+- proof class утверждения указан по шести-классному словарю из
+  [`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels) — Source-present,
+  Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated — никогда не
+  округлен выше того, что реально доказывает evidence;
 - provider или physical capability включает readback/reconciliation, а не только request success;
 - accountable product/domain owner принял поведение в правильной environment.
 

@@ -23,15 +23,20 @@ capabilities must extend this annex before implementation is considered specifie
 
 ### 1.1 Evidence labels
 
-| Label | Interpretation in this annex |
-|---|---|
-| **Canonical** | Required by an owning IronWrap contract. |
-| **Source-present** | A route, component, handler, schema, adapter, or deterministic test fixture exists. |
-| **Locally rendered** | The UI was rendered from this checkout against the acceptance harness. |
-| **Locally validated** | The named local check passed on this checkout. |
-| **Partial** | A meaningful path exists, but configuration, adapter, UI, policy, or proof is incomplete. |
-| **Target** | Required behavior without complete executable and proven support. |
-| **Not proven** | No merge, deploy, runtime, provider, business, or customer conclusion may be drawn. |
+This annex uses the single proof-label vocabulary defined in
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels): Target,
+Source-present, Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated,
+plus the Canonical and Partial qualifiers and the Blocked status flag. It does not define its own
+labels.
+
+Two annex-specific notes on applying that vocabulary to UI evidence:
+
+- A screenshot proves the pictured surface rendered from this checkout — that is evidence toward
+  Source-present, not Locally-validated on its own. Locally-validated additionally requires a named
+  check to have passed, not just a render (see §1.2).
+- "Not proven" is retired: per `DOCUMENTATION-CONTRACT.md`'s "proof classes never merge" rule, a
+  capability that has not earned a class simply does not assert one — state the class actually reached
+  (often Source-present) rather than a separate negative label.
 
 ### 1.2 Screenshot evidence rule
 

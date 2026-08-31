@@ -418,12 +418,125 @@ KPI, retention rule и exception path.
 | White label / Operating Packs | Повторяемая безопасная настройка tenant без drift | Частично, целевое состояние | Second real tenant, isolation, upgrade/rollback compatibility |
 | Governance, workforce, facility, insurance, compliance | Whole-company controls соединяются с operating facts | В основном target или partial | Owning objects, issuer readbacks, drills, accountable signoffs |
 
-### 9.3 Текущие флаги возможностей из проверенного снимка архитектуры
+### 9.3 Проверенное состояние флагов возможностей в reference configuration
 
-Архитектурный документ фиксирует reference configuration с включенным effect runtime, но с
-выключенными или отсутствующими QuickBooks OAuth/final-invoice execution, Hermes desktop, public
-estimator, Newo, Postiz, Facet routes и proposal-template configuration. Это факты снимка
-документации, а не live readback среды. UI обязан честно показывать недоступные возможности.
+Проверено по репозиторию на `main` @ `3da7ee2b`, а не по живой среде. Reference configuration —
+это `workers-bus/wrangler.jsonc`: верхнеуровневый `vars` — production deployment, а `env.local` и
+`env.staging` заменяют эти vars целиком, а не наследуют их. Worker secrets никогда не лежат в
+репозитории, поэтому любое утверждение о секрете ниже помечено как `unknown`.
+`docs/AI-NATIVE-ARCHITECTURE.md` — это утверждение документации об этих флагах, а не доказательство
+их состояния; доказательство — процитированные здесь bindings и code paths.
+
+Три состояния, и они никогда не сливаются:
+
+- **absent (отсутствует)** — ни один code path в `workers-bus/src` не читает это имя; ничего не
+  выключено, потому что за именем ничего нет.
+- **present, default-off (есть, по умолчанию выключено)** — code path существует, а его флаг равен
+  `"false"` в reference configuration. Поверхность отказывает до любой работы (`404` или `503`).
+- **present and on but unconfigured (включено, но не сконфигурировано)** — флаг равен `"true"` или
+  флага нет вовсе, но обязательное значение пустое. Поверхность достижима и падает при первом же
+  использовании с именованным кодом.
+
+| Возможность | Управляющий binding (`file:line`) | Значение по умолчанию | Состояние | Что обязан увидеть пользователь |
+|---|---|---|---|---|
+| QuickBooks OAuth | `workers-bus/wrangler.jsonc:183` `QB_OAUTH_ENABLED` | `"false"` (local `:383`, staging `:565` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Не подключено; подключение — действие администратора, требующее учётных данных Intuit |
+| QuickBooks final-invoice execution | `workers-bus/wrangler.jsonc:184` `QB_FINAL_INVOICE_ENABLED` | `"false"` (local `:384`, staging `:566` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено — ни один счёт не уходит в QuickBooks; одобренный intent ждёт |
+| Hermes desktop | `workers-bus/wrangler.jsonc:209` `APP_HERMES_DESKTOP_ENABLED` | `"false"` (local `:403`, staging `:585` тоже `"false"`) | present, default-off | Недоступно |
+| Hermes hosted reference execution | `workers-bus/src/hermes-desktop.ts:1629` `APP_HERMES_HOSTED_REFERENCE_ENABLED` | не объявлен ни в одной среде | present, default-off по факту отсутствия | Недоступно |
+| Public estimator | `workers-bus/wrangler.jsonc:194` `PUBLIC_ESTIMATE_ENABLED` | `"false"` в production и staging (`:574`); `"true"` в `env.local` (`:392`) | present, default-off в развёрнутой конфигурации | Выключено в production; локальный стенд не является доказательством для него |
+| Newo | `workers-bus/wrangler.jsonc:130` `NEWO_ENABLED` | `"false"` (local `:339`, staging `:526` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено |
+| Postiz | `workers-bus/wrangler.jsonc:224` `POSTIZ_ENABLED` | `"false"` (local `:418`, staging `:600` тоже `"false"`) | present, default-off; под ним ещё и unconfigured | Выключено |
+| Facet v2 design ingest | `workers-bus/wrangler.jsonc:215` `FACET_V2_INGEST_ENABLED` плюс `:216` `FACET_V2_ROUTES_JSON` | `"true"` при routes `"[]"` | **present and on but unconfigured** | Включено, но не сконфигурировано — ни один Facet route не зарегистрирован, доставка падает |
+| Facet launch | `workers-bus/wrangler.jsonc:221` `APP_FACET_LAUNCH_ENABLED` плюс `:222` `APP_FACET_LAUNCH_BASE_URL`, `:223` `APP_FACET_LAUNCH_SOURCE_TENANT_ID` | `"true"` при обоих пустых значениях | **present and on but unconfigured** | Включено, но не сконфигурировано — запуск Facet-дизайна падает |
+| Facet v2 native projection | `workers-bus/wrangler.jsonc:217` `FACET_V2_NATIVE_PROJECTION_ENABLED` | `"true"` во всех средах | present and on; простаивает, потому что проецирует только принятые ingest-строки | Доступно, но проецировать нечего, пока ingest не сконфигурирован |
+| Facet design → Frappe projection | `workers-bus/wrangler.jsonc:218` `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` | `"false"` во всех средах | present, default-off | Выключено (выводимая из эксплуатации проекция) |
+| Facet v1 design ingest | `workers-bus/wrangler.jsonc:213` `FACET_DESIGN_INGEST_ENABLED` | `"false"` во всех средах | **absent** — нет потребителя в `workers-bus/src`; имя читает только `tools/production-readiness.mjs:938` | Ничего; это имя не должно появляться как возможность |
+| Facet quote-revision prepare | `workers-bus/wrangler.jsonc:219` `APP_FACET_QUOTE_REVISION_PREPARE_ENABLED` | `"false"` во всех средах | **absent как управляющий флаг** — объявлен в `workers-bus/src/app-types.ts:101`, но нигде в `src` не читается; названная им поверхность вместо этого закрыта конфигурацией broker | Ничего; флаг не описывает того, что получает пользователь |
+| Proposal-template configuration | `workers-bus/wrangler.jsonc:236` `PROPOSAL_TEMPLATE_DOC_ID` | `""`; в `env.local` и `env.staging` не объявлен вовсе | **present and on but unconfigured** — флага нет, маршрут смонтирован безусловно в `workers-bus/src/app-api.ts:884` | Кнопка генерации предложения предлагается и падает с `proposal_doc_not_configured`; показывать надо «не сконфигурировано», а не «недоступно» |
+| Proposal publication | `workers-bus/wrangler.jsonc:220` `APP_PROPOSAL_PUBLICATION_ENABLED` | `"false"` в production и staging (`:596`); `"true"` в `env.local` (`:414`) | present, default-off в развёрнутой конфигурации | Выключено |
+| Document generation | `workers-bus/wrangler.jsonc:123` `APP_DOCUMENT_GENERATION_ENABLED` | `"false"` во всех средах | present, default-off | Выключено |
+
+Code paths и поведение отказа за каждой строкой:
+
+- **QuickBooks.** Оба флага читаются в `workers-bus/src/quickbooks-final-invoice.ts:411` и `:415`;
+  старт OAuth отказывает с `quickbooks_oauth_disabled` (`:838`), а dispatch — с
+  `quickbooks_final_invoice_disabled` (`:1234`). Callback route —
+  `workers-bus/src/index.ts:572`, webhook Intuit — `:771`. Переключение одного флага не включает
+  возможность: `configuration()` (`:3089`) требует ещё и
+  `QB_TOKEN_ENCRYPTION_KEY_VERSION`, который равен `""` в
+  `workers-bus/wrangler.jsonc:188`, плюс секреты `QB_CLIENT_ID` / `QB_CLIENT_SECRET` /
+  `QB_TOKEN_ENCRYPTION_KEY`.
+- **Hermes desktop.** Все desktop-маршруты отказывают `404` в
+  `workers-bus/src/hermes-desktop.ts:220`, `:307` и `:334`; pairing-маршрут подключён в
+  `workers-bus/src/app-api.ts:553`. Reference execution требует второго флага и
+  `APP_HERMES_PROVIDER_MODEL` (`workers-bus/src/hermes-desktop.ts:1633`); ни одно из этих имён не
+  встречается ни в одной среде `wrangler.jsonc`.
+- **Public estimator.** Флаг читается в `workers-bus/src/public-estimator.ts:226`; readiness
+  считает выключенное состояние здоровым (`:210`). Включение в production дополнительно требует
+  allowed origins, allowed brands, consent jurisdiction, Turnstile site key и пустой legacy-список
+  диапазонов — всё это `""` в `workers-bus/wrangler.jsonc:195-203` — плюс секреты
+  `PUBLIC_ESTIMATE_TURNSTILE_SECRET` и `PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER`.
+- **Newo.** Webhook-плоскость отказывает с `newo_disabled` в `workers-bus/src/newo.ts:169`,
+  control-плоскость — в `workers-bus/src/newo-control.ts:747`. Включение требует также
+  `NEWO_PROJECT_ID`, `NEWO_AGENT_ID`, обоих webhook id и URL и `NEWO_PHONE_NUMBER` — всё `""` в
+  `workers-bus/wrangler.jsonc:135-140` и `:147` — плюс секреты `NEWO_API_KEY`,
+  `NEWO_WEBHOOK_TOKEN` и `NEWO_BOOKING_TOKEN` (`workers-bus/src/operations.ts:505`, `:522`).
+- **Postiz.** `workers-bus/src/postiz.ts:151`; каждая точка входа отделяет `postiz_disabled` от
+  `postiz_not_configured` (`:453`, `:523`, `:600`, `:644`). Конфигурация дополнительно требует
+  `POSTIZ_API_BASE_URL`, равного `""` в `workers-bus/wrangler.jsonc:226`, и секрета
+  `POSTIZ_API_KEY` (`workers-bus/src/postiz.ts:1242`).
+- **Facet routes.** `/ingest/facet-design` (`workers-bus/src/index.ts:668`) и
+  `/ingest/facet-estimator-ready` (`:676`) **включены**, поэтому они не отвечают `404`; они
+  отвечают `503 facet_v2_ingest_unavailable` / `facet_estimator_ready_unavailable`, потому что
+  `facetV2StaticRoutes` отвергает пустой массив (`workers-bus/src/facet-design-ingest.ts:389-394`),
+  а секрет `FACET_V2_KEYS_JSON` отсутствует (`workers-bus/src/facet-design-ingest.ts:368`).
+  Офисный launch-маршрут (`workers-bus/src/app-api.ts:1490`) отвечает
+  `503 facet_launch_not_configured` по той же причине плюс из-за пустых base URL и source tenant
+  (`workers-bus/src/facet-launch.ts:658`).
+- **Proposal template.** Флага включения нет вовсе. `workers-bus/src/proposal-doc-action.ts:81-83`
+  возвращает `503 proposal_doc_not_configured`, когда id шаблона пуст или Google не
+  сконфигурирован. Это единственная строка, где слово «выключено» активно вводит в заблуждение:
+  действие предлагается estimator'у и падает при первом использовании.
+
+**Действительно ли effect runtime включён?** Да, во всех трёх средах: `EFFECT_RUNTIME_ENABLED`
+равен `"true"` в `workers-bus/wrangler.jsonc:122` (production), `:331` (local) и `:518` (staging).
+Это не декорация — `assertEffectLedgerReady` (`workers-bus/src/effect-runtime.ts:195`) отказывает
+любой provider mutation с `effect_runtime_required`, пока флаг не `"true"`, и с
+`effect_ledger_unavailable`, пока не резолвится D1 binding; его вызывают адаптеры QuickBooks,
+JobNimbus, Google, Newo, Postiz, Frappe и Facet projection. Его схема —
+`workers-bus/migrations/0042_external_effect_runtime.sql` и
+`0062_external_effect_insert_replace_guards.sql`. Чего репозиторий показать не может — применены ли
+эти миграции в развёрнутой базе; это runtime readback, и `canonicalEffectLedgerSchemaReady`
+(`workers-bus/src/capability-readiness.ts:658`) — та проба, которая на это отвечает.
+
+**Runtime-readable против build-time.** Ни один из этих флагов не является build-time: в `app/`
+нет ни одного feature gate на `import.meta.env`, поэтому бандл PWA одинаков при любой конфигурации,
+а каждое состояние выше решается в Worker на каждый запрос. Это делает честный UI возможным, но не
+автоматическим:
+
+- `GET /api/v1/integrations/readiness` (`workers-bus/src/app-api.ts:1616`, только office-роли) —
+  единственная сводная read model возможностей. Она покрывает шестнадцать capability id
+  (`workers-bus/src/capability-readiness.ts:11-29`) и среди них сообщает `newo`, `postiz`,
+  `public_estimator`, `quickbooks` и `facet_association`. При этом её сигнал `quickbooks` — это
+  учётные данные и realm, а не `QB_OAUTH_ENABLED` (`:637`): состояние флага и сигнал readiness —
+  разные факты, и показывать их как один нельзя.
+- Для нескольких возможностей есть отдельные сигналы: `quickBooksAvailable` в read model настройки
+  компании (`workers-bus/src/company-setup-api.ts:448`) и отсутствие пункта в `allowed_actions` для
+  proposal publication (`workers-bus/src/app-api.ts:5497`).
+- `GET /api/v1/session` (`workers-bus/src/app-api.ts:640`) не несёт флагов возможностей вообще,
+  поэтому не-office роль не имеет runtime-способа узнать, что Hermes desktop, proposal template или
+  Facet routes недоступны; эти поверхности узнают об этом только из `404`/`503` при первом
+  использовании. Hermes desktop, proposal-template configuration и Facet ingest routes также не
+  представлены в readiness read model.
+
+**Неизвестно из репозитория.** Каждому из этих пунктов нужен readback в названной среде, а не ещё
+один документ: установлен ли фактически хоть один Worker secret (`QB_*`, `NEWO_*`,
+`POSTIZ_API_KEY`, `FACET_V2_KEYS_JSON`, `FACET_LAUNCH_HMAC_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`);
+применены ли в развёрнутой D1 миграции `0042`, `0062` и `0118`; существует ли для этого tenant хоть
+одна строка `capability_integration_manifests` или `capability_proof_facts`, поскольку репозиторий
+не сеет ни одной; и совпадают ли живые vars развёрнутого Worker с этим файлом — это может решить
+только readback `/ready` или `/api/v1/integrations/readiness`. До тех пор каждая строка выше —
+source-present факт конфигурации, и UI обязан подавать её именно так.
 
 ## 10. Функциональные требования
 

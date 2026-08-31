@@ -601,7 +601,7 @@ Capability, которой экран не может воспользовать
 2. Форма собирает name, work email и role; captured validation/focus state видим и не теряет данные молча.
 3. Existing accounts показывают immutable owner и явные role/removal controls для другого человека.
 
-**Доказательство:** локально отрисованная source surface; прошли 6 из 6 targeted onboarding scenarios (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5). **Закрыто 2026-08-31 (ELEC-233):** оба ранее открытых finding оказались дрейфом acceptance-fixture, а не дефектами UI. Fixture заполняла компанию уже готовым именем, поэтому setup list никогда не доходил до состояния, которое видит новая компания — теперь reset дает компанию без имени, и шаг company читается как “Later”, текущее слово для “здесь еще ничего не сделано”. Ответ fixture по company-profile также не содержал полей, обязательных по клиентскому контракту, поэтому `/settings/company` отрисовывал error state и этот suite вообще не проверял форму; теперь fixture отдает тот же envelope, что и Worker. §8 хранит receipt до ремонта, пока он не будет перегенерирован на поставленном коммите.
+**Доказательство:** локально отрисованная source surface; прошли 6 из 6 targeted onboarding scenarios (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5), повторно подтверждено 2026-08-31 на `9686d80e` (ELEC-237/G1.8). **Закрыто 2026-08-31 (ELEC-233):** оба ранее открытых finding оказались дрейфом acceptance-fixture, а не дефектами UI. Fixture заполняла компанию уже готовым именем, поэтому setup list никогда не доходил до состояния, которое видит новая компания — теперь reset дает компанию без имени, и шаг company читается как “Later”, текущее слово для “здесь еще ничего не сделано”. Ответ fixture по company-profile также не содержал полей, обязательных по клиентскому контракту, поэтому `/settings/company` отрисовывал error state и этот suite вообще не проверял форму; теперь fixture отдает тот же envelope, что и Worker. §8 теперь перегенерирован на поставленном коммите ниже. Примечание: этот suite запускается только вручную через `test:pwa:onboarding` — ни один шаг CI не задает `ACCEPTANCE_MODE=onboarding`, поэтому это доказательство остается только локальным, не проверяется CI (ELEC-251).
 
 ### 7.9 Любая роль: выключенная capability
 
@@ -615,20 +615,47 @@ Capability, которой экран не может воспользовать
 
 ## 8. Receipt приемочного стенда для этого приложения
 
-Зависимости приложения установлены из committed lockfile; успешно прошли TypeScript, Vite, PWA
-generation и repository distribution verification. Targeted UI runs дали следующие результаты:
+Перегенерировано 2026-08-31 (ELEC-237/G1.8) из реального прогона на `ironwrap-os` @
+`9686d80ea381c57d0aeaaecedbeb952d059620db` (`main`; включает ELEC-233/#232, ELEC-240/#233,
+ELEC-244/#234 и ELEC-236/#235). Каждое число ниже получено на этом checkout, а не перенесено из
+предыдущего receipt. Полные команды и сырой вывод — в evidence-комментарии ELEC-237; эта таблица —
+сводка.
+
+**Полный harness:** `npm test --prefix workers-bus` (1622/1622 passed) плюс `npm run typecheck`
+(чисто после `npm run typegen`); `npm test --prefix app` (971/971 passed, 120 файлов); `npm run
+build --prefix app` (успешно; TypeScript, Vite, PWA generation и distribution verification прошли);
+`npm run test:pwa --prefix app` (258 тестов, 95 passed, 162 self-skip из-за несовпадающего
+`ACCEPTANCE_MODE`, 1 failed — см. строку Field Today). Timing-чувствительность
+`app/src/inventory/inventory-page.test.tsx` из ELEC-246 в этом прогоне не воспроизвелась, но зелёный
+статус этого suite подтвержден на конкретном железе этого прогона, а не как детерминированное
+свойство — более узкое утверждение, чем подразумевает "locally validated", именно для шага `app
+test`.
 
 | Suite / поверхность | Результат | Интерпретация |
 |---|---:|---|
-| Accounting desktop scenarios | 6 / 6 passed | Current accounting fixture совпала с targeted assertions. |
+| Accounting desktop scenarios | 3–4 / 6 passed (недетерминированно) | Два assertion падают в каждом прогоне (`app/e2e/accounting-money-desk.spec.ts:144`, `:156`) — strict-mode коллизия заголовков и отсутствующая кнопка "Approve external invoice"; третий (проверка 44px touch-target) упал один раз из трёх на 0.00002px, вероятно шум точности рендеринга. Заведено как ELEC-249. Этот suite никогда не запускается в CI (ни один шаг не задаёт `ACCEPTANCE_MODE=accounting`) — заведено как ELEC-251. |
 | Customer portal mobile scenarios | 4 / 4 passed | Current portal fixture совпала с targeted assertions. |
-| Owner/reception/sales/service desktop | 4 / 4 passed | Выбранные office views отрисовались и прошли targeted assertions. |
-| Production-plan targeted scenario | 0 / 1 passed | Test ожидает schedule-check link, которого current UI не показывает. |
-| Owner onboarding mobile scenarios | 4 / 6 passed | Два assertions не соответствуют current onboarding UI. |
-| Field Today capture | Rendered after deterministic device-proof seed | Доказана только pictured fixture; full-day offline test не выполнялся. |
+| Owner/reception/sales/service desktop | 4 / 4 passed | Выбранные office views отрисовались и прошли targeted assertions. Чисто прошли в двух изолированных повторах; touch-target проверка в `service-calls.spec.ts` один раз упала при параллельном запуске (на 0.00001px меньше 44px), но прошла в обоих изолированных повторах — тот же паттерн точности рендеринга, что и в строке accounting, не считается отдельным сценарным провалом. |
+| Production-plan targeted scenario | 0 / 1 passed | Держится падающим намеренно: приложение вообще не предлагает маршрут к schedule check, и это единственный сигнал harness, указывающий на этот gap. Gap принадлежит **ELEC-241** под G3 (inline-комментарий в файле теста, `app/e2e/production-plan.spec.ts:113`, всё ещё говорит "owner ELEC-239" — дубликат, заведённый в тот же день; PO подтвердил, что ELEC-241 канонический, лучше специфицированный issue, и сверяет дубликат отдельно, вне этого slice). |
+| Owner onboarding mobile scenarios | 6 / 6 passed | Рост с 4/6 в предыдущем receipt — исправление fixture по ELEC-233 подтверждено на этом коммите. Никогда не запускается в CI (ELEC-251), как и строка accounting. |
+| Field Today capture | 4 / 5 passed | Доказана только pictured fixture; full-day offline test не выполнялся (это реальное устройство и полный день — задача G3). Пятый assertion в этом прогоне — axe-скан WCAG AA, и теперь он падает: серьёзное нарушение цветового контраста (~3.1–3.2:1 против требуемых 4.5:1) на постоянном пункте навигации Safety. Новый finding, воспроизведен в 2/2 изолированных прогонах. Заведено как ELEC-250. |
 
-Эти receipts являются только local source/test evidence. Падающие assertions сохранены как backlog
-для product/test-contract review; данное изменение документации не меняет поведение приложения.
+Дополнительные suites, тоже прогнанные на этом коммите, все зелёные и все под CI:
+`test:pwa:board` (14/14), `test:pwa:placement` (2/2), `test:pwa:owner-configuration` (9/9), и
+`test:pwa:capabilities` / `test:pwa:capabilities:accounting` (4/4 содержательных assertion в сумме
+двух дополняющих прогонов, совпадает с доказательством §7.9).
+
+**Заявление о классе доказательства.** Всё вышеперечисленное — local source/test evidence: это
+доказывает только то, что работает на этом checkout под mocked acceptance server, не больше. Это не
+merge, не deploy, не configuration, не runtime health, не business acceptance и не customer
+validation — ничего из этого для данного коммита не существует (см. acceptance bundle в
+evidence-комментарии ELEC-237). CI прогнан на этом же коммите (`9686d80e`, run `33425734349`) и
+зелёный, но набор suites в CI не покрывает сценарии accounting и onboarding выше (ELEC-251),
+поэтому "CI зелёный" и "строки этого receipt" — два разных, лишь частично пересекающихся
+утверждения; одно не подтверждает другое. Три строки выше несут именованных владельцев и открытые
+даты вместо закрытого disposition: ELEC-249 (accounting, заведено 2026-08-31), ELEC-250 (field
+WCAG, заведено 2026-08-31) и ELEC-251 (CI gap, заведено 2026-08-31). Gap строки production-plan
+принадлежит ELEC-241 под G3 — см. выше.
 
 ## 9. Трассируемость process -> flow -> UI
 

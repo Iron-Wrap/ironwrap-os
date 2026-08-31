@@ -604,7 +604,7 @@ configuration-surface change, not a presentation change.
 2. The add-person form collects name, work email, and role; the captured validation/focus state is visible rather than silently discarded.
 3. Existing accounts show owner immutability and explicit role/removal controls for another person.
 
-**Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 carries the pre-repair receipt until it is regenerated on the delivered commit.
+**Evidence:** locally rendered source surface; six of six targeted onboarding scenarios passed (`npm run test:pwa:onboarding`, mobile-chromium Pixel 5), reconfirmed 2026-08-31 on `9686d80e` (ELEC-237/G1.8). **Closed 2026-08-31 (ELEC-233):** both previously open findings were acceptance-fixture drift, not UI defects. The fixture seeded a company that was already named, so the setup list could never reach the state a fresh company sees — it now resets unnamed and the company step reads “Later”, the current word for “no work done here yet”. The company-profile fixture response also omitted fields the client contract requires, so `/settings/company` rendered its error state and this suite never exercised the form at all; the fixture now emits the envelope the Worker emits. §8 is now regenerated on the delivered commit below. Note: this suite runs only when someone invokes `test:pwa:onboarding` directly — no CI step sets `ACCEPTANCE_MODE=onboarding`, so this proof is local-only, never CI-gated (ELEC-251).
 
 ### 7.9 Any role: a capability that is switched off
 
@@ -618,21 +618,45 @@ configuration-surface change, not a presentation change.
 
 ## 8. Acceptance-harness receipt for this annex
 
-The app was installed from the committed lockfile and built successfully with TypeScript, Vite, PWA
-generation, and the repository’s distribution verification. The deterministic targeted UI runs used
-for the gallery produced these results:
+Regenerated 2026-08-31 (ELEC-237/G1.8) from a real run on `ironwrap-os` @
+`9686d80ea381c57d0aeaaecedbeb952d059620db` (`main`; carries ELEC-233/#232, ELEC-240/#233,
+ELEC-244/#234, and ELEC-236/#235). Every number below comes from output produced on this checkout,
+not carried forward from an earlier receipt. Full commands and raw output are in the ELEC-237
+evidence comment; this table is a summary.
+
+**Full harness:** `npm test --prefix workers-bus` (1622/1622 passed) plus `npm run typecheck`
+(clean after `npm run typegen`); `npm test --prefix app` (971/971 passed, 120 files); `npm run
+build --prefix app` (succeeded; TypeScript, Vite, PWA generation, and distribution verification all
+passed); `npm run test:pwa --prefix app` (258 tests, 95 passed, 162 self-skipped for a
+non-matching `ACCEPTANCE_MODE`, 1 failed — see the Field Today row). The `app/src/inventory/
+inventory-page.test.tsx` timing sensitivity tracked at ELEC-246 did not reproduce in this run, but
+that suite's green is established on this run's hardware, not proven deterministic — a narrower
+claim than "locally validated" implies for the `app test` step specifically.
 
 | Suite / surface | Result | Interpretation |
 |---|---:|---|
-| Accounting desktop scenarios | 6 / 6 passed | Current accounting fixture behavior matched targeted assertions. |
+| Accounting desktop scenarios | 3–4 / 6 passed (non-deterministic) | Two assertions fail every run (`app/e2e/accounting-money-desk.spec.ts:144`, `:156`) — a strict-mode heading collision and a missing "Approve external invoice" button; a third (a 44px touch-target check) failed once in three runs by 0.00002px, likely rendering-precision noise. Filed as ELEC-249. This suite is never run in CI (no step sets `ACCEPTANCE_MODE=accounting`) — filed as ELEC-251. |
 | Customer portal mobile scenarios | 4 / 4 passed | Current portal fixture behavior matched targeted assertions. |
-| Owner/reception/sales/service targeted desktop scenarios | 4 / 4 passed | The selected office views rendered and met their targeted assertions. |
-| Production-plan targeted scenario | 0 / 1 passed | Test expects a schedule-check link that current UI does not expose. |
-| Owner onboarding mobile scenarios | 4 / 6 passed | Two assertions no longer match current onboarding UI. |
-| Field Today capture | Rendered after deterministic device-proof seed | Proves the pictured fixture only; it was not a full-day offline test. |
+| Owner/reception/sales/service targeted desktop scenarios | 4 / 4 passed | The selected office views rendered and met their targeted assertions. Ran clean in two isolated repeats; a touch-target check in `service-calls.spec.ts` failed once under concurrent execution (0.00001px short of 44px) but passed in both isolated reruns — the same rendering-precision pattern as the accounting row, not treated as a distinct scenario failure. |
+| Production-plan targeted scenario | 0 / 1 passed | Held failing on purpose: the app offers no route to a schedule check at all, and this is the only harness signal pointing at that gap. Gap owned by **ELEC-241** under G3 (the test file's inline comment at `app/e2e/production-plan.spec.ts:113` still says "owner ELEC-239" — a duplicate filed the same day; the PO confirmed ELEC-241 is the canonical, better-scoped issue and is reconciling the duplicate separately, out of this slice). |
+| Owner onboarding mobile scenarios | 6 / 6 passed | Up from 4/6 on the previous receipt — ELEC-233's fixture repair confirmed on this commit. Never run in CI (ELEC-251), same as the accounting row. |
+| Field Today capture | 4 / 5 passed | Proves the pictured fixture only; it was not a full-day offline test (that real-device exercise belongs to G3). This run's 5th assertion is a WCAG AA axe scan, and it now fails: a serious color-contrast violation (~3.1–3.2:1 against a required 4.5:1) on the persistent Safety navigation entry. New finding, reproduced in 2/2 isolated runs. Filed as ELEC-250. |
 
-These receipts are local source/test evidence only. The failing assertions are preserved as backlog
-items for product/test-contract review; this documentation change does not alter application behavior.
+Supplementary suites also exercised on this commit, all green and all CI-gated: `test:pwa:board`
+(14/14), `test:pwa:placement` (2/2), `test:pwa:owner-configuration` (9/9), and
+`test:pwa:capabilities` / `test:pwa:capabilities:accounting` (4/4 substantive assertions across the
+two complementary runs, matching §7.9's evidence).
+
+**Proof-class statement.** All of the above is local source/test evidence: it proves what runs on
+this checkout under a mocked acceptance server, nothing more. It is not merge, deploy,
+configuration, runtime health, business acceptance, or customer validation — none of that exists
+for this commit (see the acceptance bundle in the ELEC-237 evidence comment). CI ran on this exact
+commit (`9686d80e`, run `33425734349`) and is green, but CI's own suite selection does not cover
+the accounting or onboarding scenarios above (ELEC-251), so "CI green" and "this receipt's rows"
+are two different, only partially overlapping claims — do not read one as backing the other.
+Three rows above carry named owners and open dates rather than a closed disposition: ELEC-249
+(accounting, filed 2026-08-31), ELEC-250 (field WCAG, filed 2026-08-31), and ELEC-251 (CI gap,
+filed 2026-08-31). The production-plan row's gap is owned by ELEC-241 under G3 — see above.
 
 ## 9. Process-to-flow-to-UI traceability
 

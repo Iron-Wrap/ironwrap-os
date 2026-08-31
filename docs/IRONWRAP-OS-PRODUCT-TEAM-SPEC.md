@@ -486,12 +486,127 @@ KPI, retention rule, and exception path.
 | White label / Operating Packs | Repeat safe tenant setup without drift | Partial/target | Second real tenant, isolation, upgrade/rollback compatibility |
 | Governance, workforce, facility, insurance, compliance | Whole-company controls join operating facts | Mostly target/partial | Owning objects, issuer readbacks, drills, accountable signoffs |
 
-### 9.3 Current capability flags from the reviewed architecture snapshot
+### 9.3 Verified capability flag state of the reference configuration
 
-The architecture document records the reference configuration with the effect runtime enabled while
-QuickBooks OAuth/final-invoice execution, Hermes desktop, public estimator, Newo, Postiz, Facet
-routes, and proposal-template configuration are disabled or absent. These are documentation-snapshot
-facts, not a live environment readback. The UI must represent unavailable capabilities honestly.
+Verified against the repository at `main` @ `3da7ee2b`, not against a live environment. The
+reference configuration is `workers-bus/wrangler.jsonc`: top-level `vars` is the production
+deployment, and `env.local` / `env.staging` replace those vars wholesale rather than inheriting
+them. Worker secrets are never in the repository, so every claim below about a secret is `unknown`
+and marked as such. `docs/AI-NATIVE-ARCHITECTURE.md` is a documentation claim about these flags,
+not evidence of them; the bindings and code paths cited here are the evidence.
+
+Three states, and they never merge:
+
+- **absent** — no code path in `workers-bus/src` reads the name; nothing is switched off because
+  there is nothing behind it.
+- **present, default-off** — the code path exists and its flag is `"false"` in the reference
+  configuration. The surface refuses before doing any work (`404` or `503`).
+- **present and on but unconfigured** — the flag is `"true"`, or there is no flag at all, but a
+  required value is empty. The surface is reachable and fails at first use with a named code.
+
+| Capability | Controlling binding (`file:line`) | Reference default | State | What a user must be shown |
+|---|---|---|---|---|
+| QuickBooks OAuth | `workers-bus/wrangler.jsonc:183` `QB_OAUTH_ENABLED` | `"false"` (local `:383`, staging `:565` also `"false"`) | present, default-off; unconfigured underneath | Not connected; connecting is an administrator action that needs Intuit credentials |
+| QuickBooks final-invoice execution | `workers-bus/wrangler.jsonc:184` `QB_FINAL_INVOICE_ENABLED` | `"false"` (local `:384`, staging `:566` also `"false"`) | present, default-off; unconfigured underneath | Off — no invoice reaches QuickBooks; approved intent waits |
+| Hermes desktop | `workers-bus/wrangler.jsonc:209` `APP_HERMES_DESKTOP_ENABLED` | `"false"` (local `:403`, staging `:585` also `"false"`) | present, default-off | Not available |
+| Hermes hosted reference execution | `workers-bus/src/hermes-desktop.ts:1629` `APP_HERMES_HOSTED_REFERENCE_ENABLED` | undeclared in every environment | present, default-off by omission | Not available |
+| Public estimator | `workers-bus/wrangler.jsonc:194` `PUBLIC_ESTIMATE_ENABLED` | `"false"` production and staging (`:574`); `"true"` in `env.local` (`:392`) | present, default-off in the deployed configuration | Off in production; the local stack is not evidence for it |
+| Newo | `workers-bus/wrangler.jsonc:130` `NEWO_ENABLED` | `"false"` (local `:339`, staging `:526` also `"false"`) | present, default-off; unconfigured underneath | Off |
+| Postiz | `workers-bus/wrangler.jsonc:224` `POSTIZ_ENABLED` | `"false"` (local `:418`, staging `:600` also `"false"`) | present, default-off; unconfigured underneath | Off |
+| Facet v2 design ingest | `workers-bus/wrangler.jsonc:215` `FACET_V2_INGEST_ENABLED` plus `:216` `FACET_V2_ROUTES_JSON` | `"true"` with routes `"[]"` | **present and on but unconfigured** | On but not configured — no Facet route is registered, so delivery fails |
+| Facet launch | `workers-bus/wrangler.jsonc:221` `APP_FACET_LAUNCH_ENABLED` plus `:222` `APP_FACET_LAUNCH_BASE_URL`, `:223` `APP_FACET_LAUNCH_SOURCE_TENANT_ID` | `"true"` with both values empty | **present and on but unconfigured** | On but not configured — launching a Facet design fails |
+| Facet v2 native projection | `workers-bus/wrangler.jsonc:217` `FACET_V2_NATIVE_PROJECTION_ENABLED` | `"true"` in every environment | present and on; idle because it projects only accepted ingest rows | Available, with nothing to project until ingest is configured |
+| Facet design → Frappe projection | `workers-bus/wrangler.jsonc:218` `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` | `"false"` in every environment | present, default-off | Off (a retiring projection) |
+| Facet v1 design ingest | `workers-bus/wrangler.jsonc:213` `FACET_DESIGN_INGEST_ENABLED` | `"false"` in every environment | **absent** — no consumer in `workers-bus/src`; only `tools/production-readiness.mjs:938` reads it | Nothing; the name must not appear as a capability |
+| Facet quote-revision prepare | `workers-bus/wrangler.jsonc:219` `APP_FACET_QUOTE_REVISION_PREPARE_ENABLED` | `"false"` in every environment | **absent as a control** — declared at `workers-bus/src/app-types.ts:101` but read nowhere in `src`; the surface it names is gated by broker configuration instead | Nothing; the flag does not describe what the user gets |
+| Proposal-template configuration | `workers-bus/wrangler.jsonc:236` `PROPOSAL_TEMPLATE_DOC_ID` | `""`; not declared at all in `env.local` or `env.staging` | **present and on but unconfigured** — no flag exists; the route is mounted unconditionally at `workers-bus/src/app-api.ts:884` | Generate proposal is offered and fails with `proposal_doc_not_configured`; the action must be shown as not configured, not as unavailable |
+| Proposal publication | `workers-bus/wrangler.jsonc:220` `APP_PROPOSAL_PUBLICATION_ENABLED` | `"false"` production and staging (`:596`); `"true"` in `env.local` (`:414`) | present, default-off in the deployed configuration | Off |
+| Document generation | `workers-bus/wrangler.jsonc:123` `APP_DOCUMENT_GENERATION_ENABLED` | `"false"` in every environment | present, default-off | Off |
+
+Code paths and refusal behaviour behind each row:
+
+- **QuickBooks.** Both flags are read at `workers-bus/src/quickbooks-final-invoice.ts:411` and
+  `:415`; OAuth start refuses with `quickbooks_oauth_disabled` (`:838`) and dispatch with
+  `quickbooks_final_invoice_disabled` (`:1234`). The callback route is
+  `workers-bus/src/index.ts:572` and the Intuit webhook `:771`. Flipping either flag alone does
+  not enable the capability: `configuration()` (`:3089`) also requires
+  `QB_TOKEN_ENCRYPTION_KEY_VERSION`, which is `""` at
+  `workers-bus/wrangler.jsonc:188`, and the `QB_CLIENT_ID` / `QB_CLIENT_SECRET` /
+  `QB_TOKEN_ENCRYPTION_KEY` secrets.
+- **Hermes desktop.** Every desktop route refuses with `404` at
+  `workers-bus/src/hermes-desktop.ts:220`, `:307` and `:334`; the pairing route is wired at
+  `workers-bus/src/app-api.ts:553`. Reference execution needs a second flag and
+  `APP_HERMES_PROVIDER_MODEL` (`workers-bus/src/hermes-desktop.ts:1633`); neither name appears in
+  any environment of `wrangler.jsonc`.
+- **Public estimator.** `workers-bus/src/public-estimator.ts:226` reads the flag; readiness treats
+  deactivated as healthy (`:210`). Enabling it in production additionally requires allowed origins,
+  allowed brands, a consent jurisdiction, a Turnstile site key, an empty legacy range list — all
+  `""` at `workers-bus/wrangler.jsonc:195-203` — and the `PUBLIC_ESTIMATE_TURNSTILE_SECRET` and
+  `PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER` secrets.
+- **Newo.** The webhook plane refuses with `newo_disabled` at `workers-bus/src/newo.ts:169` and the
+  control plane at `workers-bus/src/newo-control.ts:747`. Enabling it also requires
+  `NEWO_PROJECT_ID`, `NEWO_AGENT_ID`, both webhook ids and URLs and `NEWO_PHONE_NUMBER` — all `""`
+  at `workers-bus/wrangler.jsonc:135-140` and `:147` — plus the `NEWO_API_KEY`,
+  `NEWO_WEBHOOK_TOKEN` and `NEWO_BOOKING_TOKEN` secrets (`workers-bus/src/operations.ts:505`,
+  `:522`).
+- **Postiz.** `workers-bus/src/postiz.ts:151`; every entry point separates `postiz_disabled` from
+  `postiz_not_configured` (`:453`, `:523`, `:600`, `:644`). Configuration additionally requires
+  `POSTIZ_API_BASE_URL`, `""` at `workers-bus/wrangler.jsonc:226`, and the `POSTIZ_API_KEY` secret
+  (`workers-bus/src/postiz.ts:1242`).
+- **Facet routes.** `/ingest/facet-design` (`workers-bus/src/index.ts:668`) and
+  `/ingest/facet-estimator-ready` (`:676`) are switched **on**, so they do not answer `404`; they
+  answer `503 facet_v2_ingest_unavailable` / `facet_estimator_ready_unavailable` because
+  `facetV2StaticRoutes` rejects an empty array (`workers-bus/src/facet-design-ingest.ts:389-394`)
+  and the `FACET_V2_KEYS_JSON` secret is absent (`workers-bus/src/facet-design-ingest.ts:368`).
+  The office launch route (`workers-bus/src/app-api.ts:1490`) answers
+  `503 facet_launch_not_configured` for the same reason
+  plus the empty base URL and source tenant (`workers-bus/src/facet-launch.ts:658`).
+- **Proposal template.** There is no enable flag. `workers-bus/src/proposal-doc-action.ts:81-83`
+  returns `503 proposal_doc_not_configured` when the template id is empty or Google is
+  unconfigured. This is the one row where "disabled" would be actively misleading: the action is
+  offered to an estimator and fails at first use.
+
+**Is the effect runtime actually enabled?** Yes, in all three environments:
+`EFFECT_RUNTIME_ENABLED` is `"true"` at `workers-bus/wrangler.jsonc:122` (production), `:331`
+(local) and `:518` (staging). It is not decoration — `assertEffectLedgerReady`
+(`workers-bus/src/effect-runtime.ts:195`) refuses every provider mutation with
+`effect_runtime_required` unless the flag is `"true"`, and with `effect_ledger_unavailable` unless
+the D1 binding resolves; the QuickBooks, JobNimbus, Google, Newo, Postiz, Frappe and Facet
+projection adapters all call it. Its schema is
+`workers-bus/migrations/0042_external_effect_runtime.sql` and
+`0062_external_effect_insert_replace_guards.sql`. What the repository cannot show is whether
+those migrations are applied in the deployed database; that is a runtime readback, and
+`canonicalEffectLedgerSchemaReady` (`workers-bus/src/capability-readiness.ts:658`) is the probe
+that would answer it.
+
+**Runtime-readable versus build-time.** None of these flags is build-time: `app/` contains no
+`import.meta.env` feature gate, so the PWA bundle is identical whatever the configuration says, and
+every state above is decided per request in the Worker. That makes an honest UI possible, but not
+automatic:
+
+- `GET /api/v1/integrations/readiness` (`workers-bus/src/app-api.ts:1616`, office roles only) is
+  the one composed capability read model. It covers sixteen capability ids
+  (`workers-bus/src/capability-readiness.ts:11-29`) and reports `newo`, `postiz`,
+  `public_estimator`, `quickbooks` and `facet_association` among them. Note that its `quickbooks`
+  signal is credentials-and-realm, not `QB_OAUTH_ENABLED` (`:637`) — flag state and readiness
+  signal are different facts and must not be shown as one.
+- Per-surface signals exist for a few others: `quickBooksAvailable` in the company-setup read model
+  (`workers-bus/src/company-setup-api.ts:448`) and `allowed_actions` omission for proposal
+  publication (`workers-bus/src/app-api.ts:5497`).
+- `GET /api/v1/session` (`workers-bus/src/app-api.ts:640`) carries no capability flags at all, so a
+  non-office role has no runtime way to learn that Hermes desktop, the proposal template or the
+  Facet routes are unavailable; those surfaces discover it only from a `404`/`503` at first use.
+  Hermes desktop, proposal-template configuration and the Facet ingest routes have no entry in the
+  readiness read model either.
+
+**Unknown from the repository.** Each of these needs a named-environment readback, not another
+document: whether any Worker secret is actually set (`QB_*`, `NEWO_*`, `POSTIZ_API_KEY`,
+`FACET_V2_KEYS_JSON`, `FACET_LAUNCH_HMAC_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`); whether the deployed
+D1 has migrations `0042`, `0062` and `0118` applied; whether any `capability_integration_manifests`
+or `capability_proof_facts` row exists for this tenant, since the repository seeds none; and
+whether the deployed Worker's live vars still match this file, which only a `/ready` or
+`/api/v1/integrations/readiness` readback can settle. Until then every row above is a
+source-present configuration fact, and the UI must present it as such.
 
 ## 10. Functional requirements
 

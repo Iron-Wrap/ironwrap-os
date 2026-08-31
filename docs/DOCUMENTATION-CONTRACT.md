@@ -178,8 +178,10 @@ described something other than proof, it is named as a qualifier instead.
 | External proof required | `CAPABILITY-MATRIX.md` | Blocked status flag | Same function as "Blocked" under a different name; unified above. |
 
 `docs/CAPABILITY-MATRIX.md` §"Status vocabulary" keeps a pointer to this section instead of its own
-term list; relabeling its capability rows to the six classes is out of scope here and is handed to
-G1.6 (Multica ELEC-230's downstream). `docs/IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.md` §1.1 and
+term list. Relabeling its capability rows to the six classes was handed to G1.6 downstream of Multica
+ELEC-230 and is now complete: `IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.2's 23 rows (ELEC-235) and the
+matrix's own 30 "Capability-by-capability target" rows and 7 "Seven-area maturity snapshot" rows
+(ELEC-244, 2026-08-31). No tracked document still asserts proof in a prior vocabulary. `docs/IRONWRAP-OS-OPERATIONS-AND-UI-ANNEX.md` §1.1 and
 `docs/IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §18.1/§22 are updated in this same slice to point here instead
 of restating a competing table.
 

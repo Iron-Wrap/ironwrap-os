@@ -491,7 +491,7 @@ a named accountable human's acceptance of the capability itself, or real custome
 | Safety | Stops, incidents, readiness, corrective action remain authoritative | Locally-validated (repository tests including one emergency drill covering rescue, failed PPE, a duplicate offline report, a late corrective action, and independent release — `app/src/field/safety-action-panel.test.tsx` plus Worker-side coverage). No deployment, runtime, business-acceptance, or real-device proof. | Real-device drill and live reporting/readback where required |
 | Quality, change, closeout | Work and deviations close with independent evidence | Source-present. No narrative implementation section or named passing check exists for quality, change, or closeout beyond the maturity-table summary. | Defect/hold/change propagation and real closeout/recovery |
 | Inventory, warehouse, procurement | Materials and custody conserve through work | Locally-validated (`workers-bus/test/inventory-control.test.ts`, `workers-bus/test/inventory-control-api.test.ts` — conservation invariants and conserving movements). No PWA surface, no provider adapter, no deployment, no business-acceptance proof; supplier packets remain internal-only. | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
-| Shop manufacturing | Controlled release, QC, yield, bundle handover | Source-present. No named passing check is cited anywhere in the matrix; shop travelers and assemblies remain target-only per the matrix's own honesty note (see open item below on the apparent scope mismatch with the maturity table). | Physical event capture, tooling/maintenance, dispatch and billing proof |
+| Shop manufacturing | Controlled release, QC, yield, bundle handover | Locally-validated, Partial (corrected 2026-08-31, ELEC-244). `frappe-apps/ironwrap_roofing/tests/test_shop_fabrication_api.py` covers the release/reservation/setup-route/first-piece/final-QC/yield/bundle/handover/billing-basis chain in 29 cases; that CI step is `continue-on-error: true`, so it is a local pass, not a merge gate. Shop travelers and assemblies are a different scope and remain Target — no `shop_traveler` or assembly DocType exists — which settles the scope mismatch filed below. | Physical event capture, tooling/maintenance, dispatch and billing proof |
 | Scheduling/dispatch | Conflict-free assignment from current facts | Source-present. The D1 assignment-revision/conflict-check ledger exists; scheduler capacity remains target-only and no solver or booking surface exists. No named passing check is cited. | Capacity/weather/material inputs and dispatcher acceptance |
 | Fleet/equipment/cargo | Unsafe or wrong-custody assets cannot release | Locally-validated (`frappe-apps/ironwrap_roofing/tests/test_fleet_operations_policy.py`, `.../test_fleet_panel_api.py` pin the release fence exactly). Photo evidence capture is absent, not merely unproven — no code path writes it. No deployment, runtime, real-vehicle, or business-accepted proof. | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
 | Accounting and QuickBooks | Approved intent becomes provider-posted reconciled truth | Source-present. QuickBooks OAuth and final-invoice execution are off in every environment (`docs/AI-NATIVE-ARCHITECTURE.md` machine-checked snapshot); provider mapping, tax, and readback remain incomplete and no accountable human has signed off. | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
@@ -507,23 +507,23 @@ a named accountable human's acceptance of the capability itself, or real custome
 Open items this pass could not settle, reported per the rule that an unsettled label is filed, not left
 silently at its prior value:
 
-- **Shop manufacturing scope mismatch.** `docs/CAPABILITY-MATRIX.md`'s "Sep 1 remaining honesty" note
-  states shop travelers and assemblies remain target-only, while its "Capability-by-capability target"
-  table describes signed release/reservation/setup/QC/yield/custody-handover functionality as already
-  existing. Both cannot be the full picture for the same capability. Owner: IronWrap OS product owner
-  (whoever owns IRO-46/IRO-47). Settling evidence: a fresh read of `frappe-apps/ironwrap_roofing` shop
-  DocTypes and their test coverage against both claims.
+- **Shop manufacturing scope mismatch — SETTLED 2026-08-31 (ELEC-244), no product decision needed.**
+  The settling evidence this item named was collected: `frappe-apps/ironwrap_roofing` has seven shop
+  DocTypes (`shop_order`, `shop_order_line`, `shop_operation`, `shop_material_allocation`,
+  `shop_inspection`, `shop_yield`, `shop_bundle`) covered by 29 cases in
+  `tests/test_shop_fabrication_api.py`, and it has no `shop_traveler` or assembly DocType — the string
+  "traveler" appears nowhere in the tree. The two sections describe different objects, so both were
+  accurate and neither was overclaiming. `docs/CAPABILITY-MATRIX.md` now says so explicitly in both
+  places, and its Shop row is Locally-validated, Partial.
 - **Production-plan schedule-check and owner-onboarding rows.** ELEC-233 (G1.4) is in flight and may
   move the production gates/derived-phase row (schedule-check) and the identity/session row
   (owner-onboarding, i.e. the Settings/company-setup surface). Both are labeled here at what they earn
   today; re-check against ELEC-233's green assertion once it lands. Owner: ELEC-233.
-- **CAPABILITY-MATRIX.md's own "Capability-by-capability target" table** (26 domain rows) and its
-  "Seven-area maturity snapshot" (7 rows) still use the prior free-prose vocabulary
-  ("Strong"/"Partial:"/"Mixed") rather than the six canonical classes. `DOCUMENTATION-CONTRACT.md`'s
-  "Status vocabulary" pointer names relabeling "the rows in this file" as part of G1.6, but this pass's
-  Multica issue (ELEC-235) scoped the 23 rows above plus the matrix's header preamble. Relabeling those
-  additional ~33 rows is out of scope here and is tracked as a fast-follow. Owner: next G1 documentation
-  lane / PO to assign. Settling evidence: the same evidence audit applied to those rows.
+- **CAPABILITY-MATRIX.md's own domain tables — CLOSED 2026-08-31 by ELEC-244.** The fast-follow ran:
+  the "Capability-by-capability target" table (30 domain rows, not the 26 estimated here) and the
+  "Seven-area maturity snapshot" (7 rows) now carry the six canonical classes, and
+  `docs/DOCUMENTATION-CONTRACT.md`'s migration pointer records the migration as complete. No tracked
+  document still asserts proof in a prior vocabulary.
 - **Two default-off/unconfigured findings G1.3 (ELEC-232) parked under this goal**: the `ERPNEXT_BASE_URL`
   split between `deploy/env.example:19` and `workers-bus/wrangler.jsonc:180`, and
   `tools/production-readiness.mjs` covering none of the eight capabilities G1.3 named. Neither is a

@@ -425,7 +425,7 @@ Customer-validated: ни у одной возможности флаги, сек
 | Safety | Stops, incidents, readiness и corrective action остаются authoritative | Locally-validated (repository-тесты, включая один emergency drill, покрывающий rescue, failed PPE, дублирующийся offline-отчет, позднее corrective action и independent release — `app/src/field/safety-action-panel.test.tsx` плюс покрытие на стороне Worker). Нет deployment, runtime, business-acceptance или real-device proof. | Real-device drill и live reporting/readback там, где требуется |
 | Quality, change, closeout | Работа и deviations закрываются независимыми доказательствами | Source-present. Нет ни narrative-раздела реализации, ни процитированной прошедшей проверки для quality, change или closeout, кроме строки в сводной таблице зрелости. | Defect/hold/change propagation и real closeout/recovery |
 | Inventory, warehouse, procurement | Материалы и custody сохраняются через работу | Locally-validated (`workers-bus/test/inventory-control.test.ts`, `workers-bus/test/inventory-control-api.test.ts` — инварианты сохранения и conserving movements). Нет поверхности PWA, provider adapter, deployment, business-acceptance proof; supplier-пакеты остаются только внутренними. | Receiving PWA, supplier transmission, AP adapter, live reconciliation |
-| Shop manufacturing | Controlled release, QC, yield и bundle handover | Source-present. Прошедшая проверка нигде в matrix не процитирована; shop travelers и assemblies остаются target-only по собственной honesty-заметке matrix (см. открытый пункт ниже о видимом расхождении с таблицей зрелости). | Physical event capture, tooling/maintenance, dispatch и billing proof |
+| Shop manufacturing | Controlled release, QC, yield и bundle handover | Locally-validated, Partial (исправлено 2026-08-31, ELEC-244). `frappe-apps/ironwrap_roofing/tests/test_shop_fabrication_api.py` покрывает цепочку release/reservation/setup-route/first-piece/final-QC/yield/bundle/handover/billing-basis в 29 кейсах; этот шаг CI помечен `continue-on-error: true`, поэтому это локальный проход, а не merge-gate. Shop travelers и assemblies — другой объем и остаются Target: DocType `shop_traveler` или assembly не существует. Это урегулирует расхождение объема, зафиксированное ниже. | Physical event capture, tooling/maintenance, dispatch и billing proof |
 | Scheduling/dispatch | Conflict-free assignment из текущих фактов | Source-present. D1 assignment-revision/conflict-check ledger существует; scheduler capacity остается target-only, solver или booking-поверхности нет. Прошедшая проверка не процитирована. | Capacity/weather/material inputs и dispatcher acceptance |
 | Fleet/equipment/cargo | Unsafe или wrong-custody assets нельзя выпустить | Locally-validated (`frappe-apps/ironwrap_roofing/tests/test_fleet_operations_policy.py`, `.../test_fleet_panel_api.py` точно закрепляют release fence). Photo evidence capture отсутствует, а не просто не доказана — ни один code path её не пишет. Нет deployment, runtime, real-vehicle или business-accepted proof. | Photo evidence, telematics identity, collision lifecycle, real vehicle day |
 | Accounting и QuickBooks | Approved intent становится provider-posted reconciled truth | Source-present. QuickBooks OAuth и final-invoice execution выключены во всех средах (машинно-проверяемый снимок `docs/AI-NATIVE-ARCHITECTURE.md`); provider mapping, tax и readback остаются неполными, ни один accountable человек не подписал. | OAuth, mapping/tax, sandbox effect/readback, accountant signoff |
@@ -441,26 +441,23 @@ Customer-validated: ни у одной возможности флаги, сек
 Открытые пункты, которые этот проход не смог урегулировать — зафиксированы, а не молча оставлены на
 прежнем значении:
 
-- **Расхождение объема Shop manufacturing.** Заметка «Sep 1 remaining honesty» в
-  `docs/CAPABILITY-MATRIX.md` утверждает, что shop travelers и assemblies остаются target-only, а её же
-  таблица «Capability-by-capability target» описывает signed release/reservation/setup/QC/yield/
-  custody-handover функциональность как уже существующую. Оба утверждения не могут быть полной картиной
-  одной и той же возможности одновременно. Владелец: product owner IronWrap OS (владелец IRO-46/IRO-47).
-  Урегулирующее доказательство: свежее чтение shop DocTypes `frappe-apps/ironwrap_roofing` и их тестового
-  покрытия против обоих утверждений.
+- **Расхождение объема Shop manufacturing — УРЕГУЛИРОВАНО 2026-08-31 (ELEC-244), продуктовое решение не нужно.**
+  Названное здесь урегулирующее доказательство собрано: в `frappe-apps/ironwrap_roofing` семь shop-DocTypes
+  (`shop_order`, `shop_order_line`, `shop_operation`, `shop_material_allocation`, `shop_inspection`,
+  `shop_yield`, `shop_bundle`), покрытых 29 кейсами в `tests/test_shop_fabrication_api.py`, и нет ни
+  `shop_traveler`, ни assembly DocType — строка «traveler» не встречается в дереве нигде. Две секции
+  описывают разные объекты, поэтому обе были точны и ни одна не завышала claim. `docs/CAPABILITY-MATRIX.md`
+  теперь говорит это явно в обоих местах, а его строка Shop — Locally-validated, Partial.
 - **Строки production-plan schedule-check и owner-onboarding.** ELEC-233 (G1.4) в процессе и может
   изменить строку production gates/derived phase (schedule-check) и строку identity/session
   (owner-onboarding, т.е. поверхность Settings/company-setup). Обе помечены здесь тем, что они
   заслуживают сегодня; перепроверить против green-подтверждения ELEC-233 после его landing. Владелец:
   ELEC-233.
-- **Собственная таблица `docs/CAPABILITY-MATRIX.md` «Capability-by-capability target»** (26 строк по
-  доменам) и «Seven-area maturity snapshot» (7 строк) все еще используют прежний словарь свободной прозы
-  («Strong»/«Partial:»/«Mixed») вместо шести канонических классов. Указатель «Status vocabulary» в
-  `DOCUMENTATION-CONTRACT.md` называет relabeling «строк в этом файле» частью G1.6, но Multica-issue этого
-  прохода (ELEC-235) ограничил объем 23 строками выше плюс header-преамбулой matrix. Relabeling этих
-  дополнительных ~33 строк вне объема здесь и отслеживается как fast-follow. Владелец: следующая
-  документационная лейн G1 / PO для назначения. Урегулирующее доказательство: тот же evidence audit,
-  примененный к этим строкам.
+- **Собственные доменные таблицы `docs/CAPABILITY-MATRIX.md` — ЗАКРЫТО 2026-08-31 проходом ELEC-244.**
+  Fast-follow выполнен: таблица «Capability-by-capability target» (30 доменных строк, а не 26, как здесь
+  оценивалось) и «Seven-area maturity snapshot» (7 строк) теперь несут шесть канонических классов, а
+  указатель миграции в `docs/DOCUMENTATION-CONTRACT.md` фиксирует миграцию как завершенную. Ни один
+  отслеживаемый документ больше не заявляет proof в прежнем словаре.
 - **Два default-off/unconfigured находки, которые G1.3 (ELEC-232) припарковал под этой целью**: разделение
   `ERPNEXT_BASE_URL` между `deploy/env.example:19` и `workers-bus/wrangler.jsonc:180`, и
   `tools/production-readiness.mjs`, не покрывающий ни одну из восьми возможностей, названных G1.3. Ни то,

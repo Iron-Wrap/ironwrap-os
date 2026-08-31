@@ -70,7 +70,7 @@ services:
 
   frappe-init:
     profiles: [frappe]
-    image: frappe/bench:latest
+    image: frappe/bench:v5.31.0
     platform: linux/arm64
     depends_on:
       mariadb:
@@ -91,7 +91,7 @@ services:
 
   frappe:
     profiles: [frappe]
-    image: frappe/bench:latest
+    image: frappe/bench:v5.31.0
     platform: linux/arm64
     depends_on:
       frappe-init:

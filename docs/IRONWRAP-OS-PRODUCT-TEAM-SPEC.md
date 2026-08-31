@@ -823,6 +823,14 @@ anti-gaming note, and baseline before a target is approved.
 9. Controlled non-customer reference journey across the full lifecycle.
 10. Separate accountable customer validation after legal, operational, and readiness gates.
 
+This ladder is not a second proof vocabulary. It coarsens onto the six proof classes defined in
+[`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels): rungs 1–5 are
+Locally-validated; rung 6 is Configured once its sandbox is credentialed and named, and only reaches
+Runtime-proven if a live authenticated call and its readback actually executed against it; rungs 7–9
+are Runtime-proven, with rung 9 its fullest single-capability instance; rung 10 is Customer-validated.
+Business-accepted has no numbered rung — it is a named accountable human reviewing and accepting the
+evidence gathered at rung 8 or 9, not an eleventh rung.
+
 ### 18.2 Required adversarial scenarios
 
 - Cross-tenant identifiers, stale versions, duplicate requests, replayed webhook, and revoked device.
@@ -936,7 +944,10 @@ A story is done when:
   are addressed;
 - focused tests pass, broader required gates pass, and no unrelated user work is included;
 - documentation and diagrams are updated without creating competing authority;
-- exact source/test/CI/merge/deploy/runtime/business/customer proof states are reported separately;
+- the claim's proof class is reported using the six-class vocabulary in
+  [`DOCUMENTATION-CONTRACT.md`](./DOCUMENTATION-CONTRACT.md#required-truth-labels) — Source-present,
+  Locally-validated, Configured, Runtime-proven, Business-accepted, Customer-validated — never rounded
+  up past what its evidence actually earns;
 - a provider or physical capability includes readback/reconciliation, not only request success;
 - accountable product/domain owner accepts the behavior in the correct environment.
 

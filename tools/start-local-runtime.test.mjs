@@ -135,7 +135,10 @@ test("the launcher waits for the stub, forwards one Worker port, and leaves stdi
     } catch {
       launches = [];
     }
-    if (launches.some((line) => line.startsWith(`${join(root, "app")}|`))) {
+    if (
+      launches.some((line) => line.startsWith(`${join(root, "workers-bus")}|`)) &&
+      launches.some((line) => line.startsWith(`${join(root, "app")}|`))
+    ) {
       break;
     }
     await delay(50);

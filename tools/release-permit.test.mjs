@@ -27,6 +27,7 @@ import {
   signExternalReleaseEvidence,
   signServiceAdapterReceipt,
   validateReleasePermitPayload,
+  validateDomainReadbackReceipt,
   validateProductionPromotionReceipt,
   validateSecretInventoryReadback,
   validateProviderTargetPolicy,
@@ -69,6 +70,17 @@ const PREVIOUS_VERSION = "33333333-3333-4333-8333-333333333333";
 const ISSUED_AT = "2026-08-16T20:00:00.000Z";
 const EXPIRES_AT = "2026-08-16T20:10:00.000Z";
 const NOW = Date.parse("2026-08-16T20:01:00.000Z");
+const DOMAIN_HOSTNAME = "os.ironwrapexteriors.com";
+const DOMAIN_SERVICE = "ironwrap-bus";
+const DOMAIN_ZONE_ID = "a".repeat(32);
+const DOMAIN_PROVIDER_RESULT = [{
+  id: "domain-1",
+  hostname: "OS.IRONWRAPEXTERIORS.COM.",
+  service: DOMAIN_SERVICE,
+  zone_id: DOMAIN_ZONE_ID,
+  environment: "production",
+}];
+const DOMAIN_PROVIDER_READBACK_DIGEST = sha(canonicalJson(DOMAIN_PROVIDER_RESULT));
 
 function affectedScopes() {
   return ["agent", "customer", "facet", "field", "finance", "production", "provider", "reception", "sales", "shop"].map((scope) => ({
@@ -198,6 +210,9 @@ function releaseManifest() {
       pwa_readback_digest: VERSION_DIGEST,
       frappe_revision: "frappe-production-candidate-20260816",
       frappe_readback_digest: sha("frappe-production-candidate-readback"),
+      domain_hostname: DOMAIN_HOSTNAME,
+      domain_service: DOMAIN_SERVICE,
+      domain_zone_id: DOMAIN_ZONE_ID,
       status: "prepared",
     },
     affected_scopes: scopes,
@@ -810,6 +825,46 @@ test("generation advance requires the same durable permit claim", async () => {
   await assert.rejects(() => boundary.readClaim({ key, permitDigest: sha("other") }), /release_permit_d1_replay_claim_missing/);
 });
 
+test("domain readback receipt binds the exact hostname, service, zone, and digest", () => {
+  const receipt = {
+    schema: "ironwrap_cloudflare_workers_domain_readback_v1",
+    type: "ironwrap-cloudflare-workers-domain-readback",
+    hostname: DOMAIN_HOSTNAME,
+    service: DOMAIN_SERVICE,
+    zone_id: DOMAIN_ZONE_ID,
+    provider_readback_digest: DOMAIN_PROVIDER_READBACK_DIGEST,
+    status: "matched",
+  };
+  assert.equal(
+    validateDomainReadbackReceipt(receipt, {
+      hostname: DOMAIN_HOSTNAME,
+      service: DOMAIN_SERVICE,
+      zoneId: DOMAIN_ZONE_ID,
+      providerReadbackDigest: DOMAIN_PROVIDER_READBACK_DIGEST,
+      providerResult: DOMAIN_PROVIDER_RESULT,
+    }).status,
+    "matched",
+  );
+  assert.throws(
+    () => validateDomainReadbackReceipt({ ...receipt, provider_readback_digest: sha("wrong") }, {
+      providerResult: DOMAIN_PROVIDER_RESULT,
+    }),
+    /release_permit_domain_readback_digest_mismatch/,
+  );
+  assert.throws(
+    () => validateDomainReadbackReceipt({ ...receipt, zone_id: "z".repeat(32) }),
+    /release_permit_domain_readback_zone_invalid/,
+  );
+  const otherHostname = "other.ironwrapexteriors.com";
+  assert.throws(
+    () => validateDomainReadbackReceipt({
+      ...receipt,
+      hostname: otherHostname,
+    }, { hostname: DOMAIN_HOSTNAME }),
+    /release_permit_domain_readback_hostname_drift/,
+  );
+});
+
 test("generation advance requires an immutable production receipt for the exact provider version", async () => {
   const { privateKey, publicKey } = keyPair();
   const permit = signReleasePermit(privateKey, payload(), { now: NOW });
@@ -829,6 +884,10 @@ test("generation advance requires an immutable production receipt for the exact 
     frappe_readback_digest: sha("frappe-production-candidate-readback"),
     service_promotion_digest: sha("service-promotion-receipt"),
     service_readback_digest: sha("service-readback-receipt"),
+    domain_hostname: DOMAIN_HOSTNAME,
+    domain_service: DOMAIN_SERVICE,
+    domain_zone_id: DOMAIN_ZONE_ID,
+    domain_provider_readback_digest: DOMAIN_PROVIDER_READBACK_DIGEST,
     frappe_scope: "in-scope",
     smoke_evidence_digest: sha("production-smoke"),
     smoke_result: "passed",
@@ -855,6 +914,10 @@ test("generation advance requires an immutable production receipt for the exact 
     mergeCommit: MERGE_COMMIT,
     mergeReceiptDigest: sha(canonicalJson(mergeReceipt)),
     frappeReadbackDigest: sha("frappe-production-candidate-readback"),
+    domainHostname: DOMAIN_HOSTNAME,
+    domainService: DOMAIN_SERVICE,
+    domainZoneId: DOMAIN_ZONE_ID,
+    domainProviderReadbackDigest: DOMAIN_PROVIDER_READBACK_DIGEST,
   }, { now: NOW }).revision, WORKER_VERSION);
   const boundary = {
     async readClaim() { return { status: "claimed" }; },
@@ -877,6 +940,28 @@ test("generation advance requires an immutable production receipt for the exact 
     mergeReceipt,
     now: NOW,
   }), /release_permit_production_promotion_version_digest_drift/);
+  const alteredDomainHostname = "other.ironwrapexteriors.com";
+  const alteredDomainFields = {
+    ...fields,
+    domain_hostname: alteredDomainHostname,
+    domain_provider_readback_digest: sha(canonicalJson([{
+      id: "domain-other",
+      hostname: alteredDomainHostname,
+      service: DOMAIN_SERVICE,
+      zone_id: DOMAIN_ZONE_ID,
+    }])),
+  };
+  await assert.rejects(() => advanceReleaseGeneration(publicKey, permit, {
+    boundary,
+    policyKey: "release-policy:Iron-Wrap/ironwrap-os",
+    productionReceipt: {
+      ...receipt,
+      ...alteredDomainFields,
+      evidence_digest: sha(canonicalJson(alteredDomainFields)),
+    },
+    mergeReceipt,
+    now: NOW,
+  }), /release_permit_production_promotion_domain_hostname_drift/);
 });
 
 test("an expired permit can record rollback only through its durable admitted claim", async () => {
@@ -1205,6 +1290,13 @@ test("full release manifest rejects missing component, recovery, and business id
   assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, artifacts: { ...manifest.artifacts, facet_digest: undefined } } }), { now: NOW }), /release_permit_release_manifest_artifact_digest_invalid/);
   assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, recovery: { ...manifest.recovery, prior_frappe_revision: "" } } }), { now: NOW }), /release_permit_release_manifest_prior_frappe_invalid/);
   assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, business_evidence: { ...manifest.business_evidence, result: "pending" } } }), { now: NOW }), /release_permit_release_manifest_business_not_passed/);
+  assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: {
+    ...manifest,
+    production_candidates: {
+      ...manifest.production_candidates,
+      domain_zone_id: "z".repeat(32),
+    },
+  } }), { now: NOW }), /release_permit_release_manifest_production_domain_zone_invalid/);
 });
 
 test("source admission merge receipt binds the exact PR, permit, and tested tree", () => {

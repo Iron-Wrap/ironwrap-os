@@ -13,8 +13,9 @@ import {
   createPublicKey,
   randomBytes,
 } from "node:crypto";
-import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstat, open, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   admitReleasePermit,
@@ -28,6 +29,8 @@ import {
   validateReleaseEnvironmentPreflight,
   createCloudflareD1ReplayBoundary,
   CI_WORKFLOW_PATH,
+  DOMAIN_READBACK_SCHEMA,
+  DOMAIN_READBACK_TYPE,
   LAUNCH_PROOF_STEP_NAMES,
   PRODUCTION_PROMOTION_SCHEMA,
   PRODUCTION_PROMOTION_TYPE,
@@ -51,6 +54,7 @@ import {
   validateProductionPromotionReceipt,
   validateSourceMergeReceipt,
   validateWorkerVersionReadback,
+  validateDomainReadbackReceipt,
   verifyReviewGoReceipt,
   verifyExternalReleaseEvidence,
   verifyServiceAdapterReceipt,
@@ -65,6 +69,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const IDENTITY_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const ACCOUNT_RE = /^[0-9a-f]{32}$/;
+const DOMAIN_HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const DOMAIN_SERVICE_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/;
+const DOMAIN_ZONE_RE = ACCOUNT_RE;
 const INDEPENDENT_ISSUER_ROUTE = "/v2/independent-issuer";
 const INDEPENDENT_ISSUER_REQUEST_SCHEMA =
   "ironwrap_independent_issuer_request_v2";
@@ -103,6 +110,7 @@ const SERVICE_ADAPTER_IDENTITY_NAMES = Object.freeze([
   "RELEASE_SERVICE_ADAPTER_RUN_ID",
   "RELEASE_SERVICE_ADAPTER_KEY_VERSION",
 ]);
+const RESTORE_INTERNAL_TABLE_PREFIXES = Object.freeze(["sqlite_", "_cf_"]);
 
 function fail(code) {
   throw new Error(`release_promotion_${code}`);
@@ -1396,6 +1404,131 @@ async function versionSnapshot(args) {
   });
 }
 
+function normalizeDomainHostname(value, code) {
+  const hostname = requireString(value, code).toLowerCase().replace(/\.$/, "");
+  if (!DOMAIN_HOSTNAME_RE.test(hostname)) fail(code);
+  return hostname;
+}
+
+function normalizeDomainService(value, code) {
+  const service = requireString(value, code);
+  if (!DOMAIN_SERVICE_RE.test(service)) fail(code);
+  return service;
+}
+
+function normalizeDomainZone(value, code) {
+  const zone = requireString(value, code).toLowerCase();
+  if (!DOMAIN_ZONE_RE.test(zone)) fail(code);
+  return zone;
+}
+
+function domainZoneArgument(args) {
+  if (args.has("zone-id")) return arg(args, "zone-id");
+  if (args.has("zone")) return arg(args, "zone");
+  fail("cli_zone-id_required");
+}
+
+async function domainReadback(args) {
+  const expected = {
+    hostname: normalizeDomainHostname(arg(args, "hostname"), "domain_readback_hostname_invalid"),
+    service: normalizeDomainService(arg(args, "service"), "domain_readback_service_invalid"),
+    zoneId: normalizeDomainZone(domainZoneArgument(args), "domain_readback_zone_invalid"),
+  };
+  const response = await readJson(
+    arg(args, "input"),
+    "domain_readback_response_invalid",
+  );
+  if (response.success !== true || !Array.isArray(response.result)) {
+    fail("domain_readback_response_invalid");
+  }
+  const entries = response.result.map((entry) => {
+    if (!isRecord(entry)) fail("domain_readback_entry_invalid");
+    return {
+      hostname: normalizeDomainHostname(
+        entry.hostname,
+        "domain_readback_entry_invalid",
+      ),
+      service: normalizeDomainService(
+        entry.service,
+        "domain_readback_entry_invalid",
+      ),
+      zone_id: normalizeDomainZone(
+        entry.zone_id,
+        "domain_readback_entry_invalid",
+      ),
+    };
+  });
+  const matches = entries.filter(
+    (entry) =>
+      entry.hostname === expected.hostname &&
+      entry.service === expected.service &&
+      entry.zone_id === expected.zoneId,
+  );
+  if (matches.length === 0) fail("domain_readback_mismatch");
+  if (matches.length !== 1) fail("domain_readback_duplicate");
+  const receipt = {
+    schema: DOMAIN_READBACK_SCHEMA,
+    type: DOMAIN_READBACK_TYPE,
+    hostname: matches[0].hostname,
+    service: matches[0].service,
+    zone_id: matches[0].zone_id,
+    provider_readback_digest: sha256(canonicalJson(response.result)),
+    status: "matched",
+  };
+  validateDomainReadbackReceipt(receipt, {
+    hostname: expected.hostname,
+    service: expected.service,
+    zoneId: expected.zoneId,
+  });
+  await writeJson(arg(args, "output"), receipt);
+}
+
+function productionDomainTarget(permitPayload) {
+  const target = permitPayload.release_manifest?.production_candidates;
+  if (
+    !isRecord(target) ||
+    typeof target.domain_hostname !== "string" ||
+    typeof target.domain_service !== "string" ||
+    typeof target.domain_zone_id !== "string"
+  )
+    fail("production_domain_permit_invalid");
+  const hostname = requireString(
+    target.domain_hostname,
+    "production_domain_permit_hostname_invalid",
+  );
+  const service = requireString(
+    target.domain_service,
+    "production_domain_permit_service_invalid",
+  );
+  const zoneId = requireString(
+    target.domain_zone_id,
+    "production_domain_permit_zone_invalid",
+  );
+  if (!DOMAIN_HOSTNAME_RE.test(hostname))
+    fail("production_domain_permit_hostname_invalid");
+  if (!DOMAIN_SERVICE_RE.test(service))
+    fail("production_domain_permit_service_invalid");
+  if (!DOMAIN_ZONE_RE.test(zoneId))
+    fail("production_domain_permit_zone_invalid");
+  return { hostname, service, zoneId };
+}
+
+export function validateProductionDomainRoute(productionConfig, hostname) {
+  const route = [{
+    pattern: normalizeDomainHostname(
+      hostname,
+      "production_domain_hostname_invalid",
+    ),
+    custom_domain: true,
+  }];
+  if (
+    !isRecord(productionConfig) ||
+    productionConfig.routes_digest !== sha256(canonicalJson(route))
+  )
+    fail("production_domain_route_drift");
+  return route;
+}
+
 async function readiness(args) {
   const health = await readJson(arg(args, "health"));
   const ready = await readJson(arg(args, "ready"));
@@ -1406,12 +1539,17 @@ function quoteSqlIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
+function isRestoreInternalTable(name) {
+  const normalizedName = name.toLowerCase();
+  return RESTORE_INTERNAL_TABLE_PREFIXES.some((prefix) => normalizedName.startsWith(prefix));
+}
+
 function exportedTableNames(sql) {
   const names = [];
   const pattern = /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))/gi;
   for (const match of sql.matchAll(pattern)) {
     const name = match[1] ?? match[2] ?? match[3] ?? match[4];
-    if (name && !name.startsWith("sqlite_")) names.push(name);
+    if (name && !isRestoreInternalTable(name)) names.push(name);
   }
   const unique = [...new Set(names)].sort();
   if (unique.length === 0 || !unique.includes("dedup_claims")) fail("restore_schema_missing");
@@ -1423,10 +1561,144 @@ async function restoreQuery(args) {
   const sql = exportBytes.toString("utf8");
   if (exportBytes.length < 32 || !/\bCREATE\s+TABLE\b/i.test(sql)) fail("restore_export_empty");
   const tables = exportedTableNames(sql);
-  const schema = "SELECT 'schema' AS kind, type AS object_type, name AS object_name, COALESCE(sql, '') AS definition, CAST(NULL AS INTEGER) AS row_count FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','index','trigger')";
+  const schema = "SELECT 'schema' AS kind, type AS object_type, name AS object_name, COALESCE(sql, '') AS definition, CAST(NULL AS INTEGER) AS row_count FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND type IN ('table','index','trigger')";
   const counts = tables.map((table) => `SELECT 'row_count' AS kind, 'table' AS object_type, '${table.replaceAll("'", "''")}' AS object_name, '' AS definition, COUNT(*) AS row_count FROM ${quoteSqlIdentifier(table)}`);
   const content = tables.map((table) => `SELECT '${table.replaceAll("'", "''")}' AS __ironwrap_restore_table_iro41, * FROM ${quoteSqlIdentifier(table)}`);
   await writeFile(arg(args, "output"), `${[`${[schema, ...counts].join(" UNION ALL ")} ORDER BY kind, object_type, object_name`, ...content].join(";\n")};\n`, { mode: 0o600 });
+}
+
+function restoreSchemaRows(database) {
+  const rows = database.prepare(
+    `SELECT type AS object_type,
+            name AS object_name,
+            COALESCE(sql, '') AS definition
+       FROM sqlite_schema
+      WHERE name NOT LIKE 'sqlite_%'
+        AND name NOT LIKE '_cf_%'
+        AND type IN ('table', 'index', 'trigger')
+      ORDER BY type, name`,
+  ).all();
+  return rows.map((row) => {
+    if (
+      !isRecord(row) ||
+      typeof row.object_type !== "string" ||
+      typeof row.object_name !== "string" ||
+      typeof row.definition !== "string"
+    )
+      fail("restore_schema_invalid");
+    return {
+      kind: "schema",
+      object_type: row.object_type,
+      object_name: row.object_name,
+      definition: row.definition,
+      row_count: null,
+    };
+  });
+}
+
+function restoreRowCountRows(database, tables) {
+  return tables.map((table) => {
+    const row = database.prepare(
+      `SELECT COUNT(*) AS row_count FROM ${quoteSqlIdentifier(table)}`,
+    ).get();
+    const count = isRecord(row) ? row.row_count : null;
+    if (!Number.isSafeInteger(count) || count < 0) fail("restore_row_count_invalid");
+    return {
+      kind: "row_count",
+      object_type: "table",
+      object_name: table,
+      definition: "",
+      row_count: count,
+    };
+  });
+}
+
+function restoreContentResults(database, tables) {
+  return tables.map((table) => {
+    const rows = database.prepare(
+      `SELECT * FROM ${quoteSqlIdentifier(table)}`,
+    ).all();
+    return {
+      success: true,
+      results: rows.map((row) => {
+        if (!isRecord(row)) fail("restore_content_invalid");
+        return { __ironwrap_restore_table_iro41: table, ...row };
+      }),
+    };
+  });
+}
+
+function restoreIntegrityOk(database) {
+  const row = database.prepare("PRAGMA integrity_check").get();
+  if (!isRecord(row)) fail("restore_integrity_invalid");
+  const [value] = Object.values(row);
+  if (value !== "ok") fail("restore_integrity_failed");
+}
+
+async function withImportedRestoreDatabase(exportSql, databaseFile, callback) {
+  let database;
+  let createdDatabase = false;
+  let keepDatabase = false;
+  try {
+    let reservation;
+    try {
+      reservation = await open(databaseFile, "wx");
+    } catch (error) {
+      if (error?.code === "EEXIST") fail("restore_database_exists");
+      fail("restore_database_open_invalid");
+    }
+    createdDatabase = true;
+    await reservation.close();
+    try {
+      database = new DatabaseSync(databaseFile);
+    } catch {
+      fail("restore_database_open_invalid");
+    }
+    try {
+      database.exec(exportSql);
+    } catch {
+      fail("restore_import_invalid");
+    }
+    restoreIntegrityOk(database);
+    const result = await callback(database);
+    keepDatabase = true;
+    return result;
+  } finally {
+    try {
+      if (database) database.close();
+    } finally {
+      if (createdDatabase && !keepDatabase) await unlink(databaseFile).catch(() => {});
+    }
+  }
+}
+
+async function restoreLocal(args) {
+  const exportBytes = await readFile(arg(args, "export"));
+  const exportSql = exportBytes.toString("utf8");
+  if (
+    exportBytes.length < 32 ||
+    !/\bCREATE\s+TABLE\b/i.test(exportSql) ||
+    !/\bINSERT\s+INTO\b/i.test(exportSql)
+  )
+    fail("restore_export_empty");
+  const tables = exportedTableNames(exportSql);
+  await withImportedRestoreDatabase(
+    exportSql,
+    arg(args, "database"),
+    async (database) => {
+      const output = [
+        {
+          success: true,
+          results: [
+            ...restoreSchemaRows(database),
+            ...restoreRowCountRows(database, tables),
+          ],
+        },
+        ...restoreContentResults(database, tables),
+      ];
+      await writeJson(arg(args, "output"), output);
+    },
+  );
 }
 
 function parseD1QueryResults(value, tables, code) {
@@ -1491,15 +1763,40 @@ async function restoreReadback(args) {
   const restoredTableNames = restoredManifest.schema.filter((row) => row.object_type === "table").map((row) => row.object_name).sort();
   if (JSON.stringify(sourceTableNames) !== JSON.stringify(exportedTables) || JSON.stringify(restoredTableNames) !== JSON.stringify(exportedTables)) fail("restore_schema_export_mismatch");
   if (sourceManifest.manifest_digest !== restoredManifest.manifest_digest) fail("restore_manifest_mismatch");
+  const sourceTarget = args.get("source-target");
+  const restoredTarget = args.get("restored-target");
+  if ((sourceTarget === undefined) !== (restoredTarget === undefined)) {
+    fail("restore_target_pair_required");
+  }
+  let restoreTargets;
+  if (sourceTarget !== undefined) {
+    const sourceIdentity = requireString(
+      sourceTarget,
+      "restore_source_target_invalid",
+    );
+    const restoredIdentity = requireString(
+      restoredTarget,
+      "restore_restored_target_invalid",
+    );
+    if (sourceIdentity === restoredIdentity) fail("restore_targets_not_distinct");
+    restoreTargets = { source: sourceIdentity, restored: restoredIdentity };
+  }
+  const exportDigest = sha256(exportBytes);
+  const evidenceFields = {
+    export_digest: exportDigest,
+    manifest_digest: sourceManifest.manifest_digest,
+    ...(restoreTargets === undefined ? {} : { restore_targets: restoreTargets }),
+  };
   await writeJson(arg(args, "output"), {
     status: "matched",
     result: "passed",
     restored: true,
-    export_digest: sha256(exportBytes),
+    export_digest: exportDigest,
     manifest_digest: sourceManifest.manifest_digest,
     source_manifest: sourceManifest,
     restored_manifest: restoredManifest,
-    evidence_digest: sha256(canonicalJson({ export_digest: sha256(exportBytes), manifest_digest: sourceManifest.manifest_digest })),
+    ...(restoreTargets === undefined ? {} : { restore_targets: restoreTargets }),
+    evidence_digest: sha256(canonicalJson(evidenceFields)),
     observed_at: new Date().toISOString(),
   });
 }
@@ -1821,6 +2118,11 @@ async function productionReceipt(args) {
   const revision = requireUuid(arg(args, "version-id"), "version_id_invalid");
   const versionDigest = requireHash(arg(args, "version-digest"), "version_digest_invalid");
   const permitPayload = await readJson(arg(args, "permit-payload"), "permit_payload_invalid");
+  const domainTarget = productionDomainTarget(permitPayload);
+  const domainReadback = validateDomainReadbackReceipt(
+    await readJson(arg(args, "domain-readback"), "domain_readback_invalid"),
+    domainTarget,
+  );
   if (permitPayload.release_manifest?.frappe_scope !== frappeScopeValue) {
     fail("production_frappe_scope_permit_drift");
   }
@@ -1931,6 +2233,10 @@ async function productionReceipt(args) {
     frappe_readback_digest: frappeReadbackDigest,
     service_promotion_digest: servicePromotionDigest,
     service_readback_digest: serviceReadbackDigest,
+    domain_hostname: domainReadback.hostname,
+    domain_service: domainReadback.service,
+    domain_zone_id: domainReadback.zone_id,
+    domain_provider_readback_digest: domainReadback.provider_readback_digest,
     smoke_evidence_digest: smokeEvidenceDigest,
     smoke_result: "passed",
     smoke_step_names: stepNames,
@@ -1945,6 +2251,10 @@ async function productionReceipt(args) {
     active_readback: "matched",
     evidence_digest: sha256(canonicalJson(fields)),
     observed_at: new Date().toISOString(),
+  }, {
+    domainHostname: domainTarget.hostname,
+    domainService: domainTarget.service,
+    domainZoneId: domainTarget.zoneId,
   }));
 }
 
@@ -2078,6 +2388,20 @@ async function assemblePermit(args) {
   const diff = requireHash(context.diff_sha256, "diff_invalid");
   const repository = requireString(context.repository, "repository_invalid");
   if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
+  const productionDomain = {
+    hostname: normalizeDomainHostname(
+      arg(args, "domain-hostname"),
+      "production_domain_hostname_invalid",
+    ),
+    service: normalizeDomainService(
+      arg(args, "domain-service"),
+      "production_domain_service_invalid",
+    ),
+    zoneId: normalizeDomainZone(
+      arg(args, "domain-zone-id"),
+      "production_domain_zone_invalid",
+    ),
+  };
   const sourceEvidence = await computeSourceEvidence({ repoRoot, sourceCommit, baseCommit });
   for (const [key, expected] of [["source_commit", sourceCommit], ["base_commit", baseCommit], ["source_git_tree", sourceGitTree], ["source_tree_sha256", sourceTree], ["diff_sha256", diff]]) {
     if (sourceEvidence[key] !== expected) fail(`source_${key}_drift`);
@@ -2107,6 +2431,7 @@ async function assemblePermit(args) {
   if (externalEvidence.issuer_principal === arg(args, "issuer-identity")) fail("release_evidence_not_independent");
   const stagingConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "staging" });
   const productionConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "production" });
+  validateProductionDomainRoute(productionConfig, productionDomain.hostname);
   const configDigest = computeReleaseConfigDigest({ staging: stagingConfig.digest, production: productionConfig.digest });
   if (context.config_digest !== configDigest
     || staging.config_digest !== stagingConfig.digest
@@ -2260,6 +2585,9 @@ async function assemblePermit(args) {
       frappe_readback_digest:
         externalEvidence.service_identities.frappe
           .production_candidate_readback_digest,
+      domain_hostname: productionDomain.hostname,
+      domain_service: productionDomain.service,
+      domain_zone_id: productionDomain.zoneId,
       status: "prepared",
     },
     affected_scopes: externalEvidence.affected_scopes,
@@ -2608,8 +2936,10 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "version-snapshot") return versionSnapshot(args);
   if (command === "deployment-rollback-readback") return deploymentRollbackReadback(args);
   if (command === "staging-cleanup-receipt") return stagingCleanupReceipt(args);
+  if (command === "domain-readback") return domainReadback(args);
   if (command === "readiness") return readiness(args);
   if (command === "restore-query") return restoreQuery(args);
+  if (command === "restore-local") return restoreLocal(args);
   if (command === "restore-readback") return restoreReadback(args);
   if (command === "d1-recovery-point") return d1RecoveryPoint(args);
   if (command === "production-rollback-receipt") return productionRollbackReceipt(args);

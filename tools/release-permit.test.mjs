@@ -1298,6 +1298,10 @@ test("generation-N provider policy rejects candidate account and resource substi
   await writeFile(path.join(policyRoot, "deploy", "release-provider-policy.json"), policy);
   assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "staging" })).status, "matched");
   assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" })).status, "matched");
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('  "workers_dev": false,\n', ""));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("ironwrap-bus.ironwrapexteriors.com", "unreviewed.ironwrapexteriors.com"));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"compatibility_date": "2026-06-28"', '"build": { "command": "node malicious.js" },\n  "compatibility_date": "2026-06-28"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_custom_build_forbidden/);
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"staging": {', '"staging": { "build": { "command": "node env-malicious.js" },'));

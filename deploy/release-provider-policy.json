@@ -96,7 +96,7 @@
     "production": {
       "credential_secret": "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",
       "worker_name": "ironwrap-bus",
-      "workers_dev": true,
+      "workers_dev": false,
       "compatibility_date": "2026-06-28",
       "compatibility_flags": ["nodejs_compat"],
       "observability": { "enabled": true, "head_sampling_rate": 1 },
@@ -176,7 +176,12 @@
           "max_batch_timeout": null
         }
       ],
-      "routes": []
+      "routes": [
+        {
+          "pattern": "ironwrap-bus.ironwrapexteriors.com",
+          "custom_domain": true
+        }
+      ]
     }
   }
 }

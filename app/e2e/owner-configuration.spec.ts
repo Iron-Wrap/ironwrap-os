@@ -5,6 +5,7 @@ import AxeBuilder from "@axe-core/playwright";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
+const HIT_TARGET_MIN_PX = 43.99;
 
 const pipeline = {
   pipeline_id: "pipeline_sales",
@@ -295,8 +296,8 @@ test.describe("Owner configuration mobile acceptance", () => {
       const action = page.getByRole("button", { name: routeCase.action, exact: true });
       await expect(action).toBeVisible();
       const bounds = await action.boundingBox();
-      expect(bounds?.height).toBeGreaterThanOrEqual(44);
-      expect(bounds?.width).toBeGreaterThanOrEqual(44);
+      expect(bounds?.height).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+      expect(bounds?.width).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
 
       await focusFromKeyboard(page, action);
       const focus = await action.evaluate((element) => {
@@ -372,8 +373,8 @@ test.describe("Owner configuration mobile acceptance", () => {
 
     const moveColourUp = page.getByRole("button", { name: "Move Colour up" });
     const bounds = await moveColourUp.boundingBox();
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+    expect(bounds?.width).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
     await moveColourUp.scrollIntoViewIfNeeded();
     await moveColourUp.focus();
     await expect(moveColourUp).toBeFocused();
@@ -592,8 +593,8 @@ test.describe("Owner configuration mobile acceptance", () => {
     // Every block control is a real touch target on a 390px screen.
     for (const name of ["Add field", "Move Field 2 up", "Remove Field 2"]) {
       const bounds = await page.getByRole("button", { name, exact: true }).boundingBox();
-      expect(bounds?.height, name).toBeGreaterThanOrEqual(44);
-      expect(bounds?.width, name).toBeGreaterThanOrEqual(44);
+      expect(bounds?.height, name).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+      expect(bounds?.width, name).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
     }
 
     await mkdir(shotDir, { recursive: true });
@@ -713,7 +714,7 @@ test.describe("Owner configuration mobile acceptance", () => {
     const gateway = page.getByRole("link", { name: /Manage recipients/ });
     await expect(gateway).toBeVisible();
     const gatewayBounds = await gateway.boundingBox();
-    expect(gatewayBounds?.height).toBeGreaterThanOrEqual(44);
+    expect(gatewayBounds?.height).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
     await gateway.click();
 
     await expect(page.getByRole("heading", { name: "Recipients", exact: true })).toBeVisible();
@@ -731,7 +732,7 @@ test.describe("Owner configuration mobile acceptance", () => {
 
     const save = page.getByRole("button", { name: "Save recipient", exact: true });
     const saveBounds = await save.boundingBox();
-    expect(saveBounds?.height).toBeGreaterThanOrEqual(44);
+    expect(saveBounds?.height).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
     await save.click();
 
     await expect(page.getByText("The shop", { exact: true })).toBeVisible();

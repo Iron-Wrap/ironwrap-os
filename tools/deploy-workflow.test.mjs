@@ -91,6 +91,15 @@ function validateWorkflow(workflow) {
   assert.match(admission, /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/);
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
+  assert.match(
+    workflow,
+    /RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap-bus\.ironwrapexteriors\.com/,
+  );
+  assert.match(workflow, /RELEASE_PRODUCTION_DOMAIN_SERVICE: ironwrap-bus/);
+  assert.match(
+    workflow,
+    /RELEASE_PRODUCTION_ZONE_ID: \$\{\{ vars\.RELEASE_PRODUCTION_ZONE_ID \}\}/,
+  );
   assert.match(admission, /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
   // The push-sourced arm derives generation N from the squash commit's single
   // parent and hands both commits to the enforcer, which re-reads the same
@@ -160,10 +169,21 @@ function validateWorkflow(workflow) {
   assert.match(staging, /environment-preflight[\s\S]*staging-environment-preflight\.json/);
   assert.match(
     staging,
-    /d1 export[\s\S]*restore-query[\s\S]*d1 execute[\s\S]*--json[\s\S]*restore-readback/,
+    /d1 export[\s\S]*> "\$export_log" 2>&1[\s\S]*restore-local[\s\S]*--database "\$source_database"[\s\S]*restore-local[\s\S]*--database "\$restored_database"[\s\S]*restore-readback[\s\S]*--source-target "\$source_database"[\s\S]*--restored-target "\$restored_database"[\s\S]*backup-receipt/,
   );
-  assert.match(staging, /restore_persist="\$RUNNER_TEMP\/ironwrap-d1-restore-/);
-  assert.match(staging, /--persist-to "\$restore_persist"/);
+  assert.match(staging, /source_database="\$RUNNER_TEMP\/staging-restore-source-\$\{GITHUB_RUN_ID\}\.sqlite"/);
+  assert.match(staging, /restored_database="\$RUNNER_TEMP\/staging-restore-restored-\$\{GITHUB_RUN_ID\}\.sqlite"/);
+  assert.match(
+    staging,
+    /test ! -e "\$source_database"[\s\S]*test ! -e "\$restored_database"/,
+  );
+  assert.match(
+    staging,
+    /if ! "\$WRANGLER_BIN" d1 export[\s\S]*echo "release_staging_export_failed" >&2/,
+  );
+  assert.doesNotMatch(staging, /restore-query|--persist-to|d1 execute/);
+  const stagingProof = staging.slice(staging.indexOf("- name: Publish redacted staging proof"));
+  assert.doesNotMatch(stagingProof, /staging\.sql|staging-export\.log/);
   assert.match(staging, /rollback-receipt/);
   assert.match(
     staging,
@@ -189,12 +209,17 @@ function validateWorkflow(workflow) {
     "Trigger the independently permissioned full-surface evidence issuer",
     "Bounded wait for signed full-surface release evidence",
     "Assemble the signed short-lived permit from independent evidence",
+    "--domain-hostname \"\$RELEASE_PRODUCTION_DOMAIN_HOSTNAME\"",
+    "--domain-service \"\$RELEASE_PRODUCTION_DOMAIN_SERVICE\"",
+    "--domain-zone-id \"\$RELEASE_PRODUCTION_ZONE_ID\"",
     "Consume the permit once through the durable D1 replay and policy boundary",
     "Auto-merge the exact admitted PR and verify the resulting main tree",
     "Apply admitted migrations only after exact source admission",
     "Promote the exact Frappe/VPS candidate through the governed adapter",
     "Re-read the exact Frappe/VPS active revision through the governed adapter",
     "Promote the pre-verified immutable production version",
+    "Deploy the production custom-domain route after immutable promotion",
+    "Read back the production Workers domain binding",
     "Verify production identity, health, readiness, and authenticated smoke",
     "Bind production active revision, readiness, and exact smoke to immutable receipt",
     "Advance the durable generation only after production proof",
@@ -235,6 +260,14 @@ function validateWorkflow(workflow) {
   assert.match(production, /environment-preflight[\s\S]*production-environment-preflight\.json/);
   assert.match(
     production,
+    /if \[\[ ! "\$RELEASE_PRODUCTION_ZONE_ID" =~ \^\[0-9a-f\]\{32\}\$ \]\]; then[\s\S]*release_production_invalid_zone_id/,
+  );
+  assert.match(
+    production,
+    /assemble[\s\S]*--domain-hostname "\$RELEASE_PRODUCTION_DOMAIN_HOSTNAME"[\s\S]*--domain-service "\$RELEASE_PRODUCTION_DOMAIN_SERVICE"[\s\S]*--domain-zone-id "\$RELEASE_PRODUCTION_ZONE_ID"/,
+  );
+  assert.match(
+    production,
     /node "\$RELEASE_ENFORCER" service-adapter-preflight[\s\S]*service-adapter-preflight\.json/,
   );
   assert.doesNotMatch(
@@ -245,7 +278,40 @@ function validateWorkflow(workflow) {
   assert.doesNotMatch(production, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
   assert.match(production, /id: promote_frappe[\s\S]*--operation promote[\s\S]*service-promotion\.receipt/);
   assert.match(production, /id: readback_frappe[\s\S]*--operation readback[\s\S]*service-readback\.receipt/);
+  assert.match(
+    production,
+    /id: deploy_production_triggers[\s\S]*\"\$WRANGLER_BIN\" triggers deploy --config workers-bus\/wrangler\.jsonc/,
+  );
+  const productionAdmitMarker = 'node "$RELEASE_ENFORCER" admit \\';
+  const productionAdmitIndex = production.indexOf(productionAdmitMarker);
+  assert.ok(productionAdmitIndex >= 0, "missing production permit admission command");
+  assert.doesNotMatch(
+    production.slice(0, productionAdmitIndex),
+    /triggers deploy/,
+  );
+  assert.equal(
+    (production.match(/triggers deploy --config workers-bus\/wrangler\.jsonc/g) ?? [])
+      .length,
+    1,
+  );
+  assert.match(
+    production,
+    /triggers deploy --config workers-bus\/wrangler\.jsonc[\s\S]*Read back the production Workers domain binding[\s\S]*https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/\$CLOUDFLARE_ACCOUNT_ID\/workers\/domains/,
+  );
+  assert.match(
+    production,
+    /--header "Authorization: Bearer \$CLOUDFLARE_API_TOKEN"[\s\S]*--output "\$response" 2> "\$response_error"[\s\S]*release_production_domain_readback_request_failed/,
+  );
+  assert.match(
+    production,
+    /domain-readback[\s\S]*--input "\$response"[\s\S]*--hostname "\$RELEASE_PRODUCTION_DOMAIN_HOSTNAME"[\s\S]*--service "\$RELEASE_PRODUCTION_DOMAIN_SERVICE"[\s\S]*--zone-id "\$RELEASE_PRODUCTION_ZONE_ID"[\s\S]*production-domain-readback\.json/,
+  );
+  assert.doesNotMatch(staging, /triggers deploy/);
+  const productionProof = production.slice(production.indexOf("- name: Publish signed permit and production proof receipt"));
+  assert.match(productionProof, /production-domain-readback\.json/);
+  assert.doesNotMatch(productionProof, /production-domains\.json|production-domains\.error/);
   assert.match(production, /production-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*--service-promotion-receipt[\s\S]*--service-readback-receipt/);
+  assert.match(production, /production-receipt[\s\S]*--domain-readback "\$RUNNER_TEMP\/production-domain-readback\.json"/);
   assert.match(
     production,
     /production-post-smoke\.json[\s\S]*deployment-revision[\s\S]*production-receipt/,
@@ -353,6 +419,49 @@ test("workflow validation rejects candidate-policy self-approval and missing PR 
     ),
   );
 });
+
+test("workflow validation rejects missing or malformed production zone configuration", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        "RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID }}",
+        "RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID_MISSING }}",
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        'if [[ ! "$RELEASE_PRODUCTION_ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then',
+        'if [[ ! "$RELEASE_PRODUCTION_ZONE_ID" =~ ^[0-9a-f]{31}$ ]]; then',
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        'echo "release_production_invalid_zone_id"',
+        'echo "release_production_zone_defaulted"',
+      ),
+    ),
+  );
+});
+
+test("workflow validation rejects a production trigger inserted before permit admission", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const admissionStep = "      - name: Consume the permit once through the durable D1 replay and policy boundary\n";
+  const preAdmissionTrigger =
+    '      - name: Invalid pre-admission production trigger\n' +
+    '        run: \'"$WRANGLER_BIN" triggers deploy --config workers-bus/wrangler.jsonc\'\n\n';
+  const mutatedWorkflow = workflow.replace(
+    admissionStep,
+    `${preAdmissionTrigger}${admissionStep}`,
+  );
+  assert.notEqual(mutatedWorkflow, workflow);
+  assert.throws(() => validateWorkflow(mutatedWorkflow));
+});
+
 test("workflow validation rejects omitted component artifacts and source admission gates", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   assert.throws(() =>

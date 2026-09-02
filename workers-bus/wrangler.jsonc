@@ -6,6 +6,10 @@
   "compatibility_date": "2026-06-28",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "ironwrap-bus.ironwrapexteriors.com", "custom_domain": true }
+  ],
 
   // One deployment boundary: the Worker serves the built PWA and runs every dynamic/auth route.
   // CI builds ../app/dist before Worker bundle validation or deployment.
@@ -241,10 +245,10 @@
     "APP_TIME_ZONE": "America/Edmonton",
     "APP_CURRENCY": "CAD",
     // Required by APP_BFF_ENABLED: appPublicOrigin() returns null unless APP_PUBLIC_ORIGIN
-    // is non-empty AND listed in APP_ALLOWED_ORIGINS. Replace both if the Worker moves off
-    // workers.dev onto a custom hostname.
-    "APP_PUBLIC_ORIGIN": "https://ironwrap-bus.yellow-rain-7498.workers.dev",
-    "APP_ALLOWED_ORIGINS": "https://ironwrap-bus.yellow-rain-7498.workers.dev",
+    // is non-empty AND listed in APP_ALLOWED_ORIGINS. Keep both bound to the declared
+    // production custom domain so login links and origin checks match the release smoke URL.
+    "APP_PUBLIC_ORIGIN": "https://ironwrap-bus.ironwrapexteriors.com",
+    "APP_ALLOWED_ORIGINS": "https://ironwrap-bus.ironwrapexteriors.com",
     "APP_ALLOW_INSECURE_LOCAL": "false",
     "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
     "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
@@ -289,6 +293,7 @@
   "env": {
     "local": {
       "workers_dev": true,
+      "routes": [],
       "d1_databases": [
         {
           "binding": "DB",
@@ -424,6 +429,8 @@
         "POSTIZ_FACET_DRAFT_PROVIDER": "facebook",
         "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
         "POSTIZ_FACET_DRAFT_NOT_BEFORE": "",
+        "ESTIMATOR_PRICE_LIST_JSON": "",
+        "PROPOSAL_TEMPLATE_DOC_ID": "",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Local",
         "APP_TENANT_BRAND": "IronWrap",
@@ -466,6 +473,7 @@
     },
     "staging": {
       "workers_dev": true,
+      "routes": [],
       "d1_databases": [
         {
           "binding": "DB",
@@ -606,6 +614,8 @@
         "POSTIZ_FACET_DRAFT_PROVIDER": "facebook",
         "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
         "POSTIZ_FACET_DRAFT_NOT_BEFORE": "",
+        "ESTIMATOR_PRICE_LIST_JSON": "",
+        "PROPOSAL_TEMPLATE_DOC_ID": "",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Owner Test",
         "APP_TENANT_BRAND": "IronWrap",

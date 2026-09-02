@@ -26,6 +26,9 @@ env:
   RELEASE_RULESET_ID: 20652124
   CLOUDFLARE_ACCOUNT_ID: 7ee5775bc1ba46f05c5a65235b60e939
   RELEASE_PRODUCTION_D1_ID: f0674848-13df-4422-9896-8ba2719663b8
+  RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap-bus.ironwrapexteriors.com
+  RELEASE_PRODUCTION_DOMAIN_SERVICE: ironwrap-bus
+  RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID }}
   RELEASE_PRODUCTION_BASE_URL: https://ironwrap-bus.ironwrapexteriors.com
   RELEASE_STAGING_BASE_URL: https://ironwrap-bus-staging.yellow-rain-7498.workers.dev
   RELEASE_ISSUER_IDENTITY: release-admission@ironwrapexteriors.com
@@ -522,26 +525,31 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_STAGING_CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          "$WRANGLER_BIN" d1 export ironwrap-bus-staging \
-            --config workers-bus/wrangler.jsonc --env staging --remote --output "$RUNNER_TEMP/staging.sql"
+          export_log="$RUNNER_TEMP/staging-export.log"
+          if ! "$WRANGLER_BIN" d1 export ironwrap-bus-staging \
+            --config workers-bus/wrangler.jsonc --env staging --remote --output "$RUNNER_TEMP/staging.sql" \
+            > "$export_log" 2>&1
+          then
+            echo "release_staging_export_failed" >&2
+            exit 1
+          fi
           test -s "$RUNNER_TEMP/staging.sql"
-          node "$RELEASE_ENFORCER" restore-query \
-            --export "$RUNNER_TEMP/staging.sql" --output "$RUNNER_TEMP/staging-restore-query.sql"
-          "$WRANGLER_BIN" d1 execute ironwrap-bus-staging \
-            --config workers-bus/wrangler.jsonc --env staging --remote \
-            --command "$(cat "$RUNNER_TEMP/staging-restore-query.sql")" --json > "$RUNNER_TEMP/staging-source-manifest.json"
-          restore_persist="$RUNNER_TEMP/ironwrap-d1-restore-${GITHUB_RUN_ID}"
-          mkdir -p "$restore_persist"
-          "$WRANGLER_BIN" d1 execute ironwrap-bus \
-            --config workers-bus/wrangler.jsonc --env local --local --persist-to "$restore_persist" \
-            --file "$RUNNER_TEMP/staging.sql" > "$RUNNER_TEMP/staging-restore-import.log"
-          "$WRANGLER_BIN" d1 execute ironwrap-bus \
-            --config workers-bus/wrangler.jsonc --env local --local --persist-to "$restore_persist" \
-            --command "$(cat "$RUNNER_TEMP/staging-restore-query.sql")" --json > "$RUNNER_TEMP/staging-restored-manifest.json"
+          source_database="$RUNNER_TEMP/staging-restore-source-${GITHUB_RUN_ID}.sqlite"
+          restored_database="$RUNNER_TEMP/staging-restore-restored-${GITHUB_RUN_ID}.sqlite"
+          test ! -e "$source_database"
+          test ! -e "$restored_database"
+          node "$RELEASE_ENFORCER" restore-local \
+            --export "$RUNNER_TEMP/staging.sql" --database "$source_database" \
+            --output "$RUNNER_TEMP/staging-source-manifest.json"
+          node "$RELEASE_ENFORCER" restore-local \
+            --export "$RUNNER_TEMP/staging.sql" --database "$restored_database" \
+            --output "$RUNNER_TEMP/staging-restored-manifest.json"
           node "$RELEASE_ENFORCER" restore-readback \
             --export "$RUNNER_TEMP/staging.sql" \
             --source "$RUNNER_TEMP/staging-source-manifest.json" \
             --restored "$RUNNER_TEMP/staging-restored-manifest.json" \
+            --source-target "$source_database" \
+            --restored-target "$restored_database" \
             --output "$RUNNER_TEMP/staging-restore.readback"
           node "$RELEASE_ENFORCER" backup-receipt \
             --export "$RUNNER_TEMP/staging.sql" --readback "$RUNNER_TEMP/staging-restore.readback" \
@@ -693,6 +701,10 @@ jobs:
           for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN RELEASE_INDEPENDENT_ISSUER_URL RELEASE_INDEPENDENT_ISSUER_TOKEN RELEASE_SERVICE_ADAPTER_URL RELEASE_SERVICE_ADAPTER_TOKEN RELEASE_SERVICE_ADAPTER_PUBLIC_KEY RELEASE_SERVICE_ADAPTER_IDENTITY RELEASE_SERVICE_ADAPTER_TASK_ID RELEASE_SERVICE_ADAPTER_RUN_ID RELEASE_SERVICE_ADAPTER_KEY_VERSION; do
             if [[ -z "${!required:-}" ]]; then echo "release_production_missing_external_secret:$required" >&2; exit 1; fi
           done
+          if [[ ! "$RELEASE_PRODUCTION_ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "release_production_invalid_zone_id" >&2
+            exit 1
+          fi
 
       - name: Fail closed on the declared Frappe adapter scope and config
         env:
@@ -872,6 +884,9 @@ jobs:
           printf '%s' "$RELEASE_PERMIT_PRIVATE_KEY" > "$RUNNER_TEMP/permit.key"
           node "$RELEASE_ENFORCER" assemble \
             --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
+            --domain-hostname "$RELEASE_PRODUCTION_DOMAIN_HOSTNAME" \
+            --domain-service "$RELEASE_PRODUCTION_DOMAIN_SERVICE" \
+            --domain-zone-id "$RELEASE_PRODUCTION_ZONE_ID" \
             --repo-root "$GITHUB_WORKSPACE" \
             --context "$RUNNER_TEMP/context-download/context.json" \
             --policy "$RUNNER_TEMP/context-download/policy.json" \
@@ -1000,6 +1015,35 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
         run: '"$WRANGLER_BIN" versions deploy --config workers-bus/wrangler.jsonc --version-id "$(cat "$RUNNER_TEMP/production-version.id")" --yes'
 
+      - name: Deploy the production custom-domain route after immutable promotion
+        id: deploy_production_triggers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: '"$WRANGLER_BIN" triggers deploy --config workers-bus/wrangler.jsonc'
+
+      - name: Read back the production Workers domain binding
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/production-domains.json"
+          response_error="$RUNNER_TEMP/production-domains.error"
+          if ! curl --silent --show-error --fail --connect-timeout 10 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            --header "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/domains" \
+            --output "$response" 2> "$response_error"
+          then
+            echo "release_production_domain_readback_request_failed" >&2
+            exit 1
+          fi
+          node "$RELEASE_ENFORCER" domain-readback \
+            --input "$response" \
+            --hostname "$RELEASE_PRODUCTION_DOMAIN_HOSTNAME" \
+            --service "$RELEASE_PRODUCTION_DOMAIN_SERVICE" \
+            --zone-id "$RELEASE_PRODUCTION_ZONE_ID" \
+            --output "$RUNNER_TEMP/production-domain-readback.json"
+
       - name: Verify production identity, health, readiness, and authenticated smoke
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
@@ -1042,6 +1086,7 @@ jobs:
             --version-id "$(cat "$RUNNER_TEMP/production-version.id")" \
             --version-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/production.json" --field version_digest)" \
             --permit-payload "$RUNNER_TEMP/release-permit.json" \
+            --domain-readback "$RUNNER_TEMP/production-domain-readback.json" \
             --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
             --service-promotion-receipt "$RUNNER_TEMP/service-promotion.receipt" \
             --service-readback-receipt "$RUNNER_TEMP/service-readback.receipt" \
@@ -1186,6 +1231,7 @@ jobs:
             ${{ runner.temp }}/release-evidence.receipt
             ${{ runner.temp }}/generation-advance.json
             ${{ runner.temp }}/production-smoke-evidence.json
+            ${{ runner.temp }}/production-domain-readback.json
             ${{ runner.temp }}/production-promotion.json
             ${{ runner.temp }}/service-adapter-preflight.json
             ${{ runner.temp }}/service-promotion.receipt

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +16,7 @@ import {
   requestIndependentIssuer,
   requestServiceAdapter,
   validateIndependentIssuerRequest,
+  validateProductionDomainRoute,
 } from "./release-promotion.mjs";
 import {
   signServiceAdapterReceipt,
@@ -35,6 +36,25 @@ const ARTIFACT = "c".repeat(64);
 const CONFIG = "d".repeat(64);
 const STAGING = "11111111-1111-4111-8111-111111111111";
 const PRODUCTION = "22222222-2222-4222-8222-222222222222";
+const DOMAIN_HOSTNAME = "os.ironwrapexteriors.com";
+const DOMAIN_SERVICE = "ironwrap-bus";
+const DOMAIN_ZONE_ID = "a".repeat(32);
+const DOMAIN_PROVIDER_RESULT = [
+  {
+    id: "domain-1",
+    hostname: "OS.IRONWRAPEXTERIORS.COM.",
+    service: DOMAIN_SERVICE,
+    zone_id: DOMAIN_ZONE_ID,
+    environment: "production",
+  },
+  {
+    id: "domain-2",
+    hostname: "other.ironwrapexteriors.com",
+    service: DOMAIN_SERVICE,
+    zone_id: DOMAIN_ZONE_ID,
+    environment: "production",
+  },
+];
 const ISSUER_NOW = Date.parse("2026-08-23T00:00:00.000Z");
 const ISSUER_REQUESTED_AT = "2026-08-22T23:59:00.000Z";
 const ISSUER_EXPIRES_AT = "2026-08-23T00:04:00.000Z";
@@ -139,6 +159,9 @@ function minimalPermitPayload({
         pwa_readback_digest: sha("version"),
         frappe_revision: FRAPPE_CANDIDATE,
         frappe_readback_digest: FRAPPE_CANDIDATE_READBACK,
+        domain_hostname: DOMAIN_HOSTNAME,
+        domain_service: DOMAIN_SERVICE,
+        domain_zone_id: DOMAIN_ZONE_ID,
       },
       provider_reconciliation: { receipt_digest: PROVIDER_RECONCILIATION },
     },
@@ -198,6 +221,87 @@ test("CLI parses exactly one pinned Wrangler version identity", async (t) => {
   assert.equal((await readFile(output, "utf8")).trim(), STAGING);
   await writeFile(input, `Worker Version ID: ${STAGING}\nWorker Version ID: ${PRODUCTION}\n`);
   await assert.rejects(() => main(["parse-version", "--input", input, "--output", output]), /release_permit_version_id_ambiguous/);
+});
+
+test("domain readback normalizes one exact Workers domain and never emits provider tokens", async (t) => {
+  const root = await tempRoot(t);
+  const input = path.join(root, "domains.json");
+  const output = path.join(root, "domain.receipt.json");
+  const token = "provider-token-that-must-not-leak";
+  const invoke = () => main([
+    "domain-readback",
+    "--input",
+    input,
+    "--hostname",
+    "OS.IRONWRAPEXTERIORS.COM.",
+    "--service",
+    DOMAIN_SERVICE,
+    "--zone-id",
+    DOMAIN_ZONE_ID.toUpperCase(),
+    "--output",
+    output,
+  ]);
+  await writeFile(input, JSON.stringify({
+    success: true,
+    messages: [{ message: token }],
+    result: DOMAIN_PROVIDER_RESULT,
+  }));
+  await invoke();
+  const receipt = await readFile(output, "utf8");
+  const parsed = JSON.parse(receipt);
+  assert.deepEqual(parsed, {
+    schema: "ironwrap_cloudflare_workers_domain_readback_v1",
+    type: "ironwrap-cloudflare-workers-domain-readback",
+    hostname: DOMAIN_HOSTNAME,
+    service: DOMAIN_SERVICE,
+    zone_id: DOMAIN_ZONE_ID,
+    provider_readback_digest: sha(canonicalJson(DOMAIN_PROVIDER_RESULT)),
+    status: "matched",
+  });
+  assert.equal(receipt.includes(token), false);
+
+  await writeFile(input, JSON.stringify({
+    success: true,
+    result: [
+      { hostname: DOMAIN_HOSTNAME, service: DOMAIN_SERVICE, zone_id: DOMAIN_ZONE_ID },
+      { hostname: DOMAIN_HOSTNAME, service: DOMAIN_SERVICE, zone_id: DOMAIN_ZONE_ID },
+    ],
+  }));
+  await assert.rejects(invoke, /release_promotion_domain_readback_duplicate/);
+  await writeFile(input, JSON.stringify({ success: true, result: [{}] }));
+  await assert.rejects(invoke, /release_promotion_domain_readback_entry_invalid/);
+  await writeFile(input, JSON.stringify({
+    success: true,
+    result: [{
+      hostname: DOMAIN_HOSTNAME,
+      service: DOMAIN_SERVICE,
+      zone_id: "z".repeat(32),
+    }],
+  }));
+  await assert.rejects(invoke, /release_promotion_domain_readback_entry_invalid/);
+  for (const entry of [
+    { hostname: "wrong.ironwrapexteriors.com", service: DOMAIN_SERVICE, zone_id: DOMAIN_ZONE_ID },
+    { hostname: DOMAIN_HOSTNAME, service: "other-service", zone_id: DOMAIN_ZONE_ID },
+    { hostname: DOMAIN_HOSTNAME, service: DOMAIN_SERVICE, zone_id: "b".repeat(32) },
+  ]) {
+    await writeFile(input, JSON.stringify({ success: true, result: [entry] }));
+    await assert.rejects(invoke, /release_promotion_domain_readback_mismatch/);
+  }
+  await writeFile(input, JSON.stringify({ success: false, result: [] }));
+  await assert.rejects(invoke, /release_promotion_domain_readback_response_invalid/);
+});
+
+test("production domain target must match the checked-in custom route digest", () => {
+  const expectedRoute = [{ pattern: DOMAIN_HOSTNAME, custom_domain: true }];
+  assert.doesNotThrow(() => validateProductionDomainRoute({
+    routes_digest: sha(canonicalJson(expectedRoute)),
+  }, DOMAIN_HOSTNAME));
+  assert.throws(() => validateProductionDomainRoute({
+    routes_digest: sha(canonicalJson([{ pattern: "other.ironwrapexteriors.com", custom_domain: true }])),
+  }, DOMAIN_HOSTNAME), /release_promotion_production_domain_route_drift/);
+  assert.throws(() => validateProductionDomainRoute({
+    routes_digest: sha(canonicalJson([])),
+  }, DOMAIN_HOSTNAME), /release_promotion_production_domain_route_drift/);
 });
 
 test("machine service-adapter signer emits a bounded exact provider receipt", async (t) => {
@@ -1249,6 +1353,166 @@ test("restore readback rejects free text, malformed JSON, empty state, and schem
   await assert.rejects(invoke, /release_promotion_restore_manifest_mismatch/);
 });
 
+test("restore-local keeps two independent large SQLite imports readback-equivalent", async (t) => {
+  const root = await tempRoot(t);
+  const exportFile = path.join(root, "large-export.sql");
+  const firstDatabase = path.join(root, "restore-one.sqlite");
+  const secondDatabase = path.join(root, "restore-two.sqlite");
+  const firstOutput = path.join(root, "restore-one.json");
+  const secondOutput = path.join(root, "restore-two.json");
+  const readbackOutput = path.join(root, "restore.readback.json");
+  const identityReadbackOutput = path.join(root, "restore.identity-readback.json");
+  const largeValue = "large-restore-value-".repeat(140_000);
+  const tables = [
+    "dedup_claims",
+    "large_payload",
+    ...Array.from({ length: 101 }, (_, index) => `restore_table_${String(index).padStart(3, "0")}`),
+  ];
+  const statements = [
+    'CREATE TABLE "_cf_KV" (value TEXT);',
+    'CREATE TABLE dedup_claims (dedup_key TEXT);',
+    "INSERT INTO dedup_claims VALUES ('release-policy');",
+    'CREATE TABLE large_payload (value TEXT);',
+    `INSERT INTO large_payload VALUES ('${largeValue}');`,
+    ...tables.slice(2).flatMap((table, index) => [
+      `CREATE TABLE ${table} (value TEXT);`,
+      `INSERT INTO ${table} VALUES ('row-${index}');`,
+    ]),
+  ];
+  const exportSql = `${statements.join("\n")}\n`;
+  assert.ok(Buffer.byteLength(exportSql) > 2 * 1024 * 1024);
+  await writeFile(exportFile, exportSql);
+
+  const restore = (database, output) => main([
+    "restore-local",
+    "--export",
+    exportFile,
+    "--database",
+    database,
+    "--output",
+    output,
+  ]);
+  await restore(firstDatabase, firstOutput);
+  await restore(secondDatabase, secondOutput);
+  assert.equal((await lstat(firstDatabase)).isFile(), true);
+  assert.equal((await lstat(secondDatabase)).isFile(), true);
+  const first = JSON.parse(await readFile(firstOutput, "utf8"));
+  const second = JSON.parse(await readFile(secondOutput, "utf8"));
+  assert.equal(first.length, tables.length + 1);
+  assert.equal(second.length, tables.length + 1);
+  assert.equal(JSON.stringify(first).includes(largeValue), true);
+  assert.equal(JSON.stringify(second).includes(largeValue), true);
+  assert.equal(JSON.stringify(first).includes("_cf_KV"), false);
+  assert.equal(JSON.stringify(second).includes("_cf_KV"), false);
+  await main([
+    "restore-readback",
+    "--export",
+    exportFile,
+    "--source",
+    firstOutput,
+    "--restored",
+    secondOutput,
+    "--output",
+    readbackOutput,
+  ]);
+  const readback = JSON.parse(await readFile(readbackOutput, "utf8"));
+  assert.equal(readback.status, "matched");
+  assert.equal(readback.result, "passed");
+  assert.equal(readback.restored, true);
+  assert.equal("restore_targets" in readback, false);
+  await main([
+    "restore-readback",
+    "--export",
+    exportFile,
+    "--source",
+    firstOutput,
+    "--restored",
+    secondOutput,
+    "--source-target",
+    firstDatabase,
+    "--restored-target",
+    secondDatabase,
+    "--output",
+    identityReadbackOutput,
+  ]);
+  const identityReadback = JSON.parse(
+    await readFile(identityReadbackOutput, "utf8"),
+  );
+  assert.deepEqual(identityReadback.restore_targets, {
+    source: firstDatabase,
+    restored: secondDatabase,
+  });
+  assert.match(identityReadback.evidence_digest, /^[0-9a-f]{64}$/);
+  await assert.rejects(
+    () => main([
+      "restore-readback",
+      "--export",
+      exportFile,
+      "--source",
+      firstOutput,
+      "--restored",
+      secondOutput,
+      "--source-target",
+      firstDatabase,
+      "--output",
+      path.join(root, "restore.missing-target.json"),
+    ]),
+    /release_promotion_restore_target_pair_required/,
+  );
+  await assert.rejects(
+    () => main([
+      "restore-readback",
+      "--export",
+      exportFile,
+      "--source",
+      firstOutput,
+      "--restored",
+      secondOutput,
+      "--source-target",
+      firstDatabase,
+      "--restored-target",
+      firstDatabase,
+      "--output",
+      path.join(root, "restore.same-target.json"),
+    ]),
+    /release_promotion_restore_targets_not_distinct/,
+  );
+
+  const unwritableOutput = path.join(root, "output-directory");
+  const failedOutputDatabase = path.join(root, "failed-output.sqlite");
+  await mkdir(unwritableOutput);
+  await assert.rejects(
+    () => restore(failedOutputDatabase, unwritableOutput),
+    /EISDIR|is a directory/,
+  );
+  await assert.rejects(() => lstat(failedOutputDatabase), { code: "ENOENT" });
+
+  const invalidExport = path.join(root, "invalid-export.sql");
+  const invalidDatabase = path.join(root, "invalid.sqlite");
+  await writeFile(invalidExport, `${exportSql}INSERT INTO dedup_claims VALUES ('unterminated);\n`);
+  await assert.rejects(
+    () => main([
+      "restore-local",
+      "--export",
+      invalidExport,
+      "--database",
+      invalidDatabase,
+      "--output",
+      path.join(root, "invalid.json"),
+    ]),
+    /release_promotion_restore_import_invalid/,
+  );
+  await assert.rejects(() => lstat(invalidDatabase), { code: "ENOENT" });
+
+  const existingDatabase = path.join(root, "existing.sqlite");
+  await writeFile(existingDatabase, "occupied");
+  await assert.rejects(
+    () => restore(existingDatabase, path.join(root, "existing.json")),
+    /release_promotion_restore_database_exists/,
+  );
+  assert.equal(await readFile(existingDatabase, "utf8"), "occupied");
+});
+
 test("production receipt binds active revision, config, readiness, and exact smoke evidence", async (t) => {
   const root = await tempRoot(t);
   const active = path.join(root, "active.id");
@@ -1257,6 +1521,8 @@ test("production receipt binds active revision, config, readiness, and exact smo
   const ready = path.join(root, "ready.json");
   const output = path.join(root, "production.json");
   const permitPayload = path.join(root, "permit.json");
+  const domainInput = path.join(root, "domains.json");
+  const domainReadback = path.join(root, "domain.readback.json");
   const mergeReceiptFile = path.join(root, "merge.json");
   const servicePromotionReceiptFile = path.join(
     root,
@@ -1304,6 +1570,27 @@ test("production receipt binds active revision, config, readiness, and exact smo
   await writeFile(health, JSON.stringify({ ok: true }));
   await writeFile(ready, JSON.stringify({ ok: true }));
   await writeFile(smoke, JSON.stringify(v4SmokeEvidence()));
+  await writeFile(domainInput, JSON.stringify({
+    success: true,
+    result: [{
+      hostname: DOMAIN_HOSTNAME,
+      service: DOMAIN_SERVICE,
+      zone_id: DOMAIN_ZONE_ID,
+    }],
+  }));
+  await main([
+    "domain-readback",
+    "--input",
+    domainInput,
+    "--hostname",
+    DOMAIN_HOSTNAME,
+    "--service",
+    DOMAIN_SERVICE,
+    "--zone-id",
+    DOMAIN_ZONE_ID,
+    "--output",
+    domainReadback,
+  ]);
   const receiptArgs = [
     "production-receipt",
     "--frappe-scope",
@@ -1316,6 +1603,8 @@ test("production receipt binds active revision, config, readiness, and exact smo
     health,
     "--ready",
     ready,
+    "--domain-readback",
+    domainReadback,
     "--source-commit",
     COMMIT,
     "--source-tree",
@@ -1353,6 +1642,9 @@ test("production receipt binds active revision, config, readiness, and exact smo
   const receipt = JSON.parse(await readFile(output, "utf8"));
   assert.equal(receipt.active_readback, "matched");
   assert.equal(receipt.revision, PRODUCTION);
+  assert.equal(receipt.domain_hostname, DOMAIN_HOSTNAME);
+  assert.equal(receipt.domain_service, DOMAIN_SERVICE);
+  assert.equal(receipt.domain_zone_id, DOMAIN_ZONE_ID);
   const scopeMismatchArgs = receiptArgs.filter((value, index, list) => {
     const serviceFlags = new Set(SERVICE_RECEIPT_TEST_FLAGS);
     return !serviceFlags.has(value) && !serviceFlags.has(list[index - 1]);

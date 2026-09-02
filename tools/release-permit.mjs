@@ -51,6 +51,10 @@ export const PRODUCTION_RECOVERY_REQUIRED_SCHEMA =
   "ironwrap_production_recovery_required_v1";
 export const PRODUCTION_PROMOTION_SCHEMA = "ironwrap_production_promotion_v1";
 export const PRODUCTION_PROMOTION_TYPE = "ironwrap-production-promotion";
+export const DOMAIN_READBACK_SCHEMA =
+  "ironwrap_cloudflare_workers_domain_readback_v1";
+export const DOMAIN_READBACK_TYPE =
+  "ironwrap-cloudflare-workers-domain-readback";
 export const SERVICE_ADAPTER_RECEIPT_SCHEMA =
   "ironwrap_service_adapter_receipt_v1";
 export const SERVICE_ADAPTER_RECEIPT_TYPE = "ironwrap-service-adapter-receipt";
@@ -91,6 +95,8 @@ const NONCE_RE = /^[A-Za-z0-9_-]{32,128}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$/;
 const IDENTITY_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const FRAPPE_SCOPE_RE = /^(?:in-scope|out-of-scope)$/;
+const DOMAIN_HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const DOMAIN_ZONE_RE = /^[0-9a-f]{32}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MIGRATION_RE = /^\d{4}_[a-z0-9][a-z0-9_-]*\.sql$/;
 const VERSION_MESSAGE_RE = new RegExp(
@@ -924,6 +930,9 @@ function validateReleaseManifest(manifest, permit) {
       "pwa_readback_digest",
       "frappe_revision",
       "frappe_readback_digest",
+      "domain_hostname",
+      "domain_service",
+      "domain_zone_id",
       "status",
     ],
     "release_manifest_production_candidates_shape_invalid",
@@ -950,6 +959,20 @@ function validateReleaseManifest(manifest, permit) {
     "prepared",
     manifest.production_candidates.status,
     "release_manifest_production_candidates_not_prepared",
+  );
+  text(
+    manifest.production_candidates.domain_hostname,
+    "release_manifest_production_domain_hostname_invalid",
+    DOMAIN_HOSTNAME_RE,
+  );
+  text(
+    manifest.production_candidates.domain_service,
+    "release_manifest_production_domain_service_invalid",
+  );
+  text(
+    manifest.production_candidates.domain_zone_id,
+    "release_manifest_production_domain_zone_invalid",
+    DOMAIN_ZONE_RE,
   );
   validateAffectedScopes(manifest.affected_scopes);
   equal(sha256(canonicalJson(manifest.affected_scopes)), manifest.staging.affected_scope_evidence_digest, "release_manifest_scope_digest_mismatch");
@@ -1255,6 +1278,46 @@ export function validateProductionRecoveryRequiredReceipt(
   return receipt;
 }
 
+/** Validate the redacted, exact Cloudflare Workers custom-domain readback. */
+export function validateDomainReadbackReceipt(receipt, expected = {}) {
+  exactKeys(
+    receipt,
+    [
+      "schema",
+      "type",
+      "hostname",
+      "service",
+      "zone_id",
+      "provider_readback_digest",
+      "status",
+    ],
+    "domain_readback_shape_invalid",
+  );
+  equal(DOMAIN_READBACK_SCHEMA, receipt.schema, "domain_readback_schema_invalid");
+  equal(DOMAIN_READBACK_TYPE, receipt.type, "domain_readback_type_invalid");
+  text(receipt.hostname, "domain_readback_hostname_invalid", DOMAIN_HOSTNAME_RE);
+  text(receipt.service, "domain_readback_service_invalid");
+  text(receipt.zone_id, "domain_readback_zone_invalid", DOMAIN_ZONE_RE);
+  hash(receipt.provider_readback_digest, "domain_readback_digest_invalid");
+  equal("matched", receipt.status, "domain_readback_status_invalid");
+  if (expected.providerResult !== undefined) {
+    equal(
+      sha256(canonicalJson(expected.providerResult)),
+      receipt.provider_readback_digest,
+      "domain_readback_digest_mismatch",
+    );
+  }
+  for (const [key, value] of Object.entries({
+    hostname: expected.hostname,
+    service: expected.service,
+    zone_id: expected.zoneId,
+    provider_readback_digest: expected.providerReadbackDigest,
+  })) {
+    if (value !== undefined) equal(value, receipt[key], `domain_readback_${key}_drift`);
+  }
+  return receipt;
+}
+
 /** Validate the immutable post-promotion proof required before generation advance. */
 export function validateProductionPromotionReceipt(
   receipt,
@@ -1283,6 +1346,10 @@ export function validateProductionPromotionReceipt(
       "frappe_readback_digest",
       "service_promotion_digest",
       "service_readback_digest",
+      "domain_hostname",
+      "domain_service",
+      "domain_zone_id",
+      "domain_provider_readback_digest",
       "smoke_evidence_digest",
       "smoke_result",
       "smoke_step_names",
@@ -1330,6 +1397,21 @@ export function validateProductionPromotionReceipt(
     receipt.service_readback_digest,
     "production_promotion_service_readback_digest_invalid",
   );
+  text(
+    receipt.domain_hostname,
+    "production_promotion_domain_hostname_invalid",
+    DOMAIN_HOSTNAME_RE,
+  );
+  text(receipt.domain_service, "production_promotion_domain_service_invalid");
+  text(
+    receipt.domain_zone_id,
+    "production_promotion_domain_zone_invalid",
+    DOMAIN_ZONE_RE,
+  );
+  hash(
+    receipt.domain_provider_readback_digest,
+    "production_promotion_domain_readback_digest_invalid",
+  );
   const leftoverFrappeDigest = sha256("frappe-not-required");
   if (receipt.frappe_scope === "in-scope" &&
       (receipt.frappe_revision === "leftover-not-promoted" ||
@@ -1366,6 +1448,10 @@ export function validateProductionPromotionReceipt(
     frappe_revision: expected.frappeRevision,
     frappe_readback_digest: expected.frappeReadbackDigest,
     frappe_scope: expected.frappeScope,
+    domain_hostname: expected.domainHostname,
+    domain_service: expected.domainService,
+    domain_zone_id: expected.domainZoneId,
+    domain_provider_readback_digest: expected.domainProviderReadbackDigest,
   }))
     if (value !== undefined) equal(value, receipt[key], `production_promotion_${key}_drift`);
   const digest = sha256(
@@ -1385,6 +1471,10 @@ export function validateProductionPromotionReceipt(
       frappe_readback_digest: receipt.frappe_readback_digest,
       service_promotion_digest: receipt.service_promotion_digest,
       service_readback_digest: receipt.service_readback_digest,
+      domain_hostname: receipt.domain_hostname,
+      domain_service: receipt.domain_service,
+      domain_zone_id: receipt.domain_zone_id,
+      domain_provider_readback_digest: receipt.domain_provider_readback_digest,
       smoke_evidence_digest: receipt.smoke_evidence_digest,
       smoke_result: receipt.smoke_result,
       smoke_step_names: receipt.smoke_step_names,
@@ -2335,6 +2425,9 @@ export async function advanceReleaseGeneration(
       pwaRevision: payload.release_manifest.production_candidates.pwa_revision,
       pwaReadbackDigest: payload.worker.production_version_digest,
       frappeScope: payload.release_manifest.frappe_scope,
+      domainHostname: payload.release_manifest.production_candidates.domain_hostname,
+      domainService: payload.release_manifest.production_candidates.domain_service,
+      domainZoneId: payload.release_manifest.production_candidates.domain_zone_id,
       ...(payload.release_manifest.frappe_scope === "in-scope"
         ? {
             frappeRevision:

@@ -101,6 +101,11 @@ export function comparableAudits(summary) {
     .map(([audit]) => audit);
 }
 
+export function missingComparableAudits(summary, requiredAudits) {
+  const comparable = new Set(comparableAudits(summary));
+  return requiredAudits.filter((audit) => !comparable.has(audit));
+}
+
 function round(value) {
   return Math.round(value * 1000) / 1000;
 }
@@ -118,21 +123,32 @@ export async function main({ rounds = Number(process.env.LIGHTHOUSE_AB_ROUNDS ??
 
   for (const [index, protocol] of plan.entries()) {
     process.stdout.write(`\nA/B leg ${index + 1}/${plan.length}: ${protocol}\n`);
-    const { aggregate, failures } = await measure({
+    const {
+      aggregate,
+      failures,
+      evidence: measurementEvidence,
+    } = await measure({
       profile: config.profileFor(protocol),
       runFilePrefix: `ab-leg${index + 1}-${protocol}`,
       clean: index === 0,
     });
-    legs.push({ leg: index + 1, protocol, aggregate, thresholdMisses: failures });
+    legs.push({
+      leg: index + 1,
+      protocol,
+      aggregate,
+      runner: measurementEvidence.runner,
+      thresholdMisses: failures,
+    });
   }
 
   const summary = summarizeProtocolAb(legs);
   const evidence = {
-    version: 1,
+    version: 2,
     tool: "lighthouse@13.4.1",
     url: config.url,
     gateProtocol: config.GATE_PROTOCOL,
     runsPerLeg: config.numberOfRuns,
+    runnerNormalization: config.runnerNormalization,
     plan,
     ...summary,
   };
@@ -162,6 +178,12 @@ export async function main({ rounds = Number(process.env.LIGHTHOUSE_AB_ROUNDS ??
     );
     throw new Error(
       `The A/B measured no audit on both protocols, so it compared nothing:\n- ${reasons.join("\n- ")}`,
+    );
+  }
+  const missingRequired = missingComparableAudits(summary, config.runnerNormalization.auditIds);
+  if (missingRequired.length) {
+    throw new Error(
+      `The A/B did not compare required normalized audits: ${missingRequired.join(", ")}`,
     );
   }
 

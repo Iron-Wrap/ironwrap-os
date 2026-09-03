@@ -19,33 +19,58 @@ const { certificateSpkiFingerprint } = await import("./acceptance-certificate.mj
 
 export { median };
 
-export function evaluateAssertions(results, assertions) {
+export function evaluateAssertions(results, assertions, runnerNormalization) {
   const failures = [];
   const aggregate = {};
 
   for (const [auditId, [, options]] of Object.entries(assertions)) {
-    const values = results.map((result) => {
+    const rawValues = results.map((result) => {
       if (auditId.startsWith("categories:")) {
         return result.categories[auditId.slice("categories:".length)]?.score;
       }
       return result.audits[auditId]?.numericValue;
     });
-    if (!values.every((value) => Number.isFinite(value))) {
+    if (!rawValues.every((value) => Number.isFinite(value))) {
       failures.push(`${auditId}: Lighthouse returned a non-numeric value`);
       continue;
     }
 
+    const normalize = runnerNormalization?.auditIds.includes(auditId);
+    const values = normalize
+      ? rawValues.map((value, index) => {
+          const benchmarkIndex = results[index].environment?.benchmarkIndex;
+          return normalizeRunnerValue(
+            value,
+            benchmarkIndex,
+            runnerNormalization.referenceBenchmarkIndex,
+          );
+        })
+      : rawValues;
+    if (!values.every((value) => Number.isFinite(value))) {
+      failures.push(`${auditId}: runner normalization requires a positive benchmarkIndex`);
+      continue;
+    }
+
     const value = median(values);
-    aggregate[auditId] = { median: value, values };
+    aggregate[auditId] = normalize
+      ? { median: value, values, rawMedian: median(rawValues), rawValues }
+      : { median: value, values };
+    const label = normalize ? "runner-normalized median" : "median";
     if (options.minScore !== undefined && value < options.minScore) {
-      failures.push(`${auditId}: median ${value} is below ${options.minScore}`);
+      failures.push(`${auditId}: ${label} ${value} is below ${options.minScore}`);
     }
     if (options.maxNumericValue !== undefined && value > options.maxNumericValue) {
-      failures.push(`${auditId}: median ${value} exceeds ${options.maxNumericValue}`);
+      failures.push(`${auditId}: ${label} ${value} exceeds ${options.maxNumericValue}`);
     }
   }
 
   return { aggregate, failures };
+}
+
+export function normalizeRunnerValue(value, benchmarkIndex, referenceBenchmarkIndex) {
+  if (![value, benchmarkIndex, referenceBenchmarkIndex].every(Number.isFinite)) return NaN;
+  if (benchmarkIndex <= 0 || referenceBenchmarkIndex <= 0) return NaN;
+  return (value * benchmarkIndex) / referenceBenchmarkIndex;
 }
 
 /**
@@ -193,18 +218,23 @@ export async function measure({
       runFiles.push(runFile);
     }
 
-    const { aggregate, failures } = evaluateAssertions(results, profile.assertions);
+    const { aggregate, failures } = evaluateAssertions(
+      results,
+      profile.assertions,
+      profile.runnerNormalization,
+    );
     return {
       aggregate,
       failures,
       outputDir,
       evidence: {
-        version: 2,
+        version: 3,
         tool: "lighthouse@13.4.1",
         url: profile.url,
         protocol: profile.protocol,
         runs: profile.numberOfRuns,
         thresholds: profile.assertions,
+        runnerNormalization: profile.runnerNormalization,
         aggregate,
         runner: describeRunner(results),
         runFiles,

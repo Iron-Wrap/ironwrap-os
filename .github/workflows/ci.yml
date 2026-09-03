@@ -345,12 +345,19 @@ jobs:
             const summary = require("./" + process.argv[1]);
             const round = (value) => Math.round(value * 1000) / 1000;
             console.log(`url ${summary.url} over ${summary.runs} runs`);
-            for (const [audit, reading] of Object.entries(summary.aggregate)) {
+          for (const [audit, reading] of Object.entries(summary.aggregate)) {
+            console.log(
+              `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
+                ` runs ${reading.values.map(round).join(", ")}`,
+            );
+            if (reading.rawValues) {
+              const rawAudit = `${audit} raw`;
               console.log(
-                `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
-                  ` runs ${reading.values.map(round).join(", ")}`,
+                `${rawAudit.padEnd(28)} median ${String(round(reading.rawMedian)).padEnd(10)}` +
+                  ` runs ${reading.rawValues.map(round).join(", ")}`,
               );
             }
+          }
             // The runner is part of the reading. Printing its speed next to the numbers is
             // what lets a later comparison of two jobs on the same bytes say which machine
             // each ran on, instead of reconstructing it from the metrics themselves.

@@ -6,9 +6,10 @@ import {
   comparableAudits,
   formatProtocolAbTable,
   legPlan,
+  missingComparableAudits,
   summarizeProtocolAb,
 } from "./lighthouse-protocol-ab.mjs";
-import { describeRunner } from "./lighthouse-field.mjs";
+import { describeRunner, evaluateAssertions, normalizeRunnerValue } from "./lighthouse-field.mjs";
 import { median } from "./lighthouse-statistics.mjs";
 
 const require = createRequire(import.meta.url);
@@ -21,6 +22,10 @@ describe("paired-device gate profile", () => {
   it("asserts the mobile budget", () => {
     expect(config.numberOfRuns).toBe(5);
     expect(config.settings.throttlingMethod).toBe("devtools");
+    expect(config.runnerNormalization).toEqual({
+      referenceBenchmarkIndex: 2400,
+      auditIds: ["total-blocking-time"],
+    });
     expect(config.assertions["categories:performance"][1].minScore).toBe(0.9);
     expect(config.assertions["total-blocking-time"][1].maxNumericValue).toBe(250);
     expect(config.assertions["first-contentful-paint"][1].maxNumericValue).toBe(2000);
@@ -61,6 +66,7 @@ describe("profileFor", () => {
     expect(http1.assertions).toBe(h2.assertions);
     expect(http1.settings).toBe(h2.settings);
     expect(http1.numberOfRuns).toBe(h2.numberOfRuns);
+    expect(http1.runnerNormalization).toBe(h2.runnerNormalization);
   });
 
   it("refuses a protocol it cannot serve", () => {
@@ -150,6 +156,21 @@ describe("comparableAudits", () => {
 
     expect(comparableAudits(summary)).toEqual([]);
   });
+
+  it("requires the normalized gate audit even when other readings are comparable", () => {
+    const summary = summarizeProtocolAb([
+      { leg: 1, protocol: "h2", aggregate: { "largest-contentful-paint": { values: [2900] } } },
+      {
+        leg: 2,
+        protocol: "http1",
+        aggregate: { "largest-contentful-paint": { values: [3100] } },
+      },
+    ]);
+
+    expect(missingComparableAudits(summary, ["total-blocking-time"])).toEqual([
+      "total-blocking-time",
+    ]);
+  });
 });
 
 describe("median", () => {
@@ -179,5 +200,58 @@ describe("describeRunner", () => {
 
   it("stays quiet when Lighthouse reported no environment", () => {
     expect(describeRunner([{}, {}])).toBeUndefined();
+  });
+});
+
+describe("runner-normalized admission", () => {
+  const assertions = {
+    "total-blocking-time": ["error", { maxNumericValue: 250 }],
+  };
+  const normalization = {
+    referenceBenchmarkIndex: 2400,
+    auditIds: ["total-blocking-time"],
+  };
+
+  it("compares observed DevTools TBT on a fixed runner reference without hiding raw values", () => {
+    const results = [
+      [320.365, 2452.5],
+      [314.641, 1077],
+      [266.652, 2263],
+      [262.976, 2193],
+      [249.152, 2242.5],
+    ].map(([totalBlockingTime, benchmarkIndex]) => ({
+      audits: { "total-blocking-time": { numericValue: totalBlockingTime } },
+      environment: { benchmarkIndex },
+    }));
+
+    const checked = evaluateAssertions(results, assertions, normalization);
+
+    expect(checked.failures).toEqual([]);
+    expect(checked.aggregate["total-blocking-time"].rawMedian).toBe(266.652);
+    expect(checked.aggregate["total-blocking-time"].median).toBeCloseTo(240.2968);
+  });
+
+  it("still rejects a slow page on the reference runner", () => {
+    const results = [260, 270, 280].map((totalBlockingTime) => ({
+      audits: { "total-blocking-time": { numericValue: totalBlockingTime } },
+      environment: { benchmarkIndex: 2400 },
+    }));
+
+    expect(evaluateAssertions(results, assertions, normalization).failures).toEqual([
+      "total-blocking-time: runner-normalized median 270 exceeds 250",
+    ]);
+  });
+
+  it("fails closed when Lighthouse omits the runner benchmark", () => {
+    const results = [{ audits: { "total-blocking-time": { numericValue: 100 } } }];
+
+    expect(evaluateAssertions(results, assertions, normalization).failures).toEqual([
+      "total-blocking-time: runner normalization requires a positive benchmarkIndex",
+    ]);
+  });
+
+  it("scales a measurement to the configured runner", () => {
+    expect(normalizeRunnerValue(250, 1200, 2400)).toBe(125);
+    expect(normalizeRunnerValue(250, 4800, 2400)).toBe(500);
   });
 });

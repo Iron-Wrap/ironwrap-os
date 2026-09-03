@@ -26,6 +26,15 @@ const schemes = { h2: "https", http1: "http" };
 // already spanned 200-242 ms on identical bytes; 200 sat inside the noise, not below it.
 const numberOfRuns = 5;
 
+// DevTools throttling reports the trace Chrome actually observed, so the host CPU remains
+// part of the reading. Runs 33785583056 and 33789275965 measured the same app tree on runner
+// allocations with benchmark medians 2674.5 and 2242.5. Their midpoint is 2458.5; 2400 is
+// the deliberately stricter round reference used to compare each same-run TBT sample.
+const runnerNormalization = {
+  referenceBenchmarkIndex: 2400,
+  auditIds: ["total-blocking-time"],
+};
+
 const settings = {
   // Match Lighthouse's built-in `perf` preset explicitly. The programmatic API
   // does not resolve a `preset` value supplied inside `settings`.
@@ -74,6 +83,7 @@ function profileFor(protocol) {
     },
     settings,
     assertions,
+    runnerNormalization,
     outputDir: ".lighthouseci",
   };
 }

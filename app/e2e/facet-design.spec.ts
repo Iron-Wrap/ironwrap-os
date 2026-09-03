@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
+import { expectTouchTarget } from "./touch-target";
 
 const estimatorMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -92,8 +93,10 @@ test.describe("Facet design acceptance", () => {
 
     const controls = page.locator("main button:visible, main a:visible");
     for (let index = 0; index < (await controls.count()); index += 1) {
-      const box = await controls.nth(index).boundingBox();
-      if (box) expect(box.height).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(controls.nth(index), {
+        name: `control ${index}`,
+        axis: "height",
+      });
     }
 
     await assertNoFrappeDesk(page);

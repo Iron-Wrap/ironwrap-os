@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 import { detailResponse, listResponse, serviceCase } from "../src/service/service-fixtures";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -50,7 +51,7 @@ test.describe("Service calls acceptance", () => {
 
     const callLink = page.getByRole("link", { name: /interior water stain/i });
     await expect(callLink).toHaveAttribute("href", "/service/svc_case_0001");
-    expect((await callLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(callLink, { name: "service call link", axis: "height" });
     await expectNoSideScroll(page);
     await page.screenshot({ path: `${shotDir}/service-calls-${testInfo.project.name}.png` });
 
@@ -73,9 +74,10 @@ test.describe("Service calls acceptance", () => {
     await expect(proof).toHaveAttribute("minlength", "64");
     await expect(proof).toHaveAttribute("maxlength", "64");
     await expect(page.getByRole("button", { name: "Save check" })).toBeDisabled();
-    expect(
-      (await page.getByRole("link", { name: "Back to Service calls" }).boundingBox())?.height ?? 0,
-    ).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(page.getByRole("link", { name: "Back to Service calls" }), {
+      name: "Back to Service calls",
+      axis: "height",
+    });
 
     await expectNoSideScroll(page);
     await page.screenshot({ path: `${shotDir}/service-case-${testInfo.project.name}.png` });

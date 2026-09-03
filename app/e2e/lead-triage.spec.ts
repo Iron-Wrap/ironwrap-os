@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -86,8 +87,10 @@ test.describe("Lead check acceptance", () => {
       ["button", "Refresh context"],
       ["button", "Record triage"],
     ] as const) {
-      const box = await page.getByRole(role, { name }).first().boundingBox();
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(page.getByRole(role, { name }).first(), {
+        name,
+        axis: "height",
+      });
     }
 
     const geometry = await page.evaluate(() => ({

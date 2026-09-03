@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 /**
  * ELEC-202 acceptance, walked in a real browser at a phone viewport: a lead added through the
@@ -252,8 +253,7 @@ test.describe("Lead onto a pipeline board", () => {
     // 2. It lands on the sales desk, and the desk now offers a board for it.
     await expect(page.getByRole("heading", { name: "Sales desk" })).toBeVisible();
     const addToBoard = page.getByRole("button", { name: "Add Pat Prospect to a board" });
-    await expect(addToBoard).toBeVisible();
-    expect((await addToBoard.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(addToBoard, { name: "Add Pat Prospect to a board", axis: "height" });
     await page.screenshot({ path: `${shotDir}/placement-1-sales-desk.png` });
 
     // 3. Only the board the server says this session may write is offered.

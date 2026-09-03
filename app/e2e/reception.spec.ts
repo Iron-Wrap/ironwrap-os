@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 import { newoOperationsFixture } from "../src/newo/newo-operations-test-fixture";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -44,8 +45,7 @@ test.describe("Reception acceptance", () => {
       page.getByRole("button", { name: /send|book|approve|delete|run|fix/i }),
     ).toHaveCount(0);
     const refresh = page.getByRole("button", { name: "Refresh Reception" });
-    await expect(refresh).toBeVisible();
-    expect((await refresh.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(refresh, { name: "Refresh Reception", axis: "height" });
 
     const size = await page.evaluate(() => ({
       page: document.documentElement.scrollWidth,

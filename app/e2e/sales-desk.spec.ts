@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -140,8 +141,8 @@ test.describe("Sales desk acceptance", () => {
     const roofWork = page.getByRole("link", { name: "Open roof work" });
     await expect(leadCheck).toHaveAttribute("href", "/sales/leads/LEAD-A/triage");
     await expect(roofWork).toHaveAttribute("href", "/estimator/jobs/JOB-A");
-    expect((await leadCheck.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-    expect((await roofWork.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(leadCheck, { name: "Open lead check", axis: "height" });
+    await expectTouchTarget(roofWork, { name: "Open roof work", axis: "height" });
 
     await expect(
       page.getByRole("button", { name: /send|call|email|issue quote|collect payment/i }),

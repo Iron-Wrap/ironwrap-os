@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { devices, expect, test, type Page } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 // Mobile-first acceptance for step 3 of the core workflow (ELEC-94 / ELEC-89).
 //
@@ -51,9 +52,7 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
     expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
       MOBILE_WIDTH + 1,
     );
-    expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
-      44,
-    );
+    await expectTouchTarget(control, { name: `${screen}: "${label}"`, axis: "height" });
   }
 }
 

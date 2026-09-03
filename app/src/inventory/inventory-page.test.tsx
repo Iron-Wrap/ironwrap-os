@@ -222,6 +222,24 @@ const overview: InventoryOverviewResponse = {
   recent_scans: [],
 };
 
+/**
+ * A 64-character SHA-256 digest reaches this field from a clipboard or a scanner, never
+ * from someone hand-typing hex. Entering it with `paste` drives the same controlled-input
+ * change handler a keystroke does, and removes ~256 synthetic keystrokes per test — two
+ * thirds of everything this file typed, and the reason it sat within a second of its
+ * ceiling on a loaded machine (ELEC-246). The character-by-character path is still
+ * covered: every other field below is typed, and the digest itself is typed in
+ * "normalises a hand-typed digest".
+ *
+ * Do not convert this back to `user.type` without re-reading that issue.
+ */
+async function pasteDigest(user: ReturnType<typeof userEvent.setup>, digest: string) {
+  const field = screen.getByLabelText("Evidence SHA-256");
+  await user.clear(field);
+  await user.click(field);
+  await user.paste(digest);
+}
+
 function renderPage(session: AuthenticatedSession = opsSession) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -307,9 +325,8 @@ async function submitGuidedTransitions(transitions: readonly GuidedTransition[])
       await user.type(screen.getByLabelText("Action being reversed"), "command-0001");
     }
     await user.clear(screen.getByLabelText("Evidence reference"));
-    await user.clear(screen.getByLabelText("Evidence SHA-256"));
     await user.type(screen.getByLabelText("Evidence reference"), `evidence:${transition}`);
-    await user.type(screen.getByLabelText("Evidence SHA-256"), "a".repeat(64));
+    await pasteDigest(user, "a".repeat(64));
     fireEvent.submit(screen.getByRole("form", { name: "Record warehouse action" }));
     expect(await screen.findByText("Action complete")).toBeVisible();
   }
@@ -428,17 +445,41 @@ describe("InventoryPage", () => {
     expect(recordInventoryScan).toHaveBeenCalledOnce();
   });
 
+  // These three carried a 20 s override — 5 s above the project default — because each
+  // walked four transitions through a desk that re-rendered wholesale on every keystroke.
+  // With that fixed they run in a fraction of a second, so they sit on the shared default
+  // like every other test here. Restoring an override would hide the next regression
+  // rather than report it.
   it("uses barcode selection and guided evidence for inbound and issue transitions", async () => {
     await submitGuidedTransitions(["receive", "reserve", "release_reservation", "issue_use"]);
-  }, 20_000);
+  });
 
   it("uses barcode selection and guided evidence for return, transfer, and quarantine", async () => {
     await submitGuidedTransitions(["return", "transfer", "quarantine", "release_quarantine"]);
-  }, 20_000);
+  });
 
   it("uses barcode selection and guided evidence for count, yield, and reversal", async () => {
     await submitGuidedTransitions(["count_freeze", "count_adjustment", "yield", "reversal"]);
-  }, 20_000);
+  });
+
+  // The digest field lowercases what it is given. Every other test now pastes an
+  // already-lowercase digest, so this is the one that proves the normalisation itself, and
+  // that it survives being entered one character at a time.
+  it("normalises a hand-typed digest to the lowercase the server verifies", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderPage();
+    await screen.findByRole("heading", { name: "Inventory" });
+    await user.click(screen.getAllByRole("button", { name: "Use as source" })[0]!);
+
+    const field = screen.getByLabelText("Evidence SHA-256");
+    await user.type(field, "AbCdEf");
+    expect(field).toHaveValue("abcdef");
+
+    await user.clear(field);
+    await user.click(field);
+    await user.paste("A".repeat(64));
+    expect(field).toHaveValue("a".repeat(64));
+  });
 
   it("keeps warehouse receive and transfer on the single D1 inventory desk", async () => {
     renderPage();
@@ -508,7 +549,7 @@ describe("InventoryPage", () => {
     await user.type(screen.getByLabelText("Receipt reference"), "receipt-retry");
     await user.type(screen.getByLabelText("Purchase-order line"), "po-line-retry");
     await user.type(screen.getByLabelText("Evidence reference"), "evidence:retry");
-    await user.type(screen.getByLabelText("Evidence SHA-256"), "a".repeat(64));
+    await pasteDigest(user, "a".repeat(64));
 
     fireEvent.submit(screen.getByRole("form", { name: "Record warehouse action" }));
     expect(await screen.findByText("Action outcome uncertain")).toBeVisible();

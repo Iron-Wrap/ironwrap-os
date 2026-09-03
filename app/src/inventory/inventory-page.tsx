@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Barcode, ClipboardList, PackageSearch, RefreshCw, Warehouse } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { memo, useCallback, useMemo, useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -61,6 +61,8 @@ type CommandForm = {
   evidenceRef: string;
   evidenceSha256: string;
 };
+
+type FieldChange = <K extends keyof CommandForm>(field: K, value: CommandForm[K]) => void;
 
 type CommandAttempt = {
   commandId: string;
@@ -226,54 +228,77 @@ function InventoryDesk({
       ? selectedTransition
       : overview.allowed_transitions[0];
 
-  const sourcePosition = overview.positions.find(
-    (position) => position.position_id === form.sourcePositionId,
+  // Every warehouse action is submitted with a 64-character evidence digest, so a single
+  // action costs this desk a hundred-odd keystrokes. The form state lives here, next to
+  // the read-only tenant read-back — the position table, the catalog, the summary tiles —
+  // so without these boundaries each of those keystrokes re-rendered and re-derived the
+  // whole desk. That is what a warehouse phone pays for while a crew member types, and
+  // what put the guided-transition tests within a second of their ceiling (ELEC-246).
+  //
+  // The derivations below depend on the chosen positions, never on the typed fields, so
+  // they are computed once per selection instead of once per character.
+  const sourcePosition = useMemo(
+    () => overview.positions.find((position) => position.position_id === form.sourcePositionId),
+    [overview.positions, form.sourcePositionId],
   );
-  const targetPosition = overview.positions.find(
-    (position) => position.position_id === form.targetPositionId,
+  const targetPosition = useMemo(
+    () => overview.positions.find((position) => position.position_id === form.targetPositionId),
+    [overview.positions, form.targetPositionId],
   );
-  const sourceLayers = sourcePosition
-    ? overview.valuation_layers.filter(
-        (layer) =>
-          layer.item_id === sourcePosition.item_id &&
-          (overview.items.find((item) => item.item_id === sourcePosition.item_id)
-            ?.valuation_method === "fifo" ||
-            layer.lot_id === sourcePosition.lot_id) &&
-          layer.remaining_scaled > 0,
-      )
-    : [];
-  const compatibleTargets = sourcePosition
-    ? overview.positions.filter(
-        (position) =>
-          position.position_id !== sourcePosition.position_id &&
-          position.item_id === sourcePosition.item_id &&
-          position.uom_id === sourcePosition.uom_id &&
-          (transition === "yield"
-            ? position.parent_lot_id === sourcePosition.lot_id &&
-              ["remnant", "scrap"].includes(position.lot_kind)
-            : position.lot_id === sourcePosition.lot_id),
-      )
-    : [];
+  const sourceLayers = useMemo(
+    () =>
+      sourcePosition
+        ? overview.valuation_layers.filter(
+            (layer) =>
+              layer.item_id === sourcePosition.item_id &&
+              (overview.items.find((item) => item.item_id === sourcePosition.item_id)
+                ?.valuation_method === "fifo" ||
+                layer.lot_id === sourcePosition.lot_id) &&
+              layer.remaining_scaled > 0,
+          )
+        : [],
+    [overview.valuation_layers, overview.items, sourcePosition],
+  );
+  const compatibleTargets = useMemo(
+    () =>
+      sourcePosition
+        ? overview.positions.filter(
+            (position) =>
+              position.position_id !== sourcePosition.position_id &&
+              position.item_id === sourcePosition.item_id &&
+              position.uom_id === sourcePosition.uom_id &&
+              (transition === "yield"
+                ? position.parent_lot_id === sourcePosition.lot_id &&
+                  ["remnant", "scrap"].includes(position.lot_kind)
+                : position.lot_id === sourcePosition.lot_id),
+          )
+        : [],
+    [overview.positions, sourcePosition, transition],
+  );
 
-  function setField<K extends keyof CommandForm>(field: K, value: CommandForm[K]) {
+  const setField = useCallback(function setField<K extends keyof CommandForm>(
+    field: K,
+    value: CommandForm[K],
+  ) {
     setForm((current) => ({ ...current, [field]: value }));
-  }
+  }, []);
 
-  function choosePosition(position: Position, target = false) {
-    setField(target ? "targetPositionId" : "sourcePositionId", position.position_id);
-    if (!target) {
-      setForm((current) => ({
-        ...current,
-        sourcePositionId: position.position_id,
-        targetPositionId: "",
-        itemId: position.item_id,
-        lotId: position.lot_id,
-        binId: position.bin_id,
-        uomId: position.uom_id,
-        jobCustody: position.job_custody,
-      }));
-    }
-  }
+  const choosePosition = useCallback((position: Position, target = false) => {
+    setForm((current) =>
+      target
+        ? { ...current, targetPositionId: position.position_id }
+        : {
+            ...current,
+            sourcePositionId: position.position_id,
+            targetPositionId: "",
+            itemId: position.item_id,
+            lotId: position.lot_id,
+            binId: position.bin_id,
+            uomId: position.uom_id,
+            jobCustody: position.job_custody,
+          },
+    );
+  }, []);
 
   function chooseLookupPosition(result: InventoryLookupResponse["result"]) {
     if (!result) return;
@@ -448,41 +473,7 @@ function InventoryDesk({
         </Notice>
       ) : null}
 
-      <section aria-label="Inventory authority and policy" className="grid gap-3 sm:grid-cols-2">
-        <IdentityTile
-          label="Current authority"
-          value={overview.authority_ref ?? "None read back"}
-          detail={inventoryStatusLabel(overview.authority.verification_state)}
-        />
-        <IdentityTile
-          label="Command policy"
-          value="Inventory command rules"
-          detail={`Version ${overview.policy_version}`}
-        />
-      </section>
-      {overview.authority.verification_state !== "verified" ? (
-        <Notice tone="danger" title="Inventory commands are fail-closed">
-          The current inventory authority is{" "}
-          {inventoryStatusLabel(overview.authority.verification_state).toLowerCase()}. The server
-          will refuse commands until a current verified readback exists.
-        </Notice>
-      ) : null}
-
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-        <Tile label="Items" value={overview.summary.item_count} />
-        <Tile label="Positions" value={overview.summary.position_count} />
-        <Tile label="On hand" value={summaryQuantity(overview, "quantity_scaled")} />
-        <Tile label="Reserved" value={summaryQuantity(overview, "reserved_scaled")} />
-        <Tile
-          label="Quarantined"
-          value={summaryQuantity(overview, "quarantined_scaled")}
-          tone={overview.summary.quarantined_scaled > 0 ? "danger" : undefined}
-        />
-        <Tile label="Value" value={summaryValue(overview, session.tenant.currency)} />
-      </dl>
-      <SummaryGroups overview={overview} />
-
-      <InventoryCatalog overview={overview} />
+      <InventoryReadBack overview={overview} currency={session.tenant.currency} />
 
       <section
         aria-labelledby="inventory-scan-heading"
@@ -583,102 +574,7 @@ function InventoryDesk({
         <RecentScans scans={overview.recent_scans} />
       </section>
 
-      <section aria-labelledby="inventory-positions-heading">
-        <div className="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-muted">Tenant stock position</p>
-            <h2
-              id="inventory-positions-heading"
-              className="mt-1 text-2xl font-black tracking-[-0.03em]"
-            >
-              Available stock
-            </h2>
-          </div>
-          <span className="text-sm text-muted">{overview.positions.length} shown</span>
-        </div>
-        {overview.positions.length === 0 ? (
-          <EmptyState
-            title="No stock positions yet"
-            message="A verified receipt or return will appear here after the ledger accepts it."
-          />
-        ) : (
-          <div className="overflow-x-auto border border-border bg-surface">
-            <table className="w-full min-w-[52rem] text-left text-sm">
-              <caption className="sr-only">Tenant inventory positions</caption>
-              <thead className="border-b border-border bg-surface-muted text-xs text-muted">
-                <tr>
-                  <th scope="col" className="px-4 py-3">
-                    Material
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Location
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Available
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Reserved / quarantine
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Choose
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {overview.positions.map((position) => (
-                  <tr key={position.position_id} className="border-b border-border last:border-0">
-                    <th scope="row" className="px-4 py-4">
-                      <span className="block font-bold">{position.item_code}</span>
-                      <span className="block text-xs font-normal text-muted">
-                        {position.item_kind} · lot {position.lot_code}
-                      </span>
-                    </th>
-                    <td className="px-4 py-4">
-                      <span className="block font-bold">{position.location_name}</span>
-                      <span className="block text-xs text-muted">
-                        {position.location_code} · bin {position.bin_code}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 tabular-nums">
-                      {formatQuantity(
-                        position.quantity_scaled -
-                          position.reserved_scaled -
-                          position.quarantined_scaled,
-                        position.uom_scale,
-                      )}{" "}
-                      {position.uom_code}
-                    </td>
-                    <td className="px-4 py-4 text-xs text-muted">
-                      {formatQuantity(position.reserved_scaled, position.uom_scale)} reserved ·{" "}
-                      {formatQuantity(position.quarantined_scaled, position.uom_scale)} quarantined
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="compact"
-                          onClick={() => choosePosition(position)}
-                        >
-                          Use as source
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="compact"
-                          onClick={() => choosePosition(position, true)}
-                        >
-                          Use as destination
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <PositionsTable positions={overview.positions} onChoose={choosePosition} />
 
       <section aria-labelledby="inventory-command-heading">
         <Card>
@@ -789,6 +685,171 @@ function InventoryDesk({
   );
 }
 
+/**
+ * The tenant position read-back with its two selection controls. It depends on the
+ * server read model and a stable callback, never on the command form, so memoising it
+ * keeps the table out of the render path while an evidence digest is being typed.
+ */
+/**
+ * Authority, policy and the tenant totals. Everything here is server read-back that
+ * cannot change while a command is being composed, so it is memoised away from the
+ * form's per-keystroke renders (ELEC-246).
+ */
+const InventoryReadBack = memo(function InventoryReadBack({
+  overview,
+  currency,
+}: {
+  overview: InventoryOverviewResponse;
+  currency: string;
+}) {
+  return (
+    <>
+      <section aria-label="Inventory authority and policy" className="grid gap-3 sm:grid-cols-2">
+        <IdentityTile
+          label="Current authority"
+          value={overview.authority_ref ?? "None read back"}
+          detail={inventoryStatusLabel(overview.authority.verification_state)}
+        />
+        <IdentityTile
+          label="Command policy"
+          value="Inventory command rules"
+          detail={`Version ${overview.policy_version}`}
+        />
+      </section>
+      {overview.authority.verification_state !== "verified" ? (
+        <Notice tone="danger" title="Inventory commands are fail-closed">
+          The current inventory authority is{" "}
+          {inventoryStatusLabel(overview.authority.verification_state).toLowerCase()}. The server
+          will refuse commands until a current verified readback exists.
+        </Notice>
+      ) : null}
+
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+        <Tile label="Items" value={overview.summary.item_count} />
+        <Tile label="Positions" value={overview.summary.position_count} />
+        <Tile label="On hand" value={summaryQuantity(overview, "quantity_scaled")} />
+        <Tile label="Reserved" value={summaryQuantity(overview, "reserved_scaled")} />
+        <Tile
+          label="Quarantined"
+          value={summaryQuantity(overview, "quarantined_scaled")}
+          tone={overview.summary.quarantined_scaled > 0 ? "danger" : undefined}
+        />
+        <Tile label="Value" value={summaryValue(overview, currency)} />
+      </dl>
+      <SummaryGroups overview={overview} />
+
+      <InventoryCatalog overview={overview} />
+    </>
+  );
+});
+
+const PositionsTable = memo(function PositionsTable({
+  positions,
+  onChoose,
+}: {
+  positions: InventoryOverviewResponse["positions"];
+  onChoose: (position: Position, target?: boolean) => void;
+}) {
+  return (
+    <section aria-labelledby="inventory-positions-heading">
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-muted">Tenant stock position</p>
+          <h2
+            id="inventory-positions-heading"
+            className="mt-1 text-2xl font-black tracking-[-0.03em]"
+          >
+            Available stock
+          </h2>
+        </div>
+        <span className="text-sm text-muted">{positions.length} shown</span>
+      </div>
+      {positions.length === 0 ? (
+        <EmptyState
+          title="No stock positions yet"
+          message="A verified receipt or return will appear here after the ledger accepts it."
+        />
+      ) : (
+        <div className="overflow-x-auto border border-border bg-surface">
+          <table className="w-full min-w-[52rem] text-left text-sm">
+            <caption className="sr-only">Tenant inventory positions</caption>
+            <thead className="border-b border-border bg-surface-muted text-xs text-muted">
+              <tr>
+                <th scope="col" className="px-4 py-3">
+                  Material
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Location
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Available
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Reserved / quarantine
+                </th>
+                <th scope="col" className="px-4 py-3">
+                  Choose
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((position) => (
+                <tr key={position.position_id} className="border-b border-border last:border-0">
+                  <th scope="row" className="px-4 py-4">
+                    <span className="block font-bold">{position.item_code}</span>
+                    <span className="block text-xs font-normal text-muted">
+                      {position.item_kind} · lot {position.lot_code}
+                    </span>
+                  </th>
+                  <td className="px-4 py-4">
+                    <span className="block font-bold">{position.location_name}</span>
+                    <span className="block text-xs text-muted">
+                      {position.location_code} · bin {position.bin_code}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4 tabular-nums">
+                    {formatQuantity(
+                      position.quantity_scaled -
+                        position.reserved_scaled -
+                        position.quarantined_scaled,
+                      position.uom_scale,
+                    )}{" "}
+                    {position.uom_code}
+                  </td>
+                  <td className="px-4 py-4 text-xs text-muted">
+                    {formatQuantity(position.reserved_scaled, position.uom_scale)} reserved ·{" "}
+                    {formatQuantity(position.quarantined_scaled, position.uom_scale)} quarantined
+                  </td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="compact"
+                        onClick={() => onChoose(position)}
+                      >
+                        Use as source
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="compact"
+                        onClick={() => onChoose(position, true)}
+                      >
+                        Use as destination
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+});
+
 function TransitionFields({
   transition,
   form,
@@ -806,7 +867,7 @@ function TransitionFields({
   positions: Position[];
   compatibleTargets: Position[];
   sourceLayers: Layer[];
-  onChange: <K extends keyof CommandForm>(field: K, value: CommandForm[K]) => void;
+  onChange: FieldChange;
 }) {
   const guide = TRANSITION_GUIDANCE[transition];
   const needsTarget = ["transfer", "yield"].includes(transition);
@@ -824,6 +885,24 @@ function TransitionFields({
       sourcePosition.reserved_scaled -
       sourcePosition.quarantined_scaled
     : 0;
+  // Option identity has to survive a keystroke for the memoised selects to bail out.
+  const identityOptions = useMemo(
+    () => ({
+      items: uniqueValues(positions, "item_id", (position) => position.item_code),
+      lots: uniqueValues(positions, "lot_id", (position) => position.lot_code),
+      bins: uniqueValues(
+        positions,
+        "bin_id",
+        (position) => `${position.location_code} / ${position.bin_code}`,
+      ),
+      uoms: uniqueValues(
+        positions,
+        "uom_id",
+        (position) => `${position.uom_code} (${position.uom_dimension})`,
+      ),
+    }),
+    [positions],
+  );
 
   return (
     <fieldset className="space-y-4 border-t border-border pt-5">
@@ -835,7 +914,8 @@ function TransitionFields({
             label={guide.sourceLabel ?? "Stock position"}
             value={form.sourcePositionId}
             positions={positions}
-            onChange={(value) => onChange("sourcePositionId", value)}
+            field="sourcePositionId"
+            onChange={onChange}
             emptyLabel={
               needsSource ? "Choose a stock position" : "Create or choose an exact receipt position"
             }
@@ -847,7 +927,8 @@ function TransitionFields({
             label={guide.targetLabel ?? "Destination"}
             value={form.targetPositionId}
             positions={compatibleTargets}
-            onChange={(value) => onChange("targetPositionId", value)}
+            field="targetPositionId"
+            onChange={onChange}
             emptyLabel={
               sourcePosition
                 ? "No compatible destination positions"
@@ -869,37 +950,33 @@ function TransitionFields({
                 id="inventory-item"
                 label="Material"
                 value={form.itemId}
-                options={uniqueValues(positions, "item_id", (position) => position.item_code)}
-                onChange={(value) => onChange("itemId", value)}
+                options={identityOptions.items}
+                field="itemId"
+                onChange={onChange}
               />
               <IdentitySelect
                 id="inventory-lot"
                 label="Lot"
                 value={form.lotId}
-                options={uniqueValues(positions, "lot_id", (position) => position.lot_code)}
-                onChange={(value) => onChange("lotId", value)}
+                options={identityOptions.lots}
+                field="lotId"
+                onChange={onChange}
               />
               <IdentitySelect
                 id="inventory-bin"
                 label="Bin"
                 value={form.binId}
-                options={uniqueValues(
-                  positions,
-                  "bin_id",
-                  (position) => `${position.location_code} / ${position.bin_code}`,
-                )}
-                onChange={(value) => onChange("binId", value)}
+                options={identityOptions.bins}
+                field="binId"
+                onChange={onChange}
               />
               <IdentitySelect
                 id="inventory-uom"
                 label="Unit"
                 value={form.uomId}
-                options={uniqueValues(
-                  positions,
-                  "uom_id",
-                  (position) => `${position.uom_code} (${position.uom_dimension})`,
-                )}
-                onChange={(value) => onChange("uomId", value)}
+                options={identityOptions.uoms}
+                field="uomId"
+                onChange={onChange}
               />
             </div>
           ) : (
@@ -991,14 +1068,16 @@ function TransitionFields({
             id="inventory-job"
             label="Roofing job"
             value={form.jobId}
-            onChange={(value) => onChange("jobId", value)}
+            field="jobId"
+            onChange={onChange}
             placeholder="Job reference"
           />
           <TextField
             id="inventory-work-package"
             label="Work package (optional)"
             value={form.workPackageId}
-            onChange={(value) => onChange("workPackageId", value)}
+            field="workPackageId"
+            onChange={onChange}
             placeholder="Work package reference"
           />
         </div>
@@ -1008,7 +1087,8 @@ function TransitionFields({
           id="inventory-reservation"
           label="Reservation reference"
           value={form.reservationId}
-          onChange={(value) => onChange("reservationId", value)}
+          field="reservationId"
+          onChange={onChange}
           placeholder="Reservation reference"
         />
       ) : null}
@@ -1018,14 +1098,16 @@ function TransitionFields({
             id="inventory-receipt"
             label="Receipt reference"
             value={form.receiptId}
-            onChange={(value) => onChange("receiptId", value)}
+            field="receiptId"
+            onChange={onChange}
             placeholder="Receipt reference"
           />
           <TextField
             id="inventory-po-line"
             label="Purchase-order line"
             value={form.poLineId}
-            onChange={(value) => onChange("poLineId", value)}
+            field="poLineId"
+            onChange={onChange}
             placeholder="PO line reference"
           />
         </div>
@@ -1035,7 +1117,8 @@ function TransitionFields({
           id="inventory-count-session"
           label="Approved count session"
           value={form.countSessionId}
-          onChange={(value) => onChange("countSessionId", value)}
+          field="countSessionId"
+          onChange={onChange}
           placeholder="Count session reference"
         />
       ) : null}
@@ -1074,45 +1157,69 @@ function TransitionFields({
   );
 }
 
-function TextField({
+/**
+ * The field primitives below take the form key they own rather than a closure, so the
+ * single `setField` identity can be passed straight through. That is what lets them be
+ * memoised: typing in one field no longer re-renders and re-builds the others, including
+ * the option lists of every position select (ELEC-246).
+ */
+const lowercase = (value: string) => value.toLowerCase();
+
+const TextField = memo(function TextField({
   id,
   label,
   value,
+  field,
   onChange,
   placeholder,
+  className,
+  inputMode,
+  autoComplete,
+  transform,
 }: {
   id: string;
   label: string;
   value: string;
-  onChange: (value: string) => void;
+  field: keyof CommandForm;
+  onChange: FieldChange;
   placeholder: string;
+  className?: string;
+  inputMode?: "text";
+  autoComplete?: string;
+  transform?: (value: string) => string;
 }) {
   return (
     <label htmlFor={id} className="block max-w-sm text-sm font-bold">
       {label}
       <Input
         id={id}
-        className="mt-2"
+        className={`mt-2${className ? ` ${className}` : ""}`}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) =>
+          onChange(field, transform ? transform(event.target.value) : event.target.value)
+        }
         placeholder={placeholder}
+        inputMode={inputMode}
+        autoComplete={autoComplete}
       />
     </label>
   );
-}
+});
 
-function IdentitySelect({
+const IdentitySelect = memo(function IdentitySelect({
   id,
   label,
   value,
   options,
+  field,
   onChange,
 }: {
   id: string;
   label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
+  field: keyof CommandForm;
+  onChange: FieldChange;
 }) {
   return (
     <label htmlFor={id} className="block text-sm font-bold">
@@ -1121,7 +1228,7 @@ function IdentitySelect({
         id={id}
         className="mt-2 min-h-12 w-full rounded-lg border bg-surface-raised px-3 text-base"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange(field, event.target.value)}
       >
         <option value="">Choose {label.toLowerCase()}</option>
         {options.map((option) => (
@@ -1132,7 +1239,7 @@ function IdentitySelect({
       </select>
     </label>
   );
-}
+});
 
 function uniqueValues(
   positions: Position[],
@@ -1144,11 +1251,12 @@ function uniqueValues(
   return [...values].map(([value, optionLabel]) => ({ value, label: optionLabel }));
 }
 
-function PositionSelect({
+const PositionSelect = memo(function PositionSelect({
   id,
   label,
   value,
   positions,
+  field,
   onChange,
   emptyLabel = "Choose a stock position",
 }: {
@@ -1156,7 +1264,8 @@ function PositionSelect({
   label: string;
   value: string;
   positions: Position[];
-  onChange: (value: string) => void;
+  field: keyof CommandForm;
+  onChange: FieldChange;
   emptyLabel?: string;
 }) {
   return (
@@ -1166,7 +1275,7 @@ function PositionSelect({
         id={id}
         className="mt-2 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange(field, event.target.value)}
       >
         <option value="">{emptyLabel}</option>
         {positions.map((position) => (
@@ -1177,14 +1286,14 @@ function PositionSelect({
       </select>
     </label>
   );
-}
+});
 
-function EvidenceFields({
+const EvidenceFields = memo(function EvidenceFields({
   form,
   onChange,
 }: {
   form: CommandForm;
-  onChange: <K extends keyof CommandForm>(field: K, value: CommandForm[K]) => void;
+  onChange: FieldChange;
 }) {
   return (
     <fieldset className="space-y-4 border-t border-border pt-5">
@@ -1195,32 +1304,36 @@ function EvidenceFields({
         r2://inventory-evidence/&lt;tenant&gt;/&lt;object&gt; or field-media://&lt;receipt-id&gt;.
       </p>
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="block text-sm font-bold">
-          Evidence reference
-          <Input
-            className="mt-2"
-            value={form.evidenceRef}
-            onChange={(event) => onChange("evidenceRef", event.target.value)}
-            placeholder="r2://inventory-evidence/tenant/object"
-          />
-        </label>
-        <label className="block text-sm font-bold">
-          Evidence SHA-256
-          <Input
-            className="mt-2 font-mono"
-            value={form.evidenceSha256}
-            onChange={(event) => onChange("evidenceSha256", event.target.value.toLowerCase())}
-            inputMode="text"
-            autoComplete="off"
-            placeholder="64 lowercase hexadecimal characters"
-          />
-        </label>
+        <TextField
+          id="inventory-evidence-ref"
+          label="Evidence reference"
+          value={form.evidenceRef}
+          field="evidenceRef"
+          onChange={onChange}
+          placeholder="r2://inventory-evidence/tenant/object"
+        />
+        <TextField
+          id="inventory-evidence-sha256"
+          label="Evidence SHA-256"
+          value={form.evidenceSha256}
+          field="evidenceSha256"
+          onChange={onChange}
+          className="font-mono"
+          inputMode="text"
+          autoComplete="off"
+          placeholder="64 lowercase hexadecimal characters"
+          transform={lowercase}
+        />
       </div>
     </fieldset>
   );
-}
+});
 
-function InventoryCatalog({ overview }: { overview: InventoryOverviewResponse }) {
+const InventoryCatalog = memo(function InventoryCatalog({
+  overview,
+}: {
+  overview: InventoryOverviewResponse;
+}) {
   return (
     <section aria-label="Inventory units and valuation" className="grid gap-3 sm:grid-cols-2">
       <Card>
@@ -1301,9 +1414,13 @@ function InventoryCatalog({ overview }: { overview: InventoryOverviewResponse })
       </Card>
     </section>
   );
-}
+});
 
-function RecentScans({ scans }: { scans: InventoryOverviewResponse["recent_scans"] }) {
+const RecentScans = memo(function RecentScans({
+  scans,
+}: {
+  scans: InventoryOverviewResponse["recent_scans"];
+}) {
   return (
     <Card>
       <CardHeader>
@@ -1328,7 +1445,7 @@ function RecentScans({ scans }: { scans: InventoryOverviewResponse["recent_scans
       </CardContent>
     </Card>
   );
-}
+});
 
 function createCommandAttempt(
   transition: InventoryTransition,
@@ -1492,13 +1609,28 @@ function positionLabel(position: Position): string {
   return `${position.item_code} · lot ${position.lot_code}, ${position.location_name} / bin ${position.bin_code}`;
 }
 
+// `Intl.NumberFormat` construction dominates its own `format` call, and both helpers run
+// once per position, per layer and per summary tile on every render. The desk has few
+// distinct scales and currencies, so the formatters are built once and reused.
+const quantityFormatters = new Map<number, Intl.NumberFormat>();
+const moneyFormatters = new Map<string, Intl.NumberFormat>();
+
 function formatQuantity(value: number, scale: number): string {
-  const divisor = 10 ** scale;
-  return (value / divisor).toLocaleString(undefined, { maximumFractionDigits: scale });
+  let formatter = quantityFormatters.get(scale);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: scale });
+    quantityFormatters.set(scale, formatter);
+  }
+  return formatter.format(value / 10 ** scale);
 }
 
 function formatMoney(valueMinor: number, currency: string): string {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(valueMinor / 100);
+  let formatter = moneyFormatters.get(currency);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(undefined, { style: "currency", currency });
+    moneyFormatters.set(currency, formatter);
+  }
+  return formatter.format(valueMinor / 100);
 }
 
 function summaryQuantity(
@@ -1516,7 +1648,11 @@ function summaryValue(overview: InventoryOverviewResponse, fallbackCurrency: str
   return formatMoney(group?.value_minor ?? 0, group?.currency ?? fallbackCurrency);
 }
 
-function SummaryGroups({ overview }: { overview: InventoryOverviewResponse }) {
+const SummaryGroups = memo(function SummaryGroups({
+  overview,
+}: {
+  overview: InventoryOverviewResponse;
+}) {
   return (
     <section aria-label="Grouped inventory totals" className="grid gap-3 sm:grid-cols-2">
       <Card>
@@ -1571,7 +1707,7 @@ function SummaryGroups({ overview }: { overview: InventoryOverviewResponse }) {
       </Card>
     </section>
   );
-}
+});
 
 function LookupResult({ result }: { result: NonNullable<InventoryLookupResponse["result"]> }) {
   return (

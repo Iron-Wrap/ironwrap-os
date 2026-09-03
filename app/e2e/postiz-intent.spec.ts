@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
 
 import { postizIntentFixture } from "../src/postiz/postiz-test-fixture";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -50,8 +51,7 @@ test.describe("Marketing post acceptance", () => {
     await expect(page.getByText("marketing.social.publish.reviewed")).toBeVisible();
 
     for (const name of ["Load again", "Approve post", "Turn down", "Check saved state"]) {
-      const box = await page.getByRole("button", { name }).boundingBox();
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(page.getByRole("button", { name }), { name, axis: "height" });
     }
 
     const geometry = await page.evaluate(() => ({

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { devices, expect, test, type Page } from "@playwright/test";
 
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
+import { expectTouchTarget } from "./touch-target";
 
 import { quickBooksFinalInvoiceFixture } from "../src/accounting/quickbooks-test-fixture";
 
@@ -52,14 +53,7 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
     expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
       MOBILE_WIDTH + 1,
     );
-    // 43.9 rather than 44: a `min-h-11` control measures 43.99998 after the device pixel ratio.
-    // Same tolerance, same reason, as `onboarding.spec.ts`, `capability-honesty.spec.ts`, and
-    // `pipeline-board.spec.ts` — the three suites that were already CI-gated. A bare 44 here made
-    // this file fail intermittently by 0.00002px, which is a rounding artefact and not a control a
-    // thumb can miss; leaving it in place would have made the new CI step flaky (ELEC-249/251).
-    expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
-      43.9,
-    );
+    await expectTouchTarget(control, { name: `${screen}: "${label}"`, axis: "height" });
   }
 }
 

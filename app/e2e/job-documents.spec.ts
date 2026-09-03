@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settleAnimations } from "./settle";
 
 /**
  * The documents a job carries, on the phone the work is done from.
@@ -94,6 +95,7 @@ test.describe("Documents on the job workflow surface", () => {
       contentType: "image/png",
     });
 
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa"])

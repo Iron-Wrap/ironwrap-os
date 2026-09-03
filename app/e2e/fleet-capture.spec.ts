@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { devices, expect, test, type Page } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 // Mobile-first acceptance for the driver's vehicle rail (IRO-54 / ELEC-87).
 //
@@ -50,9 +51,7 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
     expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
       MOBILE_WIDTH + 1,
     );
-    expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
-      44,
-    );
+    await expectTouchTarget(control, { name: `${screen}: "${label}"`, axis: "height" });
   }
 }
 
@@ -65,16 +64,7 @@ async function assertCheckPointTargets(page: Page): Promise<void> {
   const count = await options.count();
   expect(count, "the walk-around offers no check points").toBeGreaterThan(0);
   for (let index = 0; index < count; index += 1) {
-    const box = await options.nth(index).boundingBox();
-    if (!box) continue;
-    expect(
-      box.height,
-      `check-point option ${index} is only ${box.height}px tall`,
-    ).toBeGreaterThanOrEqual(44);
-    expect(
-      box.width,
-      `check-point option ${index} is only ${box.width}px wide`,
-    ).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(options.nth(index), { name: `check-point option ${index}` });
   }
 }
 
@@ -133,9 +123,9 @@ test.describe("Vehicle rail mobile acceptance", () => {
     // pairing desk behind it is owner/ops work, and offering it here only ever produced
     // "This work belongs to another role".
     for (const label of ["Now", "Check-in", "Vehicle", "Inventory"]) {
-      const box = await nav.getByRole("link", { name: label, exact: true }).boundingBox();
-      expect(box?.height, `${label} tab is only ${box?.height}px tall`).toBeGreaterThanOrEqual(44);
-      expect(box?.width, `${label} tab is only ${box?.width}px wide`).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(nav.getByRole("link", { name: label, exact: true }), {
+        name: `${label} tab`,
+      });
     }
     await expect(nav.getByLabel("Open all workspaces")).toHaveCount(0);
     await expect(nav.getByRole("link", { name: "Settings", exact: true })).toHaveCount(0);

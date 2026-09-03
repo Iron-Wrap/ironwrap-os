@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -128,8 +129,8 @@ test.describe("Production plan acceptance", () => {
     const scheduleLink = page.getByRole("link", { name: "Start schedule check for IW-1004" });
     await expect(jobLink).toHaveAttribute("href", "/jobs/JOB-A");
     await expect(scheduleLink).toHaveAttribute("href", "/production/schedule/JOB-D");
-    expect((await jobLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-    expect((await scheduleLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(jobLink, { name: "job link", axis: "height" });
+    await expectTouchTarget(scheduleLink, { name: "schedule-check link", axis: "height" });
     await expect(page.getByRole("button", { name: /schedule|dispatch/i })).toHaveCount(0);
 
     const geometry = await page.evaluate(() => ({

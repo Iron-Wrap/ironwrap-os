@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { expectTouchTarget } from "./touch-target";
+import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
   test("renders a mobile-safe blocked-work run sheet with no WCAG A/AA violations", async ({
@@ -46,15 +48,14 @@ test.describe("Field Companion PWA acceptance", () => {
     expect(appRequests).not.toContain("/api/v1/today");
 
     const reviewAction = page.getByRole("link", { name: "Check what blocks work" });
-    const bounds = await reviewAction.boundingBox();
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(reviewAction, { name: "Check what blocks work" });
 
     // Open the safety rail before auditing. Its controls are the highest-contrast
     // risk on the shell, and a closed <details> would hide them from axe entirely.
     await page.locator("summary", { hasText: "Safety" }).click();
     await expect(page.getByRole("button", { name: "Call for rescue" })).toBeVisible();
 
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(results.violations).toEqual([]);
   });

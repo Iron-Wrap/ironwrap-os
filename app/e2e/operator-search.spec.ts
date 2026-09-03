@@ -1,5 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
+import { settleAnimations } from "./settle";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 
@@ -17,8 +19,7 @@ test.describe("Operator command palette acceptance", () => {
 
     await page.goto("/estimator/jobs/JOB-ESTIMATOR-ACCEPTANCE");
     const trigger = page.getByRole("button", { name: /Open search/i });
-    await expect(trigger).toBeVisible();
-    expect((await trigger.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(trigger, { name: "Open search", axis: "height" });
     await trigger.click();
 
     const input = page.getByRole("combobox", {
@@ -29,6 +30,7 @@ test.describe("Operator command palette acceptance", () => {
     await expect(page.getByRole("option", { name: /Now/ })).toBeVisible();
     expect(searchRequests).toContain("?q=no");
 
+    await settleAnimations(page);
     const a11y = await new AxeBuilder({ page }).analyze();
     expect(a11y.violations).toEqual([]);
 

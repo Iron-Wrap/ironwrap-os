@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 import type { NowResponse } from "../src/now/now-contracts";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -130,8 +131,7 @@ test.describe("Now work list acceptance", () => {
     await expect(page.getByRole("heading", { name: "Work to do now" })).toBeVisible();
     await expect(page.getByText("Some lists did not load or may be missing items.")).toBeVisible();
     const mainAction = page.getByRole("button", { name: "Check all lists again" });
-    await expect(mainAction).toBeVisible();
-    expect((await mainAction.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(mainAction, { name: "Check all lists again", axis: "height" });
     await expect(page.getByRole("link", { name: "Open item" })).toHaveAttribute("href", "/owner");
 
     const listStatus = page.getByRole("complementary", { name: "List status" });

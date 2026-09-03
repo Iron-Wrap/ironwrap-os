@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -158,7 +159,7 @@ test.describe("Owner now acceptance", () => {
 
     const jobLink = page.getByRole("link", { name: "Open job IW-2042" });
     await expect(jobLink).toHaveAttribute("href", "/jobs/IW-2042");
-    expect((await jobLink.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(jobLink, { name: "Open job IW-2042", axis: "height" });
 
     const geometry = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,

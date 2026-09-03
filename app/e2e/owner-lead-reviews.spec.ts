@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
@@ -81,8 +82,7 @@ test.describe("Owner lead review acceptance", () => {
     await expect(page.getByText("lead:e2e-001")).toBeVisible();
 
     for (const name of ["Load again", "Save lead check", "Turn down"]) {
-      const box = await page.getByRole("button", { name }).boundingBox();
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(page.getByRole("button", { name }), { name, axis: "height" });
     }
 
     const geometry = await page.evaluate(() => ({

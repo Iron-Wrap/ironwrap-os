@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 /**
  * The eight named acceptance checks at the end of ELEC-156 section 5, walked in a real
@@ -10,7 +11,6 @@ import { expect, test, type Page } from "@playwright/test";
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
-const HIT_TARGET_MIN_PX = 43.99;
 
 const envelope = {
   version: 1,
@@ -324,12 +324,8 @@ test.describe("Pipeline board acceptance", () => {
       const count = await controls.count();
       expect(count).toBeGreaterThan(0);
       for (let index = 0; index < count; index += 1) {
-        const box = await controls.nth(index).boundingBox();
         const label = await controls.nth(index).innerText();
-        // 44px, measured with a hair of tolerance: a `min-h-11` box lands on
-        // 43.99998px once the layout engine has rounded rem to device pixels.
-        expect(box?.height ?? 0, `height of "${label}"`).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
-        expect(box?.width ?? 0, `width of "${label}"`).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+        await expectTouchTarget(controls.nth(index), { name: label });
       }
 
       await page.screenshot({ path: `${shotDir}/pipeline-board-${viewport.label}.png` });
@@ -360,8 +356,7 @@ test.describe("Pipeline board acceptance", () => {
     expect(moves[0]?.body).not.toHaveProperty("confirmed");
 
     const undo = page.getByRole("button", { name: "Undo" });
-    await expect(undo).toBeVisible();
-    expect((await undo.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await expectTouchTarget(undo, { name: "Undo", axis: "height" });
 
     // The toast sits above the bottom nav, not under it.
     const toastBox = await page.getByText("Moved to Quote Sent").boundingBox();
@@ -392,8 +387,11 @@ test.describe("Pipeline board acceptance", () => {
     await page.screenshot({ path: `${shotDir}/pipeline-board-backward-confirm.png` });
 
     for (const name of ["Cancel", "Confirm move"]) {
-      const box = await dialog.getByRole("button", { name }).boundingBox();
-      expect(box?.height ?? 0, `${name} height`).toBeGreaterThanOrEqual(48);
+      await expectTouchTarget(dialog.getByRole("button", { name }), {
+        name,
+        min: 48,
+        axis: "height",
+      });
     }
 
     await dialog.getByRole("button", { name: "Confirm move" }).click();
@@ -515,8 +513,7 @@ test.describe("Pipeline board acceptance", () => {
       await page.goto("/owner/board");
 
       const switcher = page.getByRole("combobox", { name: "Pipeline" });
-      await expect(switcher).toBeVisible();
-      expect((await switcher.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(HIT_TARGET_MIN_PX);
+      await expectTouchTarget(switcher, { name: "Pipeline switcher", axis: "height" });
       // The switcher may never set the width of the header: whatever an account named its
       // boards, the title beside it stays readable rather than being squeezed to a sliver.
       await expectReadableBoardTitle(page, "Sales · Marketing Pipeline");

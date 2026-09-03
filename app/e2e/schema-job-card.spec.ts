@@ -1,5 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
+import { settleAnimations } from "./settle";
 
 /**
  * The administrator-configured part of a job, on the phone the work is actually done from.
@@ -50,6 +52,7 @@ test.describe("Schema-driven job card", () => {
       contentType: "image/png",
     });
 
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa"])
@@ -127,8 +130,7 @@ test.describe("Writing back to the schema-driven job card", () => {
     await page.getByTestId("schema-field-edit-permit_number").click();
     // Every target the crew has to hit stays thumb-sized on a 390px phone.
     for (const testId of ["schema-field-input-permit_number", "schema-field-save-permit_number"]) {
-      const box = await page.getByTestId(testId).boundingBox();
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(page.getByTestId(testId), { name: testId, axis: "height" });
     }
     await page.getByTestId("schema-field-input-permit_number").fill("CAL-2026-8891");
 
@@ -158,6 +160,7 @@ test.describe("Writing back to the schema-driven job card", () => {
       contentType: "image/png",
     });
 
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page })
       .include("#main-content")
       .withTags(["wcag2a", "wcag2aa"])

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { devices, expect, test, type Page } from "@playwright/test";
 
 import { assertNoFrappeDesk } from "./frappe-desk-guard";
+import { expectTouchTarget } from "./touch-target";
 
 // Mobile acceptance for honest unavailable-capability presentation (ELEC-236, G1.7).
 //
@@ -50,10 +51,7 @@ async function assertControlsAreReachable(page: Page, screen: string): Promise<v
     expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
       MOBILE_WIDTH + 1,
     );
-    // 43.9 rather than 44: a `min-h-11` control measures 43.99998 after the device pixel ratio.
-    expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
-      43.9,
-    );
+    await expectTouchTarget(control, { name: `${screen}: "${label}"`, axis: "height" });
   }
 }
 

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { expectTouchTarget } from "./touch-target";
 
 const quoteReviewMode = process.env.ACCEPTANCE_MODE === "estimator";
 const approvalId = "quote-revision-approval:e2e-001";
@@ -117,8 +118,7 @@ test.describe("Quote change review acceptance", () => {
       ["button", "Make empty draft"],
       ["button", "Turn down"],
     ] as const) {
-      const box = await page.getByRole(role, { name }).boundingBox();
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await expectTouchTarget(page.getByRole(role, { name }), { name, axis: "height" });
     }
 
     const geometry = await page.evaluate(() => ({

@@ -90,7 +90,7 @@ export function EntityDocumentsSection({
     <section className="space-y-4" aria-labelledby={headingId} data-testid="entity-documents">
       <header className="border-b border-border pb-4">
         <p className="text-sm font-semibold text-muted">Filled from this job</p>
-        <h2 id={headingId} className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl">
+        <h2 id={headingId} className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl">
           {title}
         </h2>
       </header>

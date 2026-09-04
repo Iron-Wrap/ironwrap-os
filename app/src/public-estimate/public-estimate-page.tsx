@@ -235,8 +235,8 @@ export function PublicEstimatePage() {
           <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-surface-muted text-muted">
             <CircleOff className="size-6" aria-hidden="true" />
           </div>
-          <p className="mt-5 text-sm font-[740] text-muted">Turned off</p>
-          <h1 className="mt-1.5 text-2xl font-black tracking-[-0.035em]">
+          <p className="mt-5 text-sm font-bold text-muted">Turned off</p>
+          <h1 className="mt-1.5 text-2xl font-bold tracking-[-0.035em]">
             This estimate form is turned off
           </h1>
           <p className="mt-3 text-sm leading-6 text-muted">
@@ -262,8 +262,8 @@ export function PublicEstimatePage() {
           <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-warning-soft text-warning">
             <CircleAlert className="size-6" aria-hidden="true" />
           </div>
-          <p className="mt-5 text-sm font-[740] text-muted">Setup not finished</p>
-          <h1 className="mt-1.5 text-2xl font-black tracking-[-0.035em]">
+          <p className="mt-5 text-sm font-bold text-muted">Setup not finished</p>
+          <h1 className="mt-1.5 text-2xl font-bold tracking-[-0.035em]">
             This estimate form is not ready yet
           </h1>
           <p className="mt-3 text-sm leading-6 text-muted">
@@ -298,7 +298,7 @@ export function PublicEstimatePage() {
         <Card className="overflow-hidden">
           <div className="border-b border-border bg-surface px-5 py-5 sm:px-7 sm:py-6">
             <p className="text-xs font-bold tracking-[0.14em] text-muted">PROJECT START</p>
-            <h1 className="mt-2 text-2xl font-black tracking-[-0.04em] sm:text-3xl">
+            <h1 className="mt-2 text-2xl font-bold tracking-[-0.04em] sm:text-3xl">
               Tell us about the exterior work.
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
@@ -353,7 +353,7 @@ function PublicEstimateFrame({
               />
             ) : null}
             <div className="min-w-0">
-              <p className="truncate text-xs font-black tracking-[0.16em] text-foreground">
+              <p className="truncate text-xs font-bold tracking-[0.16em] text-foreground">
                 {brand ? brand.display_name.toUpperCase() : ""}
               </p>
               {brand?.service_area ? (
@@ -373,7 +373,7 @@ function EstimateIntroduction() {
   return (
     <section className="pt-1 sm:pt-4">
       <p className="text-xs font-bold tracking-[0.15em] text-ok">CLEAR SCOPE. NO SURPRISES.</p>
-      <h2 className="mt-4 max-w-lg text-4xl font-black leading-[0.96] tracking-[-0.055em] sm:text-5xl">
+      <h2 className="mt-4 max-w-lg text-4xl font-bold leading-[0.96] tracking-[-0.055em] sm:text-5xl">
         Tell us about your home. No sales pitch.
       </h2>
       <div className="mt-7 flex max-w-md items-center gap-3" aria-hidden="true">
@@ -401,7 +401,7 @@ function EstimateIntroduction() {
 function InfoRow({ label, text }: { label: string; text: string }) {
   return (
     <div className="grid grid-cols-[1.5rem_1fr] gap-3">
-      <dt className="font-black text-accent">{label}</dt>
+      <dt className="font-bold text-accent">{label}</dt>
       <dd className="leading-6 text-muted">{text}</dd>
     </div>
   );
@@ -684,7 +684,7 @@ function EstimateResult({
       <Card className="overflow-hidden">
         <div className="border-b border-border bg-ok-soft px-5 py-6 sm:px-8 sm:py-8">
           <CheckCircle2 className="size-9 text-ok" aria-hidden="true" />
-          <h1 className="mt-4 text-3xl font-black tracking-[-0.045em]">
+          <h1 className="mt-4 text-3xl font-bold tracking-[-0.045em]">
             We got your estimate request
           </h1>
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted">

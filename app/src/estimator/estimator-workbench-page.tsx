@@ -113,7 +113,7 @@ function EstimatorWorkbenchScreen({
           aria-labelledby="review-workspace-heading"
         >
           <header className="border-b border-border px-5 py-5 sm:px-6">
-            <h2 id="review-workspace-heading" className="text-lg font-extrabold tracking-[-0.02em]">
+            <h2 id="review-workspace-heading" className="text-lg font-bold tracking-[-0.02em]">
               What needs review
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
@@ -182,7 +182,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
         </Button>
         <div className="mt-6 min-w-0">
           <p className="text-sm font-bold text-muted">{jobIdentity}</p>
-          <h1 className="mt-1 text-3xl font-extrabold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
+          <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
             Roof and quote review
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -206,7 +206,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
         <h2 id="next-safe-step-heading" className="text-sm font-bold text-muted">
           Next step
         </h2>
-        <p className={cn("mt-2 text-xl font-extrabold tracking-[-0.03em]", decision.titleTone)}>
+        <p className={cn("mt-2 text-xl font-bold tracking-[-0.03em]", decision.titleTone)}>
           {decision.title}
         </p>
         <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
@@ -294,7 +294,7 @@ function CommercialSnapshot({
         aria-labelledby="commercial-snapshot-heading"
       >
         <div>
-          <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
+          <h2 id="commercial-snapshot-heading" className="text-lg font-bold tracking-[-0.025em]">
             Quote at a glance
           </h2>
           <EmptyInline message="No customer quote was found. Do not guess the price, payment, or proposal state." />
@@ -307,7 +307,7 @@ function CommercialSnapshot({
     <section className="border-y border-border py-5" aria-labelledby="commercial-snapshot-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
+          <h2 id="commercial-snapshot-heading" className="text-lg font-bold tracking-[-0.025em]">
             Quote at a glance
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted">
@@ -359,7 +359,7 @@ function CommercialFact({
       <dd
         className={cn(
           "mt-1 break-words font-semibold text-foreground",
-          prominent && "text-xl font-black tracking-[-0.03em] tabular-nums",
+          prominent && "text-xl font-bold tracking-[-0.03em] tabular-nums",
         )}
       >
         {value}
@@ -839,7 +839,7 @@ function SourceFacetPreview({ geometry, locale }: { geometry: EstimatorGeometry;
       aria-labelledby="source-facet-preview-heading"
     >
       <div className="border-b border-border px-4 py-4">
-        <h3 id="source-facet-preview-heading" className="text-sm font-black text-foreground">
+        <h3 id="source-facet-preview-heading" className="text-sm font-bold text-foreground">
           Roof faces
         </h3>
         <p className="mt-1 text-xs leading-5 text-muted">
@@ -894,7 +894,7 @@ function GeometryFacets({ geometry, locale }: { geometry: EstimatorGeometry; loc
   }
   return (
     <section className="mt-7" aria-labelledby="facet-comparison-heading">
-      <h3 id="facet-comparison-heading" className="text-lg font-black tracking-[-0.02em]">
+      <h3 id="facet-comparison-heading" className="text-lg font-bold tracking-[-0.02em]">
         Roof face check
       </h3>
       <details open={geometry.failed_check_count > 0 || geometry.facets_truncated} className="mt-3">
@@ -983,7 +983,7 @@ function GeometryChecks({ geometry }: { geometry: EstimatorGeometry }) {
   if (geometry.state === "unavailable") return null;
   return (
     <section className="mt-7" aria-labelledby="geometry-checks-heading">
-      <h3 id="geometry-checks-heading" className="text-lg font-black tracking-[-0.02em]">
+      <h3 id="geometry-checks-heading" className="text-lg font-bold tracking-[-0.02em]">
         Source checks
       </h3>
       <details open={geometry.failed_check_count > 0 || geometry.checks_truncated} className="mt-3">
@@ -1048,7 +1048,7 @@ function MeasurementMetrics({
   if (sourceMetrics.length === 0 && geometryMetrics.length === 0) return null;
   return (
     <section className="mt-7" aria-labelledby="measurement-metrics-heading">
-      <h3 id="measurement-metrics-heading" className="text-lg font-black tracking-[-0.02em]">
+      <h3 id="measurement-metrics-heading" className="text-lg font-bold tracking-[-0.02em]">
         Measurement references
       </h3>
       <details
@@ -1190,7 +1190,7 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
                 danger={lineage !== "linked"}
               />
             </dl>
-            <h3 className="mt-6 text-lg font-black tracking-[-0.02em]">Material list</h3>
+            <h3 className="mt-6 text-lg font-bold tracking-[-0.02em]">Material list</h3>
             <details open={flaggedItems > 0 || selected.items_truncated} className="mt-3">
               <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
                 <span className="text-sm leading-6 text-muted">
@@ -1301,7 +1301,7 @@ function CommercialRecord({
       aria-labelledby="commercial-record-heading"
     >
       <div className="px-5 py-5">
-        <h2 id="commercial-record-heading" className="text-lg font-extrabold tracking-[-0.02em]">
+        <h2 id="commercial-record-heading" className="text-lg font-bold tracking-[-0.02em]">
           Commercial outcome
         </h2>
         <p className="mt-1 text-sm leading-6 text-muted">
@@ -1311,10 +1311,10 @@ function CommercialRecord({
       <details className="group border-t border-border" aria-labelledby="quote-heading">
         <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h3 id="quote-heading" className="text-base font-extrabold tracking-[-0.02em]">
+            <h3 id="quote-heading" className="text-base font-bold tracking-[-0.02em]">
               Customer quote
             </h3>
-            <span className="mt-1 block text-xl font-extrabold tracking-[-0.03em] tabular-nums">
+            <span className="mt-1 block text-xl font-bold tracking-[-0.03em] tabular-nums">
               {quote
                 ? (formatMoney(quote.quote_total, locale, quoteCurrency) ?? "Total not recorded")
                 : "No quote returned"}
@@ -1361,7 +1361,7 @@ function CommercialRecord({
       <details className="group border-t border-border" aria-labelledby="proposal-heading">
         <summary className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h3 id="proposal-heading" className="text-base font-extrabold tracking-[-0.02em]">
+            <h3 id="proposal-heading" className="text-base font-bold tracking-[-0.02em]">
               Proposal
             </h3>
             <span className="mt-2 flex flex-wrap gap-2">
@@ -1430,9 +1430,7 @@ function CommercialRecord({
       <details className="group border-t border-border">
         <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <span className="block text-base font-extrabold tracking-[-0.02em]">
-              Customer delivery
-            </span>
+            <span className="block text-base font-bold tracking-[-0.02em]">Customer delivery</span>
             <span
               className={cn(
                 "mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold",
@@ -1465,7 +1463,7 @@ function CommercialRecord({
       <details className="group border-t border-border" aria-labelledby="scope-heading">
         <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 p-5 transition-colors hover:bg-surface-raised [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
-            <h3 id="scope-heading" className="text-base font-extrabold tracking-[-0.02em]">
+            <h3 id="scope-heading" className="text-base font-bold tracking-[-0.02em]">
               Scope and risks
             </h3>
             <span className="mt-1 block text-xs text-muted">
@@ -1544,7 +1542,7 @@ function QuoteLedger({
           <p className="text-sm font-bold text-muted">Version {quote.version}</p>
         ) : null}
       </div>
-      <p className="mt-3 text-3xl font-black tracking-[-0.035em] tabular-nums">
+      <p className="mt-3 text-3xl font-bold tracking-[-0.035em] tabular-nums">
         {formatMoney(quote.quote_total, locale, currency) ?? "Total not recorded"}
       </p>
       <dl className="mt-5 divide-y divide-border border-y border-border">
@@ -2095,7 +2093,7 @@ function ReviewGroup({
     <details className="group overflow-hidden bg-surface">
       <summary className="flex min-h-20 cursor-pointer list-none flex-col items-stretch gap-3 px-5 py-4 transition-colors hover:bg-surface-raised focus-visible:outline-offset-[-3px] [&::-webkit-details-marker]:hidden sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <span className="min-w-0">
-          <span className="block text-lg font-extrabold tracking-[-0.02em] text-foreground">
+          <span className="block text-lg font-bold tracking-[-0.02em] text-foreground">
             {title}
           </span>
           <span className="mt-1 block max-w-2xl text-sm leading-6 text-muted">{description}</span>
@@ -2133,7 +2131,7 @@ function SectionHeading({
     <div className="min-w-0">
       <Heading
         id={id}
-        className="flex items-center gap-2 text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+        className="flex items-center gap-2 text-xl font-bold tracking-[-0.025em] text-balance sm:text-2xl"
       >
         <Icon className="size-5 text-accent" aria-hidden="true" />
         {title}
@@ -2164,7 +2162,7 @@ function MeasurementFact({
       <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
         className={cn(
-          "mt-1 text-lg font-black tabular-nums",
+          "mt-1 text-lg font-bold tabular-nums",
           danger ? "text-warning" : "text-foreground",
         )}
       >

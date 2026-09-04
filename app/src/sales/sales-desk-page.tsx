@@ -186,7 +186,7 @@ function SalesDeskScreen({
         aside={
           <>
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {attentionCount === 0
                 ? "No lead checks"
                 : `${attentionCount} ${attentionCount === 1 ? "lead" : "leads"} to check`}
@@ -291,7 +291,7 @@ function SalesSignals({ model }: { model: SalesResponse }) {
               <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
               {signal.label}
             </dt>
-            <dd className={cn("mt-2 text-2xl font-black tracking-[-0.03em]", signal.tone)}>
+            <dd className={cn("mt-2 text-2xl font-bold tracking-[-0.03em]", signal.tone)}>
               {signal.value}
             </dd>
             <p className="mt-1 max-w-56 text-sm leading-5 text-muted">{signal.detail}</p>
@@ -402,7 +402,7 @@ function LeadQueue({
         <div>
           <h2
             id="sales-queue-heading"
-            className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+            className="text-xl font-bold tracking-[-0.025em] text-balance sm:text-2xl"
           >
             {queueTitle(filter)}
           </h2>
@@ -483,7 +483,7 @@ function LeadRow({
               <span>{humanize(lead.source) ?? "Source not found"}</span>
               {receivedAt ? <span>{receivedAt}</span> : null}
             </div>
-            <h3 className="mt-1 text-xl font-black tracking-[-0.025em] text-balance">
+            <h3 className="mt-1 text-xl font-bold tracking-[-0.025em] text-balance">
               {lead.contact.display_name ?? "Unnamed lead"}
             </h3>
             {contact.length > 0 ? (
@@ -659,7 +659,7 @@ function EstimateSummary({
           <StatusChip label="Not final" tone="bg-warning-soft text-warning" />
         ) : null}
       </div>
-      {value ? <p className="text-base font-black tracking-[-0.02em]">{value}</p> : null}
+      {value ? <p className="text-base font-bold tracking-[-0.02em]">{value}</p> : null}
       <p className="text-sm leading-6 text-muted">
         {[estimate.service_type, estimate.confidence].filter(Boolean).join(" · ") ||
           "Details not found"}
@@ -698,7 +698,7 @@ function QuoteSummary({
           <span className="text-xs font-bold text-muted">Version {quote.version}</span>
         ) : null}
       </div>
-      {value ? <p className="text-base font-black tracking-[-0.02em]">{value}</p> : null}
+      {value ? <p className="text-base font-bold tracking-[-0.02em]">{value}</p> : null}
       <p className="text-sm leading-6 text-muted">
         {[quote.payment_status, validUntil ? `Good until ${validUntil}` : null]
           .filter(Boolean)

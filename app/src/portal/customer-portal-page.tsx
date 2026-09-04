@@ -77,7 +77,7 @@ export function CustomerPortalView({
             <ShieldCheck className="size-6" aria-hidden="true" />
           </div>
           <p className="text-sm font-bold text-muted">{model.brand}</p>
-          <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">
+          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">
             {model.job.job_number ?? "Your project"}
           </h1>
           <p className="mt-3 text-base leading-7 text-muted">
@@ -124,7 +124,7 @@ function ProposalCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {quote?.total !== null && quote?.total !== undefined ? (
-          <p className="text-2xl font-black tracking-[-0.03em]">
+          <p className="text-2xl font-bold tracking-[-0.03em]">
             {formatMoney(quote.total, quote.currency)}
           </p>
         ) : null}

@@ -132,7 +132,7 @@ export function SchemaCardSection({
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">Configured for this account</p>
-          <h2 id={headingId} className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl">
+          <h2 id={headingId} className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl">
             {title}
           </h2>
         </div>

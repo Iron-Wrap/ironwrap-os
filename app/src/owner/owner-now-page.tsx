@@ -133,7 +133,7 @@ function OwnerNowScreen({
         aside={
           <>
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {stoppedCount > 0
                 ? `${stoppedCount} ${stoppedCount === 1 ? "work stop" : "work stops"}`
                 : checkCount > 0
@@ -220,7 +220,7 @@ function RuntimeTruthPanel({
           <div>
             <h2
               id="system-check-heading"
-              className="scroll-mt-36 text-xl font-black tracking-[-0.025em] sm:scroll-mt-24"
+              className="scroll-mt-36 text-xl font-bold tracking-[-0.025em] sm:scroll-mt-24"
             >
               System check
             </h2>
@@ -295,7 +295,7 @@ function RuntimeTruthPanel({
           <div className="flex flex-wrap items-center gap-2">
             <h2
               id="system-check-heading"
-              className="scroll-mt-36 text-xl font-black tracking-[-0.025em] sm:scroll-mt-24"
+              className="scroll-mt-36 text-xl font-bold tracking-[-0.025em] sm:scroll-mt-24"
             >
               System check
             </h2>
@@ -330,7 +330,7 @@ function RuntimeTruthPanel({
         {summaryMetrics.map((metric) => (
           <div key={metric.label} className="bg-surface-raised p-4">
             <dt className="text-sm font-semibold text-muted">{metric.label}</dt>
-            <dd className="mt-1 font-black tracking-[-0.02em] text-foreground">{metric.value}</dd>
+            <dd className="mt-1 font-bold tracking-[-0.02em] text-foreground">{metric.value}</dd>
           </div>
         ))}
       </dl>
@@ -404,7 +404,7 @@ function DecisionSummary({ model }: { model: OwnerNowResponse }) {
               <span className={`size-2 rounded-full ${signal.dot}`} aria-hidden="true" />
               {signal.label}
             </dt>
-            <dd className={`mt-2 text-2xl font-black tracking-[-0.03em] ${signal.tone}`}>
+            <dd className={`mt-2 text-2xl font-bold tracking-[-0.03em] ${signal.tone}`}>
               {signal.value}
             </dd>
             <p className="mt-1 text-sm leading-5 text-muted">{signal.detail}</p>
@@ -462,7 +462,7 @@ function MeasurementIntakeExceptionsPanel({
         <div>
           <h2
             id="roof-reports-heading"
-            className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+            className="text-xl font-bold tracking-[-0.025em] text-balance sm:text-2xl"
           >
             Roof reports to check
           </h2>
@@ -655,7 +655,7 @@ function DecisionLane({
         <div>
           <h2
             id={headingId}
-            className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+            className="text-xl font-bold tracking-[-0.025em] text-balance sm:text-2xl"
           >
             {lane.title}
           </h2>
@@ -932,7 +932,7 @@ function EmptyDecisionBoard({
           <CircleGauge className="size-5" aria-hidden="true" />
         </span>
         <div>
-          <h2 className="text-xl font-black tracking-[-0.025em]">{title}</h2>
+          <h2 className="text-xl font-bold tracking-[-0.025em]">{title}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {limited
               ? "Open Data check before you call this list clear."
@@ -953,7 +953,7 @@ function OwnerNowError({ onRetry }: { onRetry: () => void }) {
           <AlertTriangle className="size-5" aria-hidden="true" />
         </span>
         <div>
-          <h1 className="text-xl font-black tracking-[-0.025em]">
+          <h1 className="text-xl font-bold tracking-[-0.025em]">
             Today&apos;s work could not load
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted">

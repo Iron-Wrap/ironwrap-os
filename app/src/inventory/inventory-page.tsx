@@ -757,7 +757,7 @@ const PositionsTable = memo(function PositionsTable({
           <p className="text-sm font-semibold text-muted">Tenant stock position</p>
           <h2
             id="inventory-positions-heading"
-            className="mt-1 text-2xl font-black tracking-[-0.03em]"
+            className="mt-1 text-2xl font-bold tracking-[-0.03em]"
           >
             Available stock
           </h2>
@@ -1724,7 +1724,7 @@ function LookupResult({ result }: { result: NonNullable<InventoryLookupResponse[
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-border bg-surface px-3 py-3">
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 text-sm font-bold">{value}</dd>
     </div>
   );
@@ -1733,7 +1733,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function IdentityTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <div className="border border-border bg-surface px-4 py-4">
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 break-all font-bold">{value}</dd>
       <dd className="mt-1 text-sm text-muted">{detail}</dd>
     </div>
@@ -1743,9 +1743,9 @@ function IdentityTile({ label, value, detail }: { label: string; value: string; 
 function Tile({ label, value, tone }: { label: string; value: number | string; tone?: "danger" }) {
   return (
     <div className="border border-border bg-surface px-4 py-3">
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
-        className={`mt-1 text-2xl font-black tabular-nums ${tone === "danger" ? "text-danger" : ""}`}
+        className={`mt-1 text-2xl font-bold tabular-nums ${tone === "danger" ? "text-danger" : ""}`}
       >
         {value}
       </dd>

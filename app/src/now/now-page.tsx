@@ -182,7 +182,7 @@ function NowScreen({
                 <header className="mb-4">
                   <h2
                     id={`now-section-${sectionIndex}`}
-                    className="text-xl font-black tracking-[-0.025em] sm:text-2xl"
+                    className="text-xl font-bold tracking-[-0.025em] sm:text-2xl"
                   >
                     {section.title}
                   </h2>
@@ -297,7 +297,7 @@ function NowCardView({
   if ("kind" in card) return <QuickBooksNowCardView card={card} />;
   return (
     <Card className={cn("flex flex-col p-5 sm:p-6", cardTone[card.tone])}>
-      <h3 className="text-xl font-black tracking-[-0.025em]">{card.title}</h3>
+      <h3 className="text-xl font-bold tracking-[-0.025em]">{card.title}</h3>
       <p className="mt-2 text-sm leading-6 text-muted">{card.detail}</p>
 
       <div className="mt-auto pt-5">
@@ -325,8 +325,8 @@ function QuickBooksNowCardView({ card }: { card: QuickBooksNowCard }) {
       : "This invoice needs a money check.";
   return (
     <Card className={cn("flex flex-col p-5 sm:p-6", quickBooksCardTone[card.tone])}>
-      <h3 className="text-xl font-black tracking-[-0.025em]">{card.title}</h3>
-      <p className="mt-3 text-2xl font-black tracking-[-0.03em]">{card.detail}</p>
+      <h3 className="text-xl font-bold tracking-[-0.025em]">{card.title}</h3>
+      <p className="mt-3 text-2xl font-bold tracking-[-0.03em]">{card.detail}</p>
       <dl className="mt-4 space-y-3 border-t border-current/15 pt-4 text-sm">
         <div>
           <dt className="font-semibold text-muted">Job</dt>

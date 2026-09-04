@@ -173,7 +173,7 @@ export function TodayPage() {
         <section aria-labelledby="today-run-sheet-heading">
           <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
             <div>
-              <h2 id="today-run-sheet-heading" className="text-2xl font-black tracking-[-0.035em]">
+              <h2 id="today-run-sheet-heading" className="text-2xl font-bold tracking-[-0.035em]">
                 Today's work
               </h2>
             </div>
@@ -196,7 +196,7 @@ export function TodayPage() {
           </ol>
           {today.work_objects.length > 0 ? (
             <>
-              <h3 className="mt-8 border-b border-border pb-4 text-lg font-black">Other work</h3>
+              <h3 className="mt-8 border-b border-border pb-4 text-lg font-bold">Other work</h3>
               <ol className="divide-y divide-border">
                 {today.work_objects.map((workObject) => (
                   <TodayWorkObjectRow
@@ -238,7 +238,7 @@ function TodayDispatchHeader({
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm font-bold text-muted">Your work</p>
-          <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] sm:text-4xl">Today</h1>
+          <h1 className="mt-1 text-3xl font-bold tracking-[-0.045em] sm:text-4xl">Today</h1>
           <p className="mt-1.5 text-sm leading-6 text-muted sm:text-base">
             {formatFieldDay(date, dateOptions)} · {jobCount} {jobCount === 1 ? "site" : "sites"}
           </p>
@@ -360,7 +360,7 @@ function PacketAvailabilityPanel({
         </span>
         <div className="min-w-0 flex-1 sm:flex sm:items-start sm:justify-between sm:gap-6">
           <div>
-            <p className="font-black text-foreground">{state.label}</p>
+            <p className="font-bold text-foreground">{state.label}</p>
             <p className="mt-0.5 text-sm leading-5 text-muted">{state.detail}</p>
           </div>
           <p className="mt-2 shrink-0 text-sm font-bold text-foreground sm:mt-0">
@@ -401,7 +401,7 @@ function TodayJobRow({
       >
         <div className="border-b border-border bg-surface-muted/55 p-4 lg:border-b-0 lg:border-r">
           <p className="text-sm font-bold text-muted">On the board</p>
-          <p className="mt-1 text-base font-black leading-6">
+          <p className="mt-1 text-base font-bold leading-6">
             {formatFieldSchedule(job.scheduled_start, dateOptions)}
           </p>
           {job.scheduled_end ? (
@@ -412,16 +412,16 @@ function TodayJobRow({
         </div>
         <div className="min-w-0 p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <p className="font-black tracking-[-0.02em]">{job.job_number ?? job.id}</p>
+            <p className="font-bold tracking-[-0.02em]">{job.job_number ?? job.id}</p>
             {job.status ? <p className="text-sm font-semibold text-muted">{job.status}</p> : null}
           </div>
-          <h3 className="mt-1 text-xl font-black leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
+          <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {job.address ?? "Address unavailable"}
           </h3>
           {blocked ? (
             <div className="mt-3 flex items-start gap-2 text-danger">
               <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-              <p className="font-black leading-6">
+              <p className="font-bold leading-6">
                 {job.blocked_gate_count}{" "}
                 {job.blocked_gate_count === 1 ? "check blocks work" : "checks block work"}
               </p>
@@ -475,7 +475,7 @@ function TodayWorkObjectRow({
       <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
         <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
           <p className="text-sm font-bold text-muted">On the board</p>
-          <p className="mt-1 text-base font-black leading-6">
+          <p className="mt-1 text-base font-bold leading-6">
             {formatFieldSchedule(workObject.scheduled_start, dateOptions)}
           </p>
           {workObject.scheduled_end ? (
@@ -486,10 +486,10 @@ function TodayWorkObjectRow({
         </div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <p className="font-black tracking-[-0.02em]">{workObject.work_object_id}</p>
+            <p className="font-bold tracking-[-0.02em]">{workObject.work_object_id}</p>
             <p className="text-sm font-semibold text-muted">{workObject.work_object_type}</p>
           </div>
-          <h3 className="mt-1 text-xl font-black leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
+          <h3 className="mt-1 text-xl font-bold leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
             {workObject.physical_context_type} · {workObject.physical_context_id}
           </h3>
           <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
@@ -519,7 +519,7 @@ function TodayWorkObjectRow({
 function DispatchFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 font-semibold leading-6">{value}</dd>
     </div>
   );

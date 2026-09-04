@@ -160,7 +160,7 @@ export function WorkPackageIssueForm({
       aria-labelledby="work-package-issue-heading"
     >
       <p className="text-sm font-semibold text-info">Production authority</p>
-      <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+      <h2 id="work-package-issue-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
         {workPackage ? `Issue corrected Work Package v${nextVersion}` : "Issue Work Package"}
       </h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
@@ -240,7 +240,7 @@ export function WorkPackageIssueForm({
         ) : null}
 
         <fieldset className="space-y-3 border border-border p-4">
-          <legend className="px-2 font-black">Ordered steps</legend>
+          <legend className="px-2 font-bold">Ordered steps</legend>
           {steps.map((step, index) => (
             <div
               key={step.key}
@@ -292,7 +292,7 @@ export function WorkPackageIssueForm({
         </fieldset>
 
         <fieldset className="space-y-3 border border-border p-4">
-          <legend className="px-2 font-black">Hold points</legend>
+          <legend className="px-2 font-bold">Hold points</legend>
           {holds.map((hold, index) => (
             <div
               key={hold.key}

@@ -50,7 +50,7 @@ export function OperatingIntakePanel(): JSX.Element | null {
             <Inbox className="size-5 text-accent" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <h2 id="operating-intake-heading" className="text-xl font-black tracking-[-0.025em]">
+            <h2 id="operating-intake-heading" className="text-xl font-bold tracking-[-0.025em]">
               Website intake
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
@@ -96,22 +96,22 @@ export function OperatingIntakePanel(): JSX.Element | null {
 function IntakeLeadRow({ lead }: { lead: OperatingIntakeLead }): JSX.Element {
   return (
     <li className="py-4 first:pt-0 last:pb-0">
-      <p className="font-black tracking-[-0.02em]">{lead.contact_name ?? "Name not recorded"}</p>
+      <p className="font-bold tracking-[-0.02em]">{lead.contact_name ?? "Name not recorded"}</p>
       <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
         <div>
-          <dt className="text-xs font-extrabold text-muted">Intake status</dt>
+          <dt className="text-xs font-bold text-muted">Intake status</dt>
           <dd className="mt-1 font-semibold">Intake</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold text-muted">Source</dt>
+          <dt className="text-xs font-bold text-muted">Source</dt>
           <dd className="mt-1 font-semibold">{lead.source}</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold text-muted">Phone</dt>
+          <dt className="text-xs font-bold text-muted">Phone</dt>
           <dd className="mt-1 font-semibold">{lead.contact_phone ?? "Not recorded"}</dd>
         </div>
         <div>
-          <dt className="text-xs font-extrabold text-muted">Email</dt>
+          <dt className="text-xs font-bold text-muted">Email</dt>
           <dd className="mt-1 break-all font-semibold">{lead.contact_email ?? "Not recorded"}</dd>
         </div>
       </dl>

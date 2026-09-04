@@ -176,7 +176,7 @@ function QuoteRevisionApprovalQueueContent() {
                   <ClipboardCheck className="size-6 text-accent" aria-hidden="true" />
                 </span>
                 <div className="min-w-0">
-                  <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                     Quote change reviews
                   </h1>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -189,7 +189,7 @@ function QuoteRevisionApprovalQueueContent() {
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {model.approvals.length === 0
                 ? "No quote changes to review"
                 : `${model.approvals.length} ${model.approvals.length === 1 ? "quote change" : "quote changes"}`}
@@ -483,7 +483,7 @@ function QuoteRevisionApprovalDetailContent() {
                 <FileText className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Review a new quote
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -719,7 +719,7 @@ function QuoteRevisionApprovalPrepareContent() {
                 <FilePlus2 className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Ask for a new quote
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -731,7 +731,7 @@ function QuoteRevisionApprovalPrepareContent() {
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">Tell us what is wrong</h2>
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">Tell us what is wrong</h2>
             <p className="mt-2 text-sm leading-6 text-muted">
               A person will check the current quote and the empty draft before it is made.
             </p>
@@ -850,7 +850,7 @@ function QueueSignal({
         <span className={cn("size-2 rounded-full", dot)} aria-hidden="true" />
         {label}
       </dt>
-      <dd className={cn("mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl", tone)}>
+      <dd className={cn("mt-1 text-xl font-bold tracking-[-0.03em] sm:mt-2 sm:text-2xl", tone)}>
         {value}
       </dd>
     </div>
@@ -979,7 +979,7 @@ function RevisionRequestFacts({ approval }: { approval: QuoteRevisionApprovalReq
       aria-labelledby="quote-review-facts"
     >
       <div className="border-b border-border px-5 py-5 sm:px-6">
-        <h2 id="quote-review-facts" className="text-lg font-black tracking-[-0.02em]">
+        <h2 id="quote-review-facts" className="text-lg font-bold tracking-[-0.02em]">
           What you are reviewing
         </h2>
         <p className="mt-1 text-sm leading-6 text-muted">
@@ -1418,7 +1418,7 @@ function StatusBadge({ status }: { status: QuoteRevisionApprovalRequest["state"]
   return (
     <span
       className={cn(
-        "inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-xs font-extrabold",
+        "inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-xs font-bold",
         presentation.tone,
       )}
     >

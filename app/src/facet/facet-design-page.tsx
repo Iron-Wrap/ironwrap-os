@@ -66,7 +66,7 @@ function FacetDesignContent() {
             <Palette className="size-5 text-accent" aria-hidden="true" />
           </span>
           <div>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+            <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
               Customer design evidence
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted sm:text-base">
@@ -115,7 +115,7 @@ function FacetDesignContent() {
         <section className="space-y-3" aria-labelledby="facet-delivery-exceptions-heading">
           <div>
             <p className="text-sm font-bold text-danger">Signed delivery exceptions</p>
-            <h2 id="facet-delivery-exceptions-heading" className="mt-1 text-xl font-black">
+            <h2 id="facet-delivery-exceptions-heading" className="mt-1 text-xl font-bold">
               Recover without a manual association
             </h2>
           </div>
@@ -163,7 +163,7 @@ function IntakeExceptionCard({ exception }: { exception: FacetDesignIntakeExcept
           <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         )}
         <div className="min-w-0 flex-1">
-          <h3 className="font-black">
+          <h3 className="font-bold">
             {awaiting ? "Waiting for the exact project link" : "Signed delivery rejected"}
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
@@ -201,7 +201,7 @@ function Metric({
   }[tone];
   return (
     <div className="bg-surface px-5 py-4">
-      <p className={`text-3xl font-black tracking-[-0.04em] ${toneClass}`}>{value}</p>
+      <p className={`text-3xl font-bold tracking-[-0.04em] ${toneClass}`}>{value}</p>
       <p className="mt-1 text-sm font-bold text-muted">{label}</p>
     </div>
   );
@@ -217,7 +217,7 @@ function EvidenceCard({ evidence }: { evidence: FacetDesignEvidence }) {
           <p className="text-sm font-bold capitalize text-muted">
             Customer decision · {evidence.decision_kind}
           </p>
-          <h2 className="mt-1 truncate text-lg font-black">Design for {evidence.roof_job_id}</h2>
+          <h2 className="mt-1 truncate text-lg font-bold">Design for {evidence.roof_job_id}</h2>
         </div>
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 text-xs font-bold ${presentation.tone}`}

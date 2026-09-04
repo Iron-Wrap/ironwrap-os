@@ -85,7 +85,10 @@
   --foreground: #11171c;
   --muted: #5b6670;
   --border: #ccd3d9;
-  --border-strong: #7f8a94;
+  /* Hover borders, dashed drop targets and unchecked control outlines are drawn with
+     this. At #7f8a94 it was 2.87:1 on `--background`, under the 3:1 floor a UI boundary
+     owes. Darkened until every ground clears it; nothing else about the ramp moves. */
+  --border-strong: #6d7882;
   --chrome: #161b21;
   --chrome-raised: #192128;
   --chrome-foreground: #f1f4f5;
@@ -133,7 +136,8 @@
     --foreground: #eef2f4;
     --muted: #9da8b1;
     --border: #2a353e;
-    --border-strong: #52606b;
+    /* 2.63:1 on `--surface-raised` before. Same 3:1 reasoning as the light scheme. */
+    --border-strong: #6d7a85;
     --chrome: #0d1317;
     --chrome-raised: #171f25;
     --chrome-foreground: #f2f5f6;

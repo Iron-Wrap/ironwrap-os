@@ -152,7 +152,7 @@ function ProductionRunwayScreen({
         aside={
           <>
             <p className="text-sm font-bold text-muted">Today</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {model.summary.active_jobs}{" "}
               {model.summary.active_jobs === 1 ? "active job" : "active jobs"}
             </h2>
@@ -234,7 +234,7 @@ function RunwaySignals({ model }: { model: ProductionRunwayResponse }) {
               <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
               {signal.label}
             </dt>
-            <dd className={cn("mt-2 text-2xl font-black tracking-[-0.03em]", signal.tone)}>
+            <dd className={cn("mt-2 text-2xl font-bold tracking-[-0.03em]", signal.tone)}>
               {signal.value}
             </dd>
           </div>
@@ -300,7 +300,7 @@ function RunwayLane({
               <Icon className="size-4" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <h2 id={headingId} className="text-xl font-black tracking-[-0.025em] sm:text-2xl">
+              <h2 id={headingId} className="text-xl font-bold tracking-[-0.025em] sm:text-2xl">
                 {copy.title}
               </h2>
               <p className="mt-1 text-sm leading-6 text-muted">{copy.description}</p>
@@ -373,7 +373,7 @@ function RunwayJobCard({
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-muted">{job.brand ?? "Unbranded job"}</p>
           <h3
-            className="mt-1 truncate text-lg font-black tracking-[-0.02em]"
+            className="mt-1 truncate text-lg font-bold tracking-[-0.02em]"
             title={job.job_number ?? job.id}
           >
             {job.job_number ?? job.id}

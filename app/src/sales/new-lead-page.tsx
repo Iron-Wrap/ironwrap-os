@@ -89,7 +89,7 @@ function NewLeadContent() {
               <UserPlus className="size-6 text-accent" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <h1 className="text-2xl font-black tracking-[-0.035em] text-balance sm:text-3xl">
+              <h1 className="text-2xl font-bold tracking-[-0.035em] text-balance sm:text-3xl">
                 Add a lead
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">

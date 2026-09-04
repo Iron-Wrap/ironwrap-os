@@ -113,9 +113,9 @@ function OptionCard({
       className={`rounded-xl border p-4 ${chosen ? "border-ok/40 bg-ok-soft shadow-[inset_0_2px_0_var(--ok)]" : "border-border"}`}
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="text-lg font-black tracking-[-0.02em]">{title}</h3>
+        <h3 className="text-lg font-bold tracking-[-0.02em]">{title}</h3>
         {option.tier ? (
-          <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-extrabold text-muted">
+          <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-bold text-muted">
             {option.tier}
           </span>
         ) : null}

@@ -49,8 +49,8 @@ function StatePanel({
           {icon}
         </div>
         <div className="min-w-0">
-          {stateLabel ? <p className="mb-1.5 text-sm font-[740] text-muted">{stateLabel}</p> : null}
-          <h2 className="text-xl font-[760] tracking-[-0.025em]">{title}</h2>
+          {stateLabel ? <p className="mb-1.5 text-sm font-bold text-muted">{stateLabel}</p> : null}
+          <h2 className="text-xl font-bold tracking-[-0.025em]">{title}</h2>
           <p className="mt-2 max-w-md text-sm leading-6 text-muted">{message}</p>
           {footer}
           {action ? <div className="mt-5 flex flex-wrap items-center gap-2">{action}</div> : null}
@@ -63,13 +63,13 @@ function StatePanel({
 export function LoadingState({ label = "Loading your work…" }: { label?: string }) {
   return (
     <div className="grid min-h-[40dvh] place-items-center" role="status" aria-live="polite">
-      <div className="w-full max-w-xl rounded-xl border border-border/80 bg-surface-raised p-5 shadow-[var(--shadow-card)] sm:p-7">
+      <div className="w-full max-w-xl rounded-xl border border-border/80 bg-surface-raised p-5 sm:p-7">
         <div className="grid grid-cols-[3rem_minmax(0,1fr)] gap-4">
           <div className="grid size-12 place-items-center rounded-xl bg-surface-muted">
             <LoaderCircle className="size-5 animate-spin text-info" aria-hidden="true" />
           </div>
           <div>
-            <div className="text-sm font-[740] text-muted">{label}</div>
+            <div className="text-sm font-bold text-muted">{label}</div>
             <div className="mt-4 space-y-3" aria-hidden="true">
               <div className="ui-skeleton h-4 w-2/5 rounded-sm bg-surface-muted" />
               <div className="ui-skeleton h-3 w-full rounded-sm bg-surface-muted" />
@@ -152,11 +152,11 @@ function UnavailableDetail({ nextAction, personPath }: { nextAction: string; per
   return (
     <dl className="mt-4 space-y-3 border-t border-border/70 pt-4 text-sm leading-6">
       <div>
-        <dt className="font-[740] text-foreground">Next step</dt>
+        <dt className="font-bold text-foreground">Next step</dt>
         <dd className="text-muted">{nextAction}</dd>
       </div>
       <div>
-        <dt className="font-[740] text-foreground">Who to ask</dt>
+        <dt className="font-bold text-foreground">Who to ask</dt>
         <dd className="text-muted">{personPath}</dd>
       </div>
     </dl>

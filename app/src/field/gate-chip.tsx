@@ -21,7 +21,7 @@ export function GateChip({ name, state }: { name: string; state: string }) {
   return (
     <span
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-sm font-extrabold",
+        "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-sm font-bold",
         stateStyle[state] ?? "bg-surface-muted text-muted",
       )}
       aria-label={`${name}: ${state}`}

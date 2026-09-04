@@ -22,7 +22,7 @@ export function WorkspaceHeader({
   return (
     <header
       className={cn(
-        "relative overflow-hidden rounded-xl border border-border/80 bg-surface-raised shadow-[var(--shadow-card)] before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-accent",
+        "relative overflow-hidden rounded-xl border border-border/80 bg-surface-raised",
         className,
       )}
     >
@@ -34,7 +34,7 @@ export function WorkspaceHeader({
               {icon}
             </span>
             <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-[790] tracking-[-0.045em] text-balance sm:text-3xl">
+              <h1 className="text-2xl font-bold tracking-[-0.045em] text-balance sm:text-3xl">
                 {title}
               </h1>
               <div className="mt-1.5 max-w-3xl text-sm leading-6 text-muted sm:text-[0.9375rem]">

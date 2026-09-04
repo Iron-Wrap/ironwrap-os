@@ -734,7 +734,7 @@ function StageEditorList({
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="font-extrabold tracking-[-0.02em]">Stages</h3>
+          <h3 className="font-bold tracking-[-0.02em]">Stages</h3>
           <p className="mt-1 text-sm text-muted">
             {activeStages.length} of {stageLimit} active stages. Use the visible controls to arrange
             them; drag is not required.

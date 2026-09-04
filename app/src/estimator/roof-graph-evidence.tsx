@@ -51,7 +51,7 @@ export function RoofGraphEvidence({
           <div className="min-w-0">
             <h2
               id="roof-graph-heading"
-              className="flex items-center gap-2 text-xl font-black tracking-[-0.025em] text-foreground sm:text-2xl"
+              className="flex items-center gap-2 text-xl font-bold tracking-[-0.025em] text-foreground sm:text-2xl"
             >
               <Ruler className="size-5 text-accent" aria-hidden="true" />
               Roof shape drawing
@@ -178,7 +178,7 @@ export function RoofGraphEvidence({
             aria-live="polite"
             aria-labelledby="selected-roof-facet-heading"
           >
-            <p id="selected-roof-facet-heading" className="text-sm font-black text-foreground">
+            <p id="selected-roof-facet-heading" className="text-sm font-bold text-foreground">
               Selected roof face: {selectedFacet.facet.label ?? selectedFacet.facet.id}
             </p>
             <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
@@ -272,7 +272,7 @@ function GraphFact({
       <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
         className={cn(
-          "mt-1 text-lg font-black tabular-nums",
+          "mt-1 text-lg font-bold tabular-nums",
           danger ? "text-warning" : "text-foreground",
         )}
       >

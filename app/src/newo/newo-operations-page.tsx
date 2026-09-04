@@ -112,7 +112,7 @@ function NewoOperationsScreen({
               </span>
               <div className="min-w-0">
                 <div className="mt-1 flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  <h1 className="text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                     Reception
                   </h1>
                   <StateLabel ready={model.status === "ready"} />
@@ -126,7 +126,7 @@ function NewoOperationsScreen({
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Saved calls</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {model.counts.sessions} {model.counts.sessions === 1 ? "call" : "calls"}
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted">
@@ -287,7 +287,7 @@ function SignalStrip({ model }: { model: NewoOperationsResponse }) {
               <span className={cn("size-2 rounded-full", signal.dot)} aria-hidden="true" />
               {signal.label}
             </dt>
-            <dd className={cn("mt-2 text-2xl font-black sm:text-3xl", signal.tone)}>
+            <dd className={cn("mt-2 text-2xl font-bold sm:text-3xl", signal.tone)}>
               {signal.value}
             </dd>
           </div>
@@ -351,7 +351,7 @@ function ExceptionQueues({
   if (visible.length === 0) {
     return (
       <Card className="p-5 sm:p-6" aria-labelledby="new-call-exceptions">
-        <h2 id="new-call-exceptions" className="text-xl font-black sm:text-2xl">
+        <h2 id="new-call-exceptions" className="text-xl font-bold sm:text-2xl">
           Calls to check
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">No call or booking needs a check.</p>
@@ -362,7 +362,7 @@ function ExceptionQueues({
   return (
     <section className="space-y-7" aria-labelledby="new-call-exceptions">
       <header>
-        <h2 id="new-call-exceptions" className="text-xl font-black sm:text-2xl">
+        <h2 id="new-call-exceptions" className="text-xl font-bold sm:text-2xl">
           Calls to check
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">Open the oldest problem first.</p>
@@ -409,7 +409,7 @@ function SessionQueue({
           >
             <Icon className="size-4" aria-hidden="true" />
           </span>
-          <h3 id={`${id}-heading`} className="font-black sm:text-lg">
+          <h3 id={`${id}-heading`} className="font-bold sm:text-lg">
             {title}
           </h3>
         </div>
@@ -420,7 +420,7 @@ function SessionQueue({
           <li key={session.session_id} className="px-5 py-4 sm:px-6">
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                <p className="font-black tracking-[-0.01em]">
+                <p className="font-bold tracking-[-0.01em]">
                   {humanize(session.service ?? "Call")} ·{" "}
                   {humanize(session.outcome ?? session.status)}
                 </p>
@@ -490,7 +490,7 @@ function DeliveryRecovery({
   return (
     <Card className="overflow-hidden" aria-labelledby="delivery-recovery-heading">
       <header className="border-b border-border px-5 py-4 sm:px-6">
-        <h2 id="delivery-recovery-heading" className="text-xl font-black sm:text-2xl">
+        <h2 id="delivery-recovery-heading" className="text-xl font-bold sm:text-2xl">
           System fixes
         </h2>
         <p className="mt-1 text-sm leading-6 text-muted">
@@ -571,7 +571,7 @@ function RecentSessions({
   return (
     <Card className="overflow-hidden" aria-labelledby="recent-sessions-heading">
       <header className="flex items-end justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
-        <h2 id="recent-sessions-heading" className="text-xl font-black sm:text-2xl">
+        <h2 id="recent-sessions-heading" className="text-xl font-bold sm:text-2xl">
           Latest calls
         </h2>
         <span className="text-sm font-semibold text-muted">{sessions.length} shown</span>
@@ -584,7 +584,7 @@ function RecentSessions({
             <li key={session.session_id} className="px-5 py-4 sm:px-6">
               <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                  <p className="font-black tracking-[-0.01em]">
+                  <p className="font-bold tracking-[-0.01em]">
                     {humanize(session.service ?? "Call")}
                   </p>
                   <p className="mt-1 text-sm leading-6 text-muted">
@@ -630,7 +630,7 @@ function ReadinessPanel({ model }: { model: NewoOperationsResponse }) {
   return (
     <Card className="overflow-hidden" aria-labelledby="readiness-heading">
       <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <h2 id="readiness-heading" className="text-lg font-black">
+        <h2 id="readiness-heading" className="text-lg font-bold">
           System checks
         </h2>
         <span
@@ -682,7 +682,7 @@ function LaunchState({ model }: { model: NewoOperationsResponse }) {
   ];
   return (
     <Card className="overflow-hidden" aria-labelledby="launch-state-heading">
-      <h2 id="launch-state-heading" className="border-b border-border px-5 py-4 text-lg font-black">
+      <h2 id="launch-state-heading" className="border-b border-border px-5 py-4 text-lg font-bold">
         Live settings
       </h2>
       <dl className="divide-y divide-border text-sm">
@@ -708,7 +708,7 @@ function ReconciliationPanel({
     <Card className="overflow-hidden" aria-labelledby="reconciliation-heading">
       <h2
         id="reconciliation-heading"
-        className="border-b border-border px-5 py-4 text-lg font-black"
+        className="border-b border-border px-5 py-4 text-lg font-bold"
       >
         Save checks
       </h2>
@@ -764,7 +764,7 @@ function UsagePanel({
       : humanize(model.usage.status);
   return (
     <Card className="overflow-hidden" aria-labelledby="usage-heading">
-      <h2 id="usage-heading" className="border-b border-border px-5 py-4 text-lg font-black">
+      <h2 id="usage-heading" className="border-b border-border px-5 py-4 text-lg font-bold">
         Call time
       </h2>
       <dl className="divide-y divide-border px-5 text-sm">

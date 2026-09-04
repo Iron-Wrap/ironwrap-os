@@ -56,7 +56,7 @@ export function Notice({
           aria-hidden="true"
         />
         <div className="min-w-0">
-          <p className="font-[740] text-foreground">{title}</p>
+          <p className="font-bold text-foreground">{title}</p>
           <div className="mt-1 text-sm leading-6 text-muted">{children}</div>
         </div>
       </div>

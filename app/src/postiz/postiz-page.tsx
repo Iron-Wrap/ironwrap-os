@@ -197,7 +197,7 @@ function PostizContent() {
                 <Megaphone className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   {intent.title}
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -208,7 +208,7 @@ function PostizContent() {
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {stateLabel[intent.state]}
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted">
@@ -259,7 +259,7 @@ function PostizContent() {
       <StatusCard model={model} />
 
       <Card id="postiz-content" className="p-5 sm:p-6">
-        <h2 className="text-xl font-black tracking-[-0.025em]">Review content</h2>
+        <h2 className="text-xl font-bold tracking-[-0.025em]">Review content</h2>
         <p className="mt-4 whitespace-pre-wrap break-words text-base leading-7">{intent.content}</p>
         <dl className="mt-6 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
           <Fact label="Scheduled" value={formatDate(intent.scheduled_at, session)} />
@@ -271,7 +271,7 @@ function PostizContent() {
         className="overflow-hidden rounded-lg border border-border bg-surface-raised py-5 shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
         aria-labelledby="postiz-actions"
       >
-        <h2 id="postiz-actions" className="px-5 text-xl font-black tracking-[-0.025em] sm:px-6">
+        <h2 id="postiz-actions" className="px-5 text-xl font-bold tracking-[-0.025em] sm:px-6">
           What you can do
         </h2>
         <div className="mt-4 flex flex-col gap-3 px-5 sm:flex-row sm:flex-wrap sm:px-6">
@@ -368,9 +368,7 @@ function StatusCard({ model }: { model: PostizIntentResponse }) {
         )}
         <div className="min-w-0">
           <p className="text-sm font-bold text-muted">Saved state</p>
-          <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">
-            {stateLabel[intent.state]}
-          </h2>
+          <h2 className="mt-1 text-xl font-bold tracking-[-0.025em]">{stateLabel[intent.state]}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {providerLabel[intent.provider]} · {model.connected ? "Connected" : "Not connected"}
           </p>
@@ -394,7 +392,7 @@ function Proof({ model }: { model: PostizIntentResponse }) {
   if (model.intent.citations.length === 0) return null;
   return (
     <section aria-labelledby="postiz-proof">
-      <h2 id="postiz-proof" className="text-xl font-black tracking-[-0.025em]">
+      <h2 id="postiz-proof" className="text-xl font-bold tracking-[-0.025em]">
         Proof
       </h2>
       <ul className="mt-4 space-y-3 overflow-hidden rounded-lg border border-border bg-surface-raised py-4 text-sm">

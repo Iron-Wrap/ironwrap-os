@@ -8,10 +8,7 @@ export function Card({
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
     <div
-      className={cn(
-        "rounded-xl border border-border/80 bg-surface-raised shadow-[var(--shadow-card)]",
-        className,
-      )}
+      className={cn("rounded-xl border border-border/80 bg-surface-raised", className)}
       {...props}
     />
   );
@@ -29,7 +26,7 @@ export function CardTitle({
   ...props
 }: React.HTMLAttributes<HTMLHeadingElement>): React.JSX.Element {
   return (
-    <h2 className={cn("text-lg font-[760] tracking-[-0.025em] sm:text-xl", className)} {...props} />
+    <h2 className={cn("text-lg font-bold tracking-[-0.025em] sm:text-xl", className)} {...props} />
   );
 }
 

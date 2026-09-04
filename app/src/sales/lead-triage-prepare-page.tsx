@@ -157,7 +157,7 @@ function LeadTriagePrepareContent() {
                 <ClipboardCheck className="size-5 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Record native triage
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -438,7 +438,7 @@ function LeadContext({
       </div>
       <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
         <p className="text-sm font-bold text-muted">Current triage state</p>
-        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-extrabold text-foreground">
+        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-bold text-foreground">
           {humanize(lead.triage.status) ?? "Status unavailable"}
         </p>
         {lead.triage.summary ? (

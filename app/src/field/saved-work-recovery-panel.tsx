@@ -58,7 +58,7 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
         <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         <div>
           <p className="text-sm font-semibold text-danger">Saved work</p>
-          <h2 id="saved-work-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+          <h2 id="saved-work-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             {actions.length === 1
               ? "One saved item needs review"
               : `${actions.length} saved items need review`}
@@ -83,7 +83,7 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-black">{actionLabel(action)}</h3>
+                  <h3 className="font-bold">{actionLabel(action)}</h3>
                   <p className="mt-1 text-sm text-muted">
                     Saved {formatSavedAt(action.updatedAt, session.tenant.locale)}
                   </p>

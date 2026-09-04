@@ -189,7 +189,7 @@ function MoneyIntentContent() {
                 {ageLabel(intent.age_seconds)} old
               </span>
             </div>
-            <p className="mt-3 text-2xl font-black tabular-nums tracking-[-0.03em]">
+            <p className="mt-3 text-2xl font-bold tabular-nums tracking-[-0.03em]">
               {amountLabel(intent.total_amount, intent.currency)}
             </p>
           </>

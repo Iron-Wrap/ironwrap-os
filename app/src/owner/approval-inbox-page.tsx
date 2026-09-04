@@ -196,7 +196,7 @@ function ApprovalInboxContent() {
         aside={
           <>
             <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {model.approvals.length === 0
                 ? "No lead reviews"
                 : `${model.approvals.length} ${model.approvals.length === 1 ? "lead review" : "lead reviews"}`}
@@ -370,7 +370,7 @@ function SummaryMetric({
         <span className={`size-2 rounded-full ${dot}`} aria-hidden="true" />
         {label}
       </dt>
-      <dd className={`mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl ${tone}`}>
+      <dd className={`mt-1 text-xl font-bold tracking-[-0.03em] sm:mt-2 sm:text-2xl ${tone}`}>
         {value}
       </dd>
     </div>
@@ -455,7 +455,7 @@ function ApprovalCard({
             </span>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <h2 id={titleId} className="text-lg font-extrabold tracking-[-0.025em] sm:text-xl">
+                <h2 id={titleId} className="text-lg font-bold tracking-[-0.025em] sm:text-xl">
                   Lead check
                 </h2>
                 <span
@@ -522,10 +522,7 @@ function ApprovalCard({
 
           {approval.state === "pending" && rejecting ? (
             <section className="border-t border-border pt-5" aria-label="Turn down lead check">
-              <label
-                className="block text-sm font-extrabold"
-                htmlFor={`reject-reason-${approval.id}`}
-              >
+              <label className="block text-sm font-bold" htmlFor={`reject-reason-${approval.id}`}>
                 Why should we stop this lead check?
               </label>
               <Textarea
@@ -576,7 +573,7 @@ function ApprovalCard({
           {reconcileVisible && reconciling ? (
             <section className="border-t border-border pt-5" aria-label="Check saved result">
               <label
-                className="block text-sm font-extrabold"
+                className="block text-sm font-bold"
                 htmlFor={`reconciliation-outcome-${approval.id}`}
               >
                 What happened?
@@ -601,7 +598,7 @@ function ApprovalCard({
                 <option value="not_executed">Lead check was not saved</option>
               </Select>
               <label
-                className="mt-4 block text-sm font-extrabold"
+                className="mt-4 block text-sm font-bold"
                 htmlFor={`reconciliation-evidence-${approval.id}`}
               >
                 What did you check?
@@ -711,7 +708,7 @@ function DiffColumn({
     <section
       className={`${tone} p-4 ${title === "After" ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
     >
-      <h4 className="font-extrabold">{title}</h4>
+      <h4 className="font-bold">{title}</h4>
       <dl className="mt-3 space-y-3 text-sm leading-6">
         {rows.map(([label, value]) => (
           <div key={label}>

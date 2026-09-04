@@ -208,7 +208,7 @@ function WorkObjectPacketHeader({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-muted">{model.work_object.workObjectType}</p>
-          <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] text-pretty sm:text-4xl">
+          <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-pretty sm:text-4xl">
             {model.work_object.workObjectId}
           </h1>
           <p className="mt-2 text-base leading-6 text-muted">
@@ -320,7 +320,7 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
             <p className="text-sm font-semibold text-muted">Sent job proof</p>
             <h2
               id="proof-stream-heading"
-              className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+              className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl"
             >
               Job proof
             </h2>
@@ -357,7 +357,7 @@ function JobPacketHeader({
           <p className="text-sm font-semibold text-muted">
             {model.job.job_number ?? "Assigned job"}
           </p>
-          <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] text-pretty sm:text-4xl">
+          <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-pretty sm:text-4xl">
             {model.job.address ?? "Job plan"}
           </h1>
         </div>
@@ -551,7 +551,7 @@ function WorkPackagePanel({
           aria-labelledby="work-package-heading"
         >
           <p className="text-sm font-semibold text-warning">Work plan</p>
-          <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+          <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             No work plan is ready
           </h2>
           <p className="mt-2 leading-6 text-muted">
@@ -745,7 +745,7 @@ function WorkPackagePanel({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-muted">Work plan</p>
-            <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+            <h2 id="work-package-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
               {workPackage.title}
             </h2>
           </div>
@@ -809,7 +809,7 @@ function WorkPackagePanel({
             aria-labelledby="work-package-change-heading"
           >
             <p className="text-sm font-semibold text-warning">Plan changed</p>
-            <h3 id="work-package-change-heading" className="mt-1 text-lg font-black">
+            <h3 id="work-package-change-heading" className="mt-1 text-lg font-bold">
               This plan replaces {workPackage.supersession.prior_id}
             </h3>
             <p className="mt-2 leading-6">{workPackage.supersession.reason}</p>
@@ -827,13 +827,13 @@ function WorkPackagePanel({
         ) : null}
 
         <section aria-labelledby="work-package-steps-heading">
-          <h3 id="work-package-steps-heading" className="font-black">
+          <h3 id="work-package-steps-heading" className="font-bold">
             Work steps
           </h3>
           <ol className="mt-3 space-y-3">
             {workPackage.steps.map((step) => (
               <li key={step.sequence} className="border border-border p-4">
-                <p className="font-black">
+                <p className="font-bold">
                   Step {step.sequence} · {step.instruction}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-muted">Proof: {step.required_evidence}</p>
@@ -846,7 +846,7 @@ function WorkPackagePanel({
         </section>
 
         <section aria-labelledby="work-package-holds-heading">
-          <h3 id="work-package-holds-heading" className="font-black">
+          <h3 id="work-package-holds-heading" className="font-bold">
             Stop and check
           </h3>
           <ol className="mt-3 space-y-3">
@@ -859,9 +859,7 @@ function WorkPackagePanel({
                     : "border border-warning/35 bg-warning-soft p-4"
                 }
               >
-                <p
-                  className={holdPoint.released ? "font-black text-ok" : "font-black text-warning"}
-                >
+                <p className={holdPoint.released ? "font-bold text-ok" : "font-bold text-warning"}>
                   Check {holdPoint.sequence} · {holdPoint.hold_point}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-muted">
@@ -882,7 +880,7 @@ function WorkPackagePanel({
           className="border border-border p-4"
           aria-labelledby="work-package-workers-heading"
         >
-          <h3 id="work-package-workers-heading" className="font-black">
+          <h3 id="work-package-workers-heading" className="font-bold">
             Crew
           </h3>
           {workPackage.acknowledgement.workers.length > 0 ? (
@@ -920,7 +918,7 @@ function WorkPackagePanel({
           aria-labelledby="work-package-evidence-heading"
         >
           <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <h3 id="work-package-evidence-heading" className="font-black">
+            <h3 id="work-package-evidence-heading" className="font-bold">
               Proof needed
             </h3>
             <span className="text-sm font-semibold text-muted">
@@ -956,7 +954,7 @@ function WorkPackagePanel({
                   {canCaptureEvidence ? (
                     <div className="flex flex-wrap gap-2">
                       <a
-                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-bold underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
                         aria-label={`Add proof for step ${step.sequence}`}
                         href={workPackageEvidenceHref(
                           model.job.id,
@@ -973,7 +971,7 @@ function WorkPackagePanel({
                       </a>
                       {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
                         <a
-                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-bold text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
                           aria-label={`Fix proof for step ${step.sequence}`}
                           href={workPackageEvidenceHref(
                             model.job.id,
@@ -1021,7 +1019,7 @@ function WorkPackagePanel({
                   {canCaptureEvidence ? (
                     <div className="flex flex-wrap gap-2">
                       <a
-                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-bold underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
                         aria-label={`Add proof for stop ${holdPoint.sequence}`}
                         href={workPackageEvidenceHref(
                           model.job.id,
@@ -1038,7 +1036,7 @@ function WorkPackagePanel({
                       </a>
                       {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
                         <a
-                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-bold text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-focus focus-visible:outline-offset-3"
                           aria-label={`Fix proof for stop ${holdPoint.sequence}`}
                           href={workPackageEvidenceHref(
                             model.job.id,
@@ -1070,7 +1068,7 @@ function WorkPackagePanel({
           className="border border-border p-4"
           aria-labelledby="work-package-acknowledgement-heading"
         >
-          <h3 id="work-package-acknowledgement-heading" className="font-black">
+          <h3 id="work-package-acknowledgement-heading" className="font-bold">
             Review and agree
           </h3>
           {workPackage.acknowledgement.current_user_acknowledged ? (
@@ -1113,7 +1111,7 @@ function WorkPackagePanel({
         </section>
 
         <section className="border border-border p-4" aria-labelledby="work-package-start-heading">
-          <h3 id="work-package-start-heading" className="font-black">
+          <h3 id="work-package-start-heading" className="font-bold">
             Start work
           </h3>
           {canStart ? (
@@ -1146,7 +1144,7 @@ function WorkPackagePanel({
             className="border-2 border-ok/45 bg-ok-soft p-4"
             aria-labelledby="work-package-completion-heading"
           >
-            <h3 id="work-package-completion-heading" className="font-black text-ok">
+            <h3 id="work-package-completion-heading" className="font-bold text-ok">
               Finish this work plan
             </h3>
             {canComplete ? (
@@ -1179,7 +1177,7 @@ function WorkPackagePanel({
           className="border-2 border-danger/55 bg-danger-soft/45 p-4"
           aria-labelledby="stop-work-heading"
         >
-          <h3 id="stop-work-heading" className="font-black text-danger">
+          <h3 id="stop-work-heading" className="font-bold text-danger">
             Stop Work
           </h3>
           <p className="mt-2 text-sm leading-6 text-muted">
@@ -1277,7 +1275,7 @@ function WorkStatus({
     >
       <header className="border-b border-border px-4 py-4 sm:px-5">
         <p className="text-sm font-semibold text-muted">Before work starts</p>
-        <h2 id="work-status-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+        <h2 id="work-status-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
           Work checks
         </h2>
       </header>
@@ -1293,7 +1291,7 @@ function WorkStatus({
             <ClipboardCheck className="mt-0.5 size-6 shrink-0 text-info" aria-hidden="true" />
           )}
           <div>
-            <p className="text-lg font-black tracking-[-0.02em]">
+            <p className="text-lg font-bold tracking-[-0.02em]">
               {blocked
                 ? `${blockedGates.length} ${blockedGates.length === 1 ? "check blocks" : "checks block"} work`
                 : model.job.current_gate_state
@@ -1351,7 +1349,7 @@ function CaptureProofPanel({
         aria-labelledby="capture-boundary-heading"
       >
         <p className="text-sm font-semibold text-muted">Add job proof</p>
-        <h2 id="capture-boundary-heading" className="mt-1 text-xl font-black tracking-[-0.025em]">
+        <h2 id="capture-boundary-heading" className="mt-1 text-xl font-bold tracking-[-0.025em]">
           {fieldRole ? "Current job needed" : "View only"}
         </h2>
         <p className="mt-2 leading-6 text-muted">
@@ -1370,7 +1368,7 @@ function CaptureProofPanel({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
           <p className="text-sm font-semibold text-muted">Job proof</p>
-          <h2 id="capture-proof-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+          <h2 id="capture-proof-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             {blocked ? "Show the blocked site" : "Show this site"}
           </h2>
           <p className="mt-2 leading-6 text-muted">
@@ -1423,7 +1421,7 @@ function SafetyAndAccess({
         <p className="text-sm font-semibold text-muted">Check before work</p>
         <h2
           id="safety-access-heading"
-          className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+          className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl"
         >
           Safety and site
         </h2>
@@ -1433,7 +1431,7 @@ function SafetyAndAccess({
           <div className="flex items-start gap-3">
             <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
             <div>
-              <p className="font-black">
+              <p className="font-bold">
                 Safety plan{safety?.version ? ` · v${safety.version}` : ""}
               </p>
               <p className="mt-1 text-sm leading-6 text-muted">
@@ -1457,7 +1455,7 @@ function SafetyAndAccess({
           <div className="flex items-start gap-3">
             <MapPin className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
             <div>
-              <p className="font-black">Job contact and access</p>
+              <p className="font-bold">Job contact and access</p>
               <p className="mt-1 text-sm leading-6 text-muted">
                 {contact?.display_name ?? "Contact name is missing"}
               </p>
@@ -1474,7 +1472,7 @@ function SafetyAndAccess({
             <p className="mt-5 text-sm font-semibold text-muted">Phone number is missing</p>
           )}
           <div className="mt-5 border-t border-border pt-4">
-            <p className="text-xs font-extrabold text-muted">How to enter the site</p>
+            <p className="text-xs font-bold text-muted">How to enter the site</p>
             <p className="mt-2 text-sm leading-6 text-muted">
               {contact?.access_instructions ?? "Site entry steps are missing."}
             </p>
@@ -1500,7 +1498,7 @@ function PacketDetails({
         <p className="text-sm font-semibold text-muted">More job details</p>
         <h2
           id="packet-details-heading"
-          className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+          className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl"
         >
           Job details
         </h2>
@@ -1585,7 +1583,7 @@ function PacketDetail({
 }) {
   return (
     <details>
-      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-1 py-4 font-black [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-1 py-4 font-bold [&::-webkit-details-marker]:hidden">
         <span>{title}</span>
         <span className="text-sm font-semibold text-muted">
           {count} {count === 1 ? "item" : "items"}
@@ -1614,7 +1612,7 @@ function PacketEvidenceLine({ title, detail }: { title: string; detail: string |
 function JobFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 font-semibold leading-6">{value}</dd>
     </div>
   );
@@ -2116,14 +2114,14 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                 ref={stepHeadingRef}
                 id="capture-evidence-heading"
                 tabIndex={-1}
-                className="mt-1 text-2xl font-black tracking-[-0.03em]"
+                className="mt-1 text-2xl font-bold tracking-[-0.03em]"
               >
                 Capture what you see
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
               <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
-                <span className="flex items-center gap-2 text-lg font-black">
+                <span className="flex items-center gap-2 text-lg font-bold">
                   <Camera aria-hidden="true" />
                   Take photos
                 </span>
@@ -2139,7 +2137,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   onChange={(event) => choosePhotos(event.target.files)}
                 />
               </label>
-              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-bold focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
                 <span className="flex items-center gap-2">
                   <Mic aria-hidden="true" />
                   Add voice note
@@ -2219,7 +2217,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                 ref={stepHeadingRef}
                 id="capture-detail-heading"
                 tabIndex={-1}
-                className="mt-1 text-2xl font-black tracking-[-0.03em]"
+                className="mt-1 text-2xl font-bold tracking-[-0.03em]"
               >
                 Add job details
               </h2>
@@ -2231,7 +2229,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   aria-labelledby="evidence-correction-heading"
                 >
                   <p className="text-sm font-semibold text-warning">Fix an old proof item</p>
-                  <h3 id="evidence-correction-heading" className="mt-1 font-black">
+                  <h3 id="evidence-correction-heading" className="mt-1 font-bold">
                     This one file will replace the old view.
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-muted">
@@ -2265,7 +2263,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               </Button>
               {blocker ? (
                 <div className="space-y-4 border border-danger/35 bg-danger-soft p-4">
-                  <p className="font-black text-danger">Tell the office what stops work.</p>
+                  <p className="font-bold text-danger">Tell the office what stops work.</p>
                   <label className="block font-bold" htmlFor="blocker-category">
                     Blocker type
                   </label>
@@ -2356,7 +2354,7 @@ function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
   return (
     <header className="border-b border-border pb-5 sm:pb-6">
       <p className="text-sm font-semibold text-muted">{model.job.job_number ?? "Assigned job"}</p>
-      <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Add job proof</h1>
+      <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Add job proof</h1>
       <p className="mt-2 text-base leading-7 text-muted">
         {model.job.address ?? "Address unavailable"}
       </p>
@@ -2379,7 +2377,7 @@ function CheckInProgress({ step }: { step: number }) {
             className={`min-h-14 px-2 py-3 text-center text-sm font-bold ${index > 0 ? "border-l border-border" : ""} ${active ? "border-b-4 border-accent text-foreground" : complete ? "text-ok" : "text-muted"}`}
             aria-current={active ? "step" : undefined}
           >
-            <span className="block text-xs font-extrabold">{index + 1}</span>
+            <span className="block text-xs font-bold">{index + 1}</span>
             <span className="mt-0.5 block">{label}</span>
           </li>
         );
@@ -2421,7 +2419,7 @@ function CaptureReview({
   return (
     <section className="border border-border" aria-labelledby="selected-evidence-heading">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <h3 id="selected-evidence-heading" className="font-black">
+        <h3 id="selected-evidence-heading" className="font-bold">
           Files to save
         </h3>
         <p className="text-sm font-semibold text-muted">
@@ -2531,11 +2529,7 @@ function CheckInSaved({
           <p className="text-sm font-semibold text-muted">
             {action.state === "needs_attention" ? "Saved here, not sent" : "Saved on this phone"}
           </p>
-          <h2
-            ref={headingRef}
-            tabIndex={-1}
-            className="mt-1 text-2xl font-black tracking-[-0.03em]"
-          >
+          <h2 ref={headingRef} tabIndex={-1} className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             {action.state === "needs_attention" ? "Check-in needs a check" : "Check-in saved"}
           </h2>
         </div>
@@ -2543,7 +2537,7 @@ function CheckInSaved({
       </div>
       {action.state === "needs_attention" ? (
         <div className="mt-4 space-y-2 border-2 border-danger/45 bg-danger-soft p-4" role="alert">
-          <p className="font-black text-danger">This check-in did not send.</p>
+          <p className="font-bold text-danger">This check-in did not send.</p>
           <p className="leading-7">{guidance.reason}</p>
           <p className="leading-7 font-bold">{guidance.nextStep}</p>
         </div>

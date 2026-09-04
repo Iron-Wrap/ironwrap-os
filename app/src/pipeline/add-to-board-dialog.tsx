@@ -149,7 +149,7 @@ export function AddToBoardDialog({
         className="max-h-[min(85dvh,42rem)] w-full overflow-y-auto overscroll-contain rounded-t-xl border border-border bg-surface p-3 shadow-[0_-12px_48px_oklch(0_0_0/0.28)] sm:max-w-md sm:rounded-xl sm:shadow-[0_24px_72px_oklch(0_0_0/0.28)]"
       >
         <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border px-1 pb-2">
-          <p className="min-w-0 truncate text-sm font-extrabold">
+          <p className="min-w-0 truncate text-sm font-bold">
             {placed ? "On the board" : "Add to a board"}
           </p>
           <button

@@ -125,7 +125,7 @@ export function AppShell() {
               />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-sm font-extrabold tracking-[-0.02em]">
+              <span className="block truncate text-sm font-bold tracking-[-0.02em]">
                 {session.tenant.brand}
               </span>
               <span className="block truncate text-xs font-semibold text-chrome-muted">
@@ -163,10 +163,10 @@ export function AppShell() {
                   said which screen it was on. The home button beside this
                   already carries the mark and names the brand in its label. */}
               <div className="min-w-0">
-                <p className="truncate text-xs font-[720] leading-4 text-muted">
+                <p className="truncate text-xs font-bold leading-4 text-muted">
                   {currentItem.workspace}
                 </p>
-                <p className="truncate text-sm font-[760] tracking-[-0.015em] text-foreground">
+                <p className="truncate text-sm font-bold tracking-[-0.015em] text-foreground">
                   {currentItem.label}
                 </p>
               </div>
@@ -230,7 +230,7 @@ export function AppShell() {
       <div className="safe-bottom fixed inset-x-0 bottom-0 z-50 px-2 pt-2 lg:inset-x-auto lg:bottom-3 lg:left-3 lg:w-[14.75rem] lg:p-0 lg:text-chrome-foreground">
         <div className="flex items-stretch overflow-hidden rounded-2xl border border-border/80 bg-surface p-1 shadow-[var(--shadow-floating)] lg:block lg:rounded-xl lg:border-danger/25 lg:bg-chrome-raised lg:p-0">
           <details className="group shrink-0 lg:w-full">
-            <summary className="flex min-h-16 w-16 cursor-pointer list-none flex-col items-center justify-center gap-1 rounded-xl px-2 text-xs font-[780] transition-colors hover:bg-danger-soft group-open:bg-danger-soft group-open:text-foreground lg:min-h-12 lg:w-full lg:flex-row lg:justify-start lg:gap-2.5 lg:px-3 lg:text-sm [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-16 w-16 cursor-pointer list-none flex-col items-center justify-center gap-1 rounded-xl px-2 text-xs font-bold transition-colors hover:bg-danger-soft group-open:bg-danger-soft group-open:text-foreground lg:min-h-12 lg:w-full lg:flex-row lg:justify-start lg:gap-2.5 lg:px-3 lg:text-sm [&::-webkit-details-marker]:hidden">
               <ShieldAlert className="size-5 shrink-0 text-danger" aria-hidden="true" />
               <span>Safety</span>
             </summary>
@@ -253,7 +253,7 @@ export function AppShell() {
                     popoverTarget="mobile-workspace-popover"
                     aria-controls="mobile-workspace-popover"
                     className={cn(
-                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-[720] text-muted transition-[background-color,color,transform,box-shadow] hover:bg-surface-muted active:scale-[0.98]",
+                      "flex min-h-16 w-full flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-bold text-muted transition-[background-color,color,transform,box-shadow] hover:bg-surface-muted active:scale-[0.98]",
                       currentItemIsInMore && mobileActiveClassName,
                     )}
                     aria-label="Open all workspaces"
@@ -270,7 +270,7 @@ export function AppShell() {
                     className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] top-auto z-[60] m-0 max-h-[min(72dvh,40rem)] w-auto overflow-y-auto overscroll-contain rounded-2xl border border-border/80 bg-surface p-3 text-foreground shadow-[var(--shadow-floating)]"
                   >
                     <div className="flex min-h-11 items-center justify-between gap-4 border-b border-border px-1 pb-2">
-                      <p className="text-sm font-extrabold">All work</p>
+                      <p className="text-sm font-bold">All work</p>
                       <button
                         type="button"
                         popoverTarget="mobile-workspace-popover"
@@ -383,7 +383,7 @@ function MobileNavItem({ item, active }: { item: NavigationItem; active: boolean
     <Link
       to={item.to}
       className={cn(
-        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-[720] text-muted transition-[background-color,color,transform,box-shadow] active:scale-[0.98]",
+        "flex min-h-16 min-w-[3.75rem] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-xs font-bold text-muted transition-[background-color,color,transform,box-shadow] active:scale-[0.98]",
         active && mobileActiveClassName,
       )}
       aria-current={active ? "page" : undefined}

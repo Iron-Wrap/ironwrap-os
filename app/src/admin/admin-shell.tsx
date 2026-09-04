@@ -65,7 +65,7 @@ export function SetupLink({
         <Icon className="size-5 text-accent" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block font-extrabold tracking-[-0.02em]">{title}</span>
+        <span className="block font-bold tracking-[-0.02em]">{title}</span>
         <span className="mt-0.5 block text-sm leading-5 text-muted">{description}</span>
       </span>
       {status ? (

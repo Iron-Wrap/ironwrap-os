@@ -201,7 +201,7 @@ function ReconciliationHealthCard() {
   if (summary.isPending && !summary.data) {
     return (
       <Card className="p-5 sm:p-6">
-        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <h2 className="text-xl font-bold tracking-[-0.025em]">Reconciliation health</h2>
         <p className="mt-2 text-sm leading-6 text-muted">Loading the money desk…</p>
       </Card>
     );
@@ -209,7 +209,7 @@ function ReconciliationHealthCard() {
   if (!summary.data) {
     return (
       <Card className="p-5 sm:p-6">
-        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <h2 className="text-xl font-bold tracking-[-0.025em]">Reconciliation health</h2>
         <p className="mt-2 text-sm leading-6 text-muted">
           The money desk could not be read, so reconciliation health is unknown. The recorded
           connection state above is unaffected.
@@ -221,7 +221,7 @@ function ReconciliationHealthCard() {
   const health = summary.data.summary.reconciliation_health;
   return (
     <Card className="p-5 sm:p-6">
-      <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+      <h2 className="text-xl font-bold tracking-[-0.025em]">Reconciliation health</h2>
       <p className="mt-2 text-sm leading-6 text-muted">
         How much of what IronWrap believes has been checked against QuickBooks recently.
       </p>
@@ -272,7 +272,7 @@ function HealthTile({ label, value }: { label: string; value: number }) {
   return (
     <div className="border border-border bg-surface px-4 py-3">
       <dt className="text-sm font-bold text-muted">{label}</dt>
-      <dd className="mt-1 text-2xl font-black tabular-nums">{value}</dd>
+      <dd className="mt-1 text-2xl font-bold tabular-nums">{value}</dd>
     </div>
   );
 }
@@ -475,7 +475,7 @@ function QuickBooksSettingsContent() {
       <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
         <Card className="relative overflow-hidden p-5 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-accent sm:p-6">
           <p className="text-sm font-bold text-muted">Recorded state</p>
-          <h2 className="mt-1 text-2xl font-black tracking-[-0.035em]">
+          <h2 className="mt-1 text-2xl font-bold tracking-[-0.035em]">
             {connectionModel.state === "connected"
               ? "Connected"
               : connectionModel.state === "revoked"
@@ -507,7 +507,7 @@ function QuickBooksSettingsContent() {
         <summary className="flex min-h-24 cursor-pointer list-none items-center justify-between gap-5 px-5 py-5 transition-colors hover:bg-surface-raised sm:px-6 [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
             <span className="block text-sm font-bold text-muted">Advanced recovery</span>
-            <span className="mt-1 block text-xl font-black tracking-[-0.025em]">
+            <span className="mt-1 block text-xl font-bold tracking-[-0.025em]">
               Job-specific QuickBooks mapping
             </span>
             <span className="mt-2 block max-w-3xl text-sm leading-6 text-muted">
@@ -523,7 +523,7 @@ function QuickBooksSettingsContent() {
           </span>
         </summary>
         <div className="border-t border-border bg-surface-raised/45 p-5 sm:p-6">
-          <h2 className="text-lg font-black tracking-[-0.025em]">
+          <h2 className="text-lg font-bold tracking-[-0.025em]">
             Record job-specific QuickBooks IDs
           </h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
@@ -665,7 +665,7 @@ function QuickBooksSettingsContent() {
 
       {session.user.role === "accounting" ? (
         <Card className="p-5 sm:p-6">
-          <h2 className="text-xl font-black tracking-[-0.025em]">
+          <h2 className="text-xl font-bold tracking-[-0.025em]">
             {connectionModel.state === "connected"
               ? "Connection changes belong to the owner"
               : connectionModel.state === "reconciliation_required"
@@ -682,7 +682,7 @@ function QuickBooksSettingsContent() {
         <>
           {canConnect ? (
             <Card className="p-5 sm:p-6">
-              <h2 className="text-xl font-black tracking-[-0.025em]">
+              <h2 className="text-xl font-bold tracking-[-0.025em]">
                 Connect the intended company
               </h2>
               <p className="mt-2 text-sm leading-6 text-muted">
@@ -916,7 +916,7 @@ function QuickBooksFinalInvoiceContent() {
             <p className="mt-4 text-sm font-bold text-muted">
               QuickBooks final invoice · job {intent.job_id}
             </p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] sm:text-4xl">
+            <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] sm:text-4xl">
               {intent.currency} {intent.amounts.final_balance}
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -1058,7 +1058,7 @@ function IntentStatus({ model }: { model: QuickBooksFinalInvoiceResponse }) {
           <CircleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
         )}
         <div className="min-w-0">
-          <h2 id="qbo-state" className="text-xl font-black tracking-[-0.025em]">
+          <h2 id="qbo-state" className="text-xl font-bold tracking-[-0.025em]">
             {presentation.label}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">{presentation.explanation}</p>
@@ -1103,7 +1103,7 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
     >
       <h2
         id="candidate-amounts"
-        className="px-5 pt-5 text-xl font-black tracking-[-0.025em] sm:px-6 sm:pt-6"
+        className="px-5 pt-5 text-xl font-bold tracking-[-0.025em] sm:px-6 sm:pt-6"
       >
         Immutable candidate
       </h2>
@@ -1145,7 +1145,7 @@ function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
     >
       <h2
         id="candidate-lines"
-        className="px-5 pt-5 text-xl font-black tracking-[-0.025em] sm:px-6 sm:pt-6"
+        className="px-5 pt-5 text-xl font-bold tracking-[-0.025em] sm:px-6 sm:pt-6"
       >
         Immutable pre-tax lines
       </h2>
@@ -1158,7 +1158,7 @@ function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
             <span className="text-sm font-bold">
               {lineCodeLabels[line.description_code] ?? line.description_code}
             </span>
-            <span className="shrink-0 font-black">
+            <span className="shrink-0 font-bold">
               {model.intent.currency} {line.amount}
             </span>
           </li>
@@ -1182,7 +1182,7 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
       <div className="flex items-start gap-3">
         <FileCheck2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div className="min-w-0">
-          <h2 id="qbo-basis" className="text-xl font-black tracking-[-0.025em]">
+          <h2 id="qbo-basis" className="text-xl font-bold tracking-[-0.025em]">
             Why this review is required
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
@@ -1249,7 +1249,7 @@ function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
     >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 id="qbo-evidence" className="text-xl font-black tracking-[-0.025em]">
+          <h2 id="qbo-evidence" className="text-xl font-bold tracking-[-0.025em]">
             Evidence citations
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
@@ -1444,7 +1444,7 @@ function AmountFact({
   return (
     <div className={cn("p-4", bordered && "border-t border-border sm:border-t-0 sm:border-l")}>
       <dt className="text-sm font-bold text-muted">{label}</dt>
-      <dd className={cn("mt-2 font-bold", emphasis && "text-xl font-black")}>{value}</dd>
+      <dd className={cn("mt-2 font-bold", emphasis && "text-xl font-bold")}>{value}</dd>
     </div>
   );
 }

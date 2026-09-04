@@ -132,7 +132,7 @@ function ServiceDeskContent() {
                 <LifeBuoy className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                   Service calls
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -143,7 +143,7 @@ function ServiceDeskContent() {
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Open now</p>
-            <h2 className="mt-2 text-xl font-black tracking-[-0.025em]">
+            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
               {cases.length} {cases.length === 1 ? "call" : "calls"}
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted">
@@ -186,7 +186,7 @@ function ServiceDeskContent() {
         <section aria-label="Open service calls">
           <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
             <div>
-              <h2 className="text-lg font-black tracking-[-0.02em]">Open calls</h2>
+              <h2 className="text-lg font-bold tracking-[-0.02em]">Open calls</h2>
               <p className="mt-1 text-sm leading-6 text-muted">Calls are shown by due time.</p>
             </div>
             <p className="text-sm font-semibold text-muted">
@@ -214,7 +214,7 @@ function ServiceDeskContent() {
                   >
                     <span className="min-w-0">
                       <span className="flex flex-wrap items-center gap-2">
-                        <span className="font-black tracking-[-0.01em]">
+                        <span className="font-bold tracking-[-0.01em]">
                           {codeLabel(serviceCase.symptom_code)}
                         </span>
                         <span className="text-sm font-bold text-muted">
@@ -242,7 +242,7 @@ function ServiceDeskContent() {
       <Card className="overflow-hidden">
         <form onSubmit={submit} aria-label="Save a service call">
           <div className="border-b border-border px-5 py-5 sm:px-6">
-            <h2 className="text-lg font-black tracking-[-0.02em]">Save a new call</h2>
+            <h2 className="text-lg font-bold tracking-[-0.02em]">Save a new call</h2>
             <p className="mt-1 text-sm leading-6 text-muted">
               This saves the report and the contact rule. It does not send a truck or promise a fix.
             </p>
@@ -250,7 +250,7 @@ function ServiceDeskContent() {
 
           <div className="space-y-7 p-5 sm:p-6">
             <fieldset>
-              <legend className="text-sm font-black text-foreground">Who and where</legend>
+              <legend className="text-sm font-bold text-foreground">Who and where</legend>
               <div className="mt-4 grid gap-5 sm:grid-cols-2">
                 <TextField
                   id="service-customer"
@@ -285,7 +285,7 @@ function ServiceDeskContent() {
             </fieldset>
 
             <fieldset className="border-t border-border pt-6">
-              <legend className="text-sm font-black text-foreground">What happened</legend>
+              <legend className="text-sm font-bold text-foreground">What happened</legend>
               <div className="mt-4 grid gap-5 sm:grid-cols-2">
                 <SelectField
                   id="service-severity"
@@ -339,7 +339,7 @@ function ServiceDeskContent() {
             </fieldset>
 
             <fieldset className="border-t border-border pt-6">
-              <legend className="text-sm font-black text-foreground">Saved proof</legend>
+              <legend className="text-sm font-bold text-foreground">Saved proof</legend>
               <p className="mt-1 text-sm leading-6 text-muted">
                 Add the saved IDs that show we can call the customer and keep this report.
               </p>

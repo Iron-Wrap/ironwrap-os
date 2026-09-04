@@ -98,7 +98,7 @@ function ReadinessScreen({
               </span>
               <div className="min-w-0">
                 <div className="mt-1 flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                  <h1 className="text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
                     Integration readiness
                   </h1>
                   <StateLabel ready={model.verdict === "ready"} />
@@ -112,7 +112,7 @@ function ReadinessScreen({
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Required capabilities</p>
-            <p className="mt-2 text-2xl font-black tracking-[-0.03em]">
+            <p className="mt-2 text-2xl font-bold tracking-[-0.03em]">
               {ready} of {required.length} ready
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
@@ -218,7 +218,7 @@ function CapabilityCard({ capability }: { capability: IntegrationCapability }) {
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-extrabold">{label(capability.id)}</h3>
+          <h3 className="font-bold">{label(capability.id)}</h3>
           <p className="mt-1 text-xs font-bold text-muted">
             {capability.required ? "Required" : "Optional"}
             {disabled ? " · Turned off on purpose" : ""}
@@ -353,16 +353,16 @@ function CapabilityAvailability() {
                           : "border-warning/35 bg-warning-soft/55",
                     )}
                   >
-                    <p className="text-sm font-[740] text-muted">
+                    <p className="text-sm font-bold text-muted">
                       {capabilityStateLabels[capability.state]}
                     </p>
-                    <h3 className="mt-1 font-extrabold">{capability.title}</h3>
+                    <h3 className="mt-1 font-bold">{capability.title}</h3>
                     <p className="mt-1 text-sm leading-6 text-muted">
                       {copy ? copy.message : CAPABILITY_AVAILABLE_CAVEAT}
                     </p>
                     {copy ? (
                       <p className="mt-2 text-sm leading-6 text-muted">
-                        <span className="font-[740] text-foreground">Next step</span>{" "}
+                        <span className="font-bold text-foreground">Next step</span>{" "}
                         {copy.nextAction}
                       </p>
                     ) : null}

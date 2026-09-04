@@ -209,7 +209,7 @@ function MoneyDeskContent() {
                 params={{ intentId: health.oldest_unreconciled_intent_id }}
                 className="mt-4 flex min-h-14 flex-col justify-center gap-0.5 border border-border px-4 py-3 hover:bg-surface-muted"
               >
-                <span className="text-xs font-extrabold text-muted">Oldest unfinished item</span>
+                <span className="text-xs font-bold text-muted">Oldest unfinished item</span>
                 <span className="text-sm font-bold leading-6 underline underline-offset-4">
                   Open item
                 </span>
@@ -232,9 +232,9 @@ function MoneyDeskContent() {
 function Tile({ label, value, tone }: { label: string; value: number; tone?: "danger" }) {
   return (
     <div className="border border-border bg-surface px-4 py-3">
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
-        className={`mt-1 text-2xl font-black tabular-nums ${
+        className={`mt-1 text-2xl font-bold tabular-nums ${
           tone === "danger" && value > 0 ? "text-danger" : ""
         }`}
       >

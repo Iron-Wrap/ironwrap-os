@@ -524,7 +524,7 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
             <KanbanSquare className="size-5 text-accent" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-black tracking-[-0.03em] sm:text-2xl lg:text-3xl">
+            <h1 className="truncate text-xl font-bold tracking-[-0.03em] sm:text-2xl lg:text-3xl">
               {activePipeline.name}
             </h1>
             <p className="text-xs font-semibold text-muted sm:text-sm">
@@ -731,7 +731,7 @@ function StageColumn({
     >
       <header className="flex min-h-16 shrink-0 flex-col justify-center gap-0.5 rounded-t-lg border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold">{stage.name}</h3>
+          <h3 className="min-w-0 flex-1 truncate text-sm font-bold">{stage.name}</h3>
           {stage.is_won ? (
             <span className="rounded-full bg-ok-soft px-2 py-0.5 text-xs font-bold text-ok">
               WON
@@ -804,7 +804,7 @@ function MoveToast({
                 type="button"
                 disabled={busy}
                 onClick={() => onUndo(toast.undo!)}
-                className="flex min-h-11 items-center gap-1.5 rounded-md px-3 text-sm font-black text-accent transition-colors hover:bg-surface-muted disabled:opacity-55"
+                className="flex min-h-11 items-center gap-1.5 rounded-md px-3 text-sm font-bold text-accent transition-colors hover:bg-surface-muted disabled:opacity-55"
               >
                 <Undo2 className="size-4" aria-hidden="true" />
                 Undo

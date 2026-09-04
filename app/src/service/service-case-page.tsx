@@ -115,7 +115,7 @@ function ServiceCaseContent() {
                 <ClipboardList className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance capitalize sm:text-4xl">
+                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance capitalize sm:text-4xl">
                   {codeLabel(serviceCase.symptom_code)}
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -126,7 +126,7 @@ function ServiceCaseContent() {
           </div>
           <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
             <p className="text-sm font-bold text-muted">Job ID</p>
-            <p className="mt-2 break-words text-lg font-black tracking-[-0.02em]">
+            <p className="mt-2 break-words text-lg font-bold tracking-[-0.02em]">
               {serviceCase.roof_job_id}
             </p>
             <p className="mt-4 text-sm font-bold text-muted">Call by</p>
@@ -922,7 +922,7 @@ function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <dt className="text-sm font-bold text-muted">{label}</dt>
-      <dd className="mt-1 text-xl font-black tracking-[-0.03em]">{value}</dd>
+      <dd className="mt-1 text-xl font-bold tracking-[-0.03em]">{value}</dd>
     </div>
   );
 }

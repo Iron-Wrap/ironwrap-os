@@ -108,7 +108,7 @@ export function FleetPage() {
     <section className="mx-auto max-w-3xl space-y-6 pb-4">
       <header className="border-b pb-5">
         <p className="text-sm font-semibold text-muted">Field Companion</p>
-        <h1 className="mt-1 text-3xl font-black tracking-[-0.03em]">Vehicle</h1>
+        <h1 className="mt-1 text-3xl font-bold tracking-[-0.03em]">Vehicle</h1>
         <p className="mt-2 leading-6 text-muted">
           Record a pre-trip, a post-trip, or a fault on the vehicle or equipment you hold. These
           save on this device first and go up on their own.
@@ -210,7 +210,7 @@ export function FleetPage() {
                 void submitDefect(asset, draft);
               }}
             >
-              <h2 className="text-xl font-black tracking-[-0.025em]">Report a fault</h2>
+              <h2 className="text-xl font-bold tracking-[-0.025em]">Report a fault</h2>
               <label className="block text-sm font-bold">
                 How bad is it
                 <Select
@@ -277,7 +277,7 @@ export function FleetPage() {
                 void submitCollision(asset, draft);
               }}
             >
-              <h2 className="mt-1 text-xl font-black tracking-[-0.025em]">Report a collision</h2>
+              <h2 className="mt-1 text-xl font-bold tracking-[-0.025em]">Report a collision</h2>
               <p className="leading-6 text-muted">
                 This is a vehicle incident, not a worker injury or near-miss. Those stay on the
                 safety report.
@@ -326,7 +326,7 @@ export function FleetPage() {
                 void submitInspection(asset, draft);
               }}
             >
-              <h2 className="text-xl font-black tracking-[-0.025em]">
+              <h2 className="text-xl font-bold tracking-[-0.025em]">
                 {draft.kind === "pre_trip" ? "Pre-trip inspection" : "Post-trip inspection"}
               </h2>
               <p className="leading-6 text-muted">
@@ -634,7 +634,7 @@ function AssetSummary({
     <div className="border bg-surface-raised p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-2xl font-black tracking-[-0.03em]">{asset.display_name}</h2>
+          <h2 className="text-2xl font-bold tracking-[-0.03em]">{asset.display_name}</h2>
           <p className="mt-1 text-sm text-muted">
             {[
               asset.asset_kind,
@@ -648,7 +648,7 @@ function AssetSummary({
         </div>
         <span
           className={cn(
-            "inline-flex min-h-9 items-center rounded-full border px-3 text-sm font-extrabold",
+            "inline-flex min-h-9 items-center rounded-full border px-3 text-sm font-bold",
             asset.status === "Active"
               ? "border-ok/35 bg-ok-soft text-ok"
               : "border-danger/35 bg-danger-soft text-danger",
@@ -702,7 +702,7 @@ function DispatchStatus({ asset }: { asset: FleetPanelAsset }) {
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         <div className="min-w-0">
-          <h2 id="fleet-blockers-heading" className="text-xl font-black tracking-[-0.025em]">
+          <h2 id="fleet-blockers-heading" className="text-xl font-bold tracking-[-0.025em]">
             This one cannot go out yet
           </h2>
           <p className="mt-1 leading-6 text-muted">

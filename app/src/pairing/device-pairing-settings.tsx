@@ -160,7 +160,7 @@ function OfficeDevicePairingSettings() {
         <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-surface-muted text-foreground">
           <Smartphone className="size-6" aria-hidden="true" />
         </div>
-        <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Crew devices</h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Crew devices</h1>
         <p className="mt-3 max-w-2xl text-base leading-7 text-muted">
           Pair one field browser under supervision. The code is short-lived, device-bound, and never
           needs a password on the roof.
@@ -204,7 +204,7 @@ function OfficeDevicePairingSettings() {
                   desktop AI client once, complete pairing, then discard it.
                 </p>
                 <label
-                  className="block text-sm font-extrabold"
+                  className="block text-sm font-bold"
                   htmlFor="hermes-desktop-bootstrap-prompt"
                 >
                   Self-configuring Hermes bootstrap prompt
@@ -219,10 +219,7 @@ function OfficeDevicePairingSettings() {
                 <p className="text-xs text-muted">
                   Bound API audience: <code>{desktopIssued.api_audience}</code>
                 </p>
-                <label
-                  className="block text-sm font-extrabold"
-                  htmlFor="hermes-desktop-pairing-link"
-                >
+                <label className="block text-sm font-bold" htmlFor="hermes-desktop-pairing-link">
                   One-time Hermes desktop pairing link
                 </label>
                 <Input
@@ -258,7 +255,7 @@ function OfficeDevicePairingSettings() {
             />
           ) : (
             <>
-              <label className="block font-extrabold" htmlFor="field-user">
+              <label className="block font-bold" htmlFor="field-user">
                 Active field user
               </label>
               <Select
@@ -387,7 +384,7 @@ function IssuedPairingCard({
               {pairingExpiryLabel(pairing.expires_at, now)}
             </CardDescription>
           </div>
-          <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-black text-warning">
+          <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-warning">
             One-time code
           </span>
         </div>
@@ -423,7 +420,7 @@ function IssuedPairingCard({
                   </Button>
                 ) : null}
               </div>
-              <label className="block text-sm font-extrabold" htmlFor="pairing-link">
+              <label className="block text-sm font-bold" htmlFor="pairing-link">
                 No camera? Copy or open this one-time link on the crew device.
               </label>
               <Input
@@ -498,7 +495,7 @@ function DeviceList({
               <div key={device.id} className="rounded-lg border bg-surface p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="font-black">{device.field_user_name}</p>
+                    <p className="font-bold">{device.field_user_name}</p>
                     <p className="mt-1 break-all font-mono text-xs text-muted">{device.id}</p>
                     <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                       <DeviceFact label="Paired" value={formatDateTime(device.paired_at)} />
@@ -519,8 +516,8 @@ function DeviceList({
                   <span
                     className={
                       revoked
-                        ? "rounded-full bg-surface-muted px-3 py-1 text-xs font-black text-muted"
-                        : "rounded-full bg-ok-soft px-3 py-1 text-xs font-black text-ok"
+                        ? "rounded-full bg-surface-muted px-3 py-1 text-xs font-bold text-muted"
+                        : "rounded-full bg-ok-soft px-3 py-1 text-xs font-bold text-ok"
                     }
                   >
                     {revoked ? "Revoked" : "Active"}
@@ -543,7 +540,7 @@ function DeviceList({
                     className="mt-4 rounded-lg border border-danger/30 bg-danger-soft p-4"
                     role="alert"
                   >
-                    <p className="font-black text-danger">Revoke this device now?</p>
+                    <p className="font-bold text-danger">Revoke this device now?</p>
                     <p className="mt-1 text-sm leading-6 text-danger">
                       {device.field_user_name} will need a new supervised pairing before this
                       browser can use Field Companion again.
@@ -582,7 +579,7 @@ function DeviceList({
 function DeviceFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-extrabold text-muted">{label}</dt>
+      <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd className="mt-1 font-bold">{value}</dd>
     </div>
   );

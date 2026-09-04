@@ -25,7 +25,7 @@ export function MoneyBadge({ badge }: { badge: AccountingIntentRow["badge"] }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-extrabold",
+        "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-bold",
         presentation.tone,
       )}
     >
@@ -45,7 +45,7 @@ export function MoneyQueueRow({ intent }: { intent: AccountingIntentRow }) {
         <span className="flex flex-wrap items-center gap-2">
           <MoneyBadge badge={intent.badge} />
           <span className="font-bold tracking-[-0.01em]">{kindLabel(intent.kind)}</span>
-          <span className="ml-auto font-black tabular-nums">
+          <span className="ml-auto font-bold tabular-nums">
             {amountLabel(intent.total_amount, intent.currency)}
           </span>
         </span>
@@ -81,7 +81,7 @@ export function MoneyQueueSection({
       <div className="border-b border-border px-4 py-4 sm:px-6">
         <div className="flex items-baseline gap-2">
           <h2 className="text-lg font-bold tracking-[-0.02em]">{title}</h2>
-          <span className="text-sm font-extrabold tabular-nums text-muted">{count}</span>
+          <span className="text-sm font-bold tabular-nums text-muted">{count}</span>
         </div>
         <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
       </div>

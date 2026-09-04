@@ -1031,7 +1031,7 @@ function RecipientsGateway({ catalog }: { catalog: AutomationCatalog }) {
         <Send className="size-5 text-accent" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block font-extrabold tracking-[-0.02em]">Manage recipients</span>
+        <span className="block font-bold tracking-[-0.02em]">Manage recipients</span>
         <span className="mt-0.5 block text-sm leading-5 text-muted">
           {total === 0
             ? "Nobody can be emailed yet. Add the shop, an office inbox, or a shared address."

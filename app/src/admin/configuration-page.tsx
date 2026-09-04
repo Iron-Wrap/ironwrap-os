@@ -83,7 +83,7 @@ function ConfigurationLink({
     >
       <span className="grid size-11 place-items-center rounded-lg bg-surface-muted">{icon}</span>
       <span>
-        <span className="block font-extrabold tracking-[-0.02em]">{title}</span>
+        <span className="block font-bold tracking-[-0.02em]">{title}</span>
         <span className="mt-1 block text-sm leading-5 text-muted">{description}</span>
       </span>
     </Link>

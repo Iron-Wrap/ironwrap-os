@@ -99,7 +99,7 @@ export function PipelineCard({
 
 function CardSlotRow({ slot, ownerInitials }: { slot: CardSlot; ownerInitials?: string }) {
   if (slot.slot === "value") {
-    return <p className="mt-2 text-base font-extrabold tabular-nums">{slot.text}</p>;
+    return <p className="mt-2 text-base font-bold tabular-nums">{slot.text}</p>;
   }
   if (slot.slot === "identifiers") {
     return (

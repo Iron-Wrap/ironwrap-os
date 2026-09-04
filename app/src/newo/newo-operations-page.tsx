@@ -107,7 +107,7 @@ function NewoOperationsScreen({
         <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <div className="min-w-0 p-5 sm:p-7 lg:p-8">
             <div className="flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background">
                 <Headphones className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">

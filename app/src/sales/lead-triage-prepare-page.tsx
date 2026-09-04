@@ -283,7 +283,7 @@ function LeadTriagePrepareContent() {
               rows={5}
               required
               placeholder="For example: Hail report received. Verify the property address, access, and preferred inspection window before any customer follow-up."
-              className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 shadow-sm outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
+              className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
             />
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
               <span>

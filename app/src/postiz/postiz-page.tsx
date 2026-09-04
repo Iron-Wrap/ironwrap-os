@@ -193,7 +193,7 @@ function PostizContent() {
               </Link>
             </Button>
             <div className="mt-5 flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background">
                 <Megaphone className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">

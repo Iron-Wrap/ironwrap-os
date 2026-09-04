@@ -473,7 +473,7 @@ function QuickBooksSettingsContent() {
       <CapabilityUnavailable read={oauth} />
 
       <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
-        <Card className="relative overflow-hidden p-5 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-accent sm:p-6">
+        <Card className="p-5 sm:p-6">
           <p className="text-sm font-bold text-muted">Recorded state</p>
           <h2 className="mt-1 text-2xl font-bold tracking-[-0.035em]">
             {connectionModel.state === "connected"
@@ -503,7 +503,7 @@ function QuickBooksSettingsContent() {
         <ReconciliationHealthCard />
       </div>
 
-      <details className="group overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <details className="group overflow-hidden rounded-xl border border-border bg-surface">
         <summary className="flex min-h-24 cursor-pointer list-none items-center justify-between gap-5 px-5 py-5 transition-colors hover:bg-surface-raised sm:px-6 [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
             <span className="block text-sm font-bold text-muted">Advanced recovery</span>
@@ -904,7 +904,7 @@ function QuickBooksFinalInvoiceContent() {
 
   return (
     <section className="mx-auto max-w-[86rem] space-y-6 pb-4">
-      <header className="relative overflow-hidden rounded-2xl border border-border bg-surface-raised p-5 shadow-sm before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-accent sm:p-7 lg:p-8">
+      <header className="rounded-2xl border border-border bg-surface-raised p-5 sm:p-7 lg:p-8">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
             <Button asChild variant="ghost" size="compact" className="-ml-2">
@@ -1098,7 +1098,7 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
   const { intent } = model;
   return (
     <section
-      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+      className="overflow-hidden rounded-xl border border-border bg-surface"
       aria-labelledby="candidate-amounts"
     >
       <h2
@@ -1140,7 +1140,7 @@ function CandidateAmounts({ model }: { model: QuickBooksFinalInvoiceResponse }) 
 function CandidateLines({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
     <section
-      className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+      className="overflow-hidden rounded-xl border border-border bg-surface"
       aria-labelledby="candidate-lines"
     >
       <h2
@@ -1176,7 +1176,7 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
   });
   return (
     <section
-      className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
+      className="rounded-xl border border-border bg-surface p-5 sm:p-6"
       aria-labelledby="qbo-basis"
     >
       <div className="flex items-start gap-3">
@@ -1244,7 +1244,7 @@ function citationSourceLabel(source: "IronWrap" | "Frappe" | "R2"): string {
 function Evidence({ model }: { model: QuickBooksFinalInvoiceResponse }) {
   return (
     <section
-      className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
+      className="rounded-xl border border-border bg-surface p-5 sm:p-6"
       aria-labelledby="qbo-evidence"
     >
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1319,10 +1319,7 @@ function PendingDecision({
 }) {
   if (!canApprove && !canReject) {
     return (
-      <section
-        className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6"
-        role="status"
-      >
+      <section className="rounded-xl border border-border bg-surface p-5 sm:p-6" role="status">
         <h2 className="font-bold">
           {offline
             ? "Reconnect before deciding"
@@ -1343,7 +1340,7 @@ function PendingDecision({
 
   return (
     <section
-      className="overflow-hidden rounded-xl border border-border bg-surface shadow-md"
+      className="overflow-hidden rounded-xl border border-border bg-surface"
       aria-labelledby="qbo-decision"
     >
       <div className="border-b border-border p-5 sm:p-6">

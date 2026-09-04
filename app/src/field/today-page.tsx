@@ -248,7 +248,7 @@ function TodayDispatchHeader({
             className={
               offline
                 ? "inline-flex min-h-10 items-center gap-2 rounded-lg border border-warning/30 bg-warning-soft/45 px-3 text-sm font-bold text-foreground"
-                : "inline-flex min-h-10 items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 text-sm font-bold text-foreground shadow-sm"
+                : "inline-flex min-h-10 items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 text-sm font-bold text-foreground"
             }
             role="status"
           >

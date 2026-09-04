@@ -85,7 +85,7 @@ function NewLeadContent() {
             Sales desk
           </Link>
           <div className="mt-2 flex min-w-0 items-start gap-4">
-            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background">
               <UserPlus className="size-6 text-accent" aria-hidden="true" />
             </span>
             <div className="min-w-0">

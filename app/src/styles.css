@@ -118,7 +118,6 @@
   --motion-fast: 140ms;
   --motion-standard: 220ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --shadow-card: 0 1px 1px rgb(23 34 43 / 0.04), 0 10px 28px rgb(23 34 43 / 0.055);
   --shadow-floating: 0 18px 50px rgb(8 14 19 / 0.18);
   /* Hoisted from `.safe-bottom` so anything anchored above the mobile bottom nav can
      reuse the one inset rather than re-deriving it. `.safe-bottom` keeps its own
@@ -157,7 +156,6 @@
     --danger-soft: color-mix(in srgb, var(--danger) 16%, var(--surface-raised));
     --info: #7ebbd3;
     --info-soft: color-mix(in srgb, var(--info) 16%, var(--surface-raised));
-    --shadow-card: 0 1px 0 rgb(255 255 255 / 0.025), 0 14px 34px rgb(0 0 0 / 0.22);
     --shadow-floating: 0 24px 64px rgb(0 0 0 / 0.42);
   }
 }

@@ -645,6 +645,160 @@ export async function listAuthorityRecordReadbacks(
   return rows.results;
 }
 
+/** What the desk shows for one record: the head the fence would pick, and the fence's own verdict.
+ *  The verdict is computed here, on the server, so no screen can invent a second answer. */
+export type AuthorityVerdict =
+  | "clear"
+  | "expiring"
+  | "expired"
+  | "revoked"
+  | "unknown"
+  | "contradictory";
+
+export interface AuthorityHeadView {
+  authority_record_id: string;
+  authority_version: number;
+  authority_kind: string | null;
+  authority_scope: string | null;
+  scope_type: string | null;
+  scope_ref: string | null;
+  issuer_name: string;
+  issuer_jurisdiction: string;
+  verification_state: AuthorityReadbackState;
+  authority_effective_from: string | null;
+  authority_expires_at: string | null;
+  authority_revoked_at: string | null;
+  observed_at: string;
+  verdict: AuthorityVerdict;
+  denial_code: AuthorityLifecycleDenial | null;
+  days_left: number | null;
+}
+
+export interface AuthoritySubjectView {
+  subject_key: string;
+  subject_type: string | null;
+  subject_role: string | null;
+  person_user: string | null;
+  organization: string | null;
+  records: AuthorityHeadView[];
+}
+
+/** Rows a single tenant desk may hold. Beyond this the desk is the wrong surface. */
+const MAX_AUTHORITY_DESK_ROWS = 2000;
+/** A ticket inside this many days is worth acting on before it stops work. */
+export const AUTHORITY_EXPIRING_DAYS = 30;
+
+function daysBetween(fromIso: string, toDate: string): number | null {
+  const from = Date.parse(`${fromIso.slice(0, 10)}T00:00:00Z`);
+  const to = Date.parse(`${toDate}T00:00:00Z`);
+  if (Number.isNaN(from) || Number.isNaN(to)) return null;
+  return Math.round((to - from) / 86_400_000);
+}
+
+function verdictFor(
+  row: AuthorityRecordReadback,
+  denial: AuthorityLifecycleDenial | null,
+  today: string,
+): { verdict: AuthorityVerdict; daysLeft: number | null } {
+  const daysLeft = row.authority_expires_at ? daysBetween(today, row.authority_expires_at) : null;
+  if (denial === "authority_revoked") return { verdict: "revoked", daysLeft };
+  if (denial === "authority_expired") return { verdict: "expired", daysLeft };
+  if (denial === "authority_contradictory") return { verdict: "contradictory", daysLeft };
+  if (denial) return { verdict: "unknown", daysLeft };
+  if (daysLeft !== null && daysLeft <= AUTHORITY_EXPIRING_DAYS) return { verdict: "expiring", daysLeft };
+  return { verdict: "clear", daysLeft };
+}
+
+function subjectKeyOf(row: AuthorityRecordReadback): string {
+  return [row.subject_type ?? "", row.subject_role ?? "", row.person_user ?? "", row.organization ?? ""].join("|");
+}
+
+/** Every current authority head this tenant holds, grouped by whom it is about.
+ *
+ *  It reuses `currentAuthorityHeads` and `lifecycleDenialForRow`, which are the same two rules the
+ *  fence applies when it stops work, so the desk cannot disagree with the fence. A record whose
+ *  heads contradict each other is reported as contradictory rather than resolved to one of them. */
+export async function listCurrentAuthorityHeads(
+  env: AppEnv,
+  tenantId: string,
+  now: string,
+): Promise<AuthoritySubjectView[]> {
+  if (!TENANT_ID.test(tenantId) || !ISO_INSTANT.test(now)) return [];
+  const today = now.slice(0, 10);
+  const rows = await env.DB.prepare(
+    `SELECT readback_id, tenant_id, authority_record_id, authority_version,
+            subject_type, subject_role, person_user, organization, authority_kind,
+            authority_scope, scope_type, scope_ref, roof_job, scope_json,
+            issuer_name, issuer_jurisdiction, issuer_reference, issuer_source_version,
+            verification_state, evidence_refs_json, evidence_sha256, authority_state_digest_sha256,
+            authority_effective_from, authority_expires_at, authority_revoked_at,
+            supersedes_authority_record_id, authority_verification_method, issuer_receipt_sha256,
+            observed_by_user_id, observed_at, observation_fingerprint_sha256, action_id
+       FROM authority_record_readbacks
+      WHERE tenant_id = ?
+      ORDER BY authority_record_id ASC, authority_version DESC, observed_at DESC
+      LIMIT ?`,
+  ).bind(tenantId, MAX_AUTHORITY_DESK_ROWS).all<AuthorityRecordReadback>();
+
+  const byRecord = new Map<string, AuthorityRecordReadback[]>();
+  for (const row of rows.results) {
+    const peers = byRecord.get(row.authority_record_id) ?? [];
+    peers.push(row);
+    byRecord.set(row.authority_record_id, peers);
+  }
+
+  const bySubject = new Map<string, AuthoritySubjectView>();
+  for (const peers of byRecord.values()) {
+    const heads = currentAuthorityHeads(peers);
+    // A contradictory record has no single head, so it is reported from its newest row rather
+    // than dropped: an operator who cannot see it cannot resolve it.
+    const shown = heads.rows.length > 0 ? heads.rows : peers.slice(0, 1);
+    for (const row of shown) {
+      const denial = heads.code ?? lifecycleDenialForRow(row, { tenantId, now });
+      const { verdict, daysLeft } = verdictFor(row, denial, today);
+      const key = subjectKeyOf(row);
+      const subject = bySubject.get(key) ?? {
+        subject_key: key,
+        subject_type: row.subject_type,
+        subject_role: row.subject_role,
+        person_user: row.person_user,
+        organization: row.organization,
+        records: [],
+      };
+      subject.records.push({
+        authority_record_id: row.authority_record_id,
+        authority_version: row.authority_version,
+        authority_kind: row.authority_kind,
+        authority_scope: row.authority_scope,
+        scope_type: row.scope_type,
+        scope_ref: row.scope_ref,
+        issuer_name: row.issuer_name,
+        issuer_jurisdiction: row.issuer_jurisdiction,
+        verification_state: row.verification_state,
+        authority_effective_from: row.authority_effective_from,
+        authority_expires_at: row.authority_expires_at,
+        authority_revoked_at: row.authority_revoked_at,
+        observed_at: row.observed_at,
+        verdict,
+        denial_code: denial,
+        days_left: daysLeft,
+      });
+      bySubject.set(key, subject);
+    }
+  }
+
+  const rank: Record<AuthorityVerdict, number> = {
+    revoked: 0, expired: 1, contradictory: 2, unknown: 3, expiring: 4, clear: 5,
+  };
+  const worst = (s: AuthoritySubjectView) => Math.min(...s.records.map((r) => rank[r.verdict]));
+  for (const subject of bySubject.values()) {
+    subject.records.sort((a, b) => rank[a.verdict] - rank[b.verdict] ||
+      (a.authority_kind ?? "").localeCompare(b.authority_kind ?? ""));
+  }
+  return [...bySubject.values()].sort((a, b) => worst(a) - worst(b) ||
+    (a.person_user ?? a.organization ?? "").localeCompare(b.person_user ?? b.organization ?? ""));
+}
+
 export async function resolveAuthorityLifecycle(
   env: AppEnv,
   input: AuthorityLifecycleExpectation,
@@ -1360,7 +1514,7 @@ function lifecycleBindingFromExpectation(
   };
 }
 
-function currentAuthorityHeads(
+export function currentAuthorityHeads(
   rows: AuthorityRecordReadback[],
 ): { rows: AuthorityRecordReadback[]; code: AuthorityLifecycleDenial | null } {
   const currentByAuthorityRecord = new Map<string, AuthorityRecordReadback>();
@@ -1510,7 +1664,7 @@ function authorityActionMatchesClaim(
     action.expected_version === input.expectedVersion;
 }
 
-function lifecycleDenialForRow(
+export function lifecycleDenialForRow(
   row: AuthorityRecordReadback,
   input: AuthorityLifecycleExpectation,
 ): AuthorityLifecycleDenial | null {

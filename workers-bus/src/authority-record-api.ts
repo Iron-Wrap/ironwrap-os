@@ -1,8 +1,10 @@
 import { validAppCsrf } from "./app-auth.ts";
 import {
+  AUTHORITY_EXPIRING_DAYS,
   claimAuthorityRecordAction,
   getAuthorityRecordAction,
   listAuthorityRecordReadbacks,
+  listCurrentAuthorityHeads,
   type AuthorityRecordOperation,
 } from "./authority-records.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
@@ -79,6 +81,25 @@ export async function handleAuthorityRecordRoute(
   auth: AuthContext,
 ): Promise<Response | null> {
   const url = new URL(req.url);
+
+  // The desk: every current head this tenant holds, with the fence's own verdict on each.
+  // No live issuer is called; these are the readbacks already on file.
+  if (req.method === "GET" && url.pathname === "/api/v1/authority-records") {
+    if (!readAllowed(auth)) return json({ error: "authority_read_required" }, 403);
+    const now = new Date().toISOString();
+    try {
+      const subjects = await listCurrentAuthorityHeads(env, auth.session.tenant_id, now);
+      return json({
+        version: 1,
+        read_model_generated_at: now,
+        expiring_within_days: AUTHORITY_EXPIRING_DAYS,
+        subjects,
+      });
+    } catch {
+      return json({ error: "authority_record_store_unavailable" }, 502);
+    }
+  }
+
   const actionDetail = url.pathname.match(/^\/api\/v1\/authority-records\/actions\/([^/]+)$/);
   if (req.method === "GET" && actionDetail) {
     if (!readAllowed(auth)) return json({ error: "authority_read_required" }, 403);

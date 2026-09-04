@@ -2558,6 +2558,71 @@ const requestListener = async (request, response) => {
     const portal = await routeCustomerPortal(request, requestUrl);
     if (portal) return sendJson(response, method, portal.status, portal.body);
   }
+  // The People desk (IRO-251): current authority heads with the server's own verdict. Synthetic
+  // subjects only, and no issuer is contacted here or in production for this read.
+  if (method === "GET" && requestUrl.pathname === "/api/v1/authority-records") {
+    return sendJson(response, method, 200, {
+      version: 1,
+      read_model_generated_at: "2026-08-20T09:00:00.000Z",
+      expiring_within_days: 30,
+      subjects: [
+        {
+          subject_key: "Person|Worker|expired.acceptance@example.invalid|",
+          subject_type: "Person",
+          subject_role: "Worker",
+          person_user: "expired.acceptance@example.invalid",
+          organization: null,
+          records: [
+            {
+              authority_record_id: "Authority-Record-Acceptance-0002",
+              authority_version: 2,
+              authority_kind: "Fall Protection",
+              authority_scope: "field installation",
+              scope_type: "Field",
+              scope_ref: "field:job-acceptance",
+              issuer_name: "Alberta issuer",
+              issuer_jurisdiction: "AB-CA",
+              verification_state: "verified",
+              authority_effective_from: "2025-01-01",
+              authority_expires_at: "2026-01-01",
+              authority_revoked_at: null,
+              observed_at: "2026-08-20T09:00:00.000Z",
+              verdict: "expired",
+              denial_code: "authority_expired",
+              days_left: -231,
+            },
+          ],
+        },
+        {
+          subject_key: "Person|Worker|clear.acceptance@example.invalid|",
+          subject_type: "Person",
+          subject_role: "Worker",
+          person_user: "clear.acceptance@example.invalid",
+          organization: null,
+          records: [
+            {
+              authority_record_id: "Authority-Record-Acceptance-0001",
+              authority_version: 1,
+              authority_kind: "Worker Competency",
+              authority_scope: "field installation",
+              scope_type: "Field",
+              scope_ref: "field:job-acceptance",
+              issuer_name: "Alberta issuer",
+              issuer_jurisdiction: "AB-CA",
+              verification_state: "verified",
+              authority_effective_from: "2026-01-01",
+              authority_expires_at: "2027-06-30",
+              authority_revoked_at: null,
+              observed_at: "2026-08-20T09:00:00.000Z",
+              verdict: "clear",
+              denial_code: null,
+              days_left: 314,
+            },
+          ],
+        },
+      ],
+    });
+  }
   if (ACCEPTANCE_MODE === "onboarding") {
     // The real logo lives in R2 behind `/public/company-logo`. A 1x1 PNG is enough for the
     // screens to prove they point at it, and for a "no logo yet" state to 404 into its fallback.

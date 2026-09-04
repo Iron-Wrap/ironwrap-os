@@ -76,8 +76,8 @@ describe("role-shaped navigation", () => {
   });
 
   it("keeps the complete role map while marking only daily phone destinations as primary", () => {
-    expect(navigationForRole("owner")).toHaveLength(14);
-    expect(navigationForRole("ops")).toHaveLength(11);
+    expect(navigationForRole("owner")).toHaveLength(15);
+    expect(navigationForRole("ops")).toHaveLength(12);
     expect(navigationForRole("field")).toHaveLength(4);
     expect(
       navigationForRole("owner")
@@ -251,5 +251,23 @@ describe("role-shaped navigation", () => {
     expect(roleCanAccess("production", "pairing")).toBe(false);
     expect(roleCanAccess("field", "pairing")).toBe(false);
     expect(roleCanAccess("accounting", "pairing")).toBe(false);
+  });
+});
+
+describe("the People desk", () => {
+  it("is an office surface: owner and ops read it, nobody else", () => {
+    expect(roleCanAccess("owner", "authority")).toBe(true);
+    expect(roleCanAccess("ops", "authority")).toBe(true);
+    for (const role of ["sales", "production", "accounting", "field"] as const) {
+      expect(roleCanAccess(role, "authority")).toBe(false);
+    }
+  });
+
+  it("sits in Resources, beside the other things a job needs", () => {
+    const item = navigationForRole("ops").find((entry) => entry.to === "/people");
+    expect(item?.workspace).toBe("Resources");
+    expect(item?.label).toBe("People");
+    // The bottom bar on a phone stays four tabs; this one lives under More.
+    expect((item as { mobilePrimary?: boolean } | undefined)?.mobilePrimary).toBeUndefined();
   });
 });

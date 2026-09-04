@@ -154,6 +154,9 @@ const loadFleetPage = () => import("./field/fleet-page");
 const FleetPage = lazy(async () => ({
   default: (await loadFleetPage()).FleetPage,
 }));
+const PeoplePage = lazy(async () => ({
+  default: (await import("./people/people-page")).PeoplePage,
+}));
 const InventoryPage = lazy(async () => ({
   default: (await import("./inventory/inventory-page")).InventoryPage,
 }));
@@ -364,6 +367,12 @@ const inventoryRoute = createRoute({
   component: InventoryRoute,
 });
 
+const peopleRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/people",
+  component: PeopleRoute,
+});
+
 function TodayRoute() {
   return (
     <RoleGuard surface="field">
@@ -409,6 +418,16 @@ function FleetRoute() {
     <RoleGuard surface="fleet">
       <Suspense fallback={<FieldRouteSkeleton label="Loading your vehicle" />}>
         <FleetPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function PeopleRoute() {
+  return (
+    <RoleGuard surface="authority">
+      <Suspense fallback={<OwnerRouteSkeleton />}>
+        <PeoplePage />
       </Suspense>
     </RoleGuard>
   );
@@ -946,6 +965,7 @@ const routeTree = rootRoute.addChildren([
     jobCheckInRoute,
     fleetRoute,
     inventoryRoute,
+    peopleRoute,
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,

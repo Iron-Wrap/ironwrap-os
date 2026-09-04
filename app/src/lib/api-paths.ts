@@ -8,6 +8,9 @@ export const API_PATHS = {
   // (docs/CAPABILITY-SIGNAL-CONTRACT.md).
   capabilities: "/api/v1/capabilities",
   search: (query: string) => `/api/v1/search?q=${encodeURIComponent(query)}`,
+  authorityRecords: "/api/v1/authority-records",
+  authorityRecordReadbacks: (recordId: string) =>
+    `/api/v1/authority-records/${encodeURIComponent(recordId)}/readbacks`,
   inventoryOverview: "/api/v1/inventory/overview",
   inventoryLookup: "/api/v1/inventory/lookup",
   inventoryScans: "/api/v1/inventory/scans",

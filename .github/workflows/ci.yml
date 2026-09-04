@@ -167,6 +167,10 @@ jobs:
       # was never actually run in CI.
       - name: Run app Playwright e2e (owner configuration, office session)
         run: npm run test:pwa:owner-configuration --prefix app
+      # The People desk is an office surface, so under the default field mode its spec
+      # self-skips. It gets the office session in its own step, like the configuration screens.
+      - name: Run app Playwright e2e (people desk, office session)
+        run: npm run test:pwa:people --prefix app
       # Putting a lead on a board is the only product path that reaches the card-placement
       # route, and it spans two role surfaces (sales desk -> board). It needs the same office
       # session the board does, so it gets its own step rather than silently self-skipping.

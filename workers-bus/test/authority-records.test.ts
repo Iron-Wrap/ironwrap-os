@@ -10,6 +10,7 @@ import {
   completeAuthorityRecordAction,
   EXTERNAL_ISSUER_AUTHORITY_KINDS,
   listAuthorityRecordReadbacks,
+  listCurrentAuthorityHeads,
   parseAuthorityRequirements,
   recordAuthorityReadback,
   resolveAuthorityLifecycle,
@@ -1684,4 +1685,78 @@ test("authority lifecycle fails closed when freshness windows are missing", asyn
   });
   assert.equal(verdict.ok, false);
   assert.equal(verdict.code, "authority_stale");
+});
+
+test("the authority desk lists one current head per record with the fence's own verdict", async () => {
+  const db = new SqliteD1();
+  // Clear: expires well beyond the horizon.
+  await recordAuthorityReadback(env(db), readbackInput());
+  // Expiring: inside the thirty-day horizon.
+  await recordAuthorityReadback(env(db), readbackInput({
+    readbackId: "Authority-Readback-0002",
+    authorityRecordId: "Authority-Record-0002",
+    personUser: "expiring@example.invalid",
+    authorityKind: "Fall Protection",
+    authorityExpiresAt: "2026-09-01",
+    authorityStateDigestSha256: "d".repeat(64),
+  }));
+  // Expired: already past.
+  await recordAuthorityReadback(env(db), readbackInput({
+    readbackId: "Authority-Readback-0003",
+    authorityRecordId: "Authority-Record-0003",
+    personUser: "expired@example.invalid",
+    authorityKind: "Ticket",
+    authorityEffectiveFrom: "2025-01-01",
+    authorityExpiresAt: "2026-01-01",
+    authorityStateDigestSha256: "c".repeat(64),
+  }));
+  // A second version of the first record: the desk shows the head, not both rows.
+  await recordAuthorityReadback(env(db), readbackInput({
+    readbackId: "Authority-Readback-0004",
+    authorityVersion: 2,
+    authorityExpiresAt: "2027-06-30",
+    authorityStateDigestSha256: "f".repeat(64),
+    observedAt: "2026-08-17T13:00:00.000Z",
+  }));
+
+  const subjects = await listCurrentAuthorityHeads(env(db), TENANT, NOW);
+  const flat = subjects.flatMap((s) => s.records);
+  assert.equal(flat.length, 3, "one head per record, not one per readback");
+
+  const byRecord = new Map(flat.map((r) => [r.authority_record_id, r]));
+  assert.equal(byRecord.get(RECORD)?.authority_version, 2, "the newest version is the head");
+  assert.equal(byRecord.get(RECORD)?.verdict, "clear");
+  assert.equal(byRecord.get("Authority-Record-0002")?.verdict, "expiring");
+  assert.equal(byRecord.get("Authority-Record-0002")?.days_left, 15);
+  assert.equal(byRecord.get("Authority-Record-0003")?.verdict, "expired");
+  assert.equal(byRecord.get("Authority-Record-0003")?.denial_code, "authority_expired");
+
+  // Attention first: nothing clear may sort above something expired.
+  const order = subjects.map((s) => Math.min(...s.records.map((r) =>
+    ["revoked", "expired", "contradictory", "unknown", "expiring", "clear"].indexOf(r.verdict))));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "worst first");
+});
+
+test("the authority desk is tenant-bound and refuses a role without authority:read", async () => {
+  const db = new SqliteD1();
+  await recordAuthorityReadback(env(db), readbackInput());
+
+  const other = await listCurrentAuthorityHeads(env(db), OTHER_TENANT, NOW);
+  assert.deepEqual(other, [], "another tenant sees nothing");
+
+  const ok = await handleAuthorityRecordRoute(
+    apiRequest("GET", "/api/v1/authority-records"), env(db), auth("ops"),
+  );
+  assert.equal(ok?.status, 200);
+  const body = await ok!.json() as { subjects: unknown[]; expiring_within_days: number };
+  assert.equal(body.subjects.length, 1);
+  assert.equal(body.expiring_within_days, 30);
+
+  const customer = auth("ops");
+  customer.permissions = customer.permissions.filter((p) => p !== "authority:read");
+  const refused = await handleAuthorityRecordRoute(
+    apiRequest("GET", "/api/v1/authority-records"), env(db), customer,
+  );
+  assert.equal(refused?.status, 403);
+  assert.deepEqual(await refused!.json(), { error: "authority_read_required" });
 });

@@ -104,6 +104,7 @@ label is therefore not evidence that every depicted workflow is owner-operated i
 | `/accounting`, `/accounting/exceptions`, `/accounting/quickbooks` | Permission-specific | Permission-specific | No | No | Yes | No |
 | `/check-in`, `/vehicle` | Permission-specific | Permission-specific | No | No | No | Yes |
 | `/inventory` | Yes | Yes | No | Permission-specific | No | Yes |
+| `/people` (authority records, read only) | Yes | Yes | No | No | No | No |
 | `/settings` company/team/devices/integrations | Yes | Yes within grant | No | No | QuickBooks scope only | No |
 | Public estimator, portal, contract links | Bounded administration | Bounded administration | Commercial preparation only | No | Financial read only as granted | No |
 | `GET /api/v1/capabilities` (capability state) | Full detail | Full detail | State and reason only | State and reason only | State and reason only | State and reason only |

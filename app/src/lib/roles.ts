@@ -12,6 +12,7 @@ import {
   Settings,
   ShieldCheck,
   Truck,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -30,6 +31,7 @@ export type RoleSurface =
   | "fleet"
   | "inventory"
   | "pairing"
+  | "authority"
   | "ownerConfiguration";
 
 export interface NavigationItem {
@@ -55,6 +57,7 @@ export interface NavigationItem {
     | "/accounting/exceptions"
     | "/accounting/quickbooks"
     | "/inventory"
+    | "/people"
     | "/settings";
   icon: LucideIcon;
   activeColor: "accent" | "ok" | "warning";
@@ -130,6 +133,13 @@ const officeNavigation = [
     label: "Inventory",
     to: "/inventory",
     icon: Boxes,
+    activeColor: "ok",
+    workspace: "Resources",
+  },
+  {
+    label: "People",
+    to: "/people",
+    icon: Users,
     activeColor: "ok",
     workspace: "Resources",
   },
@@ -313,6 +323,9 @@ export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
   // Pairing issues a field-device secret. The API already allows owner and ops;
   // this surface is the matching UI gate so Settings cannot look owner-only.
   if (surface === "pairing") return role === "owner" || role === "ops";
+  // Reading who may work is an office judgement: production and field meet the same fence
+  // through their own surfaces, and the API keeps `authority:read` decisive either way.
+  if (surface === "authority") return role === "owner" || role === "ops";
   return role === "owner" || role === "ops";
 }
 

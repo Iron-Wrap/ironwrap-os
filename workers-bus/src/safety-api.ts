@@ -9,7 +9,7 @@ import {
   assignCorrectiveAction,
   closeCorrectiveAction,
   evaluateSafetyReadiness,
-  getSafetyCorrectiveAction,
+  safetyCorrectiveActionProjection,
   getSafetyEquipment,
   getSafetyOccurrence,
   issueSafetyEquipment,
@@ -19,6 +19,7 @@ import {
   recordSafetyReadinessSnapshot,
   recordSafetyResponse,
   replaceSafetyEquipment,
+  safetyDeskProjection,
   safetyPanelProjection,
   SafetyError,
   submitCorrectiveActionEvidence,
@@ -78,15 +79,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
   const actual = Object.keys(value).sort();
   const required = [...expected].sort();
-  return actual.length === required.length && actual.every((key, index) => key === required[index]);
+  return (
+    actual.length === required.length &&
+    actual.every((key, index) => key === required[index])
+  );
 }
 
 async function body(
   req: Request,
-): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; response: Response }> {
+): Promise<
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; response: Response }
+> {
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
     return { ok: false, response: json({ error: "payload_too_large" }, 413) };
@@ -128,9 +138,14 @@ function evidenceField(value: Record<string, unknown>): SafetyEvidence | null {
  * Scope chain for a readiness question. A work package inherits its job and the
  * tenant, so a tenant-wide stop reaches every package below it.
  */
-function scopeChain(tenantId: string, scope: SafetyScopeRef, jobId: string | null): SafetyScopeRef[] {
+function scopeChain(
+  tenantId: string,
+  scope: SafetyScopeRef,
+  jobId: string | null,
+): SafetyScopeRef[] {
   const chain: SafetyScopeRef[] = [{ type: "tenant", id: tenantId }];
-  if (jobId && scope.type !== "roof_job") chain.push({ type: "roof_job", id: jobId });
+  if (jobId && scope.type !== "roof_job")
+    chain.push({ type: "roof_job", id: jobId });
   if (scope.type !== "tenant") chain.push(scope);
   return chain;
 }
@@ -148,7 +163,18 @@ export async function handleSafetyRoute(
 
   if (req.method === "GET" && url.pathname === "/api/v1/safety/panel") {
     try {
-      return json({ version: 1, panel: await safetyPanelProjection(env, tenantId, userId) });
+      return json({
+        version: 1,
+        panel: await safetyPanelProjection(env, tenantId, userId),
+      });
+    } catch (error) {
+      return safetyFailure(error);
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/v1/safety/desk") {
+    try {
+      return json(await safetyDeskProjection(env, tenantId, userId, now));
     } catch (error) {
       return safetyFailure(error);
     }
@@ -164,7 +190,11 @@ export async function handleSafetyRoute(
     try {
       const readiness = await evaluateSafetyReadiness(env, {
         tenantId,
-        scopes: scopeChain(tenantId, { type: scopeType as SafetyScopeType, id: scopeId }, jobId),
+        scopes: scopeChain(
+          tenantId,
+          { type: scopeType as SafetyScopeType, id: scopeId },
+          jobId,
+        ),
         subjectUserIds: [userId],
         now,
       });
@@ -174,19 +204,25 @@ export async function handleSafetyRoute(
     }
   }
 
-  const occurrenceDetail = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)$/);
+  const occurrenceDetail = url.pathname.match(
+    /^\/api\/v1\/safety\/occurrences\/([^/]+)$/,
+  );
   if (req.method === "GET" && occurrenceDetail) {
     const occurrenceId = pathPart(occurrenceDetail[1] ?? "");
     if (!occurrenceId) return json({ error: "not_found" }, 404);
     try {
       const occurrence = await getSafetyOccurrence(env, tenantId, occurrenceId);
-      return occurrence ? json({ version: 1, occurrence }) : json({ error: "not_found" }, 404);
+      return occurrence
+        ? json({ version: 1, occurrence })
+        : json({ error: "not_found" }, 404);
     } catch (error) {
       return safetyFailure(error);
     }
   }
 
-  const occurrenceEvents = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)\/events$/);
+  const occurrenceEvents = url.pathname.match(
+    /^\/api\/v1\/safety\/occurrences\/([^/]+)\/events$/,
+  );
   if (req.method === "GET" && occurrenceEvents) {
     const occurrenceId = pathPart(occurrenceEvents[1] ?? "");
     if (!occurrenceId) return json({ error: "not_found" }, 404);
@@ -201,25 +237,32 @@ export async function handleSafetyRoute(
     }
   }
 
-  const equipmentDetail = url.pathname.match(/^\/api\/v1\/safety\/equipment\/([^/]+)$/);
+  const equipmentDetail = url.pathname.match(
+    /^\/api\/v1\/safety\/equipment\/([^/]+)$/,
+  );
   if (req.method === "GET" && equipmentDetail) {
     const equipmentId = pathPart(equipmentDetail[1] ?? "");
     if (!equipmentId) return json({ error: "not_found" }, 404);
     try {
       const equipment = await getSafetyEquipment(env, tenantId, equipmentId);
-      return equipment ? json({ version: 1, equipment }) : json({ error: "not_found" }, 404);
+      return equipment
+        ? json({ version: 1, equipment })
+        : json({ error: "not_found" }, 404);
     } catch (error) {
       return safetyFailure(error);
     }
   }
 
-  const correctiveDetail = url.pathname.match(/^\/api\/v1\/safety\/corrective-actions\/([^/]+)$/);
+  const correctiveDetail = url.pathname.match(
+    /^\/api\/v1\/safety\/corrective-actions\/([^/]+)$/,
+  );
   if (req.method === "GET" && correctiveDetail) {
     const actionId = pathPart(correctiveDetail[1] ?? "");
     if (!actionId) return json({ error: "not_found" }, 404);
     try {
-      const action = await getSafetyCorrectiveAction(env, tenantId, actionId);
-      return action ? json({ version: 1, corrective_action: action }) : json({ error: "not_found" }, 404);
+      return json(
+        await safetyCorrectiveActionProjection(env, tenantId, userId, actionId),
+      );
     } catch (error) {
       return safetyFailure(error);
     }
@@ -285,14 +328,22 @@ export async function handleSafetyRoute(
     }
   }
 
-  const inspection = url.pathname.match(/^\/api\/v1\/safety\/equipment\/([^/]+)\/inspections$/);
+  const inspection = url.pathname.match(
+    /^\/api\/v1\/safety\/equipment\/([^/]+)\/inspections$/,
+  );
   if (inspection) {
     const equipmentId = pathPart(inspection[1] ?? "");
     if (!equipmentId) return json({ error: "not_found" }, 404);
     const result = parsed.value.result;
+    const expectedVersion = parsed.value.expected_version;
     if (
-      !["detail", "result"].every((key) => key in parsed.value) ||
-      (result !== "pass" && result !== "fail")
+      !["detail", "result", "expected_version"].every(
+        (key) => key in parsed.value,
+      ) ||
+      (result !== "pass" && result !== "fail") ||
+      typeof expectedVersion !== "number" ||
+      !Number.isInteger(expectedVersion) ||
+      expectedVersion < 1
     ) {
       return json({ error: "safety_equipment_input_invalid" }, 400);
     }
@@ -304,6 +355,7 @@ export async function handleSafetyRoute(
         result,
         detail: stringField(parsed.value.detail) ?? "",
         evidence: evidenceField(parsed.value),
+        expectedVersion,
         now,
       });
       return json({ version: 1, equipment });
@@ -312,12 +364,18 @@ export async function handleSafetyRoute(
     }
   }
 
-  const replacement = url.pathname.match(/^\/api\/v1\/safety\/equipment\/([^/]+)\/replacement$/);
+  const replacement = url.pathname.match(
+    /^\/api\/v1\/safety\/equipment\/([^/]+)\/replacement$/,
+  );
   if (replacement) {
     const equipmentId = pathPart(replacement[1] ?? "");
     if (!equipmentId) return json({ error: "not_found" }, 404);
     if (
-      !exactKeys(parsed.value, ["detail", "replacement_equipment_id", "replacement_serial_number"])
+      !exactKeys(parsed.value, [
+        "detail",
+        "replacement_equipment_id",
+        "replacement_serial_number",
+      ])
     ) {
       return json({ error: "safety_equipment_input_invalid" }, 400);
     }
@@ -325,8 +383,10 @@ export async function handleSafetyRoute(
       const result = await replaceSafetyEquipment(env, {
         tenantId,
         equipmentId,
-        replacementEquipmentId: stringField(parsed.value.replacement_equipment_id) ?? "",
-        replacementSerialNumber: stringField(parsed.value.replacement_serial_number) ?? "",
+        replacementEquipmentId:
+          stringField(parsed.value.replacement_equipment_id) ?? "",
+        replacementSerialNumber:
+          stringField(parsed.value.replacement_serial_number) ?? "",
         actorUserId: userId,
         detail: stringField(parsed.value.detail) ?? "",
         now,
@@ -337,7 +397,9 @@ export async function handleSafetyRoute(
     }
   }
 
-  const command = url.pathname.match(/^\/api\/v1\/safety\/occurrences\/([^/]+)\/commands$/);
+  const command = url.pathname.match(
+    /^\/api\/v1\/safety\/occurrences\/([^/]+)\/commands$/,
+  );
   if (command) {
     const occurrenceId = pathPart(command[1] ?? "");
     if (!occurrenceId) return json({ error: "not_found" }, 404);
@@ -383,7 +445,9 @@ export async function handleSafetyRoute(
     const notificationKind = parsed.value.notification_kind;
     if (
       typeof notificationKind !== "string" ||
-      !SAFETY_NOTIFICATION_KINDS.includes(notificationKind as SafetyNotificationKind) ||
+      !SAFETY_NOTIFICATION_KINDS.includes(
+        notificationKind as SafetyNotificationKind,
+      ) ||
       typeof parsed.value.required !== "boolean"
     ) {
       return json({ error: "safety_notification_input_invalid" }, 400);
@@ -394,11 +458,13 @@ export async function handleSafetyRoute(
         notificationId: stringField(parsed.value.notification_id) ?? "",
         occurrenceId: stringField(parsed.value.occurrence_id) ?? "",
         authorityName: stringField(parsed.value.authority_name) ?? "",
-        authorityJurisdiction: stringField(parsed.value.authority_jurisdiction) ?? "",
+        authorityJurisdiction:
+          stringField(parsed.value.authority_jurisdiction) ?? "",
         notificationKind: notificationKind as SafetyNotificationKind,
         required: parsed.value.required,
         dueAt: stringField(parsed.value.due_at),
-        determinationReason: stringField(parsed.value.determination_reason) ?? "",
+        determinationReason:
+          stringField(parsed.value.determination_reason) ?? "",
         actorUserId: userId,
         now,
       });
@@ -408,7 +474,9 @@ export async function handleSafetyRoute(
     }
   }
 
-  const submission = url.pathname.match(/^\/api\/v1\/safety\/notifications\/([^/]+)\/submission$/);
+  const submission = url.pathname.match(
+    /^\/api\/v1\/safety\/notifications\/([^/]+)\/submission$/,
+  );
   if (submission) {
     const notificationId = pathPart(submission[1] ?? "");
     if (!notificationId) return json({ error: "not_found" }, 404);
@@ -442,13 +510,17 @@ export async function handleSafetyRoute(
       return json({ error: "safety_corrective_action_input_invalid" }, 400);
     }
     const riskLevel = parsed.value.risk_level;
-    if (typeof riskLevel !== "string" || !SAFETY_SEVERITIES.includes(riskLevel as SafetySeverity)) {
+    if (
+      typeof riskLevel !== "string" ||
+      !SAFETY_SEVERITIES.includes(riskLevel as SafetySeverity)
+    ) {
       return json({ error: "safety_corrective_action_input_invalid" }, 400);
     }
     try {
       const action = await assignCorrectiveAction(env, {
         tenantId,
-        correctiveActionId: stringField(parsed.value.corrective_action_id) ?? "",
+        correctiveActionId:
+          stringField(parsed.value.corrective_action_id) ?? "",
         occurrenceId: stringField(parsed.value.occurrence_id) ?? "",
         riskLevel: riskLevel as SafetySeverity,
         ownerUserId: stringField(parsed.value.owner_user_id) ?? "",
@@ -512,7 +584,9 @@ export async function handleSafetyRoute(
     }
   }
 
-  const closure = url.pathname.match(/^\/api\/v1\/safety\/corrective-actions\/([^/]+)\/closure$/);
+  const closure = url.pathname.match(
+    /^\/api\/v1\/safety\/corrective-actions\/([^/]+)\/closure$/,
+  );
   if (closure) {
     const actionId = pathPart(closure[1] ?? "");
     if (!actionId) return json({ error: "not_found" }, 404);
@@ -533,11 +607,21 @@ export async function handleSafetyRoute(
   // Recording what a release gate saw is an operational act, not a browser one:
   // the snapshot is written by the gate itself in safety-release-gate.ts.
   if (url.pathname === "/api/v1/safety/readiness-snapshots") {
-    if (!exactKeys(parsed.value, ["consumer", "scope_id", "scope_type", "snapshot_id"])) {
+    if (
+      !exactKeys(parsed.value, [
+        "consumer",
+        "scope_id",
+        "scope_type",
+        "snapshot_id",
+      ])
+    ) {
       return json({ error: "safety_readiness_input_invalid" }, 400);
     }
     const scopeType = parsed.value.scope_type;
-    if (typeof scopeType !== "string" || !SAFETY_SCOPE_TYPES.includes(scopeType as SafetyScopeType)) {
+    if (
+      typeof scopeType !== "string" ||
+      !SAFETY_SCOPE_TYPES.includes(scopeType as SafetyScopeType)
+    ) {
       return json({ error: "safety_readiness_input_invalid" }, 400);
     }
     const scope: SafetyScopeRef = {

@@ -1375,6 +1375,30 @@ implemented and technically proven production system; it blocks only customer/bu
 
 ## Completion definitions
 
+## Slice evidence ledger (design / source / runtime / live kept apart)
+
+One maintained record per connected UI-to-persistence slice. "Design" names the accepted board or
+records that none is accepted; "Source" names the commit and focused checks; "Runtime" names a
+proof against a running Worker or the browser acceptance fixture; "Live" is a named-environment
+readback. A passing screen or CI run in one column never fills another.
+
+| Slice | Design | Source | Runtime | Live |
+|---|---|---|---|---|
+| Safety equipment inspection, corrective-action evidence/verification/closure, offline evidence queue, reconnect drain, held-session policy, revision-bound inspection verdict (IRO-253) | Sep 2 candidate `ironwrap-os-redesign` boards `Safety equipment`, `Corrective action` (occurrence-centric; runtime is action-centric and offers no stop release); acceptance lineage not established | `codex/iro-253-safety-completion` up to `84f00ce9` (PR #266): `workers-bus/test/safety-lifecycle.test.ts` 27/27, `app/src/safety/*.test.tsx`, `outbox.test.ts`, `auth-boundary.test.tsx`; before/after regressions recorded in the review-ready packets | `app/e2e/safety-desk.spec.ts` 7/7 against the acceptance fixture at 390 and 1440 px, axe clean, light and dark; hosted CI run 34767340614 SUCCESS | none; `deploy.yml` admission blocked on release provisioning (IRO-219/220/221) |
+| Make a document from the job shelf (owner): `POST /api/v1/document-generations` with CSRF + idempotency key, receipt shown per outcome (`succeeded`, `unknown`, `not_executed`, `manual_exception`, `failed`), off state when the capability is off, no control for other roles, offline disables the control, retry replays the same key | Sep 2 board `Make a document` (NDocument) describes a completion-packet preview with withheld fields; runtime is the existing shelf plus one action and a receipt, no preview of the rendered file | this branch: `app/src/documents/document-{contracts,api,section}.ts(x)`, `document-section.test.tsx` (owner success, three roles refused, capability off, refused outcome with same-key retry, unavailable) 33/33; Worker unchanged; `workers-bus/test/document-generation-r2-api.test.ts` 5/5 proves D1/R2 attempt, receipt, replay, and reconciliation | `app/e2e/job-document-generation.spec.ts` (owner session, committed flag off: off panel, no control, direct command refused 503) plus `job-documents.spec.ts` 3/3; render pass at 390/768/1440 light, dark, reduced motion (transitions collapse to 0), axe 0 on 6 states | none; `APP_DOCUMENT_GENERATION_ENABLED` is `false` in every checked-in environment, so the live success path is unproven by definition |
+
+Finite missing states for these two slices, to be closed or explicitly excluded: (a) the live
+"on" state of document generation on a real R2 bucket. Closed on this branch: (b) readback of the
+generated file through its receipt: `GET /api/v1/document-generations/:receiptId/document`
+(owner-only, tenant-scoped, digest-checked; Worker test covers success, non-owner refusal, foreign
+tenant, tampered object, missing object, and a receipt that never succeeded) and the "Open the
+document" link on the shelf receipt, with pending and sign-in-ended states (unit tests; browser
+proof waits for an environment with the flag on); (c) tablet 768 px render of the safety
+desk, light and dark, axe clean; (d) access loss mid-form on the corrective and inspection pages
+(401 answered by the fixture's revoke switch): findings and the action stay on screen, nothing is
+recorded, controls re-enable after re-read, browser test in `safety-desk.spec.ts` and unit cases
+on both pages; (e) the safety desk and equipment list in the dark theme at 1440 px, axe clean.
+
 The pre-customer implementation and technical production-reference program is complete only when:
 
 - every target gap above is implemented or explicitly excluded by owner policy;

@@ -1,17 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronDown, FileText, Lock } from "lucide-react";
 import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
+import { capabilityPreventsUse, useCapability } from "../capabilities/capability-signal";
+import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
+import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ApiError } from "../lib/api";
 import type { FieldDateOptions } from "../field/field-formatting";
 import { messageFor } from "../field/field-formatting";
 import { cn } from "../lib/cn";
 import { loadSchemaCard } from "../schema-forms/schema-card-api";
 import { schemaCardQueryKey } from "../schema-forms/schema-card-contracts";
-import { loadEntityDocuments } from "./document-api";
-import { entityDocumentsQueryKey } from "./document-contracts";
+import { generateEntityDocument, loadEntityDocuments } from "./document-api";
+import {
+  DOCUMENT_GENERATIONS_ROUTE,
+  documentGenerationResponseSchema,
+  entityDocumentsQueryKey,
+  type DocumentGenerationOutcome,
+  type DocumentGenerationResponse,
+} from "./document-contracts";
 import {
   documentSegments,
   readableDocuments,
@@ -48,6 +59,9 @@ export function EntityDocumentsSection({
 }) {
   const session = useSession();
   const enabled = Boolean(entityId);
+  // Read once for the shelf: when generation is switched off, one panel says so for every
+  // document rather than each card repeating the same paragraph.
+  const generation = useCapability("document_generation");
   const documents = useQuery({
     queryKey: entityDocumentsQueryKey(
       session.tenant.id,
@@ -86,6 +100,7 @@ export function EntityDocumentsSection({
   if (resolved.length === 0) return null;
 
   const offline = documents.data.offline || card.data.offline;
+  const generationOff = session.user.role === "owner" && capabilityPreventsUse(generation);
   return (
     <section className="space-y-4" aria-labelledby={headingId} data-testid="entity-documents">
       <header className="border-b border-border pb-4">
@@ -117,9 +132,18 @@ export function EntityDocumentsSection({
             key={document.templateId}
             document={document}
             defaultOpen={index === 0}
+            entityType={entityType}
+            entityId={entityId}
+            offline={offline}
+            canGenerate={session.user.role === "owner" && !generationOff}
           />
         ))}
       </div>
+      {generationOff ? (
+        <div data-testid="document-generation-off">
+          <CapabilityUnavailable read={generation} />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -133,9 +157,17 @@ export function EntityDocumentsSection({
 function DocumentDisclosure({
   document,
   defaultOpen,
+  entityType,
+  entityId,
+  offline,
+  canGenerate,
 }: {
   document: ResolvedDocument;
   defaultOpen: boolean;
+  entityType: string;
+  entityId: string;
+  offline: boolean;
+  canGenerate: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = `document-panel-${document.templateId}`;
@@ -169,8 +201,161 @@ function DocumentDisclosure({
         data-testid={`document-body-${document.templateKey}`}
       >
         <DocumentBody document={document} />
+        {canGenerate ? (
+          <MakeDocumentAction
+            document={document}
+            entityType={entityType}
+            entityId={entityId}
+            offline={offline}
+          />
+        ) : null}
       </div>
     </Card>
+  );
+}
+
+const outcomeCopy: Record<DocumentGenerationOutcome, { title: string; body: string }> = {
+  succeeded: {
+    title: "Document made",
+    body: "The file was written and read back with the digest the receipt records.",
+  },
+  unknown: {
+    title: "Not confirmed yet",
+    body: "The write was sent but the storage answer did not arrive. The receipt keeps it open; the office reconciles it before anything else is made from it.",
+  },
+  not_executed: {
+    title: "Not made",
+    body: "The write was refused before anything was stored. Nothing exists to attach.",
+  },
+  manual_exception: {
+    title: "Needs a person",
+    body: "What was read back does not match what was written. The receipt is kept for the office to decide; no attachment was recorded.",
+  },
+  failed: {
+    title: "Failed",
+    body: "The storage write failed. Nothing was attached; the receipt records the attempt.",
+  },
+};
+
+/**
+ * Making the file from the shelf. Owner only, because generation is an external side effect on
+ * R2 with its own permit (`workers-bus/src/document-generation-r2.ts`); other roles read the
+ * shelf and see nothing here. The Worker answers every outcome with the receipt it wrote, so the
+ * person sees the receipt rather than a spinner's guess, and a retry after a lost answer replays
+ * the same idempotency key instead of minting a second document.
+ */
+function MakeDocumentAction({
+  document,
+  entityType,
+  entityId,
+  offline,
+}: {
+  document: ResolvedDocument;
+  entityType: string;
+  entityId: string;
+  offline: boolean;
+}) {
+  const session = useSession();
+  const [idempotencyKey] = useState(() => `docgen:${crypto.randomUUID()}`);
+  const generation = useMutation({
+    mutationFn: () =>
+      generateEntityDocument(session, {
+        entityType,
+        entityId,
+        templateId: document.templateId,
+        templateRevisionId: document.revisionId,
+        idempotencyKey,
+      }),
+  });
+  // A refused outcome (409/502) still carries the receipt in the error body.
+  const refused =
+    generation.error instanceof ApiError
+      ? documentGenerationResponseSchema.safeParse(generation.error.details)
+      : undefined;
+  const result: DocumentGenerationResponse | undefined =
+    generation.data ?? (refused?.success ? refused.data : undefined);
+  const unavailable =
+    generation.error instanceof ApiError &&
+    generation.error.code.startsWith("document_generation_") &&
+    generation.error.code.endsWith("unavailable");
+  const sessionLost = generation.error instanceof ApiError && generation.error.status === 401;
+
+  return (
+    <div className="mt-4 space-y-3 border-t border-border pt-4" data-testid="document-generation">
+      {result ? (
+        <Notice
+          tone={
+            result.outcome === "succeeded"
+              ? "success"
+              : result.outcome === "unknown"
+                ? "warning"
+                : "danger"
+          }
+          title={outcomeCopy[result.outcome].title}
+        >
+          {outcomeCopy[result.outcome].body} Receipt {result.generation.receipt_id}, template
+          revision {result.generation.template_version}
+          {result.generation.provider_document_id
+            ? `, stored as ${result.generation.provider_document_id}`
+            : ""}
+          . Digest {result.generation.output_digest.slice(0, 12)}…
+          {result.outcome === "succeeded" ? (
+            <div className="mt-3">
+              <Button asChild variant="outline">
+                <a
+                  href={`${DOCUMENT_GENERATIONS_ROUTE}/${encodeURIComponent(result.generation.receipt_id)}/document`}
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Open the document
+                </a>
+              </Button>
+              <p className="mt-2 text-sm text-muted">
+                Opens the stored file through its receipt; the server checks the digest before
+                handing it over. If your sign-in has ended, sign in again and press the link once
+                more.
+              </p>
+            </div>
+          ) : null}
+          {result.outcome === "unknown" ? (
+            <p className="mt-2 text-sm">
+              No file is available to open until the office reconciles this receipt.
+            </p>
+          ) : null}
+        </Notice>
+      ) : null}
+      {!result && sessionLost ? (
+        <Notice tone="warning" title="Your sign-in ended before this was made">
+          Nothing was made. Sign in again in another tab or reload, then press the button again; the
+          same request is sent, never a second document.
+        </Notice>
+      ) : null}
+      {!result && unavailable ? (
+        <Notice tone="info" title="Document generation is switched off here">
+          This environment has not switched on document generation. Nothing was made.
+        </Notice>
+      ) : null}
+      {!result && generation.isError && !unavailable && !sessionLost ? (
+        <Notice tone="danger" title="Not confirmed">
+          {generation.error instanceof Error ? generation.error.message : "No answer arrived."}{" "}
+          Trying again sends the same request, never a second document.
+        </Notice>
+      ) : null}
+      {offline ? (
+        <p className="text-sm text-muted">Connect to make this document from the current values.</p>
+      ) : null}
+      {result?.outcome !== "succeeded" ? (
+        <Button
+          type="button"
+          variant="outline"
+          busy={generation.isPending}
+          disabled={offline || generation.isPending}
+          onClick={() => generation.mutate()}
+        >
+          {generation.isError || result ? "Try again" : "Make this document"}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

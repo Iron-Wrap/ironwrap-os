@@ -7,7 +7,9 @@ import { ApiError } from "../lib/api";
 import type { AppRole } from "../lib/roles";
 import { loadSchemaCard } from "../schema-forms/schema-card-api";
 import type { SchemaCardEntry } from "../schema-forms/schema-card-contracts";
-import { loadEntityDocuments } from "./document-api";
+import { useCapability } from "../capabilities/capability-signal";
+import type { Capability } from "../capabilities/capability-contracts";
+import { generateEntityDocument, loadEntityDocuments } from "./document-api";
 import type { EntityDocument } from "./document-contracts";
 import { EntityDocumentsSection } from "./document-section";
 
@@ -18,10 +20,17 @@ vi.mock("../schema-forms/schema-card-api", async (importOriginal) => ({
 vi.mock("./document-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./document-api")>()),
   loadEntityDocuments: vi.fn(),
+  generateEntityDocument: vi.fn(),
+}));
+vi.mock("../capabilities/capability-signal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../capabilities/capability-signal")>()),
+  useCapability: vi.fn(),
 }));
 
 const loadSchemaCardMock = vi.mocked(loadSchemaCard);
 const loadEntityDocumentsMock = vi.mocked(loadEntityDocuments);
+const generateEntityDocumentMock = vi.mocked(generateEntityDocument);
+const useCapabilityMock = vi.mocked(useCapability);
 const dateOptions = { locale: "en-CA", timeZone: "America/Edmonton" };
 
 function entry(fieldKey: string, label: string, value: unknown): SchemaCardEntry {
@@ -100,7 +109,35 @@ const filledCard = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The committed reference configuration does not list document generation for a scoped role;
+  // for the owner the tests set the state they need.
+  useCapabilityMock.mockReturnValue({ status: "not_visible" });
 });
+
+const generationOff: Capability = {
+  id: "document_generation",
+  title: "Document generation",
+  presence: "present",
+  state: "off",
+  reason: "flag_off",
+  flag_state: "off",
+  configuration_state: "not_evaluated",
+  readback_required: true,
+};
+
+const receipt = {
+  receipt_id: "dgr_0001",
+  generation_attempt_id: "dga_0001",
+  receipt_version: 1,
+  template_id: "tpl_materials",
+  template_version: 1,
+  provider: "r2",
+  provider_document_id: "documents/freshco/dga_0001.html",
+  output_digest: "a".repeat(64),
+  readback_status: "matched",
+  terminal_status: "succeeded",
+  reconciliation_outcome: "succeeded",
+};
 
 describe("EntityDocumentsSection", () => {
   it("reaches the job's materials list and fills it from that job's values", async () => {
@@ -242,5 +279,129 @@ describe("EntityDocumentsSection", () => {
     renderSection();
 
     expect(await screen.findByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+
+  describe("making the document (owner)", () => {
+    it("lets the owner make the document and shows the receipt the server wrote", async () => {
+      resolve([materialsList], filledCard);
+      generateEntityDocumentMock.mockResolvedValue({
+        outcome: "succeeded",
+        generation: receipt,
+        attachment: null,
+      });
+      renderSection("owner");
+      const make = await screen.findByRole("button", { name: "Make this document" });
+      await userEvent.click(make);
+      expect(await screen.findByText("Document made")).toBeInTheDocument();
+      expect(screen.getByText(/Receipt dgr_0001, template revision 1/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Open the document" })).toHaveAttribute(
+        "href",
+        "/api/v1/document-generations/dgr_0001/document",
+      );
+      expect(screen.queryByRole("button", { name: "Make this document" })).not.toBeInTheDocument();
+      expect(generateEntityDocumentMock).toHaveBeenCalledTimes(1);
+      const [, input] = generateEntityDocumentMock.mock.calls[0]!;
+      expect(input).toMatchObject({
+        entityType: "job",
+        entityId: "JOB-1",
+        templateId: "tpl_materials",
+        templateRevisionId: "rev_tpl_1",
+      });
+      expect(input.idempotencyKey).toMatch(/^[A-Za-z0-9._:-]{8,140}$/);
+    });
+
+    it.each<AppRole>(["production", "ops", "field"])("offers nothing to %s", async (role) => {
+      resolve([materialsList], filledCard);
+      renderSection(role);
+      await screen.findByTestId("document-toggle-materials_list");
+      expect(screen.queryByRole("button", { name: "Make this document" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("document-generation")).not.toBeInTheDocument();
+    });
+
+    it("shows the owner the off state instead of a control when generation is switched off", async () => {
+      useCapabilityMock.mockReturnValue({ status: "known", capability: generationOff });
+      resolve([materialsList], filledCard);
+      renderSection("owner");
+      expect(await screen.findByText("Document generation is turned off")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Make this document" })).not.toBeInTheDocument();
+      expect(generateEntityDocumentMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a refused outcome with its receipt and replays the same key on retry", async () => {
+      resolve([materialsList], filledCard);
+      generateEntityDocumentMock.mockRejectedValue(
+        new ApiError({
+          status: 409,
+          code: "api_error",
+          message: "Conflict",
+          details: {
+            outcome: "not_executed",
+            generation: {
+              ...receipt,
+              provider_document_id: null,
+              readback_status: null,
+              terminal_status: "not_executed",
+              reconciliation_outcome: "not_executed",
+            },
+            attachment: null,
+          },
+        }),
+      );
+      renderSection("owner");
+      await userEvent.click(await screen.findByRole("button", { name: "Make this document" }));
+      expect(await screen.findByText("Not made")).toBeInTheDocument();
+      expect(screen.getByText(/Receipt dgr_0001/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(generateEntityDocumentMock).toHaveBeenCalledTimes(2));
+      const keys = generateEntityDocumentMock.mock.calls.map(([, input]) => input.idempotencyKey);
+      expect(keys[0]).toBe(keys[1]);
+    });
+
+    it("offers no file for an unconfirmed write and keeps the job context when the sign-in ends", async () => {
+      resolve([materialsList], filledCard);
+      generateEntityDocumentMock.mockResolvedValueOnce({
+        outcome: "unknown",
+        generation: {
+          ...receipt,
+          provider_document_id: null,
+          readback_status: null,
+          terminal_status: null,
+          reconciliation_outcome: "unknown",
+        },
+        attachment: null,
+      });
+      renderSection("owner");
+      await userEvent.click(await screen.findByRole("button", { name: "Make this document" }));
+      expect(await screen.findByText("Not confirmed yet")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Open the document" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+
+      generateEntityDocumentMock.mockRejectedValueOnce(
+        new ApiError({ status: 401, code: "session_invalid", message: "Sign in again." }),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(
+        await screen.findByText("Your sign-in ended before this was made"),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("document-toggle-materials_list")).toBeInTheDocument();
+      const keys = generateEntityDocumentMock.mock.calls.map(([, input]) => input.idempotencyKey);
+      expect(new Set(keys).size).toBe(1);
+    });
+
+    it("says generation is switched off in this environment when the server refuses it as unavailable", async () => {
+      resolve([materialsList], filledCard);
+      generateEntityDocumentMock.mockRejectedValue(
+        new ApiError({
+          status: 503,
+          code: "document_generation_unavailable",
+          message: "Service unavailable",
+        }),
+      );
+      renderSection("owner");
+      await userEvent.click(await screen.findByRole("button", { name: "Make this document" }));
+      expect(
+        await screen.findByText("Document generation is switched off here"),
+      ).toBeInTheDocument();
+    });
   });
 });

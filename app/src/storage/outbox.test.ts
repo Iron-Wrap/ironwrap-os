@@ -1107,4 +1107,62 @@ describe("offline outbox", () => {
     expect(await getOutboxSummary(principal)).toMatchObject({ pending: 0, unclaimed: 1 });
     expect(await claimNextQueuedAction(principal, 2_000)).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "matches corrective evidence readback before clearing the outbox (mismatch: %s)",
+    async (mismatch) => {
+      const payload = {
+        detail: "Tie-off installed and checked.",
+        evidence_refs_json: JSON.stringify([
+          { ref: "r2://safety/inspection.pdf", sha256: "a".repeat(64) },
+        ]),
+        evidence_sha256: "b".repeat(64),
+      };
+      const saved = await saveOutboxAction({
+        ...principal,
+        kind: "safety_corrective_evidence",
+        endpoint: "/api/v1/safety/corrective-actions/ca_test/evidence",
+        payload,
+      });
+      await queueOutboxAction(saved.deviceActionId);
+      const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual(payload);
+        expect(new Headers(init?.headers).get("Idempotency-Key")).toBe(saved.deviceActionId);
+        return Response.json({
+          version: 1,
+          corrective_action: {
+            corrective_action_id: "ca_test",
+            occurrence_id: "so_test",
+            version: 4,
+            state: "closed",
+            risk_level: "high",
+            owner_user_id: principal.userId,
+            description: "Install a tie-off.",
+            due_at: "2026-09-01T00:00:00.000Z",
+            ...payload,
+            evidence_captured_by_user_id: mismatch ? "another-user" : principal.userId,
+            evidence_submitted_at: "2026-09-01T00:00:00.000Z",
+            verified_by_user_id: "appu_independent",
+            verified_at: "2026-09-01T01:00:00.000Z",
+            closed_at: "2026-09-01T02:00:00.000Z",
+          },
+        });
+      });
+      await flushOutbox({ ...principal, csrfToken: "csrf", fetcher });
+      const read = await getOutboxAction(saved.deviceActionId);
+      expect(read?.state).toBe(mismatch ? "needs_attention" : "verified");
+      if (mismatch) expect(read?.payload).toEqual(payload);
+    },
+  );
+
+  it("never queues corrective verification or closure as evidence", async () => {
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "safety_corrective_evidence",
+        endpoint: "/api/v1/safety/corrective-actions/ca_test/closure",
+        payload: { detail: "Close it." },
+      }),
+    ).rejects.toThrow("cannot be queued");
+  });
 });

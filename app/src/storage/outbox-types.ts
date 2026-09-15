@@ -17,6 +17,7 @@ export const outboxActionKinds = [
   // for rescue are worker rights, so they queue durably like any other field
   // action and never depend on a live connection.
   "safety_action",
+  "safety_corrective_evidence",
   "fleet_pre_trip_inspection",
   "fleet_post_trip_inspection",
   "fleet_defect_report",

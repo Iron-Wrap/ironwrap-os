@@ -76,8 +76,8 @@ describe("role-shaped navigation", () => {
   });
 
   it("keeps the complete role map while marking only daily phone destinations as primary", () => {
-    expect(navigationForRole("owner")).toHaveLength(15);
-    expect(navigationForRole("ops")).toHaveLength(12);
+    expect(navigationForRole("owner")).toHaveLength(16);
+    expect(navigationForRole("ops")).toHaveLength(13);
     expect(navigationForRole("field")).toHaveLength(4);
     expect(
       navigationForRole("owner")

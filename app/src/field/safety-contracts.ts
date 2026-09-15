@@ -145,3 +145,82 @@ export function safetyActionLabel(kind: SafetyActionKind): string {
         ? "Equipment defect report"
         : "Rescue call";
 }
+
+export const safetyEquipmentResponseSchema = z.object({
+  version: z.literal(1),
+  equipment: z.object({
+    equipment_id: z.string().min(1),
+    equipment_kind: z.string().min(1),
+    serial_number: z.string().min(1),
+    version: z.number().int().positive(),
+    status: z.enum(["in_service", "quarantined", "defective", "replaced", "retired"]),
+    assigned_user_id: z.string().nullable(),
+    inspection_interval_days: z.number().int().positive(),
+    last_inspection_at: z.string().nullable(),
+    last_inspection_result: z.enum(["pass", "fail"]).nullable(),
+    inspection_due_at: z.string().nullable(),
+    replaced_by_equipment_id: z.string().nullable(),
+    updated_at: z.string().min(1),
+  }),
+});
+
+export type SafetyEquipment = z.infer<typeof safetyEquipmentResponseSchema>["equipment"];
+
+export const correctiveEvidenceSchema = z
+  .object({
+    detail: z.string().trim().min(3).max(4000),
+    evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    evidence_refs_json: z
+      .string()
+      .max(20000)
+      .refine((value) => {
+        try {
+          return z
+            .array(
+              z.object({
+                ref: z
+                  .string()
+                  .trim()
+                  .min(3)
+                  .max(512)
+                  .regex(/^\P{Cc}+$/u),
+                sha256: z.string().regex(/^[0-9a-f]{64}$/),
+              }),
+            )
+            .min(1)
+            .max(100)
+            .safeParse(JSON.parse(value)).success;
+        } catch {
+          return false;
+        }
+      }),
+  })
+  .strict();
+export type CorrectiveEvidence = z.infer<typeof correctiveEvidenceSchema>;
+
+export const correctiveActionSchema = z.object({
+  corrective_action_id: z.string().min(1),
+  occurrence_id: z.string().min(1),
+  version: z.number().int().positive(),
+  state: z.enum(["open", "evidence_submitted", "verified", "closed", "rejected"]),
+  risk_level: z.enum(safetySeverities),
+  owner_user_id: z.string().min(1),
+  description: z.string().min(1),
+  due_at: z.string().min(1),
+  evidence_refs_json: z.string().nullable(),
+  evidence_sha256: z.string().nullable(),
+  evidence_captured_by_user_id: z.string().nullable(),
+  evidence_submitted_at: z.string().nullable(),
+  verified_by_user_id: z.string().nullable(),
+  verified_at: z.string().nullable(),
+  closed_at: z.string().nullable(),
+});
+export const correctiveActionResponseSchema = z.object({
+  version: z.literal(1),
+  corrective_action: correctiveActionSchema,
+});
+export const correctiveActionDetailSchema = correctiveActionResponseSchema.extend({
+  allowed_actions: z.array(z.enum(["submit_evidence", "verify", "reject", "close"])),
+  verification_unavailable_reason: z.string().nullable(),
+});
+export type CorrectiveActionDetail = z.infer<typeof correctiveActionDetailSchema>;

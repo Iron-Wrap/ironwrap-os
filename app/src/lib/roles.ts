@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CircleGauge,
   ClipboardCheck,
+  HardHat,
   Headphones,
   KanbanSquare,
   LifeBuoy,
@@ -30,6 +31,7 @@ export type RoleSurface =
   | "field"
   | "fleet"
   | "inventory"
+  | "safety"
   | "pairing"
   | "authority"
   | "ownerConfiguration";
@@ -58,6 +60,7 @@ export interface NavigationItem {
     | "/accounting/quickbooks"
     | "/inventory"
     | "/people"
+    | "/safety"
     | "/settings";
   icon: LucideIcon;
   activeColor: "accent" | "ok" | "warning";
@@ -165,6 +168,13 @@ const officeNavigation = [
     icon: Settings,
     activeColor: "accent",
     workspace: "Finance",
+  },
+  {
+    label: "Safety",
+    to: "/safety",
+    icon: HardHat,
+    activeColor: "warning",
+    workspace: "Control",
   },
   {
     label: "Approvals",

@@ -1197,6 +1197,16 @@ const FIXTURE_CAPABILITY_REFERENCE = [
     audience: ["owner", "ops", "accounting"],
   },
   {
+    id: "document_generation",
+    title: "Document generation",
+    state: "off",
+    reason: "flag_off",
+    flag_state: "off",
+    configuration_state: "not_evaluated",
+    flag_binding: "APP_DOCUMENT_GENERATION_ENABLED",
+    audience: ["owner", "ops"],
+  },
+  {
     id: "hermes_desktop",
     title: "Hermes desktop pilot",
     state: "off",
@@ -2534,6 +2544,121 @@ async function routeOnboarding(request, requestUrl, method) {
   return null;
 }
 
+function initialSafetyEquipment() {
+  const equipment = (equipment_id, verdict, overrides = {}) => ({
+    equipment_id,
+    equipment_kind: "fall_arrest_harness",
+    serial_number: `ACCEPTANCE-${"S".repeat(120)}`,
+    version: 1,
+    inspection_interval_days: 180,
+    last_inspection_at: "2026-08-20T09:00:00.000Z",
+    replaced_by_equipment_id: null,
+    updated_at: "2026-08-20T09:00:00.000Z",
+    status: "in_service",
+    assigned_user_id: `appu_acceptance_${"h".repeat(180)}`,
+    inspection_due_at: "2027-01-01T00:00:00.000Z",
+    last_inspection_result: "pass",
+    verdict,
+    detail: null,
+    days_left: 134,
+    ...overrides,
+  });
+  return Object.fromEntries(
+    [
+      equipment("eq_acceptance_clear", "serviceable"),
+      equipment("eq_acceptance_due", "expiring", {
+        days_left: 5,
+        inspection_due_at: "2026-08-25T09:00:00.000Z",
+      }),
+      equipment("eq_acceptance_failed", "unserviceable", {
+        status: "quarantined",
+        last_inspection_result: "fail",
+        detail: "The last inspection failed. Take this harness out of service.",
+      }),
+    ].map((record) => [record.equipment_id, record]),
+  );
+}
+let safetyEquipmentState = initialSafetyEquipment();
+
+function initialCorrectiveActions() {
+  const actions = [
+    {
+      corrective_action_id: "ca_acceptance_blocking",
+      occurrence_id: `so_acceptance_${"o".repeat(180)}`,
+      state: "open",
+      risk_level: "high",
+      owner_user_id: `appu_acceptance_${"a".repeat(180)}`,
+      due_at: "2026-08-19T09:00:00.000Z",
+      description: `Install a ladder tie-off point. Reference ${"R".repeat(180)}`,
+      blocking: true,
+      days_left: -1,
+    },
+    {
+      corrective_action_id: "ca_acceptance_tracking",
+      occurrence_id: "so_acceptance_low",
+      state: "open",
+      risk_level: "low",
+      owner_user_id: "appu_acceptance_field",
+      due_at: "2026-08-19T09:00:00.000Z",
+      description: "Replace the faded storage label.",
+      blocking: false,
+      days_left: -1,
+    },
+    // Reported by the office fixture user: the reporter holds full authority and still may
+    // not verify, exactly as `verifyCorrectiveAction` refuses on the Worker.
+    {
+      corrective_action_id: "ca_acceptance_reported",
+      occurrence_id: "so_acceptance_reported",
+      reported_by_user_id: "appu_acceptance_owner",
+      state: "open",
+      risk_level: "low",
+      owner_user_id: "appu_acceptance_field",
+      due_at: "2026-08-21T09:00:00.000Z",
+      description: "Re-hang the fire extinguisher sign.",
+      blocking: false,
+      days_left: 1,
+    },
+  ];
+  return Object.fromEntries(
+    actions.map((action) => [
+      action.corrective_action_id,
+      {
+        version: 1,
+        reported_by_user_id: "appu_acceptance_reporter",
+        evidence_refs_json: null,
+        evidence_sha256: null,
+        evidence_captured_by_user_id: null,
+        evidence_submitted_at: null,
+        verified_by_user_id: null,
+        verified_at: null,
+        closed_at: null,
+        ...action,
+        ...(["ca_acceptance_tracking", "ca_acceptance_reported"].includes(
+          action.corrective_action_id,
+        )
+          ? {
+              state: "evidence_submitted",
+              version: 2,
+              evidence_refs_json: JSON.stringify([
+                { ref: "r2://safety/label-check.pdf", sha256: "a".repeat(64) },
+              ]),
+              evidence_sha256: "b".repeat(64),
+              evidence_captured_by_user_id: "appu_acceptance_field",
+              evidence_submitted_at: "2026-08-20T09:00:00.000Z",
+            }
+          : {}),
+      },
+    ]),
+  );
+}
+let correctiveActionState = initialCorrectiveActions();
+let safetySessionRevoked = false;
+const revokedSessionResponse = (response, method) =>
+  sendJson(response, method, 401, {
+    error: "session_invalid",
+    message: "Your sign-in is no longer valid. Sign in again.",
+  });
+
 const requestListener = async (request, response) => {
   const method = request.method ?? "GET";
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
@@ -2623,6 +2748,138 @@ const requestListener = async (request, response) => {
       ],
     });
   }
+  if (method === "POST" && requestUrl.pathname === "/__acceptance/safety/reset") {
+    safetyEquipmentState = initialSafetyEquipment();
+    correctiveActionState = initialCorrectiveActions();
+    safetySessionRevoked = false;
+    return sendJson(response, method, 200, { ok: true });
+  }
+  // Test-only: the office session is revoked mid-form. Every safety command then answers the way
+  // the Worker does when `requireAppSession` refuses a stale cookie, so the browser spec can prove
+  // the page keeps the person's findings and job context instead of losing them.
+  if (method === "POST" && requestUrl.pathname === "/__acceptance/safety/revoke-session") {
+    safetySessionRevoked = true;
+    return sendJson(response, method, 200, { ok: true });
+  }
+  const correctiveMatch = requestUrl.pathname.match(
+    /^\/api\/v1\/safety\/corrective-actions\/([^/]+)(?:\/(evidence|verification|closure))?$/,
+  );
+  if (correctiveMatch) {
+    const action = correctiveActionState[correctiveMatch[1]];
+    if (!action) return sendJson(response, method, 404, { error: "not_found" });
+    const actor = currentFixtureSession().user;
+    const authority = ["owner", "ops", "production"].includes(actor.role);
+    // Same separation of duties as the Worker: reporter, owner, and evidence capturer are out.
+    const independent =
+      actor.id !== action.owner_user_id &&
+      actor.id !== action.evidence_captured_by_user_id &&
+      actor.id !== action.reported_by_user_id;
+    const allowed = [
+      ...(action.state === "open" ? ["submit_evidence"] : []),
+      ...(action.state === "evidence_submitted" && authority && independent
+        ? ["verify", "reject"]
+        : []),
+      ...(action.state === "verified" && authority ? ["close"] : []),
+    ];
+    if (method === "GET" && !correctiveMatch[2])
+      return sendJson(response, method, 200, {
+        version: 1,
+        corrective_action: action,
+        allowed_actions: allowed,
+        verification_unavailable_reason:
+          action.state === "evidence_submitted" && (!authority || !independent)
+            ? "The reporter, owner, and evidence capturer cannot verify this closure."
+            : null,
+      });
+    if (method === "POST") {
+      if (safetySessionRevoked) return revokedSessionResponse(response, method);
+      const input = await readJsonBody(request);
+      const command = correctiveMatch[2];
+      if (
+        command === "evidence" &&
+        action.state === "open" &&
+        typeof input.evidence_refs_json === "string" &&
+        /^[a-f0-9]{64}$/.test(input.evidence_sha256)
+      ) {
+        Object.assign(action, {
+          state: "evidence_submitted",
+          version: action.version + 1,
+          evidence_refs_json: input.evidence_refs_json,
+          evidence_sha256: input.evidence_sha256,
+          evidence_captured_by_user_id: actor.id,
+          evidence_submitted_at: "2026-08-20T10:00:00.000Z",
+        });
+      } else if (
+        command === "verification" &&
+        allowed.includes("verify") &&
+        ["verified", "rejected"].includes(input.verdict)
+      ) {
+        action.state = input.verdict;
+        action.version += 1;
+        action.verified_by_user_id = actor.id;
+        action.verified_at = "2026-08-20T11:00:00.000Z";
+      } else if (command === "closure" && allowed.includes("close")) {
+        action.state = "closed";
+        action.version += 1;
+        action.closed_at = "2026-08-20T12:00:00.000Z";
+      } else
+        return sendJson(response, method, 409, { error: "safety_corrective_action_state_invalid" });
+      return sendJson(response, method, 200, { version: 1, corrective_action: action });
+    }
+  }
+  const safetyEquipmentMatch = requestUrl.pathname.match(
+    /^\/api\/v1\/safety\/equipment\/([^/]+)(\/inspections)?$/,
+  );
+  if (safetyEquipmentMatch) {
+    const record = safetyEquipmentState[safetyEquipmentMatch[1]];
+    if (!record) return sendJson(response, method, 404, { error: "not_found" });
+    if (method === "GET" && !safetyEquipmentMatch[2]) {
+      return sendJson(response, method, 200, { version: 1, equipment: record });
+    }
+    if (method === "POST" && safetyEquipmentMatch[2]) {
+      if (safetySessionRevoked) return revokedSessionResponse(response, method);
+      const input = await readJsonBody(request);
+      if (
+        !["pass", "fail"].includes(input.result) ||
+        typeof input.detail !== "string" ||
+        input.detail.trim().length < 3
+      ) {
+        return sendJson(response, method, 400, { error: "safety_equipment_input_invalid" });
+      }
+      if (!Number.isInteger(input.expected_version) || input.expected_version < 1)
+        return sendJson(response, method, 400, { error: "safety_equipment_input_invalid" });
+      // Same rule as the Worker: a verdict binds to the revision the inspector read.
+      if (input.expected_version !== record.version)
+        return sendJson(response, method, 409, {
+          error: "safety_equipment_version_conflict",
+          message: `This equipment changed since it was read (revision ${input.expected_version} read, revision ${record.version} on file). Read the current record before inspecting.`,
+        });
+      record.version += 1;
+      record.last_inspection_result = input.result;
+      record.status = input.result === "pass" ? "in_service" : "quarantined";
+      record.verdict = input.result === "pass" ? "serviceable" : "unserviceable";
+      record.detail =
+        input.result === "pass"
+          ? null
+          : "The last inspection failed. Take this harness out of service.";
+      record.last_inspection_at = "2026-08-20T10:00:00.000Z";
+      record.updated_at = record.last_inspection_at;
+      record.inspection_due_at = "2027-02-16T10:00:00.000Z";
+      return sendJson(response, method, 200, { version: 1, equipment: record });
+    }
+  }
+  if (method === "GET" && requestUrl.pathname === "/api/v1/safety/desk") {
+    return sendJson(response, method, 200, {
+      version: 1,
+      read_model_generated_at: "2026-08-20T09:00:00.000Z",
+      expiring_within_days: 30,
+      actor_role: "owner",
+      equipment: Object.values(safetyEquipmentState),
+      corrective_actions: Object.values(correctiveActionState).filter(
+        (action) => !["closed", "rejected"].includes(action.state),
+      ),
+    });
+  }
   if (ACCEPTANCE_MODE === "onboarding") {
     // The real logo lives in R2 behind `/public/company-logo`. A 1x1 PNG is enough for the
     // screens to prove they point at it, and for a "no logo yet" state to 404 into its fallback.
@@ -2672,6 +2929,17 @@ const requestListener = async (request, response) => {
     }
   }
 
+  // `POST /api/v1/document-generations` mirrors the committed flag state above: owner only,
+  // idempotency key required, and refused as unavailable because APP_DOCUMENT_GENERATION_ENABLED
+  // is "false" in every checked-in environment. The success path is proven on the Worker
+  // (`workers-bus/test/document-generation-r2-api.test.ts`), not invented here.
+  if (method === "POST" && requestUrl.pathname === "/api/v1/document-generations") {
+    if (currentFixtureSession().user.role !== "owner")
+      return sendJson(response, method, 403, { error: "document_generation_forbidden" });
+    if (!/^[A-Za-z0-9._:-]{8,140}$/.test(request.headers["idempotency-key"] ?? ""))
+      return sendJson(response, method, 400, { error: "idempotency_key_required" });
+    return sendJson(response, method, 503, { error: "document_generation_unavailable" });
+  }
   if (method !== "GET" && method !== "HEAD") {
     return sendJson(response, method, 405, { error: "method_not_allowed" });
   }

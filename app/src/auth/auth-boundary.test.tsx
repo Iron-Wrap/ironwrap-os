@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./session", async (importOriginal) => {
@@ -21,7 +21,9 @@ import { AuthBoundary } from "./auth-boundary";
 import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
 import { fetchFieldBootstrap, takePrimedFieldBootstrap } from "./field-bootstrap";
 import { fetchSession, type SessionResponse } from "./session";
+import { useSession } from "./session-context";
 import { ApiError } from "../lib/api";
+import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 
 const pairingRequiredSession: SessionResponse = {
   version: 1,
@@ -246,5 +248,130 @@ describe("AuthBoundary", () => {
     expect(await screen.findByText("Authenticated production work")).toBeVisible();
     expect(clearDeviceSecret).toHaveBeenCalledOnce();
     expect(fetchSession).toHaveBeenCalledOnce();
+  });
+});
+
+describe("AuthBoundary after an offline reload", () => {
+  const liveSession: SessionResponse = {
+    ...unpairedSession,
+    authenticated: true,
+    user: {
+      id: "appu_ops",
+      email: "ops@example.invalid",
+      display_name: "Operations",
+      role: "ops",
+      frappe_user_id: "ops@example.invalid",
+    },
+    tenant: unpairedSession.tenant!,
+    permissions: ["session:read"],
+    allowed_actions: ["session.logout"],
+    csrf_token: "csrf-live",
+    session_expires_at: "2026-07-11T12:00:00.000Z",
+  };
+  const offlineSnapshot: SessionResponse = {
+    ...liveSession,
+    csrf_token: "offline-session-no-csrf",
+    stale_fields: ["session.offline_snapshot"],
+  };
+  function ShowToken() {
+    const session = useSession();
+    return <div>token: {session.csrf_token}</div>;
+  }
+  async function queueOneAction() {
+    const saved = await saveOutboxAction({
+      tenantId: liveSession.tenant!.id,
+      userId: "appu_ops",
+      kind: "safety_action",
+      endpoint: "/api/v1/safety/actions",
+      payload: { kind: "hazard_report", description: "Loose guard rail on the east scaffold." },
+    });
+    await queueOutboxAction(saved.deviceActionId);
+    return saved.deviceActionId;
+  }
+  function renderBoundary() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <ShowToken />
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("re-checks the sign-in when the network returns so queued work can upload", async () => {
+    vi.mocked(fetchSession)
+      .mockResolvedValueOnce(offlineSnapshot)
+      .mockResolvedValueOnce(liveSession);
+    const deviceActionId = await queueOneAction();
+    renderBoundary();
+    expect(await screen.findByText("token: offline-session-no-csrf")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("online")));
+
+    expect(await screen.findByText("token: csrf-live")).toBeVisible();
+    expect(fetchSession).toHaveBeenCalledTimes(2);
+    expect((await getOutboxAction(deviceActionId))?.state).toBe("queued");
+  });
+
+  it("closes the authenticated content when the held snapshot has expired and the re-check cannot reach the server", async () => {
+    const expired: SessionResponse = {
+      ...offlineSnapshot,
+      session_expires_at: "2020-01-01T00:00:00.000Z",
+    };
+    vi.mocked(fetchSession)
+      .mockResolvedValueOnce(expired)
+      // Status 0 is retried once by the boundary; every attempt fails the same way.
+      .mockRejectedValue(
+        new ApiError({ status: 0, code: "network_unavailable", message: "Offline." }),
+      );
+    const deviceActionId = await queueOneAction();
+    renderBoundary();
+    expect(await screen.findByText("token: offline-session-no-csrf")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("online")));
+
+    expect(await screen.findByText("This device needs the internet")).toBeVisible();
+    expect(screen.queryByText(/token:/)).not.toBeInTheDocument();
+    expect((await getOutboxAction(deviceActionId))?.state).toBe("queued");
+  });
+
+  it("closes the authenticated content when the server rejects the held sign-in outright", async () => {
+    vi.mocked(fetchSession)
+      .mockResolvedValueOnce(offlineSnapshot)
+      .mockRejectedValueOnce(
+        new ApiError({ status: 401, code: "session_invalid", message: "Sign in again." }),
+      );
+    const deviceActionId = await queueOneAction();
+    renderBoundary();
+    expect(await screen.findByText("token: offline-session-no-csrf")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("online")));
+
+    expect(await screen.findByText("IronWrap OS is not ready")).toBeVisible();
+    expect(screen.queryByText(/token:/)).not.toBeInTheDocument();
+    const kept = await getOutboxAction(deviceActionId);
+    expect(kept?.state).toBe("queued");
+    expect(kept?.payload).toMatchObject({ kind: "hazard_report" });
+  });
+
+  it("keeps the offline sign-in and every queued item when the re-check fails", async () => {
+    vi.mocked(fetchSession)
+      .mockResolvedValueOnce(offlineSnapshot)
+      .mockRejectedValueOnce(
+        new ApiError({ status: 503, code: "session_unavailable", message: "Try again later." }),
+      );
+    const deviceActionId = await queueOneAction();
+    renderBoundary();
+    expect(await screen.findByText("token: offline-session-no-csrf")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("online")));
+
+    await waitFor(() => expect(fetchSession).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("token: offline-session-no-csrf")).toBeVisible();
+    expect(screen.queryByText("This device needs the internet")).not.toBeInTheDocument();
+    const kept = await getOutboxAction(deviceActionId);
+    expect(kept?.state).toBe("queued");
+    expect(kept?.payload).toMatchObject({ kind: "hazard_report" });
   });
 });

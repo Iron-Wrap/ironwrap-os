@@ -83,7 +83,12 @@ GET /api/v1/documents/{entity_type}/{entity_id}
 5. **No authority decision that the record read does not already make.** A reader authorized for
    the record but not for a bound field still receives the block; the field is simply absent from
    their record read, and the PWA marks that line withheld rather than guessing.
-6. Read-only. `POST` stays on `/api/v1/document-generations`, owner-only, unchanged.
+6. Read-only. `POST` stays on `/api/v1/document-generations`, owner-only, unchanged. The stored
+   file behind a receipt is read only through `GET /api/v1/document-generations/{receipt_id}/document`
+   (owner-only, tenant-scoped by the receipt, bytes digest-checked against `output_digest` before
+   they leave; `409 document_generation_pending` / `document_generation_not_stored` when the effect
+   never reached `succeeded`, `409 document_generation_readback_mismatch` when the object no longer
+   matches, `404 document_object_missing` when it is gone). No client composes a storage URL.
 
 ### Known boundary: assignment is a per-field decision, not a per-record one
 

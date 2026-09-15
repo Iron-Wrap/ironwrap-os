@@ -63,3 +63,47 @@ export interface EntityDocumentsModel {
   /** True when this render came from the device cache because the network was unreachable. */
   offline: boolean;
 }
+
+/**
+ * `POST /api/v1/document-generations` (owner only). The Worker answers with the effect outcome
+ * and the durable receipt it wrote: `succeeded` 200, `unknown` 202 (the R2 write was not
+ * acknowledged; a reconcile may still prove it), `not_executed` / `manual_exception` 409,
+ * `failed` 502. Every one of those carries a receipt, so the client shows the receipt, not a
+ * guess. `.passthrough()` keeps a widened server from breaking a shipped client.
+ */
+export const DOCUMENT_GENERATIONS_ROUTE = "/api/v1/document-generations";
+
+export const documentGenerationOutcomes = [
+  "succeeded",
+  "failed",
+  "unknown",
+  "manual_exception",
+  "not_executed",
+] as const;
+
+export const documentGenerationReceiptSchema = z
+  .object({
+    receipt_id: z.string().min(1),
+    generation_attempt_id: z.string().min(1),
+    receipt_version: z.number().int().positive(),
+    template_id: z.string().min(1),
+    template_version: z.number().int().positive(),
+    provider: z.string().min(1),
+    provider_document_id: z.string().nullable(),
+    output_digest: z.string().min(1),
+    readback_status: z.string().nullable(),
+    terminal_status: z.string().nullable(),
+    reconciliation_outcome: z.string().nullable(),
+  })
+  .passthrough();
+
+export const documentGenerationResponseSchema = z
+  .object({
+    outcome: z.enum(documentGenerationOutcomes),
+    generation: documentGenerationReceiptSchema,
+    attachment: z.unknown().nullable(),
+  })
+  .passthrough();
+
+export type DocumentGenerationOutcome = (typeof documentGenerationOutcomes)[number];
+export type DocumentGenerationResponse = z.infer<typeof documentGenerationResponseSchema>;

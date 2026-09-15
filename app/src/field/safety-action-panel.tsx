@@ -220,6 +220,26 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
         </ul>
       ) : null}
 
+      {panel?.my_corrective_actions.length ? (
+        <section className="mt-4 space-y-2" aria-label="Your corrective actions">
+          <h3 className="font-bold">Your corrective actions</h3>
+          <ul className="space-y-2">
+            {panel.my_corrective_actions.map((action) => (
+              <li key={action.corrective_action_id} className="space-y-1 border p-3">
+                <p className="break-all text-sm">{action.description}</p>
+                <Button asChild variant="outline">
+                  <a
+                    href={`/safety/corrective-actions/${encodeURIComponent(action.corrective_action_id)}`}
+                  >
+                    Open corrective action
+                  </a>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <div className="mt-5 grid gap-2 sm:grid-cols-2">
         <Button
           type="button"

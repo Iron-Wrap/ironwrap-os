@@ -50,6 +50,7 @@ import {
   type R2DocumentGenerationResult,
 } from "./document-generation-r2.ts";
 import { EffectRuntimeError } from "./effect-runtime.ts";
+import { sha256Hex } from "./newo-hash.ts";
 import { knownEntityType } from "./pipeline-board-store.ts";
 
 const ADMIN_FIELDS = "/api/v1/admin/schema-fields";
@@ -60,15 +61,22 @@ const DOCUMENT_GENERATIONS = "/api/v1/document-generations";
 const MAX_BODY_BYTES = 32 * 1024;
 
 const ADMIN_FIELD_ROUTE = /^\/api\/v1\/admin\/schema-fields\/([^/]+)$/;
-const ADMIN_FIELD_REVISIONS_ROUTE = /^\/api\/v1\/admin\/schema-fields\/([^/]+)\/revisions$/;
+const ADMIN_FIELD_REVISIONS_ROUTE =
+  /^\/api\/v1\/admin\/schema-fields\/([^/]+)\/revisions$/;
 const ADMIN_TEMPLATE_ROUTE = /^\/api\/v1\/admin\/document-templates\/([^/]+)$/;
-const ADMIN_TEMPLATE_REVISIONS_ROUTE = /^\/api\/v1\/admin\/document-templates\/([^/]+)\/revisions$/;
+const ADMIN_TEMPLATE_REVISIONS_ROUTE =
+  /^\/api\/v1\/admin\/document-templates\/([^/]+)\/revisions$/;
 const RECORD_VALUES_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)$/;
-const RECORD_VALUE_WRITE_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/values$/;
-const RECORD_VALUE_REVISIONS_ROUTE = /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/revisions$/;
+const RECORD_VALUE_WRITE_ROUTE =
+  /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/values$/;
+const RECORD_VALUE_REVISIONS_ROUTE =
+  /^\/api\/v1\/schema-fields\/([^/]+)\/([^/]+)\/([^/]+)\/revisions$/;
 const RECORD_DOCUMENTS_ROUTE = /^\/api\/v1\/documents\/([^/]+)\/([^/]+)$/;
-const DOCUMENT_GENERATION_RECONCILE_ROUTE = /^\/api\/v1\/document-generations\/([^/]+)\/reconcile$/;
+const DOCUMENT_GENERATION_RECONCILE_ROUTE =
+  /^\/api\/v1\/document-generations\/([^/]+)\/reconcile$/;
 const DOCUMENT_GENERATION_ROUTE = /^\/api\/v1\/document-generations\/([^/]+)$/;
+const DOCUMENT_GENERATION_OBJECT_ROUTE =
+  /^\/api\/v1\/document-generations\/([^/]+)\/document$/;
 
 export async function handleSchemaFormsRoute(
   req: Request,
@@ -78,13 +86,20 @@ export async function handleSchemaFormsRoute(
 ): Promise<Response | null> {
   const url = new URL(req.url);
   const path = url.pathname;
-  const administration = path === ADMIN_FIELDS || path.startsWith(`${ADMIN_FIELDS}/`) ||
-    path === ADMIN_TEMPLATES || path.startsWith(`${ADMIN_TEMPLATES}/`);
-  const records = path === RECORD_FIELDS || path.startsWith(`${RECORD_FIELDS}/`);
+  const administration =
+    path === ADMIN_FIELDS ||
+    path.startsWith(`${ADMIN_FIELDS}/`) ||
+    path === ADMIN_TEMPLATES ||
+    path.startsWith(`${ADMIN_TEMPLATES}/`);
+  const records =
+    path === RECORD_FIELDS || path.startsWith(`${RECORD_FIELDS}/`);
   // Record document reads are deliberately NOT part of `generations`: authoring and generating a
   // document are owner-only commands, reading the layout the owner authored is not.
-  const documents = path === RECORD_DOCUMENTS || path.startsWith(`${RECORD_DOCUMENTS}/`);
-  const generations = path === DOCUMENT_GENERATIONS || path.startsWith(`${DOCUMENT_GENERATIONS}/`);
+  const documents =
+    path === RECORD_DOCUMENTS || path.startsWith(`${RECORD_DOCUMENTS}/`);
+  const generations =
+    path === DOCUMENT_GENERATIONS ||
+    path.startsWith(`${DOCUMENT_GENERATIONS}/`);
   if (!administration && !records && !documents && !generations) return null;
 
   if (administration && auth.session.role !== "owner")
@@ -93,34 +108,62 @@ export async function handleSchemaFormsRoute(
     return json({ error: "document_generation_forbidden" }, 403);
 
   try {
-    if (path === ADMIN_FIELDS) return await adminFieldsRoot(req, env, auth, url, now);
+    if (path === ADMIN_FIELDS)
+      return await adminFieldsRoot(req, env, auth, url, now);
     const fieldRevisions = path.match(ADMIN_FIELD_REVISIONS_ROUTE);
-    if (fieldRevisions) return await adminFieldRevisions(req, env, auth, fieldRevisions[1] ?? "");
+    if (fieldRevisions)
+      return await adminFieldRevisions(req, env, auth, fieldRevisions[1] ?? "");
     const field = path.match(ADMIN_FIELD_ROUTE);
     if (field) return await adminField(req, env, auth, field[1] ?? "", now);
 
-    if (path === ADMIN_TEMPLATES) return await adminTemplatesRoot(req, env, auth, url, now);
+    if (path === ADMIN_TEMPLATES)
+      return await adminTemplatesRoot(req, env, auth, url, now);
     const templateRevisions = path.match(ADMIN_TEMPLATE_REVISIONS_ROUTE);
     if (templateRevisions)
-      return await adminTemplateRevisions(req, env, auth, templateRevisions[1] ?? "");
+      return await adminTemplateRevisions(
+        req,
+        env,
+        auth,
+        templateRevisions[1] ?? "",
+      );
     const template = path.match(ADMIN_TEMPLATE_ROUTE);
-    if (template) return await adminTemplate(req, env, auth, template[1] ?? "", now);
+    if (template)
+      return await adminTemplate(req, env, auth, template[1] ?? "", now);
 
     const valueRevisions = path.match(RECORD_VALUE_REVISIONS_ROUTE);
     if (valueRevisions)
-      return await recordValueRevisions(req, env, auth, valueRevisions.slice(1));
+      return await recordValueRevisions(
+        req,
+        env,
+        auth,
+        valueRevisions.slice(1),
+      );
     const valueWrite = path.match(RECORD_VALUE_WRITE_ROUTE);
-    if (valueWrite) return await recordValueWrite(req, env, auth, valueWrite.slice(1), now);
+    if (valueWrite)
+      return await recordValueWrite(req, env, auth, valueWrite.slice(1), now);
     const values = path.match(RECORD_VALUES_ROUTE);
     if (values) return await recordValues(req, env, auth, values.slice(1));
     const documentsRead = path.match(RECORD_DOCUMENTS_ROUTE);
-    if (documentsRead) return await recordDocuments(req, env, auth, documentsRead.slice(1));
+    if (documentsRead)
+      return await recordDocuments(req, env, auth, documentsRead.slice(1));
 
-    if (path === DOCUMENT_GENERATIONS) return await documentGenerationRoot(req, env, auth, now);
+    if (path === DOCUMENT_GENERATIONS)
+      return await documentGenerationRoot(req, env, auth, now);
     const reconcile = path.match(DOCUMENT_GENERATION_RECONCILE_ROUTE);
-    if (reconcile) return await documentGenerationReconcile(req, env, auth, reconcile[1] ?? "", now);
+    if (reconcile)
+      return await documentGenerationReconcile(
+        req,
+        env,
+        auth,
+        reconcile[1] ?? "",
+        now,
+      );
+    const object = path.match(DOCUMENT_GENERATION_OBJECT_ROUTE);
+    if (object)
+      return await documentGenerationObject(req, env, auth, object[1] ?? "");
     const generation = path.match(DOCUMENT_GENERATION_ROUTE);
-    if (generation) return await documentGenerationRead(req, env, auth, generation[1] ?? "");
+    if (generation)
+      return await documentGenerationRead(req, env, auth, generation[1] ?? "");
   } catch (error) {
     return domainFailure(error);
   }
@@ -137,18 +180,25 @@ async function documentGenerationRoot(
   const mutation = await mutationInput(req, auth);
   if ("response" in mutation) return mutation.response;
   const body = mutation.body;
-  const result = await generateDocumentToR2(env, {
-    tenantId: auth.session.tenant_id,
-    entityType: body.entity_type as string,
-    entityId: body.entity_id as string,
-    templateId: body.template_id as string,
-    templateRevisionId: body.template_revision_id as string | null | undefined,
-    expectedInputSnapshotDigest: body.expected_input_snapshot_digest as string | null | undefined,
-    outputFieldId: body.output_field_id as string | null | undefined,
-    expectedOutputFieldVersion: body.expected_output_field_version as number | null | undefined,
-    actor: sessionActor(auth),
-    idempotencyKey: mutation.idempotencyKey,
-  }, now);
+  const result = await generateDocumentToR2(
+    env,
+    {
+      tenantId: auth.session.tenant_id,
+      entityType: body.entity_type as string,
+      entityId: body.entity_id as string,
+      templateId: body.template_id as string,
+      templateRevisionId: body.template_revision_id as
+        string | null | undefined,
+      expectedInputSnapshotDigest: body.expected_input_snapshot_digest as
+        string | null | undefined,
+      outputFieldId: body.output_field_id as string | null | undefined,
+      expectedOutputFieldVersion: body.expected_output_field_version as
+        number | null | undefined,
+      actor: sessionActor(auth),
+      idempotencyKey: mutation.idempotencyKey,
+    },
+    now,
+  );
   return generationResponse(result);
 }
 
@@ -161,8 +211,91 @@ async function documentGenerationRead(
   if (req.method !== "GET") return json({ error: "not_found" }, 404);
   const receiptId = decoded(encodedReceiptId);
   if (!receiptId) return json({ error: "not_found" }, 404);
-  const receipt = await getDocumentGenerationReceipt(env, auth.session.tenant_id, receiptId);
-  return receipt ? json({ generation: generationReceiptView(receipt) }) : json({ error: "not_found" }, 404);
+  const receipt = await getDocumentGenerationReceipt(
+    env,
+    auth.session.tenant_id,
+    receiptId,
+  );
+  return receipt
+    ? json({ generation: generationReceiptView(receipt) })
+    : json({ error: "not_found" }, 404);
+}
+
+/**
+ * The stored file behind a receipt, read back through the receipt rather than by any URL a client
+ * could compose. Owner only (the route prefix), tenant-scoped by the receipt lookup. The bytes are
+ * digest-checked against `output_digest` before they leave, so a client can never be handed an
+ * object that differs from what the receipt attests; a receipt whose effect never reached
+ * `succeeded` has no file to hand over and says so with the recorded outcome.
+ */
+async function documentGenerationObject(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  encodedReceiptId: string,
+): Promise<Response> {
+  if (req.method !== "GET") return json({ error: "not_found" }, 404);
+  const receiptId = decoded(encodedReceiptId);
+  if (!receiptId) return json({ error: "not_found" }, 404);
+  const receipt = await getDocumentGenerationReceipt(
+    env,
+    auth.session.tenant_id,
+    receiptId,
+  );
+  if (!receipt) return json({ error: "not_found" }, 404);
+  if (
+    receipt.reconciliation_outcome === null ||
+    receipt.reconciliation_outcome === "unknown"
+  )
+    return json(
+      {
+        error: "document_generation_pending",
+        outcome: receipt.reconciliation_outcome,
+      },
+      409,
+    );
+  if (
+    receipt.reconciliation_outcome !== "succeeded" ||
+    !receipt.provider_document_id
+  )
+    return json(
+      {
+        error: "document_generation_not_stored",
+        outcome: receipt.reconciliation_outcome,
+      },
+      409,
+    );
+  const bucket = (env as { RAW?: R2Bucket }).RAW;
+  if (!bucket || typeof bucket.get !== "function")
+    return json({ error: "document_generation_r2_unavailable" }, 503);
+  let object: R2ObjectBody | null;
+  try {
+    object = await bucket.get(receipt.provider_document_id.replace(/^r2:/, ""));
+  } catch {
+    return json({ error: "document_generation_r2_unavailable" }, 503);
+  }
+  if (!object) return json({ error: "document_object_missing" }, 404);
+  const body = await object.text();
+  if ((await sha256Hex(body)) !== receipt.output_digest)
+    return json(
+      {
+        error: "document_generation_readback_mismatch",
+        expected: receipt.output_digest,
+      },
+      409,
+    );
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-disposition": `inline; filename="${receipt.template_id}-v${receipt.template_version}.html"`,
+      "cache-control": "private, no-store",
+      "x-document-digest": receipt.output_digest,
+      "x-content-type-options": "nosniff",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'",
+    },
+  });
 }
 
 async function documentGenerationReconcile(
@@ -177,27 +310,42 @@ async function documentGenerationReconcile(
   if (!generationAttemptId) return json({ error: "not_found" }, 404);
   const mutation = await mutationInput(req, auth);
   if ("response" in mutation) return mutation.response;
-  const result = await reconcileDocumentR2(env, {
-    tenantId: auth.session.tenant_id,
-    generationAttemptId,
-    actor: sessionActor(auth),
-    idempotencyKey: mutation.idempotencyKey,
-  }, now);
+  const result = await reconcileDocumentR2(
+    env,
+    {
+      tenantId: auth.session.tenant_id,
+      generationAttemptId,
+      actor: sessionActor(auth),
+      idempotencyKey: mutation.idempotencyKey,
+    },
+    now,
+  );
   return generationResponse(result);
 }
 
 function generationResponse(result: R2DocumentGenerationResult): Response {
-  const status = result.outcome === "unknown" ? 202
-    : result.outcome === "manual_exception" || result.outcome === "not_executed" ? 409
-      : result.outcome === "failed" ? 502 : 200;
-  return json({
-    outcome: result.outcome,
-    generation: generationReceiptView(result.receipt),
-    attachment: result.attachment ? recordValueView(result.attachment) : null,
-  }, status);
+  const status =
+    result.outcome === "unknown"
+      ? 202
+      : result.outcome === "manual_exception" ||
+          result.outcome === "not_executed"
+        ? 409
+        : result.outcome === "failed"
+          ? 502
+          : 200;
+  return json(
+    {
+      outcome: result.outcome,
+      generation: generationReceiptView(result.receipt),
+      attachment: result.attachment ? recordValueView(result.attachment) : null,
+    },
+    status,
+  );
 }
 
-function generationReceiptView(receipt: DocumentGenerationReceipt): Record<string, unknown> {
+function generationReceiptView(
+  receipt: DocumentGenerationReceipt,
+): Record<string, unknown> {
   return {
     receipt_id: receipt.receipt_id,
     generation_attempt_id: receipt.generation_attempt_id,
@@ -219,7 +367,11 @@ function generationReceiptView(receipt: DocumentGenerationReceipt): Record<strin
     reconciliation_outcome: receipt.reconciliation_outcome,
     authority: {
       kind: receipt.authority_kind,
-      actor: { type: receipt.actor_type, role: receipt.actor_role, id: receipt.actor_id },
+      actor: {
+        type: receipt.actor_type,
+        role: receipt.actor_role,
+        id: receipt.actor_id,
+      },
       authority_ref: receipt.authority_ref,
       policy_ref: receipt.policy_ref,
       policy_version: receipt.policy_version,
@@ -229,18 +381,19 @@ function generationReceiptView(receipt: DocumentGenerationReceipt): Record<strin
       compensation_policy: receipt.compensation_policy,
     },
     created_at: receipt.created_at,
-    inputs: receipt.attempt?.inputs.map((input) => ({
-      sequence: input.sequence,
-      field_id: input.field_id,
-      field_key: input.field_key,
-      label: input.label,
-      field_definition_revision_id: input.field_definition_revision_id,
-      field_definition_version: input.field_definition_version,
-      value_revision_id: input.value_revision_id,
-      value_version: input.value_version,
-      value_digest: input.value_digest,
-      value: input.value,
-    })) ?? [],
+    inputs:
+      receipt.attempt?.inputs.map((input) => ({
+        sequence: input.sequence,
+        field_id: input.field_id,
+        field_key: input.field_key,
+        label: input.label,
+        field_definition_revision_id: input.field_definition_revision_id,
+        field_definition_version: input.field_definition_version,
+        value_revision_id: input.value_revision_id,
+        value_version: input.value_version,
+        value_digest: input.value_digest,
+        value: input.value,
+      })) ?? [],
   };
 }
 
@@ -253,11 +406,18 @@ async function adminFieldsRoot(
 ): Promise<Response> {
   if (req.method === "GET") {
     const entityType = entityTypeFilter(url);
-    if (entityType === null) return json({ error: "schema_field_entity_type_invalid" }, 400);
+    if (entityType === null)
+      return json({ error: "schema_field_entity_type_invalid" }, 400);
     return json({
       version: 1,
       catalog: fieldCatalog(),
-      fields: (await listSchemaFieldDefinitions(env, auth.session.tenant_id, entityType || undefined)).map(adminFieldView),
+      fields: (
+        await listSchemaFieldDefinitions(
+          env,
+          auth.session.tenant_id,
+          entityType || undefined,
+        )
+      ).map(adminFieldView),
     });
   }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
@@ -268,7 +428,10 @@ async function adminFieldsRoot(
     fieldDefinitionInput(mutation.body, auth, mutation.idempotencyKey),
     now,
   );
-  return json({ outcome: result.kind, field: adminFieldView(result.definition) }, result.kind === "created" ? 201 : 200);
+  return json(
+    { outcome: result.kind, field: adminFieldView(result.definition) },
+    result.kind === "created" ? 201 : 200,
+  );
 }
 
 async function adminField(
@@ -281,8 +444,14 @@ async function adminField(
   const fieldId = decoded(encodedFieldId);
   if (!fieldId) return json({ error: "not_found" }, 404);
   if (req.method === "GET") {
-    const field = await getSchemaFieldDefinition(env, auth.session.tenant_id, fieldId);
-    return field ? json({ field: adminFieldView(field) }) : json({ error: "not_found" }, 404);
+    const field = await getSchemaFieldDefinition(
+      env,
+      auth.session.tenant_id,
+      fieldId,
+    );
+    return field
+      ? json({ field: adminFieldView(field) })
+      : json({ error: "not_found" }, 404);
   }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
   const mutation = await mutationInput(req, auth);
@@ -292,7 +461,10 @@ async function adminField(
     fieldDefinitionInput(mutation.body, auth, mutation.idempotencyKey, fieldId),
     now,
   );
-  return json({ outcome: result.kind, field: adminFieldView(result.definition) });
+  return json({
+    outcome: result.kind,
+    field: adminFieldView(result.definition),
+  });
 }
 
 async function adminFieldRevisions(
@@ -304,13 +476,23 @@ async function adminFieldRevisions(
   if (req.method !== "GET") return json({ error: "not_found" }, 404);
   const fieldId = decoded(encodedFieldId);
   if (!fieldId) return json({ error: "not_found" }, 404);
-  const current = await getSchemaFieldDefinition(env, auth.session.tenant_id, fieldId);
+  const current = await getSchemaFieldDefinition(
+    env,
+    auth.session.tenant_id,
+    fieldId,
+  );
   if (!current) return json({ error: "not_found" }, 404);
   return json({
     field_id: fieldId,
     current_revision_id: current.revision_id,
     current_version: current.version,
-    revisions: (await listSchemaFieldDefinitionRevisions(env, auth.session.tenant_id, fieldId)).map(adminFieldView),
+    revisions: (
+      await listSchemaFieldDefinitionRevisions(
+        env,
+        auth.session.tenant_id,
+        fieldId,
+      )
+    ).map(adminFieldView),
   });
 }
 
@@ -323,7 +505,8 @@ async function adminTemplatesRoot(
 ): Promise<Response> {
   if (req.method === "GET") {
     const entityType = entityTypeFilter(url);
-    if (entityType === null) return json({ error: "document_template_entity_type_invalid" }, 400);
+    if (entityType === null)
+      return json({ error: "document_template_entity_type_invalid" }, 400);
     return json({
       version: 1,
       catalog: {
@@ -331,7 +514,13 @@ async function adminTemplatesRoot(
         block_kinds: [...DOCUMENT_TEMPLATE_BLOCK_KINDS],
         retention_policies: [...SCHEMA_RETENTION_POLICIES],
       },
-      templates: (await listDocumentTemplates(env, auth.session.tenant_id, entityType || undefined)).map(adminTemplateView),
+      templates: (
+        await listDocumentTemplates(
+          env,
+          auth.session.tenant_id,
+          entityType || undefined,
+        )
+      ).map(adminTemplateView),
     });
   }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
@@ -342,7 +531,10 @@ async function adminTemplatesRoot(
     templateInput(mutation.body, auth, mutation.idempotencyKey),
     now,
   );
-  return json({ outcome: result.kind, template: adminTemplateView(result.template) }, result.kind === "created" ? 201 : 200);
+  return json(
+    { outcome: result.kind, template: adminTemplateView(result.template) },
+    result.kind === "created" ? 201 : 200,
+  );
 }
 
 async function adminTemplate(
@@ -355,8 +547,14 @@ async function adminTemplate(
   const templateId = decoded(encodedTemplateId);
   if (!templateId) return json({ error: "not_found" }, 404);
   if (req.method === "GET") {
-    const template = await getDocumentTemplate(env, auth.session.tenant_id, templateId);
-    return template ? json({ template: adminTemplateView(template) }) : json({ error: "not_found" }, 404);
+    const template = await getDocumentTemplate(
+      env,
+      auth.session.tenant_id,
+      templateId,
+    );
+    return template
+      ? json({ template: adminTemplateView(template) })
+      : json({ error: "not_found" }, 404);
   }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
   const mutation = await mutationInput(req, auth);
@@ -366,7 +564,10 @@ async function adminTemplate(
     templateInput(mutation.body, auth, mutation.idempotencyKey, templateId),
     now,
   );
-  return json({ outcome: result.kind, template: adminTemplateView(result.template) });
+  return json({
+    outcome: result.kind,
+    template: adminTemplateView(result.template),
+  });
 }
 
 async function adminTemplateRevisions(
@@ -378,13 +579,23 @@ async function adminTemplateRevisions(
   if (req.method !== "GET") return json({ error: "not_found" }, 404);
   const templateId = decoded(encodedTemplateId);
   if (!templateId) return json({ error: "not_found" }, 404);
-  const current = await getDocumentTemplate(env, auth.session.tenant_id, templateId);
+  const current = await getDocumentTemplate(
+    env,
+    auth.session.tenant_id,
+    templateId,
+  );
   if (!current) return json({ error: "not_found" }, 404);
   return json({
     template_id: templateId,
     current_revision_id: current.revision_id,
     current_version: current.version,
-    revisions: (await listDocumentTemplateRevisions(env, auth.session.tenant_id, templateId)).map(adminTemplateView),
+    revisions: (
+      await listDocumentTemplateRevisions(
+        env,
+        auth.session.tenant_id,
+        templateId,
+      )
+    ).map(adminTemplateView),
   });
 }
 
@@ -447,11 +658,17 @@ async function recordDocuments(
     sessionActor(auth),
   );
   if (!readable) return json({ error: "not_found" }, 404);
-  const templates = await listDocumentTemplates(env, auth.session.tenant_id, scope.entityType);
+  const templates = await listDocumentTemplates(
+    env,
+    auth.session.tenant_id,
+    scope.entityType,
+  );
   return json({
     entity_type: scope.entityType,
     entity_id: scope.entityId,
-    documents: templates.filter((template) => template.active).map(recordDocumentView),
+    documents: templates
+      .filter((template) => template.active)
+      .map(recordDocumentView),
   });
 }
 
@@ -460,7 +677,9 @@ async function recordDocuments(
  * retention - stay on `adminTemplateView`. `blocks` travels verbatim: it is the same
  * `DocumentTemplateBlock[]` `renderDocumentTemplate` consumes, in authored order.
  */
-function recordDocumentView(template: DocumentTemplateRevision): Record<string, unknown> {
+function recordDocumentView(
+  template: DocumentTemplateRevision,
+): Record<string, unknown> {
   return {
     template_id: template.template_id,
     template_key: template.template_key,
@@ -486,10 +705,20 @@ async function recordValueWrite(
   if ("response" in mutation) return mutation.response;
   const result = await recordSchemaFieldValue(
     env,
-    fieldValueInput(mutation.body, auth, mutation.idempotencyKey, scope.entityType, scope.entityId, fieldId),
+    fieldValueInput(
+      mutation.body,
+      auth,
+      mutation.idempotencyKey,
+      scope.entityType,
+      scope.entityId,
+      fieldId,
+    ),
     now,
   );
-  return json({ outcome: result.kind, value: recordValueView(result.value) }, result.kind === "created" ? 201 : 200);
+  return json(
+    { outcome: result.kind, value: recordValueView(result.value) },
+    result.kind === "created" ? 201 : 200,
+  );
 }
 
 async function recordValueRevisions(
@@ -510,7 +739,12 @@ async function recordValueRevisions(
     fieldId,
     sessionActor(auth),
   );
-  return json({ entity_type: scope.entityType, entity_id: scope.entityId, field_id: fieldId, revisions: revisions.map(recordValueView) });
+  return json({
+    entity_type: scope.entityType,
+    entity_id: scope.entityId,
+    field_id: fieldId,
+    revisions: revisions.map(recordValueView),
+  });
 }
 
 function fieldDefinitionInput(
@@ -581,10 +815,12 @@ function fieldValueInput(
     entityType,
     entityId,
     fieldId,
-    fieldDefinitionRevisionId: body.field_definition_revision_id as string | null | undefined,
+    fieldDefinitionRevisionId: body.field_definition_revision_id as
+      string | null | undefined,
     expectedVersion: body.expected_version as number,
     value: body.value,
-    basedOnValueRevisionId: body.based_on_value_revision_id as string | null | undefined,
+    basedOnValueRevisionId: body.based_on_value_revision_id as
+      string | null | undefined,
     correctionReason: body.correction_reason as string | null | undefined,
     sourceRef: body.source_ref as string | null | undefined,
     evidenceRef: body.evidence_ref as string | null | undefined,
@@ -596,7 +832,12 @@ function fieldValueInput(
 
 function sessionActor(auth: AuthContext): SchemaFieldActor {
   return {
-    type: auth.session.role === "owner" ? "owner" : auth.session.role === "field" ? "worker" : "agent",
+    type:
+      auth.session.role === "owner"
+        ? "owner"
+        : auth.session.role === "field"
+          ? "worker"
+          : "agent",
     role: auth.session.role,
     userId: auth.session.user_id,
     authorityRef: `app:${auth.session.user_id}`,
@@ -607,17 +848,27 @@ function sessionActor(auth: AuthContext): SchemaFieldActor {
 async function mutationInput(
   req: Request,
   auth: AuthContext,
-): Promise<{ body: Record<string, unknown>; idempotencyKey: string } | { response: Response }> {
-  if (!validAppCsrf(req, auth)) return { response: json({ error: "csrf_failed" }, 403) };
+): Promise<
+  | { body: Record<string, unknown>; idempotencyKey: string }
+  | { response: Response }
+> {
+  if (!validAppCsrf(req, auth))
+    return { response: json({ error: "csrf_failed" }, 403) };
   const idempotencyKey = req.headers.get("idempotency-key")?.trim() ?? "";
   if (!/^[A-Za-z0-9._:-]{8,140}$/.test(idempotencyKey))
     return { response: json({ error: "idempotency_key_required" }, 400) };
   const parsed = await readJson(req);
-  if (!parsed.ok) return { response: json({ error: parsed.error }, parsed.status) };
-  const body = parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)
-    ? parsed.value as Record<string, unknown>
-    : null;
-  return body ? { body, idempotencyKey } : { response: json({ error: "invalid_request" }, 400) };
+  if (!parsed.ok)
+    return { response: json({ error: parsed.error }, parsed.status) };
+  const body =
+    parsed.value &&
+    typeof parsed.value === "object" &&
+    !Array.isArray(parsed.value)
+      ? (parsed.value as Record<string, unknown>)
+      : null;
+  return body
+    ? { body, idempotencyKey }
+    : { response: json({ error: "invalid_request" }, 400) };
 }
 
 function fieldCatalog(): Record<string, unknown> {
@@ -657,14 +908,21 @@ function adminFieldView(field: SchemaFieldDefinition): Record<string, unknown> {
     read_roles: field.read_roles,
     write_roles: field.write_roles,
     active: field.active,
-    actor: { type: field.actor_type, role: field.actor_role, id: field.actor_id, authority_ref: field.authority_ref },
+    actor: {
+      type: field.actor_type,
+      role: field.actor_role,
+      id: field.actor_id,
+      authority_ref: field.authority_ref,
+    },
     command_fingerprint: field.command_fingerprint,
     effective_at: field.effective_at,
     created_at: field.created_at,
   };
 }
 
-function recordFieldView(field: SchemaFieldDefinition): Record<string, unknown> {
+function recordFieldView(
+  field: SchemaFieldDefinition,
+): Record<string, unknown> {
   return {
     field_id: field.field_id,
     field_key: field.field_key,
@@ -698,7 +956,9 @@ function recordValueView(value: SchemaFieldValue): Record<string, unknown> {
   };
 }
 
-function adminTemplateView(template: DocumentTemplateRevision): Record<string, unknown> {
+function adminTemplateView(
+  template: DocumentTemplateRevision,
+): Record<string, unknown> {
   return {
     template_id: template.template_id,
     revision_id: template.revision_id,
@@ -711,17 +971,26 @@ function adminTemplateView(template: DocumentTemplateRevision): Record<string, u
     blocks: template.blocks,
     retention_policy: template.retention_policy,
     active: template.active,
-    actor: { type: template.actor_type, role: template.actor_role, id: template.actor_id, authority_ref: template.authority_ref },
+    actor: {
+      type: template.actor_type,
+      role: template.actor_role,
+      id: template.actor_id,
+      authority_ref: template.authority_ref,
+    },
     command_fingerprint: template.command_fingerprint,
     effective_at: template.effective_at,
     created_at: template.created_at,
   };
 }
 
-function recordScope(segments: string[]): { entityType: string; entityId: string } | null {
+function recordScope(
+  segments: string[],
+): { entityType: string; entityId: string } | null {
   const entityType = decoded(segments[0] ?? "");
   const entityId = decoded(segments[1] ?? "");
-  return entityType && entityId && knownEntityType(entityType) ? { entityType, entityId } : null;
+  return entityType && entityId && knownEntityType(entityType)
+    ? { entityType, entityId }
+    : null;
 }
 
 function entityTypeFilter(url: URL): string | null {
@@ -742,11 +1011,14 @@ function decoded(value: string): string | null {
 
 async function readJson(
   req: Request,
-): Promise<{ ok: true; value: unknown } | { ok: false; error: string; status: number }> {
+): Promise<
+  { ok: true; value: unknown } | { ok: false; error: string; status: number }
+> {
   if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES)
     return { ok: false, error: "payload_too_large", status: 413 };
   const text = await req.text();
-  if (text.length > MAX_BODY_BYTES) return { ok: false, error: "payload_too_large", status: 413 };
+  if (text.length > MAX_BODY_BYTES)
+    return { ok: false, error: "payload_too_large", status: 413 };
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
@@ -755,16 +1027,29 @@ async function readJson(
 }
 
 function domainFailure(error: unknown): Response {
-  if (!(error instanceof SchemaFormsError) && !(error instanceof DocumentTemplatesError) &&
-      !(error instanceof EffectRuntimeError)) throw error;
+  if (
+    !(error instanceof SchemaFormsError) &&
+    !(error instanceof DocumentTemplatesError) &&
+    !(error instanceof EffectRuntimeError)
+  )
+    throw error;
   const code = error.code;
-  const status = code === "effect_runtime_required" ? 503
-    : code.includes("write_failed") ? 500
-    : code.includes("unavailable") ? 503
-    : code.includes("forbidden") ? 403
-    : code.endsWith("_not_found") || code.endsWith("_entity_not_found") ? 404
-    : /conflict|stale|retired|retention_hold|_exists|not_visible|in_flight|not_reconcilable|unknown_requires/.test(code) ? 409
-    : 400;
+  const status =
+    code === "effect_runtime_required"
+      ? 503
+      : code.includes("write_failed")
+        ? 500
+        : code.includes("unavailable")
+          ? 503
+          : code.includes("forbidden")
+            ? 403
+            : code.endsWith("_not_found") || code.endsWith("_entity_not_found")
+              ? 404
+              : /conflict|stale|retired|retention_hold|_exists|not_visible|in_flight|not_reconcilable|unknown_requires/.test(
+                    code,
+                  )
+                ? 409
+                : 400;
   const detail = "detail" in error ? error.detail : {};
   return json({ error: code, ...detail }, status);
 }

@@ -3,7 +3,9 @@ import { getDeviceSecret } from "../auth/device-credential";
 import { cacheFieldModel, getCachedFieldModel } from "../field/field-cache";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import {
+  DOCUMENT_GENERATIONS_ROUTE,
   DOCUMENTS_ROUTE_PREFIX,
+  documentGenerationResponseSchema,
   entityDocumentsResponseSchema,
   type EntityDocumentsModel,
 } from "./document-contracts";
@@ -65,4 +67,35 @@ function entityDocumentsCacheKey(
   entityId: string,
 ): string {
   return `${session.tenant.id}:${session.user.id}:entity-documents:${entityType}:${entityId}`;
+}
+
+/**
+ * Ask the Worker to make one document from the current record. Owner only on the server; the
+ * caller supplies the idempotency key and keeps it for a retry, so a lost answer replays the same
+ * attempt instead of minting a second document. Non-2xx outcomes (`not_executed`,
+ * `manual_exception`, `failed`) still carry a receipt and are surfaced through `ApiError.detail`.
+ */
+export function generateEntityDocument(
+  session: AuthenticatedSession,
+  input: {
+    entityType: string;
+    entityId: string;
+    templateId: string;
+    templateRevisionId: string;
+    idempotencyKey: string;
+  },
+) {
+  return apiRequest({
+    path: DOCUMENT_GENERATIONS_ROUTE,
+    method: "POST",
+    csrfToken: session.csrf_token,
+    idempotencyKey: input.idempotencyKey,
+    body: {
+      entity_type: input.entityType,
+      entity_id: input.entityId,
+      template_id: input.templateId,
+      template_revision_id: input.templateRevisionId,
+    },
+    schema: documentGenerationResponseSchema,
+  });
 }

@@ -1,3 +1,4 @@
+import { correctiveEvidenceSchema } from "../field/safety-contracts";
 import { getDatabase } from "./db";
 import { classifyOutboxFailure } from "./outbox-failure";
 import { notifyOutboxChanged } from "./outbox-store";
@@ -29,6 +30,7 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
   // One global endpoint on purpose: the safety rail must not require a job, an
   // assignment, or a current work package.
   safety_action: /^\/api\/v1\/safety\/actions$/,
+  safety_corrective_evidence: /^\/api\/v1\/safety\/corrective-actions\/[^/?#]+\/evidence$/,
   fleet_pre_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/pre-trip-inspections$/,
   fleet_post_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/post-trip-inspections$/,
   fleet_defect_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/defects$/,
@@ -541,6 +543,7 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   if (fleetInspectionKinds.has(input.kind)) assertFleetInspectionPayload(input.payload);
   if (input.kind === "fleet_defect_report") assertFleetDefectPayload(input.payload);
   if (input.kind === "schema_field_value") assertSchemaFieldValuePayload(input.payload);
+  if (input.kind === "safety_corrective_evidence") correctiveEvidenceSchema.parse(input.payload);
   for (const attachment of input.attachments ?? []) {
     if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
   }

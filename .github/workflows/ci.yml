@@ -171,6 +171,10 @@ jobs:
       # self-skips. It gets the office session in its own step, like the configuration screens.
       - name: Run app Playwright e2e (people desk, office session)
         run: npm run test:pwa:people --prefix app
+      - name: Run app Playwright e2e (safety desk, office session)
+        run: npm run test:pwa:safety --prefix app
+      - name: Run app Playwright e2e (job document generation, office session)
+        run: npm run test:pwa:documents --prefix app
       # Putting a lead on a board is the only product path that reaches the card-placement
       # route, and it spans two role surfaces (sales desk -> board). It needs the same office
       # session the board does, so it gets its own step rather than silently self-skipping.

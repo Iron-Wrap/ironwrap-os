@@ -191,6 +191,9 @@ export const API_PATHS = {
     `/api/v1/service-cases/${encodeURIComponent(caseId)}/cost-recovery-claims`,
   serviceCaseCostRecoveryReconcile: (caseId: string, claimId: string) =>
     `/api/v1/service-cases/${encodeURIComponent(caseId)}/cost-recovery-claims/${encodeURIComponent(claimId)}/reconcile`,
+  // The safety desk: the whole company's equipment and corrective actions, judged by the
+  // release gate's own rules. Reads only; every change goes through its own safety command.
+  safetyDesk: "/api/v1/safety/desk",
   approvals: "/api/v1/approvals",
   approvalLeadTriagePrepare: "/api/v1/approvals/lead-triage",
   approvalApprove: (approvalId: string) =>

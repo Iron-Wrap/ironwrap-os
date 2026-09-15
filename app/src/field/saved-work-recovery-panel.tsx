@@ -139,6 +139,7 @@ const actionNames: Record<OutboxAction["kind"], string> = {
   inventory_command: "Inventory action",
   inventory_scan: "Inventory scan",
   safety_action: "Safety report",
+  safety_corrective_evidence: "Corrective action evidence",
   fleet_pre_trip_inspection: "Pre-trip inspection",
   fleet_post_trip_inspection: "Post-trip inspection",
   fleet_defect_report: "Fault report",

@@ -1,3 +1,7 @@
+import {
+  correctiveActionResponseSchema,
+  correctiveEvidenceSchema,
+} from "../field/safety-contracts";
 import { z } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
@@ -208,7 +212,8 @@ async function uploadAction(
   if (
     action.kind === "inventory_command" ||
     action.kind === "inventory_scan" ||
-    action.kind === "schema_field_value"
+    action.kind === "schema_field_value" ||
+    action.kind === "safety_corrective_evidence"
   ) {
     headers.set("Content-Type", "application/json");
     // Inventory routes accept the durable business-intent body directly.
@@ -273,6 +278,36 @@ async function uploadAction(
   }
 
   if (response.ok) {
+    if (action.kind === "safety_corrective_evidence") {
+      const responseBody = correctiveActionResponseSchema.safeParse(await safeJson(response));
+      const sent = correctiveEvidenceSchema.safeParse(action.payload);
+      const expectedId = action.endpoint.split("/")[5];
+      const record = responseBody.success ? responseBody.data.corrective_action : undefined;
+      if (
+        !record ||
+        !sent.success ||
+        encodeURIComponent(record.corrective_action_id) !== expectedId ||
+        record.evidence_captured_by_user_id !== action.userId ||
+        record.evidence_refs_json !== sent.data.evidence_refs_json ||
+        record.evidence_sha256 !== sent.data.evidence_sha256 ||
+        record.state === "open"
+      ) {
+        return {
+          ok: false,
+          failure: attentionFailure(
+            "verification_mismatch",
+            "The server did not confirm this exact evidence. The saved submission remains on this device.",
+            now,
+            response.status,
+          ),
+        };
+      }
+      return {
+        ok: true,
+        serverRef: record.corrective_action_id,
+        cursor: `${record.corrective_action_id}:${record.version}`,
+      };
+    }
     if (action.kind === "schema_field_value") {
       const value = schemaFieldValueResponseSchema.safeParse(await safeJson(response));
       if (!value.success) {

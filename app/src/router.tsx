@@ -1,5 +1,6 @@
 import {
   Outlet,
+  useParams,
   createRootRoute,
   createRoute,
   createRouter,
@@ -159,6 +160,16 @@ const PeoplePage = lazy(async () => ({
 }));
 const InventoryPage = lazy(async () => ({
   default: (await import("./inventory/inventory-page")).InventoryPage,
+}));
+const SafetyDeskPage = lazy(async () => ({
+  default: (await import("./safety/safety-desk-page")).SafetyDeskPage,
+}));
+
+const CorrectiveActionPage = lazy(async () => ({
+  default: (await import("./safety/corrective-action-page")).CorrectiveActionPage,
+}));
+const SafetyEquipmentPage = lazy(async () => ({
+  default: (await import("./safety/safety-equipment-page")).SafetyEquipmentPage,
 }));
 
 // Field Companion is the PWA's default entry point. Start loading its module while the
@@ -373,6 +384,47 @@ const peopleRoute = createRoute({
   component: PeopleRoute,
 });
 
+const safetyDeskRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/safety",
+  component: SafetyDeskRoute,
+});
+
+const correctiveActionRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/safety/corrective-actions/$actionId",
+  component: CorrectiveActionRoute,
+});
+function CorrectiveActionRoute() {
+  const { actionId } = correctiveActionRoute.useParams();
+  return (
+    <Suspense fallback={<FieldRouteSkeleton label="Loading corrective action" />}>
+      <CorrectiveActionPage key={actionId} actionId={actionId} />
+    </Suspense>
+  );
+}
+
+const safetyEquipmentRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/safety/equipment",
+  component: SafetyEquipmentRoute,
+});
+const safetyEquipmentDetailRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/safety/equipment/$equipmentId",
+  component: SafetyEquipmentRoute,
+});
+function SafetyEquipmentRoute() {
+  const { equipmentId } = useParams({ strict: false });
+  return (
+    <RoleGuard surface="safety">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading equipment" />}>
+        <SafetyEquipmentPage key={equipmentId ?? "list"} equipmentId={equipmentId} />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
 function TodayRoute() {
   return (
     <RoleGuard surface="field">
@@ -438,6 +490,16 @@ function InventoryRoute() {
     <RoleGuard surface="inventory">
       <Suspense fallback={<FieldRouteSkeleton label="Loading inventory" />}>
         <InventoryPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function SafetyDeskRoute() {
+  return (
+    <RoleGuard surface="safety">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading safety" />}>
+        <SafetyDeskPage />
       </Suspense>
     </RoleGuard>
   );
@@ -966,6 +1028,10 @@ const routeTree = rootRoute.addChildren([
     fleetRoute,
     inventoryRoute,
     peopleRoute,
+    safetyDeskRoute,
+    correctiveActionRoute,
+    safetyEquipmentRoute,
+    safetyEquipmentDetailRoute,
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,

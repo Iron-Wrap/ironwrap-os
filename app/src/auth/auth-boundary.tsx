@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
-import { ApiError } from "../lib/api";
+import { ApiError, isRetryableApiError } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
@@ -11,7 +11,7 @@ import {
   type FieldBootstrap,
 } from "./field-bootstrap";
 import { MagicLinkForm } from "./magic-link-form";
-import { fetchSession } from "./session";
+import { fetchSession, isOfflineSession } from "./session";
 import { SessionProvider } from "./session-context";
 import { sessionQueryKey } from "./session-query";
 
@@ -33,8 +33,34 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
     },
   });
 
+  // An offline reload signs in from the IndexedDB snapshot, which carries no CSRF token, so
+  // nothing queued can upload. The moment the network returns, ask the server for the live
+  // session again; a fresh token flows to every consumer of the shared session (the outbox
+  // sync among them) without a manual reload. A failed re-check keeps the offline session and
+  // touches nothing in the queue.
+  const heldSession = sessionQuery.data?.session;
+  const offlineSession = Boolean(heldSession?.authenticated && isOfflineSession(heldSession));
+  const refetchSession = sessionQuery.refetch;
+  useEffect(() => {
+    if (!offlineSession) return;
+    const restore = () => void refetchSession();
+    window.addEventListener("online", restore);
+    return () => window.removeEventListener("online", restore);
+  }, [offlineSession, refetchSession]);
+
   if (sessionQuery.isPending) return <LoadingState label="Checking your sign-in…" />;
-  if (sessionQuery.isError) {
+  // Held-session policy after a failed re-check. A transient failure (network, 5xx) while the
+  // held sign-in is still within its own expiry keeps serving the held session, so a flaky
+  // tower never throws a crew member out. Two cases close the authenticated content instead:
+  // the held snapshot has passed `session_expires_at` (the server never renewed it, and
+  // `recoverOfflineSession` has already dropped it), or the server answered with a definite
+  // refusal (4xx). Queued work stays in the outbox in every case; only the UI closes.
+  // Compared against the moment the re-check failed, which the query records; render stays pure.
+  const heldExpired =
+    heldSession?.authenticated === true &&
+    Date.parse(heldSession.session_expires_at) <= sessionQuery.errorUpdatedAt;
+  const definiteRefusal = sessionQuery.isError && !isRetryableApiError(sessionQuery.error);
+  if (sessionQuery.isError && (!sessionQuery.data || heldExpired || definiteRefusal)) {
     const offline = sessionQuery.error instanceof ApiError && sessionQuery.error.status === 0;
     return (
       <div className="grid min-h-dvh place-items-center p-4">
@@ -50,6 +76,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       </div>
     );
   }
+  if (!sessionQuery.data) return <LoadingState label="Checking your sign-in…" />;
   const { session, today } = sessionQuery.data;
   if (!session.authenticated) {
     return (

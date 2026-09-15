@@ -50,7 +50,12 @@ export const SAFETY_SCOPE_TYPES = [
   "vehicle",
 ] as const;
 
-export const SAFETY_SEVERITIES = ["low", "moderate", "high", "critical"] as const;
+export const SAFETY_SEVERITIES = [
+  "low",
+  "moderate",
+  "high",
+  "critical",
+] as const;
 
 export const SAFETY_NOTIFICATION_KINDS = [
   "regulatory",
@@ -68,7 +73,12 @@ export const SAFETY_READINESS_CONSUMERS = [
 ] as const;
 
 /** Roles that may inspect, quarantine, retire, or issue equipment. */
-const EQUIPMENT_AUTHORITY_ROLES = new Set(["owner", "ops", "production", "shop"]);
+const EQUIPMENT_AUTHORITY_ROLES = new Set([
+  "owner",
+  "ops",
+  "production",
+  "shop",
+]);
 /** Roles that may command a rescue, declare control, release a stop, or verify closure. */
 const RESPONSE_AUTHORITY_ROLES = new Set(["owner", "ops", "production"]);
 /** Roles that may record a regulatory or external notification. */
@@ -79,28 +89,17 @@ export type SafetyOccurrenceKind = (typeof SAFETY_OCCURRENCE_KINDS)[number];
 export type SafetyScopeType = (typeof SAFETY_SCOPE_TYPES)[number];
 export type SafetySeverity = (typeof SAFETY_SEVERITIES)[number];
 export type SafetyNotificationKind = (typeof SAFETY_NOTIFICATION_KINDS)[number];
-export type SafetyReadinessConsumer = (typeof SAFETY_READINESS_CONSUMERS)[number];
+export type SafetyReadinessConsumer =
+  (typeof SAFETY_READINESS_CONSUMERS)[number];
 
 export type SafetyEquipmentStatus =
-  | "in_service"
-  | "quarantined"
-  | "defective"
-  | "replaced"
-  | "retired";
+  "in_service" | "quarantined" | "defective" | "replaced" | "retired";
 
 export type SafetyOccurrenceState =
-  | "reported"
-  | "made_safe"
-  | "investigating"
-  | "controlled"
-  | "closed";
+  "reported" | "made_safe" | "investigating" | "controlled" | "closed";
 
 export type SafetyCorrectiveActionState =
-  | "open"
-  | "evidence_submitted"
-  | "verified"
-  | "closed"
-  | "rejected";
+  "open" | "evidence_submitted" | "verified" | "closed" | "rejected";
 
 export type SafetyBlockerCode =
   | "safety_stop_active"
@@ -202,7 +201,8 @@ export interface SafetyCorrectiveActionRecord {
 
 export interface SafetyBlocker {
   code: SafetyBlockerCode;
-  subject_type: "occurrence" | "equipment" | "notification" | "corrective_action";
+  subject_type:
+    "occurrence" | "equipment" | "notification" | "corrective_action";
   subject_id: string;
   detail: string;
 }
@@ -250,7 +250,11 @@ export async function safetyActor(
   userId: string,
 ): Promise<SafetyActor> {
   if (!TENANT_ID.test(tenantId) || !USER_ID.test(userId)) {
-    throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
+    throw new SafetyError(
+      "safety_actor_unknown",
+      403,
+      "This safety actor is not recognized.",
+    );
   }
   const row = await env.DB.prepare(
     `SELECT user_id, COALESCE(access_role, role) AS effective_role
@@ -261,12 +265,21 @@ export async function safetyActor(
     .bind(tenantId, userId)
     .first<{ user_id: string; effective_role: string }>();
   if (!row) {
-    throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
+    throw new SafetyError(
+      "safety_actor_unknown",
+      403,
+      "This safety actor is not recognized.",
+    );
   }
   return { userId: row.user_id, role: row.effective_role };
 }
 
-function requireRole(actor: SafetyActor, allowed: Set<string>, code: string, message: string): void {
+function requireRole(
+  actor: SafetyActor,
+  allowed: Set<string>,
+  code: string,
+  message: string,
+): void {
   if (!allowed.has(actor.role)) throw new SafetyError(code, 403, message);
 }
 
@@ -303,7 +316,11 @@ export async function reportSafetyOccurrence(
   assertReportInput(input);
   const actor = await safetyActor(env, input.tenantId, input.reportedByUserId);
   const fingerprint = await occurrenceFingerprint(input);
-  const existing = await occurrenceByFingerprint(env, input.tenantId, fingerprint);
+  const existing = await occurrenceByFingerprint(
+    env,
+    input.tenantId,
+    fingerprint,
+  );
   if (existing) return { kind: "duplicate", occurrence: existing };
 
   const inserted = await env.DB.prepare(
@@ -332,7 +349,11 @@ export async function reportSafetyOccurrence(
     .run();
 
   if (d1Changes(inserted) !== 1) {
-    const raced = await occurrenceByFingerprint(env, input.tenantId, fingerprint);
+    const raced = await occurrenceByFingerprint(
+      env,
+      input.tenantId,
+      fingerprint,
+    );
     if (!raced) {
       throw new SafetyError(
         "safety_occurrence_insert_failed",
@@ -359,7 +380,11 @@ export async function reportSafetyOccurrence(
     deviceActionId: input.deviceActionId,
   });
 
-  const occurrence = await occurrenceById(env, input.tenantId, input.occurrenceId);
+  const occurrence = await occurrenceById(
+    env,
+    input.tenantId,
+    input.occurrenceId,
+  );
   if (!occurrence) {
     throw new SafetyError(
       "safety_occurrence_insert_failed",
@@ -391,7 +416,11 @@ export async function recordMakeSafe(
   input: MakeSafeInput,
 ): Promise<SafetyOccurrenceRecord> {
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
-  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  const occurrence = await requireOccurrence(
+    env,
+    input.tenantId,
+    input.occurrenceId,
+  );
   if (occurrence.state !== "reported") {
     if (occurrence.state === "made_safe") return occurrence;
     throw new SafetyError(
@@ -412,7 +441,12 @@ export async function recordMakeSafe(
     now: input.now,
   });
   await appendOccurrenceEventRow(env, {
-    eventId: derivedEventId("soe", input.occurrenceId, nextVersion, "make_safe"),
+    eventId: derivedEventId(
+      "soe",
+      input.occurrenceId,
+      nextVersion,
+      "make_safe",
+    ),
     tenantId: input.tenantId,
     occurrenceId: input.occurrenceId,
     occurrenceVersion: nextVersion,
@@ -462,12 +496,17 @@ export async function recordSafetyResponse(
   requireRole(
     actor,
     RESPONSE_AUTHORITY_ROLES,
-    input.command === "rescue_dispatched" || input.command === "rescue_completed"
+    input.command === "rescue_dispatched" ||
+      input.command === "rescue_completed"
       ? "safety_rescue_authority_required"
       : "safety_release_authority_required",
     "This safety command requires current production authority.",
   );
-  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  const occurrence = await requireOccurrence(
+    env,
+    input.tenantId,
+    input.occurrenceId,
+  );
   const next = nextOccurrenceShape(occurrence, input.command);
   const nextVersion = occurrence.version + 1;
   if (input.command === "closed") {
@@ -484,7 +523,12 @@ export async function recordSafetyResponse(
     now: input.now,
   });
   await appendOccurrenceEventRow(env, {
-    eventId: derivedEventId("soe", input.occurrenceId, nextVersion, input.command),
+    eventId: derivedEventId(
+      "soe",
+      input.occurrenceId,
+      nextVersion,
+      input.command,
+    ),
     tenantId: input.tenantId,
     occurrenceId: input.occurrenceId,
     occurrenceVersion: nextVersion,
@@ -504,7 +548,11 @@ export async function recordSafetyResponse(
 function nextOccurrenceShape(
   occurrence: SafetyOccurrenceRecord,
   command: SafetyResponseCommand,
-): { state: SafetyOccurrenceState; stopActive: number; rescueCompletedAt?: string | null } {
+): {
+  state: SafetyOccurrenceState;
+  stopActive: number;
+  rescueCompletedAt?: string | null;
+} {
   switch (command) {
     case "rescue_dispatched":
       if (occurrence.rescue_required !== 1) {
@@ -656,7 +704,11 @@ export async function issueSafetyEquipment(
     (input.assignedUserId !== null && !USER_ID.test(input.assignedUserId)) ||
     !ISO_INSTANT.test(input.now)
   ) {
-    throw new SafetyError("safety_equipment_input_invalid", 400, "Invalid safety-equipment input.");
+    throw new SafetyError(
+      "safety_equipment_input_invalid",
+      400,
+      "Invalid safety-equipment input.",
+    );
   }
   const existing = await equipmentById(env, input.tenantId, input.equipmentId);
   if (existing) return existing;
@@ -704,6 +756,8 @@ export interface EquipmentInspectionInput {
   result: "pass" | "fail";
   detail: string;
   evidence: SafetyEvidence | null;
+  /** The equipment revision the inspector actually read before deciding. */
+  expectedVersion: number;
   now: string;
 }
 
@@ -723,7 +777,11 @@ export async function recordEquipmentInspection(
     "safety_inspection_authority_required",
     "Inspecting safety equipment requires current equipment authority.",
   );
-  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  const equipment = await requireEquipment(
+    env,
+    input.tenantId,
+    input.equipmentId,
+  );
   if (equipment.status === "retired" || equipment.status === "replaced") {
     throw new SafetyError(
       "safety_equipment_state_invalid",
@@ -731,11 +789,23 @@ export async function recordEquipmentInspection(
       "This equipment is no longer in the fleet.",
     );
   }
+  // A verdict is only valid against the record the inspector read. If someone else
+  // quarantined or changed the item since, a "pass" from the stale screen must not
+  // return it to service; the inspector has to read the new condition first.
+  if (equipment.version !== input.expectedVersion) {
+    throw new SafetyError(
+      "safety_equipment_version_conflict",
+      409,
+      `This equipment changed since it was read (revision ${input.expectedVersion} read, revision ${equipment.version} on file). Read the current record before inspecting.`,
+    );
+  }
   const nextVersion = equipment.version + 1;
   const dueAt = new Date(
-    Date.parse(input.now) + equipment.inspection_interval_days * 24 * 60 * 60 * 1000,
+    Date.parse(input.now) +
+      equipment.inspection_interval_days * 24 * 60 * 60 * 1000,
   ).toISOString();
-  const nextStatus: SafetyEquipmentStatus = input.result === "pass" ? "in_service" : "quarantined";
+  const nextStatus: SafetyEquipmentStatus =
+    input.result === "pass" ? "in_service" : "quarantined";
   const updated = await env.DB.prepare(
     `UPDATE safety_equipment
         SET version = ?, status = ?, last_inspection_at = ?, last_inspection_result = ?,
@@ -803,7 +873,11 @@ export async function reportEquipmentDefect(
   input: EquipmentDefectInput,
 ): Promise<SafetyEquipmentRecord> {
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
-  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  const equipment = await requireEquipment(
+    env,
+    input.tenantId,
+    input.equipmentId,
+  );
   if (equipment.status === "retired" || equipment.status === "replaced") {
     throw new SafetyError(
       "safety_equipment_state_invalid",
@@ -818,7 +892,13 @@ export async function reportEquipmentDefect(
         SET version = ?, status = 'defective', updated_at = ?
       WHERE tenant_id = ? AND equipment_id = ? AND version = ?`,
   )
-    .bind(nextVersion, input.now, input.tenantId, input.equipmentId, equipment.version)
+    .bind(
+      nextVersion,
+      input.now,
+      input.tenantId,
+      input.equipmentId,
+      equipment.version,
+    )
     .run();
   if (d1Changes(updated) !== 1) {
     throw new SafetyError(
@@ -828,7 +908,12 @@ export async function reportEquipmentDefect(
     );
   }
   await appendEquipmentEventRow(env, {
-    eventId: derivedEventId("see", input.equipmentId, nextVersion, "defect_reported"),
+    eventId: derivedEventId(
+      "see",
+      input.equipmentId,
+      nextVersion,
+      "defect_reported",
+    ),
     tenantId: input.tenantId,
     equipmentId: input.equipmentId,
     equipmentVersion: nextVersion,
@@ -857,7 +942,10 @@ export interface ReplaceEquipmentInput {
 export async function replaceSafetyEquipment(
   env: AppEnv,
   input: ReplaceEquipmentInput,
-): Promise<{ replaced: SafetyEquipmentRecord; replacement: SafetyEquipmentRecord }> {
+): Promise<{
+  replaced: SafetyEquipmentRecord;
+  replacement: SafetyEquipmentRecord;
+}> {
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   requireRole(
     actor,
@@ -865,7 +953,11 @@ export async function replaceSafetyEquipment(
     "safety_inspection_authority_required",
     "Replacing safety equipment requires current equipment authority.",
   );
-  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  const equipment = await requireEquipment(
+    env,
+    input.tenantId,
+    input.equipmentId,
+  );
   if (equipment.status === "retired" || equipment.status === "replaced") {
     throw new SafetyError(
       "safety_equipment_state_invalid",
@@ -907,7 +999,12 @@ export async function replaceSafetyEquipment(
     );
   }
   await appendEquipmentEventRow(env, {
-    eventId: derivedEventId("see", input.equipmentId, nextVersion, "replacement"),
+    eventId: derivedEventId(
+      "see",
+      input.equipmentId,
+      nextVersion,
+      "replacement",
+    ),
     tenantId: input.tenantId,
     equipmentId: input.equipmentId,
     equipmentVersion: nextVersion,
@@ -971,7 +1068,11 @@ export async function recordSafetyNotification(
       "Invalid safety-notification input.",
     );
   }
-  const existing = await notificationById(env, input.tenantId, input.notificationId);
+  const existing = await notificationById(
+    env,
+    input.tenantId,
+    input.notificationId,
+  );
   if (existing) return existing;
   await env.DB.prepare(
     `INSERT INTO safety_notifications
@@ -1017,7 +1118,11 @@ export async function submitSafetyNotification(
     "safety_notification_authority_required",
     "Submitting an external notification requires owner or operations authority.",
   );
-  const notification = await requireNotification(env, input.tenantId, input.notificationId);
+  const notification = await requireNotification(
+    env,
+    input.tenantId,
+    input.notificationId,
+  );
   if (notification.state !== "pending") {
     if (notification.state === "submitted") return notification;
     throw new SafetyError(
@@ -1099,7 +1204,11 @@ export async function assignCorrectiveAction(
       "Invalid corrective-action input.",
     );
   }
-  const existing = await correctiveActionById(env, input.tenantId, input.correctiveActionId);
+  const existing = await correctiveActionById(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
   if (existing) return existing;
   await env.DB.prepare(
     `INSERT INTO safety_corrective_actions
@@ -1133,7 +1242,11 @@ export async function assignCorrectiveAction(
     detail: input.description,
     recordedAt: input.now,
   });
-  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  return await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
 }
 
 export interface SubmitCorrectiveEvidenceInput {
@@ -1150,16 +1263,38 @@ export async function submitCorrectiveActionEvidence(
   input: SubmitCorrectiveEvidenceInput,
 ): Promise<SafetyCorrectiveActionRecord> {
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
-  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  const action = await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
   if (action.state !== "open") {
-    if (action.state === "evidence_submitted") return action;
+    const event = await env.DB.prepare(
+      `SELECT detail FROM safety_corrective_action_events
+        WHERE tenant_id = ? AND corrective_action_id = ? AND event_kind = 'evidence_submitted'
+        ORDER BY corrective_action_version DESC LIMIT 1`,
+    )
+      .bind(input.tenantId, input.correctiveActionId)
+      .first<{ detail: string }>();
+    // A lost response may be retried after verification or closure. Only the exact
+    // original evidence and capturer can be acknowledged as that successful write.
+    if (
+      action.evidence_refs_json === input.evidence.refsJson &&
+      action.evidence_sha256 === input.evidence.sha256 &&
+      action.evidence_captured_by_user_id === actor.userId &&
+      event?.detail === input.detail
+    )
+      return action;
     throw new SafetyError(
-      "safety_corrective_action_state_invalid",
+      "safety_corrective_evidence_conflict",
       409,
-      "This corrective action is no longer open for evidence.",
+      "Different evidence is already on file. Read the current action before submitting again.",
     );
   }
-  if (!SHA256.test(input.evidence.sha256) || !validEvidenceRefsJson(input.evidence.refsJson)) {
+  if (
+    !SHA256.test(input.evidence.sha256) ||
+    !validEvidenceRefsJson(input.evidence.refsJson)
+  ) {
     throw new SafetyError(
       "safety_evidence_invalid",
       400,
@@ -1193,7 +1328,12 @@ export async function submitCorrectiveActionEvidence(
     );
   }
   await appendCorrectiveActionEventRow(env, {
-    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, "evidence_submitted"),
+    eventId: derivedEventId(
+      "scae",
+      input.correctiveActionId,
+      nextVersion,
+      "evidence_submitted",
+    ),
     tenantId: input.tenantId,
     correctiveActionId: input.correctiveActionId,
     correctiveActionVersion: nextVersion,
@@ -1203,7 +1343,11 @@ export async function submitCorrectiveActionEvidence(
     detail: input.detail,
     recordedAt: input.now,
   });
-  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  return await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
 }
 
 export interface VerifyCorrectiveActionInput {
@@ -1231,7 +1375,11 @@ export async function verifyCorrectiveAction(
     "safety_verification_authority_required",
     "Verifying a corrective action requires current production authority.",
   );
-  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  const action = await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
   if (action.state !== "evidence_submitted") {
     throw new SafetyError(
       "safety_corrective_action_state_invalid",
@@ -1239,7 +1387,11 @@ export async function verifyCorrectiveAction(
       "Only a corrective action with submitted evidence can be verified.",
     );
   }
-  const occurrence = await requireOccurrence(env, input.tenantId, action.occurrence_id);
+  const occurrence = await requireOccurrence(
+    env,
+    input.tenantId,
+    action.occurrence_id,
+  );
   if (
     actor.userId === action.owner_user_id ||
     actor.userId === action.evidence_captured_by_user_id ||
@@ -1292,7 +1444,12 @@ export async function verifyCorrectiveAction(
     );
   }
   await appendCorrectiveActionEventRow(env, {
-    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, input.verdict),
+    eventId: derivedEventId(
+      "scae",
+      input.correctiveActionId,
+      nextVersion,
+      input.verdict,
+    ),
     tenantId: input.tenantId,
     correctiveActionId: input.correctiveActionId,
     correctiveActionVersion: nextVersion,
@@ -1302,7 +1459,11 @@ export async function verifyCorrectiveAction(
     detail: input.detail,
     recordedAt: input.now,
   });
-  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  return await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
 }
 
 export interface CloseCorrectiveActionInput {
@@ -1324,7 +1485,11 @@ export async function closeCorrectiveAction(
     "safety_verification_authority_required",
     "Closing a corrective action requires current production authority.",
   );
-  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  const action = await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
   if (action.state !== "verified") {
     if (action.state === "closed") return action;
     throw new SafetyError(
@@ -1356,7 +1521,12 @@ export async function closeCorrectiveAction(
     );
   }
   await appendCorrectiveActionEventRow(env, {
-    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, "closed"),
+    eventId: derivedEventId(
+      "scae",
+      input.correctiveActionId,
+      nextVersion,
+      "closed",
+    ),
     tenantId: input.tenantId,
     correctiveActionId: input.correctiveActionId,
     correctiveActionVersion: nextVersion,
@@ -1366,7 +1536,11 @@ export async function closeCorrectiveAction(
     detail: input.detail,
     recordedAt: input.now,
   });
-  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  return await requireCorrectiveAction(
+    env,
+    input.tenantId,
+    input.correctiveActionId,
+  );
 }
 
 export interface EvaluateSafetyReadinessInput {
@@ -1387,27 +1561,87 @@ export interface EvaluateSafetyReadinessInput {
  * release, and the field panel. It fails closed: an unreadable input is a
  * blocker, never a pass.
  */
+/** One equipment row, judged exactly as the release gate judges it.
+ *  Extracted so the safety desk and `evaluateSafetyReadiness` cannot drift apart: a desk that
+ *  called a item serviceable while the gate stopped the crew would be worse than no desk.
+ *  `subject` is the leading noun phrase, because the gate only ever sees assigned equipment
+ *  while the desk sees the whole tenant. Returns null when the item is serviceable. */
+export function equipmentUnserviceableDetail(
+  row: {
+    equipment_kind: SafetyEquipmentKind;
+    status: SafetyEquipmentStatus;
+    inspection_due_at: string | null;
+    last_inspection_result: "pass" | "fail" | null;
+  },
+  now: string,
+  subject: string,
+): string | null {
+  if (row.status !== "in_service") return `${subject} is ${row.status}.`;
+  // Never inspected and past-due are the same fact for a release gate:
+  // there is no current evidence that this item is safe to use.
+  if (!row.inspection_due_at || row.inspection_due_at <= now) {
+    return row.inspection_due_at
+      ? `${subject} inspection expired ${row.inspection_due_at}.`
+      : `${subject} has no recorded inspection.`;
+  }
+  if (row.last_inspection_result === "fail")
+    return `${subject} failed its last inspection.`;
+  return null;
+}
+
+/** The gate stops work for an overdue corrective action only at high or critical risk.
+ *  The desk shows every open action but must mark the blocking ones by this same rule. */
+export function correctiveActionBlocks(
+  row: {
+    risk_level: SafetySeverity;
+    state: SafetyCorrectiveActionState;
+    due_at: string;
+  },
+  now: string,
+): boolean {
+  if (row.risk_level !== "high" && row.risk_level !== "critical") return false;
+  if (row.state === "closed" || row.state === "rejected") return false;
+  return row.due_at < now;
+}
+
 export async function evaluateSafetyReadiness(
   env: AppEnv,
   input: EvaluateSafetyReadinessInput,
 ): Promise<SafetyReadiness> {
   if (!TENANT_ID.test(input.tenantId) || !ISO_INSTANT.test(input.now)) {
-    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness input.");
+    throw new SafetyError(
+      "safety_readiness_input_invalid",
+      400,
+      "Invalid readiness input.",
+    );
   }
   const scopes = input.scopes.filter(
-    (scope) => SAFETY_SCOPE_TYPES.includes(scope.type) && SCOPE_ID.test(scope.id),
+    (scope) =>
+      SAFETY_SCOPE_TYPES.includes(scope.type) && SCOPE_ID.test(scope.id),
   );
   if (scopes.length !== input.scopes.length) {
-    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness scope.");
+    throw new SafetyError(
+      "safety_readiness_input_invalid",
+      400,
+      "Invalid readiness scope.",
+    );
   }
-  const subjects = input.subjectUserIds.filter((userId) => USER_ID.test(userId));
+  const subjects = input.subjectUserIds.filter((userId) =>
+    USER_ID.test(userId),
+  );
   if (subjects.length !== input.subjectUserIds.length) {
-    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness subject.");
+    throw new SafetyError(
+      "safety_readiness_input_invalid",
+      400,
+      "Invalid readiness subject.",
+    );
   }
   const blockers: SafetyBlocker[] = [];
 
   if (scopes.length > 0) {
-    const scopeClause = scopes.map(() => "(scope_type = ? AND scope_id = ?)").join(" OR ");
+    const scopeClause = scopes
+      .map(() => "(scope_type = ? AND scope_id = ?)")
+      .join(" OR ");
     const scopeBindings = scopes.flatMap((scope) => [scope.type, scope.id]);
     const occurrences = await env.DB.prepare(
       `SELECT occurrence_id, occurrence_kind, state, stop_active, severity
@@ -1477,7 +1711,11 @@ export async function evaluateSafetyReadiness(
         LIMIT 100`,
     )
       .bind(input.tenantId, input.now, ...scopeBindings)
-      .all<{ corrective_action_id: string; risk_level: SafetySeverity; due_at: string }>();
+      .all<{
+        corrective_action_id: string;
+        risk_level: SafetySeverity;
+        due_at: string;
+      }>();
     for (const row of overdue.results) {
       blockers.push({
         code: "safety_corrective_action_overdue",
@@ -1506,38 +1744,27 @@ export async function evaluateSafetyReadiness(
         last_inspection_result: "pass" | "fail" | null;
       }>();
     for (const row of equipment.results) {
-      if (row.status !== "in_service") {
-        blockers.push({
-          code: "safety_equipment_unserviceable",
-          subject_type: "equipment",
-          subject_id: row.equipment_id,
-          detail: `Assigned ${row.equipment_kind} is ${row.status}.`,
-        });
-        continue;
-      }
-      // Never inspected and past-due are the same fact for a release gate:
-      // there is no current evidence that this item is safe to use.
-      if (!row.inspection_due_at || row.inspection_due_at <= input.now) {
-        blockers.push({
-          code: "safety_equipment_unserviceable",
-          subject_type: "equipment",
-          subject_id: row.equipment_id,
-          detail: row.inspection_due_at
-            ? `Assigned ${row.equipment_kind} inspection expired ${row.inspection_due_at}.`
-            : `Assigned ${row.equipment_kind} has no recorded inspection.`,
-        });
-      } else if (row.last_inspection_result === "fail") {
-        blockers.push({
-          code: "safety_equipment_unserviceable",
-          subject_type: "equipment",
-          subject_id: row.equipment_id,
-          detail: `Assigned ${row.equipment_kind} failed its last inspection.`,
-        });
-      }
+      const detail = equipmentUnserviceableDetail(
+        row,
+        input.now,
+        `Assigned ${row.equipment_kind}`,
+      );
+      if (!detail) continue;
+      blockers.push({
+        code: "safety_equipment_unserviceable",
+        subject_type: "equipment",
+        subject_id: row.equipment_id,
+        detail,
+      });
     }
   }
 
-  return { ready: blockers.length === 0, blockers, scopes, evaluated_at: input.now };
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    scopes,
+    evaluated_at: input.now,
+  };
 }
 
 export interface RecordReadinessSnapshotInput {
@@ -1564,10 +1791,16 @@ export async function recordSafetyReadinessSnapshot(
     !SAFETY_SCOPE_TYPES.includes(input.scope.type) ||
     !SCOPE_ID.test(input.scope.id)
   ) {
-    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness snapshot.");
+    throw new SafetyError(
+      "safety_readiness_input_invalid",
+      400,
+      "Invalid readiness snapshot.",
+    );
   }
   const blockersJson = JSON.stringify(input.readiness.blockers);
-  const codes = [...new Set(input.readiness.blockers.map((blocker) => blocker.code))]
+  const codes = [
+    ...new Set(input.readiness.blockers.map((blocker) => blocker.code)),
+  ]
     .sort()
     .join(",");
   const digest = await sha256Hex(
@@ -1713,11 +1946,19 @@ export async function safetyPanelProjection(
       "safety.make_safe",
       "safety.equipment_defect",
       "safety.rescue_request",
-      ...(EQUIPMENT_AUTHORITY_ROLES.has(actor.role) ? ["safety.equipment_inspect"] : []),
-      ...(RESPONSE_AUTHORITY_ROLES.has(actor.role)
-        ? ["safety.rescue_command", "safety.release", "safety.verify_corrective_action"]
+      ...(EQUIPMENT_AUTHORITY_ROLES.has(actor.role)
+        ? ["safety.equipment_inspect"]
         : []),
-      ...(NOTIFICATION_AUTHORITY_ROLES.has(actor.role) ? ["safety.notify_authority"] : []),
+      ...(RESPONSE_AUTHORITY_ROLES.has(actor.role)
+        ? [
+            "safety.rescue_command",
+            "safety.release",
+            "safety.verify_corrective_action",
+          ]
+        : []),
+      ...(NOTIFICATION_AUTHORITY_ROLES.has(actor.role)
+        ? ["safety.notify_authority"]
+        : []),
     ],
   };
 }
@@ -1741,7 +1982,9 @@ export async function listSafetyOccurrenceEvents(
   }>
 > {
   if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(occurrenceId)) return [];
-  const bounded = Number.isInteger(limit) ? Math.max(1, Math.min(200, limit)) : 50;
+  const bounded = Number.isInteger(limit)
+    ? Math.max(1, Math.min(200, limit))
+    : 50;
   const rows = await env.DB.prepare(
     `SELECT event_id, occurrence_version, event_kind, actor_user_id, actor_role, detail,
             captured_offline, occurred_at, recorded_at
@@ -1783,12 +2026,56 @@ export async function getSafetyEquipment(
   return await equipmentById(env, tenantId, equipmentId);
 }
 
+export async function safetyCorrectiveActionProjection(
+  env: AppEnv,
+  tenantId: string,
+  userId: string,
+  correctiveActionId: string,
+) {
+  const actor = await safetyActor(env, tenantId, userId);
+  const action = await requireCorrectiveAction(
+    env,
+    tenantId,
+    correctiveActionId,
+  );
+  const occurrence = await requireOccurrence(
+    env,
+    tenantId,
+    action.occurrence_id,
+  );
+  const authority = RESPONSE_AUTHORITY_ROLES.has(actor.role);
+  const independent =
+    actor.userId !== action.owner_user_id &&
+    actor.userId !== action.evidence_captured_by_user_id &&
+    actor.userId !== occurrence.reported_by_user_id;
+  return {
+    version: 1 as const,
+    corrective_action: action,
+    allowed_actions: [
+      ...(action.state === "open" ? ["submit_evidence" as const] : []),
+      ...(action.state === "evidence_submitted" && authority && independent
+        ? ["verify" as const, "reject" as const]
+        : []),
+      ...(action.state === "verified" && authority ? ["close" as const] : []),
+    ],
+    verification_unavailable_reason:
+      action.state !== "evidence_submitted"
+        ? null
+        : !authority
+          ? "Verifying a corrective action requires current production authority."
+          : !independent
+            ? "The reporter, owner, and evidence capturer cannot verify this closure."
+            : null,
+  };
+}
+
 export async function getSafetyCorrectiveAction(
   env: AppEnv,
   tenantId: string,
   correctiveActionId: string,
 ): Promise<SafetyCorrectiveActionRecord | null> {
-  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(correctiveActionId)) return null;
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(correctiveActionId))
+    return null;
   return await correctiveActionById(env, tenantId, correctiveActionId);
 }
 
@@ -1879,7 +2166,10 @@ interface OccurrenceEventRow {
   deviceActionId: string | null;
 }
 
-async function appendOccurrenceEventRow(env: AppEnv, row: OccurrenceEventRow): Promise<void> {
+async function appendOccurrenceEventRow(
+  env: AppEnv,
+  row: OccurrenceEventRow,
+): Promise<void> {
   assertEvidence(row.evidence);
   await env.DB.prepare(
     `INSERT INTO safety_occurrence_events
@@ -1923,7 +2213,10 @@ interface EquipmentEventRow {
   deviceActionId: string | null;
 }
 
-async function appendEquipmentEventRow(env: AppEnv, row: EquipmentEventRow): Promise<void> {
+async function appendEquipmentEventRow(
+  env: AppEnv,
+  row: EquipmentEventRow,
+): Promise<void> {
   assertEvidence(row.evidence);
   await env.DB.prepare(
     `INSERT INTO safety_equipment_events
@@ -1990,7 +2283,10 @@ async function appendCorrectiveActionEventRow(
 
 function assertEvidence(evidence: SafetyEvidence | null): void {
   if (!evidence) return;
-  if (!SHA256.test(evidence.sha256) || !validEvidenceRefsJson(evidence.refsJson)) {
+  if (
+    !SHA256.test(evidence.sha256) ||
+    !validEvidenceRefsJson(evidence.refsJson)
+  ) {
     throw new SafetyError(
       "safety_evidence_invalid",
       400,
@@ -2000,18 +2296,28 @@ function assertEvidence(evidence: SafetyEvidence | null): void {
 }
 
 function validEvidenceRefsJson(value: string): boolean {
-  if (typeof value !== "string" || value.length < 2 || value.length > 20_000) return false;
+  if (typeof value !== "string" || value.length < 2 || value.length > 20_000)
+    return false;
   try {
     const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 100) return false;
+    if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 100)
+      return false;
     return parsed.every((entry) => {
       if (!isRecord(entry)) return false;
       const ref = entry.ref;
       const sha256 = entry.sha256;
-      if (typeof ref !== "string" || typeof sha256 !== "string" || !SHA256.test(sha256)) {
+      if (
+        typeof ref !== "string" ||
+        typeof sha256 !== "string" ||
+        !SHA256.test(sha256)
+      ) {
         return false;
       }
-      return ref.trim().length >= 3 && ref.trim().length <= 512 && !/[\u0000-\u001f]/.test(ref);
+      return (
+        ref.trim().length >= 3 &&
+        ref.trim().length <= 512 &&
+        !/[\u0000-\u001f]/.test(ref)
+      );
     });
   } catch {
     return false;
@@ -2073,7 +2379,11 @@ async function requireOccurrence(
 ): Promise<SafetyOccurrenceRecord> {
   const occurrence = await occurrenceById(env, tenantId, occurrenceId);
   if (!occurrence) {
-    throw new SafetyError("safety_occurrence_not_found", 404, "That safety occurrence is unknown.");
+    throw new SafetyError(
+      "safety_occurrence_not_found",
+      404,
+      "That safety occurrence is unknown.",
+    );
   }
   return occurrence;
 }
@@ -2097,7 +2407,11 @@ async function requireEquipment(
 ): Promise<SafetyEquipmentRecord> {
   const equipment = await equipmentById(env, tenantId, equipmentId);
   if (!equipment) {
-    throw new SafetyError("safety_equipment_not_found", 404, "That safety equipment is unknown.");
+    throw new SafetyError(
+      "safety_equipment_not_found",
+      404,
+      "That safety equipment is unknown.",
+    );
   }
   return equipment;
 }
@@ -2169,15 +2483,26 @@ function derivedEventId(
   version: number,
   kind: string,
 ): string {
-  const slug = `${prefix}_${aggregateId}_${version}_${kind}`.replace(/[^A-Za-z0-9._:-]/g, "-");
+  const slug = `${prefix}_${aggregateId}_${version}_${kind}`.replace(
+    /[^A-Za-z0-9._:-]/g,
+    "-",
+  );
   const id = slug.length > 160 ? slug.slice(0, 160) : slug;
   if (!EVENT_ID.test(id)) {
-    throw new SafetyError("safety_event_identity_invalid", 400, "Invalid safety event identity.");
+    throw new SafetyError(
+      "safety_event_identity_invalid",
+      400,
+      "Invalid safety event identity.",
+    );
   }
   return id;
 }
 
-function boundedText(value: unknown, min: number, max: number): value is string {
+function boundedText(
+  value: unknown,
+  min: number,
+  max: number,
+): value is string {
   return (
     typeof value === "string" &&
     value.trim().length >= min &&
@@ -2192,4 +2517,164 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function d1Changes(result: { meta?: { changes?: number } }): number {
   return Number(result.meta?.changes ?? 0);
+}
+
+/** How far ahead the desk warns about an inspection that has not expired yet.
+ *  Desk-only: the release gate stops work at expiry, never before it. */
+export const SAFETY_INSPECTION_EXPIRING_DAYS = 30;
+
+export interface SafetyDeskEquipment {
+  equipment_id: string;
+  equipment_kind: SafetyEquipmentKind;
+  serial_number: string;
+  status: SafetyEquipmentStatus;
+  assigned_user_id: string | null;
+  inspection_due_at: string | null;
+  last_inspection_result: "pass" | "fail" | null;
+  /** "unserviceable" is exactly what stops a release; "expiring" never is. */
+  verdict: "serviceable" | "unserviceable" | "expiring";
+  /** The release gate's own sentence, so the desk cannot describe it differently. */
+  detail: string | null;
+  days_left: number | null;
+}
+
+export interface SafetyDeskCorrectiveAction {
+  corrective_action_id: string;
+  occurrence_id: string;
+  state: SafetyCorrectiveActionState;
+  risk_level: SafetySeverity;
+  owner_user_id: string;
+  due_at: string;
+  description: string;
+  /** True only when this action is what the release gate refuses on. */
+  blocking: boolean;
+  days_left: number;
+}
+
+export interface SafetyDeskProjection {
+  version: 1;
+  read_model_generated_at: string;
+  expiring_within_days: number;
+  actor_role: string;
+  /** null, not [], when this role may not read the rail: "none on file" and
+   *  "you may not see this" are different answers and must not look alike. */
+  equipment: SafetyDeskEquipment[] | null;
+  corrective_actions: SafetyDeskCorrectiveAction[] | null;
+}
+
+function daysBetween(fromIso: string, toIso: string): number {
+  return Math.floor((Date.parse(toIso) - Date.parse(fromIso)) / 86_400_000);
+}
+
+/** The whole company's safety equipment and corrective actions, judged by the release gate's
+ *  own rules. Read-only: every state change on these rails goes through its own command. */
+export async function safetyDeskProjection(
+  env: AppEnv,
+  tenantId: string,
+  userId: string,
+  now: string,
+): Promise<SafetyDeskProjection> {
+  if (!ISO_INSTANT.test(now)) {
+    throw new SafetyError(
+      "safety_desk_input_invalid",
+      400,
+      "Invalid desk input.",
+    );
+  }
+  const actor = await safetyActor(env, tenantId, userId);
+  const mayReadEquipment = EQUIPMENT_AUTHORITY_ROLES.has(actor.role);
+  const mayReadActions = RESPONSE_AUTHORITY_ROLES.has(actor.role);
+  if (!mayReadEquipment && !mayReadActions) {
+    throw new SafetyError(
+      "safety_desk_role_required",
+      403,
+      "Reading the safety desk requires equipment or response authority.",
+    );
+  }
+
+  let equipment: SafetyDeskEquipment[] | null = null;
+  if (mayReadEquipment) {
+    const rows = await env.DB.prepare(
+      `SELECT equipment_id, equipment_kind, serial_number, status, assigned_user_id,
+              inspection_due_at, last_inspection_result
+         FROM safety_equipment
+        WHERE tenant_id = ? AND status NOT IN ('replaced', 'retired')
+        ORDER BY equipment_kind, serial_number
+        LIMIT 500`,
+    )
+      .bind(tenantId)
+      .all<{
+        equipment_id: string;
+        equipment_kind: SafetyEquipmentKind;
+        serial_number: string;
+        status: SafetyEquipmentStatus;
+        assigned_user_id: string | null;
+        inspection_due_at: string | null;
+        last_inspection_result: "pass" | "fail" | null;
+      }>();
+    equipment = rows.results.map((row) => {
+      const detail = equipmentUnserviceableDetail(
+        row,
+        now,
+        `${row.equipment_kind} ${row.serial_number}`,
+      );
+      const daysLeft = row.inspection_due_at
+        ? daysBetween(now, row.inspection_due_at)
+        : null;
+      if (detail) {
+        return {
+          ...row,
+          verdict: "unserviceable" as const,
+          detail,
+          days_left: daysLeft,
+        };
+      }
+      const expiring =
+        daysLeft !== null && daysLeft <= SAFETY_INSPECTION_EXPIRING_DAYS;
+      return {
+        ...row,
+        verdict: expiring ? ("expiring" as const) : ("serviceable" as const),
+        detail: expiring
+          ? `${row.equipment_kind} ${row.serial_number} inspection is due ${row.inspection_due_at}.`
+          : null,
+        days_left: daysLeft,
+      };
+    });
+  }
+
+  let correctiveActions: SafetyDeskCorrectiveAction[] | null = null;
+  if (mayReadActions) {
+    const rows = await env.DB.prepare(
+      `SELECT corrective_action_id, occurrence_id, state, risk_level, owner_user_id,
+              due_at, description
+         FROM safety_corrective_actions
+        WHERE tenant_id = ? AND state NOT IN ('closed', 'rejected')
+        ORDER BY due_at
+        LIMIT 200`,
+    )
+      .bind(tenantId)
+      .all<{
+        corrective_action_id: string;
+        occurrence_id: string;
+        state: SafetyCorrectiveActionState;
+        risk_level: SafetySeverity;
+        owner_user_id: string;
+        due_at: string;
+        description: string;
+      }>();
+    correctiveActions = rows.results.map((row) => ({
+      ...row,
+      blocking: correctiveActionBlocks(row, now),
+      days_left: daysBetween(now, row.due_at),
+    }));
+  }
+
+  return {
+    version: 1,
+    read_model_generated_at: now,
+    expiring_within_days: SAFETY_INSPECTION_EXPIRING_DAYS,
+    actor_role: actor.role,
+    equipment,
+    corrective_actions: correctiveActions,
+  };
 }

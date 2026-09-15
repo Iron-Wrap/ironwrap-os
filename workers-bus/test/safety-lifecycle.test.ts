@@ -18,19 +18,25 @@ import {
   assignCorrectiveAction,
   closeCorrectiveAction,
   evaluateSafetyReadiness,
+  getSafetyEquipment,
   issueSafetyEquipment,
   recordEquipmentInspection,
   recordSafetyNotification,
   recordSafetyResponse,
   reportSafetyOccurrence,
   recordMakeSafe,
+  safetyDeskProjection,
+  safetyCorrectiveActionProjection,
   safetyPanelProjection,
   SafetyError,
   submitCorrectiveActionEvidence,
   submitSafetyNotification,
   verifyCorrectiveAction,
 } from "../src/safety-lifecycle.ts";
-import { safetyReadinessForScope, safetyReleaseGate } from "../src/safety-release-gate.ts";
+import {
+  safetyReadinessForScope,
+  safetyReleaseGate,
+} from "../src/safety-release-gate.ts";
 import {
   fieldWorkPackageProjection,
   type FieldWorkPackage,
@@ -41,12 +47,36 @@ const NOW = "2026-08-17T12:00:00.000Z";
 const LATER = "2026-08-17T13:00:00.000Z";
 
 const USERS = {
-  crew: { id: "appu_crew_member_0001", role: "field" as AppRole, access: "field" },
-  mate: { id: "appu_crew_member_0002", role: "field" as AppRole, access: "field" },
-  supervisor: { id: "appu_supervisor_0001", role: "ops" as AppRole, access: "production" },
-  inspector: { id: "appu_shop_inspect_01", role: "ops" as AppRole, access: "shop" },
-  auditor: { id: "appu_independent_001", role: "ops" as AppRole, access: "production" },
-  owner: { id: "appu_owner_account01", role: "owner" as AppRole, access: "owner" },
+  crew: {
+    id: "appu_crew_member_0001",
+    role: "field" as AppRole,
+    access: "field",
+  },
+  mate: {
+    id: "appu_crew_member_0002",
+    role: "field" as AppRole,
+    access: "field",
+  },
+  supervisor: {
+    id: "appu_supervisor_0001",
+    role: "ops" as AppRole,
+    access: "production",
+  },
+  inspector: {
+    id: "appu_shop_inspect_01",
+    role: "ops" as AppRole,
+    access: "shop",
+  },
+  auditor: {
+    id: "appu_independent_001",
+    role: "ops" as AppRole,
+    access: "production",
+  },
+  owner: {
+    id: "appu_owner_account01",
+    role: "owner" as AppRole,
+    access: "owner",
+  },
 } as const;
 
 class SqliteD1 {
@@ -54,7 +84,9 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of readdirSync(new URL("../migrations/", import.meta.url))
+    for (const migration of readdirSync(
+      new URL("../migrations/", import.meta.url),
+    )
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort()) {
       if (migration === "0038_app_access_roles.sql") {
@@ -75,7 +107,10 @@ class SqliteD1 {
           );
       }
       this.raw.exec(
-        readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"),
+        readFileSync(
+          new URL(`../migrations/${migration}`, import.meta.url),
+          "utf8",
+        ),
       );
     }
     const insert = this.raw.prepare(
@@ -121,7 +156,17 @@ interface StoredObject {
   checksum: string;
 }
 
-function memoryObjects(): { store: Map<string, StoredObject>; objects: { ensure: (key: string, body: string, contentType: string, checksum: string) => Promise<void> } } {
+function memoryObjects(): {
+  store: Map<string, StoredObject>;
+  objects: {
+    ensure: (
+      key: string,
+      body: string,
+      contentType: string,
+      checksum: string,
+    ) => Promise<void>;
+  };
+} {
   const store = new Map<string, StoredObject>();
   return {
     store,
@@ -129,7 +174,8 @@ function memoryObjects(): { store: Map<string, StoredObject>; objects: { ensure:
       async ensure(key, body, _contentType, checksum) {
         const existing = store.get(key);
         if (existing) {
-          if (existing.checksum !== checksum) throw new Error("immutable_object_conflict");
+          if (existing.checksum !== checksum)
+            throw new Error("immutable_object_conflict");
           return;
         }
         store.set(key, { body, checksum });
@@ -145,7 +191,9 @@ function memoryBucket(store: Map<string, StoredObject>) {
       const stored = store.get(key);
       if (!stored) return null;
       const digest = Uint8Array.from(
-        (stored.checksum.match(/../g) ?? []).map((byte) => Number.parseInt(byte, 16)),
+        (stored.checksum.match(/../g) ?? []).map((byte) =>
+          Number.parseInt(byte, 16),
+        ),
       );
       return {
         size: new TextEncoder().encode(stored.body).byteLength,
@@ -153,7 +201,11 @@ function memoryBucket(store: Map<string, StoredObject>) {
         checksums: { sha256: digest.buffer },
       };
     },
-    async put(key: string, body: string, options: { customMetadata?: { sha256?: string } }) {
+    async put(
+      key: string,
+      body: string,
+      options: { customMetadata?: { sha256?: string } },
+    ) {
       store.set(key, { body, checksum: options.customMetadata?.sha256 ?? "" });
     },
   };
@@ -203,7 +255,8 @@ function request(
   const headers = new Headers();
   if (options.csrf !== false) headers.set("x-csrf-token", "csrf");
   if (body) headers.set("content-type", "application/json");
-  if (options.deviceActionId) headers.set("x-device-action-id", options.deviceActionId);
+  if (options.deviceActionId)
+    headers.set("x-device-action-id", options.deviceActionId);
   return new Request(`https://app.example.invalid${path}`, {
     method: body ? "POST" : "GET",
     headers,
@@ -295,7 +348,12 @@ test("rescue command, control, release, and closure each require exact authority
     occurredAt: NOW,
     now: NOW,
   });
-  for (const command of ["rescue_dispatched", "controlled", "released", "closed"] as const) {
+  for (const command of [
+    "rescue_dispatched",
+    "controlled",
+    "released",
+    "closed",
+  ] as const) {
     assert.equal(
       await rejectionCode(() =>
         recordSafetyResponse(app, {
@@ -336,9 +394,16 @@ test("a stop is released only after control and a completed required rescue", as
   const app = env(db);
   await reportSafetyOccurrence(
     app,
-    occurrenceReport({ occurrenceKind: "emergency", severity: "critical", rescueRequired: true }),
+    occurrenceReport({
+      occurrenceKind: "emergency",
+      severity: "critical",
+      rescueRequired: true,
+    }),
   );
-  const step = async (actor: string, command: Parameters<typeof recordSafetyResponse>[1]["command"]) =>
+  const step = async (
+    actor: string,
+    command: Parameters<typeof recordSafetyResponse>[1]["command"],
+  ) =>
     await recordSafetyResponse(app, {
       tenantId: TENANT,
       occurrenceId: "so_ladder_slip_0001",
@@ -386,7 +451,9 @@ test("a duplicate offline report of the same event converges on one occurrence",
   assert.equal(second.occurrence.occurrence_id, "so_ladder_slip_0001");
   assert.equal(
     (
-      db.raw.prepare("SELECT COUNT(*) AS count FROM safety_occurrences").get() as {
+      db.raw
+        .prepare("SELECT COUNT(*) AS count FROM safety_occurrences")
+        .get() as {
         count: number;
       }
     ).count,
@@ -427,6 +494,7 @@ test("failed PPE inspection quarantines the item and blocks its holder", async (
     result: "pass",
     detail: "Webbing, stitching, and hardware verified.",
     evidence: null,
+    expectedVersion: 1,
     now: NOW,
   });
   assert.equal(passed.status, "in_service");
@@ -449,6 +517,7 @@ test("failed PPE inspection quarantines the item and blocks its holder", async (
     result: "fail",
     detail: "Cut through the leg strap webbing.",
     evidence: null,
+    expectedVersion: 2,
     now: LATER,
   });
   assert.equal(failed.status, "quarantined");
@@ -472,6 +541,7 @@ test("failed PPE inspection quarantines the item and blocks its holder", async (
         result: "pass",
         detail: "Looks fine to me.",
         evidence: null,
+        expectedVersion: 3,
         now: LATER,
       }),
     ),
@@ -515,7 +585,10 @@ test("an overdue high-risk corrective action blocks its scope", async () => {
 test("the reporter, owner, and evidence capturer cannot verify a closure", async () => {
   const db = new SqliteD1();
   const app = env(db);
-  await reportSafetyOccurrence(app, occurrenceReport({ reportedByUserId: USERS.crew.id }));
+  await reportSafetyOccurrence(
+    app,
+    occurrenceReport({ reportedByUserId: USERS.crew.id }),
+  );
   await assignCorrectiveAction(app, {
     tenantId: TENANT,
     correctiveActionId: "ca_ladder_control01",
@@ -529,7 +602,9 @@ test("the reporter, owner, and evidence capturer cannot verify a closure", async
     now: NOW,
   });
   const evidence = {
-    refsJson: JSON.stringify([{ ref: "r2://safety/retraining.pdf", sha256: "b".repeat(64) }]),
+    refsJson: JSON.stringify([
+      { ref: "r2://safety/retraining.pdf", sha256: "b".repeat(64) },
+    ]),
     sha256: "c".repeat(64),
   };
   await submitCorrectiveActionEvidence(app, {
@@ -628,7 +703,9 @@ test("an occurrence reporter with full production authority still cannot verify"
     correctiveActionId: "ca_reporter_block01",
     actorUserId: USERS.mate.id,
     evidence: {
-      refsJson: JSON.stringify([{ ref: "r2://safety/ladder.jpg", sha256: "b".repeat(64) }]),
+      refsJson: JSON.stringify([
+        { ref: "r2://safety/ladder.jpg", sha256: "b".repeat(64) },
+      ]),
       sha256: "c".repeat(64),
     },
     detail: "New ladder photographed on site.",
@@ -667,7 +744,9 @@ test("safety records are additive: events refuse update and delete", async () =>
   assert.throws(
     () =>
       db.raw
-        .prepare("UPDATE safety_occurrence_events SET detail = 'rewritten' WHERE occurrence_id = ?")
+        .prepare(
+          "UPDATE safety_occurrence_events SET detail = 'rewritten' WHERE occurrence_id = ?",
+        )
         .run("so_ladder_slip_0001"),
     /safety_occurrence_events_append_only/,
   );
@@ -679,7 +758,10 @@ test("safety records are additive: events refuse update and delete", async () =>
     /safety_occurrence_events_retained/,
   );
   assert.throws(
-    () => db.raw.prepare("DELETE FROM safety_occurrences WHERE occurrence_id = ?").run("so_ladder_slip_0001"),
+    () =>
+      db.raw
+        .prepare("DELETE FROM safety_occurrences WHERE occurrence_id = ?")
+        .run("so_ladder_slip_0001"),
     /safety_occurrences_retained/,
   );
 });
@@ -701,15 +783,23 @@ test("a release gate records an immutable snapshot of exactly what it saw", asyn
   assert.equal(blocked.readiness.ready, false);
   assert.equal(blocked.readiness.blockers[0]?.code, "safety_stop_active");
   const snapshot = db.raw
-    .prepare("SELECT ready, blocker_codes, consumer FROM safety_readiness_snapshots WHERE snapshot_id = ?")
-    .get(blocked.snapshot_id) as { ready: number; blocker_codes: string; consumer: string };
+    .prepare(
+      "SELECT ready, blocker_codes, consumer FROM safety_readiness_snapshots WHERE snapshot_id = ?",
+    )
+    .get(blocked.snapshot_id) as {
+    ready: number;
+    blocker_codes: string;
+    consumer: string;
+  };
   assert.equal(snapshot.ready, 0);
   assert.equal(snapshot.blocker_codes, "safety_stop_active");
   assert.equal(snapshot.consumer, "work_package_release");
   assert.throws(
     () =>
       db.raw
-        .prepare("UPDATE safety_readiness_snapshots SET ready = 1 WHERE snapshot_id = ?")
+        .prepare(
+          "UPDATE safety_readiness_snapshots SET ready = 1 WHERE snapshot_id = ?",
+        )
         .run(blocked.snapshot_id),
     /safety_readiness_snapshots_append_only/,
   );
@@ -752,24 +842,36 @@ test("the offline safety action rail works with no work package and replays idem
       severity: "critical",
     },
   };
-  const first = await processSafetyDeviceAction(app, auth(USERS.crew), submission, {
-    objects: objects.objects,
-    now: () => new Date(NOW),
-    randomId: () => "token-1",
-  });
+  const first = await processSafetyDeviceAction(
+    app,
+    auth(USERS.crew),
+    submission,
+    {
+      objects: objects.objects,
+      now: () => new Date(NOW),
+      randomId: () => "token-1",
+    },
+  );
   assert.equal(first.status, "verified");
   // The same device action replays to the identical response, not a second
   // incident, and the R2 manifest is written exactly once.
-  const replay = await processSafetyDeviceAction(app, auth(USERS.crew), submission, {
-    objects: objects.objects,
-    now: () => new Date(NOW),
-    randomId: () => "token-2",
-  });
+  const replay = await processSafetyDeviceAction(
+    app,
+    auth(USERS.crew),
+    submission,
+    {
+      objects: objects.objects,
+      now: () => new Date(NOW),
+      randomId: () => "token-2",
+    },
+  );
   assert.deepEqual(replay, first);
   assert.equal(objects.store.size, 1);
   assert.equal(
     (
-      db.raw.prepare("SELECT COUNT(*) AS count FROM safety_occurrences").get() as {
+      db.raw
+        .prepare("SELECT COUNT(*) AS count FROM safety_occurrences")
+        .get() as {
         count: number;
       }
     ).count,
@@ -782,8 +884,18 @@ test("the offline safety action rail works with no work package and replays idem
       processSafetyDeviceAction(
         app,
         auth(USERS.crew),
-        { ...submission, payload: { ...submission.payload, detail: "Something else entirely." } },
-        { objects: objects.objects, now: () => new Date(NOW), randomId: () => "token-3" },
+        {
+          ...submission,
+          payload: {
+            ...submission.payload,
+            detail: "Something else entirely.",
+          },
+        },
+        {
+          objects: objects.objects,
+          now: () => new Date(NOW),
+          randomId: () => "token-3",
+        },
       ),
     ),
     "idempotency_conflict",
@@ -802,9 +914,15 @@ test("a forward-dated device clock cannot create a future safety record", async 
       kind: "rescue_request",
       scope: { type: "roof_job", id: "JOB-A" },
       capturedAt: "2027-01-01T00:00:00.000Z",
-      payload: { detail: "Worker suspended in harness on the north elevation." },
+      payload: {
+        detail: "Worker suspended in harness on the north elevation.",
+      },
     },
-    { objects: objects.objects, now: () => new Date(NOW), randomId: () => "token-1" },
+    {
+      objects: objects.objects,
+      now: () => new Date(NOW),
+      randomId: () => "token-1",
+    },
   );
   const occurrence = db.raw
     .prepare(
@@ -834,7 +952,9 @@ test("the global safety panel is reachable by a field worker with no assignment"
   );
   assert.ok(response);
   assert.equal(response.status, 200);
-  const payload = (await response.json()) as { panel: { allowed_actions: string[] } };
+  const payload = (await response.json()) as {
+    panel: { allowed_actions: string[] };
+  };
   assert.deepEqual(payload.panel.allowed_actions, [
     "safety.report_occurrence",
     "safety.make_safe",
@@ -842,10 +962,18 @@ test("the global safety panel is reachable by a field worker with no assignment"
     "safety.rescue_request",
   ]);
 
-  const supervisorPanel = await safetyPanelProjection(app, TENANT, USERS.supervisor.id);
+  const supervisorPanel = await safetyPanelProjection(
+    app,
+    TENANT,
+    USERS.supervisor.id,
+  );
   assert.ok(supervisorPanel.allowed_actions.includes("safety.rescue_command"));
-  assert.ok(supervisorPanel.allowed_actions.includes("safety.verify_corrective_action"));
-  assert.ok(!supervisorPanel.allowed_actions.includes("safety.notify_authority"));
+  assert.ok(
+    supervisorPanel.allowed_actions.includes("safety.verify_corrective_action"),
+  );
+  assert.ok(
+    !supervisorPanel.allowed_actions.includes("safety.notify_authority"),
+  );
 });
 
 test("the replayed offline envelope reaches the safety rail through the route", async () => {
@@ -864,18 +992,25 @@ test("the replayed offline envelope reaches the safety rail through the route", 
   };
   await reportSafetyOccurrence(app, occurrenceReport());
   const first = await handleSafetyRoute(
-    request("/api/v1/safety/actions", envelope, { deviceActionId: "dev-outbox-0000001" }),
+    request("/api/v1/safety/actions", envelope, {
+      deviceActionId: "dev-outbox-0000001",
+    }),
     app,
     auth(USERS.crew),
   );
   assert.equal(first?.status, 200);
-  const verified = (await first?.json()) as { status: string; server_ref: string };
+  const verified = (await first?.json()) as {
+    status: string;
+    server_ref: string;
+  };
   assert.equal(verified.status, "verified");
   assert.equal(verified.server_ref, "so_ladder_slip_0001");
 
   // The outbox replays the identical envelope after a dropped response.
   const replay = await handleSafetyRoute(
-    request("/api/v1/safety/actions", envelope, { deviceActionId: "dev-outbox-0000001" }),
+    request("/api/v1/safety/actions", envelope, {
+      deviceActionId: "dev-outbox-0000001",
+    }),
     app,
     auth(USERS.crew),
   );
@@ -894,7 +1029,9 @@ test("the replayed offline envelope reaches the safety rail through the route", 
 
   // A device action id header that disagrees with the body is refused.
   const mismatched = await handleSafetyRoute(
-    request("/api/v1/safety/actions", envelope, { deviceActionId: "dev-outbox-0000002" }),
+    request("/api/v1/safety/actions", envelope, {
+      deviceActionId: "dev-outbox-0000002",
+    }),
     app,
     auth(USERS.crew),
   );
@@ -930,7 +1067,9 @@ test("the safety route enforces CSRF and rejects an unknown command", async () =
     auth(USERS.supervisor),
   );
   assert.equal(badCommand?.status, 400);
-  assert.deepEqual(await badCommand?.json(), { error: "safety_command_invalid" });
+  assert.deepEqual(await badCommand?.json(), {
+    error: "safety_command_invalid",
+  });
 });
 
 test("the route layer surfaces the store's exact rejection code and status", async () => {
@@ -959,7 +1098,9 @@ test("an occurrence cannot close over an unresolved notification or open action"
     app,
     occurrenceReport({ occurrenceKind: "injury", severity: "critical" }),
   );
-  const advance = async (command: Parameters<typeof recordSafetyResponse>[1]["command"]) =>
+  const advance = async (
+    command: Parameters<typeof recordSafetyResponse>[1]["command"],
+  ) =>
     await recordSafetyResponse(app, {
       tenantId: TENANT,
       occurrenceId: "so_ladder_slip_0001",
@@ -996,7 +1137,10 @@ test("an occurrence cannot close over an unresolved notification or open action"
   await advance("investigation_opened");
   await advance("controlled");
   await advance("released");
-  assert.equal(await rejectionCode(() => advance("closed")), "safety_notification_outstanding");
+  assert.equal(
+    await rejectionCode(() => advance("closed")),
+    "safety_notification_outstanding",
+  );
   await submitSafetyNotification(app, {
     tenantId: TENANT,
     notificationId: "sn_wcb_alberta_0001",
@@ -1132,6 +1276,7 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
     result: "pass",
     detail: "Pre-season inspection.",
     evidence: null,
+    expectedVersion: 1,
     now: "2026-08-01T12:00:00.000Z",
   });
 
@@ -1144,9 +1289,15 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
       kind: "rescue_request",
       scope: { type: "roof_job", id: "JOB-A" },
       capturedAt: NOW,
-      payload: { detail: "Worker suspended in harness after an arrested fall." },
+      payload: {
+        detail: "Worker suspended in harness after an arrested fall.",
+      },
     },
-    { objects: objects.objects, now: () => new Date(NOW), randomId: () => "token-1" },
+    {
+      objects: objects.objects,
+      now: () => new Date(NOW),
+      randomId: () => "token-1",
+    },
   );
   const occurrenceId = rescueCall.server_ref;
 
@@ -1184,7 +1335,11 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
         equipment_id: "eq_harness_0001",
       },
     },
-    { objects: objects.objects, now: () => new Date(NOW), randomId: () => "token-2" },
+    {
+      objects: objects.objects,
+      now: () => new Date(NOW),
+      randomId: () => "token-2",
+    },
   );
   assert.equal(defect.server_ref, "eq_harness_0001");
 
@@ -1200,7 +1355,9 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
     now: NOW,
   });
   assert.equal(earlyGate.readiness.ready, false);
-  const earlyCodes = new Set(earlyGate.readiness.blockers.map((blocker) => blocker.code));
+  const earlyCodes = new Set(
+    earlyGate.readiness.blockers.map((blocker) => blocker.code),
+  );
   assert.ok(earlyCodes.has("safety_stop_active"));
   assert.ok(earlyCodes.has("safety_equipment_unserviceable"));
 
@@ -1301,7 +1458,9 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
     now: NOW,
   });
   assert.ok(
-    lateGate.blockers.some((blocker) => blocker.code === "safety_corrective_action_overdue"),
+    lateGate.blockers.some(
+      (blocker) => blocker.code === "safety_corrective_action_overdue",
+    ),
   );
 
   // 8. Evidence is captured by the owner of the fix; verification must not be.
@@ -1367,10 +1526,13 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
     result: "pass",
     detail: "New harness accepted into service.",
     evidence: null,
+    expectedVersion: 1,
     now: NOW,
   });
   db.raw
-    .prepare("UPDATE safety_equipment SET version = version + 1, status = 'retired', assigned_user_id = NULL, assigned_at = NULL, updated_at = ? WHERE equipment_id = 'eq_harness_0001'")
+    .prepare(
+      "UPDATE safety_equipment SET version = version + 1, status = 'retired', assigned_user_id = NULL, assigned_at = NULL, updated_at = ? WHERE equipment_id = 'eq_harness_0001'",
+    )
     .run(NOW);
 
   // 10. Only now does the stop lift, and only by production authority.
@@ -1395,17 +1557,384 @@ test("emergency drill: rescue, failed PPE, duplicate report, late action, indepe
   // The whole drill is reconstructable: nothing was deleted, and both the
   // refusal and the release were recorded.
   const snapshots = db.raw
-    .prepare("SELECT ready, blocker_codes FROM safety_readiness_snapshots ORDER BY evaluated_at, snapshot_id")
+    .prepare(
+      "SELECT ready, blocker_codes FROM safety_readiness_snapshots ORDER BY evaluated_at, snapshot_id",
+    )
     .all() as Array<{ ready: number; blocker_codes: string }>;
   assert.equal(snapshots.length, 2);
-  assert.ok(snapshots.some((row) => row.ready === 0 && row.blocker_codes.length > 0));
-  assert.ok(snapshots.some((row) => row.ready === 1 && row.blocker_codes === ""));
+  assert.ok(
+    snapshots.some((row) => row.ready === 0 && row.blocker_codes.length > 0),
+  );
+  assert.ok(
+    snapshots.some((row) => row.ready === 1 && row.blocker_codes === ""),
+  );
   assert.equal(
     (
       db.raw
-        .prepare("SELECT COUNT(*) AS count FROM safety_occurrence_events WHERE occurrence_id = ?")
+        .prepare(
+          "SELECT COUNT(*) AS count FROM safety_occurrence_events WHERE occurrence_id = ?",
+        )
         .get(occurrenceId) as { count: number }
     ).count,
     8,
   );
+});
+
+test("the safety desk judges equipment by the release gate's own rule", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  // Two items: one inspected and due soon, one never inspected.
+  await issueSafetyEquipment(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_0001",
+    equipmentKind: "fall_arrest_harness",
+    serialNumber: "SN-0001",
+    assignedUserId: USERS.crew.id,
+    inspectionIntervalDays: 10,
+    actorUserId: USERS.inspector.id,
+    now: NOW,
+  });
+  await recordEquipmentInspection(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_0001",
+    actorUserId: USERS.inspector.id,
+    result: "pass",
+    detail: "Webbing, stitching, and hardware verified.",
+    evidence: null,
+    expectedVersion: 1,
+    now: NOW,
+  });
+  await issueSafetyEquipment(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_0002",
+    equipmentKind: "fall_arrest_harness",
+    serialNumber: "SN-0002",
+    assignedUserId: USERS.mate.id,
+    inspectionIntervalDays: 180,
+    actorUserId: USERS.inspector.id,
+    now: NOW,
+  });
+
+  const desk = await safetyDeskProjection(
+    app,
+    TENANT,
+    USERS.supervisor.id,
+    NOW,
+  );
+  const byId = new Map(
+    (desk.equipment ?? []).map((item) => [item.equipment_id, item]),
+  );
+
+  // Due in 10 days: visible and named, but this is not what stops a crew.
+  const soon = byId.get("eq_harness_0001");
+  assert.equal(soon?.verdict, "expiring");
+  assert.equal(soon?.days_left, 10);
+
+  // Never inspected: the desk says exactly what the gate says.
+  const unproven = byId.get("eq_harness_0002");
+  assert.equal(unproven?.verdict, "unserviceable");
+  assert.equal(
+    unproven?.detail,
+    "fall_arrest_harness SN-0002 has no recorded inspection.",
+  );
+
+  const readiness = await evaluateSafetyReadiness(app, {
+    tenantId: TENANT,
+    scopes: [],
+    subjectUserIds: [USERS.crew.id, USERS.mate.id],
+    now: NOW,
+  });
+  // The desk and the gate must not disagree about who is stopped.
+  assert.deepEqual(
+    readiness.blockers.map((blocker) => blocker.subject_id),
+    ["eq_harness_0002"],
+  );
+});
+
+test("the safety desk marks only the corrective actions the gate refuses on", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  await reportSafetyOccurrence(app, occurrenceReport());
+  await assignCorrectiveAction(app, {
+    tenantId: TENANT,
+    correctiveActionId: "ca_ladder_control01",
+    occurrenceId: "so_ladder_slip_0001",
+    riskLevel: "high",
+    ownerUserId: USERS.mate.id,
+    dueAt: "2026-08-16T12:00:00.000Z",
+    description: "Install a permanent ladder tie-off point.",
+    recurrenceOfId: null,
+    actorUserId: USERS.supervisor.id,
+    now: NOW,
+  });
+  await assignCorrectiveAction(app, {
+    tenantId: TENANT,
+    correctiveActionId: "ca_ladder_signage1",
+    occurrenceId: "so_ladder_slip_0001",
+    riskLevel: "low",
+    ownerUserId: USERS.mate.id,
+    dueAt: "2026-08-16T12:00:00.000Z",
+    description: "Add a reminder sign at the ladder base.",
+    recurrenceOfId: null,
+    actorUserId: USERS.supervisor.id,
+    now: NOW,
+  });
+
+  const desk = await safetyDeskProjection(
+    app,
+    TENANT,
+    USERS.supervisor.id,
+    NOW,
+  );
+  const actions = new Map(
+    (desk.corrective_actions ?? []).map((action) => [
+      action.corrective_action_id,
+      action,
+    ]),
+  );
+  // Both are overdue and both are shown; only high risk stops the work.
+  assert.equal(actions.get("ca_ladder_control01")?.blocking, true);
+  assert.equal(actions.get("ca_ladder_signage1")?.blocking, false);
+  assert.equal(actions.get("ca_ladder_signage1")?.days_left, -1);
+});
+
+test("the safety desk shows a rail only to a role that may act on it", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+
+  // Shop may handle equipment but does not run the response rail: null, never an empty
+  // list, so "none on file" and "not yours to see" cannot be confused.
+  const shop = await safetyDeskProjection(app, TENANT, USERS.inspector.id, NOW);
+  assert.equal(shop.actor_role, "shop");
+  assert.ok(Array.isArray(shop.equipment));
+  assert.equal(shop.corrective_actions, null);
+
+  const production = await safetyDeskProjection(
+    app,
+    TENANT,
+    USERS.supervisor.id,
+    NOW,
+  );
+  assert.ok(Array.isArray(production.equipment));
+  assert.ok(Array.isArray(production.corrective_actions));
+
+  await assert.rejects(
+    () => safetyDeskProjection(app, TENANT, USERS.crew.id, NOW),
+    (error: unknown) =>
+      error instanceof SafetyError &&
+      error.code === "safety_desk_role_required",
+  );
+});
+
+test("the safety desk route refuses a crew session and answers an operations one", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  const refused = await handleSafetyRoute(
+    request("/api/v1/safety/desk"),
+    app,
+    auth(USERS.crew),
+  );
+  assert.equal(refused?.status, 403);
+
+  const allowed = await handleSafetyRoute(
+    request("/api/v1/safety/desk"),
+    app,
+    auth(USERS.owner),
+  );
+  assert.equal(allowed?.status, 200);
+  const payload = (await allowed?.json()) as {
+    version: number;
+    equipment: unknown[];
+    corrective_actions: unknown[];
+  };
+  assert.equal(payload.version, 1);
+  assert.ok(Array.isArray(payload.equipment));
+  assert.ok(Array.isArray(payload.corrective_actions));
+});
+
+test("corrective evidence acknowledges only an exact replay, including after independent closure", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  await reportSafetyOccurrence(app, occurrenceReport());
+  await assignCorrectiveAction(app, {
+    tenantId: TENANT,
+    correctiveActionId: "ca_replay_exact01",
+    occurrenceId: "so_ladder_slip_0001",
+    riskLevel: "high",
+    ownerUserId: USERS.mate.id,
+    dueAt: LATER,
+    description: "Install a permanent tie-off point.",
+    recurrenceOfId: null,
+    actorUserId: USERS.supervisor.id,
+    now: NOW,
+  });
+  const input = {
+    tenantId: TENANT,
+    correctiveActionId: "ca_replay_exact01",
+    actorUserId: USERS.mate.id,
+    evidence: {
+      refsJson: JSON.stringify([
+        { ref: "r2://safety/tie-off-check.pdf", sha256: "a".repeat(64) },
+      ]),
+      sha256: "b".repeat(64),
+    },
+    detail: "Tie-off installed and checked.",
+    now: NOW,
+  };
+  assert.deepEqual(
+    (
+      await safetyCorrectiveActionProjection(
+        app,
+        TENANT,
+        USERS.mate.id,
+        input.correctiveActionId,
+      )
+    ).allowed_actions,
+    ["submit_evidence"],
+  );
+  const saved = await submitCorrectiveActionEvidence(app, input);
+  assert.equal(
+    (await submitCorrectiveActionEvidence(app, { ...input, now: LATER }))
+      .version,
+    saved.version,
+  );
+  for (const changed of [
+    { ...input, actorUserId: USERS.crew.id },
+    { ...input, detail: "A different observation." },
+    { ...input, evidence: { ...input.evidence, sha256: "c".repeat(64) } },
+    {
+      ...input,
+      evidence: {
+        ...input.evidence,
+        refsJson: JSON.stringify([
+          { ref: "r2://safety/other.pdf", sha256: "a".repeat(64) },
+        ]),
+      },
+    },
+  ]) {
+    assert.equal(
+      await rejectionCode(() => submitCorrectiveActionEvidence(app, changed)),
+      "safety_corrective_evidence_conflict",
+    );
+  }
+  const self = await safetyCorrectiveActionProjection(
+    app,
+    TENANT,
+    USERS.mate.id,
+    input.correctiveActionId,
+  );
+  assert.deepEqual(self.allowed_actions, []);
+  const independent = await safetyCorrectiveActionProjection(
+    app,
+    TENANT,
+    USERS.supervisor.id,
+    input.correctiveActionId,
+  );
+  assert.deepEqual(independent.allowed_actions, ["verify", "reject"]);
+  await verifyCorrectiveAction(app, {
+    ...input,
+    actorUserId: USERS.supervisor.id,
+    verdict: "verified",
+    now: LATER,
+  });
+  await closeCorrectiveAction(app, {
+    ...input,
+    actorUserId: USERS.supervisor.id,
+    now: LATER,
+  });
+  const replayed = await submitCorrectiveActionEvidence(app, {
+    ...input,
+    now: LATER,
+  });
+  assert.equal(replayed.state, "closed");
+  assert.deepEqual(
+    (
+      await safetyCorrectiveActionProjection(
+        app,
+        TENANT,
+        USERS.supervisor.id,
+        input.correctiveActionId,
+      )
+    ).allowed_actions,
+    [],
+  );
+  assert.equal(
+    db.raw
+      .prepare(
+        "SELECT count(*) AS n FROM safety_corrective_action_events WHERE corrective_action_id = ? AND event_kind = 'evidence_submitted'",
+      )
+      .get(input.correctiveActionId)?.n,
+    1,
+  );
+});
+
+test("a pass recorded from a stale equipment screen is refused after someone else quarantined the item", async () => {
+  const db = new SqliteD1();
+  const app = env(db);
+  await issueSafetyEquipment(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_stale01",
+    equipmentKind: "fall_arrest_harness",
+    serialNumber: "SN-STALE-01",
+    assignedUserId: USERS.crew.id,
+    inspectionIntervalDays: 180,
+    actorUserId: USERS.inspector.id,
+    now: NOW,
+  });
+  // Inspector A reads revision 1. Inspector B then fails the item: revision 2, quarantined.
+  const read = await getSafetyEquipment(app, TENANT, "eq_harness_stale01");
+  assert.equal(read?.version, 1);
+  const quarantined = await recordEquipmentInspection(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_stale01",
+    actorUserId: USERS.supervisor.id,
+    result: "fail",
+    detail: "Cut webbing above the dorsal D-ring.",
+    evidence: null,
+    expectedVersion: 1,
+    now: NOW,
+  });
+  assert.equal(quarantined.version, 2);
+  assert.equal(quarantined.status, "quarantined");
+  // A submits "pass" from the revision-1 screen: refused, nothing changes, no event appended.
+  assert.equal(
+    await rejectionCode(() =>
+      recordEquipmentInspection(app, {
+        tenantId: TENANT,
+        equipmentId: "eq_harness_stale01",
+        actorUserId: USERS.inspector.id,
+        result: "pass",
+        detail: "Looked fine this morning.",
+        evidence: null,
+        expectedVersion: 1,
+        now: LATER,
+      }),
+    ),
+    "safety_equipment_version_conflict",
+  );
+  const after = await getSafetyEquipment(app, TENANT, "eq_harness_stale01");
+  assert.equal(after?.version, 2);
+  assert.equal(after?.status, "quarantined");
+  assert.equal(after?.last_inspection_result, "fail");
+  assert.equal(
+    db.raw
+      .prepare(
+        "SELECT count(*) AS n FROM safety_equipment_events WHERE equipment_id = ? AND event_kind = 'inspection_pass'",
+      )
+      .get("eq_harness_stale01")?.n,
+    0,
+  );
+  // Reading the new condition and passing against revision 2 is the only way back to service.
+  const cleared = await recordEquipmentInspection(app, {
+    tenantId: TENANT,
+    equipmentId: "eq_harness_stale01",
+    actorUserId: USERS.inspector.id,
+    result: "pass",
+    detail: "Webbing replaced and verified.",
+    evidence: null,
+    expectedVersion: 2,
+    now: LATER,
+  });
+  assert.equal(cleared.version, 3);
+  assert.equal(cleared.status, "in_service");
 });

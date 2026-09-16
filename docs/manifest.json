@@ -54,17 +54,28 @@
     {
       "path": "app/README.md",
       "class": "component",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "config/newo/akb/ironwrap-receptionist.v1.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "deploy/local/README.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/AI-NATIVE-ARCHITECTURE.md",
@@ -99,7 +110,10 @@
     {
       "path": "docs/CAPABILITY-SIGNAL-CONTRACT.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/COMPLIANCE-REGISTER.md",
@@ -109,7 +123,10 @@
     {
       "path": "docs/CRM-IMPORT-MAP.md",
       "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/DOCUMENTATION-CONTRACT.md",
@@ -172,7 +189,10 @@
     {
       "path": "docs/JOBNIMBUS-MIGRATION-MAP.md",
       "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/LAUNCH-PROOF-SIDE-EFFECTS.md",
@@ -182,12 +202,18 @@
     {
       "path": "docs/LAUNCH-RUNBOOK.md",
       "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "docs/NEWO-INTEGRATION.md",
       "class": "runbook",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "docs/NEWO-PRODUCTION-RUNBOOK.md",
@@ -207,7 +233,10 @@
     {
       "path": "docs/PIPELINE-ADMIN-API-CONTRACT.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/PIPELINE-BOARD-PLACEMENT-SPEC.md",
@@ -228,7 +257,10 @@
     {
       "path": "docs/RECORD-DOCUMENTS-READ-CONTRACT.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/TEMPLATE-MARKETPLACE-REQUIREMENTS.md",
@@ -238,147 +270,248 @@
     {
       "path": "docs/WEBSITE-INTEGRATION.md",
       "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "docs/WHITE-LABEL-CLONE-PLAYBOOK.md",
       "class": "runbook",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/WORKER-SURFACE-AND-LEAD-PATH.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "docs/specs/role-bound-automation-recipients.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "frappe-apps/ironwrap_roofing/README.md",
       "class": "component",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "hermes/README.md",
       "class": "component",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "hermes/agents/closeout-agent.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/estimator-assistant.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/field-companion.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/finance-reconciler.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/lead-concierge.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "hermes/agents/owner-operator.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/production-controller.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/agents/support-admin.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/alberta-compliance.md",
       "class": "runtime",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "hermes/skills/field-closeout.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/field-voice-report.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/instant-estimate-qualifier.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/ironwrap-lead-triage.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/market-defense.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "hermes/skills/metal-roofing-takeoff.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/production-gatekeeper.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/proposal-proof-pack.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/COMPLIANCE-REGISTER.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
     },
     {
       "path": "hermes/skills/roofing-scope-builder.md",
       "class": "runtime",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
     },
     {
       "path": "hermes/skills/white-label-onboarding.md",
       "class": "runtime",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "mcp/erpnext-roofing-mcp/README.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "mcp/ironwrap-bus-mcp/README.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "mcp/newo-mcp/README.md",
       "class": "component",
-      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
+      "path": "release-issuer/README.md",
+      "class": "component",
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     },
     {
       "path": "workers-bus/README.md",
       "class": "component",
-      "authority": ["docs/AUTONOMOUS-OPERATING-SYSTEM.md", "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md", "docs/CAPABILITY-MATRIX.md"]
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
     }
   ]
 }

@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ironwrap-release-issuer",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-06-28",
+  // Deliberately no nodejs_compat: this Worker uses only Web Crypto and D1, and a smaller runtime
+  // surface is the point for a service whose whole job is to be independently trustworthy.
+
+  // Its own database, in its own account binding. The release pipeline must not be able to write
+  // this ledger, or the acknowledgement would no longer be independent of the thing it admits.
+  "d1_databases": [
+    {
+      "binding": "LEDGER",
+      "database_name": "ironwrap-release-issuer",
+      "database_id": "set-by-the-issuer-custodian",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Identity this deployment will acknowledge for, checked against every trigger. Values, not
+  // secrets: they are already public in .github/workflows/deploy.yml.
+  "vars": {
+    "ISSUER_REPOSITORY": "Iron-Wrap/ironwrap-os",
+    "ISSUER_REQUESTER_IDENTITY": "release-admission@ironwrapexteriors.com",
+    "ISSUER_PRINCIPAL": "independent-reviewer@ironwrapexteriors.com",
+    "ISSUER_TASK_IDS": "independent-source-review,independent-release-evidence",
+    "ISSUER_KEY_VERSION": "review-key-2026-08"
+  }
+
+  // ISSUER_TRIGGER_TOKEN is a secret and is never committed:
+  //   wrangler secret put ISSUER_TRIGGER_TOKEN
+  // The same value goes into the repository secret RELEASE_INDEPENDENT_ISSUER_TOKEN.
+}

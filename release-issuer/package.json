@@ -1,0 +1,11 @@
+{
+  "name": "ironwrap-release-issuer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply ironwrap-release-issuer --remote"
+  }
+}

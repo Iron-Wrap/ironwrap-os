@@ -38,6 +38,7 @@ import {
   messageFor,
   type FieldDateOptions,
 } from "./field-formatting";
+import { CustomerJobHistorySection } from "../customers/customer-history-section";
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
 import { GateChip } from "./gate-chip";
@@ -241,7 +242,17 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
     session.user.role === "field" &&
     model.assignment !== null &&
     model.allowed_actions.includes("field.checkin.create");
-  const dataLimits = model.stale_fields.filter((field) => field !== "offline.cached_packet");
+  /*
+    A marker belongs in "Some job details may be old" only if nothing else on the screen explains
+    it. The `.native_unavailable` slots are now explained inside their own panel, and leaving them
+    here too put six lines of machine vocabulary -- "Packet Materials Takeoffs Native Unavailable"
+    -- in front of a crew on every job forever, which buried the rare marker that means something
+    (a stale address, a contact whose phone did not come back). Access instructions stay: they have
+    no panel of their own, so this disclosure is the only place that says so.
+  */
+  const dataLimits = model.stale_fields.filter(
+    (field) => field !== "offline.cached_packet" && !field.endsWith(".native_unavailable"),
+  );
 
   async function loadOlder() {
     if (!cursor || loadingMore || offline) return;
@@ -304,6 +315,15 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           entityId={model.job.roof_job_id}
           dateOptions={dateOptions}
           headingId="job-documents-heading"
+        />
+        {/*
+          What else this customer has had done, finished work included. Renders for office readers
+          only — the server refuses `jobs:read:assigned`, so a crew member sees nothing here.
+        */}
+        <CustomerJobHistorySection
+          jobId={model.job.roof_job_id}
+          dateOptions={dateOptions}
+          headingId="customer-history-heading"
         />
         <CaptureProofPanel
           jobId={model.job.id}
@@ -1492,6 +1512,9 @@ function PacketDetails({
 }) {
   const materialCount =
     model.packet.materials.takeoffs.length + model.packet.materials.supplier_orders.length;
+  // The server already tells us which slots it cannot fill on this path; the panels just never
+  // read it, so every empty one claimed the job had none.
+  const uncarried = (...fields: string[]) => fields.some((f) => model.stale_fields.includes(f));
   return (
     <section aria-labelledby="packet-details-heading" className="space-y-4">
       <header className="border-b border-border pb-4">
@@ -1504,7 +1527,11 @@ function PacketDetails({
         </h2>
       </header>
       <div className="divide-y divide-border border-y border-border">
-        <PacketDetail title="Approved scope" count={model.packet.scope_clauses.length}>
+        <PacketDetail
+          title="Approved scope"
+          count={model.packet.scope_clauses.length}
+          unavailable={uncarried("packet.scope_clauses.native_unavailable")}
+        >
           {model.packet.scope_clauses.map((item) => (
             <PacketEvidenceLine
               key={item.id}
@@ -1513,7 +1540,11 @@ function PacketDetails({
             />
           ))}
         </PacketDetail>
-        <PacketDetail title="Measurements" count={model.packet.measurements.length}>
+        <PacketDetail
+          title="Measurements"
+          count={model.packet.measurements.length}
+          unavailable={uncarried("packet.measurements.native_unavailable")}
+        >
           {model.packet.measurements.map((item) => (
             <PacketEvidenceLine
               key={item.id}
@@ -1527,7 +1558,14 @@ function PacketDetails({
             />
           ))}
         </PacketDetail>
-        <PacketDetail title="Materials" count={materialCount}>
+        <PacketDetail
+          title="Materials"
+          count={materialCount}
+          unavailable={uncarried(
+            "packet.materials.takeoffs.native_unavailable",
+            "packet.materials.supplier_orders.native_unavailable",
+          )}
+        >
           {model.packet.materials.takeoffs.map((item) => (
             <PacketEvidenceLine
               key={item.id}
@@ -1554,7 +1592,11 @@ function PacketDetails({
             />
           ))}
         </PacketDetail>
-        <PacketDetail title="Change orders" count={model.packet.change_orders.length}>
+        <PacketDetail
+          title="Change orders"
+          count={model.packet.change_orders.length}
+          unavailable={uncarried("packet.change_orders.native_unavailable")}
+        >
           {model.packet.change_orders.map((item) => (
             <PacketEvidenceLine
               key={item.id}
@@ -1575,10 +1617,13 @@ function PacketDetails({
 function PacketDetail({
   title,
   count,
+  unavailable = false,
   children,
 }: {
   title: string;
   count: number;
+  /** The server said it does not carry this slot here -- not that the job has none of it. */
+  unavailable?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -1586,12 +1631,25 @@ function PacketDetail({
       <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-1 py-4 font-bold [&::-webkit-details-marker]:hidden">
         <span>{title}</span>
         <span className="text-sm font-semibold text-muted">
-          {count} {count === 1 ? "item" : "items"}
+          {unavailable && count === 0
+            ? "Not shown here"
+            : `${count} ${count === 1 ? "item" : "items"}`}
         </span>
       </summary>
       <div className="space-y-3 border-t border-border pb-5 pt-4">
         {count ? (
           children
+        ) : unavailable ? (
+          /*
+            An empty panel used to say "No items are in this work plan" whatever the reason, so a
+            slot this system does not carry yet read to a crew on a roof as a fact about the job:
+            no approved scope, no change orders. That is the one thing this screen must never say
+            by accident, so an uncarried slot now says so and points at someone who would know.
+          */
+          <p className="text-sm leading-6 text-muted">
+            This screen does not carry {title.toLowerCase()} yet. Do not read that as none — ask the
+            office before you rely on it.
+          </p>
         ) : (
           <p className="text-sm leading-6 text-muted">No items are in this work plan.</p>
         )}

@@ -1041,3 +1041,85 @@ describe("JobPage", () => {
     expect(saveOutboxAction).not.toHaveBeenCalled();
   });
 });
+
+describe("packet slots this system does not carry", () => {
+  /**
+   * Every empty panel used to read "No items are in this work plan" whatever the reason. On the
+   * owned path several slots are hard-empty and the server says so in `stale_fields`, so a crew on
+   * a roof was being told this job had no approved scope and no change orders — a claim about the
+   * job, made by a screen that had simply not been given the data.
+   */
+  function emptyPacket(model = jobModel()): JobResponse {
+    return {
+      ...model,
+      packet: {
+        ...model.packet,
+        scope_clauses: [],
+        measurements: [],
+        materials: { takeoffs: [], supplier_orders: [] },
+        change_orders: [],
+      },
+    };
+  }
+
+  it("says a slot is not carried instead of reporting it as none", async () => {
+    renderJob(emptyPacket(jobModel({ stale_fields: ["packet.change_orders.native_unavailable"] })));
+
+    expect(
+      await screen.findByText(/This screen does not carry change orders yet/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/ask the office before you rely on it/i)).toBeInTheDocument();
+  });
+
+  it("does not count an uncarried slot as zero items", async () => {
+    renderJob(emptyPacket(jobModel({ stale_fields: ["packet.change_orders.native_unavailable"] })));
+
+    await screen.findByText(/This screen does not carry change orders yet/);
+    expect(screen.getByText("Not shown here")).toBeInTheDocument();
+  });
+
+  it("still reports a genuinely empty slot as empty", async () => {
+    // The server looked and found none. That IS a fact about the job, and saying so is correct.
+    renderJob(emptyPacket(jobModel({ stale_fields: [] })));
+
+    const empties = await screen.findAllByText("No items are in this work plan.");
+    expect(empties.length).toBeGreaterThan(0);
+    expect(screen.queryByText(/does not carry/)).not.toBeInTheDocument();
+  });
+
+  it("treats either half of the materials slot as enough to stop claiming none", async () => {
+    renderJob(
+      emptyPacket(
+        jobModel({ stale_fields: ["packet.materials.supplier_orders.native_unavailable"] }),
+      ),
+    );
+
+    expect(await screen.findByText(/This screen does not carry materials yet/)).toBeInTheDocument();
+  });
+});
+
+describe("what the stale-details disclosure is for", () => {
+  it("keeps a marker the screen cannot explain anywhere else", async () => {
+    renderJob(jobModel({ stale_fields: ["job.address", "packet.contact.phone"] }));
+
+    expect(await screen.findByText(/Some job details may be old/)).toBeInTheDocument();
+    expect(screen.getByText(/Job Address, Packet Contact Phone/)).toBeInTheDocument();
+  });
+
+  it("does not repeat a slot the panel already explains", async () => {
+    // Six lines of "Packet Materials Takeoffs Native Unavailable" on every job buried the rare
+    // marker that actually means something.
+    renderJob(
+      jobModel({
+        stale_fields: [
+          "packet.scope_clauses.native_unavailable",
+          "packet.materials.takeoffs.native_unavailable",
+          "packet.change_orders.native_unavailable",
+        ],
+      }),
+    );
+
+    await screen.findByRole("heading", { name: /Job details/ });
+    expect(screen.queryByText(/Some job details may be old/)).not.toBeInTheDocument();
+  });
+});

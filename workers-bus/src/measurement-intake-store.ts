@@ -1056,6 +1056,58 @@ async function getMeasurementReceiptById(
     .first<MeasurementIntakeReceipt>();
 }
 
+/** The most a job packet will carry. A job has a handful of roofs, not a page of them. */
+export const JOB_MEASUREMENT_LIMIT = 12;
+
+export interface JobMeasurementSummary {
+  measurement_revision_id: string;
+  provider: string;
+  review_required: 0 | 1;
+  revision_number: number;
+  created_at: string;
+}
+
+/**
+ * The measurements currently standing for one job: the newest revision of each measurement root
+ * that resolved to this job.
+ *
+ * Deliberately selects summary columns only. `projection_json` is capped at two megabytes by the
+ * schema and this read feeds a field packet a crew pulls over a phone connection, so the geometry
+ * stays where the estimator reads it and the packet carries only enough to say a measurement
+ * exists, who produced it, and whether it was flagged for a human check.
+ *
+ * `native_measurement_revisions` is append-only -- there is no UPDATE against it anywhere in this
+ * Worker -- so a correction arrives as a new revision that supersedes the old one. Taking the
+ * highest `revision_number` per root is therefore what "current" means here, and `review_required`
+ * is a fact about the revision being shown rather than a flag that someone may have since cleared.
+ * `unmatched` rows are excluded: a measurement whose job association failed is not this job's.
+ */
+export async function listCurrentJobMeasurements(
+  env: Env,
+  tenantId: string,
+  roofJobId: string,
+): Promise<JobMeasurementSummary[]> {
+  const read = await env.DB.prepare(
+    `SELECT current.measurement_revision_id, current.provider, current.review_required,
+            current.revision_number, current.created_at
+       FROM native_measurement_revisions current
+      WHERE current.tenant_id = ?
+        AND current.roof_job_id = ?
+        AND current.association_status = 'matched'
+        AND current.revision_number = (
+          SELECT MAX(prior.revision_number)
+            FROM native_measurement_revisions prior
+           WHERE prior.tenant_id = current.tenant_id
+             AND prior.root_measurement_id = current.root_measurement_id
+        )
+      ORDER BY current.created_at DESC, current.measurement_revision_id ASC
+      LIMIT ?`,
+  )
+    .bind(tenantId, roofJobId, JOB_MEASUREMENT_LIMIT)
+    .all<JobMeasurementSummary>();
+  return read.results ?? [];
+}
+
 async function nativeMeasurementRevisionByReceipt(
   env: Env,
   receiptId: string,

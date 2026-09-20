@@ -45,6 +45,7 @@ interface QuoteRow {
   status: string;
   terms_hash: string;
   terms_json: string;
+  currency: string;
   total_cents: number;
   valid_until: string;
   created_at: string;
@@ -169,10 +170,27 @@ export interface CommercialJobPhaseReadModel {
       customer_status: string;
       customer_version: number;
       property_version: number | null;
+      /**
+       * The job's sole quote head in any status, or null when there is none or more than one.
+       * `quote` below only admits an approved head, so on its own it cannot tell "no quote yet"
+       * from "a quote exists but is still a draft, or was rejected".
+       */
+      quote_head: {
+        quote_revision_id: string;
+        revision_number: number;
+        status: string;
+        terms_hash: string;
+      } | null;
       quote: Record<string, unknown> | null;
       proposal: Record<string, unknown> | null;
       publication: Record<string, unknown> | null;
       acceptance: Record<string, unknown> | null;
+      /**
+       * An exact acceptance of the current quote and proposal whose publication has since been
+       * withdrawn. It never counts as `acceptance` — the phase does not advance on it — but hiding it
+       * would let a reader believe the customer never accepted anything.
+       */
+      acceptance_under_withdrawn_publication: Record<string, unknown> | null;
       deposit_derivation: Record<string, unknown> | null;
     };
     production: {
@@ -233,7 +251,7 @@ export async function readCommercialJobPhase(
     workPackageRead, safetyStops, accounting, completion, serviceCases] = await Promise.all([
     env.DB.prepare(
       `SELECT quote_revision_id, customer_quote_id, revision_number, status, terms_hash,
-              terms_json, total_cents, valid_until, created_at
+              terms_json, currency, total_cents, valid_until, created_at
         FROM commercial_quote_revisions current
        WHERE current.tenant_id = ? AND current.roof_job_id = ?
          AND NOT EXISTS (
@@ -367,6 +385,12 @@ export async function readCommercialJobPhase(
         row.proposal_revision_id === proposal.proposal_revision_id &&
         row.terms_hash === quote.terms_hash)
     : [];
+  const withdrawnAcceptanceCandidates = quote && proposal && publication && publication.state !== "published"
+    ? acceptanceRows.filter((row) =>
+        row.quote_revision_id === quote.quote_revision_id &&
+        row.proposal_revision_id === proposal.proposal_revision_id &&
+        row.terms_hash === quote.terms_hash)
+    : [];
   const acceptanceAmbiguous = exactAcceptanceCandidates.length > 1;
   const exactAcceptance = exactAcceptanceCandidates.length === 1
     ? exactAcceptanceCandidates[0]!
@@ -428,6 +452,8 @@ export async function readCommercialJobPhase(
     requiredGateNames,
     completionPacket,
     quoteAmbiguous: quoteSelection.ambiguous,
+    quoteHeadPresent: (quotes.results ?? []).length === 1,
+    withdrawnAcceptanceCount: withdrawnAcceptanceCandidates.length,
     proposalAmbiguous: proposalSelection.ambiguous,
     publicationAmbiguous: publicationSelection.ambiguous,
     proposalTermsMismatch,
@@ -461,10 +487,14 @@ export async function readCommercialJobPhase(
         customer_status: job.customer_status,
         customer_version: job.customer_version,
         property_version: job.property_version,
+        quote_head: quoteHeadProjection(quotes.results ?? []),
         quote: quote ? quoteProjection(quote) : null,
         proposal: proposal ? proposalProjection(proposal) : null,
         publication: publication ? publicationProjection(publication) : null,
         acceptance: exactAcceptance ? acceptanceProjection(exactAcceptance) : null,
+        acceptance_under_withdrawn_publication: withdrawnAcceptanceCandidates.length === 1
+          ? acceptanceProjection(withdrawnAcceptanceCandidates[0]!)
+          : null,
         deposit_derivation: exactDeposit ? depositProjection(exactDeposit) : null,
       },
       production: {
@@ -569,6 +599,8 @@ function phaseStaleReasons(input: {
   requiredGateNames: string[];
   completionPacket: CompletionRow | null;
   quoteAmbiguous: boolean;
+  quoteHeadPresent: boolean;
+  withdrawnAcceptanceCount: number;
   proposalAmbiguous: boolean;
   publicationAmbiguous: boolean;
   proposalTermsMismatch: boolean;
@@ -584,12 +616,17 @@ function phaseStaleReasons(input: {
 }): string[] {
   const reasons: string[] = [];
   if (input.quoteAmbiguous) reasons.push("commercial.quote_head_ambiguous");
+  // A sole head that is still a draft, under review, rejected or expired is not "missing".
+  else if (!input.quote && input.quoteHeadPresent) reasons.push("commercial.quote_head_not_approved");
   else if (!input.quote) reasons.push("commercial.quote_head_missing");
   if (input.proposalAmbiguous) reasons.push("commercial.proposal_head_ambiguous");
   else if (input.proposalTermsMismatch) reasons.push("commercial.proposal_terms_mismatch");
   else if (!input.proposal) reasons.push("commercial.proposal_head_missing");
   if (input.publicationAmbiguous) reasons.push("commercial.publication_head_ambiguous");
   else if (!input.publication || input.publication.state !== "published") reasons.push("commercial.publication_not_settled");
+  if (input.withdrawnAcceptanceCount > 0) {
+    reasons.push("commercial.customer_acceptance_publication_withdrawn");
+  }
   if (input.acceptanceAmbiguous) reasons.push("commercial.customer_acceptance_ambiguous");
   else if (!input.acceptance) reasons.push("commercial.customer_acceptance_missing");
   if (input.acceptanceOverflow) reasons.push("commercial.customer_acceptance_scan_overflow");
@@ -613,6 +650,19 @@ function phaseStaleReasons(input: {
   return reasons;
 }
 
+function quoteHeadProjection(
+  rows: readonly QuoteRow[],
+): CommercialJobPhaseReadModel["facts"]["commercial"]["quote_head"] {
+  if (rows.length !== 1) return null;
+  const row = rows[0]!;
+  return {
+    quote_revision_id: row.quote_revision_id,
+    revision_number: row.revision_number,
+    status: row.status,
+    terms_hash: row.terms_hash,
+  };
+}
+
 function quoteProjection(row: QuoteRow): Record<string, unknown> {
   return {
     quote_revision_id: row.quote_revision_id,
@@ -620,6 +670,7 @@ function quoteProjection(row: QuoteRow): Record<string, unknown> {
     revision_number: row.revision_number,
     status: row.status,
     terms_hash: row.terms_hash,
+    currency: row.currency,
     total_cents: row.total_cents,
     valid_until: row.valid_until,
   };

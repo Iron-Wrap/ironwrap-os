@@ -240,6 +240,7 @@ import {
 } from "./commercial-deposit.ts";
 import { readAccountingIntent } from "./accounting-intents.ts";
 import { readCommercialJobPhase } from "./commercial-job-phase.ts";
+import { readCommercialContext } from "./commercial-context.ts";
 import {
   OperatingJobAssignmentError,
   recordOperatingJobAssignment,
@@ -1587,19 +1588,47 @@ export async function handleAuthenticatedRoute(
   }
   const jobPhaseMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/phase$/);
   if (req.method === "GET" && jobPhaseMatch) {
-    if (!canReadJobs(auth))
-      return privateAppJson({ error: "job_read_required" }, 403);
+    // `jobs:read:any` only. The phase carries quote totals, terms, the customer's acceptance and
+    // the accounting intents, and `readCommercialJobPhase` is not scoped to an assignment, so the
+    // assigned-only crew reading `canReadJobs` used to admit could read any job's money by id.
+    if (!hasPermission(auth, "jobs:read:any"))
+      return privateAppJson({ error: "job_read_any_required" }, 403);
     const jobName = decodedPathSegment(jobPhaseMatch[1]);
-    if (!jobName) return appJson({ error: "not_found" }, 404);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await readCommercialJobPhase(
         env,
         auth.session.tenant_id,
         jobName,
       );
-      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
     } catch {
-      return appJson({ error: "upstream_unavailable" }, 502);
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  const commercialContextMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/commercial-context$/,
+  );
+  if (req.method === "GET" && commercialContextMatch) {
+    // The people who write to a customer: owner, ops and sales. It carries the customer's email and
+    // consent, which the job packet and search deliberately never do.
+    if (!hasPermission(auth, "sales:read"))
+      return privateAppJson({ error: "sales_read_required" }, 403);
+    const jobName = decodedPathSegment(commercialContextMatch[1]);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const model = await readCommercialContext(
+        env,
+        auth.session.tenant_id,
+        jobName,
+      );
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/owner/now") {
@@ -7431,8 +7460,11 @@ function safeInteger(value: unknown, min: number, max: number): number | null {
 }
 
 function isoDateOnly(value: unknown): string | null {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-      Number.isFinite(Date.parse(`${value}T00:00:00.000Z`))
+  // Date.parse accepts "2026-02-30" and rolls it to 2 March; only a date that survives the round
+  // trip is a real calendar date.
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsed = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value
     ? value
     : null;
 }

@@ -102,6 +102,7 @@ import {
   proposalPublicationApprovalProjection,
   reconcileProposalPublicationApprovalUncertainty,
 } from "./proposal-publication-approval-store.ts";
+import { buildCustomerJobHistoryReadModel } from "./customer-job-history.ts";
 import {
   activeAssignmentForJob,
   activeAssignmentForWorkObject,
@@ -1545,6 +1546,26 @@ export async function handleAuthenticatedRoute(
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  const customerJobHistoryMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/customer-history$/,
+  );
+  if (req.method === "GET" && customerJobHistoryMatch) {
+    // `jobs:read:any` only. A crew member holds `jobs:read:assigned` and is shown one assignment at
+    // a time on purpose; this customer's other work — including addresses nobody sent them to — is
+    // office context, and widening the field packet to carry it would be a new disclosure.
+    if (!hasPermission(auth, "jobs:read:any"))
+      return privateAppJson({ error: "job_read_any_required" }, 403);
+    const jobName = decodedPathSegment(customerJobHistoryMatch[1]);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const model = await buildCustomerJobHistoryReadModel(env, auth, jobName);
       return model
         ? privateAppJson(model)
         : privateAppJson({ error: "not_found" }, 404);

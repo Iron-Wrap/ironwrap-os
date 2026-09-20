@@ -793,6 +793,77 @@ Operator search-and-jump (2026-08-23):
   `test/app-search.test.ts`. Repository tests only: no PWA palette is wired to it on this branch,
   no deployment, no runtime verification, and no business-acceptance proof.
 
+Customer job history (2026-09-15):
+
+- A finished job left the product entirely. `buildJobReadModel` refuses any status outside
+  `Won`/`In Production`, and operator search restricts both its `jobs` and its `customers` group to
+  the same two live statuses, so a completed or cancelled job could not be found, could not be
+  opened by direct URL, and did not exist for the customer who paid for it. An office taking a call
+  about a roof done two winters ago had nothing to read.
+- `GET /api/v1/jobs/{job}/customer-history` is a read projection only -- the customer behind one
+  job, then that customer's jobs in the same tenant, all statuses, newest first. It creates no
+  fact, no transition, and no authority, and it opens no job: each row states whether the job route
+  will open it, and the client offers a link only where that is true.
+- Gated on `jobs:read:any`, which is strictly narrower than the job route beside it. A crew member
+  holds `jobs:read:assigned` and is refused, because this customer's other work includes addresses
+  nobody dispatched them to; widening the field packet to carry it would be a new disclosure. Both
+  queries are tenant-scoped, the answer is `private, no-store`, and a job in another tenant is a
+  404 rather than a refusal that confirms it exists.
+- Bounded and honest by construction: twenty rows, read one past the cap so `truncated` is a fact
+  rather than an inference from a full page, and the client says so rather than letting a capped
+  page read as the whole history. A customer with no earlier work is stated out loud, so "no
+  history" cannot be mistaken for "not permitted to see history".
+- Not cached to the device, unlike the job packet beside it. The packet is cached so a crew keeps
+  today's work underground; this is office context held by roles that work online, and writing
+  those addresses to durable storage would buy an offline case nobody asked for.
+- The Worker store is `src/customer-job-history.ts`, wired into `src/app-api.ts`, covered by
+  `test/customer-job-history.test.ts` against a real SQLite D1 built from the full migration chain.
+  That suite cross-checks the `openable` flag against the live job route rather than against a
+  constant beside it, so the two cannot drift apart silently. The PWA half is
+  `app/src/customers/`, rendered on the job packet, covered by
+  `customer-history-section.test.tsx`. Repository tests only: no deployment, no runtime
+  verification, and no business-acceptance proof. Operator search still cannot find a closed job --
+  this read reaches history through an open one, and widening search is separate work.
+
+Job packet measurements, and what an empty packet slot is allowed to claim (2026-09-15):
+
+- `buildJobReadModel` returned seven hard-coded empty slots on the owned path -- scope clauses,
+  measurements, material takeoffs, supplier orders, change orders, safety plan, access instructions
+  -- each honestly flagged in `stale_fields`, but the PWA never read those flags. Every empty panel
+  rendered "No items are in this work plan", so a crew on a roof was told this job had no approved
+  scope and no change orders. That is a claim about the job, made by a screen that had simply not
+  been given the data, and it is the one thing a field surface must never say by accident.
+- Measurements are now read, because the rows were already there.
+  `native_measurement_revisions` (0103) has carried them since the native measurement authority
+  landed; nothing but the wiring was missing. `listCurrentJobMeasurements` returns the newest
+  revision of each measurement root that resolved to this job, `matched` only, summary columns only
+  -- `projection_json` is capped at two megabytes by the schema and the geometry stays where the
+  estimator reads it. The table is append-only (no UPDATE against it exists in this Worker), so
+  "current" means the highest `revision_number` per root and `review_required` is a fact about the
+  revision shown rather than a flag someone may have cleared. The packet says "Flagged for review"
+  or "No review flagged" and claims nothing further.
+- A failed measurement read costs that one panel, not the packet: the read resolves to `null`, the
+  crew still gets the job, and `packet.measurements.native_unavailable` stays on -- which is the
+  difference between "none" and "could not read".
+- The remaining six slots still carry nothing, and now say so. An uncarried slot reads "This screen
+  does not carry X yet. Do not read that as none -- ask the office before you rely on it", and its
+  count reads "Not shown here" rather than "0 items". A slot the server did look up and found empty
+  still says "No items are in this work plan", because that one is true.
+- The "Some job details may be old" disclosure no longer repeats them. A marker belongs there only
+  if nothing else on the screen explains it; the `.native_unavailable` slots now explain themselves
+  in place, and listing them twice put six lines of machine vocabulary ("Packet Materials Takeoffs
+  Native Unavailable") in front of a crew on every job forever, burying the rare marker that means
+  something -- a stale address, a contact phone that did not come back. `packet.contact.
+  access_instructions` stays listed, because it has no panel of its own.
+- Worker: `listCurrentJobMeasurements` in `src/measurement-intake-store.ts`, wired into
+  `buildJobReadModel`, covered by `test/job-packet-measurements.test.ts` against a real SQLite D1
+  over the full migration chain -- including the schema's own receipt and job-anchor triggers, so
+  the fixture is a real intake in flight rather than a plausible row. PWA: `PacketDetail` in
+  `app/src/field/field-pages.tsx`, covered in `job-page.test.tsx`. Repository tests only: no
+  deployment, no runtime verification, and no business-acceptance proof. Scope clauses, takeoffs,
+  supplier orders, change orders and safety plans have no owned D1 table at all -- they are not
+  wiring gaps and are not closed by this change.
+
 ### Frappe compatibility core (retirement in progress)
 
 Implemented model families:

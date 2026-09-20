@@ -34,6 +34,10 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import { parseBody } from "./core.ts";
+import {
+  listCurrentJobMeasurements,
+  type JobMeasurementSummary,
+} from "./measurement-intake-store.ts";
 import { extractGeometry } from "./measurements.ts";
 import type { GeometryModel } from "./geometry.ts";
 import { takeoffFromGeometry, type TakeoffModel } from "./takeoff.ts";
@@ -1563,7 +1567,7 @@ export async function buildJobReadModel(
   if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const [gateSource, workPackage] = await Promise.all([
+  const [gateSource, workPackage, measurementRows] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, [jobName]),
     assignmentRow
       ? nativeFieldWorkPackageForAssignment(
@@ -1573,6 +1577,14 @@ export async function buildJobReadModel(
           text(assignmentRow.name)!,
         )
       : Promise.resolve(null),
+    // The crew on the roof could not see the measurements anyone had taken of it: this slot was
+    // returned empty on the owned path while `native_measurement_revisions` held the rows the
+    // whole time. `null` on failure rather than a throw, so a measurement read that goes wrong
+    // costs the crew this one panel and keeps the rest of the job packet — and the stale marker
+    // below stays on, which is the difference between "none" and "could not read".
+    listCurrentJobMeasurements(env, auth.session.tenant_id, jobName).catch(
+      () => null as JobMeasurementSummary[] | null,
+    ),
   ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
@@ -1633,7 +1645,7 @@ export async function buildJobReadModel(
   const stale = [
     "packet.contact.access_instructions",
     "packet.scope_clauses.native_unavailable",
-    "packet.measurements.native_unavailable",
+    ...(measurementRows === null ? ["packet.measurements.native_unavailable"] : []),
     "packet.materials.takeoffs.native_unavailable",
     "packet.materials.supplier_orders.native_unavailable",
     "packet.change_orders.native_unavailable",
@@ -1663,6 +1675,7 @@ export async function buildJobReadModel(
       ...(property ? [property] : []),
       ...(customer ? [customer] : []),
       ...(workPackage ? [{ modified: workPackage.modified }] : []),
+      ...(measurementRows ?? []).map((row) => ({ modified: row.created_at })),
     ],
     stale,
   );
@@ -1695,7 +1708,16 @@ export async function buildJobReadModel(
     gates: gates.flatMap((row) => gateModel(row, readMode === "assigned")),
     packet: {
       scope_clauses: [],
-      measurements: [],
+      measurements: (measurementRows ?? []).map((row) => ({
+        id: row.measurement_revision_id,
+        provider: row.provider,
+        // Exactly what the column means and nothing further. `review_required` is never cleared on
+        // this append-only table -- a correction arrives as a new revision -- so "reviewed" would
+        // be a claim no row here can support.
+        review_status:
+          row.review_required === 1 ? "Flagged for review" : "No review flagged",
+        parsed_at: row.created_at,
+      })),
       materials: {
         takeoffs: [],
         supplier_orders: [],

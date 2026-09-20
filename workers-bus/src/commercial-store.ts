@@ -351,7 +351,13 @@ export async function prepareCommercialQuote(
     "commercial_quote_status_invalid",
   );
   if (!/^[A-Z]{3}$/.test(input.currency)) fail("commercial_quote_currency_invalid");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.validUntil) || !Number.isFinite(Date.parse(`${input.validUntil}T00:00:00.000Z`))) {
+  const validUntilParsed = Date.parse(`${input.validUntil}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(input.validUntil) ||
+    !Number.isFinite(validUntilParsed) ||
+    // Date.parse rolls "2026-02-30" into March; the stored date must be the one written.
+    new Date(validUntilParsed).toISOString().slice(0, 10) !== input.validUntil
+  ) {
     fail("commercial_quote_valid_until_invalid");
   }
   const paymentTermsDays = commercialPaymentTermsDays(input.terms);

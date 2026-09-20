@@ -171,7 +171,45 @@ Current source tracing distinguishes implemented modules from reachable producti
 - native assignment, work-package, safety, completion, and final-invoice derivation exist.
 - acceptance projects qualified leads to `converted` and prospect customers to `active`; the
   read-only job-phase route spans the independent commercial, production, safety, accounting,
-  closeout, and warranty facts without becoming a writable status.
+  closeout, and warranty facts without becoming a writable status. It requires `jobs:read:any`
+  and is served `private, no-store` (2026-09-16): it used to admit any `canReadJobs` session, so a
+  crew holding only `jobs:read:assigned` could read any job's quote totals, terms, acceptance and
+  accounting intents by id, from a response with no cache directive.
+- `GET /api/v1/jobs/{job}/commercial-context` (2026-09-16, `sales:read`, `private, no-store`) is
+  the shared commercial context a person or agent reads before writing to a customer. It composes
+  the job-phase reader instead of the store's `getCurrentCommercial*` helpers, which are keyed by
+  quote or pack, accept any status and read "none" and "ambiguous" as the same `null`. It adds one
+  offer state for where the quote -> proposal -> publication -> acceptance chain stops (a draft
+  quote, a terms mismatch, a withdrawn publication, an acceptance under a later-withdrawn
+  publication and each ambiguity are named, not collapsed), `expired` by the same date rule
+  customer acceptance enforces, the customer's email and the lead's email consent row, the named
+  limits of that row (no revocation, no expiry, not bound to the address, estimate follow-up only),
+  and closed follow-up blockers: `job_cancelled`, `lead_disqualified`, `customer_archived`,
+  `recipient_email_missing`, `consent_missing`, `consent_not_granted`,
+  `consent_recipient_mismatch` (the consent belongs to the lead's address and the recipient is a
+  different one) and `commercial_facts_ambiguous`. Only the offer chain's own stale reasons are
+  passed on; the phase reader's gate, closeout and accounting reasons are not shown to sales.
+- Its source binding is the exact set of facts a follow-up is written against: job version, lead
+  version, whether the customer is archived (not the customer's version, which moves when any of
+  that customer's jobs is accepted), the offer state and whether the quote has lapsed (so "no quote"
+  and "two quotes" differ, and a quote expiring moves it without any write), the quote, proposal,
+  publication, acceptance and consent revisions, and a case-insensitive recipient hash — with a
+  canonical SHA-256 and a component diff so a stale decision can say what moved. It creates no
+  fact, permit or communication. An office-entered lead has no consent row — only the public
+  estimator writes one — so its follow-up is blocked `consent_missing`, by design.
+- The phase reader now says `commercial.quote_head_not_approved` for a sole draft, under-review,
+  rejected or expired quote instead of `quote_head_missing`, and reports
+  `commercial.customer_acceptance_publication_withdrawn` with the acceptance rather than hiding an
+  exact acceptance whose publication was withdrawn afterwards; the phase itself still does not
+  advance on it.
+- `workers-bus/src/commercial-context.ts`, covered by `test/commercial-context.test.ts` and by
+  checkpoints inside `test/iro208-commercial-reference.test.ts`, which follow the real no-seed chain
+  from intake to acceptance and a real draft quote, and assert each state and binding change on
+  real records. An independent multi-agent review of the first version found the consent/recipient
+  gap, the stale-reason leak, the none/ambiguous and expiry blind spots in the binding, the hidden
+  withdrawn acceptance, the unblocked disqualified lead and six test gaps; all are fixed here and
+  each fix is proven to fail without it. Repository tests only; the durable draft, decision and
+  governed send that consume it are a separate slice.
 - measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
   `lead_follow_up_draft` pilot. No resident context -> plan -> policy -> permit -> action ->
   readback -> reconciliation coordinator exists.

@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import {
+  sourceBindingChanges,
+  type CommercialContextReadModel,
+} from "../src/commercial-context.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -944,6 +948,18 @@ async function approveAcceptedDeposit(
   assert.notEqual(approval.actor_user_id, ACCOUNTANT_ID);
 }
 
+/** The shared commercial context, read as sales — the role that writes to customers. */
+async function commercialContext(h: Harness, jobId: string): Promise<CommercialContextReadModel> {
+  const response = await handleAuthenticatedRoute(
+    new Request(`${PUBLIC_ORIGIN}/api/v1/jobs/${encodeURIComponent(jobId)}/commercial-context`),
+    h.env,
+    auth("sales"),
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  return await response.json() as CommercialContextReadModel;
+}
+
 async function jobPhase(h: Harness, jobId: string): Promise<{
   phase: string;
   facts: {
@@ -1632,6 +1648,14 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
   const h = setup();
   try {
     const ids = await intakeAndMaterialize(h);
+    // The commercial context follows the same records at every step below, and its source binding
+    // names exactly what moved — which is what makes a decision about a follow-up go stale.
+    const atIntake = await commercialContext(h, ids.jobId);
+    assert.equal(atIntake.offer.state, "no_quote");
+    assert.equal(atIntake.contact.email?.address, CUSTOMER_EMAIL);
+    // An office intake records no consent row; only the public estimator writes one.
+    assert.equal(atIntake.contact.consent, null);
+    assert.deepEqual(atIntake.follow_up.blockers, ["consent_missing"]);
     const staleTriage = await handleAuthenticatedRoute(
       request("/api/v1/commercial/lead-triage-decisions", {
         lead_id: ids.leadId, expected_lead_version: 1, lifecycle_status: "qualified", priority: "high",
@@ -1660,12 +1684,19 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       h.env, auth("ops"),
     );
     assert.equal(quote.status, 201, await quote.clone().text());
+    const afterQuote = await commercialContext(h, ids.jobId);
+    assert.equal(afterQuote.offer.state, "proposal_missing");
+    assert.equal(afterQuote.offer.quote_head?.status, "approved");
+    assert.deepEqual(sourceBindingChanges(atIntake.source_binding, afterQuote.source_binding), ["lead", "offer", "quote"]);
     const proposalInput = proposalBody(ids, new Date().toISOString());
     const proposal = await handleAuthenticatedRoute(
       request("/api/v1/commercial/proposal-revisions", proposalInput, "iro208-proposal-0001"),
       h.env, auth("ops"),
     );
     assert.equal(proposal.status, 201, await proposal.clone().text());
+    const afterProposal = await commercialContext(h, ids.jobId);
+    assert.equal(afterProposal.offer.state, "not_published");
+    assert.deepEqual(sourceBindingChanges(afterQuote.source_binding, afterProposal.source_binding), ["offer", "proposal"]);
     const unknownPermit = await preparePublication(h, ids, "iro208-publication-prepare-unknown-0001");
     const unknownSettlementBody = {
       proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
@@ -1713,9 +1744,23 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
       request("/api/v1/commercial/proposal-publications", { ...unknownSettlementBody, permit_id: successPermit.permit_id, external_effect_id: "effect:iro208:success" }, "iro208-publication-success-0001"), h.env, auth("ops"),
     );
     assert.equal(settledReplay.status, 200);
+    const afterPublication = await commercialContext(h, ids.jobId);
+    assert.equal(afterPublication.offer.state, "published");
+    // A refused, lost or mismatched publication attempt above moved nothing; only the settled one did.
+    assert.deepEqual(
+      sourceBindingChanges(afterProposal.source_binding, afterPublication.source_binding),
+      ["offer", "publication"],
+    );
 
     const portalToken = await issuePortalLink(h, ids);
     const acceptanceId = await acceptPublicContract(h, portalToken);
+    const afterAcceptance = await commercialContext(h, ids.jobId);
+    assert.equal(afterAcceptance.offer.state, "accepted");
+    assert.equal(afterAcceptance.offer.acceptance?.acceptance_id, acceptanceId);
+    assert.ok(
+      sourceBindingChanges(afterPublication.source_binding, afterAcceptance.source_binding).includes("acceptance"),
+    );
+    assert.notEqual(afterAcceptance.source_binding_sha256, afterPublication.source_binding_sha256);
     const quoteReplayAfterConversion = await handleAuthenticatedRoute(
       request("/api/v1/commercial/quote-revisions", quoteInput, "iro208-quote-0001"),
       h.env,
@@ -1915,6 +1960,9 @@ test("commercial phase refuses multiple public quote and proposal heads", async 
     assert.equal(proposalPhaseBody.facts.commercial.acceptance, null);
     assert.equal(proposalPhaseBody.facts.commercial.deposit_derivation, null);
     assert.ok(proposalPhaseBody.stale_reasons.includes("commercial.proposal_head_ambiguous"));
+    const ambiguousProposal = await commercialContext(h, ids.jobId);
+    assert.equal(ambiguousProposal.offer.state, "proposal_ambiguous");
+    assert.ok(ambiguousProposal.follow_up.blockers.includes("commercial_facts_ambiguous"));
 
     const secondQuote = await handleAuthenticatedRoute(
       request(
@@ -1945,6 +1993,71 @@ test("commercial phase refuses multiple public quote and proposal heads", async 
     assert.equal(quotePhaseBody.facts.commercial.acceptance, null);
     assert.equal(quotePhaseBody.facts.commercial.deposit_derivation, null);
     assert.ok(quotePhaseBody.stale_reasons.includes("commercial.quote_head_ambiguous"));
+    const ambiguousQuote = await commercialContext(h, ids.jobId);
+    assert.equal(ambiguousQuote.offer.state, "quote_ambiguous");
+    assert.equal(ambiguousQuote.offer.quote_head, null);
+    assert.ok(ambiguousQuote.follow_up.blockers.includes("commercial_facts_ambiguous"));
+  } finally {
+    h.restore();
+  }
+});
+
+test("a quote cannot be valid until a day that does not exist", async () => {
+  const h = setup();
+  try {
+    const ids = await intakeAndMaterialize(h);
+    const triage = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/lead-triage-decisions", {
+        lead_id: ids.leadId, expected_lead_version: 1, lifecycle_status: "qualified", priority: "high",
+        category: "replacement", summary: "Synthetic qualified lead.", next_action: "Quote it.",
+      }, "iro208-impossible-date-triage-0001"), h.env, auth("ops"),
+    );
+    assert.equal(triage.status, 201, await triage.clone().text());
+    // Date.parse would accept this and roll it to 2 March; the stored date would not be the one sent.
+    const refused = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/quote-revisions",
+        { ...quoteBody(ids, new Date().toISOString()), valid_until: "2026-02-30" },
+        "iro208-impossible-date-quote-0001",
+      ),
+      h.env,
+      auth("ops"),
+    );
+    assert.equal(refused.status, 400, await refused.clone().text());
+    assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM commercial_quote_revisions").get()!.count, 0);
+  } finally {
+    h.restore();
+  }
+});
+
+test("commercial context tells a draft quote from no quote on real records", async () => {
+  const h = setup();
+  try {
+    const ids = await intakeAndMaterialize(h);
+    const triage = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/lead-triage-decisions", {
+        lead_id: ids.leadId, expected_lead_version: 1, lifecycle_status: "qualified", priority: "high",
+        category: "replacement", summary: "Synthetic qualified lead.", next_action: "Prepare a draft quote.",
+      }, "iro208-draft-quote-triage-0001"), h.env, auth("ops"),
+    );
+    assert.equal(triage.status, 201, await triage.clone().text());
+    const draft = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/commercial/quote-revisions",
+        { ...quoteBody(ids, new Date().toISOString()), status: "draft" },
+        "iro208-draft-quote-0001",
+      ),
+      h.env,
+      auth("ops"),
+    );
+    assert.equal(draft.status, 201, await draft.clone().text());
+    // The phase reader admits only an approved head as `quote`; the context must still see this one.
+    const model = await commercialContext(h, ids.jobId);
+    assert.equal(model.offer.state, "quote_not_approved");
+    assert.equal(model.offer.quote, null);
+    assert.equal(model.offer.quote_head?.status, "draft");
+    assert.ok(model.stale_reasons.includes("commercial.quote_head_not_approved"));
+    assert.ok(!model.stale_reasons.includes("commercial.quote_head_missing"));
   } finally {
     h.restore();
   }

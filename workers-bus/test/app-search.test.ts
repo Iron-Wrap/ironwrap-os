@@ -150,10 +150,7 @@ function auth(role: AppRole): AuthContext {
  * NOCASE ordering and `LIMIT`. The cap and the more-results signal are only worth testing if the
  * double can return one row past the cap, so it does.
  */
-function env(
-  data: Fixtures = fixtures(),
-  recorded: Recorded[] = [],
-): AppEnv {
+function env(data: Fixtures = fixtures(), recorded: Recorded[] = []): AppEnv {
   return {
     APP_TENANT_ID: TENANT,
     DB: {
@@ -181,21 +178,29 @@ function rowsFor(
   if (sql.includes("FROM operating_roof_jobs\n")) {
     const [tenantId, pattern, ...rest] = bindings;
     const limit = Number(rest.at(-1));
-    const statuses = rest.slice(0, 2).map(String);
-    const scopeValues = rest.slice(2, -1).map(String);
+    // `jobs:read:any` reaches every status; an assigned crew is still held to the live two, so the
+    // status list is as long as the caller's mode allows rather than a fixed two.
+    const statusCount = sql.includes("current_assignment") ? 2 : 4;
+    const statuses = rest.slice(0, statusCount).map(String);
+    const scopeValues = rest.slice(statusCount, -1).map(String);
     const assigned = sql.includes("current_assignment")
-      ? [...data.assignments
-          .filter(
-            (row) =>
-              row.tenant_id === tenantId &&
-              row.assigned_users.some((user) =>
-                scopeValues.includes(user.toLowerCase()),
-              ),
-          )
-          .reduce((counts, row) => {
-            counts.set(row.roof_job_id, (counts.get(row.roof_job_id) ?? 0) + 1);
-            return counts;
-          }, new Map<string, number>())]
+      ? [
+          ...data.assignments
+            .filter(
+              (row) =>
+                row.tenant_id === tenantId &&
+                row.assigned_users.some((user) =>
+                  scopeValues.includes(user.toLowerCase()),
+                ),
+            )
+            .reduce((counts, row) => {
+              counts.set(
+                row.roof_job_id,
+                (counts.get(row.roof_job_id) ?? 0) + 1,
+              );
+              return counts;
+            }, new Map<string, number>()),
+        ]
           .filter(([, count]) => count === 1)
           .map(([roofJobId]) => roofJobId)
       : scopeValues;
@@ -223,36 +228,50 @@ function rowsFor(
       .slice(0, Number(limit)) as unknown as Array<Record<string, unknown>>;
   }
   if (sql.includes("FROM operating_customers c")) {
-    const [, , tenantId, pattern, , , limit] = bindings;
+    // Bindings are the reachable status list, then tenant, pattern and the cap boundedRows adds.
+    const statuses = bindings.slice(0, -3).map(String);
+    const [tenantId, pattern, limit] = bindings.slice(-3);
     const column = sql.includes("c.contact_phone LIKE ?")
       ? ("contact_phone" as const)
       : ("display_name" as const);
-    const openJobs = data.jobs.filter((row) =>
-      ["qualified", "in_progress"].includes(row.job_status),
+    const reachableJobs = data.jobs.filter((row) =>
+      statuses.includes(row.job_status),
     );
+    const newestJobFor = (customerId: string) =>
+      reachableJobs
+        .filter((row) => row.customer_id === customerId)
+        .sort(
+          (left, right) =>
+            (right.updated_at ?? "").localeCompare(left.updated_at ?? "") ||
+            left.roof_job_id.localeCompare(right.roof_job_id),
+        )[0] ?? null;
     return data.customers
       .filter(
         (row) =>
           row.tenant_id === tenantId &&
           matchesPrefix(row[column], pattern) &&
-          openJobs.some((open) => open.customer_id === row.customer_id),
+          newestJobFor(row.customer_id) !== null,
       )
       .sort(byTextThenId(column, "customer_id"))
       .slice(0, Number(limit))
-      .map((row) => ({
-        customer_id: row.customer_id,
-        display_name: row.display_name,
-        contact_phone: row.contact_phone,
-        updated_at: row.updated_at,
-        primary_roof_job_id:
-          openJobs.find((open) => open.customer_id === row.customer_id)
-            ?.roof_job_id ?? null,
-      }));
+      .map((row) => {
+        const primary = newestJobFor(row.customer_id);
+        return {
+          customer_id: row.customer_id,
+          display_name: row.display_name,
+          contact_phone: row.contact_phone,
+          updated_at: row.updated_at,
+          primary_roof_job_id: primary?.roof_job_id ?? null,
+          primary_job_status: primary?.job_status ?? null,
+        };
+      });
   }
   throw new Error(`unexpected search query: ${sql}`);
 }
 
-function leadColumn(sql: string): "contact_name" | "contact_phone" | "contact_email" {
+function leadColumn(
+  sql: string,
+): "contact_name" | "contact_phone" | "contact_email" {
   if (sql.includes("contact_email LIKE ?")) return "contact_email";
   if (sql.includes("contact_phone LIKE ?")) return "contact_phone";
   return "contact_name";
@@ -521,7 +540,7 @@ test("an accounting session gets its own destinations and no operating register"
   );
 });
 
-test("a search result never links to a job the role could not open", async () => {
+test("a job hit points at the reading of that job that actually exists", async () => {
   const data = fixtures({
     jobs: [
       job({ roof_job_id: "JOB-A", job_number: "IW-1001" }),
@@ -543,13 +562,16 @@ test("a search result never links to a job the role could not open", async () =>
     "iw-100",
     GENERATED,
   );
+  // A finished job used to be absent from search entirely, because the work plan refuses it and a
+  // link would have 404'd. It has a record now, so it is findable and points there instead. The
+  // invariant that mattered is unchanged: no result links at a reading that does not exist.
   assert.deepEqual(
     group(model, "jobs").results.map((result) => result.href),
-    ["/jobs/JOB-A"],
+    ["/jobs/JOB-A", "/jobs/JOB-DONE/history", "/jobs/JOB-GONE/history"],
   );
 });
 
-test("a customer appears only when it owns a job the role can open", async () => {
+test("a repeat customer whose work is all finished is findable, through its record", async () => {
   const data = fixtures({
     jobs: [
       job({
@@ -563,6 +585,73 @@ test("a customer appears only when it owns a job the role can open", async () =>
       customer({
         customer_id: "CUSTOMER-CLOSED",
         display_name: "Northgate Closed",
+      }),
+    ],
+  });
+  const model = await buildOperatorSearchReadModel(
+    env(data),
+    auth("owner"),
+    "north",
+    GENERATED,
+  );
+  // This is the customer an office looks up most: the one who had a roof done two winters ago.
+  // They were unfindable by name for exactly as long as their only job had nowhere to open.
+  assert.deepEqual(
+    group(model, "customers").results.map((result) => [
+      result.label,
+      result.href,
+    ]),
+    [["Northgate Closed", "/jobs/JOB-CLOSED/history"]],
+  );
+});
+
+test("a crew is still shown only live work, never a finished job's record", async () => {
+  // Widening the office palette must not widen the crew's. A finished job reaches other properties
+  // and other customers, and a crew is shown the work in front of them.
+  const data = fixtures({
+    jobs: [
+      job({ roof_job_id: "JOB-A", job_number: "IW-1001" }),
+      job({
+        roof_job_id: "JOB-DONE",
+        job_number: "IW-1002",
+        job_status: "complete",
+      }),
+    ],
+    assignments: [
+      {
+        assignment_id: "ASSIGN-A",
+        tenant_id: TENANT,
+        roof_job_id: "JOB-A",
+        assigned_users: ["field@example.invalid"],
+      },
+      {
+        assignment_id: "ASSIGN-D",
+        tenant_id: TENANT,
+        roof_job_id: "JOB-DONE",
+        assigned_users: ["field@example.invalid"],
+      },
+    ],
+  });
+  const model = await buildOperatorSearchReadModel(
+    env(data),
+    auth("field"),
+    "iw-100",
+    GENERATED,
+  );
+  assert.deepEqual(
+    group(model, "jobs").results.map((result) => result.href),
+    ["/jobs/JOB-A"],
+  );
+});
+
+test("a customer with no job at all is still not in the register", async () => {
+  // The rule that keeps this a projection of an existing read rather than a customer directory.
+  const data = fixtures({
+    jobs: [],
+    customers: [
+      customer({
+        customer_id: "CUSTOMER-NEW",
+        display_name: "Northgate Prospect",
       }),
     ],
   });
@@ -669,7 +758,10 @@ test("LIKE wildcards and SQL punctuation are neutralised before any lookup", asy
     ["Nor%", "Nor%"],
     ["Nor_thside", "Nor thside%"],
     ["No'r", "No'r%"],
-    ["Nor; DROP TABLE operating_leads;--", "Nor DROP TABLE operating leads --%"],
+    [
+      "Nor; DROP TABLE operating_leads;--",
+      "Nor DROP TABLE operating leads --%",
+    ],
     ["Nor\\th", "Nor th%"],
     ["Nor%%%side", "Nor side%"],
   ];
@@ -771,7 +863,9 @@ test("the query class picks one exact column family per group", async () => {
   assert.deepEqual(group(byEmail, "jobs").matched_fields, []);
   assert.deepEqual(group(byEmail, "customers").matched_fields, []);
   assert.equal(
-    group(byEmail, "leads").results.map((result) => result.id).join(),
+    group(byEmail, "leads")
+      .results.map((result) => result.id)
+      .join(),
     "LEAD-A",
   );
 });
@@ -816,9 +910,7 @@ test("Go to offers exactly the destinations the role's own navigation offers", a
     [AppRole, string[]]
   >) {
     assert.deepEqual(
-      OPERATOR_SEARCH_DESTINATIONS[role].map(
-        (destination) => destination.href,
-      ),
+      OPERATOR_SEARCH_DESTINATIONS[role].map((destination) => destination.href),
       hrefs,
       role,
     );

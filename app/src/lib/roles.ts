@@ -28,6 +28,7 @@ export type RoleSurface =
   | "accounting"
   | "newo"
   | "job"
+  | "jobHistory"
   | "field"
   | "fleet"
   | "inventory"
@@ -326,6 +327,10 @@ export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
   if (surface === "fleet") return role === "field";
   if (surface === "job")
     return role === "owner" || role === "ops" || role === "production" || role === "field";
+  // The record of a job, including a finished one, mirrors `jobs:read:any` on the server exactly.
+  // Deliberately narrower than `job`: a crew holds `jobs:read:assigned` and is shown today's work,
+  // not the history of work that is over, which reaches other properties they were never sent to.
+  if (surface === "jobHistory") return role === "owner" || role === "ops" || role === "production";
   if (role === "sales") return surface === "sales";
   if (role === "production") return surface === "production";
   if (surface === "field") return role === "field" || role === "ops" || role === "owner";

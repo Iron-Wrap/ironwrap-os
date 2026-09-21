@@ -902,6 +902,54 @@ Job packet measurements, and what an empty packet slot is allowed to claim (2026
   supplier orders, change orders and safety plans have no owned D1 table at all -- they are not
   wiring gaps and are not closed by this change.
 
+The record of a finished job (2026-09-15):
+
+- A job had one reading and it was the work plan. `buildJobReadModel` refuses anything outside
+  `Won`/`In Production` because everything it carries -- the assignment, the work package, the
+  actions -- stops existing when the work does; `buildJobProofReadModel` refuses the same way. So a
+  completed job had no route at all: the office could not open the roof a customer was calling
+  about, and nobody could see what had been done to it. Operator search hid those jobs too, and
+  hid any customer whose only work was finished, on the stated grounds that there was nowhere to
+  send anyone.
+- `GET /api/v1/jobs/{job}/history` is the second reading: the record. Any status, no work package,
+  no assignment, and `allowed_actions` empty by construction -- nothing rendered from it may be a
+  control. `buildJobHistoryReadModel` carries job identity, address, customer name and phone, the
+  final gate states, and the proof.
+- The proof was the part that made this look large and was not. `listFieldWorkPackageEvidenceFromD1`
+  is keyed on assignment, work package, version and release attempt -- exactly the rows a finished
+  job no longer has -- but `field_actions.job_id` outlives all of them. `listJobEvidenceFromD1`
+  reads by tenant and job under the same trust predicates (verified, manifested, stored in R2),
+  newest first, one row past the cap. Both reads now share one column list and one row mapper, so a
+  second reader cannot drift from the first on what counts as evidence.
+- `proof_unavailable` exists because an empty proof stream and an unreadable one look identical and
+  mean opposite things. The page refuses to render the second as the first: "nothing was
+  photographed on this roof" is a claim it would be in no position to make.
+- Gated on `jobs:read:any`, mirrored in the PWA by a new `jobHistory` role surface (owner, ops,
+  production). Deliberately narrower than the `job` surface beside it: a crew holds
+  `jobs:read:assigned` and is shown today's work, not the history of work that is over, which
+  reaches properties they were never dispatched to.
+- Search follows, now that a destination exists. A `jobs:read:any` caller finds jobs in every
+  status and each row points at whichever reading exists -- `/jobs/{id}` while live,
+  `/jobs/{id}/history` once finished -- through one `jobHref` helper, so no result can link at a
+  404. Customers follow the same rule: still only customers that own a job this caller can open, but
+  that set now includes finished work, which is how a repeat customer whose roof was done two
+  winters ago became findable by name. A customer with no job at all is still not in the register,
+  and an assigned crew's palette is unchanged at the two live statuses.
+- Worker: `buildJobHistoryReadModel` in `src/app-read-models.ts`, `listJobEvidenceFromD1` in
+  `src/field-actions.ts`, `jobHref` and `REACHABLE_JOB_STATUSES` in `src/app-search.ts`, covered by
+  `test/job-history.test.ts` against a real SQLite D1 over the full migration chain -- through the
+  schema's own work-package binding trigger, so the evidence fixture is a real capture rather than
+  a plausible row -- and by `test/app-search.test.ts`. PWA: `app/src/jobs/`, routed at
+  `/jobs/$jobId/history`, covered by `job-history-page.test.tsx`. Repository tests only: no
+  deployment, no runtime verification, and no business-acceptance proof.
+- Proven in a browser as well as in unit tests: `app/e2e/job-history.spec.ts` drives the built app
+  on a 390px phone under an office session, opens the record, follows a customer's finished work to
+  it, checks the uncarried-slot wording, checks that unreadable proof never renders as no proof, and
+  runs axe over the page with no WCAG A/AA violations. It runs in CI as its own step, because
+  `test:pwa` hands the app a field session and would self-skip the file. The browser found one thing
+  the unit tests could not: the uncarried-slot explanation sits inside a collapsed `details`, so the
+  closed panel carries the signal ("Not shown here") and the reason is one tap in.
+
 ### Frappe compatibility core (retirement in progress)
 
 Implemented model families:

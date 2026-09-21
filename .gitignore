@@ -6,7 +6,8 @@
 .superdesign/tmp/
 
 # Node / build
-node_modules/
+# No trailing slash: worktrees symlink node_modules, and a symlink is not a directory to git.
+node_modules
 dist/
 .lazyweb/
 

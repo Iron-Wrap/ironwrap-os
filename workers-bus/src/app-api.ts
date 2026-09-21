@@ -108,6 +108,7 @@ import {
   activeAssignmentForWorkObject,
   buildEstimatorWorkbenchReadModel,
   buildJobProofReadModel,
+  buildJobHistoryReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
   buildProductionRunwayReadModel,
@@ -1547,6 +1548,30 @@ export async function handleAuthenticatedRoute(
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  const jobHistoryMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/history$/,
+  );
+  if (req.method === "GET" && jobHistoryMatch) {
+    // Same gate as the customer's history beside it, and narrower than the live job route: a crew
+    // holds `jobs:read:assigned` and is shown today's work, not the record of work that is over.
+    if (!hasPermission(auth, "jobs:read:any"))
+      return privateAppJson({ error: "job_read_any_required" }, 403);
+    const jobName = decodedPathSegment(jobHistoryMatch[1]);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const model = await buildJobHistoryReadModel(
+        env,
+        auth,
+        jobName,
+        url.searchParams.get("cursor"),
+      );
       return model
         ? privateAppJson(model)
         : privateAppJson({ error: "not_found" }, 404);

@@ -6,11 +6,13 @@
  * the surface the result links to, and every row carries only fields that surface already
  * returns to that role.
  *
- *   `jobs`      -> `jobs:read:any` sees the same active jobs `buildJobReadModel` will open;
- *                  `jobs:read:assigned` sees only the jobs its own current assignment opens.
+ *   `jobs`      -> `jobs:read:any` sees every job it can reach: the live ones `buildJobReadModel`
+ *                  opens, and the finished ones `buildJobHistoryReadModel` reads. Each row points
+ *                  at whichever reading exists. `jobs:read:assigned` sees only the live jobs its
+ *                  own current assignment opens.
  *   `leads`     -> `sales:read`, the same lead register `buildSalesReadModel` lists.
- *   `customers` -> `jobs:read:any`, and only customers that own an openable active job, because
- *                  the job packet is where that role already reads a customer name and phone.
+ *   `customers` -> `jobs:read:any`, and only customers that own a job this caller can open,
+ *                  because a job is where that role already reads a customer name and phone.
  *   `go_to`     -> the caller's own navigation, mirrored from `app/src/lib/roles.ts`.
  *
  * Nothing here is fuzzy. The query is normalized to a conservative character allowlist, routed
@@ -35,10 +37,35 @@ export const SEARCH_MAX_QUERY_LENGTH = 64;
 export const SEARCH_MAX_RAW_QUERY_LENGTH = 120;
 
 /**
- * The job statuses a job read is allowed to open. `buildJobReadModel` returns null outside this
- * set, so a search hit outside it would be a link to a 404.
+ * The job statuses the live work plan will open. `buildJobReadModel` returns null outside this
+ * set, so a hit outside it must not be linked to `/jobs/{id}`.
  */
 const SEARCHABLE_JOB_STATUSES = ["qualified", "in_progress"] as const;
+
+/**
+ * Every status a `jobs:read:any` caller can reach somewhere. A finished job used to be absent from
+ * search entirely, because there was nowhere to send anyone: the work plan refuses it. Now that
+ * `buildJobHistoryReadModel` reads the record of a job in any status, the reason for hiding it is
+ * gone — so the palette finds it and points at the reading that exists.
+ *
+ * A `jobs:read:assigned` caller is deliberately still held to the live set: a crew is shown the
+ * work in front of them, not the history of work that is over.
+ */
+const REACHABLE_JOB_STATUSES = [
+  "qualified",
+  "in_progress",
+  "complete",
+  "cancelled",
+] as const;
+
+/** The reading of a job that actually exists for its status. Never link at a 404. */
+function jobHref(roofJobId: string, jobStatus: string | null): string {
+  const live = (SEARCHABLE_JOB_STATUSES as readonly string[]).includes(
+    jobStatus ?? "",
+  );
+  const id = encodeURIComponent(roofJobId);
+  return live ? `/jobs/${id}` : `/jobs/${id}/history`;
+}
 
 export type OperatorSearchGroupId = "jobs" | "leads" | "customers" | "go_to";
 
@@ -48,7 +75,8 @@ export type OperatorSearchGroupId = "jobs" | "leads" | "customers" | "go_to";
  */
 export type SearchQueryClass = "email" | "numeric" | "text";
 
-export type OperatorSearchOutcome = "results" | "no_matches" | "query_too_short";
+export type OperatorSearchOutcome =
+  "results" | "no_matches" | "query_too_short";
 
 export interface OperatorSearchResult {
   id: string;
@@ -126,7 +154,12 @@ const OFFICE_DESTINATIONS: readonly SearchDestination[] = [
     href: "/approvals",
     workspace: "Control",
   },
-  { id: "settings", label: "Settings", href: "/settings", workspace: "Control" },
+  {
+    id: "settings",
+    label: "Settings",
+    href: "/settings",
+    workspace: "Control",
+  },
 ];
 
 /**
@@ -183,7 +216,12 @@ export const OPERATOR_SEARCH_DESTINATIONS: Readonly<
       href: "/check-in",
       workspace: "Delivery",
     },
-    { id: "vehicle", label: "Vehicle", href: "/vehicle", workspace: "Resources" },
+    {
+      id: "vehicle",
+      label: "Vehicle",
+      href: "/vehicle",
+      workspace: "Resources",
+    },
     {
       id: "inventory",
       label: "Inventory",
@@ -400,6 +438,8 @@ async function jobResults(
     return { group: emptyGroup("jobs", []), updatedAt: [] };
   }
   const matchedFields = ["job_number"];
+  const reachable: readonly string[] =
+    scope.jobMode === "any" ? REACHABLE_JOB_STATUSES : SEARCHABLE_JOB_STATUSES;
   let assignmentClause = "";
   let assignmentUsers: string[] = [];
   if (scope.jobMode === "assigned") {
@@ -434,15 +474,10 @@ async function jobResults(
        FROM operating_roof_jobs
       WHERE tenant_id = ?
         AND job_number LIKE ?
-        AND job_status IN (${SEARCHABLE_JOB_STATUSES.map(() => "?").join(", ")})${assignmentClause}
+        AND job_status IN (${reachable.map(() => "?").join(", ")})${assignmentClause}
       ORDER BY job_number COLLATE NOCASE ASC, roof_job_id ASC
       LIMIT ?`,
-    [
-      auth.session.tenant_id,
-      pattern,
-      ...SEARCHABLE_JOB_STATUSES,
-      ...assignmentUsers,
-    ],
+    [auth.session.tenant_id, pattern, ...reachable, ...assignmentUsers],
   );
   return {
     group: {
@@ -455,7 +490,7 @@ async function jobResults(
           row.service_type,
           nativeJobStatusLabel(row.job_status),
         ]),
-        href: `/jobs/${encodeURIComponent(row.roof_job_id)}`,
+        href: jobHref(row.roof_job_id, row.job_status),
         matched_field: "job_number",
       })),
     },
@@ -503,7 +538,10 @@ async function leadResults(
       results: read.rows.map((row) => ({
         id: row.lead_id,
         label:
-          row.contact_name ?? row.contact_email ?? row.contact_phone ?? row.lead_id,
+          row.contact_name ??
+          row.contact_email ??
+          row.contact_phone ??
+          row.lead_id,
         detail: joinDetail([row.source, row.lifecycle_status]),
         href: `/sales/leads/${encodeURIComponent(row.lead_id)}/triage`,
         matched_field: column,
@@ -518,14 +556,20 @@ interface CustomerRow {
   display_name: string | null;
   contact_phone: string | null;
   primary_roof_job_id: string | null;
+  primary_job_status: string | null;
   updated_at: string | null;
 }
 
 /**
- * Customers carry name and phone and nothing else, because name and phone are exactly what the
- * job packet's `contact` block already gives this role. Email is deliberately neither matched nor
- * returned: the job packet does not carry it, so the palette must not become the one place a
- * customer's address book entry can be probed.
+ * Customers carry name and phone and nothing else, because name and phone are exactly what a job
+ * already gives this role. Email is deliberately neither matched nor returned: a job does not carry
+ * it, so the palette must not become the one place a customer's address book entry can be probed.
+ *
+ * A customer still appears only if they own a job this caller can actually open, which is what
+ * keeps the row a projection of an existing read rather than a new customer register. The set of
+ * openable jobs is simply larger now that a finished one has a record to open: a repeat customer
+ * whose work is all complete used to be unfindable by name, which is precisely the customer an
+ * office is most often looking up.
  */
 async function customerResults(
   env: AppEnv,
@@ -540,29 +584,24 @@ async function customerResults(
   const read = await boundedRows<CustomerRow>(
     env,
     `SELECT c.customer_id, c.display_name, c.contact_phone, c.updated_at,
-            (SELECT j.roof_job_id
-               FROM operating_roof_jobs j
-              WHERE j.tenant_id = c.tenant_id
-                AND j.customer_id = c.customer_id
-                AND j.job_status IN (${SEARCHABLE_JOB_STATUSES.map(() => "?").join(", ")})
-              ORDER BY j.updated_at DESC, j.roof_job_id ASC
-              LIMIT 1) AS primary_roof_job_id
+            reachable_job.roof_job_id AS primary_roof_job_id,
+            reachable_job.job_status AS primary_job_status
        FROM operating_customers c
+       JOIN operating_roof_jobs reachable_job
+         ON reachable_job.roof_job_id = (
+              SELECT j.roof_job_id
+                FROM operating_roof_jobs j
+               WHERE j.tenant_id = c.tenant_id
+                 AND j.customer_id = c.customer_id
+                 AND j.job_status IN (${REACHABLE_JOB_STATUSES.map(() => "?").join(", ")})
+               ORDER BY j.updated_at DESC, j.roof_job_id ASC
+               LIMIT 1)
+        AND reachable_job.tenant_id = c.tenant_id
       WHERE c.tenant_id = ?
         AND c.${column} LIKE ?
-        AND EXISTS (SELECT 1
-                      FROM operating_roof_jobs open_job
-                     WHERE open_job.tenant_id = c.tenant_id
-                       AND open_job.customer_id = c.customer_id
-                       AND open_job.job_status IN (${SEARCHABLE_JOB_STATUSES.map(() => "?").join(", ")}))
       ORDER BY c.${column} COLLATE NOCASE ASC, c.customer_id ASC
       LIMIT ?`,
-    [
-      ...SEARCHABLE_JOB_STATUSES,
-      auth.session.tenant_id,
-      pattern,
-      ...SEARCHABLE_JOB_STATUSES,
-    ],
+    [...REACHABLE_JOB_STATUSES, auth.session.tenant_id, pattern],
   );
   return {
     group: {
@@ -575,7 +614,7 @@ async function customerResults(
                 id: row.customer_id,
                 label: row.display_name ?? row.customer_id,
                 detail: row.contact_phone,
-                href: `/jobs/${encodeURIComponent(row.primary_roof_job_id)}`,
+                href: jobHref(row.primary_roof_job_id, row.primary_job_status),
                 matched_field: column,
               },
             ]
@@ -591,10 +630,7 @@ async function customerResults(
  * A substring match inside a word is deliberately not offered: it is the kind of near-miss that
  * makes an operator press Enter on the wrong row.
  */
-function destinationResults(
-  role: AppRole,
-  query: string,
-): OperatorSearchGroup {
+function destinationResults(role: AppRole, query: string): OperatorSearchGroup {
   const needle = query.toLowerCase();
   const matches = OPERATOR_SEARCH_DESTINATIONS[role].filter((destination) =>
     destination.label
@@ -628,12 +664,16 @@ async function boundedRows<T>(
     .bind(...bindings, SEARCH_GROUP_LIMIT + 1)
     .all<T>();
   const rows = result.results ?? [];
-  return { rows: rows.slice(0, SEARCH_GROUP_LIMIT), more: rows.length > SEARCH_GROUP_LIMIT };
+  return {
+    rows: rows.slice(0, SEARCH_GROUP_LIMIT),
+    more: rows.length > SEARCH_GROUP_LIMIT,
+  };
 }
 
 function joinDetail(parts: Array<string | null>): string | null {
   const present = parts.filter(
-    (part): part is string => typeof part === "string" && part.trim().length > 0,
+    (part): part is string =>
+      typeof part === "string" && part.trim().length > 0,
   );
   return present.length > 0 ? present.join(" · ") : null;
 }

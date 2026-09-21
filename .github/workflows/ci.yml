@@ -175,6 +175,10 @@ jobs:
         run: npm run test:pwa:safety --prefix app
       - name: Run app Playwright e2e (job document generation, office session)
         run: npm run test:pwa:documents --prefix app
+      # The record of a finished job and the packet slots this system does not carry. Both need an
+      # office session, so `test:pwa` would self-skip the file and prove nothing.
+      - name: Run app Playwright e2e (finished job record, office session)
+        run: npm run test:pwa:job-history --prefix app
       - name: Test the independent release issuer
         run: npm test --prefix release-issuer
       # Putting a lead on a board is the only product path that reaches the card-placement

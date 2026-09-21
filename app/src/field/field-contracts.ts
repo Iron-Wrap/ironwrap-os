@@ -88,7 +88,7 @@ const workPackageSchema = z.object({
     }),
   ),
 });
-const envelopeSchema = z.object({
+export const envelopeSchema = z.object({
   version: z.literal(1),
   source_updated_at: nullableText,
   read_model_generated_at: z.string().min(1),

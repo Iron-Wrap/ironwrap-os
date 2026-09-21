@@ -22,6 +22,7 @@
     "test:pwa:people": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4182 playwright test --project=mobile-chromium people-authority",
     "test:pwa:safety": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4183 playwright test --project=mobile-chromium safety-desk",
     "test:pwa:documents": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4185 playwright test --project=mobile-chromium job-document-generation",
+    "test:pwa:job-history": "npm run build && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4186 playwright test --project=mobile-chromium job-history",
     "test:lighthouse": "npm run build && node scripts/lighthouse-field.mjs",
     "test:lighthouse:ab": "npm run build && node scripts/lighthouse-protocol-ab.mjs",
     "typecheck": "tsc -b --pretty false",

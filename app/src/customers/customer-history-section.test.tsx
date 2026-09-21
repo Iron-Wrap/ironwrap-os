@@ -100,9 +100,13 @@ it("shows the finished job with the address it was done at, and offers no link t
   expect(screen.getByText("IW-1001")).toBeInTheDocument();
   expect(screen.getByText("Complete")).toBeInTheDocument();
   expect(screen.getByText("88 Riverbend Way, Calgary, AB, T2P 1A1")).toBeInTheDocument();
-  expect(screen.getByText(/Finished work/)).toBeInTheDocument();
-  // A finished job has no live job plan; a link that 404s would be worse than no link.
+  // A finished job has no live work plan, so the row leads to its record instead of a control
+  // that would answer 404.
   expect(screen.queryByRole("link", { name: /Open this job/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /See what was done/ })).toHaveAttribute(
+    "href",
+    "/jobs/JOB-DONE/history",
+  );
 });
 
 it("links to earlier work that is still open", async () => {

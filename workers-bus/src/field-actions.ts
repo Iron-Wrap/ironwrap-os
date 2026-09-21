@@ -1220,14 +1220,12 @@ interface FieldWorkPackageEvidenceD1DbRow {
 }
 
 /** Read typed field evidence from the canonical D1 action/media receipts. */
-export async function listFieldWorkPackageEvidenceFromD1(
-  env: AppEnv,
-  input: FieldWorkPackageEvidenceD1Query,
-): Promise<FieldWorkPackageEvidenceD1Row[] | null> {
-  let result: { results?: FieldWorkPackageEvidenceD1DbRow[] };
-  try {
-    result = await env.DB.prepare(
-      `SELECT a.device_action_id, a.user_id,
+/**
+ * Columns and the trust predicates every evidence read shares: this tenant, verified, manifested,
+ * and actually stored in R2. Callers add their own scope after it. Kept in one place so a second
+ * reader cannot quietly drift from the first on what counts as evidence.
+ */
+const FIELD_EVIDENCE_SELECT = `SELECT a.device_action_id, a.user_id,
               COALESCE(NULLIF(u.email_normalized, ''), a.user_id) AS actor_user,
               COALESCE(NULLIF(u.access_role, ''), u.role) AS actor_role,
               a.created_at, a.work_package_id, a.work_package_version,
@@ -1242,7 +1240,16 @@ export async function listFieldWorkPackageEvidenceFromD1(
          JOIN field_action_media m ON m.device_action_id = a.device_action_id
          LEFT JOIN app_users u ON u.user_id = a.user_id AND u.tenant_id = a.tenant_id
         WHERE a.tenant_id = ? AND a.status = 'verified'
-          AND a.manifest_key IS NOT NULL AND m.r2_stored_at IS NOT NULL
+          AND a.manifest_key IS NOT NULL AND m.r2_stored_at IS NOT NULL`;
+
+export async function listFieldWorkPackageEvidenceFromD1(
+  env: AppEnv,
+  input: FieldWorkPackageEvidenceD1Query,
+): Promise<FieldWorkPackageEvidenceD1Row[] | null> {
+  let result: { results?: FieldWorkPackageEvidenceD1DbRow[] };
+  try {
+    result = await env.DB.prepare(
+      `${FIELD_EVIDENCE_SELECT}
           AND a.job_id = ? AND a.assignment_id = ?
           AND a.work_package_id = ? AND a.work_package_version = ?
           AND a.work_package_release_attempt_id = ?
@@ -1271,7 +1278,54 @@ export async function listFieldWorkPackageEvidenceFromD1(
     if (isMissingFieldEvidenceSchema(error)) return null;
     throw error;
   }
-  return (result.results ?? []).map((row) => {
+  return (result.results ?? []).map(fieldEvidenceRowFrom);
+}
+
+export interface JobEvidenceD1Query {
+  tenantId: string;
+  jobId: string;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Every piece of stored evidence captured against one job, whatever assignment or work package it
+ * was captured under.
+ *
+ * `listFieldWorkPackageEvidenceFromD1` above answers a different question — what proves THIS
+ * released work package — so it is keyed on the assignment, the package, its version and the
+ * release attempt. Those keys are exactly what a finished job no longer has a live row for, which
+ * is why a completed job could show no proof at all. `field_actions.job_id` outlives all of them.
+ *
+ * Same trust predicates as the live read: verified, manifested, stored. Newest first, because a
+ * history is read backwards, and one row past the limit so the caller can say whether there is more
+ * rather than inferring it from a full page.
+ */
+export async function listJobEvidenceFromD1(
+  env: AppEnv,
+  input: JobEvidenceD1Query,
+): Promise<{ rows: FieldWorkPackageEvidenceD1Row[]; more: boolean } | null> {
+  let result: { results?: FieldWorkPackageEvidenceD1DbRow[] };
+  try {
+    result = await env.DB.prepare(
+      `${FIELD_EVIDENCE_SELECT}
+          AND a.job_id = ?
+        ORDER BY a.created_at DESC, a.device_action_id DESC, m.attachment_id DESC
+        LIMIT ? OFFSET ?`,
+    )
+      .bind(input.tenantId, input.jobId, input.limit + 1, input.offset)
+      .all<FieldWorkPackageEvidenceD1DbRow>();
+  } catch (error) {
+    if (isMissingFieldEvidenceSchema(error)) return null;
+    throw error;
+  }
+  const rows = (result.results ?? []).map(fieldEvidenceRowFrom);
+  return { rows: rows.slice(0, input.limit), more: rows.length > input.limit };
+}
+
+function fieldEvidenceRowFrom(
+  row: FieldWorkPackageEvidenceD1DbRow,
+): FieldWorkPackageEvidenceD1Row {
     const evidenceId = requiredD1Text(row.evidence_id, "evidence_id");
     if (!/^evi_[0-9a-f]{32}$/.test(evidenceId))
       throw new Error("field_evidence_evidence_id_invalid");
@@ -1330,8 +1384,7 @@ export async function listFieldWorkPackageEvidenceFromD1(
         row.physical_context_id,
         "physical_context_id",
       ),
-    } satisfies FieldWorkPackageEvidenceD1Row;
-  });
+  } satisfies FieldWorkPackageEvidenceD1Row;
 }
 
 function isMissingFieldEvidenceSchema(error: unknown): boolean {

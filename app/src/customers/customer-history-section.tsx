@@ -130,23 +130,24 @@ function EarlierJobRow({
           ) : null}
           {when ? <p className="text-sm leading-6 text-muted">Last updated {when}</p> : null}
         </div>
-        {entry.openable ? (
-          <Button asChild variant="outline" className="sm:w-auto" fullWidth>
+        {/*
+          Two readings of a job, and the row offers whichever one exists. The work plan closes with
+          the work, so a finished job leads to its record instead — never to a control that would
+          answer 404.
+        */}
+        <Button asChild variant="outline" className="sm:w-auto" fullWidth>
+          {entry.openable ? (
             <Link to="/jobs/$jobId" params={{ jobId: entry.roof_job_id }}>
               Open this job
               <ChevronRight aria-hidden="true" />
             </Link>
-          </Button>
-        ) : (
-          /*
-            No button at all rather than a disabled one. This job is finished; there is no live work
-            packet behind it and nothing the reader could do to change that, so a control that
-            refuses on press would only be a dead end wearing an affordance.
-          */
-          <p className="text-sm leading-6 text-muted sm:max-w-[13rem] sm:text-right">
-            Finished work — the job plan closes with the job.
-          </p>
-        )}
+          ) : (
+            <Link to="/jobs/$jobId/history" params={{ jobId: entry.roof_job_id }}>
+              See what was done
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          )}
+        </Button>
       </Card>
     </li>
   );

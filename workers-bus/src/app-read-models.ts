@@ -55,6 +55,7 @@ import {
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 import {
   listFieldWorkPackageEvidenceFromD1,
+  listJobEvidenceFromD1,
   type FieldWorkPackageEvidenceD1Row,
 } from "./field-actions.ts";
 import {
@@ -1825,6 +1826,114 @@ export async function buildJobProofReadModel(
       nativeEvidence.length > offset + FIELD_PACKET_PROOF_PAGE_SIZE
         ? String(offset + FIELD_PACKET_PROOF_PAGE_SIZE)
         : null,
+  };
+}
+
+export interface JobHistoryReadModel extends ReadModelEnvelope {
+  job: {
+    id: string;
+    roof_job_id: string | null;
+    job_number: string | null;
+    brand: string | null;
+    service_type: string | null;
+    status: string | null;
+    address: string | null;
+    current_gate_state: string | null;
+  };
+  customer: { display_name: string | null; phone: string | null } | null;
+  gates: ReturnType<typeof gateModel>;
+  proof: { items: ProofStreamItem[]; next_cursor: string | null };
+  /** Whether the live job route will open this job. False once the work is finished. */
+  openable: boolean;
+  /** True when the evidence read could not run, so an empty stream is not read as "nothing done". */
+  proof_unavailable: boolean;
+}
+
+/**
+ * The record of one job in any status, finished included.
+ *
+ * `buildJobReadModel` is a work plan: it refuses anything outside the two live statuses because
+ * everything it carries — the work package, the assignment, the actions — stops existing when the
+ * work does. That left a completed job unreachable by any route, so the office had nothing to open
+ * when a customer called about a roof done two winters ago.
+ *
+ * This is the other thing a job is: what happened. It authorizes nothing (`allowed_actions` is
+ * deliberately empty), carries no work package and no assignment, and reads its proof through
+ * `field_actions.job_id`, which outlives the assignment and release attempt the live proof read is
+ * keyed on.
+ */
+export async function buildJobHistoryReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  jobName: string,
+  cursor: string | null,
+): Promise<JobHistoryReadModel | null> {
+  if (!validJobName(jobName)) return null;
+  const offset = parseProofCursor(cursor);
+  if (offset === null) return null;
+  const nativeJobCore = await readNativeJobCore(
+    env,
+    auth.session.tenant_id,
+    jobName,
+  );
+  if (!nativeJobCore) return null;
+  const job = nativeOperatingJobRow(nativeJobCore.job);
+  const property = nativePropertyFrappeRow(nativeJobCore.property);
+  const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
+  const [gateSource, evidence] = await Promise.all([
+    nativeProductionGates(env, auth.session.tenant_id, [jobName]),
+    listJobEvidenceFromD1(env, {
+      tenantId: auth.session.tenant_id,
+      jobId: jobName,
+      limit: FIELD_PACKET_PROOF_PAGE_SIZE,
+      offset,
+    }),
+  ]);
+  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const evidenceRows = (evidence?.rows ?? []).map(nativeWorkPackageEvidenceRow);
+  const readEnvelope = envelope(
+    auth,
+    [
+      job,
+      ...gates,
+      ...evidenceRows,
+      ...(property ? [property] : []),
+      ...(customer ? [customer] : []),
+    ],
+    [
+      ...(gateSource.partial ? ["gates.partial_source"] : []),
+      ...(evidence === null ? ["proof_stream.unavailable"] : []),
+    ],
+  );
+  return {
+    ...readEnvelope,
+    // A history read grants nothing. Nothing on this page may be mistaken for a control.
+    allowed_actions: [],
+    job: {
+      id: text(job.name)!,
+      roof_job_id: text(job.roof_job_id),
+      job_number: text(job.job_number),
+      brand: text(job.brand),
+      service_type: text(job.service_type),
+      status: text(job.job_status),
+      address: address(property ?? undefined),
+      current_gate_state: text(job.current_gate_state),
+    },
+    customer: customer
+      ? {
+          display_name: text(customer.display_name),
+          phone: text(customer.phone),
+        }
+      : null,
+    gates: gates.flatMap((row) => gateModel(row, false)),
+    proof: {
+      items: evidenceRows.map(evidenceProofItem).filter(notNull).sort(compareProofItems),
+      next_cursor: evidence?.more
+        ? String(offset + FIELD_PACKET_PROOF_PAGE_SIZE)
+        : null,
+    },
+    openable: ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never),
+    proof_unavailable: evidence === null,
   };
 }
 

@@ -119,7 +119,14 @@ dependency additions, generated artifacts, and speculative scaffolding.
 
 ## Validation ladder
 
+CI runs `make check` (validators, tool/MCP/app/Worker/Frappe suites, npm audits, capability
+evidence receipt), then `make e2e` (Playwright PWA suites) and `make secret-scan`; the required
+check is `gate`. The individual steps:
+
 ```bash
+make check
+make e2e
+make secret-scan   # set GITLEAKS_BIN off linux x64
 node tools/validate-documentation.mjs
 node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs

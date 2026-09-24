@@ -3,11 +3,12 @@
 /**
  * Source-side release admission contract.
  *
- * The permit is deliberately independent of a particular CI provider. CI builds
- * the evidence object, an independent reviewer supplies the GO receipt, and
- * this module signs/verifies the canonical envelope. Production admission must
- * consume the permit through a durable replay boundary; a process-local Map is
- * never a valid production implementation.
+ * The permit is deliberately independent of a particular CI provider. The
+ * release workflow builds the evidence object from its own automated checks
+ * (CI, staging deploy, smoke, restore and rollback drills), and this module
+ * signs/verifies the canonical envelope. No human or external reviewer signs
+ * it. Production admission must consume the permit through a durable replay
+ * boundary; a process-local Map is never a valid production implementation.
  */
 import {
   createHash,
@@ -24,7 +25,7 @@ import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.
 
 const execFile = promisify(execFileCallback);
 
-export const RELEASE_PERMIT_SCHEMA = "ironwrap_release_permit_v1";
+export const RELEASE_PERMIT_SCHEMA = "ironwrap_release_permit_v2";
 export const RELEASE_PERMIT_TYPE = "ironwrap-release-permit";
 export const MAX_PERMIT_LIFETIME_MS = 15 * 60_000;
 export const MAX_FUTURE_ISSUED_MS = 60_000;
@@ -43,7 +44,7 @@ export const RELEASE_EVIDENCE_TYPE = "ironwrap-release-external-evidence";
 export const RELEASE_EVIDENCE_PATH_PREFIX = ".release/evidence/";
 export const RELEASE_EVIDENCE_REF_PREFIX = "release-evidence/";
 export const MAX_RELEASE_EVIDENCE_LIFETIME_MS = 6 * 60 * 60_000;
-export const RELEASE_MANIFEST_SCHEMA = "ironwrap_release_manifest_v1";
+export const RELEASE_MANIFEST_SCHEMA = "ironwrap_release_manifest_v2";
 export const SOURCE_MERGE_SCHEMA = "ironwrap_source_admission_merge_v1";
 export const RELEASE_OUTCOME_SCHEMA = "ironwrap_release_outcome_v1";
 export const RELEASE_OUTCOME_PREFIX = "release-outcome:";
@@ -89,6 +90,19 @@ export const RELEASE_LICENSE_POLICY = Object.freeze({
   unknown_or_unreviewed: "fail",
 });
 
+/**
+ * Claude model IDs the Worker may use for measurement-report OCR. The Worker
+ * keeps the same list in `workers-bus/src/measurements.ts`; the environment
+ * preflight rejects any other `MEASUREMENT_OCR_MODEL` before a release mutates
+ * anything.
+ */
+export const MEASUREMENT_OCR_MODELS = Object.freeze([
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "claude-fable-5",
+  "claude-sonnet-5",
+]);
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
 const NONCE_RE = /^[A-Za-z0-9_-]{32,128}$/;
@@ -124,7 +138,6 @@ const PERMIT_KEYS = [
   "source_tree_sha256",
   "diff_sha256",
   "ci_checks",
-  "reviewer",
   "previous_generation",
   "generation",
   "policy_hash",
@@ -260,20 +273,6 @@ function validateChecks(checks, { repository, sourceCommit } = {}) {
     runIds.add(runId);
   }
   if (runIds.size !== 1) fail("ci_run_mismatch");
-}
-
-function validateReviewer(reviewer, issuerIdentity) {
-  exactKeys(reviewer, ["principal", "task_id", "run_id", "key_version", "decision", "findings_digest", "unresolved_p0", "unresolved_p1"], "reviewer_shape_invalid");
-  const identity = text(reviewer.principal, "reviewer_identity_invalid", IDENTITY_RE);
-  text(reviewer.task_id, "reviewer_task_id_invalid");
-  text(reviewer.run_id, "reviewer_run_id_invalid");
-  text(reviewer.key_version, "reviewer_key_version_invalid");
-  text(issuerIdentity, "issuer_identity_invalid", IDENTITY_RE);
-  if (identity === issuerIdentity) fail("reviewer_not_distinct");
-  equal("GO", reviewer.decision, "reviewer_not_go");
-  hash(reviewer.findings_digest, "reviewer_findings_digest_invalid");
-  equal(0, reviewer.unresolved_p0, "reviewer_p0_unresolved");
-  equal(0, reviewer.unresolved_p1, "reviewer_p1_unresolved");
 }
 
 function validateMigrations(migrations) {
@@ -845,12 +844,8 @@ function validateReleaseManifest(manifest, permit) {
       "migrations",
       "staging",
       "production_candidates",
-      "affected_scopes",
       "recovery",
       "provider_reconciliation",
-      "business_evidence",
-      "records",
-      "external_evidence",
       "evidence_digest",
     ],
     "release_manifest_shape_invalid",
@@ -902,7 +897,7 @@ function validateReleaseManifest(manifest, permit) {
   exactKeys(manifest.source.component_digests, ["worker", "pwa", "frappe", "mcp", "hermes", "tenant_config"], "release_manifest_component_shape_invalid");
   for (const value of Object.values(manifest.source.component_digests)) hash(value, "release_manifest_component_digest_invalid");
   validateSupplyChainEvidence(manifest.supply_chain, "release_manifest");
-  exactKeys(manifest.artifacts, ["aggregate_digest", "worker_digest", "pwa_digest", "frappe_wheel_digest", "frappe_site_schema_digest", "mcp_digest", "hermes_digest", "facet_digest", "facet_integration_receipt_digest"], "release_manifest_artifacts_shape_invalid");
+  exactKeys(manifest.artifacts, ["aggregate_digest", "worker_digest", "pwa_digest", "frappe_wheel_digest", "frappe_site_schema_digest", "mcp_digest", "hermes_digest"], "release_manifest_artifacts_shape_invalid");
   for (const value of Object.values(manifest.artifacts)) hash(value, "release_manifest_artifact_digest_invalid");
   equal(permit.worker.artifact_digest, manifest.artifacts.aggregate_digest, "release_manifest_aggregate_artifact_drift");
   exactKeys(manifest.configuration, ["aggregate_digest", "tenant_digest", "mcp_digest", "hermes_digest", "bindings_digest", "queues_digest", "buckets_digest", "routes_digest", "secret_names_digest"], "release_manifest_configuration_shape_invalid");
@@ -913,7 +908,7 @@ function validateReleaseManifest(manifest, permit) {
   hash(manifest.migrations.frappe_schema_digest, "release_manifest_frappe_schema_invalid");
   hash(manifest.migrations.frappe_migration_digest, "release_manifest_frappe_migration_invalid");
   equal("expand-contract", manifest.migrations.compatibility, "release_manifest_migration_compatibility_invalid");
-  exactKeys(manifest.staging, ["worker_revision", "worker_readback_digest", "pwa_revision", "pwa_readback_digest", "frappe_revision", "frappe_readback_digest", "affected_scope_evidence_digest", "status"], "release_manifest_staging_shape_invalid");
+  exactKeys(manifest.staging, ["worker_revision", "worker_readback_digest", "pwa_revision", "pwa_readback_digest", "frappe_revision", "frappe_readback_digest", "status"], "release_manifest_staging_shape_invalid");
   equal(permit.staging.revision, manifest.staging.worker_revision, "release_manifest_staging_worker_drift");
   equal(permit.worker.staging_version_digest, manifest.staging.worker_readback_digest, "release_manifest_staging_worker_readback_drift");
   text(manifest.staging.pwa_revision, "release_manifest_staging_pwa_invalid");
@@ -921,7 +916,6 @@ function validateReleaseManifest(manifest, permit) {
   hash(manifest.staging.pwa_readback_digest, "release_manifest_staging_pwa_readback_invalid");
   text(manifest.staging.frappe_revision, "release_manifest_staging_frappe_invalid");
   hash(manifest.staging.frappe_readback_digest, "release_manifest_staging_frappe_readback_invalid");
-  hash(manifest.staging.affected_scope_evidence_digest, "release_manifest_scope_digest_invalid");
   equal("matched", manifest.staging.status, "release_manifest_staging_not_matched");
   exactKeys(
     manifest.production_candidates,
@@ -974,8 +968,6 @@ function validateReleaseManifest(manifest, permit) {
     "release_manifest_production_domain_zone_invalid",
     DOMAIN_ZONE_RE,
   );
-  validateAffectedScopes(manifest.affected_scopes);
-  equal(sha256(canonicalJson(manifest.affected_scopes)), manifest.staging.affected_scope_evidence_digest, "release_manifest_scope_digest_mismatch");
   exactKeys(manifest.recovery, [
     "staging_backup_restore_digest",
     "staging_rollback_digest",
@@ -1004,15 +996,6 @@ function validateReleaseManifest(manifest, permit) {
   hash(manifest.recovery.prior_frappe_backup_digest, "release_manifest_prior_frappe_backup_invalid");
   equal("passed", manifest.recovery.status, "release_manifest_recovery_not_passed");
   validateProviderReconciliation(manifest.provider_reconciliation, "release_manifest");
-  validateBusinessEvidence(manifest.business_evidence, "release_manifest");
-  validateReleaseRecords(manifest.records, "release_manifest");
-  exactKeys(manifest.external_evidence, ["issuer_principal", "issuer_task_id", "issuer_run_id", "key_version", "receipt_digest"], "release_manifest_external_shape_invalid");
-  text(manifest.external_evidence.issuer_principal, "release_manifest_external_issuer_invalid", IDENTITY_RE);
-  if (manifest.external_evidence.issuer_principal === permit.issuer_identity) fail("release_manifest_external_not_distinct");
-  text(manifest.external_evidence.issuer_task_id, "release_manifest_external_task_invalid");
-  text(manifest.external_evidence.issuer_run_id, "release_manifest_external_run_invalid");
-  text(manifest.external_evidence.key_version, "release_manifest_external_key_invalid");
-  hash(manifest.external_evidence.receipt_digest, "release_manifest_external_receipt_invalid");
   const digestFields = { ...manifest };
   delete digestFields.evidence_digest;
   hash(manifest.evidence_digest, "release_manifest_evidence_digest_invalid");
@@ -1500,7 +1483,6 @@ export function validateReleasePermitPayload(payload, { now = Date.now() } = {})
   hash(payload.source_tree_sha256, "source_tree_digest_invalid");
   hash(payload.diff_sha256, "diff_digest_invalid");
   validateChecks(payload.ci_checks, { repository: payload.repository, sourceCommit: payload.source_commit });
-  validateReviewer(payload.reviewer, payload.issuer_identity);
   exactKeys(payload.previous_generation, ["generation", "policy_hash"], "previous_generation_shape_invalid");
   nonNegativeInteger(payload.previous_generation.generation, "previous_generation_invalid");
   hash(payload.previous_generation.policy_hash, "previous_policy_hash_invalid");
@@ -2048,7 +2030,7 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
   const requiredSecrets = ["ADMIN_TOKEN", "GOOGLE_SERVICE_ACCOUNT_JSON", "INGEST_TOKEN"];
   if (vars.MEASUREMENT_OCR_ENABLED === "true") {
     requiredSecrets.push("MEASUREMENT_OCR_API_KEY");
-    if (!new Set(["claude-fable-5", "claude-opus-5", "claude-sonnet-5"]).has(vars.MEASUREMENT_OCR_MODEL)) fail("environment_preflight_ocr_model_invalid");
+    if (!MEASUREMENT_OCR_MODELS.includes(vars.MEASUREMENT_OCR_MODEL)) fail("environment_preflight_ocr_model_invalid");
   }
   if (requiredSecrets.some((name) => !availableSecrets.includes(name))) fail("environment_preflight_required_secret_missing");
   const configReceipt = await computeEnvironmentConfigDigest({ repoRoot: root, environment });

@@ -17,6 +17,7 @@ import {
   computeSourceEvidence,
   createCloudflareD1ReplayBoundary,
   MAX_PERMIT_LIFETIME_MS,
+  MEASUREMENT_OCR_MODELS,
   parseWranglerVersionId,
   persistRecoveryRequiredOutcome,
   persistRollbackOutcome,
@@ -121,7 +122,6 @@ function productionRecovery() {
 }
 
 function releaseManifest() {
-  const scopes = affectedScopes();
   const mergePolicyFields = {
     schema: "ironwrap_github_merge_policy_v1",
     method: "squash",
@@ -129,7 +129,7 @@ function releaseManifest() {
     ruleset: { id: 20652124, target: "branch", enforcement: "active", allowed_merge_methods: ["rebase", "squash"] },
   };
   const fields = {
-    schema: "ironwrap_release_manifest_v1",
+    schema: "ironwrap_release_manifest_v2",
     frappe_scope: "in-scope",
     pr: {
       number: 43,
@@ -175,8 +175,6 @@ function releaseManifest() {
       frappe_site_schema_digest: sha("frappe-site-schema"),
       mcp_digest: sha("mcp-source"),
       hermes_digest: sha("hermes-source"),
-      facet_digest: sha("facet-artifact"),
-      facet_integration_receipt_digest: sha("facet-integration"),
     },
     configuration: {
       aggregate_digest: CONFIG,
@@ -202,7 +200,6 @@ function releaseManifest() {
       pwa_readback_digest: sha("pwa-staging-readback"),
       frappe_revision: "frappe-staging-20260816",
       frappe_readback_digest: sha("frappe-staging-readback"),
-      affected_scope_evidence_digest: sha(canonicalJson(scopes)),
       status: "matched",
     },
     production_candidates: {
@@ -215,7 +212,6 @@ function releaseManifest() {
       domain_zone_id: DOMAIN_ZONE_ID,
       status: "prepared",
     },
-    affected_scopes: scopes,
     recovery: {
       staging_backup_restore_digest: sha(JSON.stringify({ export_digest: sha("staging-export"), manifest_digest: sha("staging-manifest"), restore_evidence_digest: EVIDENCE })),
       staging_rollback_digest: EVIDENCE,
@@ -234,28 +230,6 @@ function releaseManifest() {
       receipt_digest: sha("provider-reconciliation"),
       provider_identity_digest: sha("provider-identity"),
       status: "matched",
-    },
-    business_evidence: {
-      issue_id: "IRO-7",
-      actor_receipt_ref: "linear:IRO-7:actor-receipt",
-      actor_receipt_digest: sha("actor-receipt"),
-      business_receipt_ref: "linear:IRO-7:business-receipt",
-      business_receipt_digest: sha("business-receipt"),
-      result: "passed",
-    },
-    records: {
-      authority_issue: "IRO-12",
-      implementation_issue: "IRO-41",
-      business_issue: "IRO-7",
-      release_record_ref: "release:Iron-Wrap/ironwrap-os:5",
-      release_record_digest: sha("release-record"),
-    },
-    external_evidence: {
-      issuer_principal: "evidence-reviewer@ironwrapexteriors.com",
-      issuer_task_id: "iro7-evidence-task",
-      issuer_run_id: "iro7-evidence-run",
-      key_version: "review-key-2026-08",
-      receipt_digest: sha("external-evidence-receipt"),
     },
   };
   return { ...fields, evidence_digest: sha(canonicalJson(fields)) };
@@ -293,11 +267,11 @@ function externalEvidence(overrides = {}) {
           manifest.production_candidates.frappe_readback_digest,
       },
       facet: {
-        artifact_digest: manifest.artifacts.facet_digest,
+        artifact_digest: sha("facet-artifact"),
         integration_receipt_digest: sha("facet-integration"),
       },
     },
-    affected_scopes: manifest.affected_scopes,
+    affected_scopes: affectedScopes(),
     recovery: {
       prior_worker_readback_digest:
         manifest.recovery.prior_worker_readback_digest,
@@ -310,12 +284,25 @@ function externalEvidence(overrides = {}) {
       prior_frappe_backup_digest: manifest.recovery.prior_frappe_backup_digest,
     },
     provider_reconciliation: manifest.provider_reconciliation,
-    business_evidence: manifest.business_evidence,
-    records: manifest.records,
-    issuer_principal: manifest.external_evidence.issuer_principal,
-    issuer_task_id: manifest.external_evidence.issuer_task_id,
-    issuer_run_id: manifest.external_evidence.issuer_run_id,
-    key_version: manifest.external_evidence.key_version,
+    business_evidence: {
+      issue_id: "IRO-7",
+      actor_receipt_ref: "linear:IRO-7:actor-receipt",
+      actor_receipt_digest: sha("actor-receipt"),
+      business_receipt_ref: "linear:IRO-7:business-receipt",
+      business_receipt_digest: sha("business-receipt"),
+      result: "passed",
+    },
+    records: {
+      authority_issue: "IRO-12",
+      implementation_issue: "IRO-41",
+      business_issue: "IRO-7",
+      release_record_ref: "release:Iron-Wrap/ironwrap-os:5",
+      release_record_digest: sha("release-record"),
+    },
+    issuer_principal: "evidence-reviewer@ironwrapexteriors.com",
+    issuer_task_id: "iro7-evidence-task",
+    issuer_run_id: "iro7-evidence-run",
+    key_version: "review-key-2026-08",
     issued_at: ISSUED_AT,
     expires_at: "2026-08-17T01:00:00.000Z",
     nonce: "evidence0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -392,7 +379,7 @@ function serviceAdapterPayload(operation = "promote", overrides = {}) {
 
 function payload(overrides = {}) {
   return {
-    schema: "ironwrap_release_permit_v1",
+    schema: "ironwrap_release_permit_v2",
     type: "ironwrap-release-permit",
     permit_id: "release:Iron-Wrap/ironwrap-os:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     repository: "Iron-Wrap/ironwrap-os",
@@ -405,16 +392,6 @@ function payload(overrides = {}) {
       { check_id: "ci-validation", run_id: "31970000001", job_name: "validate-and-test", conclusion: "success", repository: "Iron-Wrap/ironwrap-os", head_sha: COMMIT, workflow_id: 123456, workflow_path: ".github/workflows/ci.yml", event: "pull_request", status: "completed", run_attempt: 1 },
       { check_id: "ci-release-readiness", run_id: "31970000001", job_name: "release-readiness", conclusion: "success", repository: "Iron-Wrap/ironwrap-os", head_sha: COMMIT, workflow_id: 123456, workflow_path: ".github/workflows/ci.yml", event: "pull_request", status: "completed", run_attempt: 1 },
     ],
-    reviewer: {
-      principal: "reviewer@ironwrapexteriors.com",
-      task_id: "codex-review-iro41",
-      run_id: "review-run-31970000001",
-      key_version: "review-key-2026-08",
-      decision: "GO",
-      findings_digest: FINDINGS,
-      unresolved_p0: 0,
-      unresolved_p1: 0,
-    },
     previous_generation: { generation: 4, policy_hash: PREVIOUS_POLICY },
     generation: 5,
     policy_hash: POLICY,
@@ -631,19 +608,18 @@ test("rejects payload and signature tampering", () => {
   assert.throws(() => verifyReleasePermit(publicKey, `${encoded}.${changedSignature}`, {}, { now: NOW }), /release_permit_signature_invalid/);
 });
 
-test("rejects expiry, overlong windows, future permits, and self-approval", () => {
-  const { privateKey } = keyPair();
+test("rejects expiry, overlong windows, future permits, and an external reviewer block", () => {
   assert.throws(() => validateReleasePermitPayload(payload({ expires_at: "2026-08-16T20:16:00.000Z" }), { now: NOW }), /release_permit_window_invalid/);
   assert.throws(() => validateReleasePermitPayload(payload({ expires_at: "2026-08-16T20:00:30.000Z" }), { now: NOW }), /release_permit_expired/);
   assert.throws(() => validateReleasePermitPayload(payload({ issued_at: "2026-08-16T20:02:01.000Z" }), { now: NOW }), /release_permit_issued_in_future/);
-  assert.throws(() => validateReleasePermitPayload(payload({ reviewer: { ...payload().reviewer, principal: payload().issuer_identity } }), { now: NOW }), /release_permit_reviewer_not_distinct/);
-  assert.throws(() => signReleasePermit(privateKey, payload({ reviewer: { ...payload().reviewer, unresolved_p1: 1 } }), { now: NOW }), /release_permit_reviewer_p1_unresolved/);
+  // Releases are admitted by automated checks alone; a reviewer GO block is not
+  // part of the permit, so one cannot be smuggled in as optional evidence.
+  assert.throws(() => validateReleasePermitPayload(payload({ reviewer: { principal: "reviewer@ironwrapexteriors.com", decision: "GO" } }), { now: NOW }), /release_permit_payload_shape_invalid/);
 });
 
-test("rejects unknown fields, weak CI, non-GO review, and migration rollback paths", () => {
+test("rejects unknown fields, weak CI, and migration rollback paths", () => {
   assert.throws(() => validateReleasePermitPayload({ ...payload(), unexpected: true }, { now: NOW }), /release_permit_payload_shape_invalid/);
   assert.throws(() => validateReleasePermitPayload(payload({ ci_checks: [{ ...payload().ci_checks[0], conclusion: "neutral" }] }), { now: NOW }), /release_permit_ci_check_not_success/);
-  assert.throws(() => validateReleasePermitPayload(payload({ reviewer: { ...payload().reviewer, decision: "COMMENT" } }), { now: NOW }), /release_permit_reviewer_not_go/);
   assert.throws(() => validateReleasePermitPayload(payload({ migrations: { ...payload().migrations, ordered: ["0001_initial.sql", "0002_down.sql"], set_digest: sha(JSON.stringify(["0001_initial.sql", "0002_down.sql"])) } }), { now: NOW }), /release_permit_migration_invalid/);
 });
 
@@ -1284,12 +1260,12 @@ test("service adapter receipts bind exact Frappe promotion, post-smoke readback,
   );
 });
 
-test("full release manifest rejects missing component, recovery, and business identities", () => {
+test("full release manifest rejects missing component, recovery, and provider identities", () => {
   const manifest = releaseManifest();
   assert.equal(validateReleasePermitPayload(payload(), { now: NOW }).release_manifest.pr.number, 43);
-  assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, artifacts: { ...manifest.artifacts, facet_digest: undefined } } }), { now: NOW }), /release_permit_release_manifest_artifact_digest_invalid/);
+  assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, artifacts: { ...manifest.artifacts, pwa_digest: undefined } } }), { now: NOW }), /release_permit_release_manifest_artifact_digest_invalid/);
   assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, recovery: { ...manifest.recovery, prior_frappe_revision: "" } } }), { now: NOW }), /release_permit_release_manifest_prior_frappe_invalid/);
-  assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, business_evidence: { ...manifest.business_evidence, result: "pending" } } }), { now: NOW }), /release_permit_release_manifest_business_not_passed/);
+  assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: { ...manifest, provider_reconciliation: { ...manifest.provider_reconciliation, status: "pending" } } }), { now: NOW }), /release_permit_release_manifest_provider_not_matched/);
   assert.throws(() => validateReleasePermitPayload(payload({ release_manifest: {
     ...manifest,
     production_candidates: {
@@ -1351,7 +1327,7 @@ test("release environment preflight fails before mutation on var, notification, 
     BACKUP_ALERT_EMAIL: "backup@example.invalid",
     FROM_EMAIL: "sender@example.invalid",
     MEASUREMENT_OCR_ENABLED: "true",
-    MEASUREMENT_OCR_MODEL: "claude-opus-5",
+    MEASUREMENT_OCR_MODEL: "claude-opus-5-5",
     OWNER_ALERT_EMAIL: "owner@example.invalid",
   };
   const writeConfig = async (environmentVars) => writeFile(path.join(root, "workers-bus", "wrangler.jsonc"), JSON.stringify({
@@ -1374,6 +1350,19 @@ test("release environment preflight fails before mutation on var, notification, 
   await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names }), /release_permit_environment_preflight_ocr_model_invalid/);
   await writeConfig({ ...vars });
   await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names.filter((name) => name !== "MEASUREMENT_OCR_API_KEY") }), /release_permit_environment_preflight_required_secret_missing/);
+});
+
+test("the OCR model allowlist is one list shared by the Worker, its config, and the preflight", async () => {
+  const worker = await readFile(new URL("../workers-bus/src/measurements.ts", import.meta.url), "utf8");
+  const literal = /ALLOWED_MEASUREMENT_OCR_MODELS = new Set\(\[([^\]]*)\]\)/.exec(worker);
+  assert.ok(literal, "workers-bus/src/measurements.ts must declare ALLOWED_MEASUREMENT_OCR_MODELS");
+  const workerModels = [...literal[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual([...workerModels].sort(), [...MEASUREMENT_OCR_MODELS].sort());
+  assert.ok(MEASUREMENT_OCR_MODELS.includes("claude-opus-5-5"));
+  const wrangler = await readFile(new URL("../workers-bus/wrangler.jsonc", import.meta.url), "utf8");
+  const pinned = [...wrangler.matchAll(/"MEASUREMENT_OCR_MODEL":\s*"([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(pinned.length > 0, "wrangler.jsonc must pin MEASUREMENT_OCR_MODEL");
+  for (const model of pinned) assert.ok(MEASUREMENT_OCR_MODELS.includes(model), `${model} is not an allowed OCR model`);
 });
 
 test("generation-N provider policy rejects candidate account and resource substitution", async (t) => {

@@ -288,13 +288,14 @@ test("documentation gate rejects breaking the native release-control blocker gra
   }
 });
 
-test("documentation gate rejects making shipped Frappe release proof optional", () => {
+test("documentation gate rejects claiming Frappe receipts gate an out-of-scope release", () => {
   const temp = mkdtempSync(join(tmpdir(), "ironwrap-frappe-release-stale-"));
   try {
     const current = readFileSync(matrix, "utf8");
+    const marker = "because the Frappe candidate\n  identities came from the retired issuer; and";
     const stale = current.replace(
-      "signed Frappe\n  adapter promote/readback/rollback receipts are required release evidence while the Frappe wheel",
-      "leftover Frappe\n  adapter receipts are optional sentinels, not a release gate while the Frappe wheel",
+      marker,
+      `${marker}\n- signed Frappe adapter receipts are required release evidence while the Frappe wheel ships;`,
     );
     assert.notEqual(stale, current);
     const stalePath = join(temp, "CAPABILITY-MATRIX.md");
@@ -308,7 +309,7 @@ test("documentation gate rejects making shipped Frappe release proof optional", 
     assert.notEqual(result.status, 0);
     assert.match(
       result.stderr,
-      /Frappe release gate must match whether deploy\.yml ships the wheel/,
+      /Frappe release gate must match deploy\.yml RELEASE_FRAPPE_SCOPE/,
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });

@@ -253,7 +253,7 @@ test("Wrangler gives measurement processing an isolated queue and DLQ in every e
     );
     assert.equal(
       environment.vars.MEASUREMENT_OCR_MODEL,
-      "claude-opus-5",
+      "claude-opus-5-5",
       `${name} measurement OCR model`,
     );
     assert.equal(

@@ -128,10 +128,13 @@ const REPORT_FETCH_TIMEOUT_MS = 20_000;
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MEASUREMENT_OCR_TIMEOUT_MS = 20_000;
-const DEFAULT_MEASUREMENT_OCR_MODEL = "claude-opus-5";
+const DEFAULT_MEASUREMENT_OCR_MODEL = "claude-opus-5-5";
+// Same list as MEASUREMENT_OCR_MODELS in tools/release-permit.mjs; a test keeps them equal.
 const ALLOWED_MEASUREMENT_OCR_MODELS = new Set([
-  "claude-fable-5",
+  "claude-opus-5-5",
   "claude-opus-5",
+  "claude-fable-5-1",
+  "claude-fable-5",
   "claude-sonnet-5",
 ]);
 const OCR_MEASUREMENT_KEYS = [
@@ -1285,11 +1288,16 @@ async function requestMeasurementPdfOcr(
   config: MeasurementOcrConfig,
   report: MeasurementReportArtifact,
 ): Promise<MeasurementPdfOcrResult> {
+  // Claude Opus 5.5 rejects a forced tool_choice and always thinks, so the call is
+  // steered by the prompt under `auto` (the strict schema still binds the input),
+  // effort stays low for a bounded extraction, and max_tokens leaves room for
+  // thinking. A reply without the tool call fails as measurement_ocr_tool_result_missing.
   const requestPayload = {
     model: config.model,
-    max_tokens: 1_600,
+    max_tokens: 16_000,
+    output_config: { effort: "low" as const },
     tools: [MEASUREMENT_OCR_TOOL_SCHEMA],
-    tool_choice: { type: "tool" as const, name: MEASUREMENT_OCR_TOOL_SCHEMA.name },
+    tool_choice: { type: "auto" as const },
     messages: [
       {
         role: "user" as const,
@@ -1314,7 +1322,9 @@ async function requestMeasurementPdfOcr(
     ],
   };
   const requestBody = JSON.stringify(requestPayload);
-  const omnirouteBody = JSON.stringify({ ...requestPayload, model: OMNIROUTE_FALLBACK_MODEL });
+  // Effort is an Anthropic setting; the OmniRoute gateway may route to another provider.
+  const { output_config: _effort, ...portablePayload } = requestPayload;
+  const omnirouteBody = JSON.stringify({ ...portablePayload, model: OMNIROUTE_FALLBACK_MODEL });
 
   const controller = new AbortController();
   const timeout = setTimeout(

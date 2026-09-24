@@ -111,7 +111,8 @@ Work in coherent checkpoints:
 3. Format and run the cheapest meaningful validation.
 4. Stage only that slice and commit it precisely.
 5. Broaden checks in proportion to risk.
-6. Push, open/update the PR, monitor gates, and merge when the request and repository policy allow.
+6. Push, open/update the PR, monitor the checks, and merge yourself when they are green. No human
+   approval step; automated checks are what stop a change.
 
 Preserve unrelated user work. Never sweep dirty files into a commit. Avoid broad refactors,
 dependency additions, generated artifacts, and speculative scaffolding.

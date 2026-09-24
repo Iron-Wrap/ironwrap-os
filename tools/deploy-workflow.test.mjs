@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -82,13 +83,21 @@ function validateWorkflow(workflow) {
   );
   assert.match(
     admission,
-    /pr-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*issuer-request[\s\S]*review-wait[\s\S]*policy-genesis[\s\S]*admission-context/,
+    /pr-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*policy-genesis[\s\S]*admission-context/,
   );
-  assert.match(workflow, /explicit \/v2\/independent-issuer route/);
-  assert.match(workflow, /issuer-request emits a canonical five-minute freshness window/);
-  assert.match(workflow, /signing\/publication stay external/);
-  assert.match(admission, /id: publish_review_candidate[\s\S]*--artifact-digest "\$\{\{ steps\.publish_review_candidate\.outputs\.artifact-digest \}\}"/);
-  assert.match(admission, /review-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/review-issuer-ack\.json"/);
+  // Admission reads every job of the CI run it releases, including the
+  // `gate` aggregator and the `validate-and-test` name the ruleset requires.
+  assert.match(
+    admission,
+    /ci-checks[\s\S]*--job-names "[^"]*\bgate\b[^"]*validate-and-test"/,
+  );
+  // Automated checks are the only release gate: no reviewer GO receipt, no
+  // independent evidence issuer, and no external Frappe adapter signer.
+  assert.doesNotMatch(
+    workflow,
+    /issuer-request|review-wait|release-evidence-wait|review\.receipt|RELEASE_INDEPENDENT_|RELEASE_REVIEW_|service-adapter|RELEASE_SERVICE_ADAPTER_/,
+  );
+  assert.match(workflow, /RELEASE_FRAPPE_SCOPE: out-of-scope/);
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
   assert.match(
@@ -196,8 +205,7 @@ function validateWorkflow(workflow) {
 
   ordered(production, [
     "provider-targets",
-    "Require production provider, smoke, and permit inputs",
-    "Fail closed on the declared Frappe adapter scope and config",
+    "Require production provider and smoke inputs",
     "Verify the same immutable artifact bytes",
     "Verify production secret-name inventory before immutable promotion",
     "Fail closed on static production readiness drift before mutation",
@@ -205,18 +213,13 @@ function validateWorkflow(workflow) {
     "Verify production provider version and config readback before traffic",
     "Capture current production revision before permit admission",
     "Capture the exact production D1 recovery bookmark before admission",
-    "Publish exact staged candidate evidence for the independent evidence issuer",
-    "Trigger the independently permissioned full-surface evidence issuer",
-    "Bounded wait for signed full-surface release evidence",
-    "Assemble the signed short-lived permit from independent evidence",
+    "Assemble the signed short-lived permit from automated release evidence",
     "--domain-hostname \"\$RELEASE_PRODUCTION_DOMAIN_HOSTNAME\"",
     "--domain-service \"\$RELEASE_PRODUCTION_DOMAIN_SERVICE\"",
     "--domain-zone-id \"\$RELEASE_PRODUCTION_ZONE_ID\"",
     "Consume the permit once through the durable D1 replay and policy boundary",
     "Auto-merge the exact admitted PR and verify the resulting main tree",
     "Apply admitted migrations only after exact source admission",
-    "Promote the exact Frappe/VPS candidate through the governed adapter",
-    "Re-read the exact Frappe/VPS active revision through the governed adapter",
     "Promote the pre-verified immutable production version",
     "Deploy the production custom-domain route after immutable promotion",
     "Read back the production Workers domain binding",
@@ -226,13 +229,7 @@ function validateWorkflow(workflow) {
   ]);
   assert.match(
     production,
-    /release-evidence-wait[\s\S]*--attempts 80 --interval-ms 15000/,
-  );
-  assert.match(production, /id: publish_release_candidate[\s\S]*issuer-request[\s\S]*--artifact-digest "\$\{\{ steps\.publish_release_candidate\.outputs\.artifact-digest \}\}"/);
-  assert.match(production, /release-evidence-wait[\s\S]*--issuer-ack "\$RUNNER_TEMP\/release-evidence-issuer-ack\.json"/);
-  assert.match(
-    production,
-    /assemble[\s\S]*--artifact-manifest[\s\S]*--release-evidence/,
+    /assemble[\s\S]*--artifact-manifest[\s\S]*--production-previous-readback[\s\S]*--permit-private-key/,
   );
   assert.match(production, /assemble[\s\S]*--production-recovery/);
   assert.match(
@@ -266,18 +263,8 @@ function validateWorkflow(workflow) {
     production,
     /assemble[\s\S]*--domain-hostname "\$RELEASE_PRODUCTION_DOMAIN_HOSTNAME"[\s\S]*--domain-service "\$RELEASE_PRODUCTION_DOMAIN_SERVICE"[\s\S]*--domain-zone-id "\$RELEASE_PRODUCTION_ZONE_ID"/,
   );
-  assert.match(
-    production,
-    /node "\$RELEASE_ENFORCER" service-adapter-preflight[\s\S]*service-adapter-preflight\.json/,
-  );
-  assert.doesNotMatch(
-    production,
-    /node "\$GITHUB_WORKSPACE\/tools\/release-promotion\.mjs" service-adapter-preflight/,
-  );
   assert.match(production, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN/);
   assert.doesNotMatch(production, /secrets\.RELEASE_STAGING_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.match(production, /id: promote_frappe[\s\S]*--operation promote[\s\S]*service-promotion\.receipt/);
-  assert.match(production, /id: readback_frappe[\s\S]*--operation readback[\s\S]*service-readback\.receipt/);
   assert.match(
     production,
     /id: deploy_production_triggers[\s\S]*\"\$WRANGLER_BIN\" triggers deploy --config workers-bus\/wrangler\.jsonc/,
@@ -310,7 +297,7 @@ function validateWorkflow(workflow) {
   const productionProof = production.slice(production.indexOf("- name: Publish signed permit and production proof receipt"));
   assert.match(productionProof, /production-domain-readback\.json/);
   assert.doesNotMatch(productionProof, /production-domains\.json|production-domains\.error/);
-  assert.match(production, /production-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*--service-promotion-receipt[\s\S]*--service-readback-receipt/);
+  assert.match(production, /production-receipt[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"[\s\S]*--merge-receipt/);
   assert.match(production, /production-receipt[\s\S]*--domain-readback "\$RUNNER_TEMP\/production-domain-readback\.json"/);
   assert.match(
     production,
@@ -323,11 +310,7 @@ function validateWorkflow(workflow) {
   );
   assert.match(
     production,
-    /if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && \(steps\.promote_production\.outcome != 'skipped' \|\| steps\.promote_frappe\.outcome != 'skipped'\) \}\}/,
-  );
-  assert.match(
-    production,
-    /id: rollback_production[\s\S]*steps\.promote_frappe\.outcome \}\}" != "skipped"[\s\S]*if ! node "\$RELEASE_ENFORCER" service-adapter[\s\S]*steps\.promote_production\.outcome \}\}" != "skipped"[\s\S]*"\$WRANGLER_BIN" rollback/,
+    /id: rollback_production\n\s+if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.promote_production\.outcome != 'skipped' \}\}[\s\S]*"\$WRANGLER_BIN" rollback/,
   );
   assert.match(
     production,
@@ -338,7 +321,6 @@ function validateWorkflow(workflow) {
     production,
     /id: migrate_production[\s\S]*if: \$\{\{ failure\(\) && steps\.merge_source\.outcome == 'success' && steps\.migrate_production\.outcome == 'failure' && steps\.promote_production\.outcome == 'skipped' \}\}[\s\S]*persist-recovery-required[\s\S]*--failure-stage d1_migration_failed/,
   );
-  assert.match(production, /service-adapter[\s\S]*--operation rollback[\s\S]*service-rollback\.receipt/);
   assert.match(
     production,
     /"\$WRANGLER_BIN" rollback[\s\S]*version-snapshot[\s\S]*production-rollback-health[\s\S]*production-rollback-receipt[\s\S]*persist-rollback/,
@@ -346,11 +328,11 @@ function validateWorkflow(workflow) {
   assert.equal(
     (production.match(/--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/g) ?? [])
       .length,
-    4,
+    3,
   );
   assert.match(
     production,
-    /steps\.promote_production\.outcome \}\}" != "skipped"[\s\S]*"\$WRANGLER_BIN" rollback[\s\S]*deployments list[\s\S]*production-rollback-receipt/,
+    /"\$WRANGLER_BIN" rollback[\s\S]*deployments list[\s\S]*production-rollback-receipt/,
   );
   assert.match(production, /production-previous-version\.json[\s\S]*version-snapshot/);
   assert.equal(
@@ -364,21 +346,15 @@ function validateWorkflow(workflow) {
   );
 
   for (const required of [
-    "RELEASE_REVIEW_PUBLIC_KEY",
     "RELEASE_PERMIT_PRIVATE_KEY",
     "RELEASE_PERMIT_PUBLIC_KEY",
     "RELEASE_POLICY_LEDGER_API_TOKEN",
     "RELEASE_STAGING_CLOUDFLARE_API_TOKEN",
+    "RELEASE_STAGING_INGEST_TOKEN",
+    "RELEASE_STAGING_ADMIN_TOKEN",
     "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",
-    "RELEASE_INDEPENDENT_ISSUER_URL",
-    "RELEASE_INDEPENDENT_ISSUER_TOKEN",
-    "RELEASE_SERVICE_ADAPTER_URL",
-    "RELEASE_SERVICE_ADAPTER_TOKEN",
-    "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
-    "RELEASE_SERVICE_ADAPTER_IDENTITY",
-    "RELEASE_SERVICE_ADAPTER_TASK_ID",
-    "RELEASE_SERVICE_ADAPTER_RUN_ID",
-    "RELEASE_SERVICE_ADAPTER_KEY_VERSION",
+    "RELEASE_PRODUCTION_INGEST_TOKEN",
+    "RELEASE_PRODUCTION_ADMIN_TOKEN",
   ])
     assert.match(workflow, new RegExp(required));
   assert.match(workflow, /release_admission_missing_external_secret/);
@@ -391,7 +367,14 @@ function validateWorkflow(workflow) {
   );
   assert.doesNotMatch(staging, /wrangler deploy\s/);
   assert.doesNotMatch(production, /wrangler deploy\s/);
-  assert.match(workflow, /WORKER_VERSION: 4\.123\.0/);
+  // The trusted Wrangler loaded from the policy base must be the locked one.
+  const workerPackage = JSON.parse(
+    readFileSync(new URL("../workers-bus/package.json", import.meta.url), "utf8"),
+  );
+  assert.match(
+    workflow,
+    new RegExp(`WORKER_VERSION: ${workerPackage.devDependencies.wrangler.replaceAll(".", "\\.")}\n`),
+  );
 }
 
 test("release workflow enforces PR admission, build-once staging, and immutable promotion", async () => {
@@ -472,7 +455,12 @@ test("workflow validation rejects omitted component artifacts and source admissi
   );
   assert.throws(() =>
     validateWorkflow(
-      workflow.replace("release-evidence-wait", "release-evidence-omitted"),
+      workflow.replace(
+        '      - name: Assemble the signed short-lived permit from automated release evidence\n',
+        '      - name: Wait for an independent reviewer GO receipt\n' +
+          '        run: node "$RELEASE_ENFORCER" review-wait --attempts 40\n\n' +
+          '      - name: Assemble the signed short-lived permit from automated release evidence\n',
+      ),
     ),
   );
 });
@@ -504,10 +492,12 @@ test("workflow rejects candidate toolchain and cross-environment provider creden
     ),
   );
   assert.throws(() =>
-    validateWorkflow(workflow.replace("issuer-request", "issuer-trigger-omitted")),
-  );
-  assert.throws(() =>
-    validateWorkflow(workflow.replace("--issuer-ack", "--unbound-issuer-ack")),
+    validateWorkflow(
+      workflow.replace(
+        "RELEASE_FRAPPE_SCOPE: out-of-scope",
+        "RELEASE_FRAPPE_SCOPE: in-scope",
+      ),
+    ),
   );
 });
 
@@ -619,8 +609,8 @@ test("workflow validation rejects missing durable success or rollback outcomes",
   assert.throws(() =>
     validateWorkflow(
       workflow.replace(
-        'steps.promote_production.outcome }}" != "skipped"',
-        'steps.promote_production.outcome }}" == "success"',
+        "steps.promote_production.outcome != 'skipped' }}",
+        "steps.promote_production.outcome == 'success' }}",
       ),
     ),
   );

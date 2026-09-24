@@ -1,311 +1,85 @@
+# CI: a self-contained copy of the Mindburn CI v2 contract.
+#
+# This repository lives outside the Mindburn-Labs org, so it cannot call
+# Mindburn-Labs/platform-actions/.github/workflows/ci.yml@v2. It carries the
+# same shape inline; the dependency scan is copied from that file at tag v2
+# (d5a0eb5c1ffe8836f94cc679b36ed7a6be3d9e97).
+#
+# Jobs:
+#   check           toolchain setup, then `make check`.
+#   dependency-scan pull requests and merge groups only: fails on a HIGH or
+#                   CRITICAL vulnerability that is present at head and absent
+#                   at base. Inherited findings are Dependabot's job.
+#   gate            always runs; fails if any job it needs failed or was
+#                   cancelled.
+#
+# This repository adds, in `check`, `make e2e secret-scan` after `make check`
+# (Playwright PWA suites; pinned gitleaks over the tracked tree), and one job:
+#   paired-device-lighthouse  a timing budget, so it keeps a runner of its own.
+# `validate-and-test` reports the check name ruleset 20652163 still requires;
+# it passes exactly when `gate` passed. Delete it once the ruleset requires
+# `gate`. The workflow name `CI` is what deploy.yml's workflow_run listens
+# to, and deploy.yml reads these job names back.
+#
+# No path filters, so `gate` reports on every change. The single required
+# status check is `gate`.
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-  # `validate-and-test` is the branch ruleset's only required check, so a merge queue
-  # cannot work without this trigger: queued groups would never receive that check and
-  # would stall until they timed out. Adding it while no queue is configured dispatches
-  # nothing, so it is inert until an owner adds the `merge_queue` rule to the ruleset
-  # (ELEC-245). Every job below is unconditional, so a merge group runs the same four
-  # jobs a pull request does, and `concurrency` keys on `github.ref` - unique per queued
-  # group - so a group never cancels a pull request's run or another group's.
   merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build-and-test:
-    # Green runs on main sit at 19-28 minutes against this cap (33141006840, 33137923650,
-    # 33135289861), so every suite added since #175 raised it to 30 has been spending someone
-    # else's headroom. Raised rather than trimmed: the job died at "Test production-readiness
-    # verifier" with every validator, e2e project and Worker suite already green, which is a
-    # budget problem, not a slow check worth cutting.
+  check:
+    name: make check
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 22
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: |
-            app/package-lock.json
-            workers-bus/package-lock.json
-            mcp/erpnext-roofing-mcp/package-lock.json
-            mcp/ironwrap-bus-mcp/package-lock.json
-            mcp/newo-mcp/package-lock.json
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: '3.12'
 
-      - name: Validate DocType contract (79 DocTypes, Frappe-only link targets)
-        run: node tools/validate-erpnext-doctypes.mjs
-      - name: Validate Hermes roles and manifest against the MCP tool inventory
-        run: node tools/validate-hermes-config.mjs
-      - name: Validate tenant configs (no secrets, isolated namespaces)
-        run: node tools/validate-tenant-config.mjs
-      - name: Validate staged Newo contracts, hashes, evidence inventory, and safe defaults
-        run: node tools/validate-newo-config.mjs
-      - name: Validate lead-triage shadow authority policy and adversarial corpus
-        run: node tools/validate-lead-triage-shadow-authority.mjs
-      - name: Validate documentation authority, privacy, and links
-        run: node tools/validate-documentation.mjs
-      - name: Validate every bounded-rail issuer key is provisioned and documented
-        run: node tools/validate-site-config-pins.mjs
-      - name: Test site-config pin validator
-        run: node --test tools/validate-site-config-pins.test.mjs
-      - name: Validate per-rail Frappe credential isolation end to end
-        run: node tools/validate-rail-credential-isolation.mjs
-      - name: Test rail credential isolation validator
-        run: node --test tools/validate-rail-credential-isolation.test.mjs
-      - name: Validate the Facet blank-quote contract against Customer Quote
-        run: node tools/validate-facet-blank-quote-contract.mjs
-      - name: Test Facet blank-quote contract validator
-        run: node --test tools/validate-facet-blank-quote-contract.test.mjs
-      - name: Test stale capability evidence rejection
-        run: node --test tools/validate-documentation.test.mjs
-      - name: Test Newo production gate refusal while provider evidence is pending
-        run: node --test tools/validate-newo-config.test.mjs
-      - name: Test lead-triage shadow authority config validator
-        run: node --test tools/validate-lead-triage-shadow-authority.test.mjs
-      - name: Test tenant runtime preflight
-        run: node --test tools/validate-tenant-runtime.test.mjs
-      - name: Test pipeline template seeding (every config/pipelines document parses)
-        run: node --test tools/seed-pipeline.test.mjs
-      - name: Test tenant config generation from the clone template
-        run: node --test tools/generate-tenant-config.test.mjs
-      - name: Test tenant Worker config derivation (no source-tenant references survive)
-        run: node --test tools/generate-tenant-worker-config.test.mjs
-      - name: Test local .dev.vars composition (port overrides + example scaffold)
-        run: node --test deploy/local/dev-vars.test.mjs
-      - name: Test local runtime supervisor startup contract
-        run: node --test tools/start-local-runtime.test.mjs
-      - name: Validate tenant-leakage check 5 sweeps every doctype the Worker writes
-        run: node tools/validate-ingest-doctype-coverage.mjs
-      - name: Test ingest doctype coverage guard
-        run: node --test tools/validate-ingest-doctype-coverage.test.mjs
-      - name: Test the cross-tenant marker sweep
-        run: node --test deploy/local/frappe-marker-sweep.test.mjs
-      - name: Test local Frappe provisioner per-site scratch isolation
-        run: node --test deploy/local/frappe-init.test.mjs
-      - name: Validate IronWrap runtime tenant identity
+      - name: make check
         env:
-          IRONWRAP_TENANT_CONFIG: ironwrap
-          APP_TENANT_ID: ironwrap
-          APP_TENANT_NAME: IronWrap OS
-          APP_TENANT_BRAND: IronWrap
-          APP_LOCALE: en-CA
-          APP_TIME_ZONE: America/Edmonton
-          APP_CURRENCY: CAD
-          FROM_EMAIL: sales@ironwrapexteriors.com
-          APP_BFF_ENABLED: "false"
-          APP_CUSTOMER_PORTAL_ENABLED: "false"
-        run: node tools/validate-tenant-runtime.mjs
-      - name: Prove deterministic AppliCad extraction
-        run: node tools/applicad-xml-proof.mjs --check
-
-      - name: Install pinned Python validation tools
-        run: python -m pip install --disable-pip-version-check ruff==0.13.0 build==1.4.0 ./frappe-apps/ironwrap_roofing
-      - name: Install erpnext-roofing-mcp dependencies
-        run: npm ci --prefix mcp/erpnext-roofing-mcp
-      - name: Test leftover Frappe application contracts without a site
-        continue-on-error: true
-        working-directory: frappe-apps/ironwrap_roofing
-        run: python -m unittest discover -s tests -t .
-      - name: Lint and compile leftover Frappe application
-        continue-on-error: true
-        working-directory: frappe-apps/ironwrap_roofing
-        run: |
-          ruff check ironwrap_roofing tests
-          python -m compileall -q ironwrap_roofing tests
-      - name: Build leftover Frappe wheel
-        continue-on-error: true
-        working-directory: frappe-apps/ironwrap_roofing
-        run: python -m build --wheel
-
-      - name: Test erpnext-roofing-mcp
-        run: npm test --prefix mcp/erpnext-roofing-mcp
-      - name: Test ironwrap-bus-mcp
-        run: npm ci --prefix mcp/ironwrap-bus-mcp && npm test --prefix mcp/ironwrap-bus-mcp
-      - name: Test role-filtered newo-mcp
-        run: npm ci --prefix mcp/newo-mcp && npm test --prefix mcp/newo-mcp
-
-      - name: Install PWA dependencies
-        run: npm ci --prefix app
-      - name: Validate and build PWA assets
-        # The default `run:` shell is `bash -e {0}`, which does not set pipefail:
-        # piping the suite through tee would make this step report the exit
-        # status of tee, so a failing test could not fail the step. `shell: bash`
-        # runs `bash --noprofile --norc -eo pipefail {0}`.
-        shell: bash
-        run: |
-          npm run typecheck --prefix app
-          npm run lint --prefix app
-          npm test --prefix app 2>&1 | tee "$RUNNER_TEMP/ironwrap-app-tests.log"
-          npm run format:check --prefix app
-          npm run build --prefix app
-      - name: Install Playwright Chromium for app e2e
-        working-directory: app
-        run: npx playwright install --with-deps chromium
-      - name: Run app Playwright e2e (PWA suite)
-        run: npm run test:pwa --prefix app
-      # The board is an office surface, so it needs an office session the default
-      # field-mode acceptance server does not serve. Mobile evidence for it is a gate,
-      # not a nice-to-have, so the suite runs here rather than only on a laptop.
-      - name: Run app Playwright e2e (pipeline board, office session)
-        run: npm run test:pwa:board --prefix app
-      # Owner configuration is an office surface too, and its spec self-skips unless it
-      # is handed an office session. `test:pwa` never sets one, so without this step the
-      # whole file reported "3 skipped" and the route/state/role/device matrix it proves
-      # was never actually run in CI.
-      - name: Run app Playwright e2e (owner configuration, office session)
-        run: npm run test:pwa:owner-configuration --prefix app
-      # The People desk is an office surface, so under the default field mode its spec
-      # self-skips. It gets the office session in its own step, like the configuration screens.
-      - name: Run app Playwright e2e (people desk, office session)
-        run: npm run test:pwa:people --prefix app
-      - name: Run app Playwright e2e (safety desk, office session)
-        run: npm run test:pwa:safety --prefix app
-      - name: Run app Playwright e2e (job document generation, office session)
-        run: npm run test:pwa:documents --prefix app
-      # The record of a finished job and the packet slots this system does not carry. Both need an
-      # office session, so `test:pwa` would self-skip the file and prove nothing.
-      - name: Run app Playwright e2e (finished job record, office session)
-        run: npm run test:pwa:job-history --prefix app
-      - name: Test the independent release issuer
-        run: npm test --prefix release-issuer
-      # Putting a lead on a board is the only product path that reaches the card-placement
-      # route, and it spans two role surfaces (sales desk -> board). It needs the same office
-      # session the board does, so it gets its own step rather than silently self-skipping.
-      - name: Run app Playwright e2e (card placement, office session)
-        run: npm run test:pwa:placement --prefix app
-      # Honest unavailable-capability presentation is a mobile claim: that the state fits a
-      # phone, that the control it explains is genuinely not tappable, and that "why is this off"
-      # never answers with a link into the Frappe desk. The spec covers an office session and an
-      # accounting one because the two receive different capability projections by design, so a
-      # single run would leave the scoped half unproven (ELEC-236).
-      - name: Run app Playwright e2e (capability honesty, office session)
-        run: npm run test:pwa:capabilities --prefix app
-      - name: Run app Playwright e2e (capability honesty, accounting session)
-        run: npm run test:pwa:capabilities:accounting --prefix app
-      # The money desk is the accounting role's whole surface, and its spec self-skips unless it is
-      # handed an accounting session. No step above sets one, so the entire file reported "6 skipped"
-      # under `test:pwa` and the annex §8 "Accounting desktop scenarios" row was only ever proven by
-      # whoever last ran the script on a laptop. Two deterministic failures shipped to `main` through
-      # a green CI run that way (ELEC-249, root-caused and closed as stale assertions in ELEC-251).
-      - name: Run app Playwright e2e (money desk, accounting session)
-        run: npm run test:pwa:accounting --prefix app
-      # Same hole on the onboarding side: a brand-new company that has named nothing yet is a state
-      # only `ACCEPTANCE_MODE=onboarding` serves, so `test:pwa` skipped this file too and the annex's
-      # "Owner onboarding mobile scenarios" row was local-only evidence (ELEC-251).
-      - name: Run app Playwright e2e (owner onboarding, onboarding session)
-        run: npm run test:pwa:onboarding --prefix app
-      - name: Install Worker dependencies
-        run: npm ci --ignore-scripts --prefix workers-bus
-      - name: Generate Worker binding types
-        run: npm run typegen --prefix workers-bus
-      - name: Apply every Worker migration to an isolated local D1 state
-        run: npm run db:migrate:local --prefix workers-bus -- --persist-to "$RUNNER_TEMP/ironwrap-d1"
-      - name: Test Worker bus
-        # Same reason as the PWA step: keep the TAP capture, but let a failing
-        # worker test fail here instead of surfacing later as a missing-evidence
-        # error from validate-documentation.
-        shell: bash
-        run: npm test --prefix workers-bus 2>&1 | tee "$RUNNER_TEMP/ironwrap-worker-tests.tap"
-      - name: Typecheck Worker bus
-        run: npm run typecheck --prefix workers-bus
-      - name: Bundle Worker without deploying
-        run: npm run deploy --prefix workers-bus -- --dry-run
-      - name: Audit privileged PWA and Worker toolchains
-        run: |
-          npm audit --prefix app
-          npm audit --prefix workers-bus
-      - name: Audit shipped Node dependencies
-        run: |
-          npm audit --omit=dev --prefix app
-          npm audit --omit=dev --prefix workers-bus
-          npm audit --omit=dev --prefix mcp/erpnext-roofing-mcp
-          npm audit --omit=dev --prefix mcp/ironwrap-bus-mcp
-          npm audit --omit=dev --prefix mcp/newo-mcp
-
-      - name: Test production-readiness verifier
-        run: node --test tools/production-readiness.test.mjs
-      - name: Test launch-proof release evidence runner
-        run: node --test tools/launch-proof.test.mjs
-      - name: Test production deploy cutover contract
-        run: node --test tools/deploy-workflow.test.mjs
-      - name: Test signed release permit contract
-        run: node --test tools/release-permit.test.mjs tools/release-promotion.test.mjs
-      - name: Validate repository production contract
-        run: node tools/production-readiness.mjs contract
-      - name: Validate shell syntax
-        run: find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
-
-      - name: No em dashes in Hermes and agent-facing configuration
-        run: |
-          if grep -rl $'—' hermes/ config/ deploy/; then
-            echo "em dash found in agent-facing content" >&2; exit 1
-          fi
-
-      - name: Emit exact-source and tested-checkout capability evidence receipt
-        env:
+          # The capability evidence receipt binds the exact source under test.
           CAPABILITY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CAPABILITY_BASE_COMMIT: ${{ github.event.pull_request.base.sha || '' }}
-        run: |
-          node tools/validate-documentation.mjs \
-            --app-test-output "$RUNNER_TEMP/ironwrap-app-tests.log" \
-            --worker-test-output "$RUNNER_TEMP/ironwrap-worker-tests.tap" \
-            --evidence "$RUNNER_TEMP/ironwrap-capability-evidence.json"
+        run: make check
 
-  # Secret scanning runs on its own runner, before and independently of any dependency
-  # install, so the only bytes on the machine are the tracked tree. The scanner binary is
-  # pinned by version and verified by SHA-256 rather than run through a marketplace action:
-  # gitleaks-action requires an organisation licence key, and an unpinned installer is a
-  # supply-chain hole in the one job whose purpose is supply-chain hygiene.
-  secret-scan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GITLEAKS_VERSION: 8.30.1
-      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22
-      - name: Install pinned gitleaks
-        shell: bash
-        run: |
-          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
-          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" version
-      # The scanner's fail-closed contract is tested here rather than in build-and-test
-      # because two of its cases need the real pinned binary, which only this runner has.
-      # The suite adds no dependency: node's own test runner, on the tracked tree.
-      - name: Test the fail-closed contract of the secret scanner
-        env:
-          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
-        run: node --test tools/secret-scan.test.mjs
-      - name: Scan the tracked tree for committed secrets
-        env:
-          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
-        run: node tools/secret-scan.mjs
+      - name: Playwright e2e and secret scan
+        run: make e2e secret-scan
 
   # The paired-device budget is a timing measurement, so it gets a runner of its own.
   # Sharing one with the validator, unit, Playwright and Python suites left ~10 minutes
   # of prior work on the machine before Lighthouse started and pushed the job into its
-  # own 20-minute timeout on slower runners. Thresholds, run count and the emulated
-  # device/CPU/network profile are unchanged — only the isolation.
+  # own 20-minute timeout on slower runners.
   paired-device-lighthouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -313,20 +87,18 @@ jobs:
       # Depth 2 so HEAD^ resolves. For a pull request that is the base branch tip
       # `actions/checkout` merged into, and for a push it is the previous commit on the
       # branch, which is the comparison the scope decision below wants in both cases.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: app/package-lock.json
-      # Nine of the nine budget failures in the 58 jobs surveyed for ELEC-106 were on
-      # commits that changed nothing under `app/`: the bundle was byte-identical to one the
-      # parent commit had already measured green, so the red was runner noise and nothing
-      # else. Deciding scope before measuring is what stops the gate re-rolling that dice.
-      # The rationale, and why this does not weaken the budget, is in
-      # app/scripts/lighthouse-scope.mjs.
+      # Runs that changed nothing under `app/` measure a byte-identical bundle, so their
+      # red was runner noise (ELEC-106). The rationale, and why this does not weaken the
+      # budget, is in app/scripts/lighthouse-scope.mjs.
       - name: Decide whether the PWA bundle can have changed
         id: scope
         run: node app/scripts/lighthouse-scope.mjs
@@ -340,12 +112,9 @@ jobs:
       - name: Run paired-device Lighthouse thresholds
         if: steps.scope.outputs.measure == 'true'
         run: npm run test:lighthouse --prefix app
-      # The gate reports only the assertions it failed, so a run that fails on one
-      # metric hides how much headroom the others had — and a run that passes reports
-      # nothing at all. The readings are already on disk; print them either way.
+      # The gate reports only the assertions it failed, so print every reading either way.
       - name: Report paired-device Lighthouse readings
         if: always()
-        shell: bash
         env:
           SCOPE_REASON: ${{ steps.scope.outputs.reason }}
         run: |
@@ -355,26 +124,24 @@ jobs:
             echo "no Lighthouse summary was produced"
             exit 0
           fi
+          # shellcheck disable=SC2016 # the node script is single-quoted on purpose
           node -e '
             const summary = require("./" + process.argv[1]);
             const round = (value) => Math.round(value * 1000) / 1000;
             console.log(`url ${summary.url} over ${summary.runs} runs`);
-          for (const [audit, reading] of Object.entries(summary.aggregate)) {
-            console.log(
-              `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
-                ` runs ${reading.values.map(round).join(", ")}`,
-            );
-            if (reading.rawValues) {
-              const rawAudit = `${audit} raw`;
+            for (const [audit, reading] of Object.entries(summary.aggregate)) {
               console.log(
-                `${rawAudit.padEnd(28)} median ${String(round(reading.rawMedian)).padEnd(10)}` +
-                  ` runs ${reading.rawValues.map(round).join(", ")}`,
+                `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
+                  ` runs ${reading.values.map(round).join(", ")}`,
               );
+              if (reading.rawValues) {
+                const rawAudit = `${audit} raw`;
+                console.log(
+                  `${rawAudit.padEnd(28)} median ${String(round(reading.rawMedian)).padEnd(10)}` +
+                    ` runs ${reading.rawValues.map(round).join(", ")}`,
+                );
+              }
             }
-          }
-            // The runner is part of the reading. Printing its speed next to the numbers is
-            // what lets a later comparison of two jobs on the same bytes say which machine
-            // each ran on, instead of reconstructing it from the metrics themselves.
             const runner = summary.runner;
             if (runner) {
               console.log(
@@ -384,26 +151,110 @@ jobs:
             }
           ' "$summary"
 
-  # Splitting the work into two jobs must not quietly stop the mobile-first budget from
-  # blocking a merge: `validate-and-test` is the branch ruleset's required check and the
-  # name the release-admission gate reads back. It keeps that name and now passes only
-  # when both real jobs did.
-  validate-and-test:
+  dependency-scan:
+    name: dependency scan
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [build-and-test, paired-device-lighthouse, secret-scan]
-    if: always()
+    timeout-minutes: 15
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      OSV_SCANNER_VERSION: v2.6.0
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
     steps:
-      - name: Require every CI job to have succeeded
-        env:
-          BUILD_AND_TEST: ${{ needs.build-and-test.result }}
-          PAIRED_DEVICE_LIGHTHOUSE: ${{ needs.paired-device-lighthouse.result }}
-          SECRET_SCAN: ${{ needs.secret-scan.result }}
+      - name: Check out the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+
+      - name: Check out the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: base
+          persist-credentials: false
+
+      - name: Install osv-scanner
         run: |
-          echo "build-and-test: $BUILD_AND_TEST"
-          echo "paired-device-lighthouse: $PAIRED_DEVICE_LIGHTHOUSE"
-          echo "secret-scan: $SECRET_SCAN"
-          if [ "$BUILD_AND_TEST" != "success" ] || [ "$PAIRED_DEVICE_LIGHTHOUSE" != "success" ] || [ "$SECRET_SCAN" != "success" ]; then
-            echo "a required CI job did not succeed" >&2
+          bin="${RUNNER_TEMP}/bin"
+          mkdir -p "${bin}"
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "${bin}/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  ${bin}/osv-scanner" | sha256sum --check --strict
+          chmod +x "${bin}/osv-scanner"
+          echo "${bin}" >>"${GITHUB_PATH}"
+
+      - name: Scan base and head
+        run: |
+          # Exit 1 means "vulnerabilities found", which the next step judges.
+          # Anything else is a scanner failure and fails the job.
+          scan() {
+            osv-scanner scan source --recursive --no-call-analysis=all --allow-no-lockfiles \
+              --format json --output-file "$2" "$1" || [[ $? -eq 1 ]]
+          }
+          scan base base.json
+          scan head head.json
+
+      - name: Fail on HIGH or CRITICAL vulnerabilities new in this change
+        run: |
+          # One line per (ecosystem, package, advisory) at HIGH or CRITICAL:
+          # CVSS >= 7.0, or a GitHub advisory rated HIGH/CRITICAL. The version
+          # is reported but is not part of the key, so a bump that leaves an
+          # advisory open is not counted as new.
+          findings() {
+            jq -r '
+              .results[]?.packages[]? as $p
+              | $p.groups[]? as $g
+              | select(
+                  ((($g.max_severity // "") | tonumber?) // 0) >= 7
+                  or any(
+                    $p.vulnerabilities[]? | select(.id as $id | $g.ids | index($id));
+                    (.database_specific.severity? // "" | ascii_upcase) | IN("HIGH", "CRITICAL")
+                  )
+                )
+              | $g.ids[] as $id
+              | [$p.package.ecosystem, $p.package.name, $id, $p.package.version, ($g.max_severity // "")]
+              | @tsv
+            ' "$1" | sort -u
+          }
+          findings base.json | cut -f1-3 >base.keys
+          findings head.json >head.tsv
+          awk -F'\t' 'FILENAME == ARGV[1] { seen[$0]; next } !(($1 FS $2 FS $3) in seen)' base.keys head.tsv >new.tsv
+          inherited=$(( $(wc -l <head.tsv) - $(wc -l <new.tsv) ))
+          if [[ "${inherited}" -gt 0 ]]; then
+            echo "::notice::${inherited} HIGH/CRITICAL finding(s) already exist on the base branch; they are not caused by this change"
+          fi
+          if [[ -s new.tsv ]]; then
+            while IFS=$'\t' read -r ecosystem name id version severity; do
+              echo "::error::${ecosystem} ${name}@${version}: ${id} (CVSS ${severity:-n/a}) is new in this change"
+            done <new.tsv
             exit 1
           fi
+          echo "no new HIGH/CRITICAL vulnerabilities"
+
+  gate:
+    if: always()
+    needs: [check, paired-device-lighthouse, dependency-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed or be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${NEEDS}"
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<<"${NEEDS}" >/dev/null
+
+  validate-and-test:
+    if: always()
+    needs: [gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pass exactly when gate passed
+        env:
+          GATE: ${{ needs.gate.result }}
+        run: |
+          echo "gate: ${GATE}"
+          test "${GATE}" = success

@@ -706,7 +706,6 @@ for (const [pattern, claim] of [
     "release-control source publication remains non-deployment proof",
   ],
   [/2-of-3/, "2-of-3"],
-  [/required release evidence while the Frappe wheel/, "required Frappe release evidence"],
   [/D --> A/, "IRO-223 -> IRO-218"],
   [/D --> I/, "IRO-223 -> IRO-219"],
   [/D --> C/, "IRO-223 -> IRO-220"],
@@ -742,13 +741,15 @@ if (publicationHasNoWorkflows !== planSaysSnapshotHasNoWorkflows) {
   );
 }
 const deployWorkflow = readFileSync(resolve(root, ".github/workflows/deploy.yml"), "utf8");
-const workflowBuildsFrappeWheel = deployWorkflow.includes("frappe/ironwrap_roofing.whl");
+// Frappe adapter receipts gate a release exactly when deploy.yml declares an
+// in-scope Frappe train; the wheel is digest-bound into the artifact either way.
+const workflowPromotesFrappe = /^\s*RELEASE_FRAPPE_SCOPE: in-scope$/m.test(deployWorkflow);
 const planRequiresFrappeReceipts = capabilityMatrixContent.includes(
   "required release evidence while the Frappe wheel",
 );
-if (workflowBuildsFrappeWheel !== planRequiresFrappeReceipts) {
+if (workflowPromotesFrappe !== planRequiresFrappeReceipts) {
   fail(
-    "docs/CAPABILITY-MATRIX.md: Frappe release gate must match whether deploy.yml ships the wheel",
+    "docs/CAPABILITY-MATRIX.md: Frappe release gate must match deploy.yml RELEASE_FRAPPE_SCOPE",
   );
 }
 const workflowInvokesServiceAdapter = /\bservice-adapter\b/.test(deployWorkflow);

@@ -1633,13 +1633,18 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
       if (url === "https://api.anthropic.com/v1/messages") {
         anthropicCalls += 1;
         const body = JSON.parse(String(init?.body ?? "{}")) as {
+          model?: string;
           messages?: Array<{ content?: Array<Record<string, unknown>> }>;
-          tool_choice?: { name?: string };
+          tools?: Array<{ name?: string; strict?: boolean }>;
+          tool_choice?: { type?: string; name?: string };
+          output_config?: { effort?: string };
         };
-        assert.equal(
-          body.tool_choice?.name,
-          "extract_measurement_report_fields",
-        );
+        // Claude Opus 5.5 rejects a forced tool_choice: the call is steered, not forced.
+        assert.equal(body.model, "claude-opus-5-5");
+        assert.deepEqual(body.tool_choice, { type: "auto" });
+        assert.equal(body.tools?.[0]?.name, "extract_measurement_report_fields");
+        assert.equal(body.tools?.[0]?.strict, true);
+        assert.equal(body.output_config?.effort, "low");
         const document = body.messages?.[0]?.content?.[0] as {
           type?: string;
           source?: { type?: string; media_type?: string; data?: string };
@@ -1765,13 +1770,13 @@ test("measurement intake: frontier OCR supplements an ordinary PDF when no struc
   assert.equal(listedBody.status, "unmatched_review");
   assert.equal(listedBody.review_reason, "ocr_review_required");
   assert.equal(postQueueReceipt.ocr_status, "completed");
-  assert.equal(postQueueReceipt.ocr_model, "claude-opus-5");
+  assert.equal(postQueueReceipt.ocr_model, "claude-opus-5-5");
   assert.equal(postQueueReceipt.ocr_review_required, 1);
   assert.equal(anthropicCalls, 1);
   assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
   assert.equal(fetches.some((url) => url.startsWith("https://omniroute.test/")), false);
   const resultSlot = await sha256Hex(
-    `measurement-ocr/v1\n${receipt.receipt_id}\n${postQueueReceipt.report_sha256}\nclaude-opus-5`,
+    `measurement-ocr/v1\n${receipt.receipt_id}\n${postQueueReceipt.report_sha256}\nclaude-opus-5-5`,
   );
   assert.equal(
     postQueueReceipt.ocr_result_key,
@@ -2155,7 +2160,7 @@ test("measurement intake: frontier OCR keeps a discovered job number provisional
   assert.equal(noOp.ocr_job_number_candidate, "26-0099");
   assert.equal(anthropicCalls, 1);
   const resultSlot = await sha256Hex(
-    `measurement-ocr/v1\n${receipt.receipt_id}\n${receipt.report_sha256}\nclaude-opus-5`,
+    `measurement-ocr/v1\n${receipt.receipt_id}\n${receipt.report_sha256}\nclaude-opus-5-5`,
   );
   assert.equal(
     noOp.ocr_result_key,
@@ -2217,11 +2222,18 @@ test("measurement OCR retries through OmniRoute when Anthropic returns a billing
       }
       if (url === "https://omniroute.test/v1/messages") {
         const headers = new Headers(init?.headers);
-        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string; tool_choice?: { name?: string } };
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          model?: string;
+          tools?: Array<{ name?: string }>;
+          tool_choice?: { type?: string };
+          output_config?: unknown;
+        };
         assert.equal(headers.get("authorization"), "Bearer omni-test-key");
         assert.equal(headers.get("anthropic-version"), "2023-06-01");
         assert.equal(body.model, "auto");
-        assert.equal(body.tool_choice?.name, "extract_measurement_report_fields");
+        assert.deepEqual(body.tool_choice, { type: "auto" });
+        assert.equal(body.tools?.[0]?.name, "extract_measurement_report_fields");
+        assert.equal(body.output_config, undefined);
         return ocrToolUseResponse(18.5);
       }
       throw new Error(`unexpected fetch ${url}`);
@@ -2246,7 +2258,7 @@ test("measurement OCR retries through OmniRoute when Anthropic returns a billing
     ocr_model: string | null;
   };
   assert.equal(receipt.ocr_status, "completed");
-  assert.equal(receipt.ocr_model, "claude-opus-5");
+  assert.equal(receipt.ocr_model, "claude-opus-5-5");
   assert.equal(receipt.last_error, "ocr_review_required");
   assert.equal(fetches.filter((url) => url === "https://api.anthropic.com/v1/messages").length, 1);
   assert.equal(fetches.filter((url) => url === "https://omniroute.test/v1/messages").length, 1);

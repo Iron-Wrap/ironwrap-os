@@ -37,6 +37,7 @@ import {
   RELEASE_EVIDENCE_PATH_PREFIX,
   RELEASE_EVIDENCE_REF_PREFIX,
   RELEASE_MANIFEST_SCHEMA,
+  RELEASE_PERMIT_SCHEMA,
   REVIEW_FINDINGS_SCHEMA,
   REVIEW_RECEIPT_PATH_PREFIX,
   REVIEW_RECEIPT_REF_PREFIX,
@@ -2379,6 +2380,11 @@ async function policyGenesis(args) {
 
 async function assemblePermit(args) {
   const frappeScopeValue = frappeScope(args);
+  // Frappe candidate, prior-revision, and backup identities used to come from
+  // the retired independent evidence issuer. Nothing in this workflow observes
+  // them, so a Frappe/VPS promotion cannot be bound into a permit and the
+  // release train is Worker/PWA/D1 only.
+  if (frappeScopeValue !== "out-of-scope") fail("frappe_in_scope_candidate_source_missing");
   const context = await readJson(arg(args, "context"));
   const repoRoot = arg(args, "repo-root");
   const sourceCommit = requireCommit(context.source_commit, "source_commit_invalid");
@@ -2406,13 +2412,6 @@ async function assemblePermit(args) {
   for (const [key, expected] of [["source_commit", sourceCommit], ["base_commit", baseCommit], ["source_git_tree", sourceGitTree], ["source_tree_sha256", sourceTree], ["diff_sha256", diff]]) {
     if (sourceEvidence[key] !== expected) fail(`source_${key}_drift`);
   }
-  const reviewerReceipt = await readFile(arg(args, "review-receipt"), "utf8");
-  const reviewer = verifyReviewGoReceipt(await readFile(arg(args, "review-public-key"), "utf8"), reviewerReceipt, {
-    repository,
-    source_commit: sourceCommit,
-    source_tree_sha256: sourceTree,
-    diff_sha256: diff,
-  });
   const staging = await readJson(arg(args, "staging"));
   const production = await readJson(arg(args, "production"));
   const smoke = await readJson(arg(args, "smoke"));
@@ -2420,15 +2419,6 @@ async function assemblePermit(args) {
   const productionRecovery = await readJson(arg(args, "production-recovery"));
   const rollback = await readJson(arg(args, "rollback"));
   const artifactComponents = exactObjectKeys(await readJson(arg(args, "artifact-manifest"), "artifact_manifest_invalid"), ["worker_digest", "pwa_digest", "frappe_wheel_digest", "artifact_manifest_digest"], "artifact_manifest_shape_invalid");
-  const externalReceipt = (await readFile(arg(args, "release-evidence"), "utf8")).trim();
-  const externalEvidence = verifyExternalReleaseEvidence(await readFile(arg(args, "evidence-public-key"), "utf8"), externalReceipt, {
-    repository,
-    pr_number: context.pr?.number,
-    source_commit: sourceCommit,
-    source_git_tree: sourceGitTree,
-    artifact_digest: context.artifact_digest,
-  });
-  if (externalEvidence.issuer_principal === arg(args, "issuer-identity")) fail("release_evidence_not_independent");
   const stagingConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "staging" });
   const productionConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "production" });
   validateProductionDomainRoute(productionConfig, productionDomain.hostname);
@@ -2445,8 +2435,7 @@ async function assemblePermit(args) {
   const migrations = await computeMigrationSet({ repoRoot });
   if (JSON.stringify(context.migrations) !== JSON.stringify(migrations)) fail("migration_set_drift");
   const computedSupplyChain = await computeSupplyChainEvidence({ repoRoot, sourceCommit, ciChecks: context.ci_checks });
-  if (canonicalJson(context.supply_chain) !== canonicalJson(computedSupplyChain)
-    || canonicalJson(externalEvidence.supply_chain) !== canonicalJson(computedSupplyChain)) fail("supply_chain_drift");
+  if (canonicalJson(context.supply_chain) !== canonicalJson(computedSupplyChain)) fail("supply_chain_drift");
   const artifactManifestFields = {
     worker_digest: requireHash(artifactComponents.worker_digest, "worker_artifact_invalid"),
     pwa_digest: requireHash(artifactComponents.pwa_digest, "pwa_artifact_invalid"),
@@ -2455,19 +2444,7 @@ async function assemblePermit(args) {
   if (
     sha256(canonicalJson(artifactManifestFields)) !==
       artifactComponents.artifact_manifest_digest ||
-    canonicalJson(context.artifacts) !== canonicalJson(artifactComponents) ||
-    externalEvidence.service_identities.pwa.artifact_digest !==
-      artifactManifestFields.pwa_digest ||
-    externalEvidence.service_identities.frappe.artifact_digest !==
-      artifactManifestFields.frappe_wheel_digest ||
-    externalEvidence.service_identities.frappe.site_schema_digest !==
-      context.frappe_schema_digest ||
-    externalEvidence.service_identities.pwa.staging_revision !==
-      staging.revision ||
-    externalEvidence.service_identities.pwa.production_candidate_revision !==
-      production.revision ||
-    externalEvidence.service_identities.pwa
-      .production_candidate_readback_digest !== production.version_digest
+    canonicalJson(context.artifacts) !== canonicalJson(artifactComponents)
   )
     fail("artifact_manifest_drift");
   const previousGeneration = await readJson(arg(args, "policy"));
@@ -2475,7 +2452,7 @@ async function assemblePermit(args) {
   const policyHash = await computeReleasePolicyHash(repoRoot);
   const now = Date.now();
   const issuerIdentity = requireString(args.get("issuer-identity"), "issuer_identity_invalid");
-  if (!IDENTITY_RE.test(issuerIdentity) || issuerIdentity === reviewer.reviewer_principal) fail("issuer_identity_invalid");
+  if (!IDENTITY_RE.test(issuerIdentity)) fail("issuer_identity_invalid");
   const nonce = randomBytes(48).toString("base64url");
   const providerIdentityDigest = sha256(canonicalJson({
     staging: {
@@ -2493,7 +2470,17 @@ async function assemblePermit(args) {
       runtime_manifest_digest: production.runtime_manifest_digest,
     },
   }));
-  if (externalEvidence.provider_reconciliation.provider_identity_digest !== providerIdentityDigest) fail("provider_reconciliation_identity_drift");
+  // The PWA ships as the Worker's static assets, so its revisions and readbacks
+  // are the Worker's. The reconciliation receipt is this run's own staging and
+  // production readback, already verified by version-readback.
+  const providerReconciliation = {
+    receipt_ref: "release-provider-readback",
+    receipt_digest: sha256(canonicalJson({ staging: staging.readback, production: production.readback })),
+    provider_identity_digest: providerIdentityDigest,
+    status: "matched",
+  };
+  const frappeNotPromoted = "leftover-not-promoted";
+  const frappeNotPromotedDigest = sha256("frappe-not-required");
   const previousProduction = exactObjectKeys(
     await readJson(
       arg(args, "production-previous-readback"),
@@ -2515,15 +2502,6 @@ async function assemblePermit(args) {
     previousProduction.provider_readback_digest,
     "production_previous_readback_digest_invalid",
   );
-  if (
-    externalEvidence.recovery.prior_pwa_revision !==
-      previousProductionRevision ||
-    externalEvidence.recovery.prior_worker_readback_digest !==
-      previousProductionReadback ||
-    externalEvidence.recovery.prior_pwa_readback_digest !==
-      previousProductionReadback
-  )
-    fail("production_previous_identity_drift");
   const configuration = {
     aggregate_digest: configDigest,
     tenant_digest: requireHash(context.component_digests?.tenant_config, "tenant_source_digest_invalid"),
@@ -2550,11 +2528,9 @@ async function assemblePermit(args) {
     artifacts: {
       aggregate_digest: context.artifact_digest,
       ...artifactManifestFields,
-      frappe_site_schema_digest: externalEvidence.service_identities.frappe.site_schema_digest,
+      frappe_site_schema_digest: requireHash(context.frappe_schema_digest, "frappe_schema_digest_invalid"),
       mcp_digest: context.component_digests.mcp,
       hermes_digest: context.component_digests.hermes,
-      facet_digest: externalEvidence.service_identities.facet.artifact_digest,
-      facet_integration_receipt_digest: externalEvidence.service_identities.facet.integration_receipt_digest,
     },
     configuration,
     migrations: {
@@ -2566,60 +2542,40 @@ async function assemblePermit(args) {
     staging: {
       worker_revision: staging.revision,
       worker_readback_digest: staging.version_digest,
-      pwa_revision: externalEvidence.service_identities.pwa.staging_revision,
-      pwa_readback_digest: externalEvidence.service_identities.pwa.staging_readback_digest,
-      frappe_revision: externalEvidence.service_identities.frappe.staging_revision,
-      frappe_readback_digest: externalEvidence.service_identities.frappe.staging_readback_digest,
-      affected_scope_evidence_digest: sha256(canonicalJson(externalEvidence.affected_scopes)),
+      pwa_revision: staging.revision,
+      pwa_readback_digest: staging.version_digest,
+      frappe_revision: frappeNotPromoted,
+      frappe_readback_digest: frappeNotPromotedDigest,
       status: "matched",
     },
     production_candidates: {
-      pwa_revision:
-        externalEvidence.service_identities.pwa.production_candidate_revision,
-      pwa_readback_digest:
-        externalEvidence.service_identities.pwa
-          .production_candidate_readback_digest,
-      frappe_revision:
-        externalEvidence.service_identities.frappe
-          .production_candidate_revision,
-      frappe_readback_digest:
-        externalEvidence.service_identities.frappe
-          .production_candidate_readback_digest,
+      pwa_revision: production.revision,
+      pwa_readback_digest: production.version_digest,
+      frappe_revision: frappeNotPromoted,
+      frappe_readback_digest: frappeNotPromotedDigest,
       domain_hostname: productionDomain.hostname,
       domain_service: productionDomain.service,
       domain_zone_id: productionDomain.zoneId,
       status: "prepared",
     },
-    affected_scopes: externalEvidence.affected_scopes,
     recovery: {
       staging_backup_restore_digest: backupRestore.evidence_digest,
       staging_rollback_digest: rollback.evidence_digest,
       production_d1_recovery_digest: sha256(canonicalJson(productionRecovery)),
       prior_worker_revision: previousProductionRevision,
       prior_worker_readback_digest: previousProductionReadback,
-      prior_pwa_revision: externalEvidence.recovery.prior_pwa_revision,
-      prior_pwa_readback_digest:
-        externalEvidence.recovery.prior_pwa_readback_digest,
-      prior_frappe_revision: externalEvidence.recovery.prior_frappe_revision,
-      prior_frappe_readback_digest:
-        externalEvidence.recovery.prior_frappe_readback_digest,
-      prior_frappe_backup_digest: externalEvidence.recovery.prior_frappe_backup_digest,
+      prior_pwa_revision: previousProductionRevision,
+      prior_pwa_readback_digest: previousProductionReadback,
+      prior_frappe_revision: frappeNotPromoted,
+      prior_frappe_readback_digest: frappeNotPromotedDigest,
+      prior_frappe_backup_digest: frappeNotPromotedDigest,
       status: "passed",
     },
-    provider_reconciliation: externalEvidence.provider_reconciliation,
-    business_evidence: externalEvidence.business_evidence,
-    records: externalEvidence.records,
-    external_evidence: {
-      issuer_principal: externalEvidence.issuer_principal,
-      issuer_task_id: externalEvidence.issuer_task_id,
-      issuer_run_id: externalEvidence.issuer_run_id,
-      key_version: externalEvidence.key_version,
-      receipt_digest: sha256(externalReceipt),
-    },
+    provider_reconciliation: providerReconciliation,
   };
   const releaseManifest = { ...manifestFields, evidence_digest: sha256(canonicalJson(manifestFields)) };
   const payload = {
-    schema: "ironwrap_release_permit_v1",
+    schema: RELEASE_PERMIT_SCHEMA,
     type: "ironwrap-release-permit",
     permit_id: `release:${repository}:${sourceCommit}:${nonce.slice(0, 16)}`,
     repository,
@@ -2629,16 +2585,6 @@ async function assemblePermit(args) {
     source_tree_sha256: sourceTree,
     diff_sha256: diff,
     ci_checks: context.ci_checks,
-    reviewer: {
-      principal: reviewer.reviewer_principal,
-      task_id: reviewer.reviewer_task_id,
-      run_id: reviewer.reviewer_run_id,
-      key_version: reviewer.review_key_version,
-      decision: reviewer.decision,
-      findings_digest: reviewer.findings_digest,
-      unresolved_p0: reviewer.unresolved_p0,
-      unresolved_p1: reviewer.unresolved_p1,
-    },
     previous_generation: previousGeneration,
     generation: previousGeneration.generation + 1,
     policy_hash: policyHash,

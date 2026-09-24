@@ -207,45 +207,31 @@ npm run db:migrate
 
 ### Signed Permit And Immutable Promotion
 
-The release workflow fails closed unless all of the following are available for the exact
-successful pull-request CI merge commit, open PR head/base, and tested tree:
+Automated checks are the only release gate (owner decision, 2026-09-24): no human approval,
+independent reviewer GO receipt, or external evidence issuer. The release workflow fails closed
+unless these are available for the exact successful CI run (a pull-request merge commit, or the
+squash commit on `main`), its PR head/base, and the tested tree:
 
-- `RELEASE_REVIEW_PUBLIC_KEY` from an independent reviewer whose source-addressed signed GO is
-  retrieved from `.release/reviews/<source-commit>.json` on the `release-review/<source-commit>`
-  ref, is bound to the complete source/tree/diff, and has no unresolved P0/P1 findings. The
-  receipt is durable review evidence, not a per-release GitHub secret;
-- `RELEASE_INDEPENDENT_ISSUER_URL` (the explicit `/v2/independent-issuer` route) and its
-  trigger-only `RELEASE_INDEPENDENT_ISSUER_TOKEN`; `issuer-request` sends the exact v2 body with
-  a canonical five-minute `requested_at`/`expires_at` window, and the authenticated issuer must
-  acknowledge its distinct principal/task/run/key identity for the exact GitHub artifact digest
-  before the bounded wait. Expired or malformed requests fail closed. An exact still-valid replay
-  returns the ledgered acknowledgement without an executor re-run; an expired replay fails closed.
-  This trigger does not mint findings or receipts;
-- `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`, plus separate
-  `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_STAGING_CLOUDFLARE_API_TOKEN`, and
+- `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`; the workflow signs the permit
+  itself from its own evidence;
+- separate `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_STAGING_CLOUDFLARE_API_TOKEN`, and
   `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN` credentials with non-overlapping authority;
-- a separately signed full-surface evidence receipt covering reception, sales, field, production,
-  shop, finance, customer, agent, Facet, provider reconciliation, and genuine IRO-7 actor/business
-  evidence; a skipped scope requires signed non-applicability evidence and the provider scope may
-  not be skipped;
-- staging and production authenticated launch-proof/Frappe credentials, plus the HTTPS Frappe
-  release-adapter URL, bearer token, public key, and separately held provider private key; and
+- staging and production launch-proof tokens (`RELEASE_*_INGEST_TOKEN`, `RELEASE_*_ADMIN_TOKEN`)
+  and the `RELEASE_PRODUCTION_ZONE_ID` repository variable; and
 - every expected Worker secret name in each Cloudflare environment. Secret values are never
   placed in the permit or receipts.
 
-The complete name-only inventory and custody split is in `deploy/release.env.example`. The
-independent review/evidence trigger receives neither the permit private key nor provider mutation
-credentials, and it is not the signing/publication implementation. The existing
-`review-sign`, `review-publish`, `release-evidence-sign`, and `release-evidence-publish` primitives
-remain under the independent issuer custodian's custody. The Frappe adapter receives neither
-GitHub merge authority nor the Cloudflare token.
+The name-only inventory is in `deploy/release.env.example`. The train is Worker/PWA/D1 only
+(`RELEASE_FRAPPE_SCOPE: out-of-scope`): the leftover Frappe wheel is built and digest-bound into
+the artifact but not promoted, because the Frappe candidate identities came from the retired
+issuer and the Frappe adapter is an external signer.
 
 Generation N enforcement is loaded from the PR base, not from candidate source, so a candidate
 cannot weaken and approve its own release boundary. That predecessor enforcer atomically
 bootstraps generation `0` at
 `release-policy:Iron-Wrap/ironwrap-os` in the existing `dedup_claims` table using the canonical
 policy-and-executable-enforcement hash, or reads the existing state. The first installation of
-this workflow therefore requires the reviewed predecessor enforcer to exist on the protected base;
+this workflow therefore requires the predecessor enforcer to exist on the protected base;
 repository source does not claim that external bootstrap is already installed. A malformed or
 conflicting genesis row, changed PR/base/tree identity, missing exact CI run/job identity, changed migration set, source/tree/diff drift, missing
 secret inventory, provider DNS/readiness failure, or absent external credential stops admission.
@@ -257,18 +243,14 @@ production credentials must be distinct and incapable of cross-environment mutat
 Before the first migration or upload, a second static readiness preflight requires every top-level
 variable to be repeated in a named environment, nonempty notification sender/recipient variables,
 the exact Cloudflare secret-name inventory, and an allowed OCR model plus OCR secret whenever OCR
-is enabled. For an in-scope Frappe release, the workflow also runs a redacted service-adapter
-configuration preflight that requires the exact HTTPS `/v1/frappe` endpoint, bounded bearer token,
-Ed25519 verification key, and explicit issuer/task/run/key identity. It does not weaken `/ready`; a
-missing value, secret, or adapter contract stops before mutation.
+is enabled. It does not weaken `/ready`; a missing value or secret stops before mutation.
 Any failed staging step after traffic deployment restores the captured previous staging revision
 and accepts cleanup only after exact active-deployment readback; that cleanup receipt is not the
 successful compatibility drill. A production deploy that returns failure after changing traffic is
 also treated as attempted: recovery forces the captured previous version and trusts only readback.
 
-CI creates one deterministic aggregate containing the Worker bundle and PWA assets; it may carry a
-leftover Frappe wheel only for an enabled compatibility release. It records each included component
-digest and uploads the aggregate once. Wrangler uploads
+The release builds one deterministic aggregate containing the Worker bundle, PWA assets, and the
+leftover Frappe wheel. It records each component digest and uploads the aggregate once. Wrangler uploads
 the same bytes separately to the distinct staging and production Worker services; their provider
 version IDs are therefore different and both IDs, version readbacks, environment config digests,
 and secret-name inventory digests are bound into the permit. Staging must first prove active
@@ -277,21 +259,18 @@ explicit nonempty export plus structured `d1 execute --json` schema/row-count/se
 restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
 against the migrated schema with health/readiness/smoke proof. Only then is the short-lived permit
 assembled and consumed once through D1; the exact admitted PR is machine-merged and read back
-before production migrations or traffic promotion. Production promotes any enabled compatibility
-artifact through its authenticated adapter, promotes the pre-uploaded Worker/PWA version, re-reads
-every applicable identity after smoke, and advances the durable generation only after the exact
-authenticated launch-proof step set is bound into an immutable production-promotion receipt.
-Failure after a compatibility promotion attempt invokes its idempotent Frappe rollback when the
-Frappe promotion was attempted, plus Worker rollback when Worker promotion was attempted. It then
-verifies the restored Worker/PWA and applicable compatibility identities and health/readiness before
-atomically persisting the rollback outcome. If that recovery step cannot complete, the workflow
+before production migrations or traffic promotion. Production promotes the pre-uploaded Worker/PWA
+version, re-reads its identity after smoke, and advances the durable generation only after the
+exact authenticated launch-proof step set is bound into an immutable production-promotion receipt.
+A failure after Worker promotion rolls the Worker back automatically, then verifies the restored
+Worker/PWA identity and health/readiness before atomically persisting the rollback outcome. If that recovery step cannot complete, the workflow
 persists an `automatic_rollback_incomplete` recovery-required outcome and never claims a successful
 rollback.
 An expired permit may record that emergency rollback only when its original durable single-use
-admission claim is read back exactly. If an admitted D1 migration fails before Frappe or Worker/PWA
+admission claim is read back exactly. If an admitted D1 migration fails before Worker/PWA
 promotion, no down migration or false rollback is attempted: the durable ledger records an exact
 `production_recovery_required` outcome bound to the source merge, pre-migration D1 recovery point,
-and prior Worker/PWA/Frappe identities for operator recovery.
+and prior Worker/PWA identities for operator recovery.
 
 Repository tests prove the source contract only. A successful workflow is not live provider,
 DNS, readiness, credential, business acceptance, or production proof until its redacted receipts

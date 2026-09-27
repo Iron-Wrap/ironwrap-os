@@ -34,11 +34,13 @@ function validateWorkflow(workflow) {
     workflow,
     /workflow_run:\n\s+workflows: \[CI\]\n\s+types: \[completed\]/,
   );
-  // Exactly two source events are admissible: a pre-merge pull_request run, and
-  // a post-merge push run pinned to main. The push arm must stay paired with the
-  // branch pin, and both arms stay behind the head_repository pin so a fork's CI
-  // (including a fork whose own default branch is named main) is never admitted.
-  assert.match(admission, /workflow_run\.event == 'pull_request'/);
+  // Only the post-merge push run pinned to main is admissible. A pull_request
+  // CI success (including a Dependabot PR) must never release or merge. The
+  // push event stays paired with the branch pin and behind the head_repository
+  // pin, so a fork's CI (including a fork whose own default branch is named
+  // main) is never admitted.
+  assert.doesNotMatch(workflow, /event == 'pull_request'|workflow_run\.pull_requests\[/);
+  assert.match(admission, /workflow_run\.conclusion == 'success'/);
   assert.match(
     admission,
     /workflow_run\.event == 'push' &&\n\s+github\.event\.workflow_run\.head_branch == 'main'/,
@@ -47,20 +49,14 @@ function validateWorkflow(workflow) {
     admission,
     /workflow_run\.head_repository\.full_name == github\.repository/,
   );
-  assert.match(
-    workflow,
-    /permissions:\n\s+contents: write\n\s+actions: read\n\s+pull-requests: write/,
-  );
+  // The release never merges, so no token it holds can write contents or PRs.
+  assert.match(workflow, /^permissions:\n\s+contents: read\n\s+actions: read\n/m);
+  assert.doesNotMatch(workflow, /contents: write|pull-requests: write/);
   assert.match(workflow, /group: release-ironwrap-production/);
   assert.match(workflow, /cancel-in-progress: false/);
-  for (const job of [admission, build, staging]) {
+  for (const job of [admission, build, staging, production]) {
     assert.match(job, /permissions:\n\s+actions: read\n\s+contents: read/);
-    assert.doesNotMatch(job, /contents: write|pull-requests: write/);
   }
-  assert.match(
-    production,
-    /permissions:\n\s+actions: read\n\s+contents: write\n\s+pull-requests: write/,
-  );
   assert.equal(
     (workflow.match(/persist-credentials: false/g) ?? []).length,
     4,
@@ -83,7 +79,7 @@ function validateWorkflow(workflow) {
   );
   assert.match(
     admission,
-    /pr-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*policy-genesis[\s\S]*admission-context/,
+    /push-context[\s\S]*source-evidence[\s\S]*ci-checks[\s\S]*policy-genesis[\s\S]*admission-context/,
   );
   // Admission reads every job of the CI run it releases, including the
   // `gate` aggregator and the `validate-and-test` name the ruleset requires.
@@ -109,8 +105,9 @@ function validateWorkflow(workflow) {
     workflow,
     /RELEASE_PRODUCTION_ZONE_ID: \$\{\{ vars\.RELEASE_PRODUCTION_ZONE_ID \}\}/,
   );
-  assert.match(admission, /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
-  // The push-sourced arm derives generation N from the squash commit's single
+  // The pre-merge pr-context admission must not come back.
+  assert.doesNotMatch(workflow, /node "\$RELEASE_ENFORCER" pr-context/);
+  // Admission derives generation N from the squash commit's single
   // parent and hands both commits to the enforcer, which re-reads the same
   // lineage from the provider before admitting anything.
   assert.match(
@@ -218,7 +215,7 @@ function validateWorkflow(workflow) {
     "--domain-service \"\$RELEASE_PRODUCTION_DOMAIN_SERVICE\"",
     "--domain-zone-id \"\$RELEASE_PRODUCTION_ZONE_ID\"",
     "Consume the permit once through the durable D1 replay and policy boundary",
-    "Auto-merge the exact admitted PR and verify the resulting main tree",
+    "Read back the exact merged source and verify the main tree",
     "Apply admitted migrations only after exact source admission",
     "Promote the pre-verified immutable production version",
     "Deploy the production custom-domain route after immutable promotion",
@@ -236,21 +233,14 @@ function validateWorkflow(workflow) {
     production,
     /assemble[\s\S]*--frappe-scope "\$RELEASE_FRAPPE_SCOPE"/,
   );
+  // The admitted source is already on main: production reads the source-merge
+  // receipt back from the admitted, permit-bound "merged" context and never
+  // merges a PR itself.
   assert.match(
     production,
-    /admit[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus[\s\S]*"\$WRANGLER_BIN" versions deploy/,
+    /admit[\s\S]*jq -er '\.status \| select\(\. == "merged"\)' "\$RUNNER_TEMP\/context-download\/pr-context\.json"[\s\S]*merged-source[\s\S]*d1 migrations apply ironwrap-bus[\s\S]*"\$WRANGLER_BIN" versions deploy/,
   );
-  // A push-sourced release is already on main, so the merge step reads the same
-  // source-merge receipt back instead of merging again. It branches on the
-  // admitted, permit-bound context status rather than the live event.
-  assert.match(
-    production,
-    /source_status="\$\(jq -er '\.status \| select\(\. == "open" or \. == "merged"\)' "\$RUNNER_TEMP\/context-download\/pr-context\.json"\)"/,
-  );
-  assert.match(
-    production,
-    /admit[\s\S]*merged-source[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus/,
-  );
+  assert.doesNotMatch(workflow, /merge-pr|pulls\/[^\s]*\/merge/);
   assert.match(production, /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/);
   assert.match(production, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment production/);
   assert.doesNotMatch(production, /npm ci --ignore-scripts --prefix workers-bus/);
@@ -377,11 +367,11 @@ function validateWorkflow(workflow) {
   );
 }
 
-test("release workflow enforces PR admission, build-once staging, and immutable promotion", async () => {
+test("release workflow enforces push-only admission, build-once staging, and immutable promotion", async () => {
   validateWorkflow(await readFile(workflowUrl, "utf8"));
 });
 
-test("workflow validation rejects candidate-policy self-approval and missing PR evidence", async () => {
+test("workflow validation rejects candidate-policy self-approval and pre-merge admission", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   assert.throws(() =>
     validateWorkflow(
@@ -391,9 +381,35 @@ test("workflow validation rejects candidate-policy self-approval and missing PR 
       ),
     ),
   );
+  // Re-admitting pull_request CI runs would release and merge any open PR
+  // whose CI passed, including Dependabot PRs.
   assert.throws(() =>
     validateWorkflow(
-      workflow.replace("workflow_run.event == 'pull_request'", "true"),
+      workflow.replace(
+        "github.event.workflow_run.event == 'push' &&",
+        "(github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'pull_request') &&",
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.conclusion != ''",
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        '          node "$RELEASE_ENFORCER" merged-source \\\n',
+        '          node "$RELEASE_ENFORCER" merge-pr \\\n',
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace("  contents: read\n  actions: read\n", "  contents: write\n  actions: read\n  pull-requests: write\n"),
     ),
   );
   assert.throws(() =>
@@ -449,9 +465,6 @@ test("workflow validation rejects omitted component artifacts and source admissi
   const workflow = await readFile(workflowUrl, "utf8");
   assert.throws(() =>
     validateWorkflow(workflow.replace("--frappe-wheel", "--unbound-wheel")),
-  );
-  assert.throws(() =>
-    validateWorkflow(workflow.replace("merge-pr", "merge-without-permit")),
   );
   assert.throws(() =>
     validateWorkflow(
@@ -558,8 +571,8 @@ test("workflow validation rejects an unpinned or unverified push-sourced admissi
   assert.throws(() =>
     validateWorkflow(
       workflow.replace(
+        `'.status | select(. == "merged")'`,
         `'.status | select(. == "open" or . == "merged")'`,
-        "'.status'",
       ),
     ),
   );

@@ -209,8 +209,9 @@ npm run db:migrate
 
 Automated checks are the only release gate (owner decision, 2026-09-24): no human approval,
 independent reviewer GO receipt, or external evidence issuer. The release workflow fails closed
-unless these are available for the exact successful CI run (a pull-request merge commit, or the
-squash commit on `main`), its PR head/base, and the tested tree:
+unless these are available for the exact successful push CI run of the squash commit on `main`,
+its PR head/base, and the tested tree. A pull-request CI run, including a Dependabot PR, never
+starts a release or merges anything; the release follows whoever merged the PR:
 
 - `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`; the workflow signs the permit
   itself from its own evidence;
@@ -258,8 +259,8 @@ revision identity, `/health`, `/ready?scope=core`, authenticated affected-workfl
 explicit nonempty export plus structured `d1 execute --json` schema/row-count/sentinel manifest
 restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
 against the migrated schema with health/readiness/smoke proof. Only then is the short-lived permit
-assembled and consumed once through D1; the exact admitted PR is machine-merged and read back
-before production migrations or traffic promotion. Production promotes the pre-uploaded Worker/PWA
+assembled and consumed once through D1; the exact admitted squash commit is read back as the tip
+of `main` before production migrations or traffic promotion. Production promotes the pre-uploaded Worker/PWA
 version, re-reads its identity after smoke, and advances the durable generation only after the
 exact authenticated launch-proof step set is bound into an immutable production-promotion receipt.
 A failure after Worker promotion rolls the Worker back automatically, then verifies the restored
@@ -350,6 +351,10 @@ Newo production uses the managed federation and full governed control plane. Sto
 Follow [`NEWO-PRODUCTION-RUNBOOK.md`](./NEWO-PRODUCTION-RUNBOOK.md); do not substitute
 `INGEST_TOKEN`, expose a provider key to an MCP process, or enable customer outbound at launch.
 
+Production runs with `ERPNEXT_ENABLED="false"` (owner decision, 2026-09-27, superseding the
+2026-08-19 switch-on): the projection is out of the release train, so neither `/ready` nor the
+release smoke requires Frappe credentials. `tools/production-readiness.mjs live-env` requires the
+host `ERPNEXT_ENABLED` to equal that committed Worker value.
 Only when the Frappe compatibility projection is intentionally enabled, set the reviewed
 non-secret Worker vars `ERPNEXT_ENABLED="true"` and
 `ERPNEXT_BASE_URL="https://<frappe-host>"` in that environment before deployment. The legacy

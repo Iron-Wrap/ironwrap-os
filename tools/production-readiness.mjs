@@ -572,6 +572,17 @@ async function loadLock(repoRoot) {
  * cannot contain the secret, and G1.3 listed "whether any Worker secret is actually set" as one of
  * the four unknowns that need a named-environment readback rather than another assumption.
  */
+/** One top-level (production) Worker var from the committed wrangler.jsonc, or null. */
+async function committedProductionVar(repoRoot, name) {
+  const source = await readText(repoRoot, "workers-bus/wrangler.jsonc");
+  try {
+    const value = JSON.parse(stripJsonComments(source ?? ""))?.vars?.[name];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function evaluateReferenceCapabilities(wranglerSource) {
   let vars;
   try {
@@ -1149,7 +1160,15 @@ export async function validateLiveEnv({
   const restoreTokenStateSafe = (env.D1_RESTORE_MODE === "verify" && restoreTokenUnset) || (env.D1_RESTORE_MODE === "remote" && restoreTokenSeparated);
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
-  checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  // The Frappe projection is off in production (owner decision, 2026-09-27). The host must
+  // agree with the committed production Worker flag rather than a value frozen here.
+  const committedErpnextEnabled = await committedProductionVar(repoRoot, "ERPNEXT_ENABLED");
+  checks.push(check(
+    "live.gate.integration",
+    (committedErpnextEnabled === "true" || committedErpnextEnabled === "false") && env.ERPNEXT_ENABLED === committedErpnextEnabled,
+    `ERPNEXT_ENABLED matches the committed production Worker value (${committedErpnextEnabled})`,
+    "ERPNEXT_ENABLED must equal the committed production Worker value in workers-bus/wrangler.jsonc",
+  ));
   checks.push(check(
     "live.gate.facet_ingest",
     facetDesignIngestEnabled || env.FACET_DESIGN_INGEST_ENABLED === "false",

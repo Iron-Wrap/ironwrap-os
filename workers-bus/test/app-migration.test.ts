@@ -91,6 +91,21 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
   }
 });
 
+test("non-production Worker environments never bind the production D1 database", async () => {
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  const productionIds = config.d1_databases.map((database: { database_id: string }) => database.database_id);
+  assert.equal(productionIds.length, 1);
+  for (const name of Object.keys(config.env)) {
+    for (const database of config.env[name].d1_databases ?? []) {
+      assert.ok(
+        !productionIds.includes(database.database_id),
+        `env.${name} binds the production D1 database ${database.database_id}`,
+      );
+    }
+  }
+});
+
 test("document generation stays explicitly disabled in every checked-in Worker environment", async () => {
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
@@ -124,7 +139,9 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   }
 
   assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
-  assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "true");
+  // Newo is not required in staging until it is enabled there separately (owner decision,
+  // 2026-09-27); required-but-disabled Newo fails every release smoke.
+  assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "false");
   // The customer portal and its contract-acceptance half are on wherever the office control
   // plane exists. customerAcceptanceBackendConfigured now depends only on the native D1/R2
   // authority path plus mail delivery; retired Frappe/HMAC acceptance secrets are irrelevant.

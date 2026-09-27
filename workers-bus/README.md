@@ -674,8 +674,9 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    remain leased/retryable with capped backoff and escalate after five attempts; only the documented
    immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
    posting, and reconciliation facts require authenticated QuickBooks read-back.
-5. **Frappe compatibility projection** — configured true in the checked-in top-level/staging
-   profiles and false in development; none of those values is live proof. Before treating
+5. **Frappe compatibility projection** — configured false in the checked-in top-level
+   (production, owner decision 2026-09-27) and staging profiles and true only in the local
+   development profile; none of those values is live proof. Before treating
    `ERPNEXT_ENABLED=true` as ready, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,

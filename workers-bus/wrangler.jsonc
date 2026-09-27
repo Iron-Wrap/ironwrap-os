@@ -166,21 +166,18 @@
     "JN_CONTACT_STATUS": "New",
     "JN_JOB_RECORD_TYPE": "Retail",
     "JN_JOB_STATUS": "Lead",
-    // Frappe operating core. ERPNEXT_BASE_URL must resolve BEFORE this is deployed:
-    // with the flag on and the host unreachable, /ready goes red (fail-closed) and every
-    // lead push retries into the dead-letter queue.
+    // Frappe compatibility projection: OFF in production (owner decision, 2026-09-27).
+    // This supersedes the 2026-08-19 decision that switched it on against
+    // ironwrap.mindburn.org. Frappe is a temporary projection with no operating authority and
+    // is out of scope for the release train, so production readiness and the release smoke do
+    // not require Frappe credentials. With the flag on, /ready's frappe_configuration and
+    // rail_credential_isolation checks require the broad ERPNEXT pair plus the per-rail
+    // fleet-capture and work-package pairs, and launch-proof fails on any red check.
     //
-    // It has not resolved since the flag was turned on: os.ironwrapexteriors.com has no
-    // DNS record of any kind, and all three brand domains sit on GoDaddy nameservers whose
-    // control was never part of the ownership handover. That is why /ready has been red.
-    //
-    // ironwrap.mindburn.org is a real host reached through a Cloudflare Tunnel with no
-    // inbound port open: netcup VPS in Manassas running the pinned frappe_docker topology,
-    // seven app processes on one digest-pinned image. The hostname sits in the neighbouring
-    // estate's zone by a decision taken on 2026-08-19, because IronWrap has no Cloudflare
-    // zone of its own until DNS authority is obtained. Move it to os.ironwrapexteriors.com
-    // once that happens; nothing else here changes.
-    "ERPNEXT_ENABLED": "true",
+    // ERPNEXT_BASE_URL stays: office BFF reads (frappe-read.ts) use it independently of this
+    // flag. ironwrap.mindburn.org is the Cloudflare Tunnel host of the leftover Frappe site;
+    // move it to os.ironwrapexteriors.com once IronWrap holds DNS authority for that zone.
+    "ERPNEXT_ENABLED": "false",
     "ERPNEXT_BASE_URL": "https://ironwrap.mindburn.org",
     "QB_EXPECTED_REALM_ID": "",
     "QB_RECONCILIATION_ISSUER_USER": "",
@@ -294,11 +291,14 @@
     "local": {
       "workers_dev": true,
       "routes": [],
+      // A local-only D1 id that exists in no Cloudflare account. Miniflare keys local state
+      // by this id; a stray `--remote` with `--env local` fails instead of reaching the
+      // production database. test/app-migration.test.ts keeps it off the production id.
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "ironwrap-bus",
-          "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+          "database_id": "10ca1000-0000-4000-8000-000000000000",
           "migrations_dir": "migrations"
         }
       ],
@@ -520,9 +520,11 @@
       },
       "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
       "vars": {
-        "OWNER_ALERT_EMAIL": "",
-        "BACKUP_ALERT_EMAIL": "",
-        "FROM_EMAIL": "",
+        // Same mailboxes as production (owner decision, 2026-09-27): the release preflight
+        // requires nonempty notification sender and recipients in every environment.
+        "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
+        "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
+        "FROM_EMAIL": "sales@ironwrapexteriors.com",
         "EFFECT_RUNTIME_ENABLED": "true",
         "APP_DOCUMENT_GENERATION_ENABLED": "false",
         "PIPELINE_AUTOMATION_ENABLED": "false",
@@ -530,7 +532,10 @@
         "MEASUREMENT_OCR_ENABLED": "true",
         "MEASUREMENT_OCR_MODEL": "claude-opus-5-5",
         "OMNIROUTE_URL": "",
-        "NEWO_PRODUCTION_REQUIRED": "true",
+        // Newo is not required in staging until it is enabled there separately (owner
+        // decision, 2026-09-27); with it required, every newo_* /ready check fails the
+        // release smoke.
+        "NEWO_PRODUCTION_REQUIRED": "false",
         "NEWO_ENABLED": "false",
         "NEWO_CONTROL_WRITE_ENABLED": "false",
         "NEWO_BOOKING_MODE": "request_only",

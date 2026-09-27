@@ -55,7 +55,8 @@ for (const [name, hash] of [
   assert.ok(wrangler.includes(`"${name}": "${hash}"`), `${name} does not match expected config`);
 }
 for (const exact of [
-  '"NEWO_PRODUCTION_REQUIRED": "true"',
+  // No environment requires Newo until it is enabled separately (owner decision, 2026-09-27).
+  '"NEWO_PRODUCTION_REQUIRED": "false"',
   '"NEWO_ENABLED": "false"',
   '"NEWO_CONTROL_WRITE_ENABLED": "false"',
   '"NEWO_BOOKING_MODE": "request_only"',

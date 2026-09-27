@@ -24,9 +24,10 @@ The isolated `staging` env in `workers-bus/wrangler.jsonc` cannot exercise this 
 2. No Frappe site is deployed anywhere; the only running Frappe is the throwaway
    `deploy/local/docker-compose.yml` stack on an operator workstation, which a remote Worker
    cannot reach.
-3. Staging keeps `NEWO_PRODUCTION_REQUIRED=true` with every `NEWO_*` credential/identity blank, so
-   a deployed staging `/ready` fails the `newo_*` checks before the Frappe rail is even relevant —
-   and launch-proof aborts on any red `/ready` check.
+3. Before the 2026-09-27 owner decision, staging kept `NEWO_PRODUCTION_REQUIRED=true` with every
+   `NEWO_*` credential/identity blank, so a deployed staging `/ready` failed the `newo_*` checks
+   before the Frappe rail was even relevant — and launch-proof aborts on any red `/ready` check.
+   Staging now carries `NEWO_PRODUCTION_REQUIRED=false` until Newo is enabled there separately.
 
 A true remote-staging seam proof therefore needs, in order: a reachable HTTPS Frappe site with the
 app installed and the reader identity pinned; staging vars flipped

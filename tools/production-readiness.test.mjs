@@ -1731,7 +1731,7 @@ function validLiveEnv() {
     HERMES_VERSION: "v2026.7.7.2",
     HERMES_COMMIT: "9de9c25f620ff7f1ce0fd5457d596052d5159596",
     IRONWRAP_OS_IMAGE: `registry.ironwrap.internal/ironwrap-os:prod@sha256:${"a".repeat(64)}`,
-    ERPNEXT_ENABLED: "true",
+    ERPNEXT_ENABLED: "false",
     ERPNEXT_BASE_URL: "https://os.ironwrapexteriors.com",
     ERPNEXT_API_KEY: "frappe_key_8c921",
     ERPNEXT_API_SECRET: "frappe_secret_d1a9f80c42",
@@ -2025,6 +2025,16 @@ test("live-env mode accepts a complete locked production environment", async () 
   const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.summary.failed, 0);
+});
+
+test("live-env mode binds ERPNEXT_ENABLED to the committed production Worker value", async () => {
+  for (const value of ["true", "", "yes"]) {
+    const env = validLiveEnv();
+    env.ERPNEXT_ENABLED = value;
+    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+    assert.equal(result.ok, false, value);
+    assert.equal(result.checks.find((item) => item.id === "live.gate.integration")?.status, "fail", value);
+  }
 });
 
 test("live-env mode requires a concrete realm and dedicated QuickBooks issuer", async () => {

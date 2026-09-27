@@ -5,13 +5,14 @@ on:
     workflows: [CI]
     types: [completed]
 
+# The release never merges: it runs only after a PR has already landed on main,
+# so no job needs a token that can write contents or pull requests.
 permissions:
-  contents: write
+  contents: read
   actions: read
-  pull-requests: write
 
 # One constant production concurrency boundary is shared by every release run.
-# Reruns and stale pull-request events are rejected by exact PR/base/tree checks
+# Reruns and stale workflow events are rejected by exact PR/base/tree checks
 # plus the durable D1 policy/replay ledger; concurrency is not the replay boundary.
 concurrency:
   group: release-ironwrap-production
@@ -22,7 +23,6 @@ env:
   RELEASE_REPOSITORY: ${{ github.repository }}
   RELEASE_SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
   RELEASE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
-  RELEASE_SOURCE_EVENT: ${{ github.event.workflow_run.event }}
   RELEASE_RULESET_ID: 20652124
   CLOUDFLARE_ACCOUNT_ID: 7ee5775bc1ba46f05c5a65235b60e939
   RELEASE_PRODUCTION_D1_ID: f0674848-13df-4422-9896-8ba2719663b8
@@ -42,19 +42,19 @@ env:
 
 jobs:
   admission:
-    name: Exact PR source and predecessor-policy context
-    # Two exact source events reach admission, and nothing else. A
-    # pull_request-sourced run admits a release before its merge (this pipeline
-    # performs the merge); a push-sourced run admits it after, from the CI run
-    # that validated main itself. head_repository pins both to this repository,
-    # so a fork's CI - including a fork whose default branch is also named main -
-    # never produces an admissible workflow_run here.
+    name: Exact merged source and predecessor-policy context
+    # Only the successful push-sourced CI run that validated main reaches
+    # admission. A pull_request-sourced CI success (an agent's open PR, a
+    # Dependabot PR) never releases or merges anything: merging stays the
+    # decision of whoever merges the PR, and the release follows that merge.
+    # head_repository pins the run to this repository, so a fork's CI -
+    # including a fork whose default branch is also named main - never
+    # produces an admissible workflow_run here.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      (github.event.workflow_run.event == 'pull_request' ||
-        (github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main'))
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -73,23 +73,19 @@ jobs:
       - name: Check out generation N policy enforcement from the PR base
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_SOURCE_EVENT" == "push" ]]; then
-            # workflow_run.pull_requests is empty for a push event. Generation N
-            # for a push-sourced release is the squash commit's single parent:
-            # main immediately before this release landed. Anything with a
-            # different parent count is not a squash of an admitted PR.
-            lineage="$(git rev-list --parents --max-count=1 "$RELEASE_SOURCE_COMMIT")"
-            if [[ "$(wc -w <<< "$lineage")" -ne 2 ]]; then echo "release_admission_push_not_linear" >&2; exit 1; fi
-            base_commit="${lineage##* }"
-          else
-            base_commit="${{ github.event.workflow_run.pull_requests[0].base.sha }}"
-          fi
+          # workflow_run.pull_requests is empty for a push event. Generation N
+          # is the squash commit's single parent: main immediately before this
+          # release landed. Anything with a different parent count is not a
+          # squash of an admitted PR.
+          lineage="$(git rev-list --parents --max-count=1 "$RELEASE_SOURCE_COMMIT")"
+          if [[ "$(wc -w <<< "$lineage")" -ne 2 ]]; then echo "release_admission_push_not_linear" >&2; exit 1; fi
+          base_commit="${lineage##* }"
           if [[ ! "$base_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "release_admission_base_missing" >&2; exit 1; fi
           git worktree add --detach "$RUNNER_TEMP/policy-enforcer" "$base_commit"
           printf 'RELEASE_ENFORCER=%s\n' "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs" >> "$GITHUB_ENV"
           printf 'RELEASE_BASE_COMMIT=%s\n' "$base_commit" >> "$GITHUB_ENV"
 
-      - name: Reject missing release keys and read exact PR identity
+      - name: Reject missing release keys and read exact merged source identity
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PERMIT_PRIVATE_KEY: ${{ secrets.RELEASE_PERMIT_PRIVATE_KEY }}
@@ -103,18 +99,11 @@ jobs:
               exit 1
             fi
           done
-          if [[ "$RELEASE_SOURCE_EVENT" == "push" ]]; then
-            node "$RELEASE_ENFORCER" push-context \
-              --repository "$RELEASE_REPOSITORY" --run-id "$RELEASE_CI_RUN_ID" \
-              --ruleset-id "$RELEASE_RULESET_ID" \
-              --head-commit "$RELEASE_SOURCE_COMMIT" --base-commit "$RELEASE_BASE_COMMIT" \
-              --output "$RUNNER_TEMP/pr-context.json"
-          else
-            node "$RELEASE_ENFORCER" pr-context \
-              --repository "$RELEASE_REPOSITORY" --run-id "$RELEASE_CI_RUN_ID" \
-              --ruleset-id "$RELEASE_RULESET_ID" \
-              --output "$RUNNER_TEMP/pr-context.json"
-          fi
+          node "$RELEASE_ENFORCER" push-context \
+            --repository "$RELEASE_REPOSITORY" --run-id "$RELEASE_CI_RUN_ID" \
+            --ruleset-id "$RELEASE_RULESET_ID" \
+            --head-commit "$RELEASE_SOURCE_COMMIT" --base-commit "$RELEASE_BASE_COMMIT" \
+            --output "$RUNNER_TEMP/pr-context.json"
 
       - name: Capture exact source, tree, and binary diff evidence
         run: |
@@ -588,8 +577,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       actions: read
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -769,7 +757,7 @@ jobs:
             --policy-key "release-policy:${RELEASE_REPOSITORY}" \
             --output "$RUNNER_TEMP/admission.json"
 
-      - name: Auto-merge the exact admitted PR and verify the resulting main tree
+      - name: Read back the exact merged source and verify the main tree
         id: merge_source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -777,24 +765,14 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
-          # Branch on the admitted context, not on the live event: the source
-          # state was fixed and signed into the permit at admission time. A
-          # push-sourced release is already on main, so the post-merge command
-          # reads the identical source-merge receipt back instead of merging
-          # again. Each command rejects the other's context status, so exactly
-          # one of them can ever produce the receipt.
-          source_status="$(jq -er '.status | select(. == "open" or . == "merged")' "$RUNNER_TEMP/context-download/pr-context.json")"
-          if [[ "$source_status" == "merged" ]]; then
-            node "$RELEASE_ENFORCER" merged-source \
-              --pr-context "$RUNNER_TEMP/context-download/pr-context.json" \
-              --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
-              --admission "$RUNNER_TEMP/admission.json" --output "$RUNNER_TEMP/source-merge-receipt.json"
-          else
-            node "$RELEASE_ENFORCER" merge-pr \
-              --pr-context "$RUNNER_TEMP/context-download/pr-context.json" \
-              --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
-              --admission "$RUNNER_TEMP/admission.json" --output "$RUNNER_TEMP/source-merge-receipt.json"
-          fi
+          # The admitted source is already on main, so the merge step reads the
+          # source-merge receipt back instead of merging. The admitted,
+          # permit-bound context must say "merged"; anything else stops here.
+          jq -er '.status | select(. == "merged")' "$RUNNER_TEMP/context-download/pr-context.json" > /dev/null
+          node "$RELEASE_ENFORCER" merged-source \
+            --pr-context "$RUNNER_TEMP/context-download/pr-context.json" \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --admission "$RUNNER_TEMP/admission.json" --output "$RUNNER_TEMP/source-merge-receipt.json"
 
       - name: Apply admitted migrations only after exact source admission
         id: migrate_production

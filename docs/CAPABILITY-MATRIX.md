@@ -221,11 +221,12 @@ deterministic transitions before expanding AI autonomy.
 
 IRO-41 branch-local implementation:
 
-- a protected-source `workflow_run` contract admits exactly two events - a pull_request-sourced CI
-  success (the release is admitted before its merge, which the pipeline performs) and a push-sourced
-  CI success pinned to `main` (the release is admitted after its merge, from the squash commit that
-  is still the tip); both use generation N enforcement from the predecessor commit and bind the exact
-  PR/head/base/merge tree and CI run/check IDs. Automated checks are the only gate (owner decision,
+- a protected-source `workflow_run` contract admits exactly one event - a push-sourced CI success
+  pinned to `main` (the release is admitted after its merge, from the squash commit that is still
+  the tip); a pull_request-sourced CI success, including a Dependabot PR, never releases or merges,
+  and the release tokens hold no contents or pull-request write permission. Admission uses
+  generation N enforcement from the squash commit's parent and binds the exact PR/head/base/merge
+  tree and CI run/check IDs. Automated checks are the only gate (owner decision,
   2026-09-24): there is no reviewer GO receipt and no independent evidence issuer;
 - one aggregate artifact binds Worker, PWA, and leftover Frappe wheel digests; isolated staging
   proves config/secret-name readback, authenticated smoke, content-complete D1 restore, and the

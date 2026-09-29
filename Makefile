@@ -46,6 +46,7 @@ validate:
 
 test-tools:
 	node --test \
+	  tools/make-audit.test.mjs \
 	  tools/validate-site-config-pins.test.mjs \
 	  tools/validate-rail-credential-isolation.test.mjs \
 	  tools/validate-facet-blank-quote-contract.test.mjs \
@@ -105,7 +106,7 @@ frappe:
 audit: deps
 	npm audit --prefix app
 	npm audit --prefix workers-bus
-	for package in $(NODE_PACKAGES) workers-bus; do npm audit --omit=dev --prefix $$package; done
+	for package in $(NODE_PACKAGES) workers-bus; do npm audit --omit=dev --prefix $$package || exit $$?; done
 
 static:
 	find deploy workers-bus -path '*/node_modules' -prune -o -type f -name '*.sh' -print0 \

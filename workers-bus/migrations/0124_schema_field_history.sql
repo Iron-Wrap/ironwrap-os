@@ -372,7 +372,7 @@ BEGIN
    WHERE tenant_id = NEW.tenant_id AND field_id = NEW.field_id
      AND current_version = NEW.version - 1
      AND current_revision_id IS NEW.prior_revision_id;
-  SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'schema_field_definition_head_update_conflict') END;
+  SELECT RAISE(ABORT, 'schema_field_definition_head_update_conflict') WHERE changes() != 1;
 END;
 
 CREATE TRIGGER IF NOT EXISTS schema_field_definition_revision_append_only_update
@@ -458,7 +458,7 @@ BEGIN
    WHERE tenant_id = NEW.tenant_id AND value_head_id = NEW.value_head_id
      AND current_version = NEW.version - 1
      AND current_revision_id IS NEW.prior_value_revision_id;
-  SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'schema_field_value_head_update_conflict') END;
+  SELECT RAISE(ABORT, 'schema_field_value_head_update_conflict') WHERE changes() != 1;
 END;
 
 CREATE TRIGGER IF NOT EXISTS schema_field_value_revision_append_only_update

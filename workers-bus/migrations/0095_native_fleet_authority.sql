@@ -302,41 +302,35 @@ CREATE INDEX IF NOT EXISTS idx_fleet_defect_events_defect_time
 CREATE TRIGGER IF NOT EXISTS fleet_crews_version_guard
 BEFORE UPDATE ON fleet_crews
 FOR EACH ROW BEGIN
-  SELECT CASE
-    WHEN NEW.crew_id != OLD.crew_id OR NEW.tenant_id != OLD.tenant_id
-      THEN RAISE(ABORT, 'fleet_crew_identity_immutable')
-    WHEN NEW.version != OLD.version + 1
-      THEN RAISE(ABORT, 'fleet_crew_version_conflict')
-  END;
+  SELECT RAISE(ABORT, 'fleet_crew_identity_immutable')
+    WHERE NEW.crew_id != OLD.crew_id OR NEW.tenant_id != OLD.tenant_id;
+  SELECT RAISE(ABORT, 'fleet_crew_version_conflict')
+    WHERE NEW.version != OLD.version + 1;
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_crew_members_version_guard
 BEFORE UPDATE ON fleet_crew_members
 FOR EACH ROW BEGIN
-  SELECT CASE
-    WHEN NEW.membership_id != OLD.membership_id OR NEW.tenant_id != OLD.tenant_id
-      OR NEW.crew_id != OLD.crew_id OR NEW.user_id != OLD.user_id
-      THEN RAISE(ABORT, 'fleet_crew_membership_identity_immutable')
-    WHEN NEW.version != OLD.version + 1
-      THEN RAISE(ABORT, 'fleet_crew_membership_version_conflict')
-  END;
+  SELECT RAISE(ABORT, 'fleet_crew_membership_identity_immutable')
+    WHERE NEW.membership_id != OLD.membership_id OR NEW.tenant_id != OLD.tenant_id
+      OR NEW.crew_id != OLD.crew_id OR NEW.user_id != OLD.user_id;
+  SELECT RAISE(ABORT, 'fleet_crew_membership_version_conflict')
+    WHERE NEW.version != OLD.version + 1;
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_assets_version_guard
 BEFORE UPDATE ON fleet_assets
 FOR EACH ROW BEGIN
-  SELECT CASE
-    WHEN NEW.fleet_asset_id != OLD.fleet_asset_id OR NEW.tenant_id != OLD.tenant_id
-      THEN RAISE(ABORT, 'fleet_asset_identity_immutable')
-    WHEN NEW.version != OLD.version + 1
-      THEN RAISE(ABORT, 'fleet_asset_version_conflict')
-    WHEN OLD.status = 'Retired' AND NEW.status != 'Retired'
-      THEN RAISE(ABORT, 'fleet_asset_retired_terminal')
-    WHEN OLD.status = 'Out of Service' AND NEW.status = 'Active'
-      THEN RAISE(ABORT, 'fleet_asset_return_to_service_required')
-    WHEN OLD.status = 'Out of Service' AND NEW.status NOT IN ('Out of Service', 'Retired')
-      THEN RAISE(ABORT, 'fleet_asset_return_to_service_required')
-  END;
+  SELECT RAISE(ABORT, 'fleet_asset_identity_immutable')
+    WHERE NEW.fleet_asset_id != OLD.fleet_asset_id OR NEW.tenant_id != OLD.tenant_id;
+  SELECT RAISE(ABORT, 'fleet_asset_version_conflict')
+    WHERE NEW.version != OLD.version + 1;
+  SELECT RAISE(ABORT, 'fleet_asset_retired_terminal')
+    WHERE OLD.status = 'Retired' AND NEW.status != 'Retired';
+  SELECT RAISE(ABORT, 'fleet_asset_return_to_service_required')
+    WHERE OLD.status = 'Out of Service' AND NEW.status = 'Active';
+  SELECT RAISE(ABORT, 'fleet_asset_return_to_service_required')
+    WHERE OLD.status = 'Out of Service' AND NEW.status NOT IN ('Out of Service', 'Retired');
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_assets_no_delete
@@ -397,29 +391,25 @@ END;
 CREATE TRIGGER IF NOT EXISTS fleet_driver_authorities_version_guard
 BEFORE UPDATE ON fleet_driver_authorities
 FOR EACH ROW BEGIN
-  SELECT CASE
-    WHEN NEW.driver_authority_id != OLD.driver_authority_id OR NEW.tenant_id != OLD.tenant_id
-      OR NEW.user_id != OLD.user_id
-      THEN RAISE(ABORT, 'fleet_driver_authority_identity_immutable')
-    WHEN NEW.version != OLD.version + 1
-      THEN RAISE(ABORT, 'fleet_driver_authority_version_conflict')
-    WHEN OLD.status = 'Retired' AND NEW.status != 'Retired'
-      THEN RAISE(ABORT, 'fleet_driver_authority_retired_terminal')
-  END;
+  SELECT RAISE(ABORT, 'fleet_driver_authority_identity_immutable')
+    WHERE NEW.driver_authority_id != OLD.driver_authority_id OR NEW.tenant_id != OLD.tenant_id
+      OR NEW.user_id != OLD.user_id;
+  SELECT RAISE(ABORT, 'fleet_driver_authority_version_conflict')
+    WHERE NEW.version != OLD.version + 1;
+  SELECT RAISE(ABORT, 'fleet_driver_authority_retired_terminal')
+    WHERE OLD.status = 'Retired' AND NEW.status != 'Retired';
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_cargo_loads_version_guard
 BEFORE UPDATE ON fleet_cargo_loads
 FOR EACH ROW BEGIN
-  SELECT CASE
-    WHEN NEW.cargo_load_id != OLD.cargo_load_id OR NEW.tenant_id != OLD.tenant_id
-      OR NEW.roof_job_id != OLD.roof_job_id
-      THEN RAISE(ABORT, 'fleet_cargo_load_identity_immutable')
-    WHEN NEW.version != OLD.version + 1
-      THEN RAISE(ABORT, 'fleet_cargo_load_version_conflict')
-    WHEN OLD.status IN ('Reconciled', 'Cancelled') AND NEW.status != OLD.status
-      THEN RAISE(ABORT, 'fleet_cargo_load_terminal')
-  END;
+  SELECT RAISE(ABORT, 'fleet_cargo_load_identity_immutable')
+    WHERE NEW.cargo_load_id != OLD.cargo_load_id OR NEW.tenant_id != OLD.tenant_id
+      OR NEW.roof_job_id != OLD.roof_job_id;
+  SELECT RAISE(ABORT, 'fleet_cargo_load_version_conflict')
+    WHERE NEW.version != OLD.version + 1;
+  SELECT RAISE(ABORT, 'fleet_cargo_load_terminal')
+    WHERE OLD.status IN ('Reconciled', 'Cancelled') AND NEW.status != OLD.status;
 END;
 
 -- A load becomes a physical authority only once it is loaded. At that point the
@@ -428,7 +418,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS fleet_cargo_loads_authority_insert_guard
 BEFORE INSERT ON fleet_cargo_loads
 FOR EACH ROW BEGIN
-  SELECT CASE WHEN NEW.status IN ('Loaded', 'In Transit', 'Delivered') AND NOT EXISTS (
+  SELECT RAISE(ABORT, 'fleet_cargo_load_driver_authority_invalid')
+  WHERE NEW.status IN ('Loaded', 'In Transit', 'Delivered') AND NOT EXISTS (
     SELECT 1
       FROM fleet_assets asset
       LEFT JOIN fleet_assets trailer
@@ -449,13 +440,14 @@ FOR EACH ROW BEGIN
        AND authority.authority_source = 'Physical Document'
        AND driver.active = 1
        AND COALESCE(driver.access_role, driver.role) = 'field'
-  ) THEN RAISE(ABORT, 'fleet_cargo_load_driver_authority_invalid') END;
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_cargo_loads_authority_update_guard
 BEFORE UPDATE ON fleet_cargo_loads
 FOR EACH ROW BEGIN
-  SELECT CASE WHEN NEW.status IN ('Loaded', 'In Transit', 'Delivered') AND NOT EXISTS (
+  SELECT RAISE(ABORT, 'fleet_cargo_load_driver_authority_invalid')
+  WHERE NEW.status IN ('Loaded', 'In Transit', 'Delivered') AND NOT EXISTS (
     SELECT 1
       FROM fleet_assets asset
       LEFT JOIN fleet_assets trailer
@@ -476,13 +468,14 @@ FOR EACH ROW BEGIN
        AND authority.authority_source = 'Physical Document'
        AND driver.active = 1
        AND COALESCE(driver.access_role, driver.role) = 'field'
-  ) THEN RAISE(ABORT, 'fleet_cargo_load_driver_authority_invalid') END;
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_inspections_authorize_insert
 BEFORE INSERT ON fleet_inspections
 FOR EACH ROW BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'fleet_inspection_action_binding_invalid')
+  WHERE NOT EXISTS (
     SELECT 1 FROM fleet_asset_actions action
     WHERE action.device_action_id = NEW.device_action_id
       AND action.tenant_id = NEW.tenant_id
@@ -493,8 +486,9 @@ FOR EACH ROW BEGIN
       AND action.payload_hash = NEW.payload_hash
       AND action.manifest_key = NEW.manifest_key
       AND action.status = 'r2_stored'
-  ) THEN RAISE(ABORT, 'fleet_inspection_action_binding_invalid') END;
-  SELECT CASE WHEN NOT EXISTS (
+  );
+  SELECT RAISE(ABORT, 'fleet_asset_not_found')
+  WHERE NOT EXISTS (
     SELECT 1 FROM app_users user
     JOIN fleet_assets asset ON asset.tenant_id = user.tenant_id
     WHERE user.user_id = NEW.user_id AND user.tenant_id = NEW.tenant_id
@@ -531,13 +525,14 @@ FOR EACH ROW BEGIN
             AND COALESCE(driver.access_role, driver.role) = 'field'
         )
       )
-  ) THEN RAISE(ABORT, 'fleet_asset_not_found') END;
-  SELECT CASE WHEN NEW.meter_reading_milli IS NOT NULL AND EXISTS (
+  );
+  SELECT RAISE(ABORT, 'fleet_meter_regression')
+  WHERE NEW.meter_reading_milli IS NOT NULL AND EXISTS (
     SELECT 1 FROM fleet_assets asset
     WHERE asset.tenant_id = NEW.tenant_id AND asset.fleet_asset_id = NEW.fleet_asset_id
       AND asset.current_meter_milli IS NOT NULL
       AND NEW.meter_reading_milli < asset.current_meter_milli
-  ) THEN RAISE(ABORT, 'fleet_meter_regression') END;
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_inspections_apply_asset
@@ -587,13 +582,15 @@ END;
 CREATE TRIGGER IF NOT EXISTS fleet_defects_authorize_insert
 BEFORE INSERT ON fleet_defects
 FOR EACH ROW BEGIN
-  SELECT CASE WHEN NEW.source_inspection_id IS NOT NULL AND NOT EXISTS (
+  SELECT RAISE(ABORT, 'fleet_defect_source_inspection_binding_invalid')
+  WHERE NEW.source_inspection_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM fleet_inspections source
      WHERE source.inspection_id = NEW.source_inspection_id
        AND source.tenant_id = NEW.tenant_id
        AND source.fleet_asset_id = NEW.fleet_asset_id
-  ) THEN RAISE(ABORT, 'fleet_defect_source_inspection_binding_invalid') END;
-  SELECT CASE WHEN NOT EXISTS (
+  );
+  SELECT RAISE(ABORT, 'fleet_defect_action_binding_invalid')
+  WHERE NOT EXISTS (
     SELECT 1 FROM fleet_asset_actions action
     WHERE action.device_action_id = NEW.device_action_id
       AND action.tenant_id = NEW.tenant_id
@@ -603,8 +600,9 @@ FOR EACH ROW BEGIN
       AND action.payload_hash = NEW.payload_hash
       AND action.manifest_key = NEW.manifest_key
       AND action.status = 'r2_stored'
-  ) THEN RAISE(ABORT, 'fleet_defect_action_binding_invalid') END;
-  SELECT CASE WHEN NOT EXISTS (
+  );
+  SELECT RAISE(ABORT, 'fleet_asset_not_found')
+  WHERE NOT EXISTS (
     SELECT 1 FROM app_users user
     JOIN fleet_assets asset ON asset.tenant_id = user.tenant_id
     WHERE user.user_id = NEW.user_id AND user.tenant_id = NEW.tenant_id
@@ -641,7 +639,7 @@ FOR EACH ROW BEGIN
             AND COALESCE(driver.access_role, driver.role) = 'field'
         )
       )
-  ) THEN RAISE(ABORT, 'fleet_asset_not_found') END;
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS fleet_defects_insert_event

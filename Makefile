@@ -47,6 +47,7 @@ validate:
 test-tools:
 	node --test \
 	  tools/make-audit.test.mjs \
+	  tools/d1-migrations-splitter.test.mjs \
 	  tools/validate-site-config-pins.test.mjs \
 	  tools/validate-rail-credential-isolation.test.mjs \
 	  tools/validate-facet-blank-quote-contract.test.mjs \

@@ -224,7 +224,7 @@ BEGIN
    WHERE tenant_id = NEW.tenant_id AND template_id = NEW.template_id
      AND current_version = NEW.version - 1
      AND current_revision_id IS NEW.prior_revision_id;
-  SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'document_template_head_update_conflict') END;
+  SELECT RAISE(ABORT, 'document_template_head_update_conflict') WHERE changes() != 1;
 END;
 
 CREATE TRIGGER IF NOT EXISTS document_template_revision_no_insert_replace

@@ -110,7 +110,7 @@ test("document generation stays explicitly disabled in every checked-in Worker e
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   assert.equal(config.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
-  for (const name of ["local", "staging"])
+  for (const name of ["local", "staging", "qa"])
     assert.equal(config.env[name].vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
 });
 
@@ -124,7 +124,7 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
     .filter((name) => name.startsWith("NEWO_"))
     .sort();
 
-  for (const name of ["local", "staging"]) {
+  for (const name of ["local", "staging", "qa"]) {
     const environment = config.env[name];
     assert.deepEqual(
       Object.keys(environment.vars)

@@ -31,6 +31,7 @@ import {
   CI_WORKFLOW_PATH,
   DOMAIN_READBACK_SCHEMA,
   DOMAIN_READBACK_TYPE,
+  expectedCrons,
   LAUNCH_PROOF_STEP_NAMES,
   PRODUCTION_PROMOTION_SCHEMA,
   PRODUCTION_PROMOTION_TYPE,
@@ -1206,24 +1207,30 @@ async function serviceAdapter(args) {
 }
 
 async function admissionContext(args) {
+  const environment = arg(args, "environment");
+  if (!/^(?:qa|production)$/.test(environment)) fail("admission_context_environment_invalid");
+  const isProduction = environment === "production";
+  if (isProduction !== args.has("policy") || isProduction !== args.has("production")) {
+    fail("admission_context_environment_input_invalid");
+  }
   const source = await readJson(arg(args, "source"));
   const pr = exactObjectKeys(await readJson(arg(args, "pr-context"), "pr_context_invalid"), [
     "schema", "repository", "number", "base_ref", "base_commit", "head_ref", "head_commit", "ci_run_id", "ci_merge_commit", "ci_merge_tree", "merge_method", "merge_policy", "provider_readback_digest", "status",
   ], "pr_context_shape_invalid");
   const ciChecks = await readJson(arg(args, "checks"));
-  const policy = await readJson(arg(args, "policy"));
-  const staging = await readJson(arg(args, "staging"));
-  const production = await readJson(arg(args, "production"));
+  const policy = isProduction ? await readJson(arg(args, "policy")) : undefined;
+  const qa = await readJson(arg(args, "qa"));
+  const production = isProduction ? await readJson(arg(args, "production")) : undefined;
   const repository = arg(args, "repository");
   if (!REPOSITORY_RE.test(repository)
     || pr.schema !== "ironwrap_pr_admission_v1"
     || pr.repository !== repository
     || pr.ci_merge_commit !== source.source_commit
     || pr.ci_merge_tree !== source.source_git_tree
-    || pr.base_commit !== source.base_commit
-    || !Number.isSafeInteger(policy.generation)
-    || policy.generation < 0
-    || !SHA256_RE.test(policy.policy_hash)) fail("admission_context_invalid");
+    || pr.base_commit !== source.base_commit) fail("admission_context_invalid");
+  if (isProduction && (!Number.isSafeInteger(policy.generation) || policy.generation < 0 || !SHA256_RE.test(policy.policy_hash))) {
+    fail("admission_context_invalid");
+  }
   const migrations = await computeMigrationSet({ repoRoot: arg(args, "repo-root") });
   const supplyChain = await computeSupplyChainEvidence({
     repoRoot: arg(args, "repo-root"),
@@ -1233,37 +1240,40 @@ async function admissionContext(args) {
   for (const key of ["frappe_schema_digest", "frappe_migration_digest", "routes_source_digest"]) {
     if (!SHA256_RE.test(source[key]) || source[key] === sha256("")) fail(`source_${key}_missing`);
   }
-  await writeJson(arg(args, "output"), {
+  const context = {
     repository,
     ...source,
     pr: Object.fromEntries(Object.entries(pr).filter(([key]) => key !== "schema" && key !== "repository")),
     ci_checks: ciChecks,
     supply_chain: supplyChain,
     migrations,
-    config_digest: computeReleaseConfigDigest({ staging: staging.digest, production: production.digest }),
-    staging_config_digest: staging.digest,
-    production_config_digest: production.digest,
-    staging_secret_names: staging.secret_names,
-    production_secret_names: production.secret_names,
-    staging_secret_inventory_digest: staging.secret_inventory_digest,
-    production_secret_inventory_digest: production.secret_inventory_digest,
-    staging_binding_manifest: staging.binding_manifest,
-    production_binding_manifest: production.binding_manifest,
-    staging_binding_manifest_digest: staging.binding_manifest_digest,
-    production_binding_manifest_digest: production.binding_manifest_digest,
-    staging_runtime_manifest: staging.runtime_manifest,
-    production_runtime_manifest: production.runtime_manifest,
-    staging_runtime_manifest_digest: staging.runtime_manifest_digest,
-    production_runtime_manifest_digest: production.runtime_manifest_digest,
-    staging_vars_digest: staging.vars_digest,
-    production_vars_digest: production.vars_digest,
-    staging_queues_digest: staging.queues_digest,
-    production_queues_digest: production.queues_digest,
-    staging_buckets_digest: staging.buckets_digest,
-    production_buckets_digest: production.buckets_digest,
-    staging_routes_digest: staging.routes_digest,
-    production_routes_digest: production.routes_digest,
-  });
+    qa_config_digest: qa.digest,
+    qa_secret_names: qa.secret_names,
+    qa_secret_inventory_digest: qa.secret_inventory_digest,
+    qa_binding_manifest: qa.binding_manifest,
+    qa_binding_manifest_digest: qa.binding_manifest_digest,
+    qa_runtime_manifest: qa.runtime_manifest,
+    qa_runtime_manifest_digest: qa.runtime_manifest_digest,
+    qa_vars_digest: qa.vars_digest,
+    qa_queues_digest: qa.queues_digest,
+    qa_buckets_digest: qa.buckets_digest,
+    qa_routes_digest: qa.routes_digest,
+  };
+  if (isProduction) {
+    context.config_digest = computeReleaseConfigDigest({ qa: qa.digest, production: production.digest });
+    context.production_config_digest = production.digest;
+    context.production_secret_names = production.secret_names;
+    context.production_secret_inventory_digest = production.secret_inventory_digest;
+    context.production_binding_manifest = production.binding_manifest;
+    context.production_binding_manifest_digest = production.binding_manifest_digest;
+    context.production_runtime_manifest = production.runtime_manifest;
+    context.production_runtime_manifest_digest = production.runtime_manifest_digest;
+    context.production_vars_digest = production.vars_digest;
+    context.production_queues_digest = production.queues_digest;
+    context.production_buckets_digest = production.buckets_digest;
+    context.production_routes_digest = production.routes_digest;
+  }
+  await writeJson(arg(args, "output"), context);
 }
 
 async function directoryDigest(root) {
@@ -1341,7 +1351,7 @@ async function contextField(args) {
 async function versionMessage(args) {
   const context = await readJson(arg(args, "context"));
   const environment = arg(args, "environment");
-  if (!/^(?:staging|production)$/.test(environment)) fail("environment_invalid");
+  if (!/^(?:qa|production)$/.test(environment)) fail("environment_invalid");
   process.stdout.write(releaseVersionMessage({
     sourceCommit: context.source_commit,
     sourceTreeSha256: context.source_tree_sha256,
@@ -1482,6 +1492,28 @@ async function domainReadback(args) {
     zoneId: expected.zoneId,
   });
   await writeJson(arg(args, "output"), receipt);
+}
+
+async function cronReadback(args) {
+  const environment = arg(args, "environment");
+  const expected = await expectedCrons({ repoRoot: arg(args, "repo-root"), environment });
+  const response = await readJson(arg(args, "input"), "cron_readback_response_invalid");
+  if (response.success !== true || !isRecord(response.result) || !Array.isArray(response.result.schedules)) {
+    fail("cron_readback_response_invalid");
+  }
+  const observed = response.result.schedules.map((entry) => {
+    if (!isRecord(entry) || typeof entry.cron !== "string" || entry.cron.trim() === "") fail("cron_readback_entry_invalid");
+    return entry.cron;
+  }).sort();
+  if (canonicalJson(observed) !== canonicalJson(expected)) fail("cron_readback_drift");
+  const fields = {
+    schema: "ironwrap_release_cron_readback_v1",
+    environment,
+    expected_crons: expected,
+    observed_crons: observed,
+    status: "matched",
+  };
+  await writeJson(arg(args, "output"), { ...fields, evidence_digest: sha256(canonicalJson(fields)) });
 }
 
 function productionDomainTarget(permitPayload) {
@@ -1823,23 +1855,23 @@ async function deploymentRollbackReadback(args) {
   await writeFile(arg(args, "output"), `${revision}\n`, { mode: 0o600 });
 }
 
-async function stagingCleanupReceipt(args) {
+async function qaCleanupReceipt(args) {
   const previous = requireUuid(arg(args, "previous"), "previous_revision_invalid");
   const candidate = requireUuid(arg(args, "candidate"), "candidate_revision_invalid");
-  if (previous === candidate) fail("staging_cleanup_candidate_not_new");
+  if (previous === candidate) fail("qa_cleanup_candidate_not_new");
   const commandResult = arg(args, "command-result");
   if (!/^(?:succeeded|nonzero_reconciled)$/.test(commandResult))
-    fail("staging_cleanup_command_result_invalid");
+    fail("qa_cleanup_command_result_invalid");
   const providerRaw = await readFile(arg(args, "input"));
   let deployments;
   try {
     deployments = JSON.parse(providerRaw);
   } catch {
-    fail("staging_cleanup_provider_invalid");
+    fail("qa_cleanup_provider_invalid");
   }
   const restored = activeDeploymentVersion(deployments, previous);
   const fields = {
-    schema: "ironwrap_staging_cleanup_v1",
+    schema: "ironwrap_qa_cleanup_v1",
     previous_revision: previous,
     candidate_revision: candidate,
     restored_revision: restored,
@@ -1993,7 +2025,7 @@ async function parseVersion(args) {
 async function versionReadback(args) {
   const readback = await readJson(arg(args, "input"));
   const environment = arg(args, "environment");
-  if (!/^(?:staging|production)$/.test(environment)) fail("environment_invalid");
+  if (!/^(?:qa|production)$/.test(environment)) fail("environment_invalid");
   const inventory = await readJson(arg(args, "secret-inventory"));
   if (inventory.status !== "matched" || typeof inventory.secret_inventory_digest !== "string" || !Array.isArray(inventory.secret_names)) fail("secret_inventory_receipt_invalid");
   const context = await readJson(arg(args, "context"));
@@ -2046,7 +2078,7 @@ async function secretReadback(args) {
   }
   const context = await readJson(arg(args, "context"));
   const environment = arg(args, "environment");
-  if (!/^(?:staging|production)$/.test(environment)) fail("environment_invalid");
+  if (!/^(?:qa|production)$/.test(environment)) fail("environment_invalid");
   const names = context[`${environment}_secret_names`];
   if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== "string")) fail("secret_inventory_expected_invalid");
   await writeJson(arg(args, "output"), validateSecretInventoryReadback(readback, names));
@@ -2272,8 +2304,8 @@ async function backupReceipt(args) {
   if (exportBytes.length === 0 || readback.export_digest !== sha256(exportBytes)) fail("backup_export_drift");
   const evidenceDigest = sha256(canonicalJson({ export_digest: readback.export_digest, manifest_digest: readback.manifest_digest, restore_evidence_digest: readback.evidence_digest }));
   await writeJson(arg(args, "output"), {
-    backup_id: `backup-staging:${sha256(exportBytes).slice(0, 24)}`,
-    environment: "staging",
+    backup_id: `backup-qa:${sha256(exportBytes).slice(0, 24)}`,
+    environment: "qa",
     isolated_target: arg(args, "target"),
     source_generation: generation,
     source_commit: sourceCommit,
@@ -2306,7 +2338,7 @@ async function rollbackReceipt(args) {
   const { evidence } = parseLaunchProofEvidence(smokeRaw);
   const smokeEvidenceDigest = sha256(smokeRaw);
   const fields = {
-    drill_id: `rollback-staging:${candidate.slice(0, 24)}`,
+    drill_id: `rollback-qa:${candidate.slice(0, 24)}`,
     previous_revision: previous,
     candidate_revision: candidate,
     restored_revision: readback,
@@ -2412,25 +2444,25 @@ async function assemblePermit(args) {
   for (const [key, expected] of [["source_commit", sourceCommit], ["base_commit", baseCommit], ["source_git_tree", sourceGitTree], ["source_tree_sha256", sourceTree], ["diff_sha256", diff]]) {
     if (sourceEvidence[key] !== expected) fail(`source_${key}_drift`);
   }
-  const staging = await readJson(arg(args, "staging"));
+  const qa = await readJson(arg(args, "qa"));
   const production = await readJson(arg(args, "production"));
   const smoke = await readJson(arg(args, "smoke"));
   const backupRestore = await readJson(arg(args, "backup-restore"));
   const productionRecovery = await readJson(arg(args, "production-recovery"));
   const rollback = await readJson(arg(args, "rollback"));
   const artifactComponents = exactObjectKeys(await readJson(arg(args, "artifact-manifest"), "artifact_manifest_invalid"), ["worker_digest", "pwa_digest", "frappe_wheel_digest", "artifact_manifest_digest"], "artifact_manifest_shape_invalid");
-  const stagingConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "staging" });
+  const qaConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "qa" });
   const productionConfig = await computeEnvironmentConfigDigest({ repoRoot, environment: "production" });
   validateProductionDomainRoute(productionConfig, productionDomain.hostname);
-  const configDigest = computeReleaseConfigDigest({ staging: stagingConfig.digest, production: productionConfig.digest });
+  const configDigest = computeReleaseConfigDigest({ qa: qaConfig.digest, production: productionConfig.digest });
   if (context.config_digest !== configDigest
-    || staging.config_digest !== stagingConfig.digest
+    || qa.config_digest !== qaConfig.digest
     || production.config_digest !== productionConfig.digest
-    || staging.readback.secret_inventory_digest !== stagingConfig.secret_inventory_digest
+    || qa.readback.secret_inventory_digest !== qaConfig.secret_inventory_digest
     || production.readback.secret_inventory_digest !== productionConfig.secret_inventory_digest
-    || staging.binding_manifest_digest !== stagingConfig.binding_manifest_digest
+    || qa.binding_manifest_digest !== qaConfig.binding_manifest_digest
     || production.binding_manifest_digest !== productionConfig.binding_manifest_digest
-    || staging.runtime_manifest_digest !== stagingConfig.runtime_manifest_digest
+    || qa.runtime_manifest_digest !== qaConfig.runtime_manifest_digest
     || production.runtime_manifest_digest !== productionConfig.runtime_manifest_digest) fail("config_digest_drift");
   const migrations = await computeMigrationSet({ repoRoot });
   if (JSON.stringify(context.migrations) !== JSON.stringify(migrations)) fail("migration_set_drift");
@@ -2455,12 +2487,12 @@ async function assemblePermit(args) {
   if (!IDENTITY_RE.test(issuerIdentity)) fail("issuer_identity_invalid");
   const nonce = randomBytes(48).toString("base64url");
   const providerIdentityDigest = sha256(canonicalJson({
-    staging: {
-      revision: staging.revision,
-      version_digest: staging.version_digest,
-      config_digest: staging.config_digest,
-      binding_manifest_digest: staging.binding_manifest_digest,
-      runtime_manifest_digest: staging.runtime_manifest_digest,
+    qa: {
+      revision: qa.revision,
+      version_digest: qa.version_digest,
+      config_digest: qa.config_digest,
+      binding_manifest_digest: qa.binding_manifest_digest,
+      runtime_manifest_digest: qa.runtime_manifest_digest,
     },
     production: {
       revision: production.revision,
@@ -2471,11 +2503,11 @@ async function assemblePermit(args) {
     },
   }));
   // The PWA ships as the Worker's static assets, so its revisions and readbacks
-  // are the Worker's. The reconciliation receipt is this run's own staging and
+  // are the Worker's. The reconciliation receipt is this run's own qa and
   // production readback, already verified by version-readback.
   const providerReconciliation = {
     receipt_ref: "release-provider-readback",
-    receipt_digest: sha256(canonicalJson({ staging: staging.readback, production: production.readback })),
+    receipt_digest: sha256(canonicalJson({ qa: qa.readback, production: production.readback })),
     provider_identity_digest: providerIdentityDigest,
     status: "matched",
   };
@@ -2507,11 +2539,11 @@ async function assemblePermit(args) {
     tenant_digest: requireHash(context.component_digests?.tenant_config, "tenant_source_digest_invalid"),
     mcp_digest: requireHash(context.component_digests?.mcp, "mcp_source_digest_invalid"),
     hermes_digest: requireHash(context.component_digests?.hermes, "hermes_source_digest_invalid"),
-    bindings_digest: sha256(canonicalJson({ production: context.production_binding_manifest_digest, staging: context.staging_binding_manifest_digest })),
-    queues_digest: sha256(canonicalJson({ production: context.production_queues_digest, staging: context.staging_queues_digest })),
-    buckets_digest: sha256(canonicalJson({ production: context.production_buckets_digest, staging: context.staging_buckets_digest })),
-    routes_digest: sha256(canonicalJson({ production: context.production_routes_digest, source: context.routes_source_digest, staging: context.staging_routes_digest })),
-    secret_names_digest: sha256(canonicalJson({ production: context.production_secret_inventory_digest, staging: context.staging_secret_inventory_digest })),
+    bindings_digest: sha256(canonicalJson({ production: context.production_binding_manifest_digest, qa: context.qa_binding_manifest_digest })),
+    queues_digest: sha256(canonicalJson({ production: context.production_queues_digest, qa: context.qa_queues_digest })),
+    buckets_digest: sha256(canonicalJson({ production: context.production_buckets_digest, qa: context.qa_buckets_digest })),
+    routes_digest: sha256(canonicalJson({ production: context.production_routes_digest, source: context.routes_source_digest, qa: context.qa_routes_digest })),
+    secret_names_digest: sha256(canonicalJson({ production: context.production_secret_inventory_digest, qa: context.qa_secret_inventory_digest })),
   };
   const manifestFields = {
     schema: RELEASE_MANIFEST_SCHEMA,
@@ -2539,11 +2571,11 @@ async function assemblePermit(args) {
       frappe_migration_digest: context.frappe_migration_digest,
       compatibility: "expand-contract",
     },
-    staging: {
-      worker_revision: staging.revision,
-      worker_readback_digest: staging.version_digest,
-      pwa_revision: staging.revision,
-      pwa_readback_digest: staging.version_digest,
+    qa: {
+      worker_revision: qa.revision,
+      worker_readback_digest: qa.version_digest,
+      pwa_revision: qa.revision,
+      pwa_readback_digest: qa.version_digest,
       frappe_revision: frappeNotPromoted,
       frappe_readback_digest: frappeNotPromotedDigest,
       status: "matched",
@@ -2559,8 +2591,8 @@ async function assemblePermit(args) {
       status: "prepared",
     },
     recovery: {
-      staging_backup_restore_digest: backupRestore.evidence_digest,
-      staging_rollback_digest: rollback.evidence_digest,
+      qa_backup_restore_digest: backupRestore.evidence_digest,
+      qa_rollback_digest: rollback.evidence_digest,
       production_d1_recovery_digest: sha256(canonicalJson(productionRecovery)),
       prior_worker_revision: previousProductionRevision,
       prior_worker_readback_digest: previousProductionReadback,
@@ -2599,23 +2631,23 @@ async function assemblePermit(args) {
     },
     worker: {
       artifact_digest: context.artifact_digest,
-      staging_version_id: staging.revision,
-      staging_version_digest: staging.version_digest,
-      staging_config_digest: staging.config_digest,
-      staging_secret_inventory_digest: staging.readback.secret_inventory_digest,
+      qa_version_id: qa.revision,
+      qa_version_digest: qa.version_digest,
+      qa_config_digest: qa.config_digest,
+      qa_secret_inventory_digest: qa.readback.secret_inventory_digest,
       production_version_id: production.revision,
       production_version_digest: production.version_digest,
       production_config_digest: production.config_digest,
       production_secret_inventory_digest: production.readback.secret_inventory_digest,
     },
-    staging: {
-      environment: "staging",
-      revision: staging.revision,
+    qa: {
+      environment: "qa",
+      revision: qa.revision,
       source_commit: sourceCommit,
       source_tree_sha256: sourceTree,
       artifact_digest: context.artifact_digest,
-      config_digest: staging.config_digest,
-      readback: staging.readback,
+      config_digest: qa.config_digest,
+      readback: qa.readback,
     },
     production: {
       environment: "production",
@@ -2881,8 +2913,9 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "deployment-revision") return deploymentRevision(args);
   if (command === "version-snapshot") return versionSnapshot(args);
   if (command === "deployment-rollback-readback") return deploymentRollbackReadback(args);
-  if (command === "staging-cleanup-receipt") return stagingCleanupReceipt(args);
+  if (command === "qa-cleanup-receipt") return qaCleanupReceipt(args);
   if (command === "domain-readback") return domainReadback(args);
+  if (command === "cron-readback") return cronReadback(args);
   if (command === "readiness") return readiness(args);
   if (command === "restore-query") return restoreQuery(args);
   if (command === "restore-local") return restoreLocal(args);

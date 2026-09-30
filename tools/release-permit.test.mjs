@@ -53,11 +53,11 @@ const HEAD = "d".repeat(40);
 const MERGE_COMMIT = "e".repeat(40);
 const TREE = sha("tree");
 const DIFF = sha("diff");
-const STAGING_CONFIG = sha("staging-config");
+const QA_CONFIG = sha("qa-config");
 const PRODUCTION_CONFIG = sha("production-config");
-const STAGING_SECRET_INVENTORY = sha("staging-secret-inventory");
+const QA_SECRET_INVENTORY = sha("qa-secret-inventory");
 const PRODUCTION_SECRET_INVENTORY = sha("production-secret-inventory");
-const CONFIG = computeReleaseConfigDigest({ staging: STAGING_CONFIG, production: PRODUCTION_CONFIG });
+const CONFIG = computeReleaseConfigDigest({ qa: QA_CONFIG, production: PRODUCTION_CONFIG });
 const POLICY = sha("policy");
 const PREVIOUS_POLICY = sha("previous-policy");
 const ARTIFACT = sha("worker-artifact");
@@ -65,7 +65,7 @@ const VERSION_DIGEST = sha("worker-version");
 const UPLOAD = sha("upload-receipt");
 const FINDINGS = sha("review-findings");
 const EVIDENCE = sha("evidence");
-const STAGING_VERSION = "11111111-1111-4111-8111-111111111111";
+const QA_VERSION = "11111111-1111-4111-8111-111111111111";
 const WORKER_VERSION = "22222222-2222-4222-8222-222222222222";
 const PREVIOUS_VERSION = "33333333-3333-4333-8333-333333333333";
 const ISSUED_AT = "2026-08-16T20:00:00.000Z";
@@ -193,13 +193,13 @@ function releaseManifest() {
       frappe_migration_digest: sha("frappe-migrations"),
       compatibility: "expand-contract",
     },
-    staging: {
-      worker_revision: STAGING_VERSION,
+    qa: {
+      worker_revision: QA_VERSION,
       worker_readback_digest: VERSION_DIGEST,
-      pwa_revision: STAGING_VERSION,
-      pwa_readback_digest: sha("pwa-staging-readback"),
-      frappe_revision: "frappe-staging-20260816",
-      frappe_readback_digest: sha("frappe-staging-readback"),
+      pwa_revision: QA_VERSION,
+      pwa_readback_digest: sha("pwa-qa-readback"),
+      frappe_revision: "frappe-qa-20260816",
+      frappe_readback_digest: sha("frappe-qa-readback"),
       status: "matched",
     },
     production_candidates: {
@@ -213,8 +213,8 @@ function releaseManifest() {
       status: "prepared",
     },
     recovery: {
-      staging_backup_restore_digest: sha(JSON.stringify({ export_digest: sha("staging-export"), manifest_digest: sha("staging-manifest"), restore_evidence_digest: EVIDENCE })),
-      staging_rollback_digest: EVIDENCE,
+      qa_backup_restore_digest: sha(JSON.stringify({ export_digest: sha("qa-export"), manifest_digest: sha("qa-manifest"), restore_evidence_digest: EVIDENCE })),
+      qa_rollback_digest: EVIDENCE,
       production_d1_recovery_digest: sha(canonicalJson(productionRecovery())),
       prior_worker_revision: PREVIOUS_VERSION,
       prior_worker_readback_digest: sha("worker-previous-readback"),
@@ -249,8 +249,8 @@ function externalEvidence(overrides = {}) {
     service_identities: {
       pwa: {
         artifact_digest: manifest.artifacts.pwa_digest,
-        staging_revision: manifest.staging.pwa_revision,
-        staging_readback_digest: manifest.staging.pwa_readback_digest,
+        qa_revision: manifest.qa.pwa_revision,
+        qa_readback_digest: manifest.qa.pwa_readback_digest,
         production_candidate_revision:
           manifest.production_candidates.pwa_revision,
         production_candidate_readback_digest:
@@ -259,8 +259,8 @@ function externalEvidence(overrides = {}) {
       frappe: {
         artifact_digest: manifest.artifacts.frappe_wheel_digest,
         site_schema_digest: manifest.artifacts.frappe_site_schema_digest,
-        staging_revision: manifest.staging.frappe_revision,
-        staging_readback_digest: manifest.staging.frappe_readback_digest,
+        qa_revision: manifest.qa.frappe_revision,
+        qa_readback_digest: manifest.qa.frappe_readback_digest,
         production_candidate_revision:
           manifest.production_candidates.frappe_revision,
         production_candidate_readback_digest:
@@ -411,29 +411,29 @@ function payload(overrides = {}) {
     },
     worker: {
       artifact_digest: ARTIFACT,
-      staging_version_id: STAGING_VERSION,
-      staging_version_digest: VERSION_DIGEST,
-      staging_config_digest: STAGING_CONFIG,
-      staging_secret_inventory_digest: STAGING_SECRET_INVENTORY,
+      qa_version_id: QA_VERSION,
+      qa_version_digest: VERSION_DIGEST,
+      qa_config_digest: QA_CONFIG,
+      qa_secret_inventory_digest: QA_SECRET_INVENTORY,
       production_version_id: WORKER_VERSION,
       production_version_digest: VERSION_DIGEST,
       production_config_digest: PRODUCTION_CONFIG,
       production_secret_inventory_digest: PRODUCTION_SECRET_INVENTORY,
     },
-    staging: {
-      environment: "staging",
-      revision: STAGING_VERSION,
+    qa: {
+      environment: "qa",
+      revision: QA_VERSION,
       source_commit: COMMIT,
       source_tree_sha256: TREE,
       artifact_digest: ARTIFACT,
-      config_digest: STAGING_CONFIG,
+      config_digest: QA_CONFIG,
       readback: {
         status: "matched",
         source_commit: COMMIT,
         source_tree_sha256: TREE,
         artifact_digest: ARTIFACT,
-        config_digest: STAGING_CONFIG,
-        secret_inventory_digest: STAGING_SECRET_INVENTORY,
+        config_digest: QA_CONFIG,
+        secret_inventory_digest: QA_SECRET_INVENTORY,
       },
     },
     production: {
@@ -453,19 +453,19 @@ function payload(overrides = {}) {
       },
     },
     smoke: {
-      receipt_id: "smoke-staging-20260816-01",
+      receipt_id: "smoke-qa-20260816-01",
       workflow: "affected-workflow:authenticated-core",
       authenticated: true,
       result: "passed",
       affected_workflow_ids: ["admin_envelopes", "admin_reconcile", "admin_status", "d1_lead", "health", "ingest_estimate", "ingest_estimate_replay", "ingest_website", "ingest_website_replay", "ready"],
       source_commit: COMMIT,
-      revision: STAGING_VERSION,
+      revision: QA_VERSION,
       evidence_digest: EVIDENCE,
       observed_at: "2026-08-16T20:02:00.000Z",
     },
     backup_restore: {
-      backup_id: "backup-staging-20260816-01",
-      environment: "staging",
+      backup_id: "backup-qa-20260816-01",
+      environment: "qa",
       isolated_target: "ironwrap-restore-drill-20260816",
       source_generation: 4,
       source_commit: COMMIT,
@@ -473,19 +473,19 @@ function payload(overrides = {}) {
       result: "passed",
       restored: true,
       readback: "matched",
-      export_digest: sha("staging-export"),
-      manifest_digest: sha("staging-manifest"),
+      export_digest: sha("qa-export"),
+      manifest_digest: sha("qa-manifest"),
       restore_evidence_digest: EVIDENCE,
-      evidence_digest: sha(JSON.stringify({ export_digest: sha("staging-export"), manifest_digest: sha("staging-manifest"), restore_evidence_digest: EVIDENCE })),
+      evidence_digest: sha(JSON.stringify({ export_digest: sha("qa-export"), manifest_digest: sha("qa-manifest"), restore_evidence_digest: EVIDENCE })),
       observed_at: "2026-08-16T20:03:00.000Z",
     },
     production_recovery: productionRecovery(),
     rollback: {
-      drill_id: "rollback-staging-20260816-01",
+      drill_id: "rollback-qa-20260816-01",
       previous_revision: PREVIOUS_VERSION,
-      candidate_revision: STAGING_VERSION,
+      candidate_revision: QA_VERSION,
       restored_revision: PREVIOUS_VERSION,
-      re_promoted_revision: STAGING_VERSION,
+      re_promoted_revision: QA_VERSION,
       result: "passed",
       readback: "matched",
       health_digest: sha("rollback-health"),
@@ -523,7 +523,7 @@ test("validates, signs, and verifies the complete source-to-recovery permit", ()
   }, { now: NOW });
   assert.equal(verified.worker.artifact_digest, ARTIFACT);
   assert.equal(verified.release_manifest.frappe_scope, "in-scope");
-  assert.equal(verified.staging.readback.status, "matched");
+  assert.equal(verified.qa.readback.status, "matched");
   assert.equal(verified.production.readback.status, "matched");
 });
 
@@ -628,12 +628,12 @@ test("generation and every readback bind to the exact candidate", () => {
   const permit = signReleasePermit(privateKey, payload(), { now: NOW });
   assert.throws(() => verifyReleasePermit(publicKey, permit, { current_generation: 3 }, { now: NOW }), /release_permit_generation_gate_mismatch/);
   const drifted = payload({
-    staging: {
-      ...payload().staging,
-      readback: { ...payload().staging.readback, artifact_digest: sha("drift") },
+    qa: {
+      ...payload().qa,
+      readback: { ...payload().qa.readback, artifact_digest: sha("drift") },
     },
   });
-  assert.throws(() => validateReleasePermitPayload(drifted, { now: NOW }), /release_permit_staging_readback_artifact_drift/);
+  assert.throws(() => validateReleasePermitPayload(drifted, { now: NOW }), /release_permit_qa_readback_artifact_drift/);
   assert.throws(() => validateReleasePermitPayload(payload({ rollback: { ...payload().rollback, restored_revision: "44444444-4444-4444-8444-444444444444" } }), { now: NOW }), /release_permit_rollback_restored_revision_drift/);
 });
 
@@ -1068,9 +1068,9 @@ test("an admitted migration failure persists an immutable recovery-required outc
 });
 
 test("provider version identity is bound to the upload message and full readback", () => {
-  const message = releaseVersionMessage({ sourceCommit: COMMIT, sourceTreeSha256: TREE, artifactDigest: ARTIFACT, configDigest: STAGING_CONFIG });
-  assert.equal(parseWranglerVersionId(`Uploaded ironwrap-bus\nWorker Version ID: ${STAGING_VERSION}\n`), STAGING_VERSION);
-  assert.throws(() => parseWranglerVersionId(`Worker Version ID: ${STAGING_VERSION}\nWorker Version ID: ${WORKER_VERSION}`), /release_permit_version_id_ambiguous/);
+  const message = releaseVersionMessage({ sourceCommit: COMMIT, sourceTreeSha256: TREE, artifactDigest: ARTIFACT, configDigest: QA_CONFIG });
+  assert.equal(parseWranglerVersionId(`Uploaded ironwrap-bus\nWorker Version ID: ${QA_VERSION}\n`), QA_VERSION);
+  assert.throws(() => parseWranglerVersionId(`Worker Version ID: ${QA_VERSION}\nWorker Version ID: ${WORKER_VERSION}`), /release_permit_version_id_ambiguous/);
   const expectedManifest = [
     { name: "ASSETS", type: "assets" },
     { name: "DB", type: "d1", resource_id: "f0674848-13df-4422-9896-8ba2719663b8" },
@@ -1082,7 +1082,7 @@ test("provider version identity is bound to the upload message and full readback
   ].sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
   const runtimeManifest = { compatibility_date: "2026-06-28", compatibility_flags: ["nodejs_compat"] };
   const raw = {
-    id: STAGING_VERSION,
+    id: QA_VERSION,
     metadata: { created_on: ISSUED_AT, author_email: "release@example.invalid", source: "wrangler" },
     annotations: { "workers/message": message },
     resources: {
@@ -1100,19 +1100,19 @@ test("provider version identity is bound to the upload message and full readback
     },
   };
   const receipt = validateWorkerVersionReadback(raw, {
-    versionId: STAGING_VERSION,
+    versionId: QA_VERSION,
     sourceCommit: COMMIT,
     sourceTreeSha256: TREE,
     artifactDigest: ARTIFACT,
-    configDigest: STAGING_CONFIG,
+    configDigest: QA_CONFIG,
     secretNames: ["INGEST_TOKEN"],
     bindingManifest: expectedManifest,
     runtimeManifest,
   });
-  assert.equal(receipt.version_id, STAGING_VERSION);
+  assert.equal(receipt.version_id, QA_VERSION);
   assert.equal(receipt.secret_names[0], "INGEST_TOKEN");
   assert.match(receipt.version_digest, /^[0-9a-f]{64}$/);
-  const expected = { versionId: STAGING_VERSION, sourceCommit: COMMIT, sourceTreeSha256: TREE, artifactDigest: ARTIFACT, configDigest: STAGING_CONFIG, secretNames: ["INGEST_TOKEN"], bindingManifest: expectedManifest, runtimeManifest };
+  const expected = { versionId: QA_VERSION, sourceCommit: COMMIT, sourceTreeSha256: TREE, artifactDigest: ARTIFACT, configDigest: QA_CONFIG, secretNames: ["INGEST_TOKEN"], bindingManifest: expectedManifest, runtimeManifest };
   const mutateBinding = (name, replacement) => ({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.map((binding) => binding.name === name ? { ...binding, ...replacement } : binding) } });
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("FEATURE_ENABLED", { text: "false" }), expected), /release_permit_version_readback_binding_value_digest_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("SERVICE_ENDPOINT", { text: "https://wrong.example.invalid" }), expected), /release_permit_version_readback_binding_value_digest_drift/);
@@ -1286,16 +1286,16 @@ test("source admission merge receipt binds the exact PR, permit, and tested tree
 
 test("environment config digests include distinct environment and secret-name contracts", async () => {
   const root = path.resolve(import.meta.dirname, "..");
-  const staging = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "staging" });
+  const qa = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "qa" });
   const production = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "production" });
-  assert.notEqual(staging.digest, production.digest);
-  assert.deepEqual(staging.secret_names, production.secret_names);
-  assert.ok(staging.secret_names.includes("GOOGLE_SERVICE_ACCOUNT_JSON"));
-  assert.ok(staging.secret_names.includes("POSTIZ_API_KEY"));
-  assert.match(staging.secret_inventory_digest, /^[0-9a-f]{64}$/);
-  assert.ok(staging.binding_manifest.some((entry) => entry.name === "RAW" && entry.type === "r2_bucket" && entry.resource_name === "ironwrap-bus-staging-raw"));
-  assert.ok(staging.binding_manifest.some((entry) => entry.type === "plain_text" && /^[0-9a-f]{64}$/.test(entry.value_digest)));
-  assert.equal(staging.runtime_manifest.compatibility_date, "2026-06-28");
+  assert.notEqual(qa.digest, production.digest);
+  assert.deepEqual(qa.secret_names, production.secret_names);
+  assert.ok(qa.secret_names.includes("GOOGLE_SERVICE_ACCOUNT_JSON"));
+  assert.ok(qa.secret_names.includes("POSTIZ_API_KEY"));
+  assert.match(qa.secret_inventory_digest, /^[0-9a-f]{64}$/);
+  assert.ok(qa.binding_manifest.some((entry) => entry.name === "RAW" && entry.type === "r2_bucket" && entry.resource_name === "ironwrap-bus-qa-raw"));
+  assert.ok(qa.binding_manifest.some((entry) => entry.type === "plain_text" && /^[0-9a-f]{64}$/.test(entry.value_digest)));
+  assert.equal(qa.runtime_manifest.compatibility_date, "2026-06-28");
 });
 
 test("environment-specific vars do not erase a secret from the other environment inventory", async (t) => {
@@ -1306,16 +1306,16 @@ test("environment-specific vars do not erase a secret from the other environment
     compatibility_date: "2026-06-28",
     compatibility_flags: [],
     vars: { ALWAYS_PLAIN: "base" },
-    env: { staging: { vars: { STAGING_PLAIN: "staging" } }, production: { vars: { PRODUCTION_PLAIN: "production" } } },
+    env: { qa: { vars: { QA_PLAIN: "qa" } }, production: { vars: { PRODUCTION_PLAIN: "production" } } },
   }));
-  await writeFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "interface Env {\n  ALWAYS_PLAIN: string;\n  STAGING_PLAIN: string;\n  PRODUCTION_PLAIN: string;\n  REAL_SECRET: string;\n}\n");
-  const staging = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "staging" });
+  await writeFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "interface Env {\n  ALWAYS_PLAIN: string;\n  QA_PLAIN: string;\n  PRODUCTION_PLAIN: string;\n  REAL_SECRET: string;\n}\n");
+  const qa = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "qa" });
   const production = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "production" });
-  assert.ok(!staging.secret_names.includes("STAGING_PLAIN"));
-  assert.ok(staging.secret_names.includes("PRODUCTION_PLAIN"));
-  assert.ok(production.secret_names.includes("STAGING_PLAIN"));
+  assert.ok(!qa.secret_names.includes("QA_PLAIN"));
+  assert.ok(qa.secret_names.includes("PRODUCTION_PLAIN"));
+  assert.ok(production.secret_names.includes("QA_PLAIN"));
   assert.ok(!production.secret_names.includes("PRODUCTION_PLAIN"));
-  assert.ok(staging.binding_manifest.some((entry) => entry.name === "STAGING_PLAIN" && entry.type === "plain_text"));
+  assert.ok(qa.binding_manifest.some((entry) => entry.name === "QA_PLAIN" && entry.type === "plain_text"));
 });
 
 test("release environment preflight fails before mutation on var, notification, OCR, or secret drift", async (t) => {
@@ -1334,22 +1334,22 @@ test("release environment preflight fails before mutation on var, notification, 
     compatibility_date: "2026-06-28",
     compatibility_flags: ["nodejs_compat"],
     vars,
-    env: { staging: { vars: environmentVars } },
+    env: { qa: { vars: environmentVars } },
   }));
   await writeFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "interface Env {\n  ADMIN_TOKEN: string;\n  GOOGLE_SERVICE_ACCOUNT_JSON: string;\n  INGEST_TOKEN: string;\n  MEASUREMENT_OCR_API_KEY: string;\n}\n");
   await writeConfig({ ...vars });
   const names = ["ADMIN_TOKEN", "GOOGLE_SERVICE_ACCOUNT_JSON", "INGEST_TOKEN", "MEASUREMENT_OCR_API_KEY"];
-  assert.equal((await validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names })).status, "matched");
+  assert.equal((await validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names })).status, "matched");
   const missingVar = { ...vars };
   delete missingVar.ADMIN_LABEL;
   await writeConfig(missingVar);
-  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names }), /release_permit_environment_preflight_var_inventory_drift/);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_var_inventory_drift/);
   await writeConfig({ ...vars, FROM_EMAIL: "" });
-  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names }), /release_permit_environment_preflight_notification_config_missing/);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_notification_config_missing/);
   await writeConfig({ ...vars, MEASUREMENT_OCR_MODEL: "unreviewed-model" });
-  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names }), /release_permit_environment_preflight_ocr_model_invalid/);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_ocr_model_invalid/);
   await writeConfig({ ...vars });
-  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "staging", secretNames: names.filter((name) => name !== "MEASUREMENT_OCR_API_KEY") }), /release_permit_environment_preflight_required_secret_missing/);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names.filter((name) => name !== "MEASUREMENT_OCR_API_KEY") }), /release_permit_environment_preflight_required_secret_missing/);
 });
 
 test("the OCR model allowlist is one list shared by the Worker, its config, and the preflight", async () => {
@@ -1377,7 +1377,7 @@ test("generation-N provider policy rejects candidate account and resource substi
   const policy = await readFile(path.join(repoRoot, "deploy", "release-provider-policy.json"), "utf8");
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config);
   await writeFile(path.join(policyRoot, "deploy", "release-provider-policy.json"), policy);
-  assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "staging" })).status, "matched");
+  assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" })).status, "matched");
   assert.equal((await validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" })).status, "matched");
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('  "workers_dev": false,\n', ""));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
@@ -1385,8 +1385,8 @@ test("generation-N provider policy rejects candidate account and resource substi
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"compatibility_date": "2026-06-28"', '"build": { "command": "node malicious.js" },\n  "compatibility_date": "2026-06-28"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_custom_build_forbidden/);
-  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"staging": {', '"staging": { "build": { "command": "node env-malicious.js" },'));
-  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "staging" }), /release_permit_provider_target_custom_build_forbidden/);
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"qa": {', '"qa": { "build": { "command": "node env-malicious.js" },'));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), /release_permit_provider_target_custom_build_forbidden/);
   for (const directive of [
     '"base_dir": "/",',
     '"data_blobs": { "LEAK": "/proc/self/environ" },',
@@ -1408,8 +1408,8 @@ test("generation-N provider policy rejects candidate account and resource substi
     await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"compatibility_date": "2026-06-28"', `${binding}\n  "compatibility_date": "2026-06-28"`));
     await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_unallowlisted_config/);
   }
-  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("bd6ab4e9-4095-4df8-906a-bcb18356ddfc", "f0674848-13df-4422-9896-8ba2719663b8"));
-  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "staging" }), /release_permit_provider_target_policy_drift/);
+  await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace("0339cebc-d252-4d67-b78b-58c8b4703c6e", "f0674848-13df-4422-9896-8ba2719663b8"));
+  await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "qa" }), /release_permit_provider_target_policy_drift/);
   await writeFile(path.join(candidateRoot, "workers-bus", "wrangler.jsonc"), config.replace('"account_id": "7ee5775bc1ba46f05c5a65235b60e939"', '"account_id": "00000000000000000000000000000000"'));
   await assert.rejects(() => validateProviderTargetPolicy({ candidateRoot, policyRoot, environment: "production" }), /release_permit_provider_target_policy_drift/);
 });

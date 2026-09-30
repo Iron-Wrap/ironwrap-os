@@ -143,6 +143,10 @@ node tools/production-readiness.mjs contract
 Run component-specific app, Playwright, Lighthouse, Frappe, deployment, and live proof checks when
 the touched surface warrants them. Report skipped or blocked checks explicitly.
 
+A push to `main` deploys `qa` only (`.github/workflows/deploy.yml`, IRO-260); production releases
+come from a tag, a separate workflow (IRO-264). The first Deploy run after that merge fails closed
+at admission by design.
+
 ## Mutation guardrails
 
 Current code uses role allowlists and bounded tools. Where a write requires

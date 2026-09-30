@@ -110,11 +110,11 @@ test("document generation stays explicitly disabled in every checked-in Worker e
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   assert.equal(config.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
-  for (const name of ["local", "staging", "qa"])
+  for (const name of ["local", "qa"])
     assert.equal(config.env[name].vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
 });
 
-test("Wrangler environments declare Newo explicitly and staging keeps its queue isolated", async () => {
+test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
   const source = await readFile(
     new URL("../wrangler.jsonc", import.meta.url),
     "utf8",
@@ -124,7 +124,7 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
     .filter((name) => name.startsWith("NEWO_"))
     .sort();
 
-  for (const name of ["local", "staging", "qa"]) {
+  for (const name of ["local", "qa"]) {
     const environment = config.env[name];
     assert.deepEqual(
       Object.keys(environment.vars)
@@ -139,9 +139,9 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   }
 
   assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
-  // Newo is not required in staging until it is enabled there separately (owner decision,
+  // Newo is not required in qa until it is enabled there separately (owner decision,
   // 2026-09-27); required-but-disabled Newo fails every release smoke.
-  assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "false");
+  assert.equal(config.env.qa.vars.NEWO_PRODUCTION_REQUIRED, "false");
   // The customer portal and its contract-acceptance half are on wherever the office control
   // plane exists. customerAcceptanceBackendConfigured now depends only on the native D1/R2
   // authority path plus mail delivery; retired Frappe/HMAC acceptance secrets are irrelevant.
@@ -160,18 +160,18 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
       `${name} contract acceptance`,
     );
   }
-  // Staging runs without the BFF, and the BFF is the only control plane that can revoke a
+  // qa runs without the BFF, and the BFF is the only control plane that can revoke a
   // live customer link. customerPortalConfigured therefore reports false whenever the portal
   // is on and the BFF is off, which turns `/ready` red and blocks the release. Enabling the
   // portal there is not a flag flip; it needs APP_BFF_ENABLED plus an APP_AUTH_PEPPER secret.
-  assert.equal(config.env.staging.vars.APP_BFF_ENABLED, "false");
-  assert.equal(config.env.staging.vars.APP_CUSTOMER_PORTAL_ENABLED, "false");
+  assert.equal(config.env.qa.vars.APP_BFF_ENABLED, "false");
+  assert.equal(config.env.qa.vars.APP_CUSTOMER_PORTAL_ENABLED, "false");
   assert.equal(
-    config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
+    config.env.qa.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
     "false",
   );
   // The coupling itself, so a future flip of either flag alone cannot pass review.
-  for (const environment of [config, config.env.local, config.env.staging]) {
+  for (const environment of [config, config.env.local, config.env.qa]) {
     if (environment.vars.APP_CUSTOMER_PORTAL_ENABLED === "true") {
       assert.equal(environment.vars.APP_BFF_ENABLED, "true");
     }
@@ -179,16 +179,16 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
   assert.equal(
-    config.env.staging.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED,
+    config.env.qa.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED,
     "false",
   );
   assert.equal(config.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_ENABLED, "false");
-  assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_ENABLED, "false");
+  assert.equal(config.env.qa.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
   assert.equal(
-    config.env.staging.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON,
+    config.env.qa.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON,
     "{}",
   );
   assert.equal(config.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
@@ -197,7 +197,7 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
     "false",
   );
   assert.equal(
-    config.env.staging.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED,
+    config.env.qa.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED,
     "false",
   );
   assert.equal(config.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED, "false");
@@ -206,13 +206,13 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
     "false",
   );
   assert.equal(
-    config.env.staging.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED,
+    config.env.qa.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED,
     "false",
   );
   for (const environment of [
     config.vars,
     config.env.local.vars,
-    config.env.staging.vars,
+    config.env.qa.vars,
   ]) {
     assert.equal(
       "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON" in environment,
@@ -220,16 +220,16 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
     );
   }
   assert.deepEqual(
-    config.env.staging.queues.producers.find(
+    config.env.qa.queues.producers.find(
       (queue: { binding: string }) => queue.binding === "NEWO_QUEUE",
     ),
-    { binding: "NEWO_QUEUE", queue: "ironwrap-staging-newo-events" },
+    { binding: "NEWO_QUEUE", queue: "ironwrap-qa-newo-events" },
   );
   assert.ok(
-    config.env.staging.queues.consumers.some(
+    config.env.qa.queues.consumers.some(
       (queue: { queue: string; dead_letter_queue?: string }) =>
-        queue.queue === "ironwrap-staging-newo-events" &&
-        queue.dead_letter_queue === "ironwrap-staging-newo-dlq",
+        queue.queue === "ironwrap-qa-newo-events" &&
+        queue.dead_letter_queue === "ironwrap-qa-newo-dlq",
     ),
   );
 });
@@ -246,26 +246,31 @@ test("Wrangler gives measurement processing an isolated queue and DLQ in every e
       config,
       "ironwrap-measurements",
       "ironwrap-measurements-dlq",
+      "true",
     ],
     [
       "local",
       config.env.local,
       "ironwrap-local-measurements",
       "ironwrap-local-measurements-dlq",
+      "true",
     ],
     [
-      "staging",
-      config.env.staging,
-      "ironwrap-staging-measurements",
-      "ironwrap-staging-measurements-dlq",
+      // OCR is off in qa (owner decision 2026-09-29). Qa is a copy of the retired staging
+      // environment, not of production: 14 vars differ from top-level, six of them flags.
+      "qa",
+      config.env.qa,
+      "ironwrap-qa-measurements",
+      "ironwrap-qa-measurements-dlq",
+      "false",
     ],
   ] as const;
   const queueNames = new Set<string>();
 
-  for (const [name, environment, queueName, dlqName] of environments) {
+  for (const [name, environment, queueName, dlqName, ocrEnabled] of environments) {
     assert.equal(
       environment.vars.MEASUREMENT_OCR_ENABLED,
-      "true",
+      ocrEnabled,
       `${name} measurement OCR enabled`,
     );
     assert.equal(
@@ -1569,7 +1574,7 @@ test("Postiz stays default-off with an exact v2.23.0 contract in every Wrangler 
   for (const [name, environment] of [
     ["production", config.vars],
     ["local", config.env.local.vars],
-    ["staging", config.env.staging.vars],
+    ["qa", config.env.qa.vars],
   ] as const) {
     assert.deepEqual(
       Object.keys(environment)
@@ -1637,7 +1642,7 @@ test("QuickBooks final invoicing stays default-off and secret-free in every Wran
   for (const [name, environment] of [
     ["production", config.vars],
     ["local", config.env.local.vars],
-    ["staging", config.env.staging.vars],
+    ["qa", config.env.qa.vars],
   ] as const) {
     assert.deepEqual(
       Object.keys(environment)
@@ -1724,7 +1729,7 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
   // environment, but a flag alone can never open it: facetV2ConsumerConfig and launchConfig
   // return null without their key material, which keeps
   // an enabled-but-unprovisioned deployment answering 503 instead of accepting traffic.
-  for (const environment of [config, config.env.local, config.env.staging]) {
+  for (const environment of [config, config.env.local, config.env.qa]) {
     assert.equal(environment.vars.FACET_V2_INGEST_ENABLED, "true");
     assert.equal(environment.vars.FACET_V2_NATIVE_PROJECTION_ENABLED, "true");
     assert.equal(
@@ -1743,7 +1748,7 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
   // Deployed environments still carry no route table and no launch identity: the real Facet
   // production tenant id, issuer and origin are not in this repository. Until they are, the
   // rail is enabled and provably unreachable rather than enabled and guessing.
-  for (const environment of [config, config.env.staging]) {
+  for (const environment of [config, config.env.qa]) {
     assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
     assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
     assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");

@@ -2,9 +2,9 @@
   "schema": "ironwrap_release_provider_policy_v1",
   "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
   "environments": {
-    "staging": {
-      "credential_secret": "RELEASE_STAGING_CLOUDFLARE_API_TOKEN",
-      "worker_name": "ironwrap-bus-staging",
+    "qa": {
+      "credential_secret": "RELEASE_QA_CLOUDFLARE_API_TOKEN",
+      "worker_name": "ironwrap-bus-qa",
       "workers_dev": true,
       "compatibility_date": "2026-06-28",
       "compatibility_flags": ["nodejs_compat"],
@@ -28,63 +28,63 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "ironwrap-bus-staging",
-          "database_id": "bd6ab4e9-4095-4df8-906a-bcb18356ddfc",
+          "database_name": "ironwrap-bus-qa",
+          "database_id": "0339cebc-d252-4d67-b78b-58c8b4703c6e",
           "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [
-        { "binding": "RAW", "bucket_name": "ironwrap-bus-staging-raw" }
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-qa-raw" }
       ],
       "queue_producers": [
-        { "binding": "JN_QUEUE", "queue": "ironwrap-staging-jn-push" },
+        { "binding": "JN_QUEUE", "queue": "ironwrap-qa-jn-push" },
         {
           "binding": "MEASUREMENT_QUEUE",
-          "queue": "ironwrap-staging-measurements"
+          "queue": "ironwrap-qa-measurements"
         },
         {
           "binding": "NEWO_QUEUE",
-          "queue": "ironwrap-staging-newo-events"
+          "queue": "ironwrap-qa-newo-events"
         }
       ],
       "queue_consumers": [
         {
-          "queue": "ironwrap-staging-jn-push",
-          "dead_letter_queue": "ironwrap-staging-jn-dlq",
+          "queue": "ironwrap-qa-jn-push",
+          "dead_letter_queue": "ironwrap-qa-jn-dlq",
           "max_retries": 5,
           "max_batch_size": 10,
           "max_batch_timeout": 5
         },
         {
-          "queue": "ironwrap-staging-jn-dlq",
+          "queue": "ironwrap-qa-jn-dlq",
           "dead_letter_queue": null,
           "max_retries": 1,
           "max_batch_size": null,
           "max_batch_timeout": null
         },
         {
-          "queue": "ironwrap-staging-measurements",
-          "dead_letter_queue": "ironwrap-staging-measurements-dlq",
+          "queue": "ironwrap-qa-measurements",
+          "dead_letter_queue": "ironwrap-qa-measurements-dlq",
           "max_retries": 5,
           "max_batch_size": 1,
           "max_batch_timeout": 1
         },
         {
-          "queue": "ironwrap-staging-measurements-dlq",
+          "queue": "ironwrap-qa-measurements-dlq",
           "dead_letter_queue": null,
           "max_retries": 1,
           "max_batch_size": null,
           "max_batch_timeout": null
         },
         {
-          "queue": "ironwrap-staging-newo-events",
-          "dead_letter_queue": "ironwrap-staging-newo-dlq",
+          "queue": "ironwrap-qa-newo-events",
+          "dead_letter_queue": "ironwrap-qa-newo-dlq",
           "max_retries": 5,
           "max_batch_size": 10,
           "max_batch_timeout": 5
         },
         {
-          "queue": "ironwrap-staging-newo-dlq",
+          "queue": "ironwrap-qa-newo-dlq",
           "dead_letter_queue": null,
           "max_retries": 1,
           "max_batch_size": null,

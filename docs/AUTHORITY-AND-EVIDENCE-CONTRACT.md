@@ -414,7 +414,7 @@ authority decision. New operating workflows must not add a Frappe write or read 
 
 Software release authority is generation-bound. The protected predecessor policy and executable
 enforcer must validate the exact PR, CI run/check identities, independent findings, complete
-manifest, isolated staging/recovery proof, provider reconciliation, and business-evidence
+manifest, isolated qa/recovery proof, provider reconciliation, and business-evidence
 references before issuing a short-lived single-use permit. Candidate policy cannot authorize its
 own weakening. Source admission, provider promotion, post-smoke readback, durable success, durable
 rollback, and post-admission recovery-required state are separate receipts. An unknown, drifted,

@@ -34,7 +34,7 @@ const MERGE_COMMIT = "2".repeat(40);
 const TREE = "b".repeat(64);
 const ARTIFACT = "c".repeat(64);
 const CONFIG = "d".repeat(64);
-const STAGING = "11111111-1111-4111-8111-111111111111";
+const QA = "11111111-1111-4111-8111-111111111111";
 const PRODUCTION = "22222222-2222-4222-8222-222222222222";
 const DOMAIN_HOSTNAME = "os.ironwrapexteriors.com";
 const DOMAIN_SERVICE = "ironwrap-bus";
@@ -122,7 +122,7 @@ async function tempRoot(t) {
 }
 
 function minimalPermitPayload({
-  previous = STAGING,
+  previous = QA,
   candidate = PRODUCTION,
   frappeScope = "in-scope",
 } = {}) {
@@ -218,8 +218,8 @@ test("CLI parses exactly one pinned Wrangler version identity", async (t) => {
   const output = path.join(root, "version.id");
   await writeFile(input, "\u001b[32mUploaded ironwrap-bus\u001b[0m\nWorker Version ID: 11111111-1111-4111-8111-111111111111\n");
   await main(["parse-version", "--input", input, "--output", output]);
-  assert.equal((await readFile(output, "utf8")).trim(), STAGING);
-  await writeFile(input, `Worker Version ID: ${STAGING}\nWorker Version ID: ${PRODUCTION}\n`);
+  assert.equal((await readFile(output, "utf8")).trim(), QA);
+  await writeFile(input, `Worker Version ID: ${QA}\nWorker Version ID: ${PRODUCTION}\n`);
   await assert.rejects(() => main(["parse-version", "--input", input, "--output", output]), /release_permit_version_id_ambiguous/);
 });
 
@@ -1244,18 +1244,18 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
   await writeFile(inventoryInput, JSON.stringify([{ name: "INGEST_TOKEN", type: "secret_text" }]));
   const contextFile = path.join(root, "context.json");
   await writeFile(contextFile, JSON.stringify({
-    staging_secret_names: ["INGEST_TOKEN"],
-    staging_binding_manifest: [
+    qa_secret_names: ["INGEST_TOKEN"],
+    qa_binding_manifest: [
       { name: "DB", type: "d1", resource_id: "f0674848-13df-4422-9896-8ba2719663b8" },
       { name: "INGEST_TOKEN", type: "secret_text" },
     ],
-    staging_runtime_manifest: { compatibility_date: "2026-06-28", compatibility_flags: [] },
+    qa_runtime_manifest: { compatibility_date: "2026-06-28", compatibility_flags: [] },
   }));
-  await main(["secret-readback", "--input", inventoryInput, "--output", inventoryOutput, "--context", contextFile, "--environment", "staging"]);
+  await main(["secret-readback", "--input", inventoryInput, "--output", inventoryOutput, "--context", contextFile, "--environment", "qa"]);
   const inventory = JSON.parse(await readFile(inventoryOutput, "utf8"));
   assert.equal(inventory.status, "matched");
   await writeFile(versionInput, JSON.stringify({
-    id: STAGING,
+    id: QA,
     metadata: { created_on: "2026-08-16T20:00:00.000Z", author_email: "release@example.invalid", source: "wrangler" },
     annotations: { "workers/message": `ironwrap-release-version-v1|source=${COMMIT}|tree=${TREE}|artifact=${ARTIFACT}|config=${CONFIG}` },
     resources: {
@@ -1264,21 +1264,21 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
       bindings: [{ name: "DB", type: "d1", id: "f0674848-13df-4422-9896-8ba2719663b8" }, { name: "INGEST_TOKEN", type: "secret_text" }],
     },
   }));
-  await main(["version-readback", "--input", versionInput, "--output", versionOutput, "--environment", "staging", "--version-id", STAGING, "--source-commit", COMMIT, "--source-tree", TREE, "--artifact-digest", ARTIFACT, "--config-digest", CONFIG, "--secret-inventory", inventoryOutput, "--context", contextFile]);
+  await main(["version-readback", "--input", versionInput, "--output", versionOutput, "--environment", "qa", "--version-id", QA, "--source-commit", COMMIT, "--source-tree", TREE, "--artifact-digest", ARTIFACT, "--config-digest", CONFIG, "--secret-inventory", inventoryOutput, "--context", contextFile]);
   const version = JSON.parse(await readFile(versionOutput, "utf8"));
-  assert.equal(version.revision, STAGING);
+  assert.equal(version.revision, QA);
   assert.equal(version.readback.status, "matched");
   assert.match(version.readback.secret_inventory_digest, /^[0-9a-f]{64}$/);
 
   const evidence = path.join(root, "smoke.json");
   const smokeOutput = path.join(root, "smoke.receipt.json");
   await writeFile(evidence, JSON.stringify(v4SmokeEvidence()));
-  await main(["smoke-receipt", "--evidence", evidence, "--output", smokeOutput, "--source-commit", COMMIT, "--revision", STAGING]);
+  await main(["smoke-receipt", "--evidence", evidence, "--output", smokeOutput, "--source-commit", COMMIT, "--revision", QA]);
   const smoke = JSON.parse(await readFile(smokeOutput, "utf8"));
   assert.equal(smoke.authenticated, true);
   assert.equal(smoke.result, "passed");
 
-  const exportFile = path.join(root, "staging.sql");
+  const exportFile = path.join(root, "qa.sql");
   const sourceQuery = path.join(root, "source-query.json");
   const restoredQuery = path.join(root, "restored-query.json");
   const readbackFile = path.join(root, "restore.readback.json");
@@ -1312,9 +1312,9 @@ test("CLI creates only redacted provider, smoke, backup, and rollback receipts",
   await writeFile(rollbackReadback, "33333333-3333-4333-8333-333333333333\n");
   await writeFile(rollbackHealth, JSON.stringify({ ok: true }));
   await writeFile(rollbackReady, JSON.stringify({ ok: true }));
-  await writeFile(rollbackRepromoted, `${STAGING}\n`);
+  await writeFile(rollbackRepromoted, `${QA}\n`);
   await writeFile(rollbackSmoke, JSON.stringify(v4SmokeEvidence()));
-  await main(["rollback-receipt", "--readback", rollbackReadback, "--re-promoted", rollbackRepromoted, "--health", rollbackHealth, "--ready", rollbackReady, "--smoke", rollbackSmoke, "--output", rollbackOutput, "--source-commit", COMMIT, "--candidate", STAGING, "--previous", "33333333-3333-4333-8333-333333333333"]);
+  await main(["rollback-receipt", "--readback", rollbackReadback, "--re-promoted", rollbackRepromoted, "--health", rollbackHealth, "--ready", rollbackReady, "--smoke", rollbackSmoke, "--output", rollbackOutput, "--source-commit", COMMIT, "--candidate", QA, "--previous", "33333333-3333-4333-8333-333333333333"]);
   assert.equal(JSON.parse(await readFile(rollbackOutput, "utf8")).readback, "matched");
 });
 
@@ -1655,7 +1655,7 @@ test("production receipt binds active revision, config, readiness, and exact smo
     () => main(scopeMismatchArgs),
     /release_promotion_production_frappe_scope_permit_drift/,
   );
-  await writeFile(active, `${STAGING}\n`);
+  await writeFile(active, `${QA}\n`);
   await assert.rejects(() => main(receiptArgs), /release_promotion_production_active_revision_drift/);
   await writeFile(active, `${PRODUCTION}\n`);
   await writeFile(smoke, JSON.stringify(v4SmokeEvidence({ steps: { health: { http_status: 200, request_id: "only-one" } } })));
@@ -1664,14 +1664,54 @@ test("production receipt binds active revision, config, readiness, and exact smo
 
 test("CLI config digest is deterministic and environment-specific", async (t) => {
   const root = await tempRoot(t);
-  const staging = path.join(root, "staging.json");
+  const qa = path.join(root, "qa.json");
   const production = path.join(root, "production.json");
-  await main(["config-digest", "--repo-root", ROOT, "--environment", "staging", "--output", staging]);
+  await main(["config-digest", "--repo-root", ROOT, "--environment", "qa", "--output", qa]);
   await main(["config-digest", "--repo-root", ROOT, "--environment", "production", "--output", production]);
-  const stagingResult = JSON.parse(await readFile(staging, "utf8"));
+  const qaResult = JSON.parse(await readFile(qa, "utf8"));
   const productionResult = JSON.parse(await readFile(production, "utf8"));
-  assert.notEqual(stagingResult.digest, productionResult.digest);
-  assert.equal(stagingResult.secret_names.includes("GOOGLE_SERVICE_ACCOUNT_JSON"), true);
+  assert.notEqual(qaResult.digest, productionResult.digest);
+  assert.equal(qaResult.secret_names.includes("GOOGLE_SERVICE_ACCOUNT_JSON"), true);
+});
+
+test("admission-context requires a valid environment and matches its policy/production inputs to it", async (t) => {
+  const root = await tempRoot(t);
+  const output = path.join(root, "context.json");
+  const invoke = (extra) => main([
+    "admission-context",
+    "--repo-root", ROOT,
+    "--repository", "Iron-Wrap/ironwrap-os",
+    "--source", path.join(root, "missing-source.json"),
+    "--checks", path.join(root, "missing-checks.json"),
+    "--pr-context", path.join(root, "missing-pr.json"),
+    "--qa", path.join(root, "missing-qa.json"),
+    "--output", output,
+    ...extra,
+  ]);
+  await assert.rejects(() => invoke(["--environment", "staging"]), /release_promotion_admission_context_environment_invalid/);
+  await assert.rejects(() => invoke(["--environment", "qa", "--policy", path.join(root, "missing-policy.json")]), /release_promotion_admission_context_environment_input_invalid/);
+  await assert.rejects(() => invoke(["--environment", "qa", "--production", path.join(root, "missing-production.json")]), /release_promotion_admission_context_environment_input_invalid/);
+  await assert.rejects(() => invoke(["--environment", "production"]), /release_promotion_admission_context_environment_input_invalid/);
+  await assert.rejects(() => invoke(["--environment", "production", "--policy", path.join(root, "missing-policy.json")]), /release_promotion_admission_context_environment_input_invalid/);
+  await assert.rejects(() => invoke(["--environment", "production", "--production", path.join(root, "missing-production.json")]), /release_promotion_admission_context_environment_input_invalid/);
+});
+
+test("cron-readback matches expected qa schedules and fails closed on drift", async (t) => {
+  const root = await tempRoot(t);
+  const output = path.join(root, "cron-readback.json");
+  const input = path.join(root, "schedules.json");
+  await writeFile(input, JSON.stringify({ success: true, result: { schedules: [{ cron: "0 14 * * *" }, { cron: "*/5 * * * *" }] } } ));
+  await main(["cron-readback", "--repo-root", ROOT, "--environment", "qa", "--input", input, "--output", output]);
+  const receipt = JSON.parse(await readFile(output, "utf8"));
+  assert.equal(receipt.schema, "ironwrap_release_cron_readback_v1");
+  assert.deepEqual(receipt.expected_crons, ["*/5 * * * *", "0 14 * * *"]);
+  assert.deepEqual(receipt.observed_crons, ["*/5 * * * *", "0 14 * * *"]);
+  assert.equal(receipt.status, "matched");
+  await writeFile(input, JSON.stringify({ success: true, result: { schedules: [{ cron: "0 14 * * *" }] } }));
+  await assert.rejects(
+    () => main(["cron-readback", "--repo-root", ROOT, "--environment", "qa", "--input", input, "--output", output]),
+    /release_promotion_cron_readback_drift/,
+  );
 });
 
 test("release policy hash deterministically covers executable admission enforcement", async (t) => {
@@ -1692,36 +1732,36 @@ test("release policy hash deterministically covers executable admission enforcem
 test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs", async (t) => {
   const root = await tempRoot(t);
   const context = path.join(root, "context.json");
-  await writeFile(context, JSON.stringify({ source_commit: COMMIT, source_tree_sha256: TREE, artifact_digest: ARTIFACT, staging_config_digest: CONFIG, generation: 4 }));
+  await writeFile(context, JSON.stringify({ source_commit: COMMIT, source_tree_sha256: TREE, artifact_digest: ARTIFACT, qa_config_digest: CONFIG, generation: 4 }));
   const field = path.join(root, "field.txt");
   await main(["context-field", "--context", context, "--field", "source_commit", "--output", field]);
   assert.equal((await readFile(field, "utf8")).trim(), COMMIT);
 
   const deployments = path.join(root, "deployments.json");
   const deploymentHistory = [
-    { created_on: "2026-08-16T20:02:00.000Z", versions: [{ version_id: STAGING, percentage: 100 }] },
+    { created_on: "2026-08-16T20:02:00.000Z", versions: [{ version_id: QA, percentage: 100 }] },
     { created_on: "2026-08-16T20:01:00.000Z", versions: [{ version_id: PRODUCTION, percentage: 100 }] },
   ];
   await writeFile(deployments, JSON.stringify(deploymentHistory));
   const revision = path.join(root, "revision.txt");
   await main(["deployment-revision", "--input", deployments, "--output", revision]);
-  assert.equal((await readFile(revision, "utf8")).trim(), STAGING);
+  assert.equal((await readFile(revision, "utf8")).trim(), QA);
   await assert.rejects(() => main(["deployment-revision", "--input", deployments, "--output", revision, "--expected", PRODUCTION]), /release_promotion_deployment_active_revision_drift/);
   const providerReversed = path.join(root, "deployments-provider-order.json");
   await writeFile(providerReversed, JSON.stringify([
     { created_on: "2026-08-16T20:01:00.000Z", versions: [{ version_id: PRODUCTION, percentage: 100 }] },
-    { created_on: "2026-08-16T20:02:00.000Z", versions: [{ version_id: STAGING, percentage: 100 }] },
+    { created_on: "2026-08-16T20:02:00.000Z", versions: [{ version_id: QA, percentage: 100 }] },
   ]));
   await main(["deployment-revision", "--input", providerReversed, "--output", revision]);
-  assert.equal((await readFile(revision, "utf8")).trim(), STAGING);
+  assert.equal((await readFile(revision, "utf8")).trim(), QA);
 
-  const cleanupReceipt = path.join(root, "staging-cleanup.json");
+  const cleanupReceipt = path.join(root, "qa-cleanup.json");
   const cleanupArgs = [
-    "staging-cleanup-receipt",
+    "qa-cleanup-receipt",
     "--input",
     deployments,
     "--previous",
-    STAGING,
+    QA,
     "--candidate",
     PRODUCTION,
     "--command-result",
@@ -1731,10 +1771,10 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
   ];
   await main(cleanupArgs);
   const cleanup = JSON.parse(await readFile(cleanupReceipt, "utf8"));
-  assert.equal(cleanup.schema, "ironwrap_staging_cleanup_v1");
-  assert.equal(cleanup.previous_revision, STAGING);
+  assert.equal(cleanup.schema, "ironwrap_qa_cleanup_v1");
+  assert.equal(cleanup.previous_revision, QA);
   assert.equal(cleanup.candidate_revision, PRODUCTION);
-  assert.equal(cleanup.restored_revision, STAGING);
+  assert.equal(cleanup.restored_revision, QA);
   assert.equal(cleanup.restore_command_result, "nonzero_reconciled");
   assert.equal(cleanup.result, "passed");
   assert.equal(cleanup.readback, "matched");
@@ -1759,7 +1799,7 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
   const versionReadback = path.join(root, "version-readback.json");
   const versionSnapshot = path.join(root, "version-snapshot.json");
   const versionProviderBody = {
-    id: STAGING,
+    id: QA,
     metadata: { created_on: "2026-08-16T20:01:00.000Z" },
     resources: { bindings: [] },
   };
@@ -1769,13 +1809,13 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
     "--input",
     versionReadback,
     "--expected",
-    STAGING,
+    QA,
     "--output",
     versionSnapshot,
   ]);
   assert.deepEqual(JSON.parse(await readFile(versionSnapshot, "utf8")), {
     schema: "ironwrap_provider_version_snapshot_v1",
-    revision: STAGING,
+    revision: QA,
     provider_readback_digest: sha(canonicalJson(versionProviderBody)),
     status: "matched",
   });
@@ -1819,7 +1859,7 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
     rollbackVersionReadback,
     JSON.stringify({
       schema: "ironwrap_provider_version_snapshot_v1",
-      revision: STAGING,
+      revision: QA,
       provider_readback_digest: WORKER_PREVIOUS_READBACK,
       status: "matched",
     }),
@@ -1839,7 +1879,7 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
     "--input",
     deployments,
     "--previous",
-    STAGING,
+    QA,
     "--candidate",
     PRODUCTION,
     "--source-commit",
@@ -1870,7 +1910,7 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
     rollbackOutput,
   ];
   await main(productionRollbackArgs);
-  assert.equal(JSON.parse(await readFile(rollbackOutput, "utf8")).restored_revision, STAGING);
+  assert.equal(JSON.parse(await readFile(rollbackOutput, "utf8")).restored_revision, QA);
   const leftoverRollbackOutput = path.join(root, "rollback-leftover.json");
   const leftoverRollbackArgs = productionRollbackArgs.filter((_, index, list) => {
     const flag = list[index - 1];
@@ -1894,7 +1934,7 @@ test("CLI owns deployment/readiness/receipt parsing instead of workflow heredocs
   );
   await main(leftoverRollbackArgs);
   const leftoverRollback = JSON.parse(await readFile(leftoverRollbackOutput, "utf8"));
-  assert.equal(leftoverRollback.restored_revision, STAGING);
+  assert.equal(leftoverRollback.restored_revision, QA);
   assert.equal(leftoverRollback.frappe_restored_revision, "leftover-not-promoted");
   await writeFile(rollbackPermit, JSON.stringify(minimalPermitPayload()));
   await writeFile(

@@ -12,10 +12,10 @@
     "typegen": "wrangler types",
     "dev": "node ../deploy/local/predev.mjs && wrangler dev --env local --port ${IRONWRAP_LOCAL_WORKER_PORT:-7100} --test-scheduled",
     "deploy": "wrangler deploy --env=\"\"",
-    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:qa": "wrangler deploy --env qa",
     "db:migrate:local": "wrangler d1 migrations apply ironwrap-bus --local",
     "db:migrate": "wrangler d1 migrations apply ironwrap-bus --remote --env=\"\"",
-    "db:migrate:staging": "wrangler d1 migrations apply DB --remote --env staging"
+    "db:migrate:qa": "wrangler d1 migrations apply DB --remote --env qa"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

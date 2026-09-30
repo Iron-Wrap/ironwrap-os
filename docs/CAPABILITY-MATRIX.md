@@ -122,7 +122,7 @@ Repository-only. None of the following is live proof, deployment, or Done for a 
 - IRO-53 / IRO-55 / IRO-57 / IRO-58 / IRO-59 / IRO-60 / IRO-190 remain target-only or partial. Do not mark them Done.
 - Do not de-roofify `operating_roof_jobs`. Money, portal, Facet, and QuickBooks still key that identity.
 - JobNimbus has no owned D1 import adapter yet; it remains pending a join to `/admin/crm-import/{dry-run,execute}`. Dual-write is not retired.
-- IRO-31 / IRO-193 / IRO-28 live OCR / IRO-52 S12 remain blocked on a live staging URL, owner participation, a usable measurement-OCR provider, and QuickBooks keys. Do not treat a local `--check` as that proof.
+- IRO-31 / IRO-193 / IRO-28 live OCR / IRO-52 S12 remain blocked on a live qa URL, owner participation, a usable measurement-OCR provider, and QuickBooks keys. Do not treat a local `--check` as that proof.
 
 ## Canonical operating-authority migration
 
@@ -228,7 +228,7 @@ IRO-41 branch-local implementation:
   generation N enforcement from the squash commit's parent and binds the exact PR/head/base/merge
   tree and CI run/check IDs. Automated checks are the only gate (owner decision,
   2026-09-24): there is no reviewer GO receipt and no independent evidence issuer;
-- one aggregate artifact binds Worker, PWA, and leftover Frappe wheel digests; isolated staging
+- one aggregate artifact binds Worker, PWA, and leftover Frappe wheel digests; isolated qa
   proves config/secret-name readback, authenticated smoke, content-complete D1 restore, and the
   prior Worker operating against migrated schema before the workflow assembles and signs a
   short-lived permit;
@@ -246,7 +246,7 @@ artifact and permit, but it does not
 deliver those bytes to an immutable provider-stage revision or invoke the checked-in
 `service-adapter` client. The production receipt records Frappe as not promoted; Worker recovery
 records `automatic_rollback_incomplete` durably if the recovery step cannot complete. These are
-repository-owned source contracts. No reachable adapter, provider command, staging/production
+repository-owned source contracts. No reachable adapter, provider command, qa/production
 Frappe identity, or live receipt is proven.
 
 The checked-in publication evidence snapshot observed at `2026-08-22T23:53:36Z` records the private
@@ -311,23 +311,23 @@ flowchart LR
 
 IRO-218 must define the immutable artifact-stage transport and provider revision mapping before its
 adapter can truthfully promote anything. The client and provider time budgets must also be made
-compatible before live migration work. IRO-222 then requires authenticated disposable staging,
+compatible before live migration work. IRO-222 then requires authenticated disposable qa,
 exact promote/readback, forced restore/rollback, denial, replay, and custody evidence; source tests
 or a reachable process alone cannot close it.
 
 External proof remains required for the installed predecessor enforcer, protected-branch behavior,
-GitHub secret inventory, isolated staging credentials/readiness, production DNS/readiness, provider
+GitHub secret inventory, isolated qa credentials/readiness, production DNS/readiness, provider
 mutations, automatic merge, durable provider readback, and a complete rollback-capable production
 run. Repository tests do not satisfy any of those live states.
 
-The checked-in staging contract is intentionally fail-closed today: its named environment omits
+The checked-in qa contract is intentionally fail-closed today: its named environment omits
 `ESTIMATOR_PRICE_LIST_JSON` and `PROPOSAL_TEMPLATE_DOC_ID`, its notification sender/recipient values
 are empty, and required notification/OCR secret presence has no live readback in this branch. The
 release preflight reports those exact blockers before migration/upload; it does not disable the
 capabilities or treat a red `/ready` result as acceptable.
 
 The governed workflow also treats a provider command with a lost or nonzero response as unknown
-until active-deployment readback resolves it. Failed post-deploy staging runs restore the captured
+until active-deployment readback resolves it. Failed post-deploy qa runs restore the captured
 previous revision and emit a cleanup-only receipt; production recovery attempts Frappe rollback
 when Frappe promotion ran and Worker rollback when Worker promotion ran, then requires exact
 Worker, PWA, applicable Frappe, health, and readiness proof. If that recovery step itself fails,
@@ -480,7 +480,7 @@ ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
 - The canonical compatibility flag is `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED`; it is default-off
   (`false`) in every checked-in environment. Controlled repository/local proof may inject it for the
   bounded command, but that does not change the configured baseline or establish runtime proof.
-- Staging keeps the portal off because it runs with `APP_BFF_ENABLED: "false"`, and
+- Qa keeps the portal off because it runs with `APP_BFF_ENABLED: "false"`, and
   `customerPortalConfigured` reports false whenever the portal is on without the office control
   plane that revokes customer links — which turns `/ready` red and blocks the release.
 - Repository-verified locally, on the `deploy/local` stack with native ingest/launch gates on: an owner session
@@ -599,7 +599,7 @@ ELEC-92 owner-facing proposal publication (2026-08-20):
   (`app/src/proposal/proposal-publication-action.tsx`): prepare, then a confirmation that states
   what the customer will see and that no message, link, signature, or quote change occurs.
 - Fail-closed by default. `APP_PROPOSAL_PUBLICATION_ENABLED` is `"false"` in production and
-  staging and `"true"` only on `deploy/local`; while it is off the routes answer 404 and the read
+  qa and `"true"` only on `deploy/local`; while it is off the routes answer 404 and the read
   model advertises no actions.
 - **Estimator workbench reachability.** The strict PWA contract did not know about the
   `computed_takeoff`/`computed_estimate` previews or the `economics` block the Worker already
@@ -1201,7 +1201,7 @@ does: the Frappe unittest, lint, and wheel steps run in `make check` (the `check
 | Lead intake | Locally-validated, Partial. Native D1 intake spine — lead envelope, queue, triage handoff, and CRM import plan/execute. Checks: `workers-bus/test/d1-native-operating-intake.test.ts`, `native-lead-queue.test.ts`, `d1-synthetic-lead.test.ts`, `crm-import-plan.test.ts`, `crm-import-store.test.ts`, `crm-import-api.test.ts`. JobNimbus still has no owned D1 import adapter and dual-write is not retired, so no real dual-brand lead has been reconciled and no runtime claim exists. | all real sources cut over and bridge retirement | real dual-brand lead, reconcile |
 | Consent/comms | Locally-validated, Partial. Communication Consent and Communication Event records with required-field and write-once enforcement, and acknowledgement handling that records provider acceptance rather than delivery. Checks: `frappe-apps/ironwrap_roofing/tests/test_domain_policy.py` (consent and communication-event record validation), `workers-bus/test/notify.test.ts` ("provider acceptance, never delivery"; no eligible channel is recorded as such instead of being assumed sent). No provider send path is enabled anywhere, so the autonomous send/reply/STOP/suppression loop is Target. | autonomous provider send and response/suppression loop | opt-in/send/reply/STOP/reconcile |
 | Qualification | Locally-validated, Partial. Lead triage with a shadow-authority policy and adversarial corpus, plus the instant-estimate session. Checks: `node tools/validate-lead-triage-shadow-authority.mjs` and its validator test, `workers-bus/test/lead-triage-shadow-authority.test.ts`, `frappe-apps/ironwrap_roofing/tests/test_lead_triage_api.py`, `app/e2e/lead-triage.spec.ts`. The complete service/authority/risk policy is Target and no live lead has been triaged. | complete service/authority/risk policy | adversarial lead suite |
-| Survey | Locally-validated, Partial, Blocked: a live staging URL, owner participation, and a usable measurement-OCR provider. Measurement report/value intake, roof graph, geometry, takeoff, and evidence capture pass focused checks (`workers-bus/test/measurement-intake.test.ts`, `roof-graph.test.ts`, `geometry.test.ts`, `takeoff.test.ts`, `measurement-deltas-store.test.ts`, `native-measurement-recovery.test.ts`; `node tools/applicad-xml-proof.mjs --check`). `measurement-ocr-e2e-proof.test.ts` pins the deterministic contract, not a live extraction. No real site, frozen evaluation set, tolerance/calibration run, or conflicting-source resolution exists. | field work package, calibration, conflict resolution, and Facet-owned CV candidate extraction with uncertainty and human review | real site, frozen evaluation set, tolerance/calibration, and conflicting source test |
+| Survey | Locally-validated, Partial, Blocked: a live qa URL, owner participation, and a usable measurement-OCR provider. Measurement report/value intake, roof graph, geometry, takeoff, and evidence capture pass focused checks (`workers-bus/test/measurement-intake.test.ts`, `roof-graph.test.ts`, `geometry.test.ts`, `takeoff.test.ts`, `measurement-deltas-store.test.ts`, `native-measurement-recovery.test.ts`; `node tools/applicad-xml-proof.mjs --check`). `measurement-ocr-e2e-proof.test.ts` pins the deterministic contract, not a live extraction. No real site, frozen evaluation set, tolerance/calibration run, or conflicting-source resolution exists. | field work package, calibration, conflict resolution, and Facet-owned CV candidate extraction with uncertainty and human review | real site, frozen evaluation set, tolerance/calibration, and conflicting source test |
 | Design | Source-present, Partial. Scope Clause, Option Package, and proposal evidence records exist and pass the DocType/permission and domain-policy contract checks (`frappe-apps/ironwrap_roofing/tests/test_schema_contract.py`, `test_document_validation.py`, `test_domain_policy.py`), and the Facet design ingest/projection seam is locally validated (`workers-bus/test/facet-design-ingest.test.ts`, `facet-design-projection.test.ts`, `facet-design-v2-protocol.test.ts`). The row's own subject — controlled assemblies, details, bulletins, and engineer/permit propagation — has no object, no route, and no check anywhere in the tree, so the row records the class its weakest named scope earns. | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | Locally-validated, Partial. Takeoff, price-book rules, quote authoring, and revision approval pass focused checks (`workers-bus/test/takeoff.test.ts`, `pricing.test.ts`, `estimator-native-store.test.ts`, `estimator-workbench.test.ts`, `quote-revision-approval-api.test.ts`, `quote-revision-approval-store.test.ts`; `app/e2e/estimator-workbench.spec.ts`, `quote-revision-approval.spec.ts`). Shop, labour, equipment, and risk costing are Target and no estimate has been closed against a real job's actuals. | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
 | Contract | Locally-validated, Partial, Blocked: provider/tax configuration and QuickBooks keys. Authenticated native quote/publication routes, exact customer acceptance, and an acceptance-created durable deposit derivation queue pass focused checks (`workers-bus/test/commercial-proposal-api.test.ts`, `proposal-publication-approval-api.test.ts`, `customer-contract-acceptance.test.ts`, `portal-decision-confirmation.test.ts`, `iro208-commercial-reference.test.ts`; `app/src/portal/customer-contract-acceptance-page.test.tsx`). QuickBooks execution is off in every environment and no tax or accounting readback has run, so configured delivery/readback publication, correct agreement selection, cancellation, e-sign determination, and live business proof stay open. | configured delivery/readback publication, successful provider/tax/accounting reconciliation, correct agreement selection, cancellation, legal/commercial e-sign determination, and live business proof | deterministic quote-to-deposit reference path plus residential/commercial customer scenarios |
@@ -1504,7 +1504,7 @@ creating a second orchestration authority.
 ### Gate 8: technical production-reference proof
 
 - [IRO-222](https://linear.app/mindburn/issue/IRO-222): prove the exact IronWrap candidate through
-  isolated staging, adapter/provider readback, backup, forced restore, rollback, replay, denial,
+  isolated qa, adapter/provider readback, backup, forced restore, rollback, replay, denial,
   and custody evidence before IRO-41 release admission;
 - one controlled synthetic/reference job through every applicable state;
 - one supply-only shop order and one warranty/service case;

@@ -278,7 +278,7 @@ office session with `X-CSRF-Token`. That steady-state body accepts `role`, compa
 identity. Re-send
 the record with `active:false` to revoke that user's sessions and open link. The bearer bootstrap
 route never upserts, never accepts a client actor field, and returns a stable denial after the
-first tenant user exists. The checked-in top-level/staging configuration enables the BFF, but that
+first tenant user exists. The checked-in top-level configuration enables the BFF, but that
 is configured intent only. A named environment must have its required migration state, app build,
 Gmail delegation, `APP_AUTH_PEPPER`, origin metadata, and any enabled compatibility credentials;
 otherwise override the flag to false or block deployment. `/ready` fails closed on missing or
@@ -582,7 +582,7 @@ the Worker generates one.
 
 ### Facet design-event receipt contract
 
-The checked-in top-level/staging configuration enables `FACET_DESIGN_INGEST_ENABLED`; this is
+The checked-in top-level/qa configuration enables `FACET_DESIGN_INGEST_ENABLED`; this is
 configured intent only. Override it to false or block deployment until
 `FACET_DESIGN_INGEST_HMAC_KEY` and an exact `FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local
 allowlist are independently configured and read back in the named environment.
@@ -675,7 +675,7 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
    posting, and reconciliation facts require authenticated QuickBooks read-back.
 5. **Frappe compatibility projection** — configured false in the checked-in top-level
-   (production, owner decision 2026-09-27) and staging profiles and true only in the local
+   (production, owner decision 2026-09-27) and qa profiles and true only in the local
    development profile; none of those values is live proof. Before treating
    `ERPNEXT_ENABLED=true` as ready, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,

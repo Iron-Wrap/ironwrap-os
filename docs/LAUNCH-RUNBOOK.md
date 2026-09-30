@@ -207,17 +207,34 @@ npm run db:migrate
 
 ### Signed Permit And Immutable Promotion
 
+A push to `main` deploys `qa` only (IRO-260); production releases come from a tag, a separate
+workflow (IRO-264). The first Deploy run after the IRO-260 merge fails closed at admission by
+design: the generation-N enforcer loaded from the pre-merge base does not yet accept
+`--environment qa`, so the first real qa deploy is the second push to `main` after that merge.
+
+Between the IRO-260 merge and IRO-264, what no workflow implements is the signed permit, the durable
+policy generation and its `release-policy:Iron-Wrap/ironwrap-os` ledger row, and every production
+step below it: production migrations, traffic promotion, the production-promotion receipt and its
+recovery outcomes. The push path implements the rest of this section against `qa` alone - the
+base-loaded generation-N enforcer, the provider-target and static readiness preflights, the qa
+deploy with its version, health and readiness readbacks, and the qa rollback drill - and binds none
+of it into a permit. The push path's whole credential surface is `RELEASE_QA_CLOUDFLARE_API_TOKEN`,
+`RELEASE_QA_INGEST_TOKEN` and `RELEASE_QA_ADMIN_TOKEN`, all in the `qa` GitHub Environment, and no
+repository variable.
+
 Automated checks are the only release gate (owner decision, 2026-09-24): no human approval,
-independent reviewer GO receipt, or external evidence issuer. The release workflow fails closed
+independent reviewer GO receipt, or external evidence issuer. The release workflows fail closed
 unless these are available for the exact successful push CI run of the squash commit on `main`,
-its PR head/base, and the tested tree. A pull-request CI run, including a Dependabot PR, never
-starts a release or merges anything; the release follows whoever merged the PR:
+its PR head/base, and the tested tree. Each path reads only its own subset: the push path the three
+`RELEASE_QA_*` secrets named above, the tag-triggered production workflow (IRO-264) the permit keys,
+the policy-ledger credential and the `RELEASE_PRODUCTION_*` names. A pull-request CI run, including a
+Dependabot PR, never starts a release or merges anything; the release follows whoever merged the PR:
 
 - `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`; the workflow signs the permit
   itself from its own evidence;
-- separate `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_STAGING_CLOUDFLARE_API_TOKEN`, and
+- separate `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_QA_CLOUDFLARE_API_TOKEN`, and
   `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN` credentials with non-overlapping authority;
-- staging and production launch-proof tokens (`RELEASE_*_INGEST_TOKEN`, `RELEASE_*_ADMIN_TOKEN`)
+- qa and production launch-proof tokens (`RELEASE_*_INGEST_TOKEN`, `RELEASE_*_ADMIN_TOKEN`)
   and the `RELEASE_PRODUCTION_ZONE_ID` repository variable; and
 - every expected Worker secret name in each Cloudflare environment. Secret values are never
   placed in the permit or receipts.
@@ -239,27 +256,28 @@ secret inventory, provider DNS/readiness failure, or absent external credential 
 No release-specific migration or process-memory replay map may replace this boundary.
 Before any secret-bearing Wrangler invocation, that predecessor policy also rejects candidate
 custom builds and local-file/module discovery controls, validates the candidate service/database/
-bucket/queue/route coordinates, and runs the pinned predecessor Wrangler installation. Staging and
+bucket/queue/route coordinates, and runs the pinned predecessor Wrangler installation. Qa and
 production credentials must be distinct and incapable of cross-environment mutation.
 Before the first migration or upload, a second static readiness preflight requires every top-level
 variable to be repeated in a named environment, nonempty notification sender/recipient variables,
 the exact Cloudflare secret-name inventory, and an allowed OCR model plus OCR secret whenever OCR
 is enabled. It does not weaken `/ready`; a missing value or secret stops before mutation.
-Any failed staging step after traffic deployment restores the captured previous staging revision
+Any failed qa step after traffic deployment restores the captured previous qa revision
 and accepts cleanup only after exact active-deployment readback; that cleanup receipt is not the
 successful compatibility drill. A production deploy that returns failure after changing traffic is
 also treated as attempted: recovery forces the captured previous version and trusts only readback.
 
 The release builds one deterministic aggregate containing the Worker bundle, PWA assets, and the
 leftover Frappe wheel. It records each component digest and uploads the aggregate once. Wrangler uploads
-the same bytes separately to the distinct staging and production Worker services; their provider
+the same bytes separately to the distinct qa and production Worker services; their provider
 version IDs are therefore different and both IDs, version readbacks, environment config digests,
-and secret-name inventory digests are bound into the permit. Staging must first prove active
+and secret-name inventory digests are bound into the permit. On every push the qa job proves active
 revision identity, `/health`, `/ready?scope=core`, authenticated affected-workflow smoke, an
 explicit nonempty export plus structured `d1 execute --json` schema/row-count/sentinel manifest
 restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
-against the migrated schema with health/readiness/smoke proof. Only then is the short-lived permit
-assembled and consumed once through D1; the exact admitted squash commit is read back as the tip
+against the migrated schema with health/readiness/smoke proof, but binds none of it into a permit.
+Only then (IRO-264) is the short-lived permit assembled and consumed once through D1; the exact
+admitted squash commit is read back as the tip
 of `main` before production migrations or traffic promotion. Production promotes the pre-uploaded Worker/PWA
 version, re-reads its identity after smoke, and advances the durable generation only after the
 exact authenticated launch-proof step set is bound into an immutable production-promotion receipt.
@@ -510,7 +528,7 @@ live services; the HTTP and application smoke tests in this runbook remain manda
 
 ### Field Companion BFF Enablement Gate
 
-The checked-in top-level/staging configuration enables `APP_BFF_ENABLED` and supplies app origins;
+The checked-in top-level configuration enables `APP_BFF_ENABLED` and supplies app origins;
 development remains disabled. This is configured repository intent only. A successful
 `wrangler deploy --dry-run` proves the bundle/config shape, not a Field Companion deployment,
 runtime path, real-device result, or customer proof.
@@ -601,7 +619,7 @@ open until those exact checks are captured.
 
 ### Customer Portal and Contract-Acceptance Availability Gate
 
-The checked-in top-level/staging configuration sets the portal and contract-acceptance flags true;
+The checked-in top-level configuration sets the portal and contract-acceptance flags true;
 development remains false. Those values are configured repository intent only. The portal bearer
 is read-only and is never customer authentication or acceptance evidence. The separate
 email-bound route may commit native acceptance only after it pins the current quote, published

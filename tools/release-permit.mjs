@@ -5,7 +5,7 @@
  *
  * The permit is deliberately independent of a particular CI provider. The
  * release workflow builds the evidence object from its own automated checks
- * (CI, staging deploy, smoke, restore and rollback drills), and this module
+ * (CI, qa deploy, smoke, restore and rollback drills), and this module
  * signs/verifies the canonical envelope. No human or external reviewer signs
  * it. Production admission must consume the permit through a durable replay
  * boundary; a process-local Map is never a valid production implementation.
@@ -145,7 +145,7 @@ const PERMIT_KEYS = [
   "migrations",
   "build_once",
   "worker",
-  "staging",
+  "qa",
   "production",
   "smoke",
   "backup_restore",
@@ -304,20 +304,20 @@ function validateBuild(build) {
 function validateWorker(worker) {
   exactKeys(worker, [
     "artifact_digest",
-    "staging_version_id",
-    "staging_version_digest",
-    "staging_config_digest",
-    "staging_secret_inventory_digest",
+    "qa_version_id",
+    "qa_version_digest",
+    "qa_config_digest",
+    "qa_secret_inventory_digest",
     "production_version_id",
     "production_version_digest",
     "production_config_digest",
     "production_secret_inventory_digest",
   ], "worker_shape_invalid");
   hash(worker.artifact_digest, "worker_artifact_digest_invalid");
-  text(worker.staging_version_id, "worker_staging_version_id_invalid", UUID_RE);
-  hash(worker.staging_version_digest, "worker_staging_version_digest_invalid");
-  hash(worker.staging_config_digest, "worker_staging_config_digest_invalid");
-  hash(worker.staging_secret_inventory_digest, "worker_staging_secret_inventory_digest_invalid");
+  text(worker.qa_version_id, "worker_qa_version_id_invalid", UUID_RE);
+  hash(worker.qa_version_digest, "worker_qa_version_digest_invalid");
+  hash(worker.qa_config_digest, "worker_qa_config_digest_invalid");
+  hash(worker.qa_secret_inventory_digest, "worker_qa_secret_inventory_digest_invalid");
   text(worker.production_version_id, "worker_production_version_id_invalid", UUID_RE);
   hash(worker.production_version_digest, "worker_production_version_digest_invalid");
   hash(worker.production_config_digest, "worker_production_config_digest_invalid");
@@ -341,22 +341,22 @@ function validateReadback(readback, expected, code) {
   equal(expected.secret_inventory_digest, readback.secret_inventory_digest, `${code}_secret_inventory_drift`);
 }
 
-function validateStaging(staging, permit) {
-  exactKeys(staging, ["environment", "revision", "source_commit", "source_tree_sha256", "artifact_digest", "config_digest", "readback"], "staging_shape_invalid");
-  equal("staging", staging.environment, "staging_environment_invalid");
-  text(staging.revision, "staging_revision_invalid", UUID_RE);
-  equal(permit.worker.staging_version_id, staging.revision, "staging_revision_drift");
-  validateReadback(staging.readback, {
+function validateQa(qa, permit) {
+  exactKeys(qa, ["environment", "revision", "source_commit", "source_tree_sha256", "artifact_digest", "config_digest", "readback"], "qa_shape_invalid");
+  equal("qa", qa.environment, "qa_environment_invalid");
+  text(qa.revision, "qa_revision_invalid", UUID_RE);
+  equal(permit.worker.qa_version_id, qa.revision, "qa_revision_drift");
+  validateReadback(qa.readback, {
     source_commit: permit.source_commit,
     source_tree_sha256: permit.source_tree_sha256,
-    artifact_digest: staging.artifact_digest,
-    config_digest: permit.worker.staging_config_digest,
-    secret_inventory_digest: permit.worker.staging_secret_inventory_digest,
-  }, "staging_readback");
-  equal(permit.source_commit, staging.source_commit, "staging_source_drift");
-  equal(permit.source_tree_sha256, staging.source_tree_sha256, "staging_tree_drift");
-  equal(permit.worker.artifact_digest, staging.artifact_digest, "staging_artifact_drift");
-  equal(permit.worker.staging_config_digest, staging.config_digest, "staging_config_drift");
+    artifact_digest: qa.artifact_digest,
+    config_digest: permit.worker.qa_config_digest,
+    secret_inventory_digest: permit.worker.qa_secret_inventory_digest,
+  }, "qa_readback");
+  equal(permit.source_commit, qa.source_commit, "qa_source_drift");
+  equal(permit.source_tree_sha256, qa.source_tree_sha256, "qa_tree_drift");
+  equal(permit.worker.artifact_digest, qa.artifact_digest, "qa_artifact_drift");
+  equal(permit.worker.qa_config_digest, qa.config_digest, "qa_config_drift");
 }
 
 function validateProduction(production, permit) {
@@ -385,7 +385,7 @@ function validateSmoke(smoke, permit) {
   equal("passed", smoke.result, "smoke_not_passed");
   if (!Array.isArray(smoke.affected_workflow_ids) || JSON.stringify([...smoke.affected_workflow_ids].sort()) !== JSON.stringify([...LAUNCH_PROOF_STEP_NAMES].sort())) fail("smoke_workflows_invalid");
   equal(permit.source_commit, smoke.source_commit, "smoke_source_drift");
-  equal(permit.staging.revision, smoke.revision, "smoke_revision_drift");
+  equal(permit.qa.revision, smoke.revision, "smoke_revision_drift");
   hash(smoke.evidence_digest, "smoke_evidence_digest_invalid");
   iso(smoke.observed_at, "smoke_observed_at_invalid");
 }
@@ -393,7 +393,7 @@ function validateSmoke(smoke, permit) {
 function validateBackupRestore(backup, permit) {
   exactKeys(backup, ["backup_id", "environment", "isolated_target", "source_generation", "source_commit", "artifact_digest", "result", "restored", "readback", "export_digest", "manifest_digest", "restore_evidence_digest", "evidence_digest", "observed_at"], "backup_restore_shape_invalid");
   text(backup.backup_id, "backup_id_invalid");
-  equal("staging", backup.environment, "backup_environment_invalid");
+  equal("qa", backup.environment, "backup_environment_invalid");
   text(backup.isolated_target, "backup_target_invalid");
   equal(permit.previous_generation.generation, backup.source_generation, "backup_generation_drift");
   equal(permit.source_commit, backup.source_commit, "backup_source_drift");
@@ -428,7 +428,7 @@ function validateRollback(rollback, permit) {
   exactKeys(rollback, ["drill_id", "previous_revision", "candidate_revision", "restored_revision", "re_promoted_revision", "result", "readback", "health_digest", "readiness_digest", "smoke_evidence_digest", "smoke_result", "source_commit", "evidence_digest", "observed_at"], "rollback_shape_invalid");
   text(rollback.drill_id, "rollback_drill_id_invalid");
   text(rollback.previous_revision, "rollback_previous_revision_invalid", UUID_RE);
-  equal(permit.worker.staging_version_id, rollback.candidate_revision, "rollback_candidate_drift");
+  equal(permit.worker.qa_version_id, rollback.candidate_revision, "rollback_candidate_drift");
   text(rollback.restored_revision, "rollback_restored_revision_invalid", UUID_RE);
   equal(rollback.previous_revision, rollback.restored_revision, "rollback_restored_revision_drift");
   text(rollback.re_promoted_revision, "rollback_re_promoted_revision_invalid", UUID_RE);
@@ -487,16 +487,16 @@ function validateServiceIdentities(services, codePrefix) {
     services.pwa,
     [
       "artifact_digest",
-      "staging_revision",
-      "staging_readback_digest",
+      "qa_revision",
+      "qa_readback_digest",
       "production_candidate_revision",
       "production_candidate_readback_digest",
     ],
     `${codePrefix}_pwa_shape_invalid`,
   );
   hash(services.pwa.artifact_digest, `${codePrefix}_pwa_artifact_invalid`);
-  text(services.pwa.staging_revision, `${codePrefix}_pwa_revision_invalid`);
-  hash(services.pwa.staging_readback_digest, `${codePrefix}_pwa_readback_invalid`);
+  text(services.pwa.qa_revision, `${codePrefix}_pwa_revision_invalid`);
+  hash(services.pwa.qa_readback_digest, `${codePrefix}_pwa_readback_invalid`);
   text(
     services.pwa.production_candidate_revision,
     `${codePrefix}_pwa_production_candidate_invalid`,
@@ -510,8 +510,8 @@ function validateServiceIdentities(services, codePrefix) {
     [
       "artifact_digest",
       "site_schema_digest",
-      "staging_revision",
-      "staging_readback_digest",
+      "qa_revision",
+      "qa_readback_digest",
       "production_candidate_revision",
       "production_candidate_readback_digest",
     ],
@@ -519,8 +519,8 @@ function validateServiceIdentities(services, codePrefix) {
   );
   hash(services.frappe.artifact_digest, `${codePrefix}_frappe_artifact_invalid`);
   hash(services.frappe.site_schema_digest, `${codePrefix}_frappe_schema_invalid`);
-  text(services.frappe.staging_revision, `${codePrefix}_frappe_revision_invalid`);
-  hash(services.frappe.staging_readback_digest, `${codePrefix}_frappe_readback_invalid`);
+  text(services.frappe.qa_revision, `${codePrefix}_frappe_revision_invalid`);
+  hash(services.frappe.qa_readback_digest, `${codePrefix}_frappe_readback_invalid`);
   text(
     services.frappe.production_candidate_revision,
     `${codePrefix}_frappe_production_candidate_invalid`,
@@ -842,7 +842,7 @@ function validateReleaseManifest(manifest, permit) {
       "artifacts",
       "configuration",
       "migrations",
-      "staging",
+      "qa",
       "production_candidates",
       "recovery",
       "provider_reconciliation",
@@ -908,15 +908,15 @@ function validateReleaseManifest(manifest, permit) {
   hash(manifest.migrations.frappe_schema_digest, "release_manifest_frappe_schema_invalid");
   hash(manifest.migrations.frappe_migration_digest, "release_manifest_frappe_migration_invalid");
   equal("expand-contract", manifest.migrations.compatibility, "release_manifest_migration_compatibility_invalid");
-  exactKeys(manifest.staging, ["worker_revision", "worker_readback_digest", "pwa_revision", "pwa_readback_digest", "frappe_revision", "frappe_readback_digest", "status"], "release_manifest_staging_shape_invalid");
-  equal(permit.staging.revision, manifest.staging.worker_revision, "release_manifest_staging_worker_drift");
-  equal(permit.worker.staging_version_digest, manifest.staging.worker_readback_digest, "release_manifest_staging_worker_readback_drift");
-  text(manifest.staging.pwa_revision, "release_manifest_staging_pwa_invalid");
-  equal(permit.staging.revision, manifest.staging.pwa_revision, "release_manifest_staging_pwa_drift");
-  hash(manifest.staging.pwa_readback_digest, "release_manifest_staging_pwa_readback_invalid");
-  text(manifest.staging.frappe_revision, "release_manifest_staging_frappe_invalid");
-  hash(manifest.staging.frappe_readback_digest, "release_manifest_staging_frappe_readback_invalid");
-  equal("matched", manifest.staging.status, "release_manifest_staging_not_matched");
+  exactKeys(manifest.qa, ["worker_revision", "worker_readback_digest", "pwa_revision", "pwa_readback_digest", "frappe_revision", "frappe_readback_digest", "status"], "release_manifest_qa_shape_invalid");
+  equal(permit.qa.revision, manifest.qa.worker_revision, "release_manifest_qa_worker_drift");
+  equal(permit.worker.qa_version_digest, manifest.qa.worker_readback_digest, "release_manifest_qa_worker_readback_drift");
+  text(manifest.qa.pwa_revision, "release_manifest_qa_pwa_invalid");
+  equal(permit.qa.revision, manifest.qa.pwa_revision, "release_manifest_qa_pwa_drift");
+  hash(manifest.qa.pwa_readback_digest, "release_manifest_qa_pwa_readback_invalid");
+  text(manifest.qa.frappe_revision, "release_manifest_qa_frappe_invalid");
+  hash(manifest.qa.frappe_readback_digest, "release_manifest_qa_frappe_readback_invalid");
+  equal("matched", manifest.qa.status, "release_manifest_qa_not_matched");
   exactKeys(
     manifest.production_candidates,
     [
@@ -969,8 +969,8 @@ function validateReleaseManifest(manifest, permit) {
     DOMAIN_ZONE_RE,
   );
   exactKeys(manifest.recovery, [
-    "staging_backup_restore_digest",
-    "staging_rollback_digest",
+    "qa_backup_restore_digest",
+    "qa_rollback_digest",
     "production_d1_recovery_digest",
     "prior_worker_revision",
     "prior_worker_readback_digest",
@@ -981,10 +981,10 @@ function validateReleaseManifest(manifest, permit) {
     "prior_frappe_backup_digest",
     "status",
   ], "release_manifest_recovery_shape_invalid");
-  hash(manifest.recovery.staging_backup_restore_digest, "release_manifest_backup_digest_invalid");
-  equal(permit.backup_restore.evidence_digest, manifest.recovery.staging_backup_restore_digest, "release_manifest_backup_drift");
-  hash(manifest.recovery.staging_rollback_digest, "release_manifest_rollback_digest_invalid");
-  equal(permit.rollback.evidence_digest, manifest.recovery.staging_rollback_digest, "release_manifest_rollback_drift");
+  hash(manifest.recovery.qa_backup_restore_digest, "release_manifest_backup_digest_invalid");
+  equal(permit.backup_restore.evidence_digest, manifest.recovery.qa_backup_restore_digest, "release_manifest_backup_drift");
+  hash(manifest.recovery.qa_rollback_digest, "release_manifest_rollback_digest_invalid");
+  equal(permit.rollback.evidence_digest, manifest.recovery.qa_rollback_digest, "release_manifest_rollback_drift");
   hash(manifest.recovery.production_d1_recovery_digest, "release_manifest_d1_recovery_digest_invalid");
   equal(sha256(canonicalJson(permit.production_recovery)), manifest.recovery.production_d1_recovery_digest, "release_manifest_d1_recovery_drift");
   text(manifest.recovery.prior_worker_revision, "release_manifest_prior_worker_invalid", UUID_RE);
@@ -1499,12 +1499,12 @@ export function validateReleasePermitPayload(payload, { now = Date.now() } = {})
   equal(
     sha256(canonicalJson({
       production: payload.worker.production_config_digest,
-      staging: payload.worker.staging_config_digest,
+      qa: payload.worker.qa_config_digest,
     })),
     payload.config_digest,
     "config_manifest_digest_mismatch",
   );
-  validateStaging(payload.staging, payload);
+  validateQa(payload.qa, payload);
   validateProduction(payload.production, payload);
   validateSmoke(payload.smoke, payload);
   validateBackupRestore(payload.backup_restore, payload);
@@ -1825,7 +1825,7 @@ function environmentBindingManifest(config) {
 
 /** Compute a checked-in, environment-resolved config/binding and secret inventory digest. */
 export async function computeEnvironmentConfigDigest({ repoRoot, environment } = {}) {
-  text(environment, "config_environment_invalid", /^(?:staging|production)$/);
+  text(environment, "config_environment_invalid", /^(?:qa|production)$/);
   const root = path.resolve(repoRoot);
   const wranglerSource = await readFile(path.join(root, "workers-bus", "wrangler.jsonc"), "utf8");
   const secretSource = await readFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "utf8");
@@ -1884,6 +1884,19 @@ export async function computeEnvironmentConfigDigest({ repoRoot, environment } =
     buckets_digest: sha256(canonicalJson(bucketManifest)),
     routes_digest: sha256(canonicalJson(routesManifest)),
   };
+}
+
+/** Expected cron schedules for an environment, straight from wrangler.jsonc. */
+export async function expectedCrons({ repoRoot, environment } = {}) {
+  text(environment, "expected_crons_environment_invalid", /^(?:qa|production)$/);
+  const root = path.resolve(repoRoot);
+  const config = parseJsonc(await readFile(path.join(root, "workers-bus", "wrangler.jsonc"), "utf8"));
+  const resolved = effectiveEnvironmentConfig(config, environment);
+  const triggers = resolved.triggers;
+  if (!isRecord(triggers) || !Array.isArray(triggers.crons) || triggers.crons.some((cron) => typeof cron !== "string" || cron.trim() === "")) {
+    fail("expected_crons_triggers_invalid");
+  }
+  return [...triggers.crons].sort();
 }
 
 function providerTargetManifest(config, environment) {
@@ -1978,7 +1991,7 @@ function providerTargetManifest(config, environment) {
 
 /** Resolve candidate Cloudflare coordinates and compare them to generation-N policy. */
 export async function validateProviderTargetPolicy({ candidateRoot, policyRoot, environment } = {}) {
-  text(environment, "provider_target_environment_invalid", /^(?:staging|production)$/);
+  text(environment, "provider_target_environment_invalid", /^(?:qa|production)$/);
   const candidateSource = await readFile(path.join(path.resolve(candidateRoot), "workers-bus", "wrangler.jsonc"), "utf8");
   const policySource = await readFile(path.join(path.resolve(policyRoot), "deploy", "release-provider-policy.json"), "utf8");
   const candidate = providerTargetManifest(parseJsonc(candidateSource), environment);
@@ -1987,10 +2000,10 @@ export async function validateProviderTargetPolicy({ candidateRoot, policyRoot, 
   exactKeys(policy, ["schema", "account_id", "environments"], "provider_target_policy_shape_invalid");
   equal("ironwrap_release_provider_policy_v1", policy.schema, "provider_target_policy_schema_invalid");
   text(policy.account_id, "provider_target_policy_account_invalid", /^[0-9a-f]{32}$/);
-  exactKeys(policy.environments, ["staging", "production"], "provider_target_policy_environment_shape_invalid");
+  exactKeys(policy.environments, ["qa", "production"], "provider_target_policy_environment_shape_invalid");
   const expected = policy.environments[environment];
   exactKeys(expected, ["credential_secret", "worker_name", "workers_dev", "compatibility_date", "compatibility_flags", "observability", "assets", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"], "provider_target_policy_environment_invalid");
-  const expectedCredential = environment === "staging" ? "RELEASE_STAGING_CLOUDFLARE_API_TOKEN" : "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN";
+  const expectedCredential = environment === "qa" ? "RELEASE_QA_CLOUDFLARE_API_TOKEN" : "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN";
   equal(expectedCredential, expected.credential_secret, "provider_target_credential_scope_invalid");
   const expectedManifest = { account_id: policy.account_id, ...Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "credential_secret")) };
   for (const key of ["compatibility_flags", "crons", "d1_databases", "r2_buckets", "queue_producers", "queue_consumers", "routes"]) {
@@ -2010,7 +2023,7 @@ export async function validateProviderTargetPolicy({ candidateRoot, policyRoot, 
 }
 
 export async function validateReleaseEnvironmentPreflight({ repoRoot, environment, secretNames } = {}) {
-  text(environment, "environment_preflight_environment_invalid", /^(?:staging|production)$/);
+  text(environment, "environment_preflight_environment_invalid", /^(?:qa|production)$/);
   if (!Array.isArray(secretNames) || secretNames.some((name) => typeof name !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/.test(name)) || new Set(secretNames).size !== secretNames.length) fail("environment_preflight_secret_inventory_invalid");
   const root = path.resolve(repoRoot);
   const config = parseJsonc(await readFile(path.join(root, "workers-bus", "wrangler.jsonc"), "utf8"));
@@ -2105,10 +2118,10 @@ export function releasePermitDigest(permit) {
 }
 
 /** Bind the two provider environment configuration/binding digests together. */
-export function computeReleaseConfigDigest({ staging, production } = {}) {
-  hash(staging, "staging_config_digest_invalid");
+export function computeReleaseConfigDigest({ qa, production } = {}) {
+  hash(qa, "qa_config_digest_invalid");
   hash(production, "production_config_digest_invalid");
-  return sha256(canonicalJson({ production, staging }));
+  return sha256(canonicalJson({ production, qa }));
 }
 
 /**

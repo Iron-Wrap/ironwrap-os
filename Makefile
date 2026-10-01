@@ -1,6 +1,8 @@
-# IronWrap OS checks. CI (.github/workflows/ci.yml) runs `make check`, then
-# `make e2e secret-scan` in the same job; `gate` covers all three. The paired-device Lighthouse budget is a timing measurement and
-# keeps a runner of its own in ci.yml.
+# IronWrap OS checks. CI (.github/workflows/ci.yml) splits this into parallel jobs
+# (`check-contracts`, `check-pwa`, sharded `worker-shard`) plus a matrixed `make e2e`;
+# `gate` covers all of them. `make check` stays the local, sequential entry point and
+# must still run everything the split jobs run between them. The paired-device
+# Lighthouse budget is a timing measurement and keeps a runner of its own in ci.yml.
 
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -12,9 +14,19 @@ NODE_PACKAGES := app mcp/erpnext-roofing-mcp mcp/ironwrap-bus-mcp mcp/newo-mcp
 FRAPPE_APP := frappe-apps/ironwrap_roofing
 FRAPPE_VENV := tmp/frappe-venv
 
-.PHONY: check deps validate test-tools mcp app worker frappe audit static evidence e2e secret-scan
+.PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp app \
+  worker worker-contract worker-tests worker-shard frappe audit static evidence \
+  evidence-receipt e2e e2e-suite secret-scan
 
 check: validate test-tools mcp app worker frappe audit static evidence
+
+# Per-area sub-targets for CI's parallel jobs. Together they cover exactly what
+# `check` covers, minus `evidence` (which needs both the pwa and worker legs merged
+# onto one filesystem, so it runs in its own CI job instead): `make -n check-contracts
+# check-pwa check-worker` and `make -n check` list the same set of commands.
+check-contracts: validate test-tools mcp frappe audit static
+check-pwa: app
+check-worker: worker
 
 # npm ci only when a lockfile changes; npm writes node_modules/.package-lock.json.
 %/node_modules/.package-lock.json: %/package-lock.json
@@ -64,7 +76,15 @@ test-tools:
 	  deploy/local/frappe-marker-sweep.test.mjs \
 	  deploy/local/frappe-init.test.mjs
 	node --test \
-	  tools/production-readiness.test.mjs \
+	  tools/production-readiness-contract.test.mjs \
+	  tools/production-readiness-live-env.test.mjs \
+	  tools/production-readiness-backup-restore.test.mjs \
+	  tools/production-readiness-d1-backup.test.mjs \
+	  tools/production-readiness-d1-recovery.test.mjs \
+	  tools/production-readiness-d1-drill.test.mjs \
+	  tools/production-readiness-misc.test.mjs \
+	  tools/merge-worker-tap.test.mjs \
+	  tools/ci-workflow.test.mjs \
 	  tools/launch-proof.test.mjs \
 	  tools/deploy-workflow.test.mjs \
 	  tools/release-permit.test.mjs \
@@ -84,14 +104,54 @@ app: app/node_modules/.package-lock.json
 	npm run format:check --prefix app
 	npm run build --prefix app
 
-worker: workers-bus/node_modules/.package-lock.json
+worker: worker-contract worker-tests
+
+# The typegen/typecheck/dry-run contract, plus the migration smoke. Nothing under
+# workers-bus/src imports from app/ (IRO-267 blocker 9), but the dry-run below
+# validates the real app/dist bundle, so this target needs app's node_modules too.
+# typecheck needs worker-configuration.d.ts, which typegen generates (blocker 10),
+# so typegen must run before typecheck here.
+#
+# workers-bus/wrangler.jsonc's assets.directory points at ../app/dist, and
+# `wrangler deploy --dry-run` fails closed if that directory is missing. It
+# does not fail closed on an empty one, though: run 36706471011 showed
+# `Read 0 files from the assets directory` against `Read 97 files` inside
+# `make check` on run 36589095529, same pinned wrangler 4.131.0 - an empty
+# `app/dist` dry-runs clean but validates none of wrangler's asset limits or
+# manifest. So this target builds the real bundle first and then greps the
+# dry-run log for a nonzero read count; a wrangler upgrade that renames this
+# line must have the guard re-pinned to the new wording, not deleted.
+worker-contract: workers-bus/node_modules/.package-lock.json app/node_modules/.package-lock.json
 	mkdir -p $(OUT)
 	npm run typegen --prefix workers-bus
 	rm -rf $(OUT)/d1
 	npm run db:migrate:local --prefix workers-bus -- --persist-to "$(abspath $(OUT))/d1"
-	npm test --prefix workers-bus 2>&1 | tee $(OUT)/worker-tests.tap
 	npm run typecheck --prefix workers-bus
-	npm run deploy --prefix workers-bus -- --dry-run
+	npm run build --prefix app
+	npm run deploy --prefix workers-bus -- --dry-run 2>&1 | tee $(OUT)/worker-dry-run.log
+	grep -Eq 'Read [1-9][0-9]* files from the assets directory' $(OUT)/worker-dry-run.log
+
+# workers-bus/test/record-documents-api.test.ts imports a shared zod contract
+# from app/src/, so the Worker suite also needs app's node_modules; in the
+# unsplit `check` target this always worked by accident (the `app` target ran
+# first in the same job filesystem), a coupling CI's separate worker job made
+# real (IRO-267).
+worker-tests: workers-bus/node_modules/.package-lock.json app/node_modules/.package-lock.json
+	mkdir -p $(OUT)
+	npm run typegen --prefix workers-bus
+	npm test --prefix workers-bus 2>&1 | tee $(OUT)/worker-tests.tap
+
+# One shard of the Worker bus suite, for CI's worker matrix (SHARD=k/N, N=4). The cwd
+# must be workers-bus so node's test discovery finds the same 151 files `npm test`
+# does. No shard touches D1: nothing under workers-bus/ reads the database `worker`
+# persists (grep for persist-to|persistTo|tmp/check|.wrangler finds nothing), so the
+# 40s db:migrate:local smoke stays its own CI job (`worker-contract`) instead of
+# being duplicated, or skipped, per shard.
+worker-shard: workers-bus/node_modules/.package-lock.json app/node_modules/.package-lock.json
+	mkdir -p $(OUT)
+	npm run typegen --prefix workers-bus
+	cd workers-bus && node --test --test-shard=$(SHARD) 2>&1 \
+	  | tee "$(abspath $(OUT))/worker-tests-$(subst /,-,$(SHARD)).tap"
 
 # The leftover Frappe compatibility app: unit contracts without a site, lint,
 # and the wheel the release artifact carries.
@@ -116,12 +176,19 @@ static:
 	  echo "em dash found in agent-facing content" >&2; exit 1; \
 	fi
 
+# The receipt command, defined once so `evidence` (local) and `evidence-receipt`
+# (CI's evidence job, fed by downloaded artifacts) cannot drift apart.
+EVIDENCE_RECEIPT = node tools/validate-documentation.mjs \
+  --app-test-output $(OUT)/app-tests.log \
+  --worker-test-output $(OUT)/worker-tests.tap \
+  --evidence $(OUT)/capability-evidence.json
+
 # Exact-source capability evidence, bound to the test logs above.
 evidence: app worker
-	node tools/validate-documentation.mjs \
-	  --app-test-output $(OUT)/app-tests.log \
-	  --worker-test-output $(OUT)/worker-tests.tap \
-	  --evidence $(OUT)/capability-evidence.json
+	$(EVIDENCE_RECEIPT)
+
+evidence-receipt:
+	$(EVIDENCE_RECEIPT)
 
 # Secret scan of the tracked tree (`git archive`, not the checkout) with a
 # pinned, checksum-verified gitleaks; `tools/secret-scan.test.mjs` proves it
@@ -151,4 +218,13 @@ E2E_SUITES := test:pwa test:pwa:board test:pwa:owner-configuration test:pwa:peop
 
 e2e: app/node_modules/.package-lock.json
 	cd app && npx playwright install $(if $(CI),--with-deps,) chromium
-	for suite in $(E2E_SUITES); do npm run $$suite --prefix app; done
+	npm run build --prefix app
+	for suite in $(E2E_SUITES); do PW_SKIP_BUILD=1 npm run $$suite --prefix app; done
+
+# One e2e leg, for CI's e2e matrix (SUITE=<npm script>). Builds once, then runs
+# its own suite; app/playwright.config.ts pins one ACCEPTANCE_PORT per suite and
+# runs single-worker, so two suites must never share a job.
+e2e-suite: app/node_modules/.package-lock.json
+	cd app && npx playwright install $(if $(CI),--with-deps,) chromium
+	npm run build --prefix app
+	PW_SKIP_BUILD=1 npm run $(SUITE) --prefix app

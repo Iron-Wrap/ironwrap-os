@@ -99,7 +99,7 @@ jobs:
           node "$RELEASE_ENFORCER" ci-checks \
             --repository "$RELEASE_REPOSITORY" \
             --run-id "$RELEASE_CI_RUN_ID" \
-            --job-names "make check,paired-device-lighthouse,gate,validate-and-test" \
+            --job-names "paired-device-lighthouse,gate,validate-and-test" \
             --output "$RUNNER_TEMP/ci-checks.json"
 
       - name: Compute environment config and migration contracts

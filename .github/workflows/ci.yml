@@ -5,21 +5,49 @@
 # same shape inline; the dependency scan is copied from that file at tag v2
 # (d5a0eb5c1ffe8836f94cc679b36ed7a6be3d9e97).
 #
-# Jobs:
-#   check           toolchain setup, then `make check`.
-#   dependency-scan pull requests and merge groups only: fails on a HIGH or
-#                   CRITICAL vulnerability that is present at head and absent
-#                   at base. Inherited findings are Dependabot's job.
-#   gate            always runs; fails if any job it needs failed or was
-#                   cancelled.
-#
-# This repository adds, in `check`, `make e2e secret-scan` after `make check`
-# (Playwright PWA suites; pinned gitleaks over the tracked tree), and one job:
+# `make check` (IRO-267: 34-40 minutes end to end, budget was 60) is split into
+# parallel jobs that together cover exactly what it covers:
+#   contracts         `make check-contracts` (validators, tool/MCP tests, Frappe,
+#                     audit, static checks).
+#   pwa               `make check-pwa` (the app: typecheck, lint, vitest, build).
+#   worker            a 4-way matrix, one `make worker-shard` each; no shard reads
+#                     or writes D1, so shards need no shared state or ordering.
+#   worker-contract   `make worker-contract` - typegen, the db:migrate:local smoke,
+#                     typecheck, a real app/ build, and the deploy dry-run against
+#                     it (an empty app/dist dry-runs clean but validates none of
+#                     wrangler's asset limits - IRO-267 revision 2). Nothing under
+#                     workers-bus/src imports from app/, so it is still not part
+#                     of the shard split, but it does need app's node_modules.
+#   e2e               a 12-way matrix, one Playwright PWA suite per leg via
+#                     `make e2e-suite SUITE=<script>` (each still builds its own
+#                     bundle once; two suites never share a runner, since
+#                     app/playwright.config.ts pins one ACCEPTANCE_PORT per suite
+#                     and runs single-worker).
+#   evidence          needs both `pwa` and `worker`: the capability evidence receipt
+#                     (`make evidence-receipt`) requires both test outputs on one
+#                     filesystem, so this job downloads both artifacts, merges the
+#                     four worker shard TAPs into one (tools/merge-worker-tap.mjs -
+#                     a plain `cat` would silently bind the receipt to one shard's
+#                     count) and writes the receipt.
+#   secret-scan       `make secret-scan` (pinned gitleaks over the tracked tree).
+#   dependency-scan   pull requests and merge groups only: fails on a HIGH or
+#                     CRITICAL vulnerability that is present at head and absent
+#                     at base. Inherited findings are Dependabot's job.
 #   paired-device-lighthouse  a timing budget, so it keeps a runner of its own.
-# `validate-and-test` reports the check name ruleset 20652163 still requires;
-# it passes exactly when `gate` passed. Delete it once the ruleset requires
-# `gate`. The workflow name `CI` is what deploy.yml's workflow_run listens
-# to, and deploy.yml reads these job names back.
+#   gate              always runs; fails if any job it needs failed or was
+#                     cancelled.
+#
+# `make check` itself is unchanged and stays the local, sequential entry point.
+# tools/ci-workflow.test.mjs derives every `make <target>` invocation this
+# workflow makes and asserts it covers exactly what `make check e2e secret-scan`
+# covers - the "no check removed" proof, enforced in code rather than a PR table.
+#
+# `validate-and-test` reports the check name ruleset 20652163 still requires; it
+# passes exactly when `gate` passed. Delete it once the ruleset requires `gate`.
+# The workflow name `CI` is what deploy.yml's workflow_run listens to, and
+# deploy.yml reads these job names back - no matrix job (named e.g. `worker (1)`
+# or `e2e (test:pwa)`) may ever appear in deploy.yml's job-names list, because
+# tools/release-promotion.mjs requires exactly one job per requested name.
 #
 # No path filters, so `gate` reports on every change. The single required
 # status check is `gate`.
@@ -43,11 +71,27 @@ defaults:
   run:
     shell: bash
 
+env:
+  # tools/release-promotion.mjs:260 reads a run's jobs from
+  # actions/runs/<id>/jobs?per_page=100, unpaged. Raising this raises the
+  # static-plus-matrix job count (tools/ci-workflow.test.mjs asserts it stays
+  # at or under 100); the bound belongs here, where jobs are created, not there,
+  # where they are read.
+  WORKER_SHARDS: 4
+  # The pre-split Worker suite's "# tests" total (IRO-267 revision 2). The shard
+  # TAP names no test file, so tools/merge-worker-tap.mjs can't check the file
+  # set the shards ran - this floor is what stops four well-formed TAPs that
+  # between them ran far fewer than 151 files from still producing an accepted
+  # capability evidence receipt.
+  WORKER_TEST_FLOOR: 1670
+
 jobs:
-  check:
-    name: make check
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Measured 9m08s-10m41s (630/641/548 s) on revision 3's three green runs
+    # 36741028416 / 36742421682 / 36743805624 - the spec's original 10 was too
+    # tight a margin for the new critical path (IRO-267 step 10's own prediction).
+    timeout-minutes: 15
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,20 +110,196 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: make check
+      - name: make check-contracts
+        run: make check-contracts
+
+  pwa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: make check-pwa
+        run: make check-pwa
+
+      - name: Upload the app test log
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-tests-log
+          path: tmp/check/app-tests.log
+          retention-days: 7
+          if-no-files-found: error
+
+  worker:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: workers-bus/package-lock.json
+
+      - name: make worker-shard
+        run: make worker-shard SHARD=${{ matrix.shard }}/${{ env.WORKER_SHARDS }}
+
+      - name: Upload this shard's TAP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: worker-tap-${{ matrix.shard }}
+          path: tmp/check/worker-tests-${{ matrix.shard }}-${{ env.WORKER_SHARDS }}.tap
+          retention-days: 7
+          if-no-files-found: error
+
+  # The typegen/typecheck/dry-run contract plus the db:migrate:local smoke, via
+  # `make worker-contract`. Nothing under workers-bus/src imports from app/, but
+  # (IRO-267 revision 2) the deploy dry-run now validates the real PWA bundle
+  # instead of an empty app/dist, so this job also builds app/ and its cache key
+  # must cover both lockfiles. Nothing under workers-bus/ reads the D1 database
+  # this persists (grep for persist-to|persistTo|tmp/check|.wrangler finds
+  # nothing), so it is not a test input to anything else and needs no shared
+  # state with the worker shards.
+  worker-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            workers-bus/package-lock.json
+            app/package-lock.json
+
+      - name: make worker-contract
+        run: make worker-contract
+
+  # One Playwright PWA suite per leg. app/playwright.config.ts pins
+  # fullyParallel: false, workers: 1, and one ACCEPTANCE_PORT per suite, so two
+  # suites must never share a runner.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - test:pwa
+          - test:pwa:board
+          - test:pwa:owner-configuration
+          - test:pwa:people
+          - test:pwa:safety
+          - test:pwa:documents
+          - test:pwa:job-history
+          - test:pwa:placement
+          - test:pwa:capabilities
+          - test:pwa:capabilities:accounting
+          - test:pwa:accounting
+          - test:pwa:onboarding
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: make e2e-suite
+        run: make e2e-suite SUITE=${{ matrix.suite }}
+
+  # Exact-source capability evidence, bound to the pwa and worker test logs. The
+  # identity check this performs in CI (tools/validate-documentation.mjs's
+  # ciCheckIdentity) needs a plain checkout: no `ref:`, no `fetch-depth: 2`.
+  evidence:
+    needs: [pwa, worker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Download the app test log
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-tests-log
+          path: tmp/check
+
+      - name: Download the worker shard TAPs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: worker-tap-*
+          path: tmp/check
+          merge-multiple: true
+
+      - name: Merge the worker shard TAPs
+        run: node tools/merge-worker-tap.mjs --shards ${{ env.WORKER_SHARDS }} --min-tests ${{ env.WORKER_TEST_FLOOR }} --output tmp/check/worker-tests.tap tmp/check/worker-tests-*-${{ env.WORKER_SHARDS }}.tap
+
+      - name: Capability evidence receipt
         env:
           # The capability evidence receipt binds the exact source under test.
           CAPABILITY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CAPABILITY_BASE_COMMIT: ${{ github.event.pull_request.base.sha || '' }}
-        run: make check
+        run: make evidence-receipt
 
-      - name: Playwright e2e and secret scan
-        run: make e2e secret-scan
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-  # The paired-device budget is a timing measurement, so it gets a runner of its own.
-  # Sharing one with the validator, unit, Playwright and Python suites left ~10 minutes
-  # of prior work on the machine before Lighthouse started and pushed the job into its
-  # own 20-minute timeout on slower runners.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: make secret-scan
+        run: make secret-scan
+
+  # The paired-device budget is a timing measurement, so it gets a runner of its
+  # own. Sharing one with the validator, unit, Playwright and Python suites left
+  # ~10 minutes of prior work on the machine before Lighthouse started and
+  # pushed the job into its own 20-minute timeout on slower runners.
   paired-device-lighthouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -235,16 +455,31 @@ jobs:
 
   gate:
     if: always()
-    needs: [check, paired-device-lighthouse, dependency-scan]
+    needs:
+      [
+        contracts,
+        pwa,
+        worker,
+        worker-contract,
+        e2e,
+        evidence,
+        secret-scan,
+        paired-device-lighthouse,
+        dependency-scan,
+      ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every job to succeed or be skipped
+      # dependency-scan is the only job with a job-level `if:` (pull requests and
+      # merge groups only), so it is the only one a skip is legitimate for. A
+      # stray `if:` or path filter on any other job used to pass here as
+      # readily as a real success (IRO-267 blocker 12, revision 2 step 22).
+      - name: Require every job to succeed, except dependency-scan which may be skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${NEEDS}"
-          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<<"${NEEDS}" >/dev/null
+          jq -e 'to_entries | all(.value.result == "success" or (.key == "dependency-scan" and .value.result == "skipped"))' <<<"${NEEDS}" >/dev/null
 
   validate-and-test:
     if: always()

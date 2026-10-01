@@ -119,9 +119,10 @@ dependency additions, generated artifacts, and speculative scaffolding.
 
 ## Validation ladder
 
-CI runs `make check` (validators, tool/MCP/app/Worker/Frappe suites, npm audits, capability
-evidence receipt), then `make e2e` (Playwright PWA suites) and `make secret-scan`; the required
-check is `gate`. The individual steps:
+CI runs what `make check` (validators, tool/MCP/app/Worker/Frappe suites, npm audits, capability
+evidence receipt), `make e2e` (Playwright PWA suites), and `make secret-scan` cover, split across
+parallel jobs that together reach exactly the same checks (`.github/workflows/ci.yml`); the
+required check is `gate`. The individual steps, run locally and sequentially:
 
 ```bash
 make check

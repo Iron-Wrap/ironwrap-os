@@ -54,7 +54,14 @@ From a clean checkout of the release commit:
 ```bash
 node tools/validate-documentation.mjs
 node tools/production-readiness.mjs contract
-node --test tools/production-readiness.test.mjs
+node --test \
+  tools/production-readiness-contract.test.mjs \
+  tools/production-readiness-live-env.test.mjs \
+  tools/production-readiness-backup-restore.test.mjs \
+  tools/production-readiness-d1-backup.test.mjs \
+  tools/production-readiness-d1-recovery.test.mjs \
+  tools/production-readiness-d1-drill.test.mjs \
+  tools/production-readiness-misc.test.mjs
 ```
 
 The contract checks the exact Frappe, frappe_docker, and Hermes tags/commits; digest-pinned

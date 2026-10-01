@@ -173,11 +173,11 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
       `${name} contract acceptance`,
     );
   }
-  // qa runs without the BFF, and the BFF is the only control plane that can revoke a
-  // live customer link. customerPortalConfigured therefore reports false whenever the portal
-  // is on and the BFF is off, which turns `/ready` red and blocks the release. Enabling the
-  // portal there is not a flag flip; it needs APP_BFF_ENABLED plus an APP_AUTH_PEPPER secret.
-  assert.equal(config.env.qa.vars.APP_BFF_ENABLED, "false");
+  // qa runs the BFF since 2026-10-02 (sign-in by magic link from the operator's mailbox), with
+  // the customer portal still off. The BFF is the only control plane that can revoke a live
+  // customer link, so customerPortalConfigured reports false whenever the portal is on and the
+  // BFF is off, which turns `/ready` red and blocks the release; the loop below keeps that pair.
+  assert.equal(config.env.qa.vars.APP_BFF_ENABLED, "true");
   assert.equal(config.env.qa.vars.APP_CUSTOMER_PORTAL_ENABLED, "false");
   assert.equal(
     config.env.qa.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
@@ -191,9 +191,10 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
   }
   assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
+  // qa creates its first owner through `POST /admin/app-users/bootstrap` (ADMIN_TOKEN, once).
   assert.equal(
     config.env.qa.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED,
-    "false",
+    "true",
   );
   assert.equal(config.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_ENABLED, "false");

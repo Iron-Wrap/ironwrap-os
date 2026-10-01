@@ -86,6 +86,12 @@ function v4SmokeEvidence(overrides = {}) {
     ...overrides,
   };
 }
+function mergeSettingsResponse(overrides = {}) {
+  return new Response(JSON.stringify({ data: { repository: {
+    nameWithOwner: "Iron-Wrap/ironwrap-os", defaultBranchRef: { name: "main" },
+    mergeCommitAllowed: false, squashMergeAllowed: true, rebaseMergeAllowed: true, ...overrides,
+  } } }), { status: 200 });
+}
 function mergePolicyFixture() {
   const fields = {
     schema: "ironwrap_github_merge_policy_v1",
@@ -1033,7 +1039,7 @@ test("PR context binds current base, source head, tested merge commit, and exact
     if (value.endsWith(`/git/commits/${COMMIT}`)) return new Response(JSON.stringify({ sha: COMMIT, tree: { sha: GIT_TREE } }), { status: 200 });
     if (value.endsWith("/commits/main")) return new Response(JSON.stringify({ sha: BASE }), { status: 200 });
     if (value.endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
-    if (value.endsWith("/repos/Iron-Wrap/ironwrap-os")) return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    if (value.endsWith("/graphql")) return mergeSettingsResponse();
     return new Response("{}", { status: 404 });
   };
   globalThis.fetch = stableFetch;
@@ -1054,9 +1060,9 @@ test("PR context binds current base, source head, tested merge commit, and exact
     ? new Response(JSON.stringify({ sha: "9".repeat(40) }), { status: 200 })
     : stableFetch(url);
   await assert.rejects(() => main(["pr-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "99", "--ruleset-id", "20652124", "--output", output]), /release_promotion_pr_base_or_tree_drift/);
-  globalThis.fetch = async (url) => String(url).endsWith("/repos/Iron-Wrap/ironwrap-os")
-    ? new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 })
-    : stableFetch(url);
+  globalThis.fetch = async (url, init) => String(url).endsWith("/graphql")
+    ? mergeSettingsResponse({ mergeCommitAllowed: true })
+    : stableFetch(url, init);
   await assert.rejects(() => main(["pr-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "99", "--ruleset-id", "20652124", "--output", output]), /release_promotion_merge_policy_invalid/);
 });
 
@@ -1095,7 +1101,7 @@ test("push context admits the merged squash commit that is still main's tip", as
     if (value.endsWith("/commits/main")) return new Response(JSON.stringify(mainCommit), { status: 200 });
     if (value.endsWith("/pulls/43")) return new Response(JSON.stringify(pr), { status: 200 });
     if (value.endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
-    if (value.endsWith("/repos/Iron-Wrap/ironwrap-os")) return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    if (value.endsWith("/graphql")) return mergeSettingsResponse();
     return new Response("{}", { status: 404 });
   };
   t.after(() => {
@@ -1203,7 +1209,7 @@ test("push-context --source-policy reachable replaces the tip check with a provi
     if (value.endsWith("/commits/main")) return new Response(JSON.stringify(mainCommit), { status: 200 });
     if (value.endsWith("/pulls/43")) return new Response(JSON.stringify(mergedPr), { status: 200 });
     if (value.endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
-    if (value.endsWith("/repos/Iron-Wrap/ironwrap-os")) return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    if (value.endsWith("/graphql")) return mergeSettingsResponse();
     return new Response("{}", { status: 404 });
   };
   const invoke = (...extra) => main([
@@ -1289,15 +1295,45 @@ test("pre-merge and post-merge source admission reject each other's context", as
   await assert.rejects(() => invoke("merged-source"), /release_promotion_pr_context_contract_invalid/);
 });
 
+test("merge settings come from GraphQL, which a read-only token can see", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? "GET", body: init.body ?? "" });
+    if (String(url).endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
+    if (String(url).endsWith("/graphql")) return mergeSettingsResponse();
+    // What REST returns to a `contents: read` token: no allow_*_merge fields at all.
+    return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main" }), { status: 200 });
+  };
+  const live = await assertMergePolicyUnchanged({ repository: "Iron-Wrap/ironwrap-os", expected: mergePolicyFixture(), token: "github-token", fetchImpl });
+  assert.deepEqual(live, mergePolicyFixture());
+  const graphql = calls.filter((call) => call.url === "https://api.github.com/graphql");
+  assert.equal(graphql.length, 1);
+  assert.equal(graphql[0].method, "POST");
+  assert.deepEqual(JSON.parse(graphql[0].body).variables, { owner: "Iron-Wrap", name: "ironwrap-os" });
+  assert.ok(!calls.some((call) => call.url.endsWith("/repos/Iron-Wrap/ironwrap-os")));
+});
+
+test("a GraphQL error or a foreign repository fails the merge settings readback", async () => {
+  const rulesetResponse = () => new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
+  const withSettings = (settings) => async (url) => String(url).endsWith("/graphql") ? settings() : rulesetResponse();
+  const check = (fetchImpl) => assertMergePolicyUnchanged({ repository: "Iron-Wrap/ironwrap-os", expected: mergePolicyFixture(), token: "github-token", fetchImpl });
+  await assert.rejects(() => check(withSettings(() => new Response(JSON.stringify({ data: { repository: null }, errors: [{ type: "NOT_FOUND" }] }), { status: 200 }))), /release_promotion_merge_repository_settings_unavailable/);
+  await assert.rejects(() => check(withSettings(() => new Response("{}", { status: 502 }))), /release_promotion_merge_repository_settings_unavailable/);
+  await assert.rejects(() => check(withSettings(() => mergeSettingsResponse({ nameWithOwner: "Iron-Wrap/other" }))), /release_promotion_merge_provider_policy_invalid/);
+  await assert.rejects(() => check(withSettings(() => mergeSettingsResponse({ defaultBranchRef: null }))), /release_promotion_merge_policy_invalid/);
+});
+
 test("merge-time provider policy drift fails before any mutation", async () => {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method ?? "GET" });
+    calls.push({ url: String(url), method: init.method ?? "GET", body: init.body ?? "" });
     if (String(url).endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
-    return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    return mergeSettingsResponse({ mergeCommitAllowed: true });
   };
   await assert.rejects(() => assertMergePolicyUnchanged({ repository: "Iron-Wrap/ironwrap-os", expected: mergePolicyFixture(), token: "github-token", fetchImpl }), /release_promotion_merge_policy_invalid/);
-  assert.ok(calls.length >= 1 && calls.every((call) => call.method === "GET"));
+  // The only non-GET call is the GraphQL settings read, and it carries a query, never a mutation.
+  assert.ok(calls.length >= 1 && calls.every((call) => call.method === "GET"
+    || (call.url === "https://api.github.com/graphql" && /^\{"query":"query\(/.test(call.body))));
 });
 
 test("CI receipt rejects a jobs response from a different run", async (t) => {

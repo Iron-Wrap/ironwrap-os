@@ -369,12 +369,29 @@ function validateMergePolicy(policy, code = "merge_policy_invalid") {
   return policy;
 }
 
+const MERGE_SETTINGS_QUERY = "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { nameWithOwner defaultBranchRef { name } mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed } }";
+
+// REST `GET /repos/{repo}` omits `allow_*_merge` for a read-only token, which is what every
+// release job holds (`contents: read`); GraphQL serves the same three settings to a reader.
+async function readRepositoryMergeSettings(repository, headers, fetchImpl = fetch) {
+  const [owner, name] = repository.split("/");
+  const response = await fetchImpl("https://api.github.com/graphql", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ query: MERGE_SETTINGS_QUERY, variables: { owner, name } }),
+  }).catch(() => null);
+  if (!response?.ok) fail("merge_repository_settings_unavailable");
+  const body = await response.json().catch(() => null);
+  if (!isRecord(body) || body.errors !== undefined || !isRecord(body.data?.repository)) fail("merge_repository_settings_unavailable");
+  return body.data.repository;
+}
+
 async function readMergePolicy(repository, headers, rulesetId, fetchImpl = fetch) {
   const id = boundedInteger(String(rulesetId), { minimum: 1, maximum: Number.MAX_SAFE_INTEGER, code: "merge_ruleset_id_invalid" });
-  const repo = await githubJson(`https://api.github.com/repos/${repository}`, headers, "merge_repository_settings_unavailable", fetchImpl);
+  const repo = await readRepositoryMergeSettings(repository, headers, fetchImpl);
   const ruleset = await githubJson(`https://api.github.com/repos/${repository}/rulesets/${id}`, headers, "merge_ruleset_unavailable", fetchImpl);
   const pullRequestRules = Array.isArray(ruleset.rules) ? ruleset.rules.filter((rule) => rule?.type === "pull_request") : [];
-  if (repo.full_name !== repository
+  if (repo.nameWithOwner !== repository
     || ruleset.id !== id
     || pullRequestRules.length !== 1
     || !Array.isArray(pullRequestRules[0]?.parameters?.allowed_merge_methods)) fail("merge_provider_policy_invalid");
@@ -382,10 +399,10 @@ async function readMergePolicy(repository, headers, rulesetId, fetchImpl = fetch
     schema: "ironwrap_github_merge_policy_v1",
     method: "squash",
     repository_settings: {
-      default_branch: repo.default_branch,
-      allow_merge_commit: repo.allow_merge_commit,
-      allow_squash_merge: repo.allow_squash_merge,
-      allow_rebase_merge: repo.allow_rebase_merge,
+      default_branch: repo.defaultBranchRef?.name,
+      allow_merge_commit: repo.mergeCommitAllowed,
+      allow_squash_merge: repo.squashMergeAllowed,
+      allow_rebase_merge: repo.rebaseMergeAllowed,
     },
     ruleset: {
       id: ruleset.id,

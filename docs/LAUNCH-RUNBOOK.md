@@ -219,10 +219,19 @@ A push to `main` deploys `qa` only (IRO-260). Production is promoted from a rele
 bytes the Deploy run of that commit already proved on `qa`.
 
 `validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
-`allow_rebase_merge` `true` on `main`; `gh api repos/Iron-Wrap/ironwrap-os` reads back exactly that
-(2026-10-01, Iron-Wrap token), so `merge_policy_invalid` blocks neither the push path nor the tag
-path. That is the setting resolved, not the call proven: `readMergePolicy` runs only inside
-`pushContext`, has no standalone subcommand, and no run has reached that line.
+`allow_rebase_merge` `true` on `main`, and the repository is set that way (owner change of
+2026-10-01). `readMergePolicy` reads those three settings through GraphQL (`mergeCommitAllowed`,
+`squashMergeAllowed`, `rebaseMergeAllowed`), not through `GET /repos/{repo}`: REST omits the
+`allow_*_merge` fields for a read-only token, and every release job holds `contents: read`. The
+first push-path run (Deploy `36932948168` on `919ae3d4`, 2026-10-01) failed `merge_policy_invalid`
+for exactly that reason while the settings were already correct.
+
+`readMergePolicy` has three callers: `prContext` (`pr-context`), `pushContext` (`push-context`, used
+by the push path and as the first read on the tag path), and `assertMergePolicyUnchanged`, which
+`merge-pr` and `merged-source` call. A production run therefore reads the merge policy twice, and the
+second read fails `merge_provider_policy_drift` if the repository settings or the ruleset change
+between the two. The enforcer runs from the release commit's parent, so a change to this readback
+takes effect from the first push after the commit that introduces it.
 
 **Owner prerequisites, still open:**
 

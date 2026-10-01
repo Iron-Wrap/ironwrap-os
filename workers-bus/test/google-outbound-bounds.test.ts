@@ -15,6 +15,7 @@ import {
 } from "../src/google.ts";
 
 const SUB = "sales@example.test";
+const SCOPES = "https://www.googleapis.com/auth/gmail.send";
 
 /** A throwaway key generated per run: real enough for crypto.subtle, never a credential. */
 async function serviceAccountJson(): Promise<string> {
@@ -57,7 +58,7 @@ test("a Google host that never answers fails on the bound instead of hanging", a
     }));
   const config = await env({ APP_GOOGLE_REQUEST_TIMEOUT_MS: "1000" });
   await assert.rejects(
-    () => googleToken(config, SUB),
+    () => googleToken(config, SUB, SCOPES),
     /^Error: google_token_timeout_1000ms$/,
   );
 });
@@ -69,12 +70,12 @@ test("an unresponsive Google host is skipped once the breaker trips, with no fur
   });
   const config = await env();
   for (let attempt = 1; attempt <= 3; attempt++) {
-    await assert.rejects(() => googleToken(config, `${SUB}#${attempt}`), /^Error: google_token_network_error$/);
+    await assert.rejects(() => googleToken(config, `${SUB}#${attempt}`, SCOPES), /^Error: google_token_network_error$/);
   }
   assert.equal(fetchMock.mock.callCount(), 3);
 
   // Fourth call: refused locally, before the socket. The cost of a bad credential stops growing.
-  await assert.rejects(() => googleToken(config, `${SUB}#4`), /^Error: google_token_circuit_open_\d+s$/);
+  await assert.rejects(() => googleToken(config, `${SUB}#4`, SCOPES), /^Error: google_token_circuit_open_\d+s$/);
   assert.equal(fetchMock.mock.callCount(), 3);
 });
 
@@ -90,17 +91,17 @@ test("a Google host that answers clears the failure run behind it", async (t) =>
   });
   const config = await env();
 
-  await assert.rejects(() => googleToken(config, `${SUB}#a`), /google_token_network_error/);
-  await assert.rejects(() => googleToken(config, `${SUB}#b`), /google_token_network_error/);
+  await assert.rejects(() => googleToken(config, `${SUB}#a`, SCOPES), /google_token_network_error/);
+  await assert.rejects(() => googleToken(config, `${SUB}#b`, SCOPES), /google_token_network_error/);
   answer = true;
-  assert.equal(await googleToken(config, `${SUB}#c`), "token-value");
+  assert.equal(await googleToken(config, `${SUB}#c`, SCOPES), "token-value");
 
   // Two fresh failures must not land on top of the pre-success run, so the next call still tries.
   answer = false;
-  await assert.rejects(() => googleToken(config, `${SUB}#d`), /google_token_network_error/);
-  await assert.rejects(() => googleToken(config, `${SUB}#e`), /google_token_network_error/);
+  await assert.rejects(() => googleToken(config, `${SUB}#d`, SCOPES), /google_token_network_error/);
+  await assert.rejects(() => googleToken(config, `${SUB}#e`, SCOPES), /google_token_network_error/);
   assert.equal(fetchMock.mock.callCount(), 5);
-  await assert.rejects(() => googleToken(config, `${SUB}#f`), /google_token_network_error/);
+  await assert.rejects(() => googleToken(config, `${SUB}#f`, SCOPES), /google_token_network_error/);
   assert.equal(fetchMock.mock.callCount(), 6);
 });
 
@@ -114,7 +115,7 @@ test("a rejection from Google is an answer, not unresponsiveness, and never trip
   const config = await env();
   for (let attempt = 1; attempt <= 5; attempt++) {
     await assert.rejects(
-      () => googleToken(config, `${SUB}#${attempt}`),
+      () => googleToken(config, `${SUB}#${attempt}`, SCOPES),
       /^Error: google_token: invalid_grant Invalid JWT Signature\.$/,
     );
   }

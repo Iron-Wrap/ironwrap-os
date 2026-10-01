@@ -19,7 +19,9 @@ const GMAIL = "https://gmail.googleapis.com/gmail/v1";
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
 const DOCS = "https://docs.googleapis.com/v1";
-const SCOPES = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive";
+// Mail asks for gmail.send alone, so a delegation grant can be narrowed to sending only.
+const GMAIL_SCOPES = "https://www.googleapis.com/auth/gmail.send";
+const DRIVE_SCOPES = "https://www.googleapis.com/auth/drive";
 // Docs scope is requested ONLY by proposal generation so existing Gmail/Drive
 // flows keep minting under the already-authorized scope set. Domain-wide
 // delegation must list the documents scope before generateProposalDoc works;
@@ -152,7 +154,7 @@ function pemToPkcs8(pem: string): ArrayBuffer {
 }
 
 /** Mint (or reuse) an access token impersonating `sub` via domain-wide delegation. */
-export async function googleToken(env: Env, sub: string, scopes: string = SCOPES): Promise<string> {
+export async function googleToken(env: Env, sub: string, scopes: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const cacheKey = `${sub}\n${scopes}`;
   const cached = cachedTokens.get(cacheKey);
@@ -327,7 +329,7 @@ async function sendGmailThroughEffect(
     },
     async readback({ providerExternalId }) {
       if (!providerExternalId) return { status: "unavailable" as const, detailCode: "gmail_readback_id_missing" };
-      const token = await googleToken(env, env.FROM_EMAIL);
+      const token = await googleToken(env, env.FROM_EMAIL, GMAIL_SCOPES);
       const query = new URLSearchParams({ format: "raw" });
       const response = await googleFetch(env, `${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
         headers: { authorization: `Bearer ${token}` },
@@ -343,7 +345,7 @@ async function sendGmailThroughEffect(
     async replay({ effect }) {
       const providerMessageId = effect.provider_external_id;
       if (!providerMessageId) throw new Error("gmail_replay_id_missing");
-      const token = await googleToken(env, env.FROM_EMAIL);
+      const token = await googleToken(env, env.FROM_EMAIL, GMAIL_SCOPES);
       const response = await googleFetch(
         env,
         `${GMAIL}/users/me/messages/${encodeURIComponent(providerMessageId)}?format=raw`,
@@ -372,7 +374,7 @@ async function sendGmailThroughEffect(
 }
 
 async function sendGmailDirect(env: Env, to: string, subject: string, html: string): Promise<GmailSendReceipt> {
-  const token = await googleToken(env, env.FROM_EMAIL);
+  const token = await googleToken(env, env.FROM_EMAIL, GMAIL_SCOPES);
   const subj = `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(subject)))}?=`;
   const raw = b64url([
     `From: ${env.FROM_EMAIL}`, `To: ${to}`, `Subject: ${subj}`,
@@ -516,7 +518,7 @@ const esc = (s: string) => s.replace(/'/g, "\\'");
 export async function ensureJobFolder(
   env: Env, jobNumber: string, customer?: string | null, brand?: string | null,
 ): Promise<{ id: string; name: string; created: boolean }> {
-  const token = await googleToken(env, env.FROM_EMAIL);
+  const token = await googleToken(env, env.FROM_EMAIL, DRIVE_SCOPES);
   const root = env.SHARED_DRIVE_ID_JOBS;
   const jn = safeSegment(jobNumber);
   const existing = await driveFind(env, token,
@@ -914,7 +916,7 @@ export async function fileToJobFolder(
   files: Array<{ name: string; bytes: ArrayBuffer; contentType: string; idempotencyKey?: string }>,
 ): Promise<FiledBatch> {
   assertEffectLedgerReady(env);
-  const token = await googleToken(env, env.FROM_EMAIL);
+  const token = await googleToken(env, env.FROM_EMAIL, DRIVE_SCOPES);
   const job = await ensureJobFolder(env, jobNumber);
   const parent = await ensureSubfolder(env, token, job.id, subfolder);
 

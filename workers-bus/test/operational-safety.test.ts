@@ -94,7 +94,7 @@ function fakeEnv(options: FakeOptions = {}) {
       };
     }
     if (sql.includes("sqlite_master")) {
-      return { table_count: 48, index_count: options.missingSchemaArtifact ? 65 : 66, trigger_count: 63 };
+      return { table_count: 49, index_count: options.missingSchemaArtifact ? 65 : 66, trigger_count: 63 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -186,6 +186,12 @@ function fakeEnv(options: FakeOptions = {}) {
         .filter((row) => selected === null || row.envelope_id === selected)
         .map((row) => ({ envelope_id: row.envelope_id }));
       return { results: ids };
+    }
+    // No cron ticks in this double: a missing row reads as "stale" the same way a schema that
+    // predates IRO-262 would (cron-liveness.test.ts covers the fresh/starting/stale handler paths
+    // for real).
+    if (sql.includes("FROM cron_heartbeat")) {
+      return { results: [] };
     }
     if (sql.includes("FROM audit_log WHERE result = 'error'")) {
       return { results: options.auditFailures ?? [{

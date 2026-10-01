@@ -31,6 +31,7 @@ import {
   sweepDeadLetterAutoReplay,
   validateReplayApprovalContext,
 } from "./operations.ts";
+import { getCronLiveness, type CronLivenessReport } from "./cron-liveness.ts";
 import { ingestLead } from "./lead-intake.ts";
 import { companyLogoResponse } from "./company-profile.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
@@ -303,7 +304,9 @@ export default {
   ): Promise<void> {
     if (controller.cron === "0 14 * * *") {
       ctx.waitUntil(
-        Promise.all([
+        store.markCronTickStarted(env, controller.cron).catch((error) =>
+          log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
+        ).then(() => Promise.all([
           runReconcile(env),
           runOwnerWatchdog(env).catch((error) =>
             log({ at: "owner_watchdog", error: String(error) })
@@ -323,7 +326,22 @@ export default {
           prunePublicEstimateRateLimits(env as PublicEstimatorEnv).catch((error) =>
             log({ at: "public_estimate_rate_limit_prune", error: String(error) }),
           ),
-        ]).then(() => {}),
+        ]).then(() => {})).then(
+          () =>
+            store.markCronTickSettled(env, controller.cron, "ok").catch((error) =>
+              log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
+            ),
+          async (error) => {
+            log({ at: "cron_tick", cron: controller.cron, error: String(error) });
+            await store.markCronTickSettled(env, controller.cron, "error").catch((writeError) =>
+              log({ at: "cron_heartbeat", cron: controller.cron, error: String(writeError) })
+            );
+            // Re-raise so Cloudflare still records the invocation as an exception, as it did before
+            // the heartbeat wrapped the composed work. `status='error'` is evidence, not a
+            // replacement for that signal.
+            throw error;
+          },
+        ),
       );
     } else if (controller.cron === "*/5 * * * *") {
       // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
@@ -346,7 +364,9 @@ export default {
         return null;
       });
       ctx.waitUntil(
-        Promise.all([
+        store.markCronTickStarted(env, controller.cron).catch((error) =>
+          log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
+        ).then(() => Promise.all([
           retrySweep(env),
           reconcileNewoSessions(env).catch((error) =>
             log({ at: "newo_five_minute_reconcile", error: String(error) })
@@ -529,7 +549,22 @@ export default {
           }).catch((error) =>
             log({ at: "pipeline_stage_automation_drain", error: String(error) }),
           ),
-        ]).then(() => {}),
+        ]).then(() => {})).then(
+          () =>
+            store.markCronTickSettled(env, controller.cron, "ok").catch((error) =>
+              log({ at: "cron_heartbeat", cron: controller.cron, error: String(error) })
+            ),
+          async (error) => {
+            log({ at: "cron_tick", cron: controller.cron, error: String(error) });
+            await store.markCronTickSettled(env, controller.cron, "error").catch((writeError) =>
+              log({ at: "cron_heartbeat", cron: controller.cron, error: String(writeError) })
+            );
+            // Re-raise so Cloudflare still records the invocation as an exception, as it did before
+            // the heartbeat wrapped the composed work. `status='error'` is evidence, not a
+            // replacement for that signal.
+            throw error;
+          },
+        ),
       ); // the frequent cron
     }
   },
@@ -548,19 +583,27 @@ async function routeRequest(
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
     const scope = url.searchParams.get("scope");
+    // Cron rows are read only for scope=ops, so every other scope keeps its current cost.
+    const cronLiveness: CronLivenessReport | null = scope === "ops" ? await getCronLiveness(env) : null;
     const verdict = scope === "core" || scope === "owned_core"
       ? readiness.owned_core_ok
       : scope === "office"
       ? readiness.office_operating_plane_ok
       : scope === "projection"
       ? readiness.projection_rails_ok
+      : scope === "ops"
+      ? readiness.owned_core_ok && (cronLiveness as CronLivenessReport).ok
       : readiness.ok;
     // Keep public monitoring useful without advertising the state of every
     // downstream rail to an unauthenticated caller. Operators can use the
     // existing admin bearer token for the diagnostic check map.
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
       return methodAwareJson(req, { ok: verdict }, verdict ? 200 : 503);
-    return methodAwareJson(req, readiness, verdict ? 200 : 503);
+    return methodAwareJson(
+      req,
+      cronLiveness ? { ...readiness, crons: cronLiveness.crons } : readiness,
+      verdict ? 200 : 503,
+    );
   }
   if (url.pathname.startsWith("/internal/v1/authority-records/")) {
     const authorityResponse = await handleAuthorityRecordExecutorRoute(

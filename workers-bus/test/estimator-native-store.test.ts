@@ -672,8 +672,8 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
       contract,
       /estimator_evidence_revisions_immutable_update=estimator_evidence_revisions/,
     );
-    // Pinned to the current migration chain; 0131 adds the action-time authority guard.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=234/);
+    // Pinned to the current migration chain; 0132 adds the per-cron heartbeat table.
+    assert.match(contract, /REQUIRED_TABLE_COUNT=235/);
     assert.match(contract, /REQUIRED_INDEX_COUNT=354/);
     assert.match(contract, /REQUIRED_TRIGGER_COUNT=574/);
   }

@@ -2233,13 +2233,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // adds a file without adding an object. 0128 moves the automation recipient catalog out of a
     // deploy secret into tenant data: two append-only tables, two named indexes, and five
     // head-pointer/lineage/append-only guards. 0129 freezes governed authority requirements on
-    // both assignment tables; 0130 binds Work Packages to that exact assignment snapshot. The
+    // both assignment tables; 0130 binds Work Packages to that exact assignment snapshot, and 0131
+    // requires a current authority-precondition array on every non-stop field action. 0132 adds the
+    // per-cron heartbeat table the token-less `/ready?scope=ops` probe reads (IRO-262). The
     // 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 110);
+    assert.equal(migrations.length, 111);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0131_work_package_action_authority_precondition.sql",
+      "0132_cron_heartbeat.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2355,9 +2357,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // with a widened action/template CHECK, restoring the same 2 tables, 3 indexes and 6 triggers.
     // 0128 adds the tenant-administered automation recipient catalog: two tables (head, append-only
     // revisions), two named indexes, and five head-pointer, lineage, and append-only guards.
+    // 0132 adds one table (`cron_heartbeat`) with no index or trigger: its `TEXT PRIMARY KEY`
+    // autoindex is excluded from every inventory and the row count (at most two) never needs one.
     assert.deepEqual(
       { ...counts },
-      { tables: 234, indexes: 346, triggers: 574 },
+      { tables: 235, indexes: 346, triggers: 574 },
     );
     assert.deepEqual(
       (db.prepare(

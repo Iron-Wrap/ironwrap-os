@@ -125,6 +125,14 @@ export interface HeartbeatRecord {
   dead_letter_open: number;
 }
 
+export interface CronHeartbeatRecord {
+  cron: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  seeded_at: string;
+}
+
 export interface OperationalEnvelopeCounts {
   pending: number;
   stuck: number;
@@ -704,6 +712,7 @@ export const READINESS_COLUMN_PROBES: readonly ReadinessColumnProbe[] = [
   { table: "dead_letter", columns: ["envelope_id", "recovered"] },
   { table: "source_counts", columns: ["day", "channel", "count"] },
   { table: "heartbeat", columns: ["ran_at", "reconciled", "dead_letter_open"] },
+  { table: "cron_heartbeat", columns: ["cron", "started_at", "finished_at", "status", "seeded_at"] },
   {
     table: "quickbooks_webhook_receipts",
     columns: ["last_seen_at", "events_count", "replay_count"],
@@ -859,7 +868,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'newo_reconciliation_runs','hermes_desktop_pairings','hermes_desktop_devices',
           'hermes_desktop_envelopes','hermes_desktop_contexts','hermes_desktop_results',
           'hermes_desktop_events','capability_integration_manifests','capability_proof_facts',
-          'capability_readiness_profiles') THEN 1 ELSE 0 END), 0) AS table_count,
+          'capability_readiness_profiles','cron_heartbeat') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -997,7 +1006,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
   // The zero-row probes prove every table and column readiness, status, and replay
   // depend on, without reading a single customer row.
   for (const sql of buildReadinessColumnProbeSql()) await env.DB.prepare(sql).all();
-  return Number(artifacts?.table_count ?? 0) === 48 &&
+  return Number(artifacts?.table_count ?? 0) === 49 &&
     Number(artifacts?.index_count ?? 0) === 66 &&
     Number(artifacts?.trigger_count ?? 0) === 63 &&
     authoritySchemaReady;
@@ -1386,6 +1395,39 @@ export async function writeHeartbeat(env: Env, day: string, reconciled: boolean,
      ON CONFLICT(day) DO UPDATE SET ran_at = excluded.ran_at, reconciled = excluded.reconciled,
        dead_letter_open = excluded.dead_letter_open`,
   ).bind(day, nowIso(), reconciled ? 1 : 0, openDlq).run();
+}
+
+/** Called before a cron's composed work starts. Keeps the previous `finished_at` on update — a
+ * `finished_at` older than `started_at` is exactly the "started and never finished" signal. */
+export async function markCronTickStarted(
+  env: Env,
+  cron: string,
+  at: string = nowIso(),
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO cron_heartbeat (cron, started_at, finished_at, status, seeded_at)
+     VALUES (?, ?, NULL, 'running', ?)
+     ON CONFLICT(cron) DO UPDATE SET started_at = excluded.started_at, status = 'running'`,
+  ).bind(cron, at, at).run();
+}
+
+/** Called once a cron's composed work settles, whichever way. */
+export async function markCronTickSettled(
+  env: Env,
+  cron: string,
+  status: "ok" | "error",
+  at: string = nowIso(),
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE cron_heartbeat SET finished_at = ?, status = ? WHERE cron = ?`,
+  ).bind(at, status, cron).run();
+}
+
+export async function listCronHeartbeats(env: Env): Promise<CronHeartbeatRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT cron, started_at, finished_at, status, seeded_at FROM cron_heartbeat ORDER BY cron`,
+  ).all<CronHeartbeatRecord>();
+  return result.results;
 }
 
 function d1Changes(result: unknown): number {

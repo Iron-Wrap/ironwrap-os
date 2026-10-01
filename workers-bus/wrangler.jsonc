@@ -568,7 +568,7 @@
       "vars": {
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
-          "APP_BFF_ENABLED": "false",
+          "APP_BFF_ENABLED": "true",
           "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "false",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
@@ -587,7 +587,7 @@
           "APP_PUBLIC_ORIGIN": "https://ironwrap-bus-qa.yellow-rain-7498.workers.dev",
           "APP_ALLOWED_ORIGINS": "https://ironwrap-bus-qa.yellow-rain-7498.workers.dev",
           "APP_ALLOW_INSECURE_LOCAL": "false",
-          "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
+          "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
           "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
           "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
           "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
@@ -716,11 +716,11 @@
           "MEASUREMENT_OCR_MODEL": "claude-opus-5-5"
         },
         "CFG_CORE": {
-          // Same mailboxes as production (owner decision, 2026-09-27): the release preflight
-          // requires nonempty notification sender and recipients in every environment.
-          "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
-          "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
-          "FROM_EMAIL": "sales@ironwrapexteriors.com",
+          // qa sends real mail since 2026-10-02, so it never uses the business mailboxes: the
+          // sender and both recipients are the operator's own (owner decision, 2026-10-02).
+          "OWNER_ALERT_EMAIL": "sergeyap@mindburn.org",
+          "BACKUP_ALERT_EMAIL": "sergeyap@mindburn.org",
+          "FROM_EMAIL": "sergeyap@mindburn.org",
           "EFFECT_RUNTIME_ENABLED": "true",
           "PIPELINE_AUTOMATION_ENABLED": "false",
           "JOBNIMBUS_ENABLED": "false",

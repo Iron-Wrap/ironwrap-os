@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
+import { flattenEnv } from "../src/env-bindings.ts";
+
+// IRO-268: wrangler.jsonc groups vars into CFG_* JSON bindings. Flatten each parsed environment's
+// `vars` in place, the same way flattenEnv restores them at the Worker's entry points, so the
+// direct `config.vars.NAME` / `config.env.<env>.vars.NAME` reads below need no other change.
+function flattenParsedVars(vars: unknown): void {
+  if (vars && typeof vars === "object") Object.assign(vars, flattenEnv(vars as Env));
+}
+
 async function d1MigrationNames(): Promise<string[]> {
   return (await readdir(new URL("../migrations/", import.meta.url)))
     .filter((name) => /^\d{4}_.+\.sql$/.test(name))
@@ -109,6 +118,8 @@ test("non-production Worker environments never bind the production D1 database",
 test("document generation stays explicitly disabled in every checked-in Worker environment", async () => {
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
   assert.equal(config.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
   for (const name of ["local", "qa"])
     assert.equal(config.env[name].vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
@@ -120,6 +131,8 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
     "utf8",
   );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
   const newoVarNames = Object.keys(config.vars)
     .filter((name) => name.startsWith("NEWO_"))
     .sort();
@@ -240,6 +253,9 @@ test("Wrangler gives measurement processing an isolated queue and DLQ in every e
     "utf8",
   );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  flattenParsedVars(config.env.local.vars);
+  flattenParsedVars(config.env.qa.vars);
   const environments = [
     [
       "production",
@@ -1568,6 +1584,9 @@ test("Postiz stays default-off with an exact v2.23.0 contract in every Wrangler 
     "utf8",
   );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  flattenParsedVars(config.env.local.vars);
+  flattenParsedVars(config.env.qa.vars);
   const postizVarNames = Object.keys(config.vars)
     .filter((name) => name.startsWith("POSTIZ_"))
     .sort();
@@ -1636,6 +1655,9 @@ test("QuickBooks final invoicing stays default-off and secret-free in every Wran
     "utf8",
   );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  flattenParsedVars(config.env.local.vars);
+  flattenParsedVars(config.env.qa.vars);
   const names = Object.keys(config.vars)
     .filter((name) => name.startsWith("QB_"))
     .sort();
@@ -1724,6 +1746,9 @@ test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a re
     "utf8",
   );
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  flattenParsedVars(config.vars);
+  flattenParsedVars(config.env.local.vars);
+  flattenParsedVars(config.env.qa.vars);
 
   // The chain (launch -> signed ingest -> native design projection) is switched on in every
   // environment, but a flag alone can never open it: facetV2ConsumerConfig and launchConfig

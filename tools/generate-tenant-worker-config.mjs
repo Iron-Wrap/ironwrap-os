@@ -20,6 +20,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { flattenWranglerVars, groupWranglerVars } from "./wrangler-vars.mjs";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Placeholder D1 id: shaped like a real one so wrangler parses it, obviously not a real one. */
@@ -143,7 +145,8 @@ export function sourceEnvironment(base, sourceEnv) {
 
 export function generateTenantWorkerConfig({ base, sourceEnv = "local", tenant, runtime }) {
   const environment = sourceEnvironment(base, sourceEnv);
-  const sourceTenantId = environment.vars?.APP_TENANT_ID;
+  const sourceFlatVars = flattenWranglerVars(environment.vars ?? {});
+  const sourceTenantId = sourceFlatVars.APP_TENANT_ID;
   if (!sourceTenantId) throw new Error(`source environment ${sourceEnv} declares no APP_TENANT_ID`);
   const tenantId = tenant?.tenant?.id;
   if (typeof tenantId !== "string" || !TENANT_ID_PATTERN.test(tenantId)) {
@@ -155,11 +158,14 @@ export function generateTenantWorkerConfig({ base, sourceEnv = "local", tenant, 
   }
   if (tenantId === sourceTenantId) throw new Error(`tenant ${tenantId} is the source tenant, not a clone of it`);
 
-  const vars = {};
-  for (const [name, value] of Object.entries(environment.vars)) {
+  const flatDerivedVars = {};
+  for (const [name, value] of Object.entries(sourceFlatVars)) {
     const derive = TENANT_SCOPED_VARS[name];
-    vars[name] = derive ? derive({ tenant, runtime, value }) : value;
+    flatDerivedVars[name] = derive ? derive({ tenant, runtime, value }) : value;
   }
+  // A tenant clone needs the same CFG_* grouping wrangler.jsonc uses (IRO-268), not the flat
+  // shape TENANT_SCOPED_VARS derives values in.
+  const vars = groupWranglerVars(flatDerivedVars);
 
   const config = {
     $schema: base.$schema,
@@ -217,7 +223,7 @@ export function generateTenantWorkerConfig({ base, sourceEnv = "local", tenant, 
  * unchanged and happens to carry the first tenant's identity.
  */
 export function auditForSourceTenantReferences({ config, sourceTenantId, base, sourceEnv }) {
-  const sourceVars = sourceEnvironment(base, sourceEnv).vars;
+  const sourceVars = flattenWranglerVars(sourceEnvironment(base, sourceEnv).vars ?? {});
   const sourceIdentities = new Set(
     [
       sourceVars.ERPNEXT_INTEGRATION_USER,
@@ -232,7 +238,7 @@ export function auditForSourceTenantReferences({ config, sourceTenantId, base, s
   );
 
   const leaks = [];
-  for (const [name, value] of Object.entries(config.vars)) {
+  for (const [name, value] of Object.entries(flattenWranglerVars(config.vars))) {
     if (typeof value !== "string" || value === "") continue;
     for (const identity of sourceIdentities) {
       if (value === identity || value.includes(`"${identity}"`)) {

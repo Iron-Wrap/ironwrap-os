@@ -21,6 +21,7 @@ import {
   isOn,
 } from "./core.ts";
 import * as store from "./store.ts";
+import { flattenEnv } from "./env-bindings.ts";
 import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
@@ -221,9 +222,10 @@ const safeJson = (s: string): Record<string, unknown> => {
 export default {
   async fetch(
     req: Request,
-    env: Env,
+    boundEnv: Env,
     ctx: ExecutionContext,
   ): Promise<Response> {
+    const env = flattenEnv(boundEnv);
     const requestId = requestIdFor(req);
     const startedAt = Date.now();
     let response: Response;
@@ -241,9 +243,10 @@ export default {
 
   async queue(
     batch: MessageBatch<BusQueueMessage>,
-    env: Env,
+    boundEnv: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
+    const env = flattenEnv(boundEnv);
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
@@ -299,9 +302,10 @@ export default {
 
   async scheduled(
     controller: ScheduledController,
-    env: Env,
+    boundEnv: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
+    const env = flattenEnv(boundEnv);
     if (controller.cron === "0 14 * * *") {
       ctx.waitUntil(
         store.markCronTickStarted(env, controller.cron).catch((error) =>

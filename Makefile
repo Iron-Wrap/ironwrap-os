@@ -72,6 +72,7 @@ test-tools:
 	  tools/generate-tenant-worker-config.test.mjs \
 	  tools/start-local-runtime.test.mjs \
 	  tools/validate-ingest-doctype-coverage.test.mjs \
+	  tools/wrangler-binding-budget.test.mjs \
 	  deploy/local/dev-vars.test.mjs \
 	  deploy/local/frappe-marker-sweep.test.mjs \
 	  deploy/local/frappe-init.test.mjs

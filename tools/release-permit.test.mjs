@@ -1073,6 +1073,7 @@ test("provider version identity is bound to the upload message and full readback
   assert.throws(() => parseWranglerVersionId(`Worker Version ID: ${QA_VERSION}\nWorker Version ID: ${WORKER_VERSION}`), /release_permit_version_id_ambiguous/);
   const expectedManifest = [
     { name: "ASSETS", type: "assets" },
+    { name: "CFG_APP", type: "json", value_digest: sha(canonicalJson({ APP_LOCALE: "en-US", APP_TENANT_ID: "ironwrap" })) },
     { name: "DB", type: "d1", resource_id: "f0674848-13df-4422-9896-8ba2719663b8" },
     { name: "FEATURE_ENABLED", type: "plain_text", value_digest: sha("true") },
     { name: "INGEST_TOKEN", type: "secret_text" },
@@ -1090,6 +1091,7 @@ test("provider version identity is bound to the upload message and full readback
       script_runtime: runtimeManifest,
       bindings: [
         { name: "ASSETS", type: "assets" },
+        { name: "CFG_APP", type: "json", json: { APP_TENANT_ID: "ironwrap", APP_LOCALE: "en-US" } },
         { name: "DB", type: "d1", id: "f0674848-13df-4422-9896-8ba2719663b8" },
         { name: "FEATURE_ENABLED", type: "plain_text", text: "true" },
         { name: "INGEST_TOKEN", type: "secret_text" },
@@ -1120,6 +1122,9 @@ test("provider version identity is bound to the upload message and full readback
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("DB", { id: "00000000-0000-4000-8000-000000000000" }), expected), /release_permit_version_readback_binding_resource_id_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("RAW", { type: "r2" }), expected), /release_permit_version_readback_binding_manifest_drift/);
   assert.throws(() => validateWorkerVersionReadback(mutateBinding("JN_QUEUE", { queue_name: "wrong-queue" }), expected), /release_permit_version_readback_binding_resource_name_drift/);
+  assert.throws(() => validateWorkerVersionReadback(mutateBinding("CFG_APP", { json: { APP_TENANT_ID: "ironwrap", APP_LOCALE: "en-GB" } }), expected), /release_permit_version_readback_binding_value_digest_drift/);
+  assert.throws(() => validateWorkerVersionReadback(mutateBinding("CFG_APP", { type: "plain_text", text: JSON.stringify({ APP_TENANT_ID: "ironwrap", APP_LOCALE: "en-US" }) }), expected), /release_permit_version_readback_binding_manifest_drift/);
+  assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.map((binding) => binding.name === "CFG_APP" ? { name: binding.name, type: binding.type } : binding) } }, expected), /release_permit_version_readback_binding_value_missing/);
   assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.filter((binding) => binding.name !== "ASSETS") } }, expected), /release_permit_version_readback_binding_manifest_drift/);
   assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, script_runtime: { ...runtimeManifest, compatibility_flags: [] } } }, expected), /release_permit_version_readback_runtime_drift/);
 });
@@ -1294,7 +1299,9 @@ test("environment config digests include distinct environment and secret-name co
   assert.ok(qa.secret_names.includes("POSTIZ_API_KEY"));
   assert.match(qa.secret_inventory_digest, /^[0-9a-f]{64}$/);
   assert.ok(qa.binding_manifest.some((entry) => entry.name === "RAW" && entry.type === "r2_bucket" && entry.resource_name === "ironwrap-bus-qa-raw"));
-  assert.ok(qa.binding_manifest.some((entry) => entry.type === "plain_text" && /^[0-9a-f]{64}$/.test(entry.value_digest)));
+  // IRO-268: workers-bus/wrangler.jsonc groups every non-secret var into a CFG_* JSON binding, so
+  // the real binding manifest carries "json" entries here, not "plain_text" ones.
+  assert.ok(qa.binding_manifest.some((entry) => entry.type === "json" && entry.name.startsWith("CFG_") && /^[0-9a-f]{64}$/.test(entry.value_digest)));
   assert.equal(qa.runtime_manifest.compatibility_date, "2026-06-28");
 });
 
@@ -1316,6 +1323,35 @@ test("environment-specific vars do not erase a secret from the other environment
   assert.ok(production.secret_names.includes("QA_PLAIN"));
   assert.ok(!production.secret_names.includes("PRODUCTION_PLAIN"));
   assert.ok(qa.binding_manifest.some((entry) => entry.name === "QA_PLAIN" && entry.type === "plain_text"));
+});
+
+test("environment config digests read a CFG_* grouped config the same as a flat one (IRO-268)", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-release-config-grouped-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "workers-bus", "src"), { recursive: true });
+  await writeFile(path.join(root, "workers-bus", "wrangler.jsonc"), JSON.stringify({
+    compatibility_date: "2026-06-28",
+    compatibility_flags: [],
+    vars: { CFG_CORE: { ALWAYS_PLAIN: "base" } },
+    env: {
+      qa: { vars: { CFG_CORE: { ALWAYS_PLAIN: "base" }, QA_PLAIN: "qa" } },
+      production: { vars: { CFG_CORE: { ALWAYS_PLAIN: "base" }, PRODUCTION_PLAIN: "production" } },
+    },
+  }));
+  await writeFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "interface Env {\n  ALWAYS_PLAIN: string;\n  QA_PLAIN: string;\n  PRODUCTION_PLAIN: string;\n  REAL_SECRET: string;\n}\n");
+  const qa = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "qa" });
+  const production = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "production" });
+  // Finding 1 (secret-inventory drift): a var that only exists inside a CFG_* group must still
+  // be excluded from the secret inventory, exactly like a flat one.
+  assert.ok(!qa.secret_names.includes("ALWAYS_PLAIN"));
+  assert.ok(!qa.secret_names.includes("QA_PLAIN"));
+  assert.ok(qa.secret_names.includes("PRODUCTION_PLAIN"));
+  // Finding 2 (digest collapse): the vars digest must see the real string value, never the
+  // "[object Object]" that String() on the CFG_CORE group itself would produce.
+  const groupedEntry = qa.binding_manifest.find((entry) => entry.name === "CFG_CORE");
+  assert.ok(groupedEntry, "the CFG_CORE binding must appear in the binding manifest");
+  assert.equal(groupedEntry.type, "json");
+  assert.notEqual(qa.digest, production.digest);
 });
 
 test("release environment preflight fails before mutation on var, notification, OCR, or secret drift", async (t) => {
@@ -1349,6 +1385,53 @@ test("release environment preflight fails before mutation on var, notification, 
   await writeConfig({ ...vars, MEASUREMENT_OCR_MODEL: "unreviewed-model" });
   await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_ocr_model_invalid/);
   await writeConfig({ ...vars });
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names.filter((name) => name !== "MEASUREMENT_OCR_API_KEY") }), /release_permit_environment_preflight_required_secret_missing/);
+});
+
+test("release environment preflight reads a CFG_* grouped config the same as a flat one (IRO-268 R1.1)", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-release-preflight-grouped-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "workers-bus", "src"), { recursive: true });
+  const groupedVars = {
+    CFG_CORE: {
+      ADMIN_LABEL: "configured",
+      BACKUP_ALERT_EMAIL: "backup@example.invalid",
+      FROM_EMAIL: "sender@example.invalid",
+      OWNER_ALERT_EMAIL: "owner@example.invalid",
+    },
+    CFG_MEASUREMENT: {
+      MEASUREMENT_OCR_ENABLED: "true",
+      MEASUREMENT_OCR_MODEL: "claude-opus-5-5",
+    },
+  };
+  const writeConfig = async (environmentVars) => writeFile(path.join(root, "workers-bus", "wrangler.jsonc"), JSON.stringify({
+    compatibility_date: "2026-06-28",
+    compatibility_flags: ["nodejs_compat"],
+    vars: groupedVars,
+    env: { qa: { vars: environmentVars } },
+  }));
+  await writeFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "interface Env {\n  ADMIN_TOKEN: string;\n  GOOGLE_SERVICE_ACCOUNT_JSON: string;\n  INGEST_TOKEN: string;\n  MEASUREMENT_OCR_API_KEY: string;\n}\n");
+  await writeConfig(structuredClone(groupedVars));
+  const names = ["ADMIN_TOKEN", "GOOGLE_SERVICE_ACCOUNT_JSON", "INGEST_TOKEN", "MEASUREMENT_OCR_API_KEY"];
+  assert.equal((await validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names })).status, "matched");
+  // Drift from inside a group: the top-level and env.qa group-name sets stay equal
+  // (both have CFG_CORE, CFG_MEASUREMENT), which is exactly the merge-vs-replace disagreement
+  // between effectiveEnvironmentConfig (merges) and wrangler (replaces) the check must catch.
+  const missingVar = structuredClone(groupedVars);
+  delete missingVar.CFG_CORE.ADMIN_LABEL;
+  await writeConfig(missingVar);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_var_inventory_drift/);
+  const blankFromEmail = structuredClone(groupedVars);
+  blankFromEmail.CFG_CORE.FROM_EMAIL = "";
+  await writeConfig(blankFromEmail);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_notification_config_missing/);
+  // The silent half: a bad OCR model inside CFG_MEASUREMENT must still be caught, not disappear
+  // behind String(group) === "[object Object]".
+  const badOcrModel = structuredClone(groupedVars);
+  badOcrModel.CFG_MEASUREMENT.MEASUREMENT_OCR_MODEL = "unreviewed-model";
+  await writeConfig(badOcrModel);
+  await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names }), /release_permit_environment_preflight_ocr_model_invalid/);
+  await writeConfig(structuredClone(groupedVars));
   await assert.rejects(() => validateReleaseEnvironmentPreflight({ repoRoot: root, environment: "qa", secretNames: names.filter((name) => name !== "MEASUREMENT_OCR_API_KEY") }), /release_permit_environment_preflight_required_secret_missing/);
 });
 

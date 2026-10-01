@@ -188,6 +188,11 @@ at the time above. It is recorded in `CAPABILITY_REFERENCE_STATE` in
 imports this same registry and evaluator rather than restating them. Changing a flag is allowed;
 changing one without recording the new state fails the readiness contract.
 
+`wrangler.jsonc` groups its non-secret vars into `CFG_*` JSON bindings to stay under the Cloudflare
+Workers variable-count limit (IRO-268); this signal reads the flattened view of those bindings
+(`tools/wrangler-vars.mjs`, mirroring `workers-bus/src/env-bindings.ts`), so a flag's name and
+behavior are unchanged by which binding carries it.
+
 ## What the signal does not know
 
 Configuration presence is not credential validity. This signal reads bindings; it never calls a

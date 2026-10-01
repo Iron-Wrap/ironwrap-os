@@ -22,6 +22,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { canonicalJson } from "../mcp/erpnext-roofing-mcp/src/approval-contract.mjs";
+import { flattenWranglerVars } from "./wrangler-vars.mjs";
 
 const execFile = promisify(execFileCallback);
 
@@ -1831,7 +1832,8 @@ export async function computeEnvironmentConfigDigest({ repoRoot, environment } =
   const secretSource = await readFile(path.join(root, "workers-bus", "src", "secret-bindings.d.ts"), "utf8");
   const parsed = parseJsonc(wranglerSource);
   const resolved = effectiveEnvironmentConfig(parsed, environment);
-  const configuredVars = new Set(Object.keys(resolved.vars ?? {}).filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name)));
+  const flatVars = flattenWranglerVars(resolved.vars ?? {});
+  const configuredVars = new Set(Object.keys(flatVars).filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name)));
   const secretNames = [...new Set([...secretSource.matchAll(/^\s{2}([A-Z][A-Z0-9_]+): string;$/gm)]
     .map((match) => match[1])
     .filter((name) => !configuredVars.has(name)))].sort();
@@ -1845,7 +1847,7 @@ export async function computeEnvironmentConfigDigest({ repoRoot, environment } =
   ]
     .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
   if (new Set(bindingManifest.map((entry) => entry.name)).size !== bindingManifest.length) fail("config_binding_duplicate");
-  const vars = Object.entries(resolved.vars ?? {})
+  const vars = Object.entries(flatVars)
     .filter(([name]) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name))
     .map(([name, value]) => ({ name, value: String(value) }))
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -2030,12 +2032,12 @@ export async function validateReleaseEnvironmentPreflight({ repoRoot, environmen
   const selected = config.env?.[environment];
   if (selected !== undefined && !isRecord(selected)) fail("environment_preflight_environment_invalid");
   if (selected !== undefined) {
-    const inheritedNames = Object.keys(isRecord(config.vars) ? config.vars : {}).sort();
-    const environmentNames = Object.keys(isRecord(selected.vars) ? selected.vars : {}).sort();
+    const inheritedNames = Object.keys(flattenWranglerVars(isRecord(config.vars) ? config.vars : {})).sort();
+    const environmentNames = Object.keys(flattenWranglerVars(isRecord(selected.vars) ? selected.vars : {})).sort();
     if (canonicalJson(inheritedNames) !== canonicalJson(environmentNames)) fail("environment_preflight_var_inventory_drift");
   }
   const resolved = effectiveEnvironmentConfig(config, environment);
-  const vars = isRecord(resolved.vars) ? resolved.vars : {};
+  const vars = flattenWranglerVars(isRecord(resolved.vars) ? resolved.vars : {});
   for (const name of ["BACKUP_ALERT_EMAIL", "FROM_EMAIL", "OWNER_ALERT_EMAIL"]) {
     if (typeof vars[name] !== "string" || vars[name].trim() === "") fail("environment_preflight_notification_config_missing");
   }

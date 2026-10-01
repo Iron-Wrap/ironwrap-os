@@ -90,6 +90,18 @@ export function coverageFindings({ erpnextSource, leakageChecks, plan }) {
     );
   }
 
+  // IRO-268 R1.4: `c.vars.NAME` reads a wrangler config's vars directly, which is exactly the
+  // pattern that turned checks 6 and 8 into verdicts about nothing once vars moved into CFG_*
+  // JSON bindings (blocker 11) - the same defect shape this file exists to catch, one level
+  // removed from ERPNext. `tools/read-wrangler-var.mjs` is the one reader that stays correct
+  // whether the config is flat or grouped.
+  const directVarReads = [...leakageChecks.matchAll(/\.vars\.([A-Z][A-Z0-9_]*)/g)].map((match) => match[1]);
+  if (directVarReads.length > 0) {
+    findings.push(
+      `${LEAKAGE_CHECKS} reads ${[...new Set(directVarReads)].join(", ")} through \`.vars.NAME\` directly: that silently reads undefined once the var moves into a CFG_* group. Use tools/read-wrangler-var.mjs instead.`,
+    );
+  }
+
   return { findings, named, sweptDoctypes: shipped.size };
 }
 

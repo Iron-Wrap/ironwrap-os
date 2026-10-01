@@ -230,7 +230,8 @@ fi
 # --------------------------------------------------------------------------- 6
 check 6 "Drive: the evidence namespace is the tenant's own"
 b_bucket="$(node -e 'const c=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(c.r2_buckets[0].bucket_name)' "$B_CONFIG")"
-b_drive="$(node -e 'const c=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write([c.vars.SHARED_DRIVE_ID_JOBS,c.vars.SHARED_DRIVE_ID_RESTRICTED,c.vars.SHARED_DRIVE_ID_ARCHIVE].join("|"))' "$B_CONFIG")"
+b_drive="$(node "$ROOT_DIR/tools/read-wrangler-var.mjs" --config "$B_CONFIG" --separator '|' \
+  SHARED_DRIVE_ID_JOBS SHARED_DRIVE_ID_RESTRICTED SHARED_DRIVE_ID_ARCHIVE)"
 note "B raw bucket: $b_bucket | B SHARED_DRIVE_ID_JOBS|RESTRICTED|ARCHIVE: '$b_drive'"
 if [[ "$b_bucket" != "$TENANT_A-bus-raw" && "$b_drive" == "||" ]]; then
   handoff "B carries no Shared Drive id at all, so it cannot reach A's Drive; creating B's own Shared Drives and granting its service account is an owner action in the tenant's Google workspace. Locally proven: B's raw-evidence namespace is $b_bucket, not $TENANT_A-bus-raw, and check 4 showed a payload landing in it alone."
@@ -260,7 +261,8 @@ fi
 
 # --------------------------------------------------------------------------- 8
 check 8 "Email: B sends as B, never from an IronWrap mailbox"
-b_from="$(node -e 'const c=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write([c.vars.FROM_EMAIL,c.vars.OWNER_ALERT_EMAIL,c.vars.BACKUP_ALERT_EMAIL].join(" "))' "$B_CONFIG")"
+b_from="$(node "$ROOT_DIR/tools/read-wrangler-var.mjs" --config "$B_CONFIG" --separator ' ' \
+  FROM_EMAIL OWNER_ALERT_EMAIL BACKUP_ALERT_EMAIL)"
 b_declared="$(node -e 'const d=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.brand.brands.flatMap(b=>[b.sender_mailbox,...(b.sender_aliases??[])]).join(" "))' "$ROOT_DIR/config/tenants/$TENANT_B.json")"
 note "B sender addresses: $b_from"
 note "B declared mailboxes: $b_declared"

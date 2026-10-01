@@ -12,6 +12,7 @@ import {
   scaffoldDevVars,
   setVar,
 } from "./dev-vars.mjs";
+import { flattenWranglerVars } from "../../tools/wrangler-vars.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -20,7 +21,7 @@ function localWranglerVars() {
   const source = readFileSync(resolve(root, "workers-bus/wrangler.jsonc"), "utf8")
     .replace(/^\s*\/\/.*$/gm, "")
     .replace(/\/\*[\s\S]*?\*\//g, "");
-  return JSON.parse(source).env.local.vars;
+  return flattenWranglerVars(JSON.parse(source).env.local.vars);
 }
 
 function parseDevVars(text) {

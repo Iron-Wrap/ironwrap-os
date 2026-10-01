@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
+import { flattenWranglerVars } from "./wrangler-vars.mjs";
 // The capability registry and its evaluator are imported, not restated. G1.3 found this verifier
 // covered none of the eight capabilities spec 9.3 names, so a flag flip on QuickBooks, Newo,
 // Postiz, Hermes desktop or the proposal template was caught by nothing. Restating the rules here
@@ -576,7 +577,8 @@ async function loadLock(repoRoot) {
 async function committedProductionVar(repoRoot, name) {
   const source = await readText(repoRoot, "workers-bus/wrangler.jsonc");
   try {
-    const value = JSON.parse(stripJsonComments(source ?? ""))?.vars?.[name];
+    const vars = flattenWranglerVars(JSON.parse(stripJsonComments(source ?? ""))?.vars ?? {});
+    const value = vars[name];
     return typeof value === "string" ? value : null;
   } catch {
     return null;
@@ -586,12 +588,13 @@ async function committedProductionVar(repoRoot, name) {
 function evaluateReferenceCapabilities(wranglerSource) {
   let vars;
   try {
-    vars = JSON.parse(stripJsonComments(wranglerSource))?.vars;
+    const rawVars = JSON.parse(stripJsonComments(wranglerSource))?.vars;
+    if (!rawVars || typeof rawVars !== "object" || Array.isArray(rawVars)) {
+      return { ok: false, error: "workers-bus/wrangler.jsonc has no top-level vars block", signals: null };
+    }
+    vars = flattenWranglerVars(rawVars);
   } catch {
     return { ok: false, error: "workers-bus/wrangler.jsonc is not parseable", signals: null };
-  }
-  if (!vars || typeof vars !== "object" || Array.isArray(vars)) {
-    return { ok: false, error: "workers-bus/wrangler.jsonc has no top-level vars block", signals: null };
   }
   return {
     ok: true,

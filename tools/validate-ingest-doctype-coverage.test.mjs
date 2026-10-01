@@ -73,6 +73,13 @@ test("reverting check 5 to a hand-picked doctype is a finding", () => {
   assert.match(findings[0], /no longer runs deploy\/local\/frappe-marker-sweep\.mjs/);
 });
 
+test("a leakage check reading .vars.NAME directly is a finding (IRO-268 R1.4)", () => {
+  const directRead = `${leakageChecks}\nconst c=JSON.parse(require("node:fs").readFileSync("x","utf8"));c.vars.FROM_EMAIL;\n`;
+  const { findings } = coverageFindings({ erpnextSource, leakageChecks: directRead, plan });
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /reads FROM_EMAIL through `\.vars\.NAME` directly/);
+});
+
 test("an erpnext.ts that names no doctype fails loudly rather than passing on an empty set", () => {
   const { findings } = coverageFindings({ erpnextSource: "export const nothing = 1;\n", leakageChecks, plan });
   assert.equal(findings.length, 1);

@@ -123,9 +123,9 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
   }
 
   for (const [name, expected] of [
-    // Pinned to the current migration chain; 0131 adds the action-time authority guard
-    // (two tables, two indexes, five guards), and both D1 inventories carry it.
-    ["REQUIRED_TABLE_COUNT", 234],
+    // Pinned to the current migration chain; 0132 adds the per-cron heartbeat table (one
+    // table, no index, no trigger), and both D1 inventories carry it.
+    ["REQUIRED_TABLE_COUNT", 235],
     ["REQUIRED_INDEX_COUNT", 354],
     ["REQUIRED_TRIGGER_COUNT", 574],
   ] as const) {

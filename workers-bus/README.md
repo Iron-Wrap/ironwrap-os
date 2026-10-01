@@ -73,7 +73,7 @@ IronWrap PWA
 | Partial-write repair (pending_jn_push→pushed, retry sweep) | `queue` handler + `scheduled` retry sweep |
 | Dead-letter on a redundant channel (email, not SMS-only) | DLQ consumer → `notify.sendOwnerAlert`; dead-letter rows keep a redacted payload pointer |
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
-| Fail-closed readiness + operator status | `/ready` probes D1/schema/bindings/config; `/admin/status` reports heartbeat, queue/dead-letter/Frappe/audit/QB signals |
+| Fail-closed readiness + operator status | `/ready` probes D1/schema/bindings/config, plus a per-cron liveness verdict on `?scope=ops`; `/admin/status` reports heartbeat, queue/dead-letter/Frappe/audit/QB signals, and per-cron tick freshness (evidence only) |
 | Safe dead-letter recovery | targeted replay by `envelope_id`; confirmed bulk replay; recovery is marked only after that envelope completes |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing | `core.ts:classifyIntent` |
@@ -188,8 +188,8 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to owned evidence storage/Google Drive, and optionally project Frappe Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |
 | GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
-| GET | `/ready` | — | detailed public readiness booleans; never returns secret values |
-| GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/provider/projection/replay-ledger counts, 24h audit failures, and latest QB receipt freshness |
+| GET | `/ready` | — | detailed public readiness booleans; `?scope=ops` additionally gates on both crons having ticked recently (`*/5` fresh ≤10 min, daily fresh ≤26 h; a never-ticked row gets a per-cron startup grace — the 20-min deploy stretch plus that cron's own window, so 30 min and 26 h 20 min); never returns secret values |
+| GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/provider/projection/replay-ledger counts, 24h audit failures, latest QB receipt freshness, and per-cron tick freshness (`crons`, evidence only — never moves `status`) |
 | POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record `{day?,channel,count}`; day is a real UTC `YYYY-MM-DD`, channel is an ingest source, count is an integer from 0–1,000,000 |
 | POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | targeted or explicitly confirmed bulk dead-letter replay; both require non-secret human-approval evidence (below) |
 | GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |

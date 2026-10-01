@@ -99,9 +99,9 @@ test("0084 native measurement authority is complete in backup and restore contra
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    // Pinned to the current migration chain; 0131 adds the action-time authority guard
-    // (two tables, two indexes, five guards), and both D1 inventories carry it.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 234);
+    // Pinned to the current migration chain; 0132 adds the per-cron heartbeat table (one
+    // table, no index, no trigger), and both D1 inventories carry it.
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 235);
     assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 354);
     assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 574);
   }

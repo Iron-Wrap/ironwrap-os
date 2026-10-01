@@ -17,8 +17,8 @@ request body, log line, incident ticket, or command history.
 | Surface | Auth | Meaning | Healthy state |
 | --- | --- | --- | --- |
 | `GET /health` | none | Worker isolate liveness only | HTTP 200; does not prove dependencies |
-| `GET /ready` | none for `{ok}`; admin for diagnostic checks | D1 schema query plus R2/Queue binding and required native configuration; enabled provider/compatibility checks apply only to their configured scopes | HTTP 200 and every authenticated required check true; HTTP 503 blocks traffic cutover |
-| `GET /admin/status` | admin | Heartbeat freshness, pending/stuck/dead counts, provider/projection errors, audit failures, latest QB receipt | `status: ok`; investigate every degraded reason |
+| `GET /ready` | none for `{ok}`; admin for diagnostic checks | D1 schema query plus R2/Queue binding and required native configuration; enabled provider/compatibility checks apply only to their configured scopes; `?scope=ops` additionally gates on both crons having ticked recently | HTTP 200 and every authenticated required check true; HTTP 503 blocks traffic cutover |
+| `GET /admin/status` | admin | Heartbeat freshness, pending/stuck/dead counts, provider/projection errors, audit failures, latest QB receipt, per-cron tick freshness (`crons`) | `status: ok`; investigate every degraded reason. A stale cron is evidence here — it never moves `status` |
 | `GET /admin/dead-letter` | admin | Open forensic dead-letter rows | Empty |
 | `GET /admin/envelopes` | admin | Recent canonical envelopes and status | No unexplained pending/dead records |
 | `POST /admin/reconcile` | admin | Source-vs-landed reconcile and heartbeat | No unexplained gap; new heartbeat written |
@@ -29,6 +29,20 @@ envelopes, enabled projection errors, failed/stuck replay requests, or recent au
 Its heartbeat freshness window is 36 hours and recent-audit window is 24 hours. It reports the
 latest QuickBooks receipt and 24-hour freshness separately; lack of recent QB activity is not by
 itself a system outage.
+
+Separately, both crons write a heartbeat row (`cron_heartbeat`) at the start and the end of their
+composed work: the `*/5 * * * *` sweep is fresh for 10 minutes after its last tick started, and the
+daily `0 14 * * *` reconcile is fresh for 26 hours — tighter than the 36-hour heartbeat window above,
+so it cannot ride a green `/admin/status` to a dead daily cron. The startup grace for a never-ticked
+row is per-cron, not one shared constant: the 20-minute deploy stretch (migration-apply through
+cutover to the first tick a deployed revision can write) plus the cron's own freshness window — 30
+minutes for `*/5` and 26 h 20 min for the daily, wider than its 24-hour period so its first tick
+always lands inside it. `/admin/status` carries this as the `crons` block and it never changes
+`status`; the gate is the token-less `GET /ready?scope=ops`, which returns 503 when either cron is
+stale and is what the qa deploy polls after cutover. `crons[].status` is `seeded|running|ok|error`;
+`error` means the tick fired and its composed work threw — the same failure also surfaces as an
+errored invocation on the Cloudflare Cron Triggers tab, and an operator reading `error` here should
+check there next.
 
 `/ready` does not contact every configured downstream API or perform an R2/Queue mutation. Its
 unauthenticated response is deliberately limited to `{ok}`; send `ADMIN_TOKEN` to receive the
@@ -51,8 +65,9 @@ SHAs, UTC window, event id, and log-backend query receipts; a local test or synt
 customer proof.
 
 The scheduled `0 14 * * *` reconcile email is also a heartbeat. If no digest arrives, check
-`/admin/status`, the D1 heartbeat row, cron execution, and email delivery before assuming the
-reconcile succeeded.
+`GET /ready?scope=ops` first — it is a single token-less read of `cron_heartbeat` rather than
+waiting on mail delivery — then `/admin/status`, the D1 heartbeat row, cron execution, and email
+delivery before assuming the reconcile succeeded.
 
 Source-vs-landed reconciliation needs independent source counts. Authorized source adapters send
 daily `{day, channel, count}` facts to `POST /admin/source-count`; do not synthesize counts from
@@ -379,6 +394,16 @@ export D1_RESTORE_MODE=verify
    escalate the drill incident.
 
 Upload success without an isolated restore is not recovery proof.
+
+`cron_heartbeat` is inside the backup set, so a restored generation brings back the `started_at` it
+carried when the backup was taken. Restoring a generation older than 26 hours into a live database
+therefore reads `GET /ready?scope=ops` as 503 on `0 14 * * *` until the next 14:00 UTC tick, with
+both crons alive and nothing wrong: the per-cron startup grace covers only a row that has never
+ticked (`started_at IS NULL`), never a restored one. Confirm liveness from the `crons` block on
+`/admin/status` and the Cloudflare Cron Triggers tab, and wait for the tick rather than widening the
+window. The monthly drill restores into a separate non-production database
+(`ironwrap-restore-drill-<label>`) and the deploy's export/restore drill into `$RUNNER_TEMP`, so
+neither touches this probe or any pipeline gate.
 
 ### Live R2 Delete-Protection Gate
 

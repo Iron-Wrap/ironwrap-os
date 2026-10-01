@@ -15,6 +15,7 @@ import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
 import { gmailConfigured, sendGmail } from "./google.ts";
 import { measurementPdfOcrConfigured } from "./measurements.ts";
 import { railCredentialIsolationConfigured } from "./rail-frappe-credentials.ts";
+import { getCronLiveness, type CronLivenessEntry } from "./cron-liveness.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -202,6 +203,8 @@ export interface OperationalStatus {
     unresolved_reconciliation: number;
     connection_uncertain: number;
   };
+  /** Evidence only — a stale cron never moves `status`. The gate lives in `/ready?scope=ops`. */
+  crons: CronLivenessEntry[];
 }
 
 export type OwnerRuntimeCheckId =
@@ -766,7 +769,7 @@ export async function getOperationalStatus(
   const stuckCutoff = new Date(now.getTime() - thresholdMin * 60_000).toISOString();
   const auditSince = new Date(now.getTime() - AUDIT_FAILURE_WINDOW_HOURS * 3_600_000).toISOString();
 
-  const [heartbeatRow, openDeadLetters, envelopeCounts, replayCounts, auditFailures, qbReceipt, qbFinalInvoices] = await Promise.all([
+  const [heartbeatRow, openDeadLetters, envelopeCounts, replayCounts, auditFailures, qbReceipt, qbFinalInvoices, cronLiveness] = await Promise.all([
     store.getLatestHeartbeat(env),
     store.countOpenDeadLetter(env),
     store.getOperationalEnvelopeCounts(env, stuckCutoff),
@@ -774,6 +777,7 @@ export async function getOperationalStatus(
     store.listRecentAuditFailures(env, auditSince, auditLimit),
     store.getLatestQuickBooksWebhookReceipt(env),
     quickBooksFinalInvoiceOperationalCounts(env as AppEnv),
+    getCronLiveness(env, now),
   ]);
 
   const heartbeatAge = ageSeconds(heartbeatRow?.ran_at ?? null, now.getTime());
@@ -829,6 +833,7 @@ export async function getOperationalStatus(
     },
     quickbooks_receipts: quickbooks,
     quickbooks_final_invoices: qbFinalInvoices,
+    crons: cronLiveness.crons,
   };
 }
 

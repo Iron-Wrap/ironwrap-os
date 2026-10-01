@@ -3,8 +3,10 @@ import { test } from "node:test";
 
 import {
   createLaunchProofPlan,
+  curlFor,
   executeLaunchProof,
   runLaunchProofCli,
+  RELEASE_SMOKE_HEADER,
 } from "./launch-proof.mjs";
 
 const BASE = "https://bus.example";
@@ -295,6 +297,40 @@ test("launch proof uses an execution-unique ID", async () => {
   assert.equal(Number(later.proofStamp) - Number(prior.proofStamp), 100_000_000);
   assert.notEqual(later.estimateFixture.project_id, prior.estimateFixture.project_id);
   assert.notEqual(later.leadFixture.email, prior.leadFixture.email);
+});
+
+// IRO-264 R3: the spec's step-8 verify named this file and it had no coverage at all for
+// --release-smoke's step tagging, so a regression in RELEASE_SMOKE_STEP_PATHS (the production
+// smoke run's entire side-effect-free promise) would have shipped silently.
+test("release-smoke scope tags exactly the five side-effecting POST steps, and the default plan tags none", async () => {
+  const plain = createLaunchProofPlan({ stamp: STAMP, randomSuffix: RANDOM_SUFFIX });
+  assert.equal(plain.releaseSmoke, false);
+  for (const step of plain.steps) assert.ok(!step.releaseSmoke, `${step.name} must be untagged`);
+
+  const smoke = createLaunchProofPlan({
+    stamp: STAMP,
+    randomSuffix: RANDOM_SUFFIX,
+    releaseSmoke: true,
+  });
+  assert.equal(smoke.releaseSmoke, true);
+  const tagged = smoke.steps.filter((step) => step.releaseSmoke === true).map((step) => step.name);
+  assert.deepEqual(
+    tagged.sort(),
+    [
+      "admin_reconcile",
+      "ingest_estimate",
+      "ingest_estimate_replay",
+      "ingest_website",
+      "ingest_website_replay",
+    ].sort(),
+  );
+  for (const step of smoke.steps) {
+    if (tagged.includes(step.name)) {
+      assert.match(curlFor(step), new RegExp(`${RELEASE_SMOKE_HEADER}: 1`));
+    } else {
+      assert.doesNotMatch(curlFor(step), new RegExp(RELEASE_SMOKE_HEADER));
+    }
+  }
 });
 
 test("launch proof fails closed when D1 admin read-back is missing the fixture envelope", async () => {

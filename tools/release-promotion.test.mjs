@@ -1156,6 +1156,105 @@ test("push context admits the merged squash commit that is still main's tip", as
   );
 });
 
+test("push-context --source-policy reachable replaces the tip check with a provider reachability readback", async (t) => {
+  // IRO-264: the tag-triggered production release admits the commit the release
+  // PR merged, and main may legitimately have advanced past it by then. Under
+  // `reachable` the commit must still be ON main; under the default `tip` it must
+  // still BE main.
+  const root = await tempRoot(t);
+  const output = path.join(root, "pr-context.json");
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "github-token";
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previousToken;
+  });
+
+  const pushRun = {
+    id: 101,
+    event: "push",
+    head_branch: "main",
+    path: ".github/workflows/ci.yml",
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: "Iron-Wrap/ironwrap-os" },
+    head_repository: { full_name: "Iron-Wrap/ironwrap-os" },
+    head_sha: COMMIT,
+    run_attempt: 1,
+    pull_requests: [],
+  };
+  const mergedPr = {
+    number: 43,
+    state: "closed",
+    merged: true,
+    base: { ref: "main", sha: BASE, repo: { full_name: "Iron-Wrap/ironwrap-os" } },
+    head: { ref: "codex/iro-41-release-permit", sha: HEAD, repo: { full_name: "Iron-Wrap/ironwrap-os" } },
+    merge_commit_sha: COMMIT,
+  };
+  // main has moved on: its tip is MERGE_COMMIT, not the admitted COMMIT.
+  const respond = ({ compare = { status: "ahead", ahead_by: 2, behind_by: 0 }, main: mainCommit = { sha: MERGE_COMMIT } } = {}) => async (url) => {
+    const value = String(url);
+    if (value.endsWith("/actions/runs/101")) return new Response(JSON.stringify(pushRun), { status: 200 });
+    if (value.endsWith(`/commits/${COMMIT}/pulls`)) return new Response(JSON.stringify([{ number: 43, merge_commit_sha: COMMIT }]), { status: 200 });
+    if (value.endsWith(`/git/commits/${COMMIT}`)) return new Response(JSON.stringify({ sha: COMMIT, tree: { sha: GIT_TREE }, parents: [{ sha: BASE }] }), { status: 200 });
+    if (value.endsWith(`/compare/${COMMIT}...main`)) return new Response(JSON.stringify(compare), { status: 200 });
+    if (value.endsWith("/commits/main")) return new Response(JSON.stringify(mainCommit), { status: 200 });
+    if (value.endsWith("/pulls/43")) return new Response(JSON.stringify(mergedPr), { status: 200 });
+    if (value.endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
+    if (value.endsWith("/repos/Iron-Wrap/ironwrap-os")) return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    return new Response("{}", { status: 404 });
+  };
+  const invoke = (...extra) => main([
+    "push-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "101",
+    "--ruleset-id", "20652124", "--head-commit", COMMIT, "--base-commit", BASE,
+    ...extra, "--output", output,
+  ]);
+
+  // The default is `tip`, so this exact situation still fails closed.
+  globalThis.fetch = respond();
+  await assert.rejects(() => invoke(), /release_promotion_push_source_superseded/);
+
+  // Under `reachable` the same situation is admitted.
+  globalThis.fetch = respond();
+  await invoke("--source-policy", "reachable");
+  const reachableContext = JSON.parse(await readFile(output, "utf8"));
+  assert.equal(reachableContext.ci_merge_commit, COMMIT);
+  assert.equal(reachableContext.status, "merged");
+
+  // `identical` (the commit is still the tip) is reachable too.
+  globalThis.fetch = respond({ compare: { status: "identical", ahead_by: 0, behind_by: 0 }, main: { sha: COMMIT } });
+  await invoke("--source-policy", "reachable");
+
+  // A commit that is not on main fails closed with its own code.
+  for (const status of ["behind", "diverged", "unknown"]) {
+    globalThis.fetch = respond({ compare: { status, ahead_by: 0, behind_by: 3 } });
+    await assert.rejects(() => invoke("--source-policy", "reachable"), /release_promotion_release_source_not_reachable/, status);
+  }
+
+  // An unreadable compare endpoint is a failure, never an assumed success.
+  globalThis.fetch = async (url) => (String(url).includes("/compare/")
+    ? new Response("{}", { status: 500 })
+    : respond()(url));
+  await assert.rejects(() => invoke("--source-policy", "reachable"), /release_promotion_release_source_compare_unavailable/);
+
+  // The policy set is closed.
+  globalThis.fetch = respond();
+  await assert.rejects(() => invoke("--source-policy", "ancestor"), /release_promotion_source_policy_invalid/);
+
+  // The reachable readback is recorded, so the evidence digest differs from the
+  // tip digest for otherwise identical provider responses.
+  globalThis.fetch = respond({ compare: { status: "identical", ahead_by: 0, behind_by: 0 }, main: { sha: COMMIT } });
+  await invoke("--source-policy", "reachable");
+  const recorded = JSON.parse(await readFile(output, "utf8"));
+  await invoke();
+  const tipContext = JSON.parse(await readFile(output, "utf8"));
+  assert.notEqual(recorded.provider_readback_digest, tipContext.provider_readback_digest);
+  // ... and the default policy's digest is unchanged by this feature existing.
+  assert.match(tipContext.provider_readback_digest, /^[0-9a-f]{64}$/);
+});
+
 test("pre-merge and post-merge source admission reject each other's context", async (t) => {
   const root = await tempRoot(t);
   const contextFile = path.join(root, "pr-context.json");

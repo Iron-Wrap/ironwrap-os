@@ -225,6 +225,54 @@ function hasArg(args, name) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// How a release proves the admitted commit is still main's truth (IRO-264).
+//
+//   tip        main's tip must BE the admitted commit. The qa-only push path
+//              (`deploy.yml`) releases main's tip itself, so this is exact. It
+//              stays the default, which is what keeps that path unchanged.
+//   reachable  the admitted commit must be reachable from main: an ancestor of
+//              it, or main itself. A tag-triggered production release
+//              (`deploy-production.yml`) runs after the release pull request
+//              merged and after Deploy proved it, by which time another commit
+//              may legitimately have landed on main. Requiring the tip there
+//              would fail every production release that is not the very newest
+//              commit, while reachability still rejects a commit that was never
+//              on main (a fork, a deleted branch, a force-push).
+//
+// A policy is never inferred: the caller passes it, and the value is recorded in
+// the evidence so a reader can tell which rule was applied.
+const SOURCE_POLICIES = new Set(["tip", "reachable"]);
+const REACHABLE_COMPARE_STATUSES = new Set(["ahead", "identical"]);
+
+function sourcePolicy(args) {
+  const value = args.get("source-policy") ?? "tip";
+  if (!SOURCE_POLICIES.has(value)) fail("source_policy_invalid");
+  return value;
+}
+
+/**
+ * Provider reachability readback: is `commit` on `main`?
+ *
+ * `GET /compare/{base}...{head}` reports `status` for the HEAD relative to the
+ * BASE, so with the admitted commit as base and `main` as head, `ahead` means
+ * main has moved past the commit and `identical` means the commit is the tip.
+ * Both mean reachable. `behind` and `diverged` mean the commit is not on main,
+ * which fails closed.
+ */
+async function mainReachability(repository, commit, headers) {
+  const compare = await githubJson(
+    `https://api.github.com/repos/${repository}/compare/${commit}...main`,
+    headers,
+    "release_source_compare_unavailable",
+  );
+  if (!REACHABLE_COMPARE_STATUSES.has(compare.status)) fail("release_source_not_reachable");
+  return {
+    status: compare.status,
+    ahead_by: Number.isSafeInteger(compare.ahead_by) ? compare.ahead_by : null,
+    behind_by: Number.isSafeInteger(compare.behind_by) ? compare.behind_by : null,
+  };
+}
+
 function frappeScope(args) {
   const scope = arg(args, "frappe-scope");
   if (!FRAPPE_SCOPE_RE.test(scope)) fail("frappe_scope_invalid");
@@ -461,7 +509,13 @@ async function pushContext(args) {
     || mergeCommit.parents.length !== 1
     || mergeCommit.parents[0]?.sha !== claimedBase) fail("push_commit_not_linear_squash");
   const currentMain = await githubJson(`https://api.github.com/repos/${repository}/commits/main`, headers, "push_main_readback_unavailable");
-  if (currentMain.sha !== headCommit) fail("push_source_superseded");
+  const policy = sourcePolicy(args);
+  // Under `reachable` the tip comparison is replaced by a provider reachability
+  // readback, never merely skipped: the commit must still be on main.
+  const reachability = policy === "reachable"
+    ? await mainReachability(repository, headCommit, headers)
+    : null;
+  if (policy === "tip" && currentMain.sha !== headCommit) fail("push_source_superseded");
   const associated = await githubList(`https://api.github.com/repos/${repository}/commits/${headCommit}/pulls`, headers, "push_pr_association_unavailable");
   const sourcePrs = associated.filter((entry) => isRecord(entry) && entry.merge_commit_sha === headCommit);
   if (sourcePrs.length !== 1 || !Number.isSafeInteger(sourcePrs[0]?.number)) fail("push_pr_association_invalid");
@@ -497,6 +551,11 @@ async function pushContext(args) {
       merge: { sha: mergeCommit.sha, tree: mergeCommit.tree.sha, parent: claimedBase },
       main: { sha: currentMain.sha },
       merge_policy: mergePolicy,
+      // Recorded only under `reachable`, so the default policy's digest stays
+      // exactly what it was before IRO-264.
+      ...(policy === "reachable"
+        ? { source_policy: policy, main_reachability: reachability }
+        : {}),
     })),
     status: "merged",
   };
@@ -2369,9 +2428,21 @@ async function policyBoundary(args) {
   await writeJson(arg(args, "output"), state);
 }
 
+// `policy-genesis` and `assemble` both hash this list, but from different trees:
+// `policy-genesis --repo-root "$RUNNER_TEMP/policy-enforcer"` (deploy-production.yml:224)
+// is the base tree - the tagged commit's single parent, loaded via the
+// base-loaded enforcer - while `assemble --repo-root "$GITHUB_WORKSPACE"`
+// (deploy-production.yml:401) is the candidate tree. A `v*` tag can only exist
+// after this PR merges, so that parent always already carries both new entries
+// below: they are hashed starting with the first production release, not the
+// one after it. Nothing compares the two hashes - `assemble` only requires the
+// incoming `previous_generation.policy_hash` to be a well-formed sha256, and
+// records its own alongside it (IRO-264).
 export const RELEASE_POLICY_FILES = [
   ".github/workflows/ci.yml",
+  ".github/workflows/deploy-production.yml",
   ".github/workflows/deploy.yml",
+  ".github/workflows/release-please.yml",
   "deploy/release-provider-policy.json",
   "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
   "docs/DOCUMENTATION-CONTRACT.md",
@@ -2804,6 +2875,12 @@ async function mergedSource(args) {
   const pr = await githubJson(`https://api.github.com/repos/${context.repository}/pulls/${context.number}`, headers, "merged_source_pr_readback_unavailable");
   const mergeCommit = await githubJson(`https://api.github.com/repos/${context.repository}/git/commits/${context.ci_merge_commit}`, headers, "merged_source_commit_readback_unavailable");
   const mainReadback = await githubJson(`https://api.github.com/repos/${context.repository}/commits/main`, headers, "merged_source_main_readback_unavailable");
+  const policy = sourcePolicy(args);
+  // Same substitution as in `pushContext`: under `reachable` the tip equality
+  // below is replaced by this readback, not dropped.
+  const reachability = policy === "reachable"
+    ? await mainReachability(context.repository, context.ci_merge_commit, headers)
+    : null;
   if (pr.state !== "closed"
     || pr.merged !== true
     || pr.base?.ref !== "main"
@@ -2814,7 +2891,7 @@ async function mergedSource(args) {
     || !Array.isArray(mergeCommit.parents)
     || mergeCommit.parents.length !== 1
     || mergeCommit.parents[0]?.sha !== context.base_commit
-    || mainReadback.sha !== context.ci_merge_commit) fail("merged_source_drift");
+    || (policy === "tip" && mainReadback.sha !== context.ci_merge_commit)) fail("merged_source_drift");
   const fields = {
     schema: "ironwrap_source_admission_merge_v1",
     repository: context.repository,
@@ -2828,6 +2905,11 @@ async function mergedSource(args) {
     merge_commit: context.ci_merge_commit,
     merge_tree: mergeCommit.tree.sha,
     main_commit: mainReadback.sha,
+    // Only `reachable` records itself. A receipt without these keys is read as
+    // the strict tip policy, so dropping them cannot relax the check.
+    ...(policy === "reachable"
+      ? { source_policy: policy, main_reachability: reachability.status }
+      : {}),
     permit_digest: permitDigest,
     admission_digest: sha256(canonicalJson(admission)),
     status: "merged",

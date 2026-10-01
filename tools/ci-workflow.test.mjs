@@ -1,16 +1,67 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 // Pins the shape of .github/workflows/ci.yml (IRO-267): nothing pinned it before
 // this split, unlike tools/deploy-workflow.test.mjs for deploy.yml.
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
-const deployWorkflowUrl = new URL("../.github/workflows/deploy.yml", import.meta.url);
 const makefileUrl = new URL("../Makefile", import.meta.url);
 const repoRoot = new URL("../", import.meta.url);
 const repoRootPath = fileURLToPath(repoRoot).replace(/\/$/, "");
+const workflowsDirUrl = new URL("../.github/workflows/", import.meta.url);
+
+// A job's GitHub-visible name is its job-level `name:` when the job declares one
+// (`dependency-scan` -> `dependency scan`), else its id. A job carrying a job-level
+// `strategy:` is a matrix job: its real per-run job names are never its bare id, so
+// `collectCiChecks`' exactly-one-successful-job rule can never match it by id.
+function ciJobs(workflow) {
+  return jobNames(workflow).map((id) => {
+    const jobText = section(workflow, id);
+    const isMatrix = /^ {4}strategy:/m.test(jobText);
+    const nameMatch = jobText.match(/^ {4}name: (.+)$/m);
+    return { id, name: nameMatch ? nameMatch[1].trim() : id, isMatrix };
+  });
+}
+
+// Every `--job-names "..."` caller across the workflow directory, comment lines
+// stripped first so prose mentioning `--job-names` (lighthouse-harness-ab.yml) is
+// never read as a caller.
+async function jobNamesCallers() {
+  const files = await readdir(workflowsDirUrl);
+  const callers = [];
+  for (const file of files) {
+    const text = await readFile(new URL(file, workflowsDirUrl), "utf8");
+    const stripped = text
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    for (const match of stripped.matchAll(/--job-names "([^"]*)"/g)) {
+      callers.push({ file, names: match[1].split(",") });
+    }
+  }
+  return callers;
+}
+
+// Derivation from ci.yml: throws unless every requested name is a known,
+// non-matrix ci.yml job name. Independent of which three names a caller is
+// pinned to - that is assertJobNamesCaller's concern, not this one's.
+function assertAdmissibleJobNames(file, names, jobs) {
+  const admissible = jobs.map((job) => job.name);
+  const matrixNames = jobs.filter((job) => job.isMatrix).map((job) => job.name);
+  for (const requestedName of names) {
+    assert.ok(admissible.includes(requestedName), `${file}: ${requestedName} is not a ci.yml job name`);
+    assert.ok(!matrixNames.includes(requestedName), `${file}: ${requestedName} is a matrix job`);
+  }
+}
+
+// Caller policy on top of the derivation above: shared by the real test below
+// and by the negative tests.
+function assertJobNamesCaller(file, names, jobs) {
+  assertAdmissibleJobNames(file, names, jobs);
+  assert.deepEqual(names, ["paired-device-lighthouse", "gate", "validate-and-test"], file);
+}
 
 function section(workflow, heading) {
   const start = workflow.indexOf(`  ${heading}:`);
@@ -151,14 +202,61 @@ test("gate's shell passes only when every job succeeded, dependency-scan excepte
   assert.equal(runGate(oneFailure), 1, "a real failure must fail gate");
 });
 
-test("no matrix job name is requested by deploy.yml, which requires exactly one job per name", async () => {
-  const deployWorkflow = await readFile(deployWorkflowUrl, "utf8");
-  const jobNamesMatch = deployWorkflow.match(/--job-names "([^"]*)"/);
-  assert.ok(jobNamesMatch, "deploy.yml: --job-names not found");
-  const requested = jobNamesMatch[1].split(",");
-  assert.deepEqual(requested, ["paired-device-lighthouse", "gate", "validate-and-test"]);
-  for (const matrixJob of ["worker", "e2e", "contracts", "pwa", "make check"]) {
-    assert.ok(!requested.includes(matrixJob), `${matrixJob} must not be requested by name`);
+test("ci.yml job names: dependency-scan's override, worker and e2e as matrix jobs", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const jobs = ciJobs(workflow);
+  assert.equal(jobs.find((job) => job.id === "dependency-scan")?.name, "dependency scan");
+  assert.deepEqual(
+    [...jobs.filter((job) => job.isMatrix).map((job) => job.id)].sort(),
+    ["e2e", "worker"],
+  );
+});
+
+test("every --job-names caller in .github/workflows requests only the three non-matrix ci.yml jobs it needs", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const jobs = ciJobs(workflow);
+  const callers = await jobNamesCallers();
+  // A prose mention (lighthouse-harness-ab.yml) must never surface as a caller, and
+  // an empty read here would make every assertion below pass vacuously.
+  assert.ok(callers.length >= 2, `expected at least two --job-names callers, found ${callers.length}`);
+  for (const { file, names } of callers) {
+    assertJobNamesCaller(file, names, jobs);
+  }
+});
+
+test("a caller requesting the deleted make check job, or any matrix job, fails the ci.yml derivation", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const jobs = ciJobs(workflow);
+  assert.throws(
+    () =>
+      assertAdmissibleJobNames(
+        "synthetic",
+        ["make check", "paired-device-lighthouse", "gate", "validate-and-test"],
+        jobs,
+      ),
+    /make check is not a ci\.yml job name/,
+  );
+  assert.throws(
+    () => assertAdmissibleJobNames("synthetic", ["worker", "gate", "validate-and-test"], jobs),
+    /worker is a matrix job/,
+  );
+});
+
+test("a caller requesting admissible jobs that are not the pinned three still fails the caller pin", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const jobs = ciJobs(workflow);
+  const names = ["gate", "validate-and-test", "secret-scan"];
+  assertAdmissibleJobNames("synthetic", names, jobs);
+  assert.throws(() => assertJobNamesCaller("synthetic", names, jobs));
+});
+
+test("removing a requested job from ci.yml fails validation for every caller that still names it", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const jobs = ciJobs(workflow).filter((job) => job.id !== "gate");
+  const callers = await jobNamesCallers();
+  assert.ok(callers.length >= 2);
+  for (const { file, names } of callers) {
+    assert.throws(() => assertJobNamesCaller(file, names, jobs), `${file}: gate missing from ci.yml must be caught`);
   }
 });
 

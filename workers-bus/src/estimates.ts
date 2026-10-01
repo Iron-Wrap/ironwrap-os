@@ -24,6 +24,10 @@ export async function handleEstimateIngest(
   rawText: string,
   contentType: string | null,
   requestIdempotencyKey?: string | null,
+  // Release-smoke scope (IRO-264). This path has no acknowledgement email and no
+  // JobNimbus queue push, so the scope only marks the row; the native
+  // materialization is an owned write and still runs.
+  releaseSmoke = false,
 ): Promise<Response> {
   const raw = parseBody(rawText, contentType);
   const payload = normalizeEstimatorPayload(raw);
@@ -60,6 +64,7 @@ export async function handleEstimateIngest(
     jn_job_id: null,
     estimate_submission_key: estimateSubmissionKey,
     intent_queue: classifyIntent(`${payload.service ?? ""} ${payload.service_intent ?? ""}`),
+    release_smoke: releaseSmoke ? 1 : 0,
     created_at: now,
     updated_at: now,
   };

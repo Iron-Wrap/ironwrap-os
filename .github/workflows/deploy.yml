@@ -7,10 +7,14 @@ on:
     branches: [main]
 
 # The release never merges: it runs only after a PR has already landed on main,
-# so no job needs a token that can write contents or pull requests.
+# so no job needs a token that can write contents or pull requests. Reading pull
+# requests is still required: admission resolves the squash commit's pull-request
+# association through GET /repos/{repo}/commits/{sha}/pulls, which a private
+# repository refuses without `pull-requests: read` (IRO-264).
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 
 env:
   WORKER_VERSION: 4.131.0
@@ -46,6 +50,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+      # This job reads the squash commit's pull-request association; see the
+      # top-level permissions comment.
+      pull-requests: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -213,7 +220,10 @@ jobs:
           name: iro41-release-artifact-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/ironwrap-release-artifact.tar
           if-no-files-found: error
-          retention-days: 1
+          # The tag-triggered production release (IRO-264) consumes these bytes
+          # after the release PR merges, and a production re-run may happen days
+          # after the tag; one day of retention loses the artifact first.
+          retention-days: 30
 
       - name: Bind artifact and upload receipt into context
         env:
@@ -227,16 +237,28 @@ jobs:
             --artifact-id "$ARTIFACT_ID" --uploaded-digest "$ARTIFACT_UPLOAD_DIGEST" \
             --component-manifest "$RUNNER_TEMP/artifact-components.json"
 
+      - name: Stage the built context as one directory
+        # actions/upload-artifact roots the archive at the least common ancestor of its search
+        # paths. Two of these three files live under admission/ and one does not, so passing all
+        # three directly roots the archive at $RUNNER_TEMP and buries context.json under
+        # admission/context.json in the download, while every one of the 14 qa-job reads, and
+        # the production job after it, expects a flat context-download/context.json. Staging a
+        # single directory makes every entry flat, matching what those readers already expect.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/built-context"
+          cp "$RUNNER_TEMP/admission/context.json" "$RUNNER_TEMP/built-context/context.json"
+          cp "$RUNNER_TEMP/admission/pr-context.json" "$RUNNER_TEMP/built-context/pr-context.json"
+          cp "$RUNNER_TEMP/artifact-components.json" "$RUNNER_TEMP/built-context/artifact-components.json"
+
       - name: Publish context bound to the single artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: iro41-built-context-${{ github.event.workflow_run.head_sha }}
-          path: |
-            ${{ runner.temp }}/admission/context.json
-            ${{ runner.temp }}/admission/pr-context.json
-            ${{ runner.temp }}/artifact-components.json
+          path: ${{ runner.temp }}/built-context
           if-no-files-found: error
-          retention-days: 1
+          # Retained as long as the artifact it is bound to; see above.
+          retention-days: 30
 
   qa:
     name: Isolated qa, smoke, restore, and rollback drill
@@ -297,7 +319,7 @@ jobs:
         run: |
           set -euo pipefail
           tar -xf "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" -C "$RUNNER_TEMP"
-          test "$(sha256sum "$RUNNER_TEMP/ironwrap-release-artifact.tar" | awk '{print $1}')" = "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context-download/context.json" --field artifact_digest)"
+          test "$(sha256sum "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" | awk '{print $1}')" = "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context-download/context.json" --field artifact_digest)"
 
       - name: Verify isolated qa secret-name inventory before mutation
         env:
@@ -507,6 +529,11 @@ jobs:
             --candidate "$(cat "$RUNNER_TEMP/qa-version.id")" --previous "$previous"
 
       - name: Publish redacted qa proof
+        # Nine of these ten paths sit directly under $RUNNER_TEMP and one sits one level down
+        # (context-download/context.json), so the least common ancestor is $RUNNER_TEMP and the
+        # archive holds nine flat files plus context-download/context.json -- exactly the layout
+        # the seven reads in deploy-production.yml expect. Unlike the built-context upload above,
+        # this rooting was never ambiguous.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: iro41-qa-proof-${{ github.event.workflow_run.head_sha }}

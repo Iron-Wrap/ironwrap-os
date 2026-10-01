@@ -19,6 +19,10 @@ import {
   validateSourceCount,
   operatingTenantId,
   isOn,
+  RELEASE_SMOKE_HEADER,
+  RELEASE_SMOKE_HEADER_VALUE,
+  RELEASE_SMOKE_FIXTURE_ERROR,
+  isReleaseSmokeFixture,
 } from "./core.ts";
 import * as store from "./store.ts";
 import { flattenEnv } from "./env-bindings.ts";
@@ -702,12 +706,22 @@ async function routeRequest(
       return json({ error: "unauthorized" }, 401);
     const body = await readBounded(req);
     if (body === null) return json({ error: "payload_too_large" }, 413);
+    // Release-smoke scope, read only after the bearer check and honoured only for
+    // the reserved fixture (IRO-264).
+    const releaseSmoke = releaseSmokeRequested(req);
+    if (
+      releaseSmoke &&
+      !isReleaseSmokeFixture(parseBody(body, req.headers.get("content-type")))
+    ) {
+      return json({ error: RELEASE_SMOKE_FIXTURE_ERROR }, 400);
+    }
     return await handleEstimateIngest(
       env,
       body,
       req.headers.get("content-type"),
       req.headers.get("idempotency-key") ??
         req.headers.get("x-idempotency-key"),
+      releaseSmoke,
     );
   }
   // Facet v2 has separately provisioned rotating HMAC authority. It must never fall through to
@@ -792,8 +806,12 @@ async function routeRequest(
         ),
       );
     }
+    // Release-smoke scope (IRO-264), after the admin bearer check that guards this
+    // whole block. This route carries no body, so there is no fixture to match:
+    // the scope's only effect here is to skip the digest email to the owner and
+    // backup owner. The heartbeat row is still written exactly as always.
     if (req.method === "POST" && url.pathname === "/admin/reconcile")
-      return json(await runReconcile(env));
+      return json(await runReconcile(env, releaseSmokeRequested(req)));
     if (req.method === "POST" && url.pathname === "/admin/source-count")
       return await handleSourceCount(req, env);
     if (req.method === "POST" && url.pathname === "/admin/replay")
@@ -829,6 +847,14 @@ async function routeRequest(
 
 // ---------------------------------------------------------------------------- ingest
 
+/**
+ * Release-smoke scope request (IRO-264). Callers must already have passed the
+ * route's bearer check: this only reads the header, it authorizes nothing.
+ */
+function releaseSmokeRequested(req: Request): boolean {
+  return req.headers.get(RELEASE_SMOKE_HEADER) === RELEASE_SMOKE_HEADER_VALUE;
+}
+
 async function handleIngest(
   req: Request,
   env: Env,
@@ -842,10 +868,19 @@ async function handleIngest(
   if (rawText.length > MAX_BODY_BYTES)
     return json({ error: "payload_too_large" }, 413);
 
+  const contentType = req.headers.get("content-type");
+  // Release-smoke scope (IRO-264), read only after the caller's bearer token was
+  // accepted by the route above. It is honoured only for the reserved fixture, so
+  // a real lead can never be silently diverted to the side-effect-free path.
+  const releaseSmoke = releaseSmokeRequested(req);
+  if (releaseSmoke && !isReleaseSmokeFixture(parseBody(rawText, contentType))) {
+    return json({ error: RELEASE_SMOKE_FIXTURE_ERROR }, 400);
+  }
+
   const result = await ingestLead(
     env,
     ctx,
-    { source, provider, rawText, contentType: req.headers.get("content-type") },
+    { source, provider, rawText, contentType, releaseSmoke },
     log,
   );
   const response = result.ok ? json(result.body) : json({ error: result.error }, result.status);
@@ -861,7 +896,8 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   if (
     rec.status === "pushed" ||
     rec.status === "reconciled" ||
-    rec.status === "jn_skipped"
+    rec.status === "jn_skipped" ||
+    rec.release_smoke === 1
   ) {
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
@@ -1049,7 +1085,7 @@ async function retrySweep(env: Env): Promise<void> {
 }
 
 /** Daily reconciliation: independent source counts vs envelopes landed; heartbeat = the digest email. */
-async function runReconcile(env: Env): Promise<{
+async function runReconcile(env: Env, releaseSmoke = false): Promise<{
   day: string;
   rows: ReturnType<typeof reconcileDiff>;
   openDeadLetter: number;
@@ -1077,14 +1113,20 @@ async function runReconcile(env: Env): Promise<{
   // Email is best-effort: the heartbeat ROW (writeHeartbeat above) is the source of truth, so a
   // missing/unconfigured mailer must not fail the reconcile. Once email is wired, its arrival is
   // the human-facing heartbeat; until then, rely on the D1 heartbeat row / the admin result.
-  await sendDailyDigest(
-    env,
-    subject,
-    `<p>Daily source-vs-landed reconciliation for ${day}. (This email IS the heartbeat — if it
-      doesn't arrive, the reconcile didn't run: escalate to the backup owner.)</p>
-     <table border="1" cellpadding="4"><tr><th>channel</th><th>source</th><th>landed</th><th>gap</th></tr>${table}</table>
-     <p>Open dead-letter items: <b>${openDlq}</b>.</p>`,
-  ).catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
+  // Under the release-smoke scope the digest is skipped: a production release
+  // proof must not send the owner and backup owner a heartbeat email that says
+  // the day reconciled when it is really a release probe (IRO-264). The
+  // heartbeat row above is unchanged, so the real daily cron still reports.
+  if (!releaseSmoke) {
+    await sendDailyDigest(
+      env,
+      subject,
+      `<p>Daily source-vs-landed reconciliation for ${day}. (This email IS the heartbeat — if it
+        doesn't arrive, the reconcile didn't run: escalate to the backup owner.)</p>
+       <table border="1" cellpadding="4"><tr><th>channel</th><th>source</th><th>landed</th><th>gap</th></tr>${table}</table>
+       <p>Open dead-letter items: <b>${openDlq}</b>.</p>`,
+    ).catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
+  }
   log({ at: "reconcile", day, gaps: gaps.length, openDeadLetter: openDlq });
   return { day, rows, openDeadLetter: openDlq };
 }

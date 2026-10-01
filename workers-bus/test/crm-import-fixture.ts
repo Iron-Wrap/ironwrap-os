@@ -11,6 +11,8 @@ const MIGRATIONS = [
   "0082_envelope_operating_tenant.sql",
   "0090_operating_core.sql",
   "0109_crm_import_ledger.sql",
+  // insertEnvelope writes release_smoke (IRO-264).
+  "0133_envelope_release_smoke.sql",
 ];
 
 export class TestD1 {

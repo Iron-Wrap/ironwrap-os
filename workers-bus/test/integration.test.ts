@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index.ts";
 import { retryEstimateOperatingCoreMaterializations } from "../src/estimates.ts";
@@ -64,6 +64,7 @@ function fakeEnv() {
                     created_at: args[18],
                     updated_at: args[19],
                     tenant_id: args[20],
+                    release_smoke: args[21],
                   };
                   envelopesById.set(String(row.envelope_id), row);
                   if (row.estimate_submission_key) {
@@ -152,6 +153,8 @@ class EstimateD1 {
       "0009_replay_approval_audit.sql",
       "0090_operating_core.sql",
       "0082_envelope_operating_tenant.sql",
+      // insertEnvelope writes release_smoke (IRO-264).
+      "0133_envelope_release_smoke.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
     }
@@ -530,4 +533,282 @@ test("GET /health → ok", async () => {
   const res = await worker.fetch(new Request("https://bus.example/health"), env as never, fakeCtx() as never);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Release-smoke scope (IRO-264). The tag-triggered production release runs the
+// launch proof against PRODUCTION, so the proof must keep every owned write and
+// skip exactly three outward effects: the customer acknowledgement, the JobNimbus
+// queue push, and the reconciliation digest email. These tests are what hold that
+// split, in both directions: the scope must do nothing at all without the
+// reserved fixture, and must change nothing when the header is absent.
+
+const SMOKE_HEADER = "X-IronWrap-Release-Smoke";
+// The reserved launch-proof fixture: contact email under RFC 2606 example.invalid.
+const SMOKE_FIXTURE = {
+  name: "Launch Proof",
+  phone: "(587) 555-9999",
+  email: "launch-proof+1770000000000-abc@example.invalid",
+  service: "metal roofing",
+};
+const REAL_LEAD = { ...SMOKE_FIXTURE, email: "jane@example.com" };
+
+function websiteRequest(body: unknown, smoke: boolean): Request {
+  const headers: Record<string, string> = {
+    authorization: "Bearer test-token",
+    "content-type": "application/json",
+  };
+  if (smoke) headers[SMOKE_HEADER] = "1";
+  return new Request("https://bus.example/ingest/website", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+test("release-smoke scope keeps every owned write and skips the ack and the JobNimbus push", async () => {
+  const smoke = fakeEnv();
+  const smokeWaits: Promise<unknown>[] = [];
+  const smokeRes = await worker.fetch(
+    websiteRequest(SMOKE_FIXTURE, true),
+    smoke.env as never,
+    fakeCtx(smokeWaits) as never,
+  );
+  const smokeBody = (await smokeRes.json()) as { envelope_id: string; duplicate: boolean };
+  assert.equal(smokeRes.status, 200);
+
+  // Owned writes, all of them: raw to R2, the dedup claim, the envelope row, audit.
+  assert.equal(smoke.r2.length, 1, "raw evidence is still written");
+  assert.equal(
+    smoke.db.filter((c) => c.sql.includes("INSERT INTO dedup_claims")).length,
+    1,
+    "the dedup claim is still made",
+  );
+  assert.ok(
+    smoke.db.find((c) => c.sql.includes("INSERT INTO envelopes")),
+    "the envelope row is still written",
+  );
+  assert.ok(
+    smoke.db.find((c) => c.sql.includes("INSERT INTO audit_log")),
+    "the audit row is still written",
+  );
+  // ... and the row says what it is.
+  assert.equal(smoke.envelopesById.get(smokeBody.envelope_id)?.release_smoke, 1);
+  // ... and the row is TERMINAL, not pending_jn_push (IRO-264 R1): a terminal
+  // status survives the workflow's own automatic rollback to the previous
+  // Worker version, which has no release_smoke filter. A query filter would not.
+  assert.equal(smoke.envelopesById.get(smokeBody.envelope_id)?.status, "jn_skipped");
+
+  // The two outward effects are gone.
+  assert.equal(smoke.queue.length, 0, "no JobNimbus push is enqueued");
+  assert.equal(smokeWaits.length, 0, "no instant acknowledgement is scheduled");
+  // The skip is itself audited, mirroring the kill-switch skip.
+  assert.ok(
+    smoke.db.find(
+      (c) =>
+        c.sql.includes("INSERT INTO audit_log") &&
+        c.args.includes("jn_push") &&
+        c.args.includes("skip") &&
+        c.args.includes("release_smoke"),
+    ),
+    "the jn_push skip is audited with result=ok",
+  );
+
+  // The control: the same fixture WITHOUT the header is an ordinary lead.
+  const plain = fakeEnv();
+  const plainWaits: Promise<unknown>[] = [];
+  const plainRes = await worker.fetch(
+    websiteRequest(SMOKE_FIXTURE, false),
+    plain.env as never,
+    fakeCtx(plainWaits) as never,
+  );
+  const plainBody = (await plainRes.json()) as { envelope_id: string };
+  assert.equal(plainRes.status, 200);
+  assert.equal(plain.queue.length, 1, "an ordinary lead is still pushed");
+  assert.equal(plainWaits.length, 1, "an ordinary lead is still acknowledged");
+  assert.equal(plain.envelopesById.get(plainBody.envelope_id)?.release_smoke, 0);
+  assert.equal(
+    plain.envelopesById.get(plainBody.envelope_id)?.status,
+    "pending_jn_push",
+    "an ordinary lead is still queued, not skipped",
+  );
+});
+
+test("release-smoke scope is refused for anything but the reserved fixture", async () => {
+  const { env, r2, queue, db } = fakeEnv();
+  const waits: Promise<unknown>[] = [];
+  const res = await worker.fetch(
+    websiteRequest(REAL_LEAD, true),
+    env as never,
+    fakeCtx(waits) as never,
+  );
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: "release_smoke_fixture_required" });
+  // Refused before anything happened: a real lead is never half-ingested by a
+  // request that asked to suppress its side effects.
+  assert.equal(r2.length, 0);
+  assert.equal(queue.length, 0);
+  assert.equal(waits.length, 0);
+  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 0);
+});
+
+test("release-smoke scope needs the exact header value and never bypasses the bearer check", async () => {
+  // A truthy-looking value is not the scope.
+  for (const value of ["0", "true", "yes", ""]) {
+    const { env, queue } = fakeEnv();
+    const res = await worker.fetch(
+      new Request("https://bus.example/ingest/website", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/json",
+          [SMOKE_HEADER]: value,
+        },
+        body: JSON.stringify(SMOKE_FIXTURE),
+      }),
+      env as never,
+      fakeCtx() as never,
+    );
+    assert.equal(res.status, 200, value);
+    assert.equal(queue.length, 1, `header "${value}" must not suppress the push`);
+  }
+
+  // The scope is read only after the bearer check, so it cannot be used to reach
+  // the ingest path without the token.
+  const { env, r2 } = fakeEnv();
+  const res = await worker.fetch(
+    new Request("https://bus.example/ingest/website", {
+      method: "POST",
+      headers: { "content-type": "application/json", [SMOKE_HEADER]: "1" },
+      body: JSON.stringify(SMOKE_FIXTURE),
+    }),
+    env as never,
+    fakeCtx() as never,
+  );
+  assert.equal(res.status, 401);
+  assert.equal(r2.length, 0);
+});
+
+test("release-smoke scope marks an estimate row and refuses a non-fixture estimate", async () => {
+  const estimate = {
+    project_id: "LP-1770000000000-abc",
+    customer: "Launch Proof",
+    email: SMOKE_FIXTURE.email,
+    address: "Edmonton, AB",
+    total_estimate: "$1.00",
+  };
+  const ok = fakeEnv();
+  const okRes = await worker.fetch(
+    new Request("https://bus.example/ingest/estimate", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+        [SMOKE_HEADER]: "1",
+      },
+      body: JSON.stringify(estimate),
+    }),
+    ok.env as never,
+    fakeCtx() as never,
+  );
+  const okBody = (await okRes.json()) as { envelope_id: string };
+  // 200 or 202: the native materialization is retryable under these fake bindings.
+  // What matters here is that the row was accepted and marked.
+  assert.ok([200, 202].includes(okRes.status), `unexpected status ${okRes.status}`);
+  assert.equal(ok.envelopesById.get(okBody.envelope_id)?.release_smoke, 1);
+
+  const bad = fakeEnv();
+  const badRes = await worker.fetch(
+    new Request("https://bus.example/ingest/estimate", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+        [SMOKE_HEADER]: "1",
+      },
+      body: JSON.stringify({ ...estimate, email: "jane@example.com" }),
+    }),
+    bad.env as never,
+    fakeCtx() as never,
+  );
+  assert.equal(badRes.status, 400);
+  assert.deepEqual(await badRes.json(), { error: "release_smoke_fixture_required" });
+  assert.equal(bad.r2.length, 0);
+});
+
+test("release-smoke scope skips the reconciliation digest and still writes the heartbeat", async (t) => {
+  // The reconcile reads and writes real tables, so this one runs against the real
+  // migration chain rather than the fake bindings above.
+  const directory = new URL("../migrations/", import.meta.url);
+  const files = readdirSync(directory).filter((n) => n.endsWith(".sql")).sort();
+
+  // Gmail has to be CONFIGURED for this to prove anything: otherwise the mailer
+  // refuses before trying and both branches would look identical. The configured
+  // key is deliberately unusable, so the attempt always FAILS -- and the failure is
+  // the signal: index.ts logs `reconcile_digest_failed` when the digest was tried.
+  // Its presence means "attempted", its absence means "skipped".
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: unknown) => {
+    logged.push(String(line));
+  });
+  const attemptedDigest = () =>
+    logged.some((line) => line.includes("reconcile_digest_failed"));
+
+  const run = async (smoke: boolean) => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec("PRAGMA foreign_keys = ON");
+    for (const file of files) raw.exec(readFileSync(new URL(file, directory), "utf8"));
+    const env = withTestEffectRuntime({
+      ADMIN_TOKEN: "admin-token",
+      OWNER_ALERT_EMAIL: "owner@example.invalid",
+      BACKUP_ALERT_EMAIL: "backup@example.invalid",
+      FROM_EMAIL: "ops@example.invalid",
+      APP_TENANT_ID: "ironwrap",
+      GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({
+        client_email: "digest@example.invalid",
+        private_key: "unused-in-this-test",
+      }),
+      RAW: { put: async () => {} },
+      JN_QUEUE: { send: async () => {}, sendBatch: async () => {} },
+      DB: {
+        prepare(sql: string) {
+          const statement = raw.prepare(sql);
+          const wrap = (args: unknown[]) => ({
+            first: async <T>() => (statement.get(...(args as never[])) ?? null) as T | null,
+            all: async <T>() => ({ results: statement.all(...(args as never[])) as T[] }),
+            run: async () => {
+              const result = statement.run(...(args as never[]));
+              return { success: true, meta: { changes: Number(result.changes) } };
+            },
+          });
+          return { ...wrap([]), bind: (...args: unknown[]) => wrap(args) };
+        },
+      },
+    });
+    const headers: Record<string, string> = { authorization: "Bearer admin-token" };
+    if (smoke) headers[SMOKE_HEADER] = "1";
+    const res = await worker.fetch(
+      new Request("https://bus.example/admin/reconcile", { method: "POST", headers }),
+      env as never,
+      fakeCtx() as never,
+    );
+    const heartbeats = Number(
+      (raw.prepare("SELECT COUNT(*) AS count FROM heartbeat").get() as { count: number }).count,
+    );
+    return { status: res.status, body: await res.json(), heartbeats };
+  };
+
+  logged.length = 0;
+  const plain = await run(false);
+  assert.equal(plain.status, 200);
+  assert.ok(attemptedDigest(), "the ordinary reconcile attempts the digest email");
+  assert.equal(plain.heartbeats, 1, "the ordinary reconcile writes the heartbeat");
+
+  logged.length = 0;
+  const smoke = await run(true);
+  assert.equal(smoke.status, 200);
+  assert.equal(attemptedDigest(), false, "the release-smoke reconcile sends no digest");
+  assert.equal(smoke.heartbeats, 1, "the release-smoke reconcile still writes the heartbeat");
+  // The reconcile answer itself is unchanged: the proof asserts on this body.
+  assert.deepEqual(smoke.body, plain.body);
 });

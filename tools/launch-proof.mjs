@@ -13,9 +13,25 @@ const SYNTHETIC_RANDOM_SUFFIX_RE = /^[a-f0-9]{32}$/;
 const SYNTHETIC_RANDOM_SUFFIX_BYTES = 16;
 const OPERATING_AUTHORITY = "d1";
 
+// Release-smoke scope (IRO-264). The production release proof runs against
+// PRODUCTION, so the Worker must keep every owned write and skip the two outward
+// side effects plus the owner digest email. The Worker reads the scope from this
+// header, and honours it only for the reserved fixture below (whose contact email
+// is always under `example.invalid`).
+export const RELEASE_SMOKE_HEADER = "X-IronWrap-Release-Smoke";
+// Exactly the steps whose endpoints honour the scope: the three POST routes
+// `/ingest/website`, `/ingest/estimate` and `/admin/reconcile`. The GET probes and
+// the D1 read-back have no side effect to suppress.
+const RELEASE_SMOKE_STEP_PATHS = new Set([
+  "/ingest/website",
+  "/ingest/estimate",
+  "/admin/reconcile",
+]);
+
 export function createLaunchProofPlan({
   stamp = Date.now(),
   randomSuffix = cryptographicRandomSuffix(),
+  releaseSmoke = false,
 } = {}) {
   const proofStamp = normalizeProofStamp(stamp);
   const proofRandomSuffix = normalizeRandomSuffix(randomSuffix);
@@ -117,9 +133,14 @@ export function createLaunchProofPlan({
     proofStamp,
     proofRandomSuffix,
     executionId,
+    releaseSmoke,
     leadFixture,
     estimateFixture,
-    steps,
+    steps: steps.map((step) =>
+      releaseSmoke && RELEASE_SMOKE_STEP_PATHS.has(step.path)
+        ? { ...step, releaseSmoke: true }
+        : step,
+    ),
   };
 }
 
@@ -132,6 +153,7 @@ export function curlFor(step, base = "") {
   if (step.auth === "admin")
     parts.push("-H 'Authorization: Bearer $ADMIN_TOKEN'");
   if (step.requestId) parts.push(`-H 'X-Request-ID: ${step.requestId}'`);
+  if (step.releaseSmoke) parts.push(`-H '${RELEASE_SMOKE_HEADER}: 1'`);
   if (step.idempotencyKey)
     parts.push(`-H 'Idempotency-Key: ${step.idempotencyKey}'`);
   if (step.body)
@@ -148,6 +170,7 @@ export async function executeLaunchProof({
   fetchImpl = globalThis.fetch,
   stamp = Date.now(),
   randomSuffix,
+  releaseSmoke = false,
   onStep,
 } = {}) {
   const normalizedBase = requiredBase(base, "BUS_BASE_URL");
@@ -155,7 +178,7 @@ export async function executeLaunchProof({
   const normalizedAdminToken = requiredSecret(adminToken, "ADMIN_TOKEN");
   assert.equal(typeof fetchImpl, "function", "fetch implementation required");
 
-  const plan = createLaunchProofPlan({ stamp, randomSuffix });
+  const plan = createLaunchProofPlan({ stamp, randomSuffix, releaseSmoke });
   const results = {};
   for (const step of plan.steps) {
     results[step.name] = await runStep(step, {
@@ -249,9 +272,14 @@ export async function runLaunchProofCli({
   log = console.log,
   errorLog = console.error,
 } = {}) {
-  const plan = createLaunchProofPlan();
+  const releaseSmoke = argv.includes("--release-smoke");
+  const plan = createLaunchProofPlan({ releaseSmoke });
   if (!argv.includes("--execute")) {
     log("DRY RUN (pass --execute to send). Plan:\n");
+    if (releaseSmoke)
+      log(
+        `Release-smoke scope: ${RELEASE_SMOKE_HEADER}: 1 on the side-effecting POST steps only.\n`,
+      );
     for (const step of plan.steps) log(`# ${step.name}\n${curlFor(step)}\n`);
     log(
       "Operating authority is D1/Worker. Frappe/ERPNext stand-up is out of scope (IRO-189 / IRO-195).",
@@ -269,6 +297,7 @@ export async function runLaunchProofCli({
     fetchImpl,
     stamp: plan.proofStamp,
     randomSuffix: plan.proofRandomSuffix,
+    releaseSmoke,
     onStep: (name, result) => errorLog(`${name}: HTTP ${result.status}`),
   });
   log(JSON.stringify(evidence, null, 2));
@@ -333,6 +362,7 @@ async function runStep(step, { base, ingestToken, adminToken, fetchImpl }) {
   };
   if (step.auth === "ingest") headers.authorization = `Bearer ${ingestToken}`;
   if (step.auth === "admin") headers.authorization = `Bearer ${adminToken}`;
+  if (step.releaseSmoke) headers[RELEASE_SMOKE_HEADER.toLowerCase()] = "1";
   if (step.idempotencyKey) headers["idempotency-key"] = step.idempotencyKey;
   if (step.body) headers["content-type"] = "application/json";
   const response = await fetchImpl(base + step.path, {
@@ -410,6 +440,10 @@ function redactedEvidence({ plan, results, leadEnvelope, d1Lead, leadReplay }) {
   return {
     proof: "ironwrap-launch-proof-v4",
     operating_authority: OPERATING_AUTHORITY,
+    // The mode this evidence was produced in. `parseLaunchProofEvidence` validates
+    // named fields and the exact STEP SET, not an exact key set, so recording the
+    // mode here does not change what the permit accepts (IRO-264).
+    release_smoke: plan.releaseSmoke === true,
     fixture: {
       envelope_id: leadEnvelope,
       project_id: plan.estimateFixture.project_id,

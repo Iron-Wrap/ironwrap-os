@@ -30,6 +30,8 @@ class NativeNewoD1 {
       "0026_newo_reconciliation.sql",
       "0090_operating_core.sql",
       "0082_envelope_operating_tenant.sql",
+      // insertEnvelope writes release_smoke (IRO-264).
+      "0133_envelope_release_smoke.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }

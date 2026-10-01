@@ -198,14 +198,15 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
     `INSERT INTO envelopes (envelope_id, source, contact_name, contact_phone, contact_email,
        job_ref, payload_json, raw_key, ts, status, dedup_key, dup_of, attempts, last_error,
        jn_contact_id, jn_job_id, estimate_submission_key, intent_queue, created_at, updated_at,
-       tenant_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       tenant_id, release_smoke)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).bind(
     rec.envelope_id, rec.source, rec.contact_name, rec.contact_phone, rec.contact_email,
     rec.job_ref, rec.payload_json, rec.raw_key, rec.ts, rec.status, rec.dedup_key, rec.dup_of,
     rec.attempts, rec.last_error, rec.jn_contact_id, rec.jn_job_id,
     rec.estimate_submission_key ?? null, rec.intent_queue,
     rec.created_at, rec.updated_at, tenantId,
+    rec.release_smoke === 1 ? 1 : 0,
   ).run();
 }
 

@@ -87,6 +87,7 @@ test-tools:
 	  tools/merge-worker-tap.test.mjs \
 	  tools/ci-workflow.test.mjs \
 	  tools/launch-proof.test.mjs \
+	  tools/conventional-pr-title.test.mjs \
 	  tools/deploy-workflow.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs

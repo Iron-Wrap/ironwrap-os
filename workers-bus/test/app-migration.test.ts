@@ -2260,13 +2260,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // head-pointer/lineage/append-only guards. 0129 freezes governed authority requirements on
     // both assignment tables; 0130 binds Work Packages to that exact assignment snapshot, and 0131
     // requires a current authority-precondition array on every non-stop field action. 0132 adds the
-    // per-cron heartbeat table the token-less `/ready?scope=ops` probe reads (IRO-262). The
-    // 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 111);
+    // per-cron heartbeat table the token-less `/ready?scope=ops` probe reads (IRO-262). 0133
+    // forward-adds `envelopes.release_smoke` so a production release proof's own rows are
+    // distinguishable from customer leads; it adds no table, index, or trigger. The 0070–0078 and
+    // 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
+    assert.equal(migrations.length, 112);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0132_cron_heartbeat.sql",
+      "0133_envelope_release_smoke.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {

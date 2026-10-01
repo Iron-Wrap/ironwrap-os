@@ -30,6 +30,17 @@ paths = [
   '''(^|/)tests/''',
   '''(^|/)fixtures/''',
   '''\.test\.(?:c|m)?[jt]sx?$''',
+  # tools/production-readiness-test-helpers.mjs (IRO-267): the fixture constants
+  # tools/production-readiness.test.mjs used to carry directly, now shared by the
+  # several production-readiness-*.test.mjs files this was split into.
+  #
+  # No `^` anchor: tools/secret-scan.mjs runs `gitleaks dir <scratch>` against a
+  # randomised `mkdtemp` export, not the repo path, so gitleaks reports each
+  # finding's file as `<scratch>/tools/production-readiness-test-helpers.mjs`.
+  # `(^|/)tools/` survives that prefix and keeps the directory scope the
+  # neighbouring `(^|/)tests/` and `(^|/)fixtures/` entries have - without it,
+  # any file with this basename anywhere in the tree is exempt.
+  '''(^|/)tools/production-readiness-test-helpers\.mjs$''',
 ]
 
 [[allowlists]]

@@ -1190,7 +1190,7 @@ checkout (`main` @ `63a28e43`): the Worker suite (`npm test --prefix workers-bus
 PWA suite (`npm test --prefix app`, 932 tests across 118 files), the Frappe contract suite
 (`python -m unittest discover -s tests -t .` in `frappe-apps/ironwrap_roofing`, 433/433), and the
 repository validators named per row. Which gate a check sits behind matters and is stated where it
-does: the Frappe unittest, lint, and wheel steps run in `make check` (the `check` job of
+does: the Frappe unittest, lint, and wheel steps run in `make check` (the `contracts` job of
 `.github/workflows/ci.yml`), so a Frappe-only citation is a merge gate, not live proof.
 
 | Domain | Current state | Autonomous target gap | Proof required |

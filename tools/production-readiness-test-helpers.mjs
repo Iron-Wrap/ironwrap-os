@@ -12,31 +12,31 @@ import {
   validateLiveEnv,
 } from "./production-readiness.mjs";
 
-const TOOL = path.join(DEFAULT_REPO_ROOT, "tools/production-readiness.mjs");
-const HOST_PREFLIGHT = path.join(DEFAULT_REPO_ROOT, "deploy/host-preflight.sh");
-const BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-to-r2.sh");
-const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
-const D1_BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-d1-to-r2.sh");
-const D1_RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-d1-from-r2.sh");
-const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
-const D1_BACKUP_CONTRACT = await readFile(D1_BACKUP, "utf8");
-const HERMES_DESKTOP_MIGRATION = await readFile(
+export const TOOL = path.join(DEFAULT_REPO_ROOT, "tools/production-readiness.mjs");
+export const HOST_PREFLIGHT = path.join(DEFAULT_REPO_ROOT, "deploy/host-preflight.sh");
+export const BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-to-r2.sh");
+export const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
+export const D1_BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-d1-to-r2.sh");
+export const D1_RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-d1-from-r2.sh");
+export const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
+export const D1_BACKUP_CONTRACT = await readFile(D1_BACKUP, "utf8");
+export const HERMES_DESKTOP_MIGRATION = await readFile(
   path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations/0036_hermes_desktop_pilot.sql"),
   "utf8",
 );
-const APPROVAL_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
+export const APPROVAL_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
   type: "spki",
   format: "pem",
 });
 
-function validApprovalPublicKeyOptions() {
+export function validApprovalPublicKeyOptions() {
   return {
     statApprovalPublicKey: async () => ({ isFile: () => true }),
     readApprovalPublicKey: async () => APPROVAL_PUBLIC_KEY,
   };
 }
 
-async function writeApprovalPublicKeyFixture(t) {
+export async function writeApprovalPublicKeyFixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-approval-key-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const file = path.join(root, "approval-public.pem");
@@ -44,12 +44,12 @@ async function writeApprovalPublicKeyFixture(t) {
   return file;
 }
 
-async function writeExecutable(file, source) {
+export async function writeExecutable(file, source) {
   await writeFile(file, source);
   await chmod(file, 0o755);
 }
 
-async function mockBackupEnvironment(t, { failCopy = false, signalCopy = false } = {}) {
+export async function mockBackupEnvironment(t, { failCopy = false, signalCopy = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-backup-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -141,7 +141,7 @@ exit 0
   };
 }
 
-async function mockRestoreEnvironment(t, {
+export async function mockRestoreEnvironment(t, {
   badChecksum = false,
   manifestSite = "os.ironwrapexteriors.com",
   archiveLink = false,
@@ -327,7 +327,7 @@ esac
   };
 }
 
-async function stageD1Script(root, source) {
+export async function stageD1Script(root, source) {
   const deploy = path.join(root, "deploy");
   const workerBin = path.join(root, "workers-bus/node_modules/.bin");
   await mkdir(deploy, { recursive: true });
@@ -341,7 +341,7 @@ async function stageD1Script(root, source) {
   return { target, workerBin };
 }
 
-const BASE_REQUIRED_D1_TABLES = [
+export const BASE_REQUIRED_D1_TABLES = [
   "app_action_throttles", "app_auth_audit", "app_auth_throttles", "app_device_pairings",
   "app_devices", "app_magic_links", "app_sessions", "app_users", "approval_request_events",
   "approval_requests", "audit_log", "authority_record_actions", "authority_record_readbacks",
@@ -365,7 +365,7 @@ const BASE_REQUIRED_D1_TABLES = [
   "source_counts",
 ];
 
-const BASE_REQUIRED_D1_INDEX_BINDINGS = [
+export const BASE_REQUIRED_D1_INDEX_BINDINGS = [
   ["idx_app_action_throttles_expiry", "app_action_throttles"],
   ["idx_app_auth_audit_tenant_created", "app_auth_audit"],
   ["idx_app_auth_throttles_expiry", "app_auth_throttles"],
@@ -469,7 +469,7 @@ const BASE_REQUIRED_D1_INDEX_BINDINGS = [
   ["idx_field_actions_work_package_evidence", "field_actions"],
 ];
 
-const BASE_REQUIRED_D1_TRIGGER_BINDINGS = [
+export const BASE_REQUIRED_D1_TRIGGER_BINDINGS = [
   ["append_approval_request_created_event", "approval_requests"],
   ["append_approval_request_reconciliation_event", "approval_requests"],
   ["append_approval_request_transition_event", "approval_requests"],
@@ -564,14 +564,14 @@ const BASE_REQUIRED_D1_TRIGGER_BINDINGS = [
   ["authority_record_readbacks_validate_actor", "authority_record_readbacks"],
 ];
 
-function d1ContractCsv(name) {
+export function d1ContractCsv(name) {
   const initial = D1_BACKUP_CONTRACT.match(new RegExp(`^${name}="([^"]*)"$`, "m"))?.[1] ?? "";
   const additions = [...D1_BACKUP_CONTRACT.matchAll(new RegExp(`^${name}\\+="([^"]*)"$`, "gm"))]
     .map((match) => match[1]);
   return [initial, ...additions].join("").split(",").filter(Boolean);
 }
 
-function extendD1Bindings(baseline, current) {
+export function extendD1Bindings(baseline, current) {
   const bindings = [];
   for (const value of current) {
     const separator = value.indexOf("=");
@@ -588,22 +588,22 @@ function extendD1Bindings(baseline, current) {
   return bindings;
 }
 
-const REQUIRED_D1_TABLES = d1ContractCsv("REQUIRED_TABLES");
+export const REQUIRED_D1_TABLES = d1ContractCsv("REQUIRED_TABLES");
 assert.equal(new Set(REQUIRED_D1_TABLES).size, REQUIRED_D1_TABLES.length, "duplicate D1 table fixture");
 for (const table of BASE_REQUIRED_D1_TABLES) assert.ok(REQUIRED_D1_TABLES.includes(table), `missing D1 table fixture: ${table}`);
-const REQUIRED_D1_INDEX_BINDINGS = extendD1Bindings(
+export const REQUIRED_D1_INDEX_BINDINGS = extendD1Bindings(
   BASE_REQUIRED_D1_INDEX_BINDINGS,
   d1ContractCsv("REQUIRED_INDEX_BINDINGS"),
 );
-const REQUIRED_D1_TRIGGER_BINDINGS = extendD1Bindings(
+export const REQUIRED_D1_TRIGGER_BINDINGS = extendD1Bindings(
   BASE_REQUIRED_D1_TRIGGER_BINDINGS,
   d1ContractCsv("REQUIRED_TRIGGER_BINDINGS"),
 );
-const D1_TRIGGER_VERIFY_QUERY_PREFIX = "SELECT name AS trigger_name, tbl_name AS table_name, sql AS trigger_sql FROM sqlite_master WHERE type='trigger' AND name IN (";
-const D1_TRIGGER_VERIFY_QUERY_SUFFIX = ") ORDER BY name;";
-const MAX_REMOTE_D1_READ_COMMAND_LENGTH = 16_384;
+export const D1_TRIGGER_VERIFY_QUERY_PREFIX = "SELECT name AS trigger_name, tbl_name AS table_name, sql AS trigger_sql FROM sqlite_master WHERE type='trigger' AND name IN (";
+export const D1_TRIGGER_VERIFY_QUERY_SUFFIX = ") ORDER BY name;";
+export const MAX_REMOTE_D1_READ_COMMAND_LENGTH = 16_384;
 
-function d1TriggerVerificationBatchCount() {
+export function d1TriggerVerificationBatchCount() {
   let batchNames = "";
   let batchCount = 0;
   for (const [triggerName] of REQUIRED_D1_TRIGGER_BINDINGS) {
@@ -622,9 +622,9 @@ function d1TriggerVerificationBatchCount() {
   return batchCount + 1;
 }
 
-const REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT = d1TriggerVerificationBatchCount();
+export const REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT = d1TriggerVerificationBatchCount();
 
-const HERMES_D1_TABLES = new Set([
+export const HERMES_D1_TABLES = new Set([
   "hermes_desktop_contexts",
   "hermes_desktop_devices",
   "hermes_desktop_envelopes",
@@ -632,18 +632,18 @@ const HERMES_D1_TABLES = new Set([
   "hermes_desktop_pairings",
   "hermes_desktop_results",
 ]);
-const HERMES_D1_INDEXES = new Set(
+export const HERMES_D1_INDEXES = new Set(
   REQUIRED_D1_INDEX_BINDINGS
     .filter(([, table]) => HERMES_D1_TABLES.has(table))
     .map(([name]) => name),
 );
-const HERMES_D1_TRIGGERS = new Set(
+export const HERMES_D1_TRIGGERS = new Set(
   REQUIRED_D1_TRIGGER_BINDINGS
     .filter(([, table]) => HERMES_D1_TABLES.has(table))
     .map(([name]) => name),
 );
 
-function hermesTriggerSql(name) {
+export function hermesTriggerSql(name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = HERMES_DESKTOP_MIGRATION.match(new RegExp(
     `CREATE\\s+TRIGGER\\s+IF\\s+NOT\\s+EXISTS\\s+${escapedName}\\b[\\s\\S]*?\\nEND;`,
@@ -653,12 +653,12 @@ function hermesTriggerSql(name) {
   return match[0];
 }
 
-function hermesMigrationSql({ missingTrigger = "" } = {}) {
+export function hermesMigrationSql({ missingTrigger = "" } = {}) {
   if (!HERMES_D1_TRIGGERS.has(missingTrigger)) return HERMES_DESKTOP_MIGRATION;
   return HERMES_DESKTOP_MIGRATION.replace(hermesTriggerSql(missingTrigger), "");
 }
 
-function hermesIndexSql(name) {
+export function hermesIndexSql(name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = HERMES_DESKTOP_MIGRATION.match(new RegExp(
     `CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+IF\\s+NOT\\s+EXISTS\\s+${escapedName}\\b[\\s\\S]*?;`,
@@ -668,7 +668,7 @@ function hermesIndexSql(name) {
   return match[0].replace(/\s+IF\s+NOT\s+EXISTS/i, "");
 }
 
-function d1IndexSql(name, table) {
+export function d1IndexSql(name, table) {
   if (HERMES_D1_INDEXES.has(name)) return hermesIndexSql(name);
   if (name === "idx_app_users_tenant_access_role_active")
     return `CREATE INDEX ${name} ON ${table}(tenant_id, active, access_role, updated_at);`;
@@ -695,7 +695,7 @@ function d1IndexSql(name, table) {
   return `CREATE INDEX ${name} ON ${table}(id);`;
 }
 
-function d1GenericTableSql(name, index) {
+export function d1GenericTableSql(name, index) {
   if (name === "app_users") return `CREATE TABLE app_users (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -857,7 +857,7 @@ function d1GenericTableSql(name, index) {
   return `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`;
 }
 
-const HERMES_D1_SEED_SQL = `
+export const HERMES_D1_SEED_SQL = `
 INSERT INTO hermes_desktop_pairings (
   pairing_id, token_sha256, tenant_id, user_id, role, api_audience,
   bound_issuer, bound_origin, issued_at, expires_at
@@ -920,7 +920,7 @@ INSERT INTO hermes_desktop_events (
   '${"7".repeat(64)}', '2026-08-13T00:10:00.000Z'
 );`;
 
-function d1TriggerSql(name, table, {
+export function d1TriggerSql(name, table, {
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
   weakMeasurementTrigger = "",
@@ -1183,7 +1183,7 @@ function d1TriggerSql(name, table, {
   return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT 1; END;`;
 }
 
-function d1Sql({
+export function d1Sql({
   missingTable = "",
   missingIndex = "",
   missingTrigger = "",
@@ -1205,7 +1205,7 @@ function d1Sql({
   return `BEGIN TRANSACTION;\n${genericTables.map(d1GenericTableSql).join("\n")}\n${nullActiveAccessRole ? "UPDATE app_users SET access_role = NULL WHERE active = 1;\n" : ""}${hermesMigrationSql({ missingTrigger })}\n${HERMES_D1_SEED_SQL}\n${indexes.map(([name, table]) => d1IndexSql(name, table)).join("\n")}\n${genericTriggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakMeasurementTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger, weakAccessRoleTrigger })).join("\n")}\nCOMMIT;\n`;
 }
 
-async function mockD1BackupEnvironment(t, {
+export async function mockD1BackupEnvironment(t, {
   failCopy = false,
   signalCopy = false,
   missingTable = "",
@@ -1304,7 +1304,7 @@ exit 0
   };
 }
 
-async function mockD1RestoreEnvironment(t, {
+export async function mockD1RestoreEnvironment(t, {
   badChecksum = false,
   targetObject = "",
   preflightResponseMode = "normal",
@@ -1720,7 +1720,7 @@ esac
   };
 }
 
-function validLiveEnv() {
+export function validLiveEnv() {
   const adminToken = "admin_7f9e4c21b6a348d5a8f0c2e4";
   const effectRuntimeToken = "effect_runtime_8f6e4c2a0b9d7e5f3a1c8b6d4e2f0a9c";
   return {
@@ -1819,1341 +1819,3 @@ function validLiveEnv() {
   };
 }
 
-test("repository deployment contract is complete and Frappe-only", async () => {
-  const result = await validateContract();
-  assert.equal(result.ok, true, renderHuman(result));
-  assert.equal(result.summary.failed, 0);
-});
-
-/**
- * Before ELEC-240 the readiness contract covered none of the eight capabilities spec 9.3 names, so
- * a flag flip on QuickBooks, Newo, Postiz, Hermes desktop or the proposal template passed every
- * check. These three prove it no longer does -- in both directions, because a capability quietly
- * becoming available is as much a state change as one quietly switching off.
- */
-async function capabilityFixture(t, mutate) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-capability-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(path.join(root, "workers-bus"), { recursive: true });
-  const wranglerPath = path.join(root, "workers-bus/wrangler.jsonc");
-  const source = await readFile(
-    path.join(DEFAULT_REPO_ROOT, "workers-bus/wrangler.jsonc"),
-    "utf8",
-  );
-  await writeFile(wranglerPath, mutate(source));
-  const result = await validateContract({ repoRoot: root });
-  return (id) => result.checks.find((item) => item.id === id);
-}
-
-test("contract mode catches a capability flag flipped on without its configuration", async (t) => {
-  const checkFor = await capabilityFixture(t, (source) =>
-    source.replace('"QB_OAUTH_ENABLED": "false"', '"QB_OAUTH_ENABLED": "true"'),
-  );
-  const flipped = checkFor("contract.capability.quickbooks_oauth.state");
-  assert.equal(flipped?.status, "fail");
-  // The message has to name the new state, not just report a mismatch: an operator who flipped the
-  // flag needs to learn that what they produced is "on but unconfigured", not "connected".
-  assert.match(flipped.message, /quickbooks_oauth is unconfigured .* but off is recorded/);
-  assert.equal(checkFor("contract.capability.newo.state")?.status, "pass");
-});
-
-test("contract mode catches a capability quietly becoming available", async (t) => {
-  const route = {
-    version: 1,
-    issuer: "facet",
-    source_product: "facet",
-    source_environment: "production",
-    source_tenant_id: "6b0cbf1d-e0a7-4a1f-9b8b-9f2e4a1c77aa",
-    destination_tenant_id: "ironwrap",
-    destination_url: "https://facet.example.invalid/projects",
-  };
-  const checkFor = await capabilityFixture(t, (source) =>
-    source.replace(
-      '"FACET_V2_ROUTES_JSON": "[]"',
-      `"FACET_V2_ROUTES_JSON": ${JSON.stringify(JSON.stringify([route]))}`,
-    ),
-  );
-  // Routes configured, key set still a secret this file cannot see: `unknown`, with the readback
-  // obligation intact, rather than a confident "ready" the file has not earned.
-  const ingest = checkFor("contract.capability.facet_design_ingest.state");
-  assert.equal(ingest?.status, "fail");
-  assert.match(ingest.message, /facet_design_ingest is unknown .* but unconfigured is recorded/);
-  // Its dependent moves with it, so a state change cannot hide one capability behind another.
-  assert.equal(checkFor("contract.capability.facet_native_projection.state")?.status, "fail");
-});
-
-test("contract mode rejects a flag literal no Worker gate accepts", async (t) => {
-  const checkFor = await capabilityFixture(t, (source) =>
-    source.replace('"POSTIZ_ENABLED": "false"', '"POSTIZ_ENABLED": "1"'),
-  );
-  const flag = checkFor("contract.capability.postiz.flag");
-  assert.equal(flag?.status, "fail");
-  assert.match(flag.message, /POSTIZ_ENABLED must be exactly "true" or "false"/);
-});
-
-test("contract mode rejects a self-consistent D1 allowlist that omits a migration table", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), {
-    recursive: true,
-    preserveTimestamps: true,
-  });
-  await mkdir(path.join(root, "workers-bus"), { recursive: true });
-  await cp(
-    path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations"),
-    path.join(root, "workers-bus/migrations"),
-    { recursive: true, preserveTimestamps: true },
-  );
-  const backupPath = path.join(root, "deploy/backup-d1-to-r2.sh");
-  const backup = await readFile(backupPath, "utf8");
-  await writeFile(
-    backupPath,
-    backup
-      .replace(",facet_design_evidence_associations", "")
-      .replace(
-        `REQUIRED_TABLE_COUNT=${REQUIRED_D1_TABLES.length}`,
-        `REQUIRED_TABLE_COUNT=${REQUIRED_D1_TABLES.length - 1}`,
-      ),
-  );
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.d1.schema_inventory")?.status, "fail");
-});
-
-test("contract mode rejects a floating runtime reference", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const lockPath = path.join(root, "deploy/runtime-lock.json");
-  const lock = JSON.parse(await readFile(lockPath, "utf8"));
-  lock.components.hermes.version = "main";
-  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.lock.hermes.version")?.status, "fail");
-});
-
-test("contract mode rejects a Node.js floor below the PWA requirement", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const lockPath = path.join(root, "deploy/runtime-lock.json");
-  const lock = JSON.parse(await readFile(lockPath, "utf8"));
-  lock.host_requirements.node_version_minimum = "22.11.9";
-  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.lock.host")?.status, "fail");
-});
-
-test("contract mode rejects an overridable container pin", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const containerfilePath = path.join(root, "deploy/Containerfile.frappe");
-  const containerfile = await readFile(containerfilePath, "utf8");
-  await writeFile(containerfilePath, `${containerfile}\nARG FRAPPE_BASE_IMAGE\n`);
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.container.non_overridable")?.status, "fail");
-});
-
-test("contract mode rejects a committed lead-broker secret", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const envPath = path.join(root, "deploy/env.example");
-  const env = await readFile(envPath, "utf8");
-  await writeFile(
-    envPath,
-    env.replace(
-      "APPROVAL_BROKER_SHARED_SECRET=<unique-at-least-32-byte-worker-broker-secret>",
-      "APPROVAL_BROKER_SHARED_SECRET=committed-secret-must-never-be-here",
-    ),
-  );
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.env.secret.APPROVAL_BROKER_SHARED_SECRET")?.status, "fail");
-});
-
-test("contract mode requires the launch-proof Frappe configuration inventory", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const envPath = path.join(root, "deploy/env.example");
-  const env = await readFile(envPath, "utf8");
-  await writeFile(envPath, env.replace(/^FRAPPE_API_SECRET=.*\n/m, ""));
-
-  const result = await validateContract({ repoRoot: root });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "contract.env.FRAPPE_API_SECRET")?.status, "fail");
-});
-
-test("contract mode requires a name-only autonomous release credential inventory", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const envPath = path.join(root, "deploy/release.env.example");
-  const env = await readFile(envPath, "utf8");
-  await writeFile(
-    envPath,
-    env.replace(/^RELEASE_SERVICE_ADAPTER_TOKEN=.*\n/m, ""),
-  );
-
-  const missing = await validateContract({ repoRoot: root });
-  assert.equal(missing.ok, false);
-  assert.equal(missing.checks.find((item) => item.id === "contract.release_env.RELEASE_SERVICE_ADAPTER_TOKEN")?.status, "fail");
-
-  await writeFile(
-    envPath,
-    env.replace(
-      "RELEASE_PERMIT_PRIVATE_KEY=<release-permit-ed25519-private-key-pem>",
-      "RELEASE_PERMIT_PRIVATE_KEY=committed-private-key",
-    ),
-  );
-  const committed = await validateContract({ repoRoot: root });
-  assert.equal(committed.ok, false);
-  assert.equal(committed.checks.find((item) => item.id === "contract.release_env.RELEASE_PERMIT_PRIVATE_KEY")?.status, "fail");
-});
-
-test("live-env mode accepts a complete locked production environment", async () => {
-  const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, true, renderHuman(result));
-  assert.equal(result.summary.failed, 0);
-});
-
-test("live-env mode binds ERPNEXT_ENABLED to the committed production Worker value", async () => {
-  for (const value of ["true", "", "yes"]) {
-    const env = validLiveEnv();
-    env.ERPNEXT_ENABLED = value;
-    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-    assert.equal(result.ok, false, value);
-    assert.equal(result.checks.find((item) => item.id === "live.gate.integration")?.status, "fail", value);
-  }
-});
-
-test("live-env mode requires a concrete realm and dedicated QuickBooks issuer", async () => {
-  const env = validLiveEnv();
-  env.QB_EXPECTED_REALM_ID = "not-a-realm";
-  env.QB_RECONCILIATION_ISSUER_USER = env.ERPNEXT_INTEGRATION_USER;
-  env.IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER = env.ERPNEXT_INTEGRATION_USER;
-  env.QB_RECONCILIATION_ISSUER_API_KEY = env.ERPNEXT_API_KEY;
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of ["live.quickbooks.realm", "live.quickbooks.issuer", "live.secret.separation"]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode requires dedicated bounded launch-proof credentials", async () => {
-  const env = validLiveEnv();
-  env.FRAPPE_BASE_URL = "https://other.ironwrapexteriors.com";
-  env.FRAPPE_API_SECRET = env.ERPNEXT_API_SECRET;
-  env.FRAPPE_PROOF_POLL_ATTEMPTS = "6";
-  env.FRAPPE_PROOF_POLL_INTERVAL_MS = "5001";
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.launch_proof.base_url_consistency",
-    "live.secret.separation",
-    "live.launch_proof.poll_attempts",
-    "live.launch_proof.poll_interval",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail");
-  }
-});
-
-test("live-env mode accepts an explicitly disabled public estimator without its enable-time secrets", async () => {
-  const env = validLiveEnv();
-  env.PUBLIC_ESTIMATE_ENABLED = "false";
-  for (const name of [
-    "ERPNEXT_INTEGRATION_USER",
-    "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
-    "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
-    "PUBLIC_ESTIMATE_CONSENT_JURISDICTION",
-    "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY",
-    "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
-    "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
-    "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS",
-    "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX",
-    "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
-    "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
-  ]) delete env[name];
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, true, renderHuman(result));
-  assert.equal(result.checks.find((item) => item.id === "live.gate.public_estimate")?.status, "pass");
-  assert.equal(result.checks.find((item) => item.id === "live.secret.PUBLIC_ESTIMATE_TURNSTILE_SECRET"), undefined);
-});
-
-test("live-env mode validates every enabled Facet integration rail", async () => {
-  const env = validLiveEnv();
-  Object.assign(env, {
-    FACET_DESIGN_INGEST_ENABLED: "true",
-    FACET_DESIGN_INGEST_SOURCE_TENANT_ID: "facet-production",
-    FACET_DESIGN_INGEST_TENANT_MAP_JSON: JSON.stringify({
-      "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap", "iroof"] },
-    }),
-    FACET_DESIGN_INGEST_HMAC_KEY: "facet_ingest_hmac_4c1b9e2f8a7d6c5b4a392817",
-    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "true",
-    FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: "facet_projection_hmac_7d6c5b4a3928171615141312",
-    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: "facet_projection_key_8c921",
-    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: "facet_projection_secret_d1a9f80c42",
-    APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "true",
-    APP_QUOTE_REVISION_BROKER_URL: "https://quote-revision-broker.ironwrapexteriors.com",
-    APP_QUOTE_REVISION_BROKER_KEY_ID: "quote-revision-v1",
-    APP_QUOTE_REVISION_BROKER_TIMEOUT_MS: "15000",
-    APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS: "45",
-    QUOTE_REVISION_BROKER_SHARED_SECRET: "quote_revision_broker_9f1a4c27d8e6b5a493827161",
-  });
-
-  const enabled = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(enabled.ok, true, renderHuman(enabled));
-
-  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
-    "facet-staging": { tenant_id: "ironwrap", brand_ids: ["ironwrap"] },
-  });
-  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = env.FACET_DESIGN_INGEST_HMAC_KEY;
-  env.APP_QUOTE_REVISION_BROKER_URL = "http://quote-revision-broker.ironwrapexteriors.com";
-  env.APP_QUOTE_REVISION_BROKER_TIMEOUT_MS = "999";
-  const invalid = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(invalid.ok, false);
-  for (const id of [
-    "live.facet.ingest_tenant_map",
-    "live.secret.separation",
-    "live.facet.quote_revision_broker_url",
-    "live.facet.quote_revision_broker_bounds",
-  ]) {
-    assert.equal(invalid.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode fails closed when public-estimator controls drift from the tenant contract", async () => {
-  const env = validLiveEnv();
-  env.PUBLIC_ESTIMATE_ALLOWED_ORIGINS = "https://marketing.ironwrapexteriors.com";
-  env.PUBLIC_ESTIMATE_ALLOWED_BRANDS = "ironwrap,other";
-  env.PUBLIC_ESTIMATE_CONSENT_JURISDICTION = "Unspecified";
-  env.PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX = "101";
-  env.PUBLIC_ESTIMATE_RANGE_RULES_JSON = JSON.stringify([{
-    rule_id: "otherwise-valid-rule-v1",
-    brand: "ironwrap",
-    service: "metal_roofing",
-    province: "AB",
-    min_cad: 18_000,
-    max_cad: 32_000,
-  }]);
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.public_estimate.origin",
-    "live.public_estimate.brands",
-    "live.public_estimate.jurisdiction",
-    "live.public_estimate.rate_limits",
-    "live.public_estimate.rules",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode requires a readable Ed25519 approval public key", async () => {
-  const env = validLiveEnv();
-  const malformed = await validateLiveEnv({
-    env,
-    statApprovalPublicKey: async () => ({ isFile: () => true }),
-    readApprovalPublicKey: async () => "not a PEM public key",
-  });
-  assert.equal(malformed.ok, false);
-  assert.equal(malformed.checks.find((item) => item.id === "live.hermes.approval_public_key")?.status, "fail");
-
-  const rsaPublicKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({
-    type: "spki",
-    format: "pem",
-  });
-  const wrongType = await validateLiveEnv({
-    env,
-    statApprovalPublicKey: async () => ({ isFile: () => true }),
-    readApprovalPublicKey: async () => rsaPublicKey,
-  });
-  assert.equal(wrongType.ok, false);
-  assert.equal(wrongType.checks.find((item) => item.id === "live.hermes.approval_public_key")?.status, "fail");
-});
-
-test("live-env mode refuses to trust an invalid repository contract", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
-  const lockPath = path.join(root, "deploy/runtime-lock.json");
-  const lock = JSON.parse(await readFile(lockPath, "utf8"));
-  lock.policy.erpnext = "allowed";
-  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-
-  const result = await validateLiveEnv({ env: validLiveEnv(), repoRoot: root, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  assert.equal(result.checks.find((item) => item.id === "live.contract")?.status, "fail");
-});
-
-test("live-env mode fails closed on placeholders, HTTP URLs, and implicit gates", async () => {
-  const env = validLiveEnv();
-  env.ERPNEXT_API_SECRET = "<frappe-api-secret>";
-  env.ERPNEXT_BASE_URL = "http://os.ironwrapexteriors.com";
-  env.ERPNEXT_WRITE_ENABLED = "yes";
-  env.IRONWRAP_BUS_REQUEST_TIMEOUT_MS = "0";
-  env.BACKUP_AGE_RECIPIENT = "<age-recipient>";
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.env.ERPNEXT_API_SECRET",
-    "live.url.ERPNEXT_BASE_URL",
-    "live.gate.ERPNEXT_WRITE_ENABLED",
-    "live.timeout.IRONWRAP_BUS_REQUEST_TIMEOUT_MS",
-    "live.backup.encryption",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode binds Frappe receipt verification to a safe public key path and matching site URL", async () => {
-  const env = validLiveEnv();
-  env.IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE = "/run/secrets/../approval-public.pem";
-  env.IRONWRAP_HERMES_SITE_BASE_URL = "https://other.ironwrapexteriors.com";
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.frappe.approval_public_key_path",
-    "live.frappe.site_base_url_consistency",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode rejects a fleet or work-package rail wearing the shared bus credential", async () => {
-  // The ELEC-48 arrangement expressed through the new binding names: the rail LOOKS isolated,
-  // the identity behind it is still the broad bus pair, and the blast radius is unchanged.
-  for (const binding of [
-    "FLEET_CAPTURE_FRAPPE_API_KEY",
-    "FLEET_CAPTURE_FRAPPE_API_SECRET",
-    "WORK_PACKAGE_FRAPPE_API_KEY",
-    "WORK_PACKAGE_FRAPPE_API_SECRET",
-  ]) {
-    const env = validLiveEnv();
-    env[binding] = binding.endsWith("_SECRET") ? env.ERPNEXT_API_SECRET : env.ERPNEXT_API_KEY;
-
-    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-    assert.equal(result.ok, false, binding);
-    assert.equal(
-      result.checks.find((item) => item.id === "live.secret.separation")?.status,
-      "fail",
-      binding,
-    );
-  }
-});
-
-test("live-env mode does not require leftover Frappe fleet or work-package issuer pairs", async () => {
-  for (const binding of [
-    "FLEET_CAPTURE_FRAPPE_API_KEY",
-    "WORK_PACKAGE_FRAPPE_API_SECRET",
-  ]) {
-    const env = validLiveEnv();
-    delete env[binding];
-
-    const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-    assert.equal(result.ok, true, binding);
-    assert.notEqual(
-      result.checks.find((item) => item.id === `live.env.${binding}`)?.status,
-      "fail",
-      binding,
-    );
-  }
-});
-
-test("live-env mode aligns backup inputs with the executable backup contract", async () => {
-  const env = validLiveEnv();
-  env.RCLONE_CONFIG_R2_ENDPOINT = "https://a1b2c3d4.r2.cloudflarestorage.com/unexpected";
-  env.BACKUP_RETENTION_DAYS = "30.0";
-  env.FRAPPE_SITE = "other.ironwrapexteriors.com";
-  env.HERMES_WRITE_TOKEN = env.ERPNEXT_API_SECRET;
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.backup.endpoint",
-    "live.backup.retention",
-    "live.url.site_consistency",
-    "live.secret.separation",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("live-env mode binds D1 recovery to exact source, separated authority, and non-production defaults", async () => {
-  const env = validLiveEnv();
-  env.D1_PRODUCTION_DATABASE_ID = env.D1_RESTORE_TARGET_DATABASE_ID;
-  env.D1_BACKUP_API_TOKEN = env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY;
-  env.D1_RESTORE_API_TOKEN = env.RCLONE_CONFIG_R2_ACCESS_KEY_ID;
-  env.D1_RESTORE_R2_COMPLETED_PREFIX = "d1/other/latest";
-  env.D1_RESTORE_MODE = "remote";
-  env.D1_RESTORE_TARGET_DATABASE_ID = "f0674848-13df-4422-9896-8ba2719663b8";
-  env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:unsafe";
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  for (const id of [
-    "live.d1.source.id",
-    "live.secret.separation",
-    "live.secret.d1_restore_ephemeral",
-    "live.d1.restore_prefix",
-    "live.d1.restore_mode",
-    "live.d1.target_id",
-    "live.d1.confirmation",
-  ]) {
-    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
-  }
-});
-
-test("validator output never includes supplied secret values", async () => {
-  const env = validLiveEnv();
-  const secretValue = "do-not-print-this-sensitive-value";
-  env.ADMIN_TOKEN = secretValue;
-  env.IRONWRAP_ADMIN_TOKEN = secretValue;
-  env.D1_BACKUP_API_TOKEN = secretValue;
-  env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY = secretValue;
-  env.ERPNEXT_BASE_URL = `https://${secretValue}@os.ironwrapexteriors.com`;
-
-  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-  assert.equal(result.ok, false);
-  assert.equal(JSON.stringify(result).includes(secretValue), false);
-  assert.equal(renderHuman(result).includes(secretValue), false);
-});
-
-test("CLI emits machine-readable JSON and an accurate exit code", () => {
-  const run = spawnSync(process.execPath, [TOOL, "contract", "--json"], {
-    cwd: DEFAULT_REPO_ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(run.status, 0, run.stderr);
-  const result = JSON.parse(run.stdout);
-  assert.equal(result.mode, "contract");
-  assert.equal(result.ok, true);
-  assert.equal(result.summary.failed, 0);
-});
-
-test("live-env CLI supports JSON and human output modes", async (t) => {
-  const approvalPublicKeyFile = await writeApprovalPublicKeyFixture(t);
-  const env = { ...process.env, ...validLiveEnv(), HERMES_APPROVAL_PUBLIC_KEY_FILE: approvalPublicKeyFile };
-  const jsonRun = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
-    cwd: DEFAULT_REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
-  assert.equal(jsonRun.status, 0, jsonRun.stderr);
-  const result = JSON.parse(jsonRun.stdout);
-  assert.equal(result.mode, "live-env");
-  assert.equal(result.ok, true);
-
-  const humanRun = spawnSync(process.execPath, [TOOL, "live-env"], {
-    cwd: DEFAULT_REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
-  assert.equal(humanRun.status, 0, humanRun.stderr);
-  assert.match(humanRun.stdout, /READY: \d+ passed, 0 failed/);
-});
-
-test("live-env CLI fails closed without printing a supplied secret", async (t) => {
-  const secretValue = "cli-secret-that-must-never-be-printed";
-  const approvalPublicKeyFile = await writeApprovalPublicKeyFixture(t);
-  const env = {
-    ...process.env,
-    ...validLiveEnv(),
-    HERMES_APPROVAL_PUBLIC_KEY_FILE: approvalPublicKeyFile,
-    ERPNEXT_API_SECRET: secretValue,
-    ERPNEXT_BASE_URL: `https://${secretValue}@os.ironwrapexteriors.com`,
-  };
-  const run = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
-    cwd: DEFAULT_REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
-  assert.equal(run.status, 1);
-  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
-  assert.equal(JSON.parse(run.stdout).ok, false);
-});
-
-test("backup commits its completion marker only after upload verification", async (t) => {
-  const mock = await mockBackupEnvironment(t);
-  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations.slice(0, 3), ["copy", "check", "copyto"]);
-  assert.deepEqual(operations.slice(3), ["delete", "delete", "rmdirs"]);
-  assert.equal(operations.includes("purge"), false);
-  assert.match(run.stdout, /restore-ready Frappe backup committed and verified/);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
-});
-
-test("backup purges an incomplete remote prefix and local plaintext on failure", async (t) => {
-  const mock = await mockBackupEnvironment(t, { failCopy: true });
-  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  const output = `${run.stdout}${run.stderr}`;
-  for (const name of ["RCLONE_CONFIG_R2_ACCESS_KEY_ID", "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]) {
-    assert.equal(output.includes(mock.env[name]), false, name);
-  }
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations, ["copy", "purge"]);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
-});
-
-test("backup signal traps exit and purge the incomplete remote prefix", async (t) => {
-  const mock = await mockBackupEnvironment(t, { signalCopy: true });
-  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 143, `${run.stdout}${run.stderr}`);
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations, ["copy", "purge"]);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
-});
-
-test("backup rejects configuration in argv without echoing it", () => {
-  const secretValue = "backup-argv-secret-that-must-not-be-printed";
-  const run = spawnSync("bash", [BACKUP, secretValue], { encoding: "utf8" });
-  assert.equal(run.status, 64);
-  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
-});
-
-test("restore verification validates a completed encrypted package without mutation", async (t) => {
-  const mock = await mockRestoreEnvironment(t);
-  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.match(run.stdout, /cryptographically verified.*no restore mutation performed/);
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* (?:mktemp|bench|rm -rf)(?: |$)/.test(` ${line}`)), false, dockerOperations.join("\n"));
-  assert.deepEqual((await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n"), ["cat", "copyto", "copyto"]);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
-});
-
-test("restore mode targets only an isolated site, merges only the source encryption key, migrates, and cleans staging", async (t) => {
-  const mock = await mockRestoreEnvironment(t);
-  mock.env.RESTORE_CONFIRMATION = `RESTORE:${mock.env.RESTORE_TARGET_SITE}@${mock.env.RESTORE_TARGET_CONTAINER}`;
-  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.match(run.stdout, /isolated restore and migration completed/);
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.filter((line) => line.startsWith("cp ")).length, 4);
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") && line.includes("site_config_backup")), false);
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") && line.includes("IRONWRAP-RESTORE-ENCRYPTION-KEY.json")), true);
-  assert.equal(dockerOperations.some((line) => line.includes(`bench --site ${mock.env.RESTORE_TARGET_SITE} restore `)), true);
-  assert.equal(dockerOperations.some((line) => line.includes("python3 -c") && line.includes("encryption_key") && line.includes("site_config.json")), true);
-  assert.equal(dockerOperations.some((line) => line.includes(`bench --site ${mock.env.RESTORE_TARGET_SITE} migrate`)), true);
-  assert.equal(dockerOperations.at(-1)?.includes("rm -rf -- /tmp/ironwrap-restore.Mock1234"), true);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
-});
-
-test("restore mode rejects a target-unbound confirmation before package download", async (t) => {
-  const mock = await mockRestoreEnvironment(t);
-  mock.env.RESTORE_CONFIRMATION = "RESTORE:wrong.example@wrong-container";
-  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /confirmation.*not bound/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("restore can never target the recorded production site or container", async (t) => {
-  const mock = await mockRestoreEnvironment(t);
-  mock.env.RESTORE_TARGET_SITE = mock.env.FRAPPE_SITE;
-  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /production site can never be a restore target/);
-  await assert.rejects(readFile(path.join(mock.state, "docker.log"), "utf8"));
-});
-
-test("restore rejects an unpinned target image and a target without non-interactive database authority", async (t) => {
-  const wrongImage = await mockRestoreEnvironment(t, { targetImageMismatch: true });
-  const imageRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: wrongImage.env });
-  assert.notEqual(imageRun.status, 0);
-  assert.match(imageRun.stderr, /target container image does not match/);
-
-  const missingRoot = await mockRestoreEnvironment(t, { targetRootReady: false });
-  const rootRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: missingRoot.env });
-  assert.notEqual(rootRun.status, 0);
-  assert.match(rootRun.stderr, /non-interactive target-only root credential/);
-  await assert.rejects(readFile(path.join(missingRoot.state, "rclone.log"), "utf8"));
-});
-
-test("restore rejects targets with an external Docker network or published host ports", async (t) => {
-  const externalNetwork = await mockRestoreEnvironment(t, { targetNetworkInternal: false });
-  const networkRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: externalNetwork.env });
-  assert.notEqual(networkRun.status, 0);
-  assert.match(networkRun.stderr, /Docker network must be internal/);
-  await assert.rejects(readFile(path.join(externalNetwork.state, "rclone.log"), "utf8"));
-
-  const publishedPorts = await mockRestoreEnvironment(t, { targetPortsPublished: true });
-  const portRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: publishedPorts.env });
-  assert.notEqual(portRun.status, 0);
-  assert.match(portRun.stderr, /must not publish host ports/);
-  await assert.rejects(readFile(path.join(publishedPorts.state, "rclone.log"), "utf8"));
-});
-
-test("restore rejects a bad remote checksum before decryption and mutation", async (t) => {
-  const mock = await mockRestoreEnvironment(t, { badChecksum: true });
-  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  await assert.rejects(readFile(path.join(mock.state, "age.log"), "utf8"));
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
-});
-
-test("restore rejects manifest source-site mismatch without mutation", async (t) => {
-  const mock = await mockRestoreEnvironment(t, { manifestSite: "other.example.com" });
-  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /manifest schema, source site, timestamp, format, or image does not match/);
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
-});
-
-test("restore rejects archive links and unexpected files before extraction", async (t) => {
-  const mock = await mockRestoreEnvironment(t, { archiveLink: true });
-  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /links, directories, and non-regular entries are forbidden/);
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
-});
-
-test("failed bench restore cleans container and host plaintext", async (t) => {
-  const mock = await mockRestoreEnvironment(t, { failRestore: true });
-  mock.env.RESTORE_CONFIRMATION = `RESTORE:${mock.env.RESTORE_TARGET_SITE}@${mock.env.RESTORE_TARGET_CONTAINER}`;
-  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 19, `${run.stdout}${run.stderr}`);
-  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
-  assert.equal(dockerOperations.some((line) => line.includes(" bench ") && line.includes(" restore ")), true);
-  assert.equal(dockerOperations.at(-1)?.includes("rm -rf -- /tmp/ironwrap-restore.Mock1234"), true);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
-});
-
-test("restore rejects missing completion markers and configuration in argv", async (t) => {
-  const mock = await mockRestoreEnvironment(t, { markerPresent: false });
-  const missing = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
-  assert.notEqual(missing.status, 0);
-  assert.match(missing.stderr, /no readable completion marker/);
-
-  const secretValue = "restore-argv-secret-that-must-not-be-printed";
-  const argv = spawnSync("bash", [RESTORE, "--restore", secretValue], { encoding: "utf8", env: mock.env });
-  assert.equal(argv.status, 64);
-  assert.equal(`${argv.stdout}${argv.stderr}`.includes(secretValue), false);
-});
-
-test("D1 backup exports through locked Wrangler, validates SQL, and commits its marker last", async (t) => {
-  const mock = await mockD1BackupEnvironment(t);
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.equal(run.stderr, "");
-  assert.match(run.stdout, /exact production D1 export validated, encrypted, committed/);
-  const wrangler = await readFile(path.join(mock.state, "wrangler.log"), "utf8");
-  assert.match(wrangler, /^d1 export ironwrap-bus --remote --config .* --output /m);
-  assert.equal(wrangler.includes(mock.env.D1_BACKUP_API_TOKEN), false);
-  const config = JSON.parse(await readFile(path.join(mock.state, "source-config.json"), "utf8"));
-  assert.equal(config.account_id, mock.env.D1_PRODUCTION_ACCOUNT_ID);
-  assert.deepEqual(config.d1_databases, [{
-    binding: "BACKUP_SOURCE",
-    database_name: mock.env.D1_PRODUCTION_DATABASE_NAME,
-    database_id: mock.env.D1_PRODUCTION_DATABASE_ID,
-  }]);
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations.slice(0, 3), ["copy", "check", "copyto"]);
-  assert.equal(operations.indexOf("delete") > operations.indexOf("copyto"), true);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
-});
-
-test("D1 backup fails before upload when a required customer-portal table is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "customer_portal_links" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: customer_portal_links/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
-});
-
-test("D1 backup fails before upload when a production-schedule ledger table is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "production_schedule_approval_request_events" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: production_schedule_approval_request_events/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when the privacy-safe public-estimate rate-limit table is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "public_estimate_rate_limits" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: public_estimate_rate_limits/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when the governed-transition outbox evidence table is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "governed_transition_outbox_events" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: governed_transition_outbox_events/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when the field Work Package action ledger is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "field_work_package_actions" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: field_work_package_actions/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when the durable QuickBooks projection outbox is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "quickbooks_projection_outbox" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: quickbooks_projection_outbox/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when a required production index is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, {
-    missingIndex: "idx_qb_projection_outbox_pending",
-  });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required index: idx_qb_projection_outbox_pending on quickbooks_projection_outbox/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required invariant trigger: prevent_lead_ack_receipts_delete on lead_ack_receipts/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
-});
-
-test("D1 backup rejects a named receipt trigger without immutable update/delete semantics", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_delete" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable receipt trigger semantics: prevent_lead_ack_receipts_delete/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup rejects a measurement-delta trigger without append-only semantics", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, {
-    weakMeasurementTrigger: "measurement_deltas_append_only_delete",
-  });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(
-    run.stderr,
-    /does not enforce immutable measurement-delta trigger semantics: measurement_deltas_append_only_delete/,
-  );
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup rejects a quote-revision ledger trigger without immutable semantics", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { weakApprovalTrigger: "prevent_quote_revision_approval_event_delete" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_delete/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup rejects a governed-transition event trigger without immutable semantics", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { weakApprovalTrigger: "prevent_governed_transition_outbox_event_delete" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_governed_transition_outbox_event_delete/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup rejects Facet authority that falls back to the legacy role", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { weakAccessRoleTrigger: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(
-    run.stderr,
-    /does not enforce access-role trigger semantics: facet_design_evidence_associations_validate_insert/,
-  );
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup rejects active users without an explicit access role", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { nullActiveAccessRole: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /contains active app users without explicit access_role/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("D1 backup purges incomplete remote state and plaintext on upload failure", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { failCopy: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 9, `${run.stdout}${run.stderr}`);
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations, ["copy", "purge"]);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
-});
-
-test("D1 backup signal trap exits, purges incomplete objects, and removes plaintext", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { signalCopy: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 143, `${run.stdout}${run.stderr}`);
-  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
-  assert.deepEqual(operations, ["copy", "purge"]);
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
-});
-
-test("D1 recovery defaults to local cryptographic and SQLite verification without remote mutation", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t);
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.equal(run.stderr, "");
-  assert.match(run.stdout, /no remote mutation performed/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
-});
-
-test("remote D1 drill uses exact generated target config and verifies restored tables, indexes, and triggers", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t);
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.match(run.stdout, /exact confirmed non-production drill database/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-  assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
-  assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
-  const readOperations = operations.filter((line) => line.includes(" --json"));
-  const importOperations = operations.filter((line) => line.includes(" --file "));
-  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
-  assert.equal(readOperations.every((line) => line.includes(" --command ") && !line.includes(" --file ")), true);
-  assert.equal(importOperations.length, 1);
-  assert.equal(importOperations[0].includes(" --json"), false);
-  const commandLengths = (await readFile(path.join(mock.state, "command-lengths.log"), "utf8"))
-    .trim()
-    .split("\n")
-    .map(Number);
-  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
-  assert.equal(commandLengths.every((length) => Number.isSafeInteger(length) && length <= 16_384), true);
-  assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
-  const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
-  assert.equal(config.account_id, mock.env.D1_RESTORE_TARGET_ACCOUNT_ID);
-  assert.deepEqual(config.d1_databases, [{
-    binding: "RESTORE_TARGET",
-    database_name: mock.env.D1_RESTORE_TARGET_DATABASE_NAME,
-    database_id: mock.env.D1_RESTORE_TARGET_DATABASE_ID,
-  }]);
-});
-
-test("remote D1 drill rejects reused backup, restore, or R2 authority before download", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t);
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = mock.env.D1_BACKUP_API_TOKEN;
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /pairwise distinct/);
-  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
-});
-
-test("remote D1 drill rejects production, unconfirmed, and nonempty targets before import", async (t) => {
-  const production = await mockD1RestoreEnvironment(t);
-  production.env.D1_RESTORE_MODE = "remote";
-  production.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  production.env.D1_RESTORE_TARGET_DATABASE_NAME = production.env.D1_PRODUCTION_DATABASE_NAME;
-  production.env.D1_RESTORE_TARGET_DATABASE_ID = production.env.D1_PRODUCTION_DATABASE_ID;
-  production.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${production.env.D1_RESTORE_TARGET_DATABASE_NAME}@${production.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const productionRun = spawnSync("bash", [production.script], { encoding: "utf8", env: production.env });
-  assert.notEqual(productionRun.status, 0);
-  assert.match(productionRun.stderr, /name or UUID is unsafe|production D1 database can never/);
-  await assert.rejects(readFile(path.join(production.state, "rclone.log"), "utf8"));
-
-  const unconfirmed = await mockD1RestoreEnvironment(t);
-  unconfirmed.env.D1_RESTORE_MODE = "remote";
-  unconfirmed.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  unconfirmed.env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:wrong@00000000-0000-4000-8000-000000000000";
-  const unconfirmedRun = spawnSync("bash", [unconfirmed.script], { encoding: "utf8", env: unconfirmed.env });
-  assert.notEqual(unconfirmedRun.status, 0);
-  assert.match(unconfirmedRun.stderr, /confirmation is not bound/);
-  await assert.rejects(readFile(path.join(unconfirmed.state, "rclone.log"), "utf8"));
-
-  const nonempty = await mockD1RestoreEnvironment(t, { targetObject: "user_table" });
-  nonempty.env.D1_RESTORE_MODE = "remote";
-  nonempty.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  nonempty.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${nonempty.env.D1_RESTORE_TARGET_DATABASE_NAME}@${nonempty.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const nonemptyRun = spawnSync("bash", [nonempty.script], { encoding: "utf8", env: nonempty.env });
-  assert.notEqual(nonemptyRun.status, 0);
-  assert.match(nonemptyRun.stderr, /only the exact Cloudflare _cf_KV platform table/);
-  const operations = (await readFile(path.join(nonempty.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 1);
-  await assert.rejects(readFile(path.join(nonempty.state, "imported"), "utf8"));
-});
-
-test("remote D1 drill rejects user and unexpected Cloudflare sqlite objects before import", async (t) => {
-  for (const targetObject of ["user_table", "user_view", "user_trigger", "user_index", "unexpected_cf", "wrong_type_cf_kv"]) {
-    await t.test(targetObject, async (t) => {
-      const mock = await mockD1RestoreEnvironment(t, { targetObject });
-      mock.env.D1_RESTORE_MODE = "remote";
-      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-      assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /only the exact Cloudflare _cf_KV platform table/);
-      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, 1);
-      assert.equal(operations[0].includes(" --command "), true);
-      assert.equal(operations[0].includes(" --file "), false);
-      const preflightCommand = await readFile(path.join(mock.state, "preflight-command.sql"), "utf8");
-      assert.match(preflightCommand, /type='table' AND name='_cf_KV'/);
-      assert.match(preflightCommand, /name NOT LIKE 'sqlite_%'/);
-      await assert.rejects(readFile(path.join(mock.state, "imported"), "utf8"));
-    });
-  }
-});
-
-test("remote D1 drill rejects Wrangler progress and bulk response shapes before import", async (t) => {
-  for (const preflightResponseMode of ["progress", "bulk"]) {
-    await t.test(preflightResponseMode, async (t) => {
-      const mock = await mockD1RestoreEnvironment(t, { preflightResponseMode });
-      mock.env.D1_RESTORE_MODE = "remote";
-      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-      assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /only the exact Cloudflare _cf_KV platform table/);
-      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, 1);
-      assert.equal(operations[0].includes(" --command "), true);
-      await assert.rejects(readFile(path.join(mock.state, "imported"), "utf8"));
-    });
-  }
-});
-
-test("remote D1 drill fails when any restored production-table row count differs", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { rowMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /table row counts differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
-});
-
-test("remote D1 drill rejects missing, duplicate, and error table-count results", async (t) => {
-  for (const rowResultMode of ["missing", "duplicate", "error"]) {
-    await t.test(rowResultMode, async (t) => {
-      const mock = await mockD1RestoreEnvironment(t, { rowResultMode });
-      mock.env.D1_RESTORE_MODE = "remote";
-      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-      assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /table row counts differ/);
-      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
-      assert.equal(operations.at(-1).includes(" --command "), true);
-      assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
-    });
-  }
-});
-
-test("D1 recovery rejects an export missing a required invariant trigger", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_update" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required invariant trigger: prevent_lead_ack_receipts_update on lead_ack_receipts/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing a required customer-portal table", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTable: "customer_portal_access_throttles" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: customer_portal_access_throttles/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing the privacy-safe public-estimate rate-limit table", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTable: "public_estimate_rate_limits" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: public_estimate_rate_limits/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing the governed-transition outbox evidence table", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTable: "governed_transition_outbox_events" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: governed_transition_outbox_events/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing the field Work Package action ledger", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTable: "field_work_package_actions" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: field_work_package_actions/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing the durable QuickBooks projection outbox", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { missingTable: "quickbooks_projection_outbox" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required production table: quickbooks_projection_outbox/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects an export missing a required production index", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, {
-    missingIndex: "idx_qb_projection_outbox_pending",
-  });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required index: idx_qb_projection_outbox_pending on quickbooks_projection_outbox/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects a local receipt trigger without immutable update/delete semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_update" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable receipt trigger semantics: prevent_lead_ack_receipts_update/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects a local measurement-delta trigger without append-only semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, {
-    weakMeasurementTrigger: "measurement_deltas_append_only_update",
-  });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(
-    run.stderr,
-    /does not enforce immutable measurement-delta trigger semantics: measurement_deltas_append_only_update/,
-  );
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects a local quote-revision ledger trigger without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_quote_revision_approval_event_update" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_update/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects a local production-schedule ledger trigger without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_production_schedule_approval_event_delete" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_production_schedule_approval_event_delete/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects a governed-transition outbox event trigger without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_governed_transition_outbox_event_update" });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_governed_transition_outbox_event_update/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects Facet authority that falls back to the legacy role", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { weakAccessRoleTrigger: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(
-    run.stderr,
-    /does not enforce access-role trigger semantics: facet_design_evidence_associations_validate_insert/,
-  );
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("D1 recovery rejects active users without an explicit access role", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { nullActiveAccessRole: true });
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /contains active app users without explicit access_role/);
-  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
-});
-
-test("remote D1 drill fails when named invariant-trigger inventory differs", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { triggerMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("remote D1 drill fails when named index inventory differs", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { indexMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
-});
-
-test("remote D1 drill rejects a non-unique Hermes accepted-handoff index", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { indexSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
-});
-
-test("remote D1 drill rejects a measurement identity index without tenant scope", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { measurementIndexSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
-});
-
-test("remote D1 drill rejects missing, duplicate, and error trigger results", async (t) => {
-  for (const triggerResultMode of ["missing", "duplicate", "error"]) {
-    await t.test(triggerResultMode, async (t) => {
-      const mock = await mockD1RestoreEnvironment(t, { triggerResultMode });
-      mock.env.D1_RESTORE_MODE = "remote";
-      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-      assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-      assert.equal(operations.at(-1).includes(" --command "), true);
-      assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
-    });
-  }
-});
-
-test("remote D1 drill rejects receipt triggers without immutable update/delete semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { triggerSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("remote D1 drill rejects measurement-delta triggers without append-only semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { measurementTriggerSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { quoteRevisionTriggerSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("remote D1 drill rejects production-schedule ledger triggers without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { productionScheduleTriggerSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
-  const mock = await mockD1RestoreEnvironment(t, { governedTransitionTriggerSemanticsMismatch: true });
-  mock.env.D1_RESTORE_MODE = "remote";
-  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
-  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
-  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
-  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
-});
-
-test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {
-  const bad = await mockD1RestoreEnvironment(t, { badChecksum: true });
-  const badRun = spawnSync("bash", [bad.script], { encoding: "utf8", env: bad.env });
-  assert.notEqual(badRun.status, 0);
-  await assert.rejects(readFile(path.join(bad.state, "age.log"), "utf8"));
-
-  const signalled = await mockD1RestoreEnvironment(t, { signalDownload: true });
-  const signalRun = spawnSync("bash", [signalled.script], { encoding: "utf8", env: signalled.env });
-  assert.equal(signalRun.status, 143, `${signalRun.stdout}${signalRun.stderr}`);
-  assert.equal((await readdir(signalled.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
-});
-
-test("D1 recovery commands reject argv without echoing supplied values", () => {
-  const secretValue = "d1-argv-secret-that-must-not-be-printed";
-  for (const script of [D1_BACKUP, D1_RESTORE]) {
-    const run = spawnSync("bash", [script, secretValue], { encoding: "utf8" });
-    assert.equal(run.status, 64);
-    assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
-  }
-});
-
-test("image build rejects configuration in argv without echoing it", () => {
-  const secretValue = "build-argv-secret-that-must-not-be-printed";
-  const run = spawnSync("bash", [BUILD, secretValue], { encoding: "utf8" });
-  assert.equal(run.status, 64);
-  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
-});
-
-test("host preflight rejects configuration in argv without echoing it", () => {
-  const secretValue = "argv-secret-that-must-not-be-printed";
-  const run = spawnSync("bash", [HOST_PREFLIGHT, secretValue], { encoding: "utf8" });
-  assert.equal(run.status, 64);
-  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
-});

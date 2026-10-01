@@ -1,0 +1,165 @@
+name: Release Please
+
+# The release train (IRO-264), in three independent jobs that share no state:
+#
+#   pr-title       on every pull request: the subject that will land on main must
+#                  be a conventional commit release-please can parse, or the
+#                  change is silently dropped from the release.
+#   release-pr     on every push to main: keep exactly one release pull request
+#                  open, with the next version and the accumulated changelog.
+#   github-release on a successful Deploy of the merged release commit: tag that
+#                  commit, which is what starts the production release.
+#
+# release-please is run through npx, not an action: the organization allows only
+# GitHub-owned actions, and `googleapis/release-please-action` is not one.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+
+# Nothing is granted by default; each job declares exactly what it needs.
+permissions: {}
+
+env:
+  RELEASE_PLEASE_VERSION: 17.11.2
+
+jobs:
+  pr-title:
+    name: Conventional commit subject release-please can parse
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Reads the pull request's own commits through the API; writes nothing.
+    # pull-requests: read is required for GET /pulls/{number}/commits itself,
+    # not only for a private repository (IRO-264 follow-up: the job 403ed
+    # without it on the very first real pull request).
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      # The title and the commit subject reach the checker only through the
+      # environment. They are attacker-controlled text and are never
+      # interpolated into the shell script.
+      - name: Validate the subject that will land on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          # squash_merge_commit_title is COMMIT_OR_PR_TITLE: a single-commit pull
+          # request lands its COMMIT subject, not this title, so the commit count
+          # decides what else has to be valid. Only "exactly one" matters here, so
+          # one page of commits is enough to decide it.
+          gh api "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" \
+            > "$RUNNER_TEMP/pr-commits.json"
+          commit_count="$(jq -r 'length' "$RUNNER_TEMP/pr-commits.json")"
+          head_commit_subject=""
+          if [[ "$commit_count" == "1" ]]; then
+            head_commit_subject="$(jq -r '.[0].commit.message | split("\n")[0]' "$RUNNER_TEMP/pr-commits.json")"
+          fi
+          PR_COMMIT_COUNT="$commit_count" HEAD_COMMIT_SUBJECT="$head_commit_subject" \
+            node tools/conventional-pr-title.mjs
+
+  release-pr:
+    name: Keep one release pull request open
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # release-please pushes the release branch and opens/updates the release PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Create or update the release pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npx --yes "release-please@$RELEASE_PLEASE_VERSION" release-pr \
+            --token "$GITHUB_TOKEN" \
+            --repo-url "$GITHUB_REPOSITORY" \
+            --target-branch main \
+            --config-file release-please-config.json \
+            --manifest-file .release-please-manifest.json
+
+  github-release:
+    name: Tag the qa-proven release commit
+    # Only a successful Deploy of this repository's own main branch can tag. The
+    # head_repository pin keeps a fork's Deploy out; the conclusion pin means the
+    # commit being tagged is one qa actually proved.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      # Deploy proves every push to main, so most Deploy successes are ordinary
+      # commits that must not be tagged. Only the merge commit of the newest
+      # merged release pull request is a release. This gate exits 0 without
+      # tagging for everything else: a skipped tag is not a failure.
+      - name: Require this Deploy run to be the merged release pull request
+        id: release_commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          gh pr list --repo "$GITHUB_REPOSITORY" --state merged \
+            --head release-please--branches--main \
+            --json number,mergeCommit,mergedAt --limit 20 \
+            > "$RUNNER_TEMP/release-prs.json"
+          merge_commit="$(jq -r 'map(select(.mergedAt != null)) | sort_by(.mergedAt) | reverse | .[0].mergeCommit.oid // ""' "$RUNNER_TEMP/release-prs.json")"
+          if [[ "$merge_commit" != "$DEPLOY_HEAD_SHA" ]]; then
+            echo "not the merged release commit (newest release merge: ${merge_commit:-none}); nothing to tag"
+            echo "tag=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=true" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the release commit and publish the GitHub release
+        if: ${{ steps.release_commit.outputs.tag == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npx --yes "release-please@$RELEASE_PLEASE_VERSION" github-release \
+            --token "$GITHUB_TOKEN" \
+            --repo-url "$GITHUB_REPOSITORY" \
+            --target-branch main \
+            --config-file release-please-config.json \
+            --manifest-file .release-please-manifest.json

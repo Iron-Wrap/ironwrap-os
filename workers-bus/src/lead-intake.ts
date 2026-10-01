@@ -32,6 +32,13 @@ export interface LeadIntakeInput {
   provider?: string;
   rawText: string;
   contentType: string | null;
+  /**
+   * Release-smoke scope (IRO-264): keep every owned write, skip the two outward
+   * side effects (customer acknowledgement, JobNimbus queue push). The caller is
+   * responsible for having verified the reserved fixture; see
+   * `isReleaseSmokeFixture` in core.ts.
+   */
+  releaseSmoke?: boolean;
 }
 
 export interface LeadIntakeAccepted {
@@ -130,15 +137,16 @@ export async function ingestLead(
     payload_json: JSON.stringify(envelope.payload),
     raw_key: rawKey,
     ts: now,
-    status: valid.ok ? "pending_jn_push" : "received",
+    status: input.releaseSmoke ? "jn_skipped" : valid.ok ? "pending_jn_push" : "received",
     dedup_key: key,
     dup_of: null,
     attempts: 0,
-    last_error: valid.ok ? null : (valid.reason ?? null),
+    last_error: input.releaseSmoke ? "release_smoke" : valid.ok ? null : (valid.reason ?? null),
     jn_contact_id: null,
     jn_job_id: null,
     intent_queue: intentQueue,
     tenant_id: tenantId,
+    release_smoke: input.releaseSmoke ? 1 : 0,
     created_at: now,
     updated_at: now,
   };
@@ -157,14 +165,34 @@ export async function ingestLead(
   });
 
   // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
-  ctx.waitUntil(
-    sendInstantAck(env, rec).catch((error) =>
-      onError({ at: "instant_ack", envelope_id: envelopeId, error: String(error) }),
-    ),
-  );
+  //    A release-smoke fixture is never acknowledged: the proof runs against
+  //    production and this is the one step that would email a (synthetic) customer.
+  if (!input.releaseSmoke) {
+    ctx.waitUntil(
+      sendInstantAck(env, rec).catch((error) =>
+        onError({ at: "instant_ack", envelope_id: envelopeId, error: String(error) }),
+      ),
+    );
+  }
 
-  // 6) Enqueue the JobNimbus push (skip unroutable-no-contact rows).
-  if (valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });
+  // 6) Enqueue the JobNimbus push (skip unroutable-no-contact rows). A
+  //    release-smoke fixture is not pushed to JobNimbus either: the queue
+  //    consumer would create a real contact and job in the bridge account.
+  //    The row is already terminal (status=jn_skipped, set above), so this is
+  //    an honest skip, not a fake push — mirror the kill-switch skip audit row
+  //    (index.ts handlePush) so the skip is visible in the audit trail too.
+  if (input.releaseSmoke) {
+    await store.recordAudit(env, {
+      automation: "jn_push",
+      trigger: input.source,
+      envelope_id: envelopeId,
+      action: "skip",
+      result: "ok",
+      error: "release_smoke",
+    });
+  } else if (valid.ok) {
+    await env.JN_QUEUE.send({ envelope_id: envelopeId });
+  }
 
   return {
     ok: true,

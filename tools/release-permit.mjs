@@ -396,7 +396,11 @@ function validateBackupRestore(backup, permit) {
   text(backup.backup_id, "backup_id_invalid");
   equal("qa", backup.environment, "backup_environment_invalid");
   text(backup.isolated_target, "backup_target_invalid");
-  equal(permit.previous_generation.generation, backup.source_generation, "backup_generation_drift");
+  // Not bound to the permit's generation: qa's backup/restore drill hard-codes
+  // --source-generation 0 and reads no policy ledger by design, so once the
+  // first production release advances the ledger this binding would fail every
+  // later release (IRO-264). The value stays shape-checked only.
+  nonNegativeInteger(backup.source_generation, "backup_generation_invalid");
   equal(permit.source_commit, backup.source_commit, "backup_source_drift");
   equal(permit.worker.artifact_digest, backup.artifact_digest, "backup_artifact_drift");
   equal("passed", backup.result, "backup_not_passed");
@@ -1004,6 +1008,16 @@ function validateReleaseManifest(manifest, permit) {
 }
 
 export function validateSourceMergeReceipt(receipt, permit, { now = Date.now(), permitDigest: expectedPermitDigest } = {}) {
+  // IRO-264: a tag-triggered production release admits a commit that main may
+  // have already moved past, so the `reachable` source policy replaces the tip
+  // equality below with a provider reachability readback. The policy declares
+  // itself in the receipt and is OPTIONAL: a receipt without these two keys is
+  // read as the strict tip policy, so dropping them tightens the check rather
+  // than relaxing it, and every pre-IRO-264 receipt stays valid unchanged.
+  const reachable = receipt?.source_policy === "reachable";
+  if (isRecord(receipt) && receipt.source_policy !== undefined && !reachable) {
+    fail("source_merge_policy_invalid");
+  }
   exactKeys(receipt, [
     "schema",
     "repository",
@@ -1017,6 +1031,7 @@ export function validateSourceMergeReceipt(receipt, permit, { now = Date.now(), 
     "merge_commit",
     "merge_tree",
     "main_commit",
+    ...(reachable ? ["source_policy", "main_reachability"] : []),
     "permit_digest",
     "admission_digest",
     "status",
@@ -1033,7 +1048,17 @@ export function validateSourceMergeReceipt(receipt, permit, { now = Date.now(), 
   equal("squash", receipt.merge_method, "source_merge_method_invalid");
   equal(permit.release_manifest.pr.merge_policy.readback_digest, receipt.provider_settings_digest, "source_merge_provider_settings_drift");
   commit(receipt.merge_commit, "source_merge_commit_invalid");
-  equal(receipt.merge_commit, receipt.main_commit, "source_merge_main_drift");
+  if (reachable) {
+    // main may legitimately have advanced past the tagged commit; it may not
+    // have dropped it. `ahead` means main moved on, `identical` means the
+    // commit is still the tip. Anything else never reaches here.
+    commit(receipt.main_commit, "source_merge_main_invalid");
+    if (receipt.main_reachability !== "ahead" && receipt.main_reachability !== "identical") {
+      fail("source_merge_main_not_reachable");
+    }
+  } else {
+    equal(receipt.merge_commit, receipt.main_commit, "source_merge_main_drift");
+  }
   equal(permit.source_git_tree, receipt.merge_tree, "source_merge_tree_drift");
   hash(receipt.permit_digest, "source_merge_permit_digest_invalid");
   if (expectedPermitDigest !== undefined) equal(expectedPermitDigest, receipt.permit_digest, "source_merge_permit_digest_drift");

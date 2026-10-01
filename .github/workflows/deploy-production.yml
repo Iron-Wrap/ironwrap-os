@@ -1,0 +1,660 @@
+name: Deploy Production
+
+# Production promotion for a release tag (IRO-264).
+#
+# A push to main deploys and proves qa only (`deploy.yml`). This workflow promotes
+# the bytes qa already proved, and nothing else: it never builds. It locates the
+# CI run and the Deploy run of the tagged commit, downloads that Deploy run's
+# release artifact and qa proof, re-verifies the artifact digest, assembles the
+# signed short-lived permit from that evidence, consumes the permit once through
+# the durable D1 policy ledger, and only then mutates production.
+#
+# Every `release-promotion.mjs` call runs from `$RELEASE_ENFORCER`: the enforcer
+# checked out from the tagged commit's PARENT (generation N). The candidate tree
+# never gets to approve its own release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to promote; must equal the dispatched ref
+        required: true
+        type: string
+
+# One production promotion at a time. Reruns and replays are rejected by the
+# permit and the durable D1 ledger, not by concurrency.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+env:
+  WORKER_VERSION: 4.131.0
+  RELEASE_REPOSITORY: ${{ github.repository }}
+  RELEASE_SOURCE_COMMIT: ${{ github.sha }}
+  RELEASE_RULESET_ID: 20652124
+  CLOUDFLARE_ACCOUNT_ID: 7ee5775bc1ba46f05c5a65235b60e939
+  RELEASE_PRODUCTION_D1_ID: f0674848-13df-4422-9896-8ba2719663b8
+  RELEASE_PRODUCTION_DOMAIN_HOSTNAME: ironwrap-bus.ironwrapexteriors.com
+  RELEASE_PRODUCTION_DOMAIN_SERVICE: ironwrap-bus
+  RELEASE_PRODUCTION_ZONE_ID: ${{ vars.RELEASE_PRODUCTION_ZONE_ID }}
+  RELEASE_PRODUCTION_BASE_URL: https://ironwrap-bus.ironwrapexteriors.com
+  RELEASE_ISSUER_IDENTITY: release-admission@ironwrapexteriors.com
+  # Releases are admitted by automated checks only: CI, isolated qa with smoke,
+  # restore and rollback drills, then production smoke with automatic rollback.
+  # There is no independent reviewer or external evidence issuer. The leftover
+  # Frappe/VPS host is not promoted by this train: its candidate identities came
+  # from that issuer and its adapter is an external signer. The wheel is still
+  # built and digest-bound into the artifact.
+  RELEASE_FRAPPE_SCOPE: out-of-scope
+
+jobs:
+  production:
+    name: Admit and promote the qa-proven version for a release tag
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      # Fail closed before anything is checked out. Only a release tag of the
+      # exact `vMAJOR.MINOR.PATCH` shape release-please produces may promote, and
+      # a manual dispatch must name the very ref it was dispatched on, so
+      # `github.sha` is always the tagged commit.
+      - name: Require a release tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" != "tag" ]]; then
+            echo "release_production_ref_not_a_tag:$REF_TYPE" >&2
+            exit 1
+          fi
+          if [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release_production_tag_format_invalid:$REF_NAME" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_TAG" != "$REF_NAME" ]]; then
+            echo "release_production_dispatch_tag_mismatch" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Load generation N policy enforcement and trusted Wrangler
+        run: |
+          set -euo pipefail
+          # Generation N is the tagged commit's single parent: main immediately
+          # before this release landed. Anything with a different parent count is
+          # not a squash of an admitted PR.
+          lineage="$(git rev-list --parents --max-count=1 "$RELEASE_SOURCE_COMMIT")"
+          if [[ "$(wc -w <<< "$lineage")" -ne 2 ]]; then echo "release_admission_push_not_linear" >&2; exit 1; fi
+          base_commit="${lineage##* }"
+          if [[ ! "$base_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "release_admission_base_missing" >&2; exit 1; fi
+          git worktree add --detach "$RUNNER_TEMP/policy-enforcer" "$base_commit"
+          npm ci --ignore-scripts --prefix "$RUNNER_TEMP/policy-enforcer/workers-bus"
+          trusted_wrangler="$RUNNER_TEMP/policy-enforcer/workers-bus/node_modules/.bin/wrangler"
+          test "$("$trusted_wrangler" --version)" = "$WORKER_VERSION"
+          printf 'RELEASE_ENFORCER=%s\n' "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs" >> "$GITHUB_ENV"
+          printf 'RELEASE_BASE_COMMIT=%s\n' "$base_commit" >> "$GITHUB_ENV"
+          printf 'WRANGLER_BIN=%s\n' "$trusted_wrangler" >> "$GITHUB_ENV"
+
+      # The tag carries no run ids, so they are resolved from the provider: the
+      # CI run that validated this commit on main, and the Deploy run that proved
+      # it on qa. No run means no proof, which fails closed.
+      - name: Locate the CI and Deploy runs of the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run list --repo "$RELEASE_REPOSITORY" --workflow ci.yml \
+            --commit "$RELEASE_SOURCE_COMMIT" --limit 50 \
+            --json databaseId,status,conclusion,headSha,event,headBranch \
+            > "$RUNNER_TEMP/ci-runs.json"
+          ci_run_id="$(jq -r --arg sha "$RELEASE_SOURCE_COMMIT" 'map(select(.status == "completed" and .conclusion == "success" and .headSha == $sha and .event == "push" and .headBranch == "main")) | sort_by(.databaseId) | reverse | .[0].databaseId // ""' "$RUNNER_TEMP/ci-runs.json")"
+          if [[ -z "$ci_run_id" ]]; then echo "release_production_missing_ci_run" >&2; exit 1; fi
+
+          gh run list --repo "$RELEASE_REPOSITORY" --workflow deploy.yml \
+            --commit "$RELEASE_SOURCE_COMMIT" --limit 50 \
+            --json databaseId,status,conclusion,headSha \
+            > "$RUNNER_TEMP/deploy-runs.json"
+          qa_run_id="$(jq -r --arg sha "$RELEASE_SOURCE_COMMIT" 'map(select(.status == "completed" and .conclusion == "success" and .headSha == $sha)) | sort_by(.databaseId) | reverse | .[0].databaseId // ""' "$RUNNER_TEMP/deploy-runs.json")"
+          if [[ -z "$qa_run_id" ]]; then echo "release_production_missing_qa_run" >&2; exit 1; fi
+
+          printf 'RELEASE_CI_RUN_ID=%s\n' "$ci_run_id" >> "$GITHUB_ENV"
+          printf 'RELEASE_QA_RUN_ID=%s\n' "$qa_run_id" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: iro41-release-artifact-${{ github.sha }}
+          path: ${{ runner.temp }}/artifact-download
+          run-id: ${{ env.RELEASE_QA_RUN_ID }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: iro41-qa-proof-${{ github.sha }}
+          path: ${{ runner.temp }}/qa-proof
+          run-id: ${{ env.RELEASE_QA_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      # The artifact names already carry the commit, but the name is not the
+      # evidence: the proof's own recorded source must be this tag's commit and
+      # this tag's tree.
+      - name: Require the qa proof to belong to this tag
+        run: |
+          set -euo pipefail
+          qa_context="$RUNNER_TEMP/qa-proof/context-download/context.json"
+          test -s "$qa_context"
+          source_git_tree="$(git rev-parse "HEAD^{tree}")"
+          if ! jq -er --arg commit "$RELEASE_SOURCE_COMMIT" --arg tree "$source_git_tree" \
+            'select(.source_commit == $commit and .source_git_tree == $tree) | true' \
+            "$qa_context" > /dev/null
+          then
+            echo "release_production_qa_proof_foreign" >&2
+            exit 1
+          fi
+
+      - name: Read exact merged source identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # `reachable`, not `tip`: this tag is promoted after the release pull
+          # request merged and after Deploy proved it, so main may legitimately
+          # have moved on. The commit must still be ON main.
+          node "$RELEASE_ENFORCER" push-context \
+            --source-policy reachable \
+            --repository "$RELEASE_REPOSITORY" --run-id "$RELEASE_CI_RUN_ID" \
+            --ruleset-id "$RELEASE_RULESET_ID" \
+            --head-commit "$RELEASE_SOURCE_COMMIT" --base-commit "$RELEASE_BASE_COMMIT" \
+            --output "$RUNNER_TEMP/pr-context.json"
+
+      - name: Capture exact source, tree, and binary diff evidence
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" source-evidence \
+            --repo-root "$GITHUB_WORKSPACE" --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --base-commit "$RELEASE_BASE_COMMIT" --output "$RUNNER_TEMP/source-evidence.json"
+          # The qa proof's tree digest must be the one this tag computes for
+          # itself, not merely a tree whose git id matches.
+          expected_tree_sha256="$(jq -er '.source_tree_sha256' "$RUNNER_TEMP/source-evidence.json")"
+          if ! jq -er --arg tree "$expected_tree_sha256" \
+            'select(.source_tree_sha256 == $tree) | true' \
+            "$RUNNER_TEMP/qa-proof/context-download/context.json" > /dev/null
+          then
+            echo "release_production_qa_proof_foreign" >&2
+            exit 1
+          fi
+
+      - name: Collect exact successful CI check IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" ci-checks \
+            --repository "$RELEASE_REPOSITORY" \
+            --run-id "$RELEASE_CI_RUN_ID" \
+            --job-names "paired-device-lighthouse,gate,validate-and-test" \
+            --output "$RUNNER_TEMP/ci-checks.json"
+
+      - name: Atomically bootstrap or read the durable predecessor policy generation
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Generation N's policy hash is the BASE tree's, read by the base
+          # enforcer's own file list.
+          node "$RELEASE_ENFORCER" policy-genesis \
+            --repo-root "$RUNNER_TEMP/policy-enforcer" --repository "$RELEASE_REPOSITORY" \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+            --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --key "release-policy:${RELEASE_REPOSITORY}" \
+            --output "$RUNNER_TEMP/policy.json"
+
+      - name: Compute environment config and migration contracts
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" config-digest \
+            --repo-root "$GITHUB_WORKSPACE" --environment qa \
+            --output "$RUNNER_TEMP/qa-config.json"
+          node "$RELEASE_ENFORCER" config-digest \
+            --repo-root "$GITHUB_WORKSPACE" --environment production \
+            --output "$RUNNER_TEMP/production-config.json"
+          node "$RELEASE_ENFORCER" admission-context \
+            --repo-root "$GITHUB_WORKSPACE" --repository "$RELEASE_REPOSITORY" \
+            --environment production \
+            --source "$RUNNER_TEMP/source-evidence.json" --checks "$RUNNER_TEMP/ci-checks.json" \
+            --pr-context "$RUNNER_TEMP/pr-context.json" \
+            --policy "$RUNNER_TEMP/policy.json" \
+            --qa "$RUNNER_TEMP/qa-config.json" \
+            --production "$RUNNER_TEMP/production-config.json" \
+            --output "$RUNNER_TEMP/context.json"
+
+      - name: Verify the qa-proven artifact bytes and recompute the component manifest
+        id: archive
+        run: |
+          set -euo pipefail
+          expected="$(jq -er '.artifact_digest' "$RUNNER_TEMP/qa-proof/context-download/context.json")"
+          actual="$(sha256sum "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          mkdir -p "$RUNNER_TEMP/release-artifact"
+          tar -xf "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" \
+            -C "$RUNNER_TEMP/release-artifact"
+          node "$RELEASE_ENFORCER" artifact-manifest \
+            --worker "$RUNNER_TEMP/release-artifact/worker/index.js" \
+            --pwa "$RUNNER_TEMP/release-artifact/app/dist" \
+            --frappe-wheel "$RUNNER_TEMP/release-artifact/frappe/ironwrap_roofing.whl" \
+            --output "$RUNNER_TEMP/artifact-components.json"
+          echo "artifact_digest=$actual" >> "$GITHUB_OUTPUT"
+
+      # The same tar, re-published under the tag, so the promoted bytes are
+      # retrievable from the release itself and not only from the Deploy run.
+      - name: Republish the identical artifact under the release tag
+        id: upload_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: iro264-release-artifact-${{ github.ref_name }}
+          path: ${{ runner.temp }}/artifact-download/ironwrap-release-artifact.tar
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Bind artifact and upload receipt into the production context
+        env:
+          ARTIFACT_DIGEST: ${{ steps.archive.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ steps.upload_artifact.outputs.artifact-id }}
+          ARTIFACT_UPLOAD_DIGEST: ${{ steps.upload_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" bind-artifact \
+            --context "$RUNNER_TEMP/context.json" --artifact-digest "$ARTIFACT_DIGEST" \
+            --artifact-id "$ARTIFACT_ID" --uploaded-digest "$ARTIFACT_UPLOAD_DIGEST" \
+            --component-manifest "$RUNNER_TEMP/artifact-components.json"
+
+      - name: Require production provider and smoke inputs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          RELEASE_PRODUCTION_INGEST_TOKEN: ${{ secrets.RELEASE_PRODUCTION_INGEST_TOKEN }}
+          RELEASE_PRODUCTION_ADMIN_TOKEN: ${{ secrets.RELEASE_PRODUCTION_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          for required in CLOUDFLARE_API_TOKEN RELEASE_PRODUCTION_INGEST_TOKEN RELEASE_PRODUCTION_ADMIN_TOKEN; do
+            if [[ -z "${!required:-}" ]]; then echo "release_production_missing_external_secret:$required" >&2; exit 1; fi
+          done
+          if [[ ! "$RELEASE_PRODUCTION_ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "release_production_invalid_zone_id" >&2
+            exit 1
+          fi
+
+      - name: Verify the declared production provider targets
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" provider-targets \
+            --candidate-root "$GITHUB_WORKSPACE" --policy-root "$RUNNER_TEMP/policy-enforcer" \
+            --environment production --output "$RUNNER_TEMP/production-provider-targets.json"
+
+      - name: Verify production secret-name inventory before immutable promotion
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          "$WRANGLER_BIN" secret list \
+            --config workers-bus/wrangler.jsonc --format json > "$RUNNER_TEMP/production-secret-list.json"
+          node "$RELEASE_ENFORCER" secret-readback \
+            --input "$RUNNER_TEMP/production-secret-list.json" --output "$RUNNER_TEMP/production-secret-inventory.json" \
+            --context "$RUNNER_TEMP/context.json" --environment production
+
+      - name: Fail closed on static production readiness drift before mutation
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" environment-preflight \
+            --repo-root "$GITHUB_WORKSPACE" --environment production \
+            --secret-inventory "$RUNNER_TEMP/production-secret-inventory.json" \
+            --output "$RUNNER_TEMP/production-environment-preflight.json"
+
+      - name: Upload the same immutable bundle to the production Worker service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          message="$(node "$RELEASE_ENFORCER" version-message \
+            --context "$RUNNER_TEMP/context.json" --environment production)"
+          "$WRANGLER_BIN" versions upload \
+            "$RUNNER_TEMP/release-artifact/worker/index.js" --config workers-bus/wrangler.jsonc --no-bundle \
+            --assets "$RUNNER_TEMP/release-artifact/app/dist" --strict --message "$message" \
+            > "$RUNNER_TEMP/production-upload.log" 2>&1
+          node "$RELEASE_ENFORCER" parse-version \
+            --input "$RUNNER_TEMP/production-upload.log" --output "$RUNNER_TEMP/production-version.id"
+
+      - name: Verify production provider version and config readback before traffic
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          revision="$(cat "$RUNNER_TEMP/production-version.id")"
+          "$WRANGLER_BIN" versions view "$revision" \
+            --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-version.json"
+          node "$RELEASE_ENFORCER" version-readback \
+            --input "$RUNNER_TEMP/production-version.json" --output "$RUNNER_TEMP/production.json" \
+            --environment production --version-id "$revision" \
+            --source-commit "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field source_commit)" \
+            --source-tree "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field source_tree_sha256)" \
+            --artifact-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field artifact_digest)" \
+            --config-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field production_config_digest)" \
+            --context "$RUNNER_TEMP/context.json" \
+            --secret-inventory "$RUNNER_TEMP/production-secret-inventory.json"
+
+      - name: Capture current production revision before permit admission
+        id: capture_production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-before.json"
+          previous="$(node "$RELEASE_ENFORCER" deployment-revision \
+            --input "$RUNNER_TEMP/production-before.json" --output "$RUNNER_TEMP/production-previous.id" >/dev/null && cat "$RUNNER_TEMP/production-previous.id")"
+          "$WRANGLER_BIN" versions view "$previous" \
+            --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-previous-version.json"
+          node "$RELEASE_ENFORCER" version-snapshot \
+            --input "$RUNNER_TEMP/production-previous-version.json" --expected "$previous" \
+            --output "$RUNNER_TEMP/production-previous-readback.json"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+
+      - name: Capture the exact production D1 recovery bookmark before admission
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          "$WRANGLER_BIN" d1 time-travel info ironwrap-bus \
+            --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-d1-bookmark.json"
+          node "$RELEASE_ENFORCER" d1-recovery-point \
+            --input "$RUNNER_TEMP/production-d1-bookmark.json" \
+            --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --output "$RUNNER_TEMP/production-recovery.json"
+
+      - name: Assemble the signed short-lived permit from automated release evidence
+        env:
+          RELEASE_PERMIT_PRIVATE_KEY: ${{ secrets.RELEASE_PERMIT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PRIVATE_KEY" > "$RUNNER_TEMP/permit.key"
+          node "$RELEASE_ENFORCER" assemble \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
+            --domain-hostname "$RELEASE_PRODUCTION_DOMAIN_HOSTNAME" \
+            --domain-service "$RELEASE_PRODUCTION_DOMAIN_SERVICE" \
+            --domain-zone-id "$RELEASE_PRODUCTION_ZONE_ID" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --context "$RUNNER_TEMP/context.json" \
+            --policy "$RUNNER_TEMP/policy.json" \
+            --qa "$RUNNER_TEMP/qa-proof/qa.json" \
+            --production "$RUNNER_TEMP/production.json" \
+            --smoke "$RUNNER_TEMP/qa-proof/qa-smoke.json" \
+            --backup-restore "$RUNNER_TEMP/qa-proof/backup-restore.json" \
+            --production-recovery "$RUNNER_TEMP/production-recovery.json" \
+            --rollback "$RUNNER_TEMP/qa-proof/rollback.json" \
+            --artifact-manifest "$RUNNER_TEMP/artifact-components.json" \
+            --production-previous-readback "$RUNNER_TEMP/production-previous-readback.json" \
+            --permit-private-key "$RUNNER_TEMP/permit.key" \
+            --issuer-identity "$RELEASE_ISSUER_IDENTITY" \
+            --output "$RUNNER_TEMP/release-permit.txt" \
+            --permit-payload "$RUNNER_TEMP/release-permit.json"
+
+      - name: Consume the permit once through the durable D1 replay and policy boundary
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" admit \
+            --permit "$RUNNER_TEMP/release-permit.txt" \
+            --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --policy-key "release-policy:${RELEASE_REPOSITORY}" \
+            --output "$RUNNER_TEMP/admission.json"
+
+      - name: Read back the exact merged source and verify the main tree
+        id: merge_source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          # The admitted source is already on main, so this reads the
+          # source-merge receipt back instead of merging. The admitted,
+          # permit-bound context must say "merged"; anything else stops here.
+          jq -er '.status | select(. == "merged")' "$RUNNER_TEMP/pr-context.json" > /dev/null
+          node "$RELEASE_ENFORCER" merged-source \
+            --source-policy reachable \
+            --pr-context "$RUNNER_TEMP/pr-context.json" \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --admission "$RUNNER_TEMP/admission.json" --output "$RUNNER_TEMP/source-merge-receipt.json"
+
+      - name: Apply admitted migrations only after exact source admission
+        id: migrate_production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: '"$WRANGLER_BIN" d1 migrations apply ironwrap-bus --config workers-bus/wrangler.jsonc --remote'
+
+      - name: Promote the pre-verified immutable production version
+        id: promote_production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: '"$WRANGLER_BIN" versions deploy --config workers-bus/wrangler.jsonc --version-id "$(cat "$RUNNER_TEMP/production-version.id")" --yes'
+
+      - name: Deploy the production custom-domain route after immutable promotion
+        id: deploy_production_triggers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: '"$WRANGLER_BIN" triggers deploy --config workers-bus/wrangler.jsonc'
+
+      - name: Read back the production Workers domain binding
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/production-domains.json"
+          response_error="$RUNNER_TEMP/production-domains.error"
+          if ! curl --silent --show-error --fail --connect-timeout 10 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            --header "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/domains" \
+            --output "$response" 2> "$response_error"
+          then
+            echo "release_production_domain_readback_request_failed" >&2
+            exit 1
+          fi
+          node "$RELEASE_ENFORCER" domain-readback \
+            --input "$response" \
+            --hostname "$RELEASE_PRODUCTION_DOMAIN_HOSTNAME" \
+            --service "$RELEASE_PRODUCTION_DOMAIN_SERVICE" \
+            --zone-id "$RELEASE_PRODUCTION_ZONE_ID" \
+            --output "$RUNNER_TEMP/production-domain-readback.json"
+
+      - name: Read back the production Worker cron schedules
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/ironwrap-bus/schedules" \
+            --output "$RUNNER_TEMP/production-cron-schedules.json"
+          node "$RELEASE_ENFORCER" cron-readback \
+            --repo-root "$GITHUB_WORKSPACE" --environment production \
+            --input "$RUNNER_TEMP/production-cron-schedules.json" \
+            --output "$RUNNER_TEMP/production-cron-readback.json"
+
+      - name: Verify production identity, health, readiness, and authenticated smoke
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          BUS_BASE_URL: ${{ env.RELEASE_PRODUCTION_BASE_URL }}
+          INGEST_TOKEN: ${{ secrets.RELEASE_PRODUCTION_INGEST_TOKEN }}
+          ADMIN_TOKEN: ${{ secrets.RELEASE_PRODUCTION_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          expected="$(cat "$RUNNER_TEMP/production-version.id")"
+          "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-active.json"
+          node "$RELEASE_ENFORCER" deployment-revision \
+            --input "$RUNNER_TEMP/production-active.json" --expected "$expected" --output "$RUNNER_TEMP/production-active.id"
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 20 "$BUS_BASE_URL/health" > "$RUNNER_TEMP/production-health.json"
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 20 "$BUS_BASE_URL/ready?scope=core" > "$RUNNER_TEMP/production-ready.json"
+          node "$RELEASE_ENFORCER" readiness \
+            --health "$RUNNER_TEMP/production-health.json" --ready "$RUNNER_TEMP/production-ready.json"
+          # --release-smoke: the proof runs against production without sending a
+          # customer acknowledgement, enqueueing follow-up work, or emailing the
+          # owner digest. Every other write still happens.
+          node "$(dirname "$RELEASE_ENFORCER")/launch-proof.mjs" --execute --release-smoke > "$RUNNER_TEMP/production-smoke-evidence.json"
+          "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-post-smoke.json"
+          node "$RELEASE_ENFORCER" deployment-revision \
+            --input "$RUNNER_TEMP/production-post-smoke.json" --expected "$expected" \
+            --output "$RUNNER_TEMP/production-post-smoke.id"
+
+      - name: Bind production active revision, readiness, and exact smoke to immutable receipt
+        run: |
+          set -euo pipefail
+          node "$RELEASE_ENFORCER" production-receipt \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
+            --active "$RUNNER_TEMP/production-post-smoke.id" \
+            --smoke "$RUNNER_TEMP/production-smoke-evidence.json" \
+            --health "$RUNNER_TEMP/production-health.json" --ready "$RUNNER_TEMP/production-ready.json" \
+            --source-commit "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field source_commit)" \
+            --source-tree "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field source_tree_sha256)" \
+            --artifact-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field artifact_digest)" \
+            --config-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context.json" --field production_config_digest)" \
+            --version-id "$(cat "$RUNNER_TEMP/production-version.id")" \
+            --version-digest "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/production.json" --field version_digest)" \
+            --permit-payload "$RUNNER_TEMP/release-permit.json" \
+            --domain-readback "$RUNNER_TEMP/production-domain-readback.json" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --output "$RUNNER_TEMP/production-promotion.json"
+
+      - name: Advance the durable generation only after production proof
+        if: ${{ success() }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" advance \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --policy-key "release-policy:${RELEASE_REPOSITORY}" \
+            --production-receipt "$RUNNER_TEMP/production-promotion.json" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --output "$RUNNER_TEMP/generation-advance.json"
+
+      - name: Automatic rollback and immutable readback after a failed promotion
+        id: rollback_production
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.promote_production.outcome != 'skipped' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          previous="${{ steps.capture_production.outputs.previous }}"
+          candidate="$(cat "$RUNNER_TEMP/production-version.id")"
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          if ! "$WRANGLER_BIN" rollback "$previous" --config workers-bus/wrangler.jsonc --message "automatic rollback after failed IRO-264 promotion for git:${RELEASE_SOURCE_COMMIT}" --yes
+          then
+            echo "release_production_rollback_command_nonzero_reconciling_by_readback" >&2
+          fi
+          "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback.json"
+          "$WRANGLER_BIN" versions view "$previous" \
+            --config workers-bus/wrangler.jsonc --json > "$RUNNER_TEMP/production-rollback-version.json"
+          node "$RELEASE_ENFORCER" version-snapshot \
+            --input "$RUNNER_TEMP/production-rollback-version.json" --expected "$previous" \
+            --output "$RUNNER_TEMP/production-rollback-version-readback.json"
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 20 "$RELEASE_PRODUCTION_BASE_URL/health" > "$RUNNER_TEMP/production-rollback-health.json"
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 20 "$RELEASE_PRODUCTION_BASE_URL/ready?scope=core" > "$RUNNER_TEMP/production-rollback-ready.json"
+          node "$RELEASE_ENFORCER" readiness \
+            --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json"
+          node "$RELEASE_ENFORCER" production-rollback-receipt \
+            --input "$RUNNER_TEMP/production-rollback.json" --previous "$previous" --candidate "$candidate" \
+            --frappe-scope "$RELEASE_FRAPPE_SCOPE" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --permit-payload "$RUNNER_TEMP/release-permit.json" \
+            --version-readback "$RUNNER_TEMP/production-rollback-version-readback.json" \
+            --health "$RUNNER_TEMP/production-rollback-health.json" --ready "$RUNNER_TEMP/production-rollback-ready.json" \
+            --output "$RUNNER_TEMP/production-rollback-receipt.json"
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" persist-rollback \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --rollback-receipt "$RUNNER_TEMP/production-rollback-receipt.json" \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --output "$RUNNER_TEMP/production-rollback-outcome.json"
+
+      - name: Persist durable recovery-required outcome after incomplete automatic rollback
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.rollback_production.outcome == 'failure' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" persist-recovery-required \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --failure-stage automatic_rollback_incomplete \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --output "$RUNNER_TEMP/production-rollback-recovery-required-outcome.json"
+
+      - name: Persist durable recovery-required outcome after an admitted migration failure
+        if: ${{ failure() && steps.merge_source.outcome == 'success' && steps.migrate_production.outcome == 'failure' && steps.promote_production.outcome == 'skipped' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_POLICY_LEDGER_API_TOKEN }}
+          RELEASE_PERMIT_PUBLIC_KEY: ${{ secrets.RELEASE_PERMIT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_PERMIT_PUBLIC_KEY" > "$RUNNER_TEMP/permit.pub"
+          node "$RELEASE_ENFORCER" persist-recovery-required \
+            --permit "$RUNNER_TEMP/release-permit.txt" --permit-public-key "$RUNNER_TEMP/permit.pub" \
+            --merge-receipt "$RUNNER_TEMP/source-merge-receipt.json" \
+            --failure-stage d1_migration_failed \
+            --account-id "$CLOUDFLARE_ACCOUNT_ID" --database-id "$RELEASE_PRODUCTION_D1_ID" \
+            --output "$RUNNER_TEMP/production-recovery-required-outcome.json"
+
+      - name: Publish signed permit and production proof receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: iro264-release-proof-${{ github.ref_name }}
+          path: |
+            ${{ runner.temp }}/release-permit.txt
+            ${{ runner.temp }}/release-permit.json
+            ${{ runner.temp }}/admission.json
+            ${{ runner.temp }}/source-merge-receipt.json
+            ${{ runner.temp }}/generation-advance.json
+            ${{ runner.temp }}/production-smoke-evidence.json
+            ${{ runner.temp }}/production-domain-readback.json
+            ${{ runner.temp }}/production-cron-readback.json
+            ${{ runner.temp }}/production-environment-preflight.json
+            ${{ runner.temp }}/production-provider-targets.json
+            ${{ runner.temp }}/production-promotion.json
+            ${{ runner.temp }}/production-recovery.json
+            ${{ runner.temp }}/production-rollback-receipt.json
+            ${{ runner.temp }}/production-rollback-outcome.json
+            ${{ runner.temp }}/production-recovery-required-outcome.json
+            ${{ runner.temp }}/production-rollback-recovery-required-outcome.json
+            ${{ runner.temp }}/production-rollback-health.json
+            ${{ runner.temp }}/production-rollback-ready.json
+          if-no-files-found: ignore
+          retention-days: 30

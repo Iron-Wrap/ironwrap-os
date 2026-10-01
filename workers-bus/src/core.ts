@@ -8,6 +8,34 @@ export const ALLOWED_SOURCES = [
 export type Source = (typeof ALLOWED_SOURCES)[number];
 export const MAX_SOURCE_COUNT = 1_000_000;
 
+/**
+ * Release-smoke scope (IRO-264).
+ *
+ * The tag-triggered production release runs the launch proof against PRODUCTION,
+ * so the proof must not reach a real person: the instant acknowledgement, the
+ * JobNimbus queue push and the reconciliation digest email are skipped. Every
+ * OWNED write still happens — raw to R2, the dedup claim, the envelope row, the
+ * audit rows, the heartbeat row — because the owned write path is the thing being
+ * proved.
+ *
+ * The scope is a request header, so it is only as safe as its gate: it is honoured
+ * only for the reserved launch-proof fixture, whose contact email is always under
+ * the reserved `example.invalid` domain. A real lead can therefore never take the
+ * side-effect-free path, whatever headers it arrives with.
+ */
+export const RELEASE_SMOKE_HEADER = "x-ironwrap-release-smoke";
+export const RELEASE_SMOKE_HEADER_VALUE = "1";
+export const RELEASE_SMOKE_FIXTURE_ERROR = "release_smoke_fixture_required";
+// `example.invalid` is reserved by RFC 2606 and is the fixture domain this
+// repository's data policy already mandates, so it can never be a real customer.
+const RELEASE_SMOKE_FIXTURE_EMAIL_RE = /^[^@\s]+@(?:[a-z0-9-]+\.)*example\.invalid$/;
+
+/** True only for the reserved launch-proof fixture body. */
+export function isReleaseSmokeFixture(raw: Record<string, unknown>): boolean {
+  const email = normalizeEmail(extractContact(raw).email ?? null);
+  return email !== null && RELEASE_SMOKE_FIXTURE_EMAIL_RE.test(email);
+}
+
 export interface Contact {
   name?: string;
   phone?: string;
@@ -27,7 +55,7 @@ export type Status =
   | "received"        // raw stored + envelope written
   | "pending_jn_push" // queued for JobNimbus
   | "pushed"          // landed in JobNimbus
-  | "jn_skipped"      // JOBNIMBUS_ENABLED=false: honest skip, not a fake push
+  | "jn_skipped"      // JOBNIMBUS_ENABLED=false, or a release-smoke fixture (IRO-264): honest skip, not a fake push
   | "erpnext_no_token" // ERPNEXT_ENABLED=true but API key/secret missing: fail-closed, no retry/DLQ
   | "reconciled"      // confirmed by daily reconcile
   | "duplicate"       // deduped against an earlier envelope
@@ -60,6 +88,8 @@ export interface EnvelopeRecord {
   erpnext_error?: string | null;
   intent_queue: string | null;
   tenant_id?: string | null;
+  // 1 only for a release-smoke fixture row (IRO-264); see RELEASE_SMOKE_HEADER.
+  release_smoke?: number;
   created_at: string;
   updated_at: string;
 }

@@ -214,18 +214,73 @@ npm run db:migrate
 
 ### Signed Permit And Immutable Promotion
 
-A push to `main` deploys `qa` only (IRO-260); production releases come from a tag, a separate
-workflow (IRO-264). The first Deploy run after the IRO-260 merge fails closed at admission by
-design: the generation-N enforcer loaded from the pre-merge base does not yet accept
-`--environment qa`, so the first real qa deploy is the second push to `main` after that merge.
+A push to `main` deploys `qa` only (IRO-260). Production is promoted from a release tag by
+`.github/workflows/deploy-production.yml` (IRO-264), which builds nothing: it promotes the exact
+bytes the Deploy run of that commit already proved on `qa`.
 
-Between the IRO-260 merge and IRO-264, what no workflow implements is the signed permit, the durable
-policy generation and its `release-policy:Iron-Wrap/ironwrap-os` ledger row, and every production
-step below it: production migrations, traffic promotion, the production-promotion receipt and its
-recovery outcomes. The push path implements the rest of this section against `qa` alone - the
-base-loaded generation-N enforcer, the provider-target and static readiness preflights, the qa
-deploy with its version, health and readiness readbacks, and the qa rollback drill - and binds none
-of it into a permit. The push path's whole credential surface is `RELEASE_QA_CLOUDFLARE_API_TOKEN`,
+`validateMergePolicy` requires `allow_merge_commit: false` with `allow_squash_merge` and
+`allow_rebase_merge` `true` on `main`; `gh api repos/Iron-Wrap/ironwrap-os` reads back exactly that
+(2026-10-01, Iron-Wrap token), so `merge_policy_invalid` blocks neither the push path nor the tag
+path. That is the setting resolved, not the call proven: `readMergePolicy` runs only inside
+`pushContext`, has no standalone subcommand, and no run has reached that line.
+
+**Owner prerequisites, still open:**
+
+- `gh api repos/Iron-Wrap/ironwrap-os/environments` reports `{"total_count": 0}` (read back
+  2026-10-01 with the Iron-Wrap token): the `production` GitHub Environment does not exist yet, so
+  its "tags `v*` only" deployment rule, `vars.RELEASE_PRODUCTION_ZONE_ID`, and every
+  `RELEASE_PRODUCTION_*` / `RELEASE_PERMIT_*` / `RELEASE_POLICY_LEDGER_API_TOKEN` secret are
+  absent. A run against the missing environment gets an implicitly created, unprotected one rather
+  than the `v*`-only gate the design leans on; the job still fails closed at "Require production
+  provider and smoke inputs" and at the `^[0-9a-f]{32}$` zone-format check.
+- The first production release writes a generation-0 row to `release-policy:Iron-Wrap/ironwrap-os`
+  and then fails closed before any promotion (step 7 below, "Capture the current production
+  revision" fails `deployment_list_empty` on a Worker that has never been deployed). Any later
+  release whose base tree hashes differently across the 13 `RELEASE_POLICY_FILES` then fails
+  `policy_genesis_drift` with no override. Clearing or resetting that row is a D1 write with
+  `RELEASE_POLICY_LEDGER_API_TOKEN`, owner only.
+
+The release path, end to end:
+
+1. **Conventional commits land on `main`.** `.github/workflows/release-please.yml` fails the
+   `pr-title` check on any pull request whose landing subject release-please cannot parse. Because
+   `squash_merge_commit_title` is `COMMIT_OR_PR_TITLE`, a single-commit pull request lands its
+   **commit** subject, so that subject is validated too whenever the PR has exactly one commit.
+2. **release-please keeps one release pull request open** on the `release-please--branches--main`
+   branch, updating `CHANGELOG.md` and `.release-please-manifest.json` with the next version.
+3. **A person merges that release pull request.** This is the documented default and the only
+   configured behaviour: releasing is the one decision a human still makes. The alternative is to
+   let an automation merge it (a scheduled job, or GitHub auto-merge). Changing that costs the last
+   human checkpoint in front of production: every green release pull request would then tag and
+   promote itself, so a bad change reaches customers without anyone choosing to ship it. Do not
+   change it without a recorded owner decision.
+   **No auto-merge is configured** for the release pull request. Note, however, that
+   `allow_auto_merge` is still **enabled at the repository level** (read back 2026-10-01), so anyone
+   with write access can enable auto-merge on an individual pull request. Disabling it is an
+   owner-only repository setting and is *not* changed by this work.
+4. **Deploy proves `qa` on the release commit**, exactly as for any other push to `main`, and
+   publishes `iro41-release-artifact-<sha>` and `iro41-qa-proof-<sha>` (retained 30 days, so a
+   production re-run days after the tag still finds the bytes).
+5. **`github-release` tags that commit.** The job runs on a successful Deploy of `main` and exits
+   without tagging unless that Deploy's head SHA is the merge commit of the newest merged release
+   pull request. Every other successful Deploy is an ordinary commit and is not a release.
+6. **The tag starts the production workflow.** A tag pushed by a `GITHUB_TOKEN` does not trigger
+   another workflow, so until the owner provisions `RELEASE_TAG_TOKEN` (a PAT or app token for
+   `github-release` to push the tag with) the tag will not start production by itself. Until then the
+   owner runs `deploy-production.yml` by hand: **Actions → Deploy Production → Run workflow**,
+   selecting the tag as the ref and entering the same tag in the required `tag` input. The job
+   refuses anything that is not a `vMAJOR.MINOR.PATCH` tag, and refuses a dispatch whose `tag` input
+   does not equal the ref it was dispatched on.
+7. **Production promotes the qa-proven bytes behind the permit and the ledger.** The job re-verifies
+   the artifact digest against the qa proof, re-reads the merged source with
+   `--source-policy reachable` (the tagged commit must still be *on* `main`, not necessarily its
+   tip), assembles the signed short-lived permit from that evidence, consumes it exactly once
+   through the durable `release-policy:Iron-Wrap/ironwrap-os` D1 ledger, and only then migrates and
+   promotes. On failure it rolls back automatically and records a durable recovery-required outcome.
+
+Every `release-promotion.mjs` call in the production job runs from the enforcer checked out from the
+tagged commit's parent (generation N), never from the tagged tree, so a release cannot approve
+itself. The push path's whole credential surface remains `RELEASE_QA_CLOUDFLARE_API_TOKEN`,
 `RELEASE_QA_INGEST_TOKEN` and `RELEASE_QA_ADMIN_TOKEN`, all in the `qa` GitHub Environment, and no
 repository variable.
 

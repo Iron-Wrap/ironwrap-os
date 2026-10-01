@@ -63,6 +63,13 @@ class SqliteD1 {
       this.raw.exec(readFileSync(new URL(file, directory), "utf8"));
       if (file === lastMigration) break;
     }
+    // A truncated chain still has to be WRITABLE by the shipped intake path, and
+    // `insertEnvelope` writes `envelopes.release_smoke` (0133, IRO-264). The column
+    // is unrelated to whatever upgrade a truncated chain is proving, so it is
+    // carried forward rather than making the writer tolerate a missing column.
+    if (lastMigration && lastMigration < "0133") {
+      this.raw.exec(readFileSync(new URL("0133_envelope_release_smoke.sql", directory), "utf8"));
+    }
     // Identity setup is the only fixture write.  Operating and commercial facts are created below
     // by the same intake and role/public routes used by a deployed tenant.
     const insert = this.raw.prepare(

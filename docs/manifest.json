@@ -42,6 +42,11 @@
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
+      "path": "CHANGELOG.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "CLAUDE.md",
       "class": "developer",
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]

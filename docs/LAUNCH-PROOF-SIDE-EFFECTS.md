@@ -22,6 +22,14 @@ Frappe lookup.
 production guard: the only thing separating a staging run from a production run is the value of
 `BUS_BASE_URL`.
 
+`--release-smoke` (IRO-264) adds `X-IronWrap-Release-Smoke: 1` to steps 3, 4, 5, 6 and 8 only —
+the Worker honours the header only when the request body is this tool's own reserved
+`example.invalid` fixture, and refuses with `400 release_smoke_fixture_required` otherwise, so the
+header is not a way to drop a real lead silently. This is the mode `deploy-production.yml` runs
+against **production** for every release, to get the ten `LAUNCH_PROOF_STEP_NAMES` proof without
+the three outward side effects (§5, §6 criterion 9, §8). It does not change steps 1, 2, 7 or 9, and
+does not change what dry-run prints beyond the header line on the affected `curl` templates.
+
 ## 2. Required inputs
 
 | Variable | Required | Used for |
@@ -87,11 +95,22 @@ Both emails are attempted whenever `GOOGLE_SERVICE_ACCOUNT_JSON` **and** `FROM_E
 run under `ctx.waitUntil` and their failure does not fail the proof — so a run can succeed while
 having sent mail, and can send mail while otherwise failing.
 
+**Under `--release-smoke`:** the envelope row, the R2 raw object, the dedup claim and the `received`
+audit row are all still written exactly as above — these are owned writes, not outbound rails. The
+status is `jn_skipped` (not `pending_jn_push`) with `last_error: "release_smoke"`, a second audit row
+(`automation=jn_push`, `action=skip`, `result=ok`, `error=release_smoke`) records the skip, and
+neither the prospect ack email nor the owner alert email nor the `JN_QUEUE` message fires. The
+terminal status is what keeps the row out of the `*/5` stuck sweep (`store.listStuck` selects
+`status = 'pending_jn_push'`) even across the production workflow's own automatic rollback to the
+previous Worker version — a status survives that rollback, a query filter would not.
+
 ### Step 4 — `POST /ingest/website` replay
 
 Returns the original `envelope_id` / `canonical_envelope_id` with `duplicate: true`. It does
 **not** insert a second `envelopes` row. Raw is still archived to R2; an `audit_log` `dedup`
 row is written against the original identity. No second queue message, no second instant-ack.
+Under `--release-smoke` this is unchanged: the replay path never reaches the two outward calls
+regardless of the header.
 
 ### Queue consumer, triggered asynchronously by step 3
 
@@ -122,7 +141,8 @@ synthetic contact and job created here are permanent CRM records for practical p
 | Frappe `Lead Envelope` + `Instant Estimate Session` (`estimate_session_id = estimate:LP-<execution-id>`) | **Frappe** | only when `ERPNEXT_ENABLED=true`. Not a launch-proof wire step or gate. |
 | `envelopes.erpnext_*`; `audit_log` `erpnext_estimate` | D1 | |
 
-No queue message, no email, no JobNimbus, no Drive on this path.
+No queue message, no email, no JobNimbus, no Drive on this path regardless of `--release-smoke` —
+the header only marks the row (`release_smoke = 1`) since there is no outbound rail here to skip.
 
 ### Step 8 — `POST /admin/reconcile`
 
@@ -130,6 +150,12 @@ No queue message, no email, no JobNimbus, no Drive on this path.
 |---|---|---|
 | Heartbeat upsert | **D1 `heartbeat`** | `INSERT … ON CONFLICT(day) DO UPDATE` — **overwrites today's row**, including `ran_at`. |
 | Daily digest email | **Gmail** | to `OWNER_ALERT_EMAIL` **and** `BACKUP_ALERT_EMAIL` (production `info@` and `sales@ironwrapexteriors.com`). The digest text asserts of itself that its arrival *is* the heartbeat, so an out-of-band copy is misleading to the recipient. |
+
+**Under `--release-smoke`:** the daily digest email is skipped (both recipients). The heartbeat
+upsert is **not** skipped and is the one effect this mode does not remove — a production release
+proof still overwrites today's `ran_at`, because `/admin/status` (step 9 / success criterion 9)
+asserts the heartbeat present, fresh and reconciled, and a skipped heartbeat would fail the very
+run that skipped it.
 
 Steps 1, 2, 7, and 9 are Worker read-only. There is no Frappe lookup step.
 
@@ -147,6 +173,18 @@ Steps 1, 2, 7, and 9 are Worker read-only. There is no Frappe lookup step.
   consumer may still write `Lead Envelope` / property / job / session rows — that rail is
   IRO-195, not this proof's gate.
 
+### Totals for one `--release-smoke --execute` (what `deploy-production.yml` runs against production)
+
+- **0 emails**, **0 JobNimbus writes**, **0 Drive writes** — the three effects this mode exists to
+  remove, and the reason it exists rather than pointing production at a non-production target.
+- **3 R2 objects** and the same `envelopes` / `dedup_claims` / `audit_log` D1 writes as an ordinary
+  run, **plus** one extra `audit_log` row for the `jn_push` skip — these are owned writes, not
+  outward rails, and every release leaves real rows of this shape in production by design.
+- **`heartbeat` day row still overwritten** — the one effect this mode does not remove (§5, step 8).
+- The envelope rows this leaves behind are permanently distinguishable from a real customer lead by
+  `status = 'jn_skipped'`, `last_error = 'release_smoke'` and `release_smoke = 1` — they are not
+  cleaned up by this tool or by this mode; see §8.
+
 ## 6. Success criteria
 
 Hard assertions, any of which aborts the run:
@@ -163,7 +201,10 @@ Hard assertions, any of which aborts the run:
 8. `/admin/reconcile` HTTP 200.
 9. `/admin/status`: `status == "ok"`; heartbeat present, `fresh`, `reconciled`; each of
    `open_dead_letters`, `stuck`, `frappe_errors`, `replay_failed`, `replay_stuck` == 0; zero recent
-   audit failures.
+   audit failures. Under `--release-smoke` this holds because the smoke lead is written terminal
+   (`jn_skipped`, §5 step 3) and is never a `stuck` candidate; a query filter on
+   `getOperationalEnvelopeCounts` instead of a terminal status would have left this criterion
+   failing on the **next** release, ~15 minutes after this one.
 10. Final CLI gate: `evidence.operating_authority == "d1"` and `evidence.d1_lead.state == "matched"`.
     `frappe_projection.state` is `out_of_scope` and is **not** the gate.
 
@@ -190,6 +231,13 @@ and not a HELM permit/receipt (IRO-190).
 | Drive folder tree | Yes, manually. |
 | Frappe records | Yes, by operator with sufficient rights. |
 
+Under `--release-smoke` the queue message, the emails and the JobNimbus contact/job rows in this
+table are never created in the first place, so there is nothing to reverse for them. The Drive
+folder tree is likewise never created — it hangs off a fresh JobNimbus job number, which this mode
+never produces. What remains to reverse is unchanged: the D1 rows (now also tagged
+`release_smoke = 1`, which does not change how they are reversed) and the `heartbeat` day row's lost
+prior `ran_at`.
+
 ## 9. Reading this before authorizing
 
 A production run is **not** dry-runnable: dry-run exercises nothing. The lowest-side-effect real
@@ -197,3 +245,9 @@ rehearsal is to point `BUS_BASE_URL` at a non-production Worker whose `JOBNIMBUS
 whose `GOOGLE_SERVICE_ACCOUNT_JSON` is unset — that removes
 every email, every CRM write, and every Drive write while still exercising D1, R2, the queue, and
 the estimate path. Frappe is not part of this proof.
+
+`--release-smoke` is the production case: it is how `deploy-production.yml` runs this exact tool
+against the real `ironwrap-bus` Worker on every release (IRO-264) without a non-production target to
+point at instead. It removes the same three effects as the rehearsal above, by construction in the
+Worker rather than by unplugging a credential, and it leaves behind real, permanently-tagged D1 and
+R2 rows in production — see the `--release-smoke --execute` totals above and §8.

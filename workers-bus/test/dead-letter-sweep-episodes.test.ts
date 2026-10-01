@@ -396,6 +396,73 @@ test("defect 3: the missing-credential skip also closes its dead-letter rows", a
   assert.equal(openDeadLetterCount(db), 0);
 });
 
+// IRO-264 R1: a release-smoke envelope was being written `pending_jn_push` like any other lead,
+// so the SAME query this file's other tests prove is correct for a dead-letter re-drive
+// (`listStuck`, selected by status alone) would also have matched it once it aged past
+// `STUCK_THRESHOLD_MIN` -- re-enqueuing a synthetic launch-proof lead to the live JobNimbus bridge
+// roughly 15 minutes after a release reported success. The fix makes the row terminal
+// (`jn_skipped`) at ingest, so it is never a `listStuck` candidate in the first place. Driven over
+// the real migrations and the real `*/5` cron handler, like every other test in this file, so a
+// regression to "filter the query instead" would show up here exactly as it would in production.
+test("IRO-264 R1: a release-smoke envelope aged past the stuck threshold is never re-queued by the five-minute cron", async () => {
+  const { env, db, queued } = sweepEnv();
+  const headers = { authorization: "Bearer ingest-secret", "content-type": "application/json" };
+  // Unlike the admin/queue calls elsewhere in this file, an ordinary (non-smoke) ingest fires
+  // `ctx.waitUntil(sendInstantAck(...))`, which the shared `ctx = {} as never` does not implement.
+  const ingestWaits: Promise<unknown>[] = [];
+  const ingestCtx = {
+    waitUntil: (p: Promise<unknown>) => { ingestWaits.push(p); },
+    passThroughOnException() {},
+  };
+
+  const smokeRes = await worker.fetch(new Request("https://bus.example/ingest/website", {
+    method: "POST",
+    headers: { ...headers, "X-IronWrap-Release-Smoke": "1" },
+    body: JSON.stringify({
+      name: "Launch Proof",
+      phone: "(587) 555-9999",
+      email: "launch-proof+1770000000000-abc@example.invalid",
+      service: "metal roofing",
+    }),
+  }), env as never, ingestCtx as never);
+  assert.equal(smokeRes.status, 200);
+  const smokeId = ((await smokeRes.json()) as { envelope_id: string }).envelope_id;
+  assert.equal(envelopeStatus(db, smokeId), "jn_skipped", "the smoke lead is terminal from the start");
+
+  const plainRes = await worker.fetch(new Request("https://bus.example/ingest/website", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Jane Doe",
+      phone: "(587) 555-1234",
+      email: "jane@example.com",
+      service: "metal roofing",
+    }),
+  }), env as never, ingestCtx as never);
+  assert.equal(plainRes.status, 200);
+  const plainId = ((await plainRes.json()) as { envelope_id: string }).envelope_id;
+  assert.equal(envelopeStatus(db, plainId), "pending_jn_push", "an ordinary lead is still queued");
+  await Promise.all(ingestWaits.map((p) => p.catch(() => {})));
+
+  // Only the sweep's own batch matters from here: both leads already pushed once at ingest.
+  queued.length = 0;
+  db.raw.prepare("UPDATE envelopes SET updated_at = ? WHERE envelope_id IN (?, ?)").run(
+    new Date(Date.now() - 20 * 60_000).toISOString(),
+    smokeId,
+    plainId,
+  );
+
+  const pending: Promise<unknown>[] = [];
+  await worker.scheduled(
+    { cron: "*/5 * * * *", scheduledTime: Date.now(), noRetry() {} } as never,
+    env as never,
+    { waitUntil: (p: Promise<unknown>) => { pending.push(p); }, passThroughOnException() {} } as never,
+  );
+  await Promise.all(pending.map((p) => p.catch(() => {})));
+
+  assert.deepEqual(queued, [plainId], "the stuck sweep re-drives the ordinary lead, never the smoke one");
+});
+
 function oldestOpenDeath(db: BusTestD1): string {
   return String(
     (db.raw.prepare("SELECT MIN(ts) AS ts FROM dead_letter WHERE recovered = 0").get() as { ts: string }).ts,

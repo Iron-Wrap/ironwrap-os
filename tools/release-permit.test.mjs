@@ -1289,6 +1289,107 @@ test("source admission merge receipt binds the exact PR, permit, and tested tree
   assert.throws(() => validateSourceMergeReceipt({ ...receipt, permit_digest: sha("other") }, payload(), { now: NOW, permitDigest: releasePermitDigest(permit) }), /release_permit_source_merge_permit_digest_drift/);
 });
 
+test("the reachable source policy accepts a main that advanced and still rejects one that dropped the commit", () => {
+  // IRO-264: a tag-triggered production release admits the commit the release PR
+  // merged, which main may legitimately have moved past by the time the tag is
+  // promoted. Reachability replaces tip equality; it does not remove a check.
+  const { privateKey } = keyPair();
+  const permit = signReleasePermit(privateKey, payload(), { now: NOW });
+  const options = { now: NOW, permitDigest: releasePermitDigest(permit) };
+  const base = sourceMergeReceipt(permit);
+
+  const reachable = (overrides = {}) => {
+    const fields = {
+      ...base,
+      main_commit: COMMIT,
+      source_policy: "reachable",
+      main_reachability: "ahead",
+      ...overrides,
+    };
+    delete fields.evidence_digest;
+    delete fields.observed_at;
+    return { ...fields, evidence_digest: sha(canonicalJson(fields)), observed_at: base.observed_at };
+  };
+
+  // main is ahead of the tagged commit: the tip policy rejects exactly this.
+  assert.throws(
+    () => validateSourceMergeReceipt({ ...base, main_commit: COMMIT }, payload(), options),
+    /release_permit_source_merge_main_drift/,
+  );
+  assert.equal(validateSourceMergeReceipt(reachable(), payload(), options).main_reachability, "ahead");
+  assert.equal(
+    validateSourceMergeReceipt(reachable({ main_reachability: "identical" }), payload(), options).source_policy,
+    "reachable",
+  );
+
+  // A commit that is not on main at all never produces a valid receipt.
+  for (const status of ["behind", "diverged", "", "unknown"]) {
+    assert.throws(
+      () => validateSourceMergeReceipt(reachable({ main_reachability: status }), payload(), options),
+      /release_permit_source_merge_main_not_reachable/,
+      status,
+    );
+  }
+
+  // The policy name itself is closed: only "reachable" relaxes anything.
+  assert.throws(
+    () => validateSourceMergeReceipt(reachable({ source_policy: "tip" }), payload(), options),
+    /release_permit_source_merge_policy_invalid/,
+  );
+
+  // Dropping either key falls back to the STRICTER tip rule, so a reachable
+  // release cannot be downgraded by deleting its own evidence.
+  const stripped = reachable();
+  delete stripped.main_reachability;
+  assert.throws(() => validateSourceMergeReceipt(stripped, payload(), options), /release_permit_source_merge_shape_invalid/);
+  const noPolicy = reachable();
+  delete noPolicy.source_policy;
+  assert.throws(() => validateSourceMergeReceipt(noPolicy, payload(), options), /release_permit_source_merge_shape_invalid/);
+
+  // Pre-IRO-264 receipts stay valid exactly as they were: absent keys, tip rule.
+  assert.equal(validateSourceMergeReceipt(base, payload(), options).merge_tree, GIT_TREE);
+  assert.throws(
+    () => validateSourceMergeReceipt({ ...base, main_commit: BASE }, payload(), options),
+    /release_permit_source_merge_/,
+  );
+});
+
+test("the backup drill's source generation is shape-checked, not bound to the permit generation", () => {
+  // qa's backup/restore drill passes --source-generation 0 and reads no policy
+  // ledger by design (IRO-260). Binding it to the permit's generation would fail
+  // every release after the first production release advanced the ledger.
+  const { privateKey, publicKey } = keyPair();
+  const base = payload();
+  assert.ok(base.previous_generation.generation > 0, "fixture must have advanced past generation 0");
+
+  const withGeneration = (generation) => ({
+    ...base,
+    backup_restore: { ...base.backup_restore, source_generation: generation },
+  });
+
+  for (const generation of [0, 1, base.previous_generation.generation, 97]) {
+    const permit = signReleasePermit(privateKey, withGeneration(generation), { now: NOW });
+    assert.equal(
+      verifyReleasePermit(publicKey, permit, {
+        repository: base.repository,
+        source_commit: base.source_commit,
+        base_commit: base.base_commit,
+        source_git_tree: base.source_git_tree,
+      }, { now: NOW }).backup_restore.source_generation,
+      generation,
+    );
+  }
+
+  // It is still a non-negative integer, so a missing or nonsense value fails.
+  for (const generation of [-1, 1.5, "4", null]) {
+    assert.throws(
+      () => validateReleasePermitPayload(withGeneration(generation), { now: NOW }),
+      /release_permit_backup_generation_invalid/,
+      String(generation),
+    );
+  }
+});
+
 test("environment config digests include distinct environment and secret-name contracts", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const qa = await computeEnvironmentConfigDigest({ repoRoot: root, environment: "qa" });

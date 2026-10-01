@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 111,
-      "latest": "0132_cron_heartbeat.sql"
+      "count": 112,
+      "latest": "0133_envelope_release_smoke.sql"
     }
   },
   "test_observation_policy": {

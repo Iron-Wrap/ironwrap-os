@@ -145,8 +145,11 @@ Run component-specific app, Playwright, Lighthouse, Frappe, deployment, and live
 the touched surface warrants them. Report skipped or blocked checks explicitly.
 
 A push to `main` deploys `qa` only (`.github/workflows/deploy.yml`, IRO-260); production releases
-come from a tag, a separate workflow (IRO-264). The first Deploy run after that merge fails closed
-at admission by design.
+come from a `v*` tag through `.github/workflows/deploy-production.yml`, which promotes the bytes that
+Deploy already proved on `qa` rather than building its own (IRO-264).
+`.github/workflows/release-please.yml` checks every pull request title, keeps one release pull
+request open, and tags the release commit after Deploy proves it; a person merges that release pull
+request. The first Deploy run after that merge fails closed at admission by design.
 
 ## Mutation guardrails
 

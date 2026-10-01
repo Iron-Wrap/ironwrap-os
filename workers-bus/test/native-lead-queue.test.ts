@@ -44,6 +44,8 @@ class TestD1 {
       "0009_replay_approval_audit.sql",
       "0090_operating_core.sql",
       "0082_envelope_operating_tenant.sql",
+      // insertEnvelope writes release_smoke (IRO-264).
+      "0133_envelope_release_smoke.sql",
     ]) {
       this.raw.exec(
         readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"),
@@ -357,6 +359,35 @@ test("a jn_skipped redelivery is a no-op acknowledgement", async (t) => {
       ).count,
     ),
     0,
+  );
+});
+
+test("IRO-264 R1: a release_smoke envelope is never re-delivered to JobNimbus, whatever its status", async (t) => {
+  // Defense in depth, not the normal path: a release-smoke row is written `jn_skipped` at ingest
+  // (lead-intake.ts), so `rec.status === "jn_skipped"` already stops it here. This proves the
+  // second, independent chokepoint `handlePush` also carries -- `rec.release_smoke === 1` -- so no
+  // future reader of `pending_jn_push` (a redelivery, a replay, a sweep) can ever reach
+  // `pushToJobNimbus` with a smoke envelope even if its status were not yet terminal.
+  const db = new TestD1();
+  const rec = envelope(); // status: pending_jn_push, the state the pre-R1 defect left it in
+  seed(db, rec);
+  db.raw.prepare("UPDATE envelopes SET release_smoke = 1 WHERE envelope_id = ?").run(rec.envelope_id);
+
+  let fetches = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetches += 1;
+    throw new Error("release_smoke_envelope_must_not_fetch");
+  });
+
+  assert.deepEqual(await runQueue(db, rec, "true", false), { acked: 1, retried: 0 });
+  assert.equal(fetches, 0, "no JobNimbus call, and no email or Drive call downstream of one");
+  assert.equal(
+    Number(
+      (db.raw.prepare("SELECT COUNT(*) AS count FROM operating_roof_jobs").get() as { count: number })
+        .count,
+    ),
+    0,
+    "no native authority is materialized for a smoke envelope either",
   );
 });
 

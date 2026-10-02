@@ -634,12 +634,18 @@ function validateReleasePleaseWorkflow(workflow) {
   const releasePr = section(workflow, "release-pr");
   const githubRelease = section(workflow, "github-release");
 
-  // Only the two release-please jobs may write. The title check reads.
+  // No job's GITHUB_TOKEN writes. The two release jobs write through RELEASE_TAG_TOKEN,
+  // held only in the `release` environment, so their PR and tag start workflows.
   assert.match(prTitle, /permissions:\n\s+contents: read/);
-  assert.doesNotMatch(prTitle, /contents: write|pull-requests: write/);
-  assert.match(releasePr, /permissions:\n\s+contents: write\n\s+pull-requests: write/);
-  assert.match(githubRelease, /permissions:\n\s+contents: write\n\s+pull-requests: read\n\s+actions: read/);
-  assert.equal((workflow.match(/contents: write/g) ?? []).length, 2);
+  assert.doesNotMatch(prTitle, /contents: write|pull-requests: write|RELEASE_TAG_TOKEN|environment:/);
+  assert.match(releasePr, /environment: release\n\s+permissions:\n\s+contents: read\n\s+steps:/);
+  assert.match(githubRelease, /environment: release\n\s+permissions:\n\s+contents: read\n\s+pull-requests: read\n\s+actions: read/);
+  assert.equal((workflow.match(/: write/g) ?? []).length, 0);
+  for (const job of [releasePr, githubRelease]) {
+    assert.match(job, /GITHUB_TOKEN: \$\{\{ secrets\.RELEASE_TAG_TOKEN \}\}\n\s+run: \|\n\s+set -euo pipefail\n\s+test -n "\$GITHUB_TOKEN" \|\|/);
+  }
+  assert.equal((workflow.match(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 0);
+  assert.equal((workflow.match(/\$\{\{ secrets\.RELEASE_TAG_TOKEN \}\}/g) ?? []).length, 2);
 
   // Each job answers to exactly one event. `release-pr` on pull_request would open
   // a release PR for every branch.
@@ -863,6 +869,16 @@ test("release-please workflow validation rejects a write-capable title check or 
         "    permissions:\n      contents: write\n",
       ),
     ),
+  );
+  // A GITHUB_TOKEN-made release PR or tag starts no workflow; the PAT outside its
+  // environment would reach every branch.
+  assert.throws(() =>
+    validateReleasePleaseWorkflow(
+      workflow.replace("GITHUB_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}", "GITHUB_TOKEN: ${{ github.token }}"),
+    ),
+  );
+  assert.throws(() =>
+    validateReleasePleaseWorkflow(workflow.replace("    environment: release\n", "")),
   );
   // Opening a release PR from a pull_request event would mint one per branch.
   assert.throws(() =>

@@ -235,8 +235,8 @@ takes effect from the first push after the commit that introduces it.
 
 **Owner prerequisites, still open:**
 
-- `gh api repos/Iron-Wrap/ironwrap-os/environments` reports `{"total_count": 0}` (read back
-  2026-10-01 with the Iron-Wrap token): the `production` GitHub Environment does not exist yet, so
+- `gh api repos/Iron-Wrap/ironwrap-os/environments` lists `qa` and `release` only (read back
+  2026-10-02): the `production` GitHub Environment does not exist yet, so
   its "tags `v*` only" deployment rule, `vars.RELEASE_PRODUCTION_ZONE_ID`, and every
   `RELEASE_PRODUCTION_*` / `RELEASE_PERMIT_*` / `RELEASE_POLICY_LEDGER_API_TOKEN` secret are
   absent. A run against the missing environment gets an implicitly created, unprotected one rather
@@ -274,8 +274,11 @@ The release path, end to end:
    without tagging unless that Deploy's head SHA is the merge commit of the newest merged release
    pull request. Every other successful Deploy is an ordinary commit and is not a release.
 6. **The tag starts the production workflow.** A tag pushed by a `GITHUB_TOKEN` does not trigger
-   another workflow, so until the owner provisions `RELEASE_TAG_TOKEN` (a PAT or app token for
-   `github-release` to push the tag with) the tag will not start production by itself. Until then the
+   another workflow, so `github-release` pushes it with `RELEASE_TAG_TOKEN`: a fine-grained PAT
+   (`Contents` and `Pull requests` read and write, `ironwrap-os` only) held in the `release` GitHub
+   Environment, which deploys from `main` only. `release-pr` uses the same token, so CI runs on the
+   release pull request without an approval click. A missing secret stops either job at
+   `release_tag_token_missing`; an expired token answers 401. If a tag did not start production, the
    owner runs `deploy-production.yml` by hand: **Actions → Deploy Production → Run workflow**,
    selecting the tag as the ref and entering the same tag in the required `tag` input. The job
    refuses anything that is not a `vMAJOR.MINOR.PATCH` tag, and refuses a dispatch whose `tag` input

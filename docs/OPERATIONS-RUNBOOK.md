@@ -141,13 +141,24 @@ the measurement queue drains that receipt, so a second run started inside that w
 timing, not a re-run bug.
 
 **Exit codes**: `0` seeded, `1` refused before any write, `2` usage, `3` ran and at least one
-attempted write failed, or crashed after a write. Exit `1` means no write was attempted; it does not
-mean the output is one line. Every guard refusal begins `refused: `, and two of them quote the
-underlying error after that prefix, stack included: an unreadable or invalid committed input (the
-synthetic fixture, the AppliCad XML, the pipeline template), and an unreachable pre-write read
-(`/health`, `/admin/envelopes`, `/ready`, `/admin/status`). An unexpected error in the guard path
-itself - a malformed `workers-bus/wrangler.jsonc`, for one - exits `1` with a bare stack trace and no
-`refused:` line.
+attempted write failed, or crashed after a write. Exit `1` means no write was attempted, and stderr
+says why in one of four shapes:
+
+1. A committed input that cannot be read or parsed (the synthetic fixture, the AppliCad XML, the
+   pipeline template): `refused: a committed input could not be loaded: ` followed by the error's
+   stack. When it is the fixture generator itself that fails, the generator's own uncaught error
+   prints first.
+2. An unreachable pre-write read (`/health`, `/admin/envelopes`, `/ready`, `/admin/status`): one
+   line, `refused: GET <url> is unreachable: ` and the transport code or message, for example
+   `UND_ERR_SOCKET` or `ECONNREFUSED`.
+3. Every other guard refusal - a production or non-loopback target, a non-200 `/health`, a 401
+   `/admin/envelopes`, a non-synthetic fixture row or envelope: its own one-line `refused: ` message.
+4. An unexpected error in the guard path itself - a malformed `workers-bus/wrangler.jsonc`, for
+   one: a bare stack and no `refused:` line.
+
+Without `--json`, a refusal raised after the fixture generator has run comes after the generator's
+one `synthetic snapshot: ...` line on stdout.
+
 For every failure the step classifiers see, each step still reports
 created/kept/skipped/`failed` and the full report prints before the process exits 3. One class
 stays outside that promise: a crash the classifiers never see - a dropped connection mid-write, a

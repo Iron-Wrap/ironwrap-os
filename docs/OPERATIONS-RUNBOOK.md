@@ -93,6 +93,87 @@ between first-owner bootstrap and authenticated office administration:
    acceptance CTA unless the live configuration resolves the dedicated acceptance service/HMAC/API
    pair as available.
 
+## Seeding A Non-production Environment
+
+`tools/seed-env.mjs` fills an empty `qa` (or a local `wrangler dev`) with clearly synthetic data
+in one idempotent run, and refuses to run against production on its own:
+
+```bash
+ADMIN_TOKEN=... INGEST_TOKEN=... node tools/seed-env.mjs --env qa [--leads N] [--json]
+node tools/seed-env.mjs --base-url http://localhost:7100                 # loopback only
+make seed ENV=qa            # ADMIN_TOKEN/INGEST_TOKEN from your own environment
+make seed BASE_URL=http://localhost:7100   # both tokens sourced from workers-bus/.dev.vars
+```
+
+`ADMIN_TOKEN` and `INGEST_TOKEN` come from the environment only - never a command-line argument,
+never logged, never present in `--json` output.
+
+**The guard**, checked before any request: `--env` must name an environment other than the
+production block (bare, `production`, or an empty string is refused); a `--base-url` must resolve
+to `localhost`, `127.0.0.1`, `::1` or `ironwrap.localhost`; the selected environment's D1 database
+id and public-origin hostname must both differ from the ones `workers-bus/wrangler.jsonc` commits
+for production. Then, still before any write, `GET /health` must answer 200 and the 100 most recent
+rows from `GET /admin/envelopes` must carry no non-synthetic `contact_email` - a target that already
+holds real-looking data is refused outright.
+
+**What it seeds**, in order: an owner-user bootstrap; the shipped JobNimbus synthetic snapshot
+flattened into `generic` CRM-import rows (12 rows: one per job, one per contact with no job);
+`--leads N` (default 3, capped at 25) synthetic website leads, one synthetic estimate submission,
+and the committed synthetic AppliCad measurement fixture. Markers throughout: `synth-` ids,
+`example.invalid` addresses, `555` phone blocks - never anything that looks like a real person.
+The seeded AppliCad XML carries no `job_number`, so it lands as a no-job report in
+`/admin/measurements/exceptions` (`docs/LAUNCH-RUNBOOK.md`) rather than as a matched measurement.
+
+**Owner step it does not perform**: the pipeline board. The tool writes
+`output/seed-env/<env>/pipelines.sql` and prints the exact `wrangler d1 execute` command; applying
+it against a real D1 is the owner's action, same as every other Ansible/Cloudflare apply.
+
+**Idempotence**: every step's `created` is 0 from the second run on, and the `counts` block is
+byte-identical from the second run on; run 1 and run 2 differ by design, each `created` becoming
+the matching `kept`. A `crm_import_runs` row (and its `crm_import_issues` rows) is written on
+every run regardless - that per-run ledger is expected, not a violation of "nothing new". The
+no-op rests on the seeded leads still being inside the 100 most recent envelopes: past that cap,
+the `GET /admin/envelopes` pre-check stops seeing them, and only `/ingest/*`'s 72h dedup window
+keeps a re-run from creating new ones. One named exception: `/ingest/measurement` answers 202
+`processing` with no `idempotent_replay` both on a first submission and on a repeat made before
+the measurement queue drains that receipt, so a second run started inside that window reports
+`measurement_intake: created=1` again, and reports `kept=1` once the receipt has settled - queue
+timing, not a re-run bug.
+
+**Exit codes**: `0` seeded, `1` refused before any write, `2` usage, `3` ran and at least one
+attempted write failed, or crashed after a write. Exit `1` means no write was attempted; it does not
+mean the output is one line. Every guard refusal begins `refused: `, and two of them quote the
+underlying error after that prefix, stack included: an unreadable or invalid committed input (the
+synthetic fixture, the AppliCad XML, the pipeline template), and an unreachable pre-write read
+(`/health`, `/admin/envelopes`, `/ready`, `/admin/status`). An unexpected error in the guard path
+itself - a malformed `workers-bus/wrangler.jsonc`, for one - exits `1` with a bare stack trace and no
+`refused:` line.
+For every failure the step classifiers see, each step still reports
+created/kept/skipped/`failed` and the full report prints before the process exits 3. One class
+stays outside that promise: a crash the classifiers never see - a dropped connection mid-write, a
+Cloudflare-side error, or a failure writing `output/seed-env/<env>/pipelines.sql` - prints a stack
+trace and exits 3 with no `counts` block at all. Exit 3 with no report therefore means writes may
+have landed and none of them is accounted for: read `GET /admin/envelopes` on the target before
+re-running. Every offline input - the synthetic JobNimbus fixture, the AppliCad XML, the pipeline
+template - is read and validated before the first write, so no missing or unreadable committed
+file can put you in that state. A `/ready` or `/admin/status` that answers is reported in `run`
+(`ready_status`, `admin_status`), never in `counts`, and never moves the exit code: the probe is a
+read and the exit code is about writes. One that cannot be reached at all is a different thing: it
+refuses at exit `1` before the first write, like any other unreachable pre-write read.
+
+**Rollback**: the seeded rows are all synthetic and identifiable (`synth-` ids, `example.invalid`
+addresses). Either delete them per table with `wrangler d1 execute --remote`, or reset that
+environment's D1 the way #290 reset qa on 2026-09-27. Nothing in the repository undoes a seeded
+row, and the `crm_import_runs` / `crm_import_issues` ledger grows monotonically by design.
+
+**When a step is skipped rather than run**: `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=false` or
+`APP_BFF_ENABLED=false` on the target makes owner bootstrap a skipped step with its reason and the
+owner action that unblocks it (flip the flag on that environment), not a failure - the process exit
+code stays 0 as long as every attempted write succeeded. `skipped` means deliberately not
+attempted (only the two flag-gated bootstrap codes and the pipeline-board owner action produce
+it); `failed` means attempted and did not succeed, for example a stale `INGEST_TOKEN` answering
+401 on an intake write - that is the case that moves the exit code to `3`.
+
 ## Incident Triage
 
 1. Record UTC start time, affected source/tenant, release commit, Worker deployment, image digest,

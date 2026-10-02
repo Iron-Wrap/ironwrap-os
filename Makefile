@@ -16,7 +16,7 @@ FRAPPE_VENV := tmp/frappe-venv
 
 .PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp app \
   worker worker-contract worker-tests worker-shard frappe audit static evidence \
-  evidence-receipt e2e e2e-suite secret-scan
+  evidence-receipt e2e e2e-suite secret-scan seed
 
 check: validate test-tools mcp app worker frappe audit static evidence
 
@@ -68,6 +68,7 @@ test-tools:
 	  tools/validate-lead-triage-shadow-authority.test.mjs \
 	  tools/validate-tenant-runtime.test.mjs \
 	  tools/seed-pipeline.test.mjs \
+	  tools/seed-env.test.mjs \
 	  tools/generate-tenant-config.test.mjs \
 	  tools/generate-tenant-worker-config.test.mjs \
 	  tools/start-local-runtime.test.mjs \
@@ -165,6 +166,24 @@ frappe:
 	cd $(FRAPPE_APP) && ../../$(FRAPPE_VENV)/bin/ruff check ironwrap_roofing tests
 	cd $(FRAPPE_APP) && ../../$(FRAPPE_VENV)/bin/python -m compileall -q ironwrap_roofing tests
 	$(FRAPPE_VENV)/bin/python -m build --wheel --outdir $(OUT)/frappe-dist $(FRAPPE_APP)
+
+# Seed a non-production environment (tools/seed-env.mjs, IRO-263). Refuses production on its own;
+# ADMIN_TOKEN/INGEST_TOKEN come from workers-bus/.dev.vars for a loopback target so neither token
+# ever appears on this command line - pass them yourself in the environment for a remote ENV=.
+#   make seed BASE_URL=http://localhost:7100
+#   ADMIN_TOKEN=... INGEST_TOKEN=... make seed ENV=qa [LEADS=5]
+seed:
+	@target="$(if $(BASE_URL),--base-url $(BASE_URL),$(if $(ENV),--env $(ENV),))"; \
+	if [ -z "$$target" ]; then \
+	  echo "usage: make seed ENV=<name>   or   make seed BASE_URL=<loopback-url>  [LEADS=n]" >&2; \
+	  exit 2; \
+	fi; \
+	if [ -n "$(BASE_URL)" ] && [ -n "$(ENV)" ]; then \
+	  echo "pass exactly one of ENV= or BASE_URL=" >&2; \
+	  exit 2; \
+	fi; \
+	if [ -n "$(BASE_URL)" ] && [ -f workers-bus/.dev.vars ]; then set -a; . workers-bus/.dev.vars; set +a; fi; \
+	node tools/seed-env.mjs $$target $(if $(LEADS),--leads $(LEADS),)
 
 audit: deps
 	npm audit --prefix app

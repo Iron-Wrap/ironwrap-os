@@ -1831,6 +1831,32 @@ test("admission-context requires a valid environment and matches its policy/prod
   await assert.rejects(() => invoke(["--environment", "production", "--production", path.join(root, "missing-production.json")]), /release_promotion_admission_context_environment_input_invalid/);
 });
 
+test("admission-context reads the JSON array that ci-checks writes", async (t) => {
+  const root = await tempRoot(t);
+  const file = async (name, value) => {
+    const target = path.join(root, name);
+    await writeFile(target, JSON.stringify(value));
+    return target;
+  };
+  // The shape collectCiChecks writes: an array of one record per required job.
+  const checks = await file("ci-checks.json", [{
+    check_id: "1", run_id: "99", job_name: "gate", conclusion: "success", repository: "Iron-Wrap/ironwrap-os",
+    head_sha: COMMIT, workflow_id: 1, workflow_path: ".github/workflows/ci.yml", event: "push", status: "completed", run_attempt: 1,
+  }]);
+  const source = await file("source.json", { source_commit: COMMIT });
+  const pr = await file("pr.json", Object.fromEntries([
+    "schema", "repository", "number", "base_ref", "base_commit", "head_ref", "head_commit", "ci_run_id", "ci_merge_commit", "ci_merge_tree", "merge_method", "merge_policy", "provider_readback_digest", "status",
+  ].map((key) => [key, "x"])));
+  const qa = await file("qa.json", {});
+  const invoke = (checksFile) => main([
+    "admission-context", "--repo-root", ROOT, "--repository", "Iron-Wrap/ironwrap-os", "--environment", "qa",
+    "--source", source, "--checks", checksFile, "--pr-context", pr, "--qa", qa, "--output", path.join(root, "context.json"),
+  ]);
+  // Past the read, the mismatched PR context is what stops it.
+  await assert.rejects(() => invoke(checks), /release_promotion_admission_context_invalid/);
+  await assert.rejects(async () => invoke(await file("object-checks.json", { checks: [] })), /release_promotion_json_invalid/);
+});
+
 test("cron-readback matches expected qa schedules and fails closed on drift", async (t) => {
   const root = await tempRoot(t);
   const output = path.join(root, "cron-readback.json");

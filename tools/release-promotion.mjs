@@ -192,6 +192,18 @@ async function readJson(file, code = "json_invalid") {
   }
 }
 
+// `ci-checks` writes a JSON array; `readJson` accepts objects only.
+async function readJsonArray(file, code = "json_invalid") {
+  let value;
+  try {
+    value = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    fail(code);
+  }
+  if (!Array.isArray(value)) fail(code);
+  return value;
+}
+
 async function writeJson(file, value) {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 }
@@ -1035,7 +1047,7 @@ async function releaseEvidenceSign(args) {
     || body.source_git_tree !== source.source_git_tree
     || body.artifact_digest !== requireHash(arg(args, "artifact-digest"), "artifact_digest_invalid")
     || body.issuer_principal === arg(args, "issuer-identity")) fail("release_evidence_input_identity_drift");
-  const checks = await readJson(arg(args, "checks"), "release_evidence_checks_invalid");
+  const checks = await readJsonArray(arg(args, "checks"), "release_evidence_checks_invalid");
   const supplyChain = await computeSupplyChainEvidence({ repoRoot: arg(args, "repo-root"), sourceCommit: source.source_commit, ciChecks: checks });
   if (canonicalJson(body.supply_chain) !== canonicalJson(supplyChain)) fail("release_evidence_supply_chain_drift");
   const now = Date.now();
@@ -1293,7 +1305,7 @@ async function admissionContext(args) {
   const pr = exactObjectKeys(await readJson(arg(args, "pr-context"), "pr_context_invalid"), [
     "schema", "repository", "number", "base_ref", "base_commit", "head_ref", "head_commit", "ci_run_id", "ci_merge_commit", "ci_merge_tree", "merge_method", "merge_policy", "provider_readback_digest", "status",
   ], "pr_context_shape_invalid");
-  const ciChecks = await readJson(arg(args, "checks"));
+  const ciChecks = await readJsonArray(arg(args, "checks"));
   const policy = isProduction ? await readJson(arg(args, "policy")) : undefined;
   const qa = await readJson(arg(args, "qa"));
   const production = isProduction ? await readJson(arg(args, "production")) : undefined;

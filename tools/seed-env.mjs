@@ -29,11 +29,21 @@
 // receipt has settled to matched or unmatched. This is queue timing, not a bug in this tool.
 //
 // Exit codes: 0 seeded, 1 refused before any write, 2 usage, 3 ran and at least one attempted write
-// failed - or crashed after a write. Exit 1 means no write was attempted; it does not mean the
-// output is one line: every guard refusal begins `refused: `, two of them quote the underlying
-// error's stack after that prefix (an unreadable or invalid committed input at :604, an unreachable
-// pre-write read), and an unexpected error in the guard path itself - a malformed
-// workers-bus/wrangler.jsonc, say - exits 1 with a bare stack trace and no `refused:` line.
+// failed - or crashed after a write. Exit 1 means no write was attempted, and stderr says why in one
+// of four shapes:
+//   1. a committed input that cannot be read or parsed (the synthetic fixture, the AppliCad XML,
+//      the pipeline template): `refused: a committed input could not be loaded: ` and the error's
+//      stack - after the generator's own uncaught error, when the fixture generator itself failed;
+//   2. an unreachable pre-write read (/health, /admin/envelopes, /ready, /admin/status): one line,
+//      `refused: GET <url> is unreachable: ` and the transport code or message (UND_ERR_SOCKET,
+//      ECONNREFUSED);
+//   3. every other guard refusal (a production or non-loopback target, a non-200 /health, a 401
+//      /admin/envelopes, a non-synthetic fixture row or envelope): its own one-line `refused: `
+//      message;
+//   4. an unexpected error in the guard path itself (a malformed workers-bus/wrangler.jsonc, say):
+//      a bare stack and no `refused:` line.
+// Without --json, a refusal raised after the fixture generator has run comes after the generator's
+// one `synthetic snapshot: ...` line on stdout.
 // The full report prints before exit 3 for every failure the step classifiers see; a crash they never
 // see (a dropped connection, a Cloudflare-side error, a failure writing the pipelines.sql
 // artefact) prints a stack trace and exits 3 with no counts. Every offline input is read and
@@ -44,7 +54,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripJsonComments } from "./generate-tenant-worker-config.mjs";
-import { flattenEnv } from "../workers-bus/src/env-bindings.ts";
+import { flattenWranglerVars } from "./wrangler-vars.mjs";
 import { pipelineSeedStatements, parsePipelineTemplate, statementsToSql } from "./seed-pipeline.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,7 +84,7 @@ export function productionIdentifiers(config) {
   let workersDevHostname = null;
   for (const envConfig of Object.values(config.env ?? {})) {
     // IRO-268 groups vars into `CFG_*` objects; read them flat, as the Worker does.
-    const origin = flattenEnv(envConfig?.vars ?? {}).APP_PUBLIC_ORIGIN;
+    const origin = flattenWranglerVars(envConfig?.vars ?? {}).APP_PUBLIC_ORIGIN;
     if (typeof origin !== "string" || !origin.includes(".workers.dev")) continue;
     try {
       const hostname = new URL(origin).hostname;
@@ -166,7 +176,7 @@ export function resolveTarget({ config, env, baseUrl }) {
     // from a flag.
     const local = config.env?.local;
     if (!local) throw new SeedGuardError("wrangler.jsonc declares no env.local to take a tenant id from.");
-    const tenantId = flattenEnv(local.vars ?? {}).APP_TENANT_ID;
+    const tenantId = flattenWranglerVars(local.vars ?? {}).APP_TENANT_ID;
     if (!tenantId) throw new SeedGuardError("env.local declares no APP_TENANT_ID.");
     const databaseName = local.d1_databases?.[0]?.database_name;
     if (!databaseName) {
@@ -192,7 +202,7 @@ export function resolveTarget({ config, env, baseUrl }) {
       `env.${env}'s D1 database id (${selectedDatabaseId}) is the production database id: refusing.`,
     );
   }
-  const selectedVars = flattenEnv(selected.vars ?? {});
+  const selectedVars = flattenWranglerVars(selected.vars ?? {});
   const origin = selectedVars.APP_PUBLIC_ORIGIN;
   if (!origin) throw new SeedGuardError(`env.${env} declares no APP_PUBLIC_ORIGIN to target.`);
   let originHostname;
@@ -502,11 +512,16 @@ function parseArgs(argv) {
           "not a re-run bug. The no-op rests on the seeded leads still being inside the 100 most recent " +
           "envelopes; past that cap only /ingest/*'s 72h dedup window keeps a re-run from creating new ones.\n\n" +
           "Exit codes: 0 seeded, 1 refused before any write, 2 usage, 3 ran and at least one attempted " +
-          "write failed, or crashed after a write. Exit 1 means no write was attempted; the refusal line " +
-          "begins `refused:` and quotes the underlying error, stack included, for an unreadable committed " +
-          "input or an unreachable pre-write read, while an unexpected error in the guard path itself exits " +
-          "1 with a bare stack. A crash the step classifiers never see exits 3 with a stack trace and no " +
-          "counts, so check the target before re-running.",
+          "write failed, or crashed after a write. Exit 1 means no write was attempted, and stderr says why " +
+          "in one of four shapes: a committed input that cannot be read or parsed prints `refused: a " +
+          "committed input could not be loaded: ` and the error's stack (after the generator's own " +
+          "uncaught error, if the fixture generator itself failed); an unreachable pre-write read prints " +
+          "one `refused: GET <url> is unreachable: ` line with the transport code or message " +
+          "(UND_ERR_SOCKET, ECONNREFUSED); every other guard refusal prints its own one-line `refused: ` " +
+          "message; and an unexpected error in the guard path itself, such as a malformed " +
+          "workers-bus/wrangler.jsonc, prints a bare stack and no `refused:` line. A crash the step " +
+          "classifiers never see exits 3 with a stack trace and no counts, so check the target before " +
+          "re-running.",
       );
       process.exit(0);
     } else {
@@ -523,7 +538,7 @@ async function fetchJson(url, options) {
   return { response, body };
 }
 
-// A pre-write read that cannot be reached refuses the way /health does at :592-598: one
+// A pre-write read that cannot be reached refuses the way the /health read in main() does: one
 // `refused: …` line, exit 1 - never a bare stack trace from the catch-all. Every caller below runs
 // before `writeAttempted = true`, so this changes the output, not the outcome or the exit code.
 async function fetchJsonOrRefuse(url, options) {

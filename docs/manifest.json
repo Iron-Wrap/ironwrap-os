@@ -121,6 +121,11 @@
       ]
     },
     {
+      "path": "docs/CLOUDFLARE-CI-CHEAT-SHEET.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+    },
+    {
       "path": "docs/COMPLIANCE-REGISTER.md",
       "class": "canonical",
       "authority": []

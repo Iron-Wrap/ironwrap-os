@@ -396,6 +396,15 @@ export async function setErpNextError(env: Env, id: string, error: string): Prom
   ).bind(error, nowIso(), id, tenantId).run();
 }
 
+/** A recovered queue envelope closes the native operating error its failed attempts recorded. */
+export async function clearNativeOperatingError(env: Env, id: string): Promise<void> {
+  const tenantId = requireEnvTenantId(env);
+  await env.DB.prepare(
+    `UPDATE envelopes SET erpnext_error = NULL, updated_at = ?
+     WHERE envelope_id = ? AND tenant_id = ? AND erpnext_error GLOB 'native_operating_*'`,
+  ).bind(nowIso(), id, tenantId).run();
+}
+
 /**
  * Stamp a failed ERPNext mirror attempt without changing `last_error`.
  *

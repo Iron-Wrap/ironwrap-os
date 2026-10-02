@@ -899,6 +899,7 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     rec.status === "jn_skipped" ||
     rec.release_smoke === 1
   ) {
+    await store.clearNativeOperatingError(env, envelopeId);
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
   }
@@ -956,6 +957,7 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     // `open_dead_letters` after a sweep or admin replay had already healed the envelope. Marked
     // ahead of the Desk sync below on purpose: that sync is best-effort and never un-terminals the
     // skip, so the recovery must not depend on it.
+    await store.clearNativeOperatingError(env, envelopeId);
     await store.markDeadLettersRecovered(env, envelopeId);
     return;
   }
@@ -1035,6 +1037,7 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     jn_contact_id: r.contactId,
     jn_job_id: r.jobId ?? null,
   });
+  await store.clearNativeOperatingError(env, envelopeId);
   await store.markDeadLettersRecovered(env, envelopeId);
 }
 

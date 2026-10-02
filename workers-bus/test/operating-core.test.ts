@@ -188,6 +188,66 @@ test("replay is idempotent and the same contact reuses one tenant customer", asy
   assert.equal(rows(db, "operating_core_events"), 14 + 11);
 });
 
+test("an email-only estimate and an email+phone lead share one customer, in both orders", async () => {
+  const estimate = (id: string) => envelope({
+    envelope_id: id,
+    contact_phone: null,
+    dedup_key: "e:jane@example.invalid",
+    raw_key: `raw/estimates/${id}.json`,
+    payload_json: JSON.stringify({
+      instant_estimate: true,
+      estimate_type: "instant",
+      estimate_project_id: "LP-iro274",
+      total_estimate: "$1.00",
+      service: "Roof",
+      address: "Edmonton, AB",
+    }),
+  });
+  const website = (id: string) => envelope({
+    envelope_id: id,
+    raw_key: `raw/website/${id}.json`,
+    payload_json: JSON.stringify({ service: "metal roofing", brand: "ironwrap" }),
+  });
+  const orders = [
+    ["estimate first", (a: string, b: string) => [estimate(a), website(b)]],
+    ["website first", (a: string, b: string) => [website(a), estimate(b)]],
+  ] as const;
+
+  for (const [label, build] of orders) {
+    const db = new TestD1();
+    const [first, second] = build(
+      "ow_19500000-0000-4000-8000-0000000000a1",
+      "ow_19500000-0000-4000-8000-0000000000a2",
+    );
+    seedEnvelope(db, first);
+    seedEnvelope(db, second);
+    const firstResult = await materializeOperatingCore(env(db), first);
+    const secondResult = await materializeOperatingCore(env(db), second);
+
+    assert.equal(rows(db, "operating_customers"), 1, label);
+    assert.equal(secondResult.customerId, firstResult.customerId, label);
+    const jobCustomers = db.raw.prepare(
+      "SELECT DISTINCT customer_id FROM operating_roof_jobs",
+    ).all() as Array<{ customer_id: string }>;
+    assert.deepEqual(jobCustomers.map(({ customer_id }) => customer_id), [firstResult.customerId], label);
+  }
+});
+
+test("a differing known contact still fails closed", async () => {
+  const db = new TestD1();
+  const first = envelope({ envelope_id: "ow_19500000-0000-4000-8000-0000000000b1" });
+  const second = envelope({
+    envelope_id: "ow_19500000-0000-4000-8000-0000000000b2",
+    contact_phone: "+15875559999",
+    raw_key: "raw/conflict/b2.json",
+  });
+  seedEnvelope(db, first);
+  seedEnvelope(db, second);
+  await materializeOperatingCore(env(db), first);
+  // The readback runs after db.batch commits, so only the rejection is asserted.
+  await assert.rejects(materializeOperatingCore(env(db), second), /operating_core_customer_conflict/);
+});
+
 test("consent follows the reused customer when a later source has only the other contact method", async () => {
   const db = new TestD1();
   const first = envelope({ envelope_id: "ow_19500000-0000-4000-8000-00000000000c" });

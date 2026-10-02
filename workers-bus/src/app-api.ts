@@ -1,3 +1,5 @@
+import { handleJobManualMeasurements } from "./job-manual-measurement-api.ts";
+import { OFFICE_LEAD_REQUEST_ID, OfficeIntakeError, parseOfficeCapture, recordOfficeIntake, readOfficeIntakeReceipt, readOfficeLeadFacts, resumeOfficeIntake } from "./office-lead-intake-store.ts";
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
 import { handlePipelineRoute } from "./pipeline-board-api.ts";
 import { buildCapabilitySignalReadModel } from "./capability-signal-api.ts";
@@ -123,6 +125,7 @@ import {
 } from "./estimator-native.ts";
 import { EstimatorNativeStoreError } from "./estimator-native-store.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
+import { parseDecisionPageRequest } from "./decision-read-model.ts";
 import {
   SEARCH_MAX_RAW_QUERY_LENGTH,
   buildOperatorSearchReadModel,
@@ -490,6 +493,21 @@ async function handleOfficeLeadCreate(
     return privateAppJson({ error: "csrf_failed" }, 403);
   const parsed = await readJson(req, MAX_COMMERCIAL_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  // Explicit opt-in preserves the response and input contract of installed legacy clients.
+  const includeReceipt = new URL(req.url).searchParams.get("include_receipt");
+  if (includeReceipt !== null && includeReceipt !== "1") return privateAppJson({ error: "invalid_include_receipt" }, 400);
+  if (includeReceipt === "1") {
+    const capture = parseOfficeCapture(parsed.value);
+    if (!capture.ok) return privateAppJson({ error: capture.error }, 400);
+    try {
+      return privateAppJson(await recordOfficeIntake(env, { tenantId: auth.session.tenant_id,
+        userId: auth.session.user_id, email: auth.session.email_normalized }, req.headers.get("Idempotency-Key") ?? "", capture.value));
+    } catch (error) {
+      return error instanceof OfficeIntakeError
+        ? privateAppJson({ error: error.code }, error.status)
+        : privateAppJson({ error: "office_intake_unavailable" }, 503);
+    }
+  }
   const validated = parseOfficeLead(parsed.value);
   if (!validated.ok) return privateAppJson({ error: validated.error }, 400);
 
@@ -627,8 +645,59 @@ export async function handleAuthenticatedRoute(
       ? privateAppJson(revoked.body)
       : privateAppJson({ error: revoked.error }, revoked.status);
   }
+  const manualMeasurementMatch = url.pathname.match(/^\/api\/v1\/estimator\/jobs\/([^/]+)\/manual-measurements$/);
+  if (manualMeasurementMatch) return handleJobManualMeasurements(req, env, auth, manualMeasurementMatch[1]);
   if (req.method === "POST" && url.pathname === "/api/v1/sales/leads") {
     return await handleOfficeLeadCreate(req, env, auth, deps.ctx);
+  }
+  const intakeResumeMatch = url.pathname.match(/^\/api\/v1\/sales\/intakes\/([^/]+)\/resume$/);
+  if (req.method === "POST" && intakeResumeMatch) {
+    if (!hasPermission(auth, "sales:read") || !hasPermission(auth, "sales:lead_create"))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+    const requestId = decodedPathSegment(intakeResumeMatch[1]);
+    if (!requestId || !OFFICE_LEAD_REQUEST_ID.test(requestId)) return privateAppJson({ error: "intake_not_found" }, 404);
+    const body = await readJson(req, 1024);
+    if (!body.ok) return privateAppJson({ error: body.error }, body.status);
+    if (!isRecord(body.value) || Object.keys(body.value).length !== 0)
+      return privateAppJson({ error: "invalid_intake_resume" }, 400);
+    try {
+      return privateAppJson(await resumeOfficeIntake(env, { tenantId: auth.session.tenant_id,
+        userId: auth.session.user_id, email: auth.session.email_normalized }, requestId));
+    } catch (error) {
+      return error instanceof OfficeIntakeError ? privateAppJson({ error: error.code }, error.status)
+        : privateAppJson({ error: "office_intake_unavailable" }, 503);
+    }
+  }
+  const intakeReceiptMatch = url.pathname.match(/^\/api\/v1\/sales\/intakes\/([^/]+)$/);
+  if (req.method === "GET" && intakeReceiptMatch) {
+    if (!hasPermission(auth, "sales:read") || !hasPermission(auth, "sales:lead_create"))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    const requestId = decodedPathSegment(intakeReceiptMatch[1]);
+    if (!requestId || !OFFICE_LEAD_REQUEST_ID.test(requestId)) return privateAppJson({ error: "intake_not_found" }, 404);
+    try {
+      return privateAppJson(await readOfficeIntakeReceipt(env, auth.session.tenant_id, auth.session.user_id, requestId));
+    } catch (error) {
+      return error instanceof OfficeIntakeError ? privateAppJson({ error: error.code }, error.status)
+        : privateAppJson({ error: "office_intake_unavailable" }, 503);
+    }
+  }
+  const salesLeadMatch = url.pathname.match(/^\/api\/v1\/sales\/leads\/([^/]+)$/);
+  if (req.method === "GET" && salesLeadMatch) {
+    if (!hasPermission(auth, "sales:read")) return privateAppJson({ error: "office_role_required" }, 403);
+    const leadId = decodedPathSegment(salesLeadMatch[1]);
+    if (!leadId || !/^lead:[a-z0-9][a-z0-9-]{1,63}:[a-f0-9]{64}$/.test(leadId))
+      return privateAppJson({ error: "lead_not_found" }, 404);
+    try {
+      const model = await buildSalesReadModel(env, auth, leadId);
+      const lead = model.leads.find((item) => item.id === leadId);
+      if (!lead) return privateAppJson({ error: "lead_not_found" }, 404);
+      return privateAppJson({ version: APP_API_VERSION, read_model_generated_at: model.read_model_generated_at,
+        permissions: model.permissions, allowed_actions: model.allowed_actions, stale_fields: model.stale_fields,
+        partial_sources: model.partial_sources, lead, intake: await readOfficeLeadFacts(env.DB, auth.session.tenant_id, lead.envelope_id) });
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
   }
   // Company profile, the derived setup checklist, and per-person notification
   // preferences. Returns null for anything it does not own, so routing continues.
@@ -704,7 +773,16 @@ export async function handleAuthenticatedRoute(
   if (req.method === "GET" && url.pathname === "/api/v1/now") {
     if (!hasPermission(auth, "now:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
-    return privateAppJson(await buildNowReadModel(env, auth));
+    const decisionPage = parseDecisionPageRequest(url.searchParams, auth);
+    if (!decisionPage.ok) {
+      return privateAppJson(
+        { error: decisionPage.status === 404 ? "not_found" : "decision_cursor_invalid" },
+        decisionPage.status,
+      );
+    }
+    return privateAppJson(
+      await buildNowReadModel(env, auth, new Date(), decisionPage),
+    );
   }
   // Search-and-jump for the command palette. Every authenticated role may call it; the role is
   // enforced by what the payload contains, not by refusing the route, because every role has at

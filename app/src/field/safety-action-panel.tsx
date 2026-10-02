@@ -18,6 +18,7 @@ import {
   safetyOccurrenceKindLabels,
   safetyOccurrenceKinds,
   safetyPanelResponseSchema,
+  safetyPanelSchema,
   safetySeverities,
   safetySeverityLabels,
   type SafetyActionKind,
@@ -71,9 +72,7 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const cached = safetyPanelResponseSchema.shape.panel.safeParse(
-        await getCachedFieldModel(cacheKey),
-      );
+      const cached = safetyPanelSchema.safeParse(await getCachedFieldModel(cacheKey));
       if (!cancelled && cached.success) setPanel(cached.data);
       try {
         const response = await apiRequest({

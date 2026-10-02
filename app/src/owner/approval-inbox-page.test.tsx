@@ -9,6 +9,7 @@ import { SessionProvider } from "../auth/session-context";
 import {
   approveApproval,
   loadApprovals,
+  loadApproval,
   newApprovalDecisionKey,
   reconcileApproval,
   rejectApproval,
@@ -18,6 +19,7 @@ import { ApprovalInboxPage } from "./approval-inbox-page";
 
 vi.mock("./approval-api", () => ({
   loadApprovals: vi.fn(),
+  loadApproval: vi.fn(),
   approveApproval: vi.fn(),
   reconcileApproval: vi.fn(),
   rejectApproval: vi.fn(),
@@ -170,14 +172,16 @@ function model(
 function renderInbox({
   session = ownerSession,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  reviewId,
 }: {
   session?: AuthenticatedSession;
   client?: QueryClient;
+  reviewId?: string;
 } = {}) {
   return render(
     <QueryClientProvider client={client}>
       <SessionProvider session={session}>
-        <ApprovalInboxPage />
+        <ApprovalInboxPage reviewId={reviewId} />
       </SessionProvider>
     </QueryClientProvider>,
   );
@@ -190,6 +194,60 @@ describe("ApprovalInboxPage", () => {
     vi.mocked(newApprovalDecisionKey).mockReturnValue("approval:stable-ui-decision-001");
     vi.mocked(rejectApproval).mockResolvedValue({ approval: pendingApproval() });
     vi.mocked(reconcileApproval).mockResolvedValue({ approval: reconciledUncertainApproval() });
+  });
+
+  it("opens the exact linked review without depending on the first page of lead history", async () => {
+    vi.mocked(loadApproval).mockResolvedValue(model());
+    renderInbox({ reviewId: "approval:ui-001" });
+    await screen.findByRole("heading", { name: "Review lead note" });
+    expect(loadApproval).toHaveBeenCalledWith("approval:ui-001");
+    expect(loadApprovals).not.toHaveBeenCalled();
+    expect(screen.getByText("What will change")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Back to decisions" })).toHaveAttribute(
+      "href",
+      "/now?show=decide",
+    );
+  });
+
+  it("requires a fresh native read after a failed refresh and after an uncertain mutation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(loadApproval).mockResolvedValueOnce(model()).mockRejectedValue(new Error("offline"));
+    vi.mocked(approveApproval).mockRejectedValue(new Error("response lost"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["now", ownerSession.tenant.id, ownerSession.user.id], { prior: true });
+    renderInbox({ reviewId: "approval:ui-001", client });
+    await screen.findByRole("button", { name: "Save lead check" });
+    await user.click(screen.getByRole("button", { name: "Load again" }));
+    await screen.findByText("This may be an old list");
+    expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
+    expect(approveApproval).not.toHaveBeenCalled();
+
+    vi.mocked(loadApproval)
+      .mockResolvedValueOnce(model())
+      .mockRejectedValue(new Error("still offline"));
+    await user.click(screen.getByRole("button", { name: "Load again" }));
+    await user.click(await screen.findByRole("button", { name: "Save lead check" }));
+    await screen.findByText("Check the saved state");
+    await screen.findByText("This may be an old list");
+    expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
+    expect(approveApproval).toHaveBeenCalledTimes(1);
+    expect(
+      client.getQueryState(["now", ownerSession.tenant.id, ownerSession.user.id])?.isInvalidated,
+    ).toBe(true);
+  });
+
+  it("keeps a linked lead review read-only in an offline session", async () => {
+    vi.mocked(loadApproval).mockResolvedValue(model());
+    renderInbox({
+      reviewId: "approval:ui-001",
+      session: { ...ownerSession, csrf_token: "offline-session-no-csrf" },
+    });
+    await screen.findByText("Go online before you choose");
+    expect(screen.getByText("What will change")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Save lead check" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
+    expect(approveApproval).not.toHaveBeenCalled();
+    expect(rejectApproval).not.toHaveBeenCalled();
   });
 
   it("shows an exact, bounded local-triage review and carries a stable CAS decision through the API", async () => {

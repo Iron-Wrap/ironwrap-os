@@ -1,525 +1,518 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, ClipboardCheck, RefreshCw, ShieldCheck } from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Notice } from "../components/ui/notice";
+import { PageHeader } from "../components/ui/page-header";
+import { Status } from "../components/ui/status";
 import { ErrorState } from "../components/ui/state-panel";
+import { Textarea } from "../components/ui/textarea";
+import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
-import { cn } from "../lib/cn";
-import { loadSales, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
-import type { SalesLead } from "./sales-contracts";
+import { loadSalesLead, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
+import type { CommercialLeadTriageInput, SalesLeadResponse } from "./sales-contracts";
 
 export function LeadTriagePreparePage() {
+  const { leadId } = useParams({ strict: false }) as { leadId?: string };
+  const session = useSession();
   return (
     <RoleGuard surface="sales">
-      <LeadTriagePrepareContent />
+      <LeadTriagePrepareContent
+        key={`${session.tenant.id}:${session.user.id}:${leadId}`}
+        leadId={leadId}
+      />
     </RoleGuard>
   );
 }
 
-function LeadTriagePrepareContent() {
-  const { leadId } = useParams({ strict: false }) as { leadId?: string };
+function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
   const session = useSession();
-  const offline = isOfflineSession(session);
+  const online = useOnlineStatus();
+  const offline = isOfflineSession(session) || !online;
   const navigate = useNavigate();
+  const client = useQueryClient();
+  const active = useRef(true);
+  const saving = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
   const query = useQuery({
-    queryKey: ["sales", session.tenant.id, session.user.id],
-    queryFn: () => loadSales(),
+    queryKey: ["sales-lead", session.tenant.id, session.user.id, leadId],
+    queryFn: () => loadSalesLead(leadId!),
+    enabled: Boolean(leadId),
     retry: false,
     refetchOnMount: "always",
   });
-  const decisionKey = useRef<string | undefined>(undefined);
-  const [lifecycleStatus, setLifecycleStatus] = useState<"triaged" | "qualified" | "disqualified">(
-    "triaged",
+  const submission = useRef<{ key: string; input: CommercialLeadTriageInput } | undefined>(
+    undefined,
   );
-  const [priority, setPriority] = useState<"low" | "normal" | "high" | "urgent">("normal");
+  const [lifecycleStatus, setLifecycleStatus] =
+    useState<CommercialLeadTriageInput["lifecycleStatus"]>();
+  const [priority, setPriority] = useState<CommercialLeadTriageInput["priority"]>("normal");
   const [category, setCategory] = useState("");
-  const [triageSummary, setTriageSummary] = useState("");
+  const [summary, setSummary] = useState("");
   const [nextAction, setNextAction] = useState("");
   const [actionError, setActionError] = useState<string>();
-  const [restartRequired, setRestartRequired] = useState(false);
-
+  const [readRequired, setReadRequired] = useState(false);
   const mutation = useMutation({
     retry: false,
-    mutationFn: async () => {
-      const lead = query.data?.leads.find((candidate) => candidate.id === leadId);
-      if (!lead) throw new Error("lead_source_unavailable");
-      decisionKey.current ??= newCommercialLeadTriageKey();
-      return await recordCommercialLeadTriage(
-        session,
-        {
-          leadId: lead.id,
-          expectedLeadVersion: lead.triage.version,
-          lifecycleStatus,
-          priority,
-          category: category.trim(),
-          summary: triageSummary.trim(),
-          nextAction: nextAction.trim(),
-        },
-        decisionKey.current,
-      );
+    mutationFn: () => {
+      const saved = submission.current;
+      if (!saved) throw new Error("lead_submission_unavailable");
+      return recordCommercialLeadTriage(session, saved.input, saved.key);
     },
     onSuccess: async () => {
-      await navigate({ to: "/sales" });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["sales"] }),
+        client.invalidateQueries({
+          queryKey: ["sales-lead", session.tenant.id, session.user.id, leadId],
+        }),
+        client.invalidateQueries({ queryKey: ["now"] }),
+      ]);
+      if (active.current) await navigate({ to: "/sales" });
     },
     onError: (error) => {
+      if (!active.current) return;
+      setReadRequired(true);
       setActionError(messageFor(error));
-      if (
-        error instanceof ApiError &&
-        [
-          "commercial_triage_version_conflict",
-          "commercial_permit_idempotency_conflict",
-          "commercial_triage_idempotency_conflict",
-        ].includes(error.code)
-      ) {
-        setRestartRequired(true);
-      }
+    },
+    onSettled: () => {
+      saving.current = false;
     },
   });
 
-  if (!leadId) {
+  async function refresh() {
+    if (query.isFetching || mutation.isPending) return;
+    const result = await query.refetch();
+    if (!result.isSuccess || result.data.lead.id !== leadId) return;
+    submission.current = undefined;
+    setReadRequired(false);
+    setActionError(undefined);
+  }
+
+  if (!leadId)
     return (
       <ErrorState
-        title="This triage link is incomplete"
-        message="No Lead Envelope was provided. Return to Sales and choose a source-backed lead."
+        title="This lead link is incomplete"
+        message="Return to Sales and choose a lead."
       />
     );
-  }
-  if (!query.data && query.isPending) return <LeadTriagePrepareSkeleton />;
-  if (!query.data && query.isError) {
+  if (!query.data && query.isPending) return <LeadReviewSkeleton />;
+  if (!query.data)
     return (
       <ErrorState
-        title="Sales context unavailable"
-        message="No triage decision was recorded. Reconnect and reopen the current Sales record before continuing."
+        title="Lead unavailable"
+        message="Reconnect and check this lead before continuing."
         onRetry={() => void query.refetch()}
       />
     );
-  }
-  if (!query.data) return <LeadTriagePrepareSkeleton />;
-
-  const lead = query.data.leads.find((candidate) => candidate.id === leadId);
-  if (
-    !lead ||
-    lead.triage.status !== "Untriaged" ||
-    !lead.attention.includes("triage_unresolved") ||
-    !query.data.allowed_actions.includes("commercial.lead_triage.record")
-  ) {
+  if (query.data.lead.id !== leadId)
     return (
       <ErrorState
-        title="Triage recording is not available"
-        message="IronWrap OS did not grant the native commercial action for this exact lead and policy version. Return to Sales and inspect the current recorded state."
-        action={
-          <Button asChild variant="outline">
-            <Link to="/sales">Back to Sales</Link>
-          </Button>
-        }
+        title="This is not the requested lead"
+        message="Return to Sales and reopen the lead. No review can be saved from this response."
       />
     );
-  }
 
-  const canRecord = !offline && query.isSuccess && !query.isFetching && !restartRequired;
-  const trimmedSummary = triageSummary.trim();
-  const trimmedCategory = category.trim();
-  const trimmedNextAction = nextAction.trim();
+  const { lead, intake } = query.data;
+  const eligible =
+    ["Untriaged", "Triaged"].includes(lead.triage.status ?? "") &&
+    query.data.allowed_actions.includes("commercial.lead_triage.record");
+  // A read may confirm the previous Needs-more-information save. That does not authorize
+  // changing its outcome to Qualified; the reviewer must choose the next decision.
+  const outcome =
+    lead.triage.status === "Triaged" && (!lifecycleStatus || lifecycleStatus === "triaged")
+      ? undefined
+      : (lifecycleStatus ?? "triaged");
+  const canRecord =
+    eligible &&
+    !offline &&
+    query.isSuccess &&
+    !query.isFetching &&
+    !readRequired &&
+    !mutation.isPending;
+  const valid =
+    Boolean(outcome) &&
+    category.trim().length >= 2 &&
+    summary.trim().length >= 1 &&
+    nextAction.trim().length >= 1;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (
-      !canRecord ||
-      mutation.isPending ||
-      trimmedCategory.length < 2 ||
-      trimmedSummary.length < 1 ||
-      trimmedNextAction.length < 1
-    )
-      return;
+    if (!canRecord || !valid || !outcome || saving.current) return;
+    saving.current = true;
+    submission.current = {
+      key: newCommercialLeadTriageKey(),
+      input: {
+        leadId: lead.id,
+        expectedLeadVersion: lead.triage.version,
+        lifecycleStatus: outcome,
+        priority,
+        category: category.trim(),
+        summary: summary.trim(),
+        nextAction: nextAction.trim(),
+      },
+    };
     setActionError(undefined);
     mutation.mutate();
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-6 pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="min-w-0">
-            <Button asChild variant="ghost" size="compact" className="-ml-2">
-              <Link to="/sales">
-                <ArrowLeft aria-hidden="true" />
-                Back to Sales
-              </Link>
-            </Button>
-            <div className="mt-4 flex min-w-0 items-start gap-3">
-              <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-                <ClipboardCheck className="size-5 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
-                  Record native triage
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Record the bounded internal sales decision in IronWrap OS. Policy, current lead
-                  version, source evidence, and idempotency are verified before the write.
-                </p>
-              </div>
-            </div>
-          </div>
+    <section className="max-w-6xl space-y-6 pb-6">
+      <PageHeader
+        title="Lead review"
+        back={
+          <Link to="/sales" className="inline-flex min-h-11 items-center gap-1.5 rounded-md">
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Back to Sales
+          </Link>
+        }
+        meta={
+          <>
+            <span>{lead.contact.display_name ?? "Name unavailable"}</span>
+            <Status kind={eligible ? "attention" : "neutral"}>
+              {lead.triage.status ?? "Status unavailable"}
+            </Status>
+          </>
+        }
+        actions={
           <Button
             type="button"
             variant="outline"
-            size="compact"
-            busy={query.isFetching}
-            disabled={query.isFetching}
-            onClick={() => void query.refetch()}
+            aria-busy={query.isFetching}
+            aria-disabled={query.isFetching || mutation.isPending}
+            onClick={() => void refresh()}
           >
             <RefreshCw aria-hidden="true" />
-            Refresh context
+            Refresh lead
           </Button>
-        </div>
-      </header>
-
+        }
+      />
       {offline ? (
-        <Notice tone="warning" title="Reconnect to record this decision">
-          Commercial decisions are never queued offline. Reopen this lead after a current connection
-          is available.
+        <Notice tone="warning" title="Reconnect to save this review">
+          Reviews are never queued offline. Reconnect and refresh this lead before saving.
         </Notice>
       ) : null}
       {query.isError ? (
-        <Notice tone="warning" title="Showing the last recorded Sales read.">
-          Refresh this lead before preparing a review while the connection warning remains.
+        <Notice tone="warning" title="This lead could not be refreshed">
+          The last saved details remain visible. Refresh successfully before saving a review.
         </Notice>
       ) : null}
       {query.isFetching ? (
-        <Notice tone="warning" title="Checking current Sales context">
-          Recording stays locked until IronWrap OS confirms that this exact native lead version is
-          still eligible under the active commercial policy.
+        <Notice tone="info" title="Checking the current lead">
+          Saving stays locked until this read finishes.
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Triage was not recorded">
-          {restartRequired ? (
-            <>
-              <p>{actionError}</p>
-              <Button asChild variant="outline" size="compact" className="mt-3">
-                <Link to="/sales">Reopen in Sales</Link>
-              </Button>
-            </>
-          ) : (
-            actionError
-          )}
+        <Notice tone="danger" title="Check the saved review">
+          <p>{actionError}</p>
+          <p className="mt-2">
+            Your notes remain here. Refresh the lead to check its saved state before starting
+            another review.
+          </p>
         </Notice>
       ) : null}
-
-      <TriageDecisionRail lead={lead} />
-      <LocalTriageFence />
-      <LeadContext lead={lead} locale={session.tenant.locale} timeZone={session.tenant.time_zone} />
-
-      <form className="border border-border bg-surface" onSubmit={submit}>
-        <div className="border-b border-border px-5 py-5 sm:px-6">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">Record the commercial decision</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            Classify the lead and leave the next internal action. This does not contact the
-            customer, publish a proposal, or alter payment or accounting state.
-          </p>
-        </div>
-        <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
-          <label className="text-sm font-bold text-foreground">
-            Outcome
-            <select
-              value={lifecycleStatus}
-              onChange={(event) =>
-                setLifecycleStatus(event.target.value as "triaged" | "qualified" | "disqualified")
-              }
-              disabled={!canRecord || mutation.isPending}
-              className="mt-2 w-full rounded-lg border bg-surface-raised px-3 py-3 text-base"
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-5">
+          <LeadContext data={query.data} />
+          {eligible ? (
+            <form
+              className="overflow-hidden rounded-xl border border-border bg-surface"
+              onSubmit={submit}
             >
-              <option value="triaged">Triaged</option>
-              <option value="qualified">Qualified</option>
-              <option value="disqualified">Disqualified</option>
-            </select>
-          </label>
-          <label className="text-sm font-bold text-foreground">
-            Priority
-            <select
-              value={priority}
-              onChange={(event) =>
-                setPriority(event.target.value as "low" | "normal" | "high" | "urgent")
-              }
-              disabled={!canRecord || mutation.isPending}
-              className="mt-2 w-full rounded-lg border bg-surface-raised px-3 py-3 text-base"
-            >
-              <option value="low">Low</option>
-              <option value="normal">Normal</option>
-              <option value="high">High</option>
-              <option value="urgent">Urgent</option>
-            </select>
-          </label>
-          <label className="text-sm font-bold text-foreground sm:col-span-2">
-            Category
-            <input
-              value={category}
-              onChange={(event) => setCategory(event.target.value.slice(0, 80))}
-              disabled={!canRecord || mutation.isPending}
-              minLength={2}
-              maxLength={80}
-              required
-              placeholder="For example: storm damage"
-              className="mt-2 w-full rounded-lg border bg-surface-raised px-4 py-3 text-base"
-            />
-          </label>
-          <div className="sm:col-span-2">
-            <label htmlFor="triage-summary" className="text-sm font-bold text-foreground">
-              Internal triage summary
-            </label>
-            <textarea
-              id="triage-summary"
-              value={triageSummary}
-              onChange={(event) => setTriageSummary(event.target.value.slice(0, 2_000))}
-              disabled={!canRecord || mutation.isPending}
-              maxLength={2_000}
-              rows={5}
-              required
-              placeholder="For example: Hail report received. Verify the property address, access, and preferred inspection window before any customer follow-up."
-              className="mt-3 w-full resize-y rounded-lg border bg-surface-raised px-4 py-3 text-base leading-6 outline-none transition-colors placeholder:text-muted focus:border-info disabled:cursor-not-allowed disabled:bg-surface-muted"
-            />
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-              <span>
-                Source evidence is derived and hashed by the server, never supplied by the browser.
-              </span>
-              <span>{triageSummary.length}/2000</span>
-            </div>
-          </div>
-          <label className="text-sm font-bold text-foreground sm:col-span-2">
-            Next internal action
-            <input
-              value={nextAction}
-              onChange={(event) => setNextAction(event.target.value.slice(0, 500))}
-              disabled={!canRecord || mutation.isPending}
-              maxLength={500}
-              required
-              placeholder="For example: verify access and book inspection"
-              className="mt-2 w-full rounded-lg border bg-surface-raised px-4 py-3 text-base"
-            />
-          </label>
+              <div className="space-y-5 p-5 sm:p-7">
+                <div>
+                  <h2 className="text-lg font-semibold">Your review</h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Your interpretation, kept separate from what the person said.
+                  </p>
+                </div>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium">
+                    Kind of work
+                    <Input
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      disabled={!canRecord}
+                      minLength={2}
+                      maxLength={80}
+                      required
+                      placeholder="For example: roofing"
+                    />
+                  </label>
+                  <label className="grid gap-2 text-sm font-medium">
+                    Priority
+                    <select
+                      value={priority}
+                      onChange={(e) => setPriority(e.target.value as typeof priority)}
+                      disabled={!canRecord}
+                      className="min-h-11 w-full rounded-lg border border-border-strong bg-surface px-3 text-base"
+                    >
+                      <option value="low">Low</option>
+                      <option value="normal">Normal</option>
+                      <option value="high">High</option>
+                      <option value="urgent">Urgent</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="grid gap-2 text-sm font-medium">
+                  <label htmlFor="lead-review-summary">Summary for the next person</label>
+                  <Textarea
+                    id="lead-review-summary"
+                    aria-describedby="lead-review-summary-hint"
+                    value={summary}
+                    onChange={(e) => setSummary(e.target.value)}
+                    disabled={!canRecord}
+                    maxLength={2000}
+                    rows={4}
+                    required
+                  />
+                  <span id="lead-review-summary-hint" className="text-xs font-normal text-muted">
+                    What the job is, anything unusual, and what is still unknown.
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-5 border-t border-border p-5 sm:p-7">
+                <fieldset disabled={!canRecord} className="space-y-3">
+                  <legend className="mb-3 text-sm font-semibold">Review outcome</legend>
+                  {!outcome ? (
+                    <p className="text-sm text-muted">
+                      Choose an outcome for this review before saving.
+                    </p>
+                  ) : null}
+                  {lead.triage.status !== "Triaged" ? (
+                    <Outcome
+                      value="triaged"
+                      selected={outcome}
+                      onChange={setLifecycleStatus}
+                      title="Needs more information"
+                      description="Keep the lead open for a qualification decision."
+                    />
+                  ) : null}
+                  <Outcome
+                    value="qualified"
+                    selected={outcome}
+                    onChange={setLifecycleStatus}
+                    title="Qualified"
+                    description="The lead is ready for the next internal step."
+                  />
+                  <Outcome
+                    value="disqualified"
+                    selected={outcome}
+                    onChange={setLifecycleStatus}
+                    title="Decline this work"
+                    description="Keep the reason in the review. No message is sent."
+                  />
+                </fieldset>
+                <div className="grid gap-2 text-sm font-medium">
+                  <label htmlFor="lead-review-next-action">Next internal action</label>
+                  <Input
+                    id="lead-review-next-action"
+                    aria-describedby="lead-review-next-action-hint"
+                    value={nextAction}
+                    onChange={(e) => setNextAction(e.target.value)}
+                    disabled={!canRecord}
+                    maxLength={500}
+                    required
+                    placeholder="For example: request a site inspection"
+                  />
+                  <span
+                    id="lead-review-next-action-hint"
+                    className="text-xs font-normal text-muted"
+                  >
+                    A handoff note. This does not book a visit or create an estimate.
+                  </span>
+                </div>
+              </div>
+              <footer className="flex flex-wrap items-center gap-3 border-t border-border p-5 sm:px-7">
+                <Button type="submit" busy={mutation.isPending} disabled={!canRecord || !valid}>
+                  Save lead review
+                </Button>
+                <span className="text-sm text-muted">
+                  Saves your review; no customer message is sent.
+                </span>
+              </footer>
+            </form>
+          ) : (
+            <Notice tone="info" title="Review is not available">
+              This lead is already decided, or your current access does not allow a review. The
+              saved details are shown above.
+            </Notice>
+          )}
         </div>
-        <div className="flex flex-col gap-3 border-t border-border bg-surface-muted/55 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p className="max-w-xl text-sm leading-6 text-muted">
-            The server issues a short-lived permit for this exact lead version, records one
-            append-only decision, and rejects stale or replay-drifted requests.
-          </p>
-          <Button
-            type="submit"
-            variant="accent"
-            className="shrink-0"
-            busy={mutation.isPending}
-            disabled={
-              !canRecord ||
-              mutation.isPending ||
-              trimmedCategory.length < 2 ||
-              trimmedSummary.length < 1 ||
-              trimmedNextAction.length < 1
-            }
-          >
-            <ClipboardCheck aria-hidden="true" />
-            Record triage
-          </Button>
-        </div>
-      </form>
+        <aside className="min-w-0 space-y-5">
+          <section className="rounded-xl border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold">Next step</h2>
+            <p className="mt-2 text-sm leading-6">
+              {eligible
+                ? "Review what they need, record the outcome, and leave a clear handoff."
+                : "Continue from the saved lead on the Sales desk."}
+            </p>
+            {lead.job && query.data.permissions.includes("estimator:read") ? (
+              <Button asChild variant="outline" className="mt-4">
+                <Link to="/estimator/jobs/$jobId" params={{ jobId: lead.job.id }}>
+                  Open estimate workspace
+                </Link>
+              </Button>
+            ) : null}
+          </section>
+          <section className="rounded-xl border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold">Saved review</h2>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
+              {lead.triage.summary ?? "No review summary recorded yet."}
+            </p>
+          </section>
+          <details className="rounded-xl border border-border bg-surface p-5">
+            <summary className="min-h-6 cursor-pointer text-sm font-semibold">
+              Record details
+            </summary>
+            <dl className="mt-4 space-y-3 text-sm">
+              <Fact label="Lead record">{lead.id}</Fact>
+              <Fact label="Source envelope">{lead.envelope_id}</Fact>
+              <Fact label="Version">{lead.triage.version}</Fact>
+              <Fact label="Received">{lead.received_at ?? "Not recorded"}</Fact>
+              {intake?.email_consent.status === "granted" ? (
+                <Fact label="Email permission recorded">
+                  {intake.email_consent.recorded_at ?? "Time unavailable"}
+                </Fact>
+              ) : null}
+            </dl>
+          </details>
+        </aside>
+      </div>
     </section>
   );
 }
 
-function TriageDecisionRail({ lead }: { lead: SalesLead }) {
-  return (
-    <section aria-labelledby="triage-decision-path">
-      <h2 id="triage-decision-path" className="text-sm font-bold text-muted">
-        Controlled path
-      </h2>
-      <ol className="mt-3 grid border border-border sm:grid-cols-3">
-        <RailStep label="Native lead" detail={`Current record · v${lead.triage.version}`} />
-        <RailStep
-          label="Policy permit"
-          detail="Short-lived"
-          tone="bg-warning-soft text-foreground"
-          bordered
-        />
-        <RailStep label="Decision ledger" detail="Append-only" bordered />
-      </ol>
-    </section>
-  );
-}
-
-function RailStep({
-  label,
-  detail,
-  tone,
-  bordered = false,
-}: {
-  label: string;
-  detail: string;
-  tone?: string;
-  bordered?: boolean;
-}) {
-  return (
-    <li
-      className={cn(
-        "min-h-24 min-w-0 px-4 py-4 sm:px-5",
-        bordered && "border-t border-border sm:border-t-0 sm:border-l",
-      )}
-    >
-      <p className="text-sm font-bold text-muted">{label}</p>
-      <p
-        className={cn(
-          "mt-2 break-all text-sm font-bold leading-5",
-          tone ? "inline-flex rounded-full px-2.5 py-1.5 text-xs" : "text-foreground",
-          tone,
-        )}
-      >
-        {detail}
-      </p>
-    </li>
-  );
-}
-
-function LocalTriageFence() {
+function LeadContext({ data }: { data: SalesLeadResponse }) {
+  const { lead, intake } = data;
+  const property = intake
+    ? [intake.address, intake.city, intake.province, intake.postal_code].filter(Boolean).join(", ")
+    : "";
   return (
     <section
-      className="border border-border bg-surface-muted/65 px-5 py-5 sm:px-6"
-      aria-labelledby="triage-fence-heading"
+      className="overflow-hidden rounded-xl border border-border bg-surface"
+      aria-label="Lead context"
     >
-      <div className="flex items-start gap-3">
-        <ShieldCheck className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-        <div>
-          <h2 id="triage-fence-heading" className="font-bold tracking-[-0.015em]">
-            Local triage only
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            No customer message is sent. Lead transport remains unchanged. This cannot issue a
-            quote, modify commercial terms, collect payment, or change accounting.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function LeadContext({
-  lead,
-  locale,
-  timeZone,
-}: {
-  lead: SalesLead;
-  locale: string;
-  timeZone: string;
-}) {
-  const receivedAt = formatDate(lead.received_at, locale, timeZone);
-  return (
-    <section
-      className="grid border-y border-border sm:grid-cols-2"
-      aria-label="Lead triage context"
-    >
-      <div className="min-w-0 px-4 py-5 sm:px-5">
-        <p className="text-sm font-bold text-muted">Lead</p>
-        <p className="mt-2 break-words font-bold text-foreground">
-          {lead.contact.display_name ?? "Name unavailable"}
+      <div className="space-y-4 p-5 sm:p-7">
+        <h2 className="text-lg font-semibold">What they told us</h2>
+        <p className="whitespace-pre-wrap break-words rounded-lg bg-surface-muted p-4 text-sm leading-6">
+          {intake?.message ?? "Their original request is not available in this view."}
         </p>
-      </div>
-      <div className="border-t border-border px-4 py-5 sm:border-t-0 sm:border-l sm:px-5">
-        <p className="text-sm font-bold text-muted">Received context</p>
-        <p className="mt-2 text-sm font-bold text-foreground">
-          {humanize(lead.source) ?? "Source unavailable"}
-        </p>
-        <p className="mt-1 text-sm text-muted">
-          {[receivedAt, lead.intent_queue].filter(Boolean).join(" · ") || "Time unavailable"}
-        </p>
-      </div>
-      <div className="border-t border-border px-4 py-5 sm:col-span-2 sm:px-5">
-        <p className="text-sm font-bold text-muted">Current triage state</p>
-        <p className="mt-2 inline-flex rounded-full border border-warning/45 bg-warning-soft px-2.5 py-1 text-xs font-bold text-foreground">
-          {humanize(lead.triage.status) ?? "Status unavailable"}
-        </p>
-        {lead.triage.summary ? (
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">{lead.triage.summary}</p>
-        ) : (
-          <p className="mt-1 text-sm leading-6 text-muted">
-            No local triage summary is recorded yet.
-          </p>
-        )}
-      </div>
-      <details className="group border-t border-border sm:col-span-2">
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold text-muted sm:px-5 [&::-webkit-details-marker]:hidden">
-          <span>System details</span>
-          <ChevronRight
-            className="size-4 transition-transform group-open:rotate-90"
-            aria-hidden="true"
-          />
-        </summary>
-        <dl className="grid gap-4 border-t border-border px-4 py-4 text-sm sm:grid-cols-2 sm:px-5">
-          <div className="min-w-0">
-            <dt className="font-bold text-muted">Lead record</dt>
-            <dd className="mt-1 break-all text-foreground">{lead.id}</dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="font-bold text-muted">Source envelope</dt>
-            <dd className="mt-1 break-all text-foreground">{lead.envelope_id}</dd>
-          </div>
+        <dl className="space-y-3 text-sm">
+          <Fact label="Request">{intake?.service ?? "Not recorded"}</Fact>
+          <Fact label="Property">{property || "Not recorded"}</Fact>
         </dl>
-      </details>
+      </div>
+      <div className="space-y-4 border-t border-border p-5 sm:p-7">
+        <h2 className="text-lg font-semibold">Contact</h2>
+        <dl className="space-y-3 text-sm">
+          <Fact label="Name">{lead.contact.display_name ?? "Not recorded"}</Fact>
+          <Fact label="Phone">{lead.contact.phone ?? "Not recorded"}</Fact>
+          <Fact label="Email">{lead.contact.email ?? "Not recorded"}</Fact>
+          <Fact label="Prefers">
+            {intake?.preferred_contact_channel === "phone"
+              ? "Phone"
+              : intake?.preferred_contact_channel === "email"
+                ? "Email"
+                : "No preference recorded"}
+          </Fact>
+          <Fact label="Source">
+            {intake?.intake_source === "walk_in"
+              ? "Walk-in"
+              : intake?.intake_source === "phone"
+                ? "Phone call"
+                : intake?.intake_source === "referral"
+                  ? "Referral"
+                  : (lead.source ?? "Not recorded")}
+          </Fact>
+          <Fact label="Email permission">
+            {intake?.email_consent.status === "granted"
+              ? "Estimate follow-up only"
+              : lead.consent.context === "recorded" && lead.consent.records.length
+                ? "Recorded permissions are available on the Sales desk."
+                : "Not recorded"}
+          </Fact>
+        </dl>
+      </div>
     </section>
   );
 }
-
-function LeadTriagePrepareSkeleton() {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <section
-      className="mx-auto max-w-5xl space-y-6"
-      aria-busy="true"
-      aria-label="Loading lead triage context"
-    >
-      <div className="h-28 border-b border-border bg-surface-muted/70" />
-      <div className="grid min-h-28 border border-border bg-surface-muted/55 sm:grid-cols-3" />
-      <div className="min-h-28 border border-border bg-surface-muted/55" />
-      <div className="min-h-72 border border-border bg-surface-muted/55" />
+    <div className="grid min-w-0 gap-1 sm:grid-cols-[120px_minmax(0,1fr)] sm:gap-4">
+      <dt className="text-muted">{label}</dt>
+      <dd className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+        {children}
+      </dd>
+    </div>
+  );
+}
+function Outcome({
+  value,
+  selected,
+  onChange,
+  title,
+  description,
+}: {
+  value: CommercialLeadTriageInput["lifecycleStatus"];
+  selected: CommercialLeadTriageInput["lifecycleStatus"] | undefined;
+  onChange: (value: CommercialLeadTriageInput["lifecycleStatus"]) => void;
+  title: string;
+  description: string;
+}) {
+  return (
+    <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-border-strong p-3 has-[:checked]:border-foreground has-[:checked]:bg-surface-muted has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent">
+      <input
+        type="radio"
+        name="review-outcome"
+        value={value}
+        checked={selected === value}
+        onChange={() => onChange(value)}
+        className="mt-0.5 size-4 shrink-0 accent-foreground"
+      />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">{title}</span>
+        <span className="mt-1 block text-sm leading-5 text-muted">{description}</span>
+      </span>
+    </label>
+  );
+}
+function LeadReviewSkeleton() {
+  return (
+    <section aria-busy="true" aria-label="Loading lead review" className="max-w-6xl space-y-6">
+      <div className="h-24 rounded-lg bg-surface-muted" />
+      <div className="h-80 rounded-xl bg-surface-muted" />
     </section>
   );
 }
-
-function humanize(value: string | null): string | null {
-  if (!value) return null;
-  return value
-    .replaceAll("_", " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-function formatDate(value: string | null, locale: string, timeZone: string): string | null {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return null;
-  return new Intl.DateTimeFormat(locale, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone,
-  }).format(timestamp);
-}
-
 function messageFor(error: unknown): string {
-  if (!(error instanceof ApiError)) {
-    return "The native triage decision was not confirmed. Refresh the lead before trying again.";
-  }
-  switch (error.code) {
-    case "commercial_policy_missing":
-    case "commercial_policy_invalid":
-    case "commercial_policy_inactive":
-      return "The native commercial policy is unavailable. No triage change was made.";
-    case "commercial_triage_version_conflict":
-    case "commercial_permit_idempotency_conflict":
-    case "commercial_triage_idempotency_conflict":
-      return "This lead changed or this submission key is bound to different facts. Return to Sales and reopen the current lead.";
-    default:
-      return "The native triage decision was not confirmed. Refresh the lead before trying again.";
-  }
+  if (
+    error instanceof ApiError &&
+    [
+      "commercial_triage_version_conflict",
+      "commercial_permit_idempotency_conflict",
+      "commercial_triage_idempotency_conflict",
+    ].includes(error.code)
+  )
+    return "This lead changed while you were reviewing it. Read the current lead before saving again.";
+  if (
+    error instanceof ApiError &&
+    [
+      "commercial_policy_missing",
+      "commercial_policy_invalid",
+      "commercial_policy_inactive",
+    ].includes(error.code)
+  )
+    return "The review policy is unavailable. Ask an owner to check the setup.";
+  return "The save result was not confirmed. The review may already have been recorded.";
 }

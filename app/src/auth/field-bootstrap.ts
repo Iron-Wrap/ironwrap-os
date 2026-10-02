@@ -47,6 +47,7 @@ let primedFieldBootstrap: Promise<FieldBootstrap> | undefined;
 
 type FieldBootstrapPreloadWindow = Window & {
   __ironwrapFieldBootstrapResponse?: Promise<Response>;
+  __ironwrapFieldBootstrapPreloadConsumed?: boolean;
 };
 
 /**
@@ -102,6 +103,8 @@ async function loadVerifiedFieldBootstrap(fetcher: typeof fetch) {
 function takeInitialFieldBootstrapPreload(fetcher: typeof fetch): Promise<Response> | undefined {
   if (fetcher !== fetch || typeof window === "undefined") return undefined;
   const preloadWindow = window as FieldBootstrapPreloadWindow;
+  // Claim the initial read even when the async head script has not arrived yet.
+  preloadWindow.__ironwrapFieldBootstrapPreloadConsumed = true;
   const response = preloadWindow.__ironwrapFieldBootstrapResponse;
   delete preloadWindow.__ironwrapFieldBootstrapResponse;
   return response;

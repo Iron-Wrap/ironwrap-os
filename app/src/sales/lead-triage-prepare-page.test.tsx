@@ -1,5 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,12 +7,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
 import { ApiError } from "../lib/api";
-import { loadSales, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
-import type { SalesResponse } from "./sales-contracts";
+import { loadSalesLead, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
+import type { SalesResponse, SalesLeadResponse } from "./sales-contracts";
 import { LeadTriagePreparePage } from "./lead-triage-prepare-page";
 
 const router = vi.hoisted(() => ({
-  params: { leadId: "LEAD-A" } as { leadId?: string },
+  params: { leadId: `lead:ironwrap:${"a".repeat(64)}` } as { leadId?: string },
   navigate: vi.fn(),
 }));
 
@@ -22,7 +22,7 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => router.navigate,
 }));
 vi.mock("./sales-api", () => ({
-  loadSales: vi.fn(),
+  loadSalesLead: vi.fn(),
   newCommercialLeadTriageKey: vi.fn(),
   recordCommercialLeadTriage: vi.fn(),
 }));
@@ -32,10 +32,10 @@ const ownerSession = {
   authenticated: true,
   user: {
     id: "appu_owner",
-    email: "owner@ironwrapexteriors.com",
+    email: "owner@example.invalid",
     display_name: "Owner",
     role: "owner",
-    frappe_user_id: "owner@ironwrapexteriors.com",
+    frappe_user_id: "owner@example.invalid",
   },
   tenant: {
     id: "ironwrap",
@@ -54,8 +54,8 @@ const ownerSession = {
   stale_fields: [],
 } satisfies AuthenticatedSession;
 
-function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
-  return {
+function salesModel(overrides: Partial<SalesResponse> = {}): SalesLeadResponse {
+  const list: SalesResponse = {
     version: 1,
     source_updated_at: "2026-07-12T12:00:00.000Z",
     read_model_generated_at: "2026-07-12T12:00:01.000Z",
@@ -73,7 +73,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
     },
     leads: [
       {
-        id: "LEAD-A",
+        id: `lead:ironwrap:${"a".repeat(64)}`,
         envelope_id: "bus-external-reference",
         source: "website",
         received_at: "2026-07-12T12:00:00.000Z",
@@ -82,7 +82,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
         contact: {
           display_name: "Pat Prospect",
           phone: "+14035559999",
-          email: "pat@example.com",
+          email: "pat@example.invalid",
         },
         triage: { status: "Untriaged", summary: null, version: 1 },
         job: null,
@@ -121,6 +121,16 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
     ],
     ...overrides,
   };
+  return {
+    version: 1,
+    read_model_generated_at: list.read_model_generated_at,
+    permissions: list.permissions,
+    allowed_actions: list.allowed_actions,
+    stale_fields: [],
+    partial_sources: [],
+    lead: list.leads[0]!,
+    intake: null,
+  };
 }
 
 function renderPage(session = ownerSession) {
@@ -138,13 +148,16 @@ function renderPage(session = ownerSession) {
 describe("LeadTriagePreparePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    router.params = { leadId: "LEAD-A" };
-    vi.mocked(loadSales).mockResolvedValue(salesModel());
+    Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
+    onlineManager.setOnline(true);
+    fireEvent(window, new Event("online"));
+    router.params = { leadId: `lead:ironwrap:${"a".repeat(64)}` };
+    vi.mocked(loadSalesLead).mockResolvedValue(salesModel());
     vi.mocked(newCommercialLeadTriageKey).mockReturnValue("commercial-lead-triage:ui-001");
     vi.mocked(recordCommercialLeadTriage).mockResolvedValue({
       decision: {
         triage_decision_id: "commercial-triage:ui-001",
-        lead_id: "LEAD-A",
+        lead_id: `lead:ironwrap:${"a".repeat(64)}`,
         lead_version: 2,
         lifecycle_status: "triaged",
         priority: "normal",
@@ -162,30 +175,28 @@ describe("LeadTriagePreparePage", () => {
     const user = userEvent.setup();
     const { container } = renderPage();
 
-    await screen.findByRole("heading", { name: "Record native triage" });
-    expect(screen.getByText("LEAD-A")).not.toBeVisible();
-    await user.click(screen.getByText("System details"));
-    expect(screen.getByText("LEAD-A")).toBeVisible();
+    await screen.findByRole("heading", { name: "Lead review" });
+    expect(screen.getByText(`lead:ironwrap:${"a".repeat(64)}`)).not.toBeVisible();
+    await user.click(screen.getByText("Record details"));
+    expect(screen.getByText(`lead:ironwrap:${"a".repeat(64)}`)).toBeVisible();
     expect(screen.getByText("bus-external-reference")).toBeVisible();
-    expect(container.textContent).not.toMatch(
-      /\+14035559999|pat@example\.com|15000|Never show this/i,
-    );
-    await user.type(screen.getByLabelText("Category"), "storm damage");
+    expect(container.textContent).not.toMatch(/15000|Never show this/i);
+    await user.type(screen.getByLabelText("Kind of work"), "storm damage");
     await user.type(
-      screen.getByLabelText("Internal triage summary"),
+      screen.getByLabelText("Summary for the next person"),
       "Hail report received. Verify address, access, and inspection window before follow-up.",
     );
     await user.type(
       screen.getByLabelText("Next internal action"),
       "Verify access and book inspection.",
     );
-    await user.click(screen.getByRole("button", { name: "Record triage" }));
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
 
     await waitFor(() => {
       expect(recordCommercialLeadTriage).toHaveBeenCalledWith(
         ownerSession,
         {
-          leadId: "LEAD-A",
+          leadId: `lead:ironwrap:${"a".repeat(64)}`,
           expectedLeadVersion: 1,
           lifecycleStatus: "triaged",
           priority: "normal",
@@ -201,67 +212,79 @@ describe("LeadTriagePreparePage", () => {
   });
 
   it("does not infer recording authority when the Sales BFF omits the native action", async () => {
-    vi.mocked(loadSales).mockResolvedValue(salesModel({ allowed_actions: ["sales.read"] }));
+    vi.mocked(loadSalesLead).mockResolvedValue(salesModel({ allowed_actions: ["sales.read"] }));
     renderPage();
 
-    expect(await screen.findByText("Triage recording is not available")).toBeVisible();
-    expect(screen.queryByLabelText("Internal triage summary")).not.toBeInTheDocument();
+    expect(await screen.findByText("Review is not available")).toBeVisible();
+    expect(screen.queryByLabelText("Summary for the next person")).not.toBeInTheDocument();
   });
 
   it("does not turn an Unknown record into a local triage request", async () => {
     const model = salesModel();
-    vi.mocked(loadSales).mockResolvedValue({
+    vi.mocked(loadSalesLead).mockResolvedValue({
       ...model,
-      leads: [
-        {
-          ...model.leads[0]!,
-          triage: { status: "Unknown", summary: null, version: 1 },
-          attention: ["triage_unresolved"],
-        },
-      ],
+      lead: {
+        ...model.lead,
+        triage: { status: "Unknown", summary: null, version: 1 },
+        attention: ["triage_unresolved"],
+      },
     });
     renderPage();
 
-    expect(await screen.findByText("Triage recording is not available")).toBeVisible();
+    expect(await screen.findByText("Review is not available")).toBeVisible();
   });
 
   it("keeps commercial triage online-only and out of the field outbox", async () => {
     const offline = { ...ownerSession, csrf_token: "offline-session-no-csrf" };
     renderPage(offline);
 
-    await screen.findByRole("heading", { name: "Record native triage" });
+    await screen.findByRole("heading", { name: "Lead review" });
     expect(screen.getByText(/never queued offline/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Record triage" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    expect(recordCommercialLeadTriage).not.toHaveBeenCalled();
+  });
+
+  it("blocks a live disconnected browser and preserves the prepared review", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "Roof repair");
+    await user.type(screen.getByLabelText("Summary for the next person"), "Review notes");
+    await user.type(screen.getByLabelText("Next internal action"), "Confirm access");
+    Object.defineProperty(window.navigator, "onLine", { configurable: true, value: false });
+    fireEvent(window, new Event("offline"));
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    expect(screen.getByLabelText("Summary for the next person")).toHaveValue("Review notes");
     expect(recordCommercialLeadTriage).not.toHaveBeenCalled();
   });
 
   it("locks preparation while it refreshes the current Sales record", async () => {
     const user = userEvent.setup();
-    let resolveRefresh: ((value: SalesResponse) => void) | undefined;
+    let resolveRefresh: ((value: SalesLeadResponse) => void) | undefined;
     renderPage();
 
-    await screen.findByRole("heading", { name: "Record native triage" });
-    await user.type(screen.getByLabelText("Category"), "roofing inquiry");
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "roofing inquiry");
     await user.type(
-      screen.getByLabelText("Internal triage summary"),
+      screen.getByLabelText("Summary for the next person"),
       "Confirm current roofing context.",
     );
     await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
-    vi.mocked(loadSales).mockImplementationOnce(
+    vi.mocked(loadSalesLead).mockImplementationOnce(
       () =>
-        new Promise<SalesResponse>((resolve) => {
+        new Promise<SalesLeadResponse>((resolve) => {
           resolveRefresh = resolve;
         }),
     );
-    await user.click(screen.getByRole("button", { name: "Refresh context" }));
+    await user.click(screen.getByRole("button", { name: "Refresh lead" }));
 
-    expect(await screen.findByText("Checking current Sales context")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Record triage" })).toBeDisabled();
+    expect(await screen.findByText("Checking the current lead")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
     expect(recordCommercialLeadTriage).not.toHaveBeenCalled();
 
     resolveRefresh?.(salesModel());
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Record triage" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Save lead review" })).toBeEnabled();
     });
   });
 
@@ -276,16 +299,147 @@ describe("LeadTriagePreparePage", () => {
     );
     renderPage();
 
-    await screen.findByRole("heading", { name: "Record native triage" });
-    await user.type(screen.getByLabelText("Category"), "roofing inquiry");
-    await user.type(screen.getByLabelText("Internal triage summary"), "Confirm roofing context.");
-    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
-    await user.click(screen.getByRole("button", { name: "Record triage" }));
-
-    expect(await screen.findByRole("link", { name: "Reopen in Sales" })).toHaveAttribute(
-      "href",
-      "/sales",
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "roofing inquiry");
+    await user.type(
+      screen.getByLabelText("Summary for the next person"),
+      "Confirm roofing context.",
     );
-    expect(screen.getByRole("button", { name: "Record triage" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
+
+    expect(await screen.findByText("Check the saved review")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh lead" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+  });
+  it("continues a triaged lead to qualified using the freshly read version", async () => {
+    const base = salesModel();
+    vi.mocked(loadSalesLead).mockResolvedValue({
+      ...base,
+      lead: {
+        ...base.lead,
+        triage: { status: "Triaged", summary: "Earlier review", version: 7 },
+        attention: [],
+      },
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Lead review" });
+    expect(screen.queryByRole("radio", { name: /Needs more information/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Qualified/ })).not.toBeChecked();
+    await user.type(screen.getByLabelText("Kind of work"), "roofing");
+    await user.type(
+      screen.getByLabelText("Summary for the next person"),
+      "Confirmed roof context.",
+    );
+    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: /Qualified/ }));
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
+    await waitFor(() =>
+      expect(recordCommercialLeadTriage).toHaveBeenCalledWith(
+        ownerSession,
+        expect.objectContaining({ expectedLeadVersion: 7, lifecycleStatus: "qualified" }),
+        expect.any(String),
+      ),
+    );
+  });
+
+  it("rejects an exact response belonging to another lead", async () => {
+    const base = salesModel();
+    vi.mocked(loadSalesLead).mockResolvedValue({
+      ...base,
+      lead: { ...base.lead, id: `lead:ironwrap:${"b".repeat(64)}` },
+    });
+    renderPage();
+    expect(await screen.findByText("This is not the requested lead")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Save lead review" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a populated review locked after a failed refresh", async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "roofing");
+    await user.type(
+      screen.getByLabelText("Summary for the next person"),
+      "Confirmed roof context.",
+    );
+    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
+    vi.mocked(loadSalesLead).mockRejectedValueOnce(new Error("offline"));
+    await user.click(screen.getByRole("button", { name: "Refresh lead" }));
+    expect(await screen.findByText("This lead could not be refreshed")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    expect(screen.getByLabelText("Summary for the next person")).toHaveValue(
+      "Confirmed roof context.",
+    );
+    expect(recordCommercialLeadTriage).not.toHaveBeenCalled();
+  });
+
+  it("requires a new explicit outcome after a lost Needs-more-information save becomes Triaged", async () => {
+    vi.mocked(recordCommercialLeadTriage).mockRejectedValueOnce(new Error("response lost"));
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "roofing");
+    await user.type(
+      screen.getByLabelText("Summary for the next person"),
+      "Still need the access details.",
+    );
+    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
+    await user.click(screen.getByRole("radio", { name: /Needs more information/ }));
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
+    expect(await screen.findByText("Check the saved review")).toBeVisible();
+    expect(vi.mocked(recordCommercialLeadTriage).mock.calls[0]![1].lifecycleStatus).toBe("triaged");
+    const base = salesModel();
+    vi.mocked(loadSalesLead).mockResolvedValueOnce({
+      ...base,
+      lead: {
+        ...base.lead,
+        triage: { status: "Triaged", summary: "Still need the access details.", version: 2 },
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh lead" }));
+    await waitFor(() => expect(screen.getByLabelText("Kind of work")).toBeEnabled());
+    expect(screen.getByLabelText("Summary for the next person")).toHaveValue(
+      "Still need the access details.",
+    );
+    expect(screen.getByRole("radio", { name: /Qualified/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /Decline this work/ })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    fireEvent.submit(screen.getByRole("button", { name: "Save lead review" }).closest("form")!);
+    expect(recordCommercialLeadTriage).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("radio", { name: /Qualified/ }));
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
+    await waitFor(() => expect(recordCommercialLeadTriage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(recordCommercialLeadTriage).mock.calls[1]![1]).toMatchObject({
+      expectedLeadVersion: 2,
+      lifecycleStatus: "qualified",
+    });
+  });
+
+  it("checks a lost save acknowledgement without a second write", async () => {
+    vi.mocked(recordCommercialLeadTriage).mockRejectedValueOnce(new Error("response lost"));
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Lead review" });
+    await user.type(screen.getByLabelText("Kind of work"), "roofing");
+    await user.type(
+      screen.getByLabelText("Summary for the next person"),
+      "Confirmed roof context.",
+    );
+    await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
+    await user.click(screen.getByRole("button", { name: "Save lead review" }));
+    expect(await screen.findByText("Check the saved review")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
+    expect(screen.getByLabelText("Kind of work")).toBeDisabled();
+    const base = salesModel();
+    vi.mocked(loadSalesLead).mockResolvedValueOnce({
+      ...base,
+      lead: { ...base.lead, triage: { status: "Qualified", summary: "Saved", version: 2 } },
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh lead" }));
+    expect(await screen.findByText("Review is not available")).toBeVisible();
+    expect(recordCommercialLeadTriage).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,39 +1,29 @@
-import { useQuery } from "@tanstack/react-query";
-import { CircleGauge, RefreshCw } from "lucide-react";
-import { lazy, Suspense, useId, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArrowRight, RefreshCw, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
-import type { AuthenticatedSession } from "../auth/session";
+import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
-import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
-import { Card } from "../components/ui/card";
+import { Dialog } from "../components/ui/dialog";
+import { PageHeader } from "../components/ui/page-header";
+import { RefTag } from "../components/ui/ref-tag";
+import { Segmented, SegmentedCount } from "../components/ui/segmented";
+import { Status } from "../components/ui/status";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
 import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { loadNow } from "./now-api";
-import type { NowAction, NowCard, NowResponse, QuickBooksNowCard } from "./now-contracts";
+import type { DecisionItem, DecisionKind, NowAction, NowCard, NowResponse } from "./now-contracts";
+import { decisionLabels, decisionStatus, decisionsView } from "./decision-presentation";
+
+import "./now-page.css";
 
 type NowCitation = NowCard["citations"][number];
-
-const NOW_SECTION_PREVIEW_LIMIT = 2;
 
 const FieldTodayPage = lazy(async () => ({
   default: (await import("../field/today-page")).TodayPage,
 }));
-
-const cardTone = {
-  critical: "border-danger/35 bg-danger-soft",
-  warning: "border-warning/35 bg-warning-soft",
-  neutral: "border-border bg-surface-raised",
-  positive: "border-ok/35 bg-ok-soft",
-} as const;
-
-const quickBooksCardTone: Record<QuickBooksNowCard["tone"], string> = {
-  attention: "border-warning/35 bg-warning-soft",
-  blocked: "border-warning/35 bg-surface-muted",
-  critical: "border-danger/35 bg-danger-soft",
-  muted: "border-border bg-surface-muted",
-};
 
 const sourceLabel: Record<NowResponse["sources"][number]["id"], string> = {
   owner: "Owner work",
@@ -50,7 +40,7 @@ const sourceStateLabel: Record<NowResponse["sources"][number]["state"], string> 
   unavailable: "Not found",
 };
 
-export function NowPage() {
+export function NowPage({ showDecisions = false }: { showDecisions?: boolean }) {
   const session = useSession();
   if (session.user.role === "field") {
     return (
@@ -59,10 +49,16 @@ export function NowPage() {
       </Suspense>
     );
   }
-  return <OfficeNowPage session={session} />;
+  return <OfficeNowPage session={session} showDecisions={showDecisions} />;
 }
 
-function OfficeNowPage({ session }: { session: AuthenticatedSession }) {
+function OfficeNowPage({
+  session,
+  showDecisions,
+}: {
+  session: AuthenticatedSession;
+  showDecisions: boolean;
+}) {
   const query = useQuery({
     queryKey: ["now", session.tenant.id, session.user.id],
     queryFn: () => loadNow(),
@@ -90,9 +86,28 @@ function OfficeNowPage({ session }: { session: AuthenticatedSession }) {
     );
   }
 
+  if (showDecisions) {
+    return (
+      <DecisionsNowScreen
+        key={`${session.tenant.id}:${session.user.id}`}
+        snapshot={query.dataUpdatedAt}
+        model={model}
+        locale={session.tenant.locale}
+        timeZone={session.tenant.time_zone}
+        offline={isOfflineSession(session)}
+        refreshing={query.isFetching}
+        refreshFailed={query.isError}
+        onRefresh={() => void query.refetch()}
+      />
+    );
+  }
+
   return (
     <NowScreen
+      key={`${session.tenant.id}:${session.user.id}:${showDecisions}`}
       model={model}
+      showDecisions={showDecisions}
+      offline={isOfflineSession(session)}
       locale={session.tenant.locale}
       timeZone={session.tenant.time_zone}
       refreshing={query.isFetching}
@@ -102,270 +117,765 @@ function OfficeNowPage({ session }: { session: AuthenticatedSession }) {
   );
 }
 
+function DecisionsNowScreen({
+  model,
+  snapshot,
+  ...props
+}: {
+  model: NowResponse;
+  snapshot: number;
+  locale: string;
+  timeZone: string;
+  offline: boolean;
+  refreshing: boolean;
+  refreshFailed: boolean;
+  onRefresh: () => void;
+}) {
+  // Reset pages without replacing focused controls. An older in-flight page
+  // remains bound to its snapshot and cannot enter the newly refreshed list.
+  const [pageState, setPageState] = useState({ snapshot, decisions: model.decisions });
+  if (pageState.snapshot !== snapshot) setPageState({ snapshot, decisions: model.decisions });
+  const assembled = pageState.snapshot === snapshot ? pageState.decisions : model.decisions;
+  const pagination = useMutation({
+    retry: false,
+    mutationFn: async ({ kind }: { kind: DecisionKind; snapshot: number }) => {
+      const source = assembled?.sources.find((entry) => entry.kind === kind);
+      const page = await loadNow(undefined, {
+        source: kind,
+        cursor: source?.next_cursor ?? undefined,
+      });
+      const next = page.decisions;
+      const nextSource = next?.sources[0];
+      if (
+        page.role !== model.role ||
+        !next ||
+        !nextSource ||
+        next.sources.length !== 1 ||
+        nextSource.kind !== kind ||
+        nextSource.state === "unavailable" ||
+        nextSource.state === "retired" ||
+        next.items.some((item) => item.kind !== kind)
+      ) {
+        throw new Error("The next requests could not be checked.");
+      }
+      return { source: nextSource, items: next.items };
+    },
+    onSuccess: (page, request) =>
+      setPageState((currentState) => {
+        const current = currentState.decisions;
+        if (!current || currentState.snapshot !== request.snapshot) return currentState;
+        const source = page.source;
+        const rows = new Map(current.items.map((item) => [item.key, item]));
+        for (const item of page.items) rows.set(item.key, item);
+        const items = [...rows.values()];
+        const sources = current.sources.map((entry) =>
+          entry.kind === source.kind
+            ? { ...source, loaded_count: items.filter((item) => item.kind === source.kind).length }
+            : entry,
+        );
+        return {
+          ...currentState,
+          decisions: {
+            ...current,
+            items,
+            sources,
+            state: sources.some(
+              (entry) => entry.state === "limited" || entry.state === "unavailable",
+            )
+              ? "limited"
+              : items.length
+                ? "ready"
+                : "empty",
+          },
+        };
+      }),
+  });
+  const currentPageRequest = pagination.variables?.snapshot === snapshot;
+  return (
+    <NowScreen
+      {...props}
+      model={decisionsView({ ...model, decisions: assembled })}
+      showDecisions
+      loadingMore={
+        currentPageRequest && pagination.isPending ? pagination.variables?.kind : undefined
+      }
+      pageError={currentPageRequest && pagination.isError ? pagination.variables?.kind : undefined}
+      onLoadMore={(kind) => {
+        if (
+          !(currentPageRequest && pagination.isPending) &&
+          !props.refreshing &&
+          !props.offline &&
+          !props.refreshFailed
+        )
+          pagination.mutate({ kind, snapshot });
+      }}
+    />
+  );
+}
+
 function NowScreen({
   model,
+  showDecisions,
+  offline,
   locale,
   timeZone,
   refreshing,
   refreshFailed,
   onRefresh,
+  onLoadMore,
+  loadingMore,
+  pageError,
 }: {
   model: NowResponse;
+  showDecisions: boolean;
+  offline: boolean;
   locale: string;
   timeZone: string;
   refreshing: boolean;
   refreshFailed: boolean;
   onRefresh: () => void;
+  onLoadMore?: (kind: DecisionKind) => void;
+  loadingMore?: DecisionKind;
+  pageError?: DecisionKind;
 }) {
-  const [expandedSections, setExpandedSections] = useState<string[]>([]);
+  const [filter, setFilter] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const wide = useWideInspector();
+  const rowButtons = useRef(new Map<string, HTMLButtonElement>());
+  const filterButtons = useRef<HTMLDivElement>(null);
+  const page = useRef<HTMLElement>(null);
+  const previousSelection = useRef<string | null>(null);
+  const instanceId = useId();
+  const inspectorId = `${instanceId}-inspector`;
+  // The read model owns section meaning and order. Tone cannot tell us whether work
+  // is stopped, waiting, or a decision, and loaded counts are not business totals.
+  const activeFilter = model.ui.sections.some((section) => section.id === filter) ? filter : null;
+  const sections = model.ui.sections.filter(
+    (section) => activeFilter === null || section.id === activeFilter,
+  );
+  const rows = sections.flatMap((section) =>
+    section.cards.map((card) => ({
+      key: JSON.stringify([section.id, card.id]),
+      card,
+      sectionTitle: section.title,
+    })),
+  );
+  const selected = rows.find((row) => row.key === selectedKey);
+  // Forget removed work, rather than reopening its drawer if a later read includes it.
+  // A guarded render-time adjustment prevents an intermediate stale selection commit.
+  if (selectedKey !== null && !selected) setSelectedKey(null);
+  const selectionId = selected?.key ?? null;
+  useEffect(() => {
+    if (previousSelection.current && !selectionId) {
+      const active = document.activeElement;
+      if (
+        active === document.body ||
+        page.current?.querySelector(".now-drawer")?.contains(active)
+      ) {
+        filterButtons.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    }
+    previousSelection.current = selectionId;
+  }, [selectionId]);
   const generatedAt = formatDateTime(model.read_model_generated_at, locale, timeZone);
+  const decisionByKey = new Map(
+    (showDecisions ? (model.decisions?.items ?? []) : []).map((item) => [item.key, item]),
+  );
   const primaryCitations = model.ui.primary_action
     ? citationsForAction(
         model.ui.primary_action,
         model.ui.sections.flatMap((section) => section.cards.flatMap((card) => card.citations)),
       )
     : [];
+  const closeDetails = () => {
+    setSelectedKey(null);
+    const button = selectedKey ? rowButtons.current.get(selectedKey) : undefined;
+    (button ?? filterButtons.current?.querySelector<HTMLButtonElement>("button"))?.focus();
+  };
+  const moveSelection = (event: KeyboardEvent<HTMLElement>) => {
+    if (!wide || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target as HTMLElement;
+    if (!target.closest("[data-now-select]")) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDetails();
+      return;
+    }
+    if (!["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) return;
+    const focused = rows.findIndex((row) => rowButtons.current.get(row.key) === target);
+    const direction = event.key === "j" || event.key === "ArrowDown" ? 1 : -1;
+    const row = rows[Math.max(0, Math.min(rows.length - 1, focused + direction))];
+    if (!row) return;
+    event.preventDefault();
+    setSelectedKey(row.key);
+    rowButtons.current.get(row.key)?.focus();
+  };
 
   return (
-    <section className="mx-auto max-w-7xl space-y-6 pb-4">
-      <WorkspaceHeader
-        icon={<CircleGauge aria-hidden="true" />}
+    <section ref={page} className="now-page" data-view={showDecisions ? "decisions" : "work"}>
+      <PageHeader
         title={model.ui.title}
-        description={model.ui.explanation}
-        aside={
-          model.ui.primary_action ? (
-            <>
-              <p className="mb-3 text-sm font-bold text-muted">Next step</p>
-              <ActionWithContext
-                action={model.ui.primary_action}
-                citations={primaryCitations}
-                primary
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-              />
-            </>
+        back={
+          showDecisions ? (
+            <a className="inline-flex min-h-11 items-center hover:text-foreground" href="/now">
+              Back to Now
+            </a>
           ) : undefined
         }
-      />
+        meta={
+          <>
+            <span>{model.ui.explanation}</span>
+            <span>{generatedAt ? `List made ${generatedAt}` : "List time not found"}</span>
+          </>
+        }
+        actions={
+          <>
+            {showDecisions ? (
+              sessionCanReviewLeads(model) ? (
+                <Button asChild variant="quiet">
+                  <a href="/approvals?view=leads">Lead review history</a>
+                </Button>
+              ) : null
+            ) : model.decisions?.sources.some((source) => source.state !== "retired") ? (
+              <Button asChild variant="secondary">
+                <a href="/now?show=decide">
+                  Decisions{" "}
+                  <span
+                    className="segmented-count"
+                    aria-label={`${model.decisions.items.length} loaded requests`}
+                  >
+                    {model.decisions.items.length}
+                  </span>
+                </a>
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              aria-busy={refreshing}
+              aria-disabled={refreshing}
+              onClick={() => {
+                if (!refreshing) onRefresh();
+              }}
+            >
+              <RefreshCw aria-hidden="true" />
+              Refresh
+            </Button>
+          </>
+        }
+      >
+        <div ref={filterButtons}>
+          <Segmented variant="filters" label="Show work">
+            <button
+              type="button"
+              aria-pressed={activeFilter === null}
+              onClick={() => {
+                setFilter(null);
+                setSelectedKey(null);
+              }}
+            >
+              {showDecisions ? "All requests" : "All work"}{" "}
+              <SegmentedCount>
+                {model.ui.sections.reduce((count, section) => count + section.cards.length, 0)}
+              </SegmentedCount>
+            </button>
+            {model.ui.sections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                aria-pressed={activeFilter === section.id}
+                onClick={() => {
+                  setFilter(section.id);
+                  setSelectedKey(null);
+                }}
+              >
+                {section.title} <SegmentedCount>{section.cards.length}</SegmentedCount>
+              </button>
+            ))}
+          </Segmented>
+        </div>
+      </PageHeader>
 
-      <OperatingIntakePanel />
+      {model.ui.primary_action ? (
+        <div className="now-next-step">
+          <p className="font-semibold">Next step</p>
+          <ActionWithContext
+            action={model.ui.primary_action}
+            citations={primaryCitations}
+            primary
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
+        </div>
+      ) : null}
+
+      {!showDecisions ? <OperatingIntakePanel /> : null}
+
+      {showDecisions && offline ? (
+        <div className="now-refresh-error" role="status">
+          <div>
+            <p className="font-semibold">You are viewing a saved list</p>
+            <p className="mt-1 text-sm">Go online and refresh before reviewing a request.</p>
+          </div>
+        </div>
+      ) : null}
+
+      {showDecisions && model.ui.state === "limited" ? (
+        <div className="now-refresh-error" role="status">
+          <div>
+            <p className="font-semibold">The decisions list is incomplete</p>
+            <p className="mt-1 text-sm">{model.ui.sync_label}</p>
+          </div>
+        </div>
+      ) : null}
 
       {refreshFailed ? (
-        <Card
-          className="flex flex-col gap-3 border-warning/35 bg-warning-soft p-4 sm:flex-row sm:items-center sm:justify-between"
-          role="alert"
-        >
+        <div className="now-refresh-error" role="alert">
           <div>
-            <p className="font-bold">The new list did not load</p>
-            <p className="mt-1 text-sm leading-6 text-muted">
-              The last saved list is still shown. Try again.
-            </p>
+            <p className="font-semibold">The new list did not load</p>
+            <p className="mt-1 text-sm">The last saved list is still shown. Try again.</p>
           </div>
-          <Button variant="outline" size="compact" onClick={onRefresh}>
+          <Button variant="secondary" onClick={onRefresh}>
             <RefreshCw aria-hidden="true" />
             Try again
           </Button>
-        </Card>
+        </div>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-start">
-        <div className="space-y-8 lg:col-start-1 lg:row-start-1">
-          {model.ui.sections.map((section, sectionIndex) => {
-            const expanded = expandedSections.includes(section.id);
-            const visibleCards = expanded
-              ? section.cards
-              : section.cards.slice(0, NOW_SECTION_PREVIEW_LIMIT);
-            const remaining = section.cards.length - NOW_SECTION_PREVIEW_LIMIT;
-            const cardsId = `now-section-${sectionIndex}-cards`;
-            return (
-              <section key={section.id} aria-labelledby={`now-section-${sectionIndex}`}>
-                <header className="mb-4">
-                  <h2
-                    id={`now-section-${sectionIndex}`}
-                    className="text-xl font-bold tracking-[-0.025em] sm:text-2xl"
-                  >
-                    {section.title}
-                  </h2>
-                  <p className="mt-1 text-sm leading-6 text-muted">{section.summary}</p>
-                </header>
-                {section.cards.length > 0 ? (
-                  <div id={cardsId} className="grid gap-4 xl:grid-cols-2">
-                    {visibleCards.map((card) => (
-                      <NowCardView
-                        key={card.id}
+      <div className="now-workspace">
+        <div className="now-work-list" onKeyDown={moveSelection}>
+          {sections.map((section, sectionIndex) => (
+            <section key={section.id} aria-labelledby={`${instanceId}-section-${sectionIndex}`}>
+              <header className="now-section-heading">
+                <h2 id={`${instanceId}-section-${sectionIndex}`}>
+                  {section.title} <span className="segmented-count">{section.cards.length}</span>
+                </h2>
+                <p>{section.summary}</p>
+              </header>
+              {section.cards.length ? (
+                <ul className="now-rows" aria-label={section.title}>
+                  {section.cards.map((card) => {
+                    const key = JSON.stringify([section.id, card.id]);
+                    return (
+                      <NowRow
+                        key={key}
                         card={card}
+                        decision={decisionByKey.get(card.id)}
+                        selected={selected?.key === key}
+                        inspectorId={wide ? inspectorId : undefined}
+                        drawer={!wide}
+                        onSelect={() => setSelectedKey(key)}
+                        register={(button) => {
+                          if (button) rowButtons.current.set(key, button);
+                          else rowButtons.current.delete(key);
+                        }}
                         refreshing={refreshing}
                         onRefresh={onRefresh}
                       />
-                    ))}
-                  </div>
-                ) : null}
-                {remaining > 0 ? (
-                  <div className="mt-4">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="compact"
-                      aria-controls={cardsId}
-                      aria-expanded={expanded}
-                      onClick={() =>
-                        setExpandedSections((current) =>
-                          expanded
-                            ? current.filter((id) => id !== section.id)
-                            : [...current, section.id],
-                        )
-                      }
-                    >
-                      {expanded ? "Show fewer" : `Show ${remaining} more`}
-                    </Button>
-                  </div>
-                ) : null}
-              </section>
-            );
-          })}
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="now-empty">
+                  {showDecisions &&
+                  model.decisions?.sources.find((source) => source.kind === section.id)?.state ===
+                    "unavailable"
+                    ? "Requests could not be checked. Refresh to try again."
+                    : "No items in this loaded section."}
+                </p>
+              )}
+              {showDecisions && onLoadMore
+                ? model.decisions?.sources
+                    .filter(
+                      (source) =>
+                        source.kind === section.id &&
+                        (source.next_cursor || source.state === "unavailable"),
+                    )
+                    .map((source) => (
+                      <div key={source.kind} className="mt-3 grid justify-items-start gap-2">
+                        {pageError === source.kind ? (
+                          <p role="alert" className="text-sm text-warning">
+                            The next requests did not load. The list is still incomplete. Try again.
+                          </p>
+                        ) : null}
+                        <Button
+                          variant="secondary"
+                          busy={loadingMore === source.kind}
+                          disabled={Boolean(loadingMore) || refreshing || offline || refreshFailed}
+                          onClick={() => onLoadMore(source.kind)}
+                        >
+                          {source.state === "unavailable"
+                            ? `Retry ${decisionLabels[source.kind].toLowerCase()}`
+                            : `Load more ${decisionLabels[source.kind].toLowerCase()}`}
+                        </Button>
+                      </div>
+                    ))
+                : null}
+            </section>
+          ))}
+          {sections.length === 0 ? (
+            <p className="now-empty">
+              {showDecisions && !model.decisions
+                ? "Refresh to load decision sources."
+                : "No items in this loaded list."}
+            </p>
+          ) : null}
         </div>
 
-        <aside
-          className={cn(
-            "rounded-xl border p-5 lg:sticky lg:top-24 lg:col-start-2 lg:row-start-1",
-            model.ui.state === "limited"
-              ? "border-warning/35 bg-warning-soft"
-              : "border-border bg-surface-muted/45",
-          )}
-          aria-labelledby="now-sync-heading"
-          aria-live="polite"
-        >
-          <div className="flex items-start gap-3">
-            <RefreshCw
-              className={cn("mt-0.5 size-5 shrink-0", refreshing && "animate-spin")}
-              aria-hidden="true"
-            />
-            <div className="min-w-0">
-              <h2 id="now-sync-heading" className="font-bold">
-                List status
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-muted">{model.ui.sync_label}</p>
-              <p className="mt-2 text-xs text-muted">
-                {generatedAt ? `List made ${generatedAt}` : "List time not found"}
-              </p>
-            </div>
-          </div>
-          <details className="mt-5 border-t border-border pt-4">
-            {/* A 20 px line of text was the whole hit box on a Pixel 5. */}
-            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-bold">
-              System details
-            </summary>
-            <ul className="mt-2 divide-y divide-border" aria-label="Work list status">
-              {model.sources.map((source) => (
-                <li
-                  key={source.id}
-                  className="flex items-center justify-between gap-3 py-3 text-sm"
-                >
-                  <span className="font-medium">{sourceLabel[source.id]}</span>
-                  <span
-                    className={cn(
-                      "shrink-0 font-bold",
-                      source.state === "current"
-                        ? "text-ok"
-                        : source.state === "limited"
-                          ? "text-warning"
-                          : "text-danger",
-                    )}
-                  >
-                    {sourceStateLabel[source.state]}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        </aside>
+        <div className="now-sidebar">
+          {wide ? (
+            <aside
+              id={inspectorId}
+              className="now-inspector"
+              aria-label={selected ? "Selected item" : "Work overview"}
+            >
+              {selected ? (
+                <>
+                  <header className="now-inspector-heading">
+                    <span>{selected.sectionTitle}</span>
+                    <Button
+                      variant="quiet"
+                      size="icon"
+                      aria-label="Close details"
+                      onClick={closeDetails}
+                    >
+                      <X aria-hidden="true" />
+                    </Button>
+                  </header>
+                  <h2>{selected.card.title}</h2>
+                  <NowCardDetails
+                    card={selected.card}
+                    decision={decisionByKey.get(selected.card.id)}
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                  />
+                </>
+              ) : (
+                <>
+                  <h2>Work in this view</h2>
+                  <p>
+                    {rows.length} {rows.length === 1 ? "item" : "items"} in this loaded list. Select
+                    an item to see its details here.
+                  </p>
+                  <p className="now-keyboard-hint">
+                    J / K or arrow keys move between rows. Enter shows details.
+                  </p>
+                </>
+              )}
+            </aside>
+          ) : null}
+          <aside
+            className={cn("now-list-status", model.ui.state === "limited" && "now-list-limited")}
+            aria-labelledby={`${instanceId}-status`}
+            aria-live="polite"
+          >
+            <h2 id={`${instanceId}-status`}>List status</h2>
+            <p>{model.ui.sync_label}</p>
+            <p className="text-xs">Counts cover this loaded list.</p>
+            <details>
+              <summary>System details</summary>
+              <ul className="divide-y divide-border" aria-label="Work list status">
+                {showDecisions
+                  ? model.decisions?.sources.map((source) => (
+                      <li key={source.kind} className="py-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">{decisionLabels[source.kind]}</span>
+                          <Status
+                            kind={
+                              source.state === "retired"
+                                ? "retired"
+                                : source.state === "current"
+                                  ? "confirmed"
+                                  : "attention"
+                            }
+                          >
+                            {source.state === "retired"
+                              ? "Retired"
+                              : source.state === "current"
+                                ? "Ready"
+                                : source.state === "unavailable"
+                                  ? "Unavailable"
+                                  : "More requests"}
+                          </Status>
+                        </div>
+                        <p className="mt-1 text-muted">
+                          {source.state === "retired"
+                            ? "Scheduling is handled in the production workspace."
+                            : source.state === "unavailable"
+                              ? "The request count is unknown."
+                              : `${source.loaded_count} loaded${source.has_more ? "; the full source has more requests" : ""}.`}
+                        </p>
+                      </li>
+                    ))
+                  : model.sources.map((source) => (
+                      <li
+                        key={source.id}
+                        className="flex items-center justify-between gap-3 py-3 text-sm"
+                      >
+                        <span className="font-medium">{sourceLabel[source.id]}</span>
+                        <span
+                          className={cn(
+                            "font-semibold",
+                            source.state === "current"
+                              ? "text-ok"
+                              : source.state === "limited"
+                                ? "text-warning"
+                                : "text-danger",
+                          )}
+                        >
+                          {sourceStateLabel[source.state]}
+                        </span>
+                      </li>
+                    ))}
+              </ul>
+            </details>
+          </aside>
+        </div>
       </div>
+
+      <Dialog
+        open={!wide && Boolean(selected)}
+        onClose={closeDetails}
+        side="end"
+        title={selected?.card.title ?? "Work details"}
+        className="now-drawer"
+      >
+        {selected && !wide ? (
+          <>
+            {refreshFailed ? (
+              <div className="now-refresh-error" role="alert">
+                <p>The new list did not load. The last saved list is still shown. Try again.</p>
+                <Button variant="secondary" busy={refreshing} onClick={onRefresh}>
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+            <NowCardDetails
+              card={selected.card}
+              decision={decisionByKey.get(selected.card.id)}
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
+          </>
+        ) : null}
+      </Dialog>
     </section>
   );
 }
 
-function NowCardView({
+function useWideInspector() {
+  const [wide, setWide] = useState(
+    () => window.matchMedia?.("(min-width: 1280px)").matches ?? false,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.("(min-width: 1280px)");
+    if (!query) return;
+    const update = () => setWide(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return wide;
+}
+
+function NowRow({
   card,
+  decision,
+  selected,
+  inspectorId,
+  drawer,
+  onSelect,
+  register,
   refreshing,
   onRefresh,
 }: {
   card: NowCard;
+  decision?: DecisionItem;
+  selected: boolean;
+  inspectorId?: string;
+  drawer: boolean;
+  onSelect: () => void;
+  register: (button: HTMLButtonElement | null) => void;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
-  const contextId = useId();
-  if ("kind" in card) return <QuickBooksNowCardView card={card} />;
+  const id = useId();
   return (
-    <Card className={cn("flex flex-col p-5 sm:p-6", cardTone[card.tone])}>
-      <h3 className="text-xl font-bold tracking-[-0.025em]">{card.title}</h3>
-      <p className="mt-2 text-sm leading-6 text-muted">{card.detail}</p>
-
-      <div className="mt-auto pt-5">
-        {card.action ? (
-          <ActionWithContext
+    <li className="now-row" data-tone={card.tone} aria-current={selected || undefined}>
+      <div className="now-row-main">
+        <h3>
+          <button
+            ref={register}
+            data-now-select
+            type="button"
+            aria-expanded={selected}
+            aria-controls={inspectorId}
+            aria-haspopup={drawer ? "dialog" : undefined}
+            onClick={onSelect}
+          >
+            {card.title}
+          </button>
+        </h3>
+        <div className="now-row-context flex flex-wrap items-center gap-2">
+          {decision ? (
+            <>
+              <Status kind={decisionStatus(decision).kind}>{decisionStatus(decision).label}</Status>
+              {decision.job_id ? (
+                <RefTag
+                  id={decision.job_id}
+                  className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4!"
+                />
+              ) : null}
+            </>
+          ) : "kind" in card ? (
+            card.job_id
+          ) : (
+            card.eyebrow
+          )}
+        </div>
+        <p className="now-row-detail">{card.detail}</p>
+      </div>
+      <div className="now-row-action">
+        {"kind" in card ? (
+          <Button asChild variant="quiet" size="compact">
+            <a href={card.action.href} aria-describedby={`${id}-reason`}>
+              {card.action.label}
+              <ArrowRight aria-hidden="true" />
+            </a>
+          </Button>
+        ) : card.action ? (
+          <ActionControl
             action={card.action}
-            citations={citationsForAction(card.action, card.citations)}
-            contextId={contextId}
+            describedBy={`${id}-reason`}
+            quiet
             refreshing={refreshing}
             onRefresh={onRefresh}
           />
         ) : (
-          <CitationLinks citations={card.citations} />
+          <Button variant="quiet" size="compact" onClick={onSelect}>
+            View details
+            <ArrowRight aria-hidden="true" />
+          </Button>
         )}
       </div>
-    </Card>
+      <div id={`${id}-reason`} className="now-row-reason">
+        {"kind" in card ? humanizeBoundedCode(card.next_step) : card.action?.reason}
+        <span className="sr-only">
+          {" "}
+          {("kind" in card || !card.action
+            ? card.citations
+            : citationsForAction(card.action, card.citations)
+          )
+            .map((citation) => citation.label)
+            .join(" ")}
+        </span>
+      </div>
+    </li>
   );
 }
 
-function QuickBooksNowCardView({ card }: { card: QuickBooksNowCard }) {
-  const reason = card.blocker_code
-    ? humanizeBoundedCode(card.blocker_code)
-    : card.rejection_reason
-      ? humanizeBoundedCode(card.rejection_reason)
-      : "This invoice needs a money check.";
+function NowCardDetails({
+  card,
+  decision,
+  refreshing,
+  onRefresh,
+}: {
+  card: NowCard;
+  decision?: DecisionItem;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
   return (
-    <Card className={cn("flex flex-col p-5 sm:p-6", quickBooksCardTone[card.tone])}>
-      <h3 className="text-xl font-bold tracking-[-0.025em]">{card.title}</h3>
-      <p className="mt-3 text-2xl font-bold tracking-[-0.03em]">{card.detail}</p>
-      <dl className="mt-4 space-y-3 border-t border-current/15 pt-4 text-sm">
-        <div>
-          <dt className="font-semibold text-muted">Job</dt>
-          <dd className="mt-1 break-all font-bold">{card.job_id}</dd>
+    <div className="now-card-details">
+      {decision ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Status kind={decisionStatus(decision).kind}>{decisionStatus(decision).label}</Status>
+          {decision.job_id ? (
+            <RefTag
+              id={decision.job_id}
+              className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4! [overflow-wrap:anywhere]"
+            />
+          ) : null}
         </div>
-        <div>
-          <dt className="font-semibold text-muted">Why</dt>
-          <dd className="mt-1 font-bold">{reason}</dd>
-        </div>
-        <div>
-          <dt className="font-semibold text-muted">Next step</dt>
-          <dd className="mt-1 font-bold">{humanizeBoundedCode(card.next_step)}</dd>
-        </div>
-      </dl>
-      <div className="mt-auto pt-5">
-        <Button asChild variant="accent" className="w-full sm:w-auto">
-          <a href={card.action.href}>{card.action.label}</a>
-        </Button>
-        <CitationLinks citations={card.citations} />
-      </div>
-    </Card>
+      ) : null}
+      <p>{card.detail}</p>
+      {"kind" in card ? (
+        <>
+          <dl className="now-facts">
+            <div>
+              <dt>Job</dt>
+              <dd>{card.job_id}</dd>
+            </div>
+            <div>
+              <dt>Why</dt>
+              <dd>
+                {card.blocker_code
+                  ? humanizeBoundedCode(card.blocker_code)
+                  : card.rejection_reason
+                    ? humanizeBoundedCode(card.rejection_reason)
+                    : "This invoice needs a money check."}
+              </dd>
+            </div>
+            <div>
+              <dt>Next step</dt>
+              <dd>{humanizeBoundedCode(card.next_step)}</dd>
+            </div>
+          </dl>
+          <Button asChild>
+            <a href={card.action.href}>{card.action.label}</a>
+          </Button>
+          <CitationLinks citations={card.citations} />
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-faint">{card.eyebrow}</p>
+          {card.action ? (
+            <>
+              <ActionWithContext
+                action={card.action}
+                citations={citationsForAction(card.action, card.citations)}
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+              />
+              <CitationLinks
+                citations={card.citations.filter(
+                  (citation) => !card.action!.citation_ids.includes(citation.id),
+                )}
+              />
+            </>
+          ) : (
+            <CitationLinks citations={card.citations} />
+          )}
+          {!card.action && card.citations.length === 0 ? (
+            <p className="text-sm text-muted">
+              No action or linked work record is available for this item.
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
   );
+}
+
+function sessionCanReviewLeads(model: NowResponse) {
+  return model.role === "owner" || model.role === "ops";
 }
 
 function ActionControl({
   action,
   describedBy,
   primary = false,
+  quiet = false,
   refreshing,
   onRefresh,
 }: {
   action: NowAction;
   describedBy?: string;
   primary?: boolean;
+  quiet?: boolean;
   refreshing: boolean;
   onRefresh: () => void;
 }) {
   const props = {
-    variant: primary ? ("accent" as const) : ("outline" as const),
+    variant: primary ? ("accent" as const) : quiet ? ("quiet" as const) : ("outline" as const),
     size: primary ? ("default" as const) : ("compact" as const),
     fullWidth: primary,
   };
@@ -375,6 +885,7 @@ function ActionControl({
       <Button asChild {...props}>
         <a href={action.href} aria-describedby={describedBy}>
           {action.label}
+          {quiet ? <ArrowRight aria-hidden="true" /> : null}
         </a>
       </Button>
     );

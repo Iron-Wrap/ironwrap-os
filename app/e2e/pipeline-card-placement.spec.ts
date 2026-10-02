@@ -16,6 +16,7 @@ import { expectTouchTarget } from "./touch-target";
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
 const PHONE = { width: 390, height: 844 };
+const leadId = `lead:ironwrap:${"b".repeat(64)}`;
 
 const envelope = {
   version: 1,
@@ -135,28 +136,56 @@ interface Placement {
 async function installRoutes(page: Page, placements: Placement[]) {
   const sales = emptySales();
   const board = emptyBoard();
+  let receipt: Record<string, unknown> | undefined;
 
-  await page.route("**/api/v1/sales/leads", async (route) => {
+  await page.route("**/api/v1/sales/leads?include_receipt=1", async (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, string>;
-    sales.leads.push(salesLead("LEAD-NEW", body.name ?? "Unnamed"));
+    const key = route.request().headers()["idempotency-key"];
+    expect(key).toMatch(/^office-lead:[0-9a-f-]{36}$/);
+    sales.leads.push(salesLead(leadId, body.name ?? "Unnamed"));
     sales.summary.listed_leads = sales.leads.length;
     sales.summary.triage_unresolved = sales.leads.length;
+    receipt = {
+      version: 1,
+      receipt: {
+        request_id: key,
+        state: "recorded",
+        outcome: "created",
+        canonical_envelope_id: sales.leads[0]!.envelope_id,
+        lead_id: leadId,
+        submitted_details_applied: true,
+        captured_at: "2026-09-30T12:00:00.000Z",
+        details: {
+          name: body.name,
+          email: body.email || null,
+          phone: body.phone || null,
+          address: body.address || null,
+          city: body.city || null,
+          province: body.province || null,
+          postal_code: body.postal_code || null,
+          service: body.service || null,
+          message: body.message || null,
+          source: "office",
+          intake_source: "phone",
+          preferred_contact_channel: null,
+          email_consent: {
+            status: "not_recorded",
+            purpose: "estimate_follow_up",
+            recorded_at: null,
+            captured_by: null,
+            jurisdiction: null,
+            wording_version: null,
+          },
+        },
+      },
+    };
     await route.fulfill({
       status: 202,
       contentType: "application/json",
-      body: JSON.stringify({
-        version: 1,
-        lead: {
-          envelope_id: "env_lead-new",
-          canonical_envelope_id: "env_lead-new",
-          tenant_id: "ironwrap",
-          status: "accepted",
-          duplicate: false,
-          queue: "Estimator",
-        },
-      }),
+      body: JSON.stringify(receipt),
     });
   });
+  await page.route("**/api/v1/sales/intakes/*", (route) => route.fulfill({ json: receipt }));
 
   await page.route("**/api/v1/sales", (route) =>
     route.fulfill({
@@ -246,9 +275,11 @@ test.describe("Lead onto a pipeline board", () => {
     // 1. Add the lead the way the office actually does.
     await page.goto("/sales/new-lead");
     await expect(page.getByRole("heading", { name: "Add a lead" })).toBeVisible();
-    await page.getByLabel("Name").fill("Pat Prospect");
-    await page.getByLabel("Email").fill("pat@example.invalid");
-    await page.getByRole("button", { name: "Add the lead" }).click();
+    await page.getByLabel("Full name", { exact: true }).fill("Pat Prospect");
+    await page.getByRole("textbox", { name: "Email", exact: true }).fill("pat@example.invalid");
+    await page.getByRole("button", { name: "Save lead", exact: true }).click();
+    await expect(page.getByText("Lead intake recorded", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Sales desk", exact: true }).last().click();
 
     // 2. It lands on the sales desk, and the desk now offers a board for it.
     await expect(page.getByRole("heading", { name: "Sales desk" })).toBeVisible();
@@ -269,7 +300,7 @@ test.describe("Lead onto a pipeline board", () => {
 
     // The command the server actually received.
     expect(placements).toHaveLength(1);
-    expect(placements[0]?.body).toMatchObject({ entity_type: "lead", entity_id: "LEAD-NEW" });
+    expect(placements[0]?.body).toMatchObject({ entity_type: "lead", entity_id: leadId });
     expect(placements[0]?.idempotencyKey).toMatch(/^pipeline-card-place:/);
 
     // 4. The board shows the card the journey created.
@@ -308,9 +339,11 @@ test.describe("Lead onto a pipeline board", () => {
 
     // Get one card onto the board first, through the product path.
     await page.goto("/sales/new-lead");
-    await page.getByLabel("Name").fill("Pat Prospect");
-    await page.getByLabel("Email").fill("pat@example.invalid");
-    await page.getByRole("button", { name: "Add the lead" }).click();
+    await page.getByLabel("Full name", { exact: true }).fill("Pat Prospect");
+    await page.getByRole("textbox", { name: "Email", exact: true }).fill("pat@example.invalid");
+    await page.getByRole("button", { name: "Save lead", exact: true }).click();
+    await expect(page.getByText("Lead intake recorded", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Sales desk", exact: true }).last().click();
     await page.getByRole("button", { name: "Add Pat Prospect to a board" }).click();
     await page
       .getByRole("dialog")

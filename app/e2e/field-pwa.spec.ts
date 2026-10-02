@@ -4,6 +4,64 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  for (const width of [320, 412, 576]) {
+    test(`keeps the run sheet in place when installation becomes available at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 915 });
+      await seedPairedFieldDevice(page);
+      await page.addInitScript(() => {
+        window.addEventListener(
+          "beforeinstallprompt",
+          (event) => {
+            if (event.isTrusted) event.stopImmediatePropagation();
+          },
+          true,
+        );
+        Object.defineProperty(navigator.storage, "persisted", { value: async () => true });
+      });
+      await page.reload();
+      await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
+      await expect(page.getByRole("status", { name: "Sync: All sent" })).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+      const before = await page.locator("#main-content").boundingBox();
+
+      await page.evaluate(() => {
+        const event = new Event("beforeinstallprompt", { cancelable: true });
+        Object.assign(event, {
+          prompt: async () => {},
+          userChoice: Promise.resolve({ outcome: "accepted", platform: "web" }),
+        });
+        window.dispatchEvent(event);
+      });
+
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toBeVisible();
+      const after = await page.locator("#main-content").boundingBox();
+      expect(after!.y).toBe(before!.y);
+      const install = page.getByRole("button", { name: "Install", exact: true });
+      const help = page.getByRole("button", { name: "Help", exact: true });
+      await expectTouchTarget(install, { name: "Install" });
+      await expectTouchTarget(help, { name: "Help" });
+      const horizontalLayout = await page.evaluate(() => ({
+        contentWidth: document.documentElement.scrollWidth,
+        availableWidth: Math.min(
+          document.documentElement.clientWidth,
+          document.documentElement.getBoundingClientRect().width,
+        ),
+      }));
+      // Stable gutters reduce visible width even when headless Chromium hides scrollbars.
+      expect(horizontalLayout.contentWidth).toBeLessThanOrEqual(horizontalLayout.availableWidth);
+      await install.focus();
+      await expect(install).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(install).toHaveCount(0);
+      expect((await page.locator("#main-content").boundingBox())!.y).toBe(before!.y);
+      await help.click();
+      await expect(page.getByRole("button", { name: "Call for rescue" })).toBeVisible();
+    });
+  }
+
   test("renders a mobile-safe blocked-work run sheet with no WCAG A/AA violations", async ({
     page,
   }) => {
@@ -52,7 +110,7 @@ test.describe("Field Companion PWA acceptance", () => {
 
     // Open the safety rail before auditing. Its controls are the highest-contrast
     // risk on the shell, and a closed <details> would hide them from axe entirely.
-    await page.locator("summary", { hasText: "Safety" }).click();
+    await page.getByRole("button", { name: "Help", exact: true }).click();
     await expect(page.getByRole("button", { name: "Call for rescue" })).toBeVisible();
 
     await settleAnimations(page);

@@ -19,8 +19,11 @@ import {
 
 export const appRoles = ["owner", "ops", "sales", "production", "accounting", "field"] as const;
 export type AppRole = (typeof appRoles)[number];
-export type NavigationWorkspace =
-  "Command" | "Revenue" | "Delivery" | "Resources" | "Finance" | "Control";
+/**
+ * The rail's groups, in the reference's order: what needs you now, the work itself, the plan
+ * that schedules it, what it consumes, the money it makes, and the settings behind it.
+ */
+export type NavigationWorkspace = "Now" | "Work" | "Plan" | "Resources" | "Money" | "Settings";
 export type RoleSurface =
   | "owner"
   | "sales"
@@ -73,24 +76,16 @@ const officeNavigation = [
     to: "/now",
     icon: CircleGauge,
     activeColor: "warning",
-    workspace: "Command",
+    workspace: "Now",
     mobilePrimary: true,
   },
   {
-    label: "Reception",
-    mobileLabel: "Calls",
-    to: "/newo",
-    icon: Headphones,
+    label: "Decisions",
+    mobileLabel: "Decisions",
+    to: "/approvals",
+    icon: ShieldCheck,
     activeColor: "warning",
-    workspace: "Revenue",
-  },
-  {
-    label: "Board",
-    mobileLabel: "Board",
-    to: "/owner/board",
-    icon: KanbanSquare,
-    activeColor: "ok",
-    workspace: "Revenue",
+    workspace: "Now",
   },
   {
     label: "Sales",
@@ -98,25 +93,24 @@ const officeNavigation = [
     to: "/sales",
     icon: BriefcaseBusiness,
     activeColor: "ok",
-    workspace: "Revenue",
+    workspace: "Work",
     mobilePrimary: true,
   },
   {
-    label: "Designs",
-    mobileLabel: "Designs",
-    to: "/facet-designs",
-    icon: Palette,
-    activeColor: "accent",
-    workspace: "Revenue",
-  },
-  {
-    label: "Production",
-    mobileLabel: "Jobs",
-    to: "/production",
-    icon: CalendarClock,
+    label: "Board",
+    mobileLabel: "Board",
+    to: "/owner/board",
+    icon: KanbanSquare,
     activeColor: "ok",
-    workspace: "Delivery",
-    mobilePrimary: true,
+    workspace: "Work",
+  },
+  {
+    label: "Reception",
+    mobileLabel: "Calls",
+    to: "/newo",
+    icon: Headphones,
+    activeColor: "warning",
+    workspace: "Work",
   },
   {
     label: "Service",
@@ -124,14 +118,31 @@ const officeNavigation = [
     to: "/service",
     icon: LifeBuoy,
     activeColor: "warning",
-    workspace: "Delivery",
+    workspace: "Work",
+  },
+  {
+    label: "Designs",
+    mobileLabel: "Designs",
+    to: "/facet-designs",
+    icon: Palette,
+    activeColor: "accent",
+    workspace: "Work",
+  },
+  {
+    label: "Production",
+    mobileLabel: "Jobs",
+    to: "/production",
+    icon: CalendarClock,
+    activeColor: "ok",
+    workspace: "Plan",
+    mobilePrimary: true,
   },
   {
     label: "Today",
     to: "/today",
     icon: ClipboardCheck,
     activeColor: "accent",
-    workspace: "Delivery",
+    workspace: "Plan",
   },
   {
     label: "Inventory",
@@ -148,12 +159,19 @@ const officeNavigation = [
     workspace: "Resources",
   },
   {
+    label: "Safety",
+    to: "/safety",
+    icon: HardHat,
+    activeColor: "warning",
+    workspace: "Resources",
+  },
+  {
     label: "Money desk",
     mobileLabel: "Money",
     to: "/accounting",
     icon: Banknote,
     activeColor: "ok",
-    workspace: "Finance",
+    workspace: "Money",
   },
   {
     label: "Money issues",
@@ -161,29 +179,14 @@ const officeNavigation = [
     to: "/accounting/exceptions",
     icon: ShieldCheck,
     activeColor: "warning",
-    workspace: "Finance",
+    workspace: "Money",
   },
   {
     label: "QuickBooks",
     to: "/accounting/quickbooks",
     icon: Settings,
     activeColor: "accent",
-    workspace: "Finance",
-  },
-  {
-    label: "Safety",
-    to: "/safety",
-    icon: HardHat,
-    activeColor: "warning",
-    workspace: "Control",
-  },
-  {
-    label: "Approvals",
-    mobileLabel: "Approve",
-    to: "/approvals",
-    icon: ShieldCheck,
-    activeColor: "warning",
-    workspace: "Control",
+    workspace: "Settings",
   },
   {
     label: "Settings",
@@ -191,7 +194,7 @@ const officeNavigation = [
     to: "/settings",
     icon: Settings,
     activeColor: "accent",
-    workspace: "Control",
+    workspace: "Settings",
   },
 ] as const satisfies readonly NavigationItem[];
 
@@ -202,28 +205,30 @@ const officeNavigation = [
 // in roles.test.ts keeps navigation and `roleCanAccess` from drifting apart again.
 const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   owner: officeNavigation,
-  ops: officeNavigation.filter((item) => item.workspace !== "Finance"),
+  // Operations runs the office but not the books: every `/accounting` destination is guarded to
+  // owner and accounting, QuickBooks included, so none of them is advertised here.
+  ops: officeNavigation.filter((item) => !item.to.startsWith("/accounting")),
   sales: [
     {
       label: "Now",
       to: "/now",
       icon: CircleGauge,
       activeColor: "warning",
-      workspace: "Command",
+      workspace: "Now",
     },
     {
       label: "Sales",
       to: "/sales",
       icon: BriefcaseBusiness,
       activeColor: "ok",
-      workspace: "Revenue",
+      workspace: "Work",
     },
     {
       label: "Board",
       to: "/sales/board",
       icon: KanbanSquare,
       activeColor: "ok",
-      workspace: "Revenue",
+      workspace: "Work",
     },
   ],
   production: [
@@ -232,7 +237,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/now",
       icon: CircleGauge,
       activeColor: "warning",
-      workspace: "Command",
+      workspace: "Now",
     },
     {
       label: "Production",
@@ -240,7 +245,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/production",
       icon: CalendarClock,
       activeColor: "ok",
-      workspace: "Delivery",
+      workspace: "Plan",
     },
   ],
   // The money desk leads, because it is the accounting role's landing page (contract section 8.2)
@@ -252,7 +257,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/accounting",
       icon: Banknote,
       activeColor: "ok",
-      workspace: "Finance",
+      workspace: "Money",
     },
     {
       label: "Exceptions",
@@ -260,14 +265,14 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/accounting/exceptions",
       icon: ShieldCheck,
       activeColor: "warning",
-      workspace: "Finance",
+      workspace: "Money",
     },
     {
       label: "Now",
       to: "/now",
       icon: CircleGauge,
       activeColor: "warning",
-      workspace: "Command",
+      workspace: "Now",
     },
     {
       label: "Settings",
@@ -275,7 +280,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/accounting/quickbooks",
       icon: Settings,
       activeColor: "accent",
-      workspace: "Control",
+      workspace: "Settings",
     },
   ],
   field: [
@@ -284,7 +289,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/now",
       icon: CircleGauge,
       activeColor: "accent",
-      workspace: "Command",
+      workspace: "Now",
       mobilePrimary: true,
     },
     {
@@ -292,7 +297,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       to: "/check-in",
       icon: BriefcaseBusiness,
       activeColor: "ok",
-      workspace: "Delivery",
+      workspace: "Work",
       mobilePrimary: true,
     },
     {

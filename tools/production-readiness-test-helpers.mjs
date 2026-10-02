@@ -1818,4 +1818,3 @@ export function validLiveEnv() {
     RESTORE_CONFIRMATION: "",
   };
 }
-

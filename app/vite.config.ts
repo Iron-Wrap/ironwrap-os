@@ -154,8 +154,8 @@ export default defineConfig({
         scope: "/",
         display: "standalone",
         orientation: "portrait-primary",
-        background_color: "#e6e8eb",
-        theme_color: "#161b21",
+        background_color: "#f3f4f2",
+        theme_color: "#1b1e22",
         icons: [
           {
             src: "/icon-192.png",

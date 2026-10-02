@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -259,7 +259,7 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review a new quote" });
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
     expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
     expect(screen.getByText(/waiting for the right person/i)).toBeVisible();
@@ -285,12 +285,14 @@ describe("QuoteRevisionApprovalPages", () => {
     );
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review a new quote" });
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
     await user.click(screen.getByRole("button", { name: "Make empty draft" }));
 
     expect(
       await screen.findByText(/could not tell if the draft was made. do not try again/i),
     ).toBeVisible();
+    expect(screen.getByText("Check the saved state")).toBeVisible();
+    expect(screen.queryByText("Your choice was not saved")).not.toBeInTheDocument();
     expect(await screen.findByText("Load this request again")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
@@ -336,7 +338,7 @@ describe("QuoteRevisionApprovalPages", () => {
     vi.mocked(reconcileQuoteRevisionApproval).mockResolvedValue({ approval: reconciled });
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review a new quote" });
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
     expect(screen.getByText("Do not try this request again")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Check saved result" }));
@@ -365,10 +367,104 @@ describe("QuoteRevisionApprovalPages", () => {
     const user = userEvent.setup();
     renderPage(<QuoteRevisionApprovalDetailPage />);
 
-    await screen.findByRole("heading", { name: "Review a new quote" });
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
     expect(screen.getByText("QUOTE-A-V4")).not.toBeVisible();
     await user.click(screen.getByText("System details"));
     expect(screen.getByText("QUOTE-A-V4")).toBeVisible();
     expect(screen.getByText("run:quote-revision:ui-001")).toBeVisible();
   });
+  it("puts the empty-draft summary before the decision and hides identifiers after it", async () => {
+    vi.mocked(loadQuoteRevisionApproval).mockResolvedValue(
+      detailModel(request(), ["quote_revision_approval.read", "quote_revision_approval.approve"]),
+    );
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    expect(screen.getByRole("img", { name: "Job JOB-A" })).toBeVisible();
+    const summary = screen.getByRole("region", { name: "What you are reviewing" });
+    const decision = screen.getByRole("complementary", { name: "Decision" });
+    const audit = screen.getByText("System details").closest("details")!;
+    expect(
+      summary.compareDocumentPosition(decision) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(decision.compareDocumentPosition(audit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(summary).getByText(request().correction_reason)).toBeVisible();
+    expect(within(decision).getByRole("button", { name: "Make empty draft" })).toBeEnabled();
+    expect(screen.getAllByText("Needs review")).toHaveLength(1);
+    expect(screen.queryByText("How this works")).not.toBeInTheDocument();
+    expect(audit).not.toHaveAttribute("open");
+  });
+
+  it("focuses the rejection reason and returns focus without making a decision on cancel", async () => {
+    const user = userEvent.setup();
+    vi.mocked(loadQuoteRevisionApproval).mockResolvedValue(
+      detailModel(request(), ["quote_revision_approval.read", "quote_revision_approval.reject"]),
+    );
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+    await user.click(await screen.findByRole("button", { name: "Turn down" }));
+    expect(screen.getByLabelText("Why should we stop this request?")).toHaveFocus();
+    await user.type(screen.getByLabelText("Why should we stop this request?"), "Recheck source.");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("button", { name: "Turn down" })).toHaveFocus();
+    expect(rejectQuoteRevisionApproval).not.toHaveBeenCalled();
+    expect(approveQuoteRevisionApproval).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Turn down" }));
+    expect(screen.getByLabelText("Why should we stop this request?")).toHaveValue("");
+  });
+
+  it("does not describe a planned run ID as proof of a saved result", async () => {
+    const user = userEvent.setup();
+    vi.mocked(loadQuoteRevisionApproval).mockResolvedValue(
+      detailModel(request({ state: "execution_uncertain", hermes_run_id: "run:planned" }), [
+        "quote_revision_approval.read",
+        "quote_revision_approval.reconcile",
+      ]),
+    );
+    renderPage(<QuoteRevisionApprovalDetailPage />);
+    await screen.findByRole("heading", { name: "Review empty draft V4" });
+    expect(screen.getByText("Check needed")).toBeVisible();
+    expect(screen.queryByText("Saved", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Draft is ready" })).not.toBeInTheDocument();
+    expect(screen.getByText("run:planned")).not.toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Check saved result" }));
+    expect(screen.getByLabelText("What happened?")).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Check saved result" })).toHaveFocus();
+    expect(reconcileQuoteRevisionApproval).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["executing", "Saving the draft"],
+    ["executed", "Draft is ready"],
+    ["denied", "Turned down"],
+    ["expired", "Review ended"],
+    ["failed", "Draft not made"],
+    ["audit_failed", "Save check failed"],
+  ] as const)(
+    "keeps the %s outcome in the decision panel without another draft action",
+    async (state, heading) => {
+      const approval = request({
+        state,
+        rejection_reason: state === "denied" ? "Verify the source first." : null,
+      });
+      vi.mocked(loadQuoteRevisionApproval).mockResolvedValue(
+        detailModel(approval, [
+          "quote_revision_approval.read",
+          "quote_revision_approval.approve",
+          "quote_revision_approval.reject",
+        ]),
+      );
+      renderPage(<QuoteRevisionApprovalDetailPage />);
+      await screen.findByRole("heading", { name: "Review empty draft V4" });
+      const decision = within(screen.getByRole("complementary", { name: "Decision" }));
+      expect(decision.getByRole("heading", { name: heading })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Make empty draft" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Turn down" })).not.toBeInTheDocument();
+      expect(decision.getByRole("link", { name: "Open quote" })).toBeVisible();
+      expect(decision.getByRole("button", { name: "Load again" })).toBeVisible();
+      if (state === "denied") expect(decision.getByText("Verify the source first.")).toBeVisible();
+    },
+  );
 });

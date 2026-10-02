@@ -145,6 +145,50 @@ describe("field packet cache", () => {
     expect(await hasCachedJobPacket(session, "JOB-Z")).toBe(false);
   });
 
+  it("rejects malformed nested proof without replacing the verified offline packet", async () => {
+    const packet = job("JOB-VALIDATED");
+    packet.proof_stream = [
+      {
+        id: "EV-TEST",
+        type: "Photo",
+        proof_slot: null,
+        occurred_at: null,
+        summary: null,
+        customer_safe: false,
+        source: null,
+        sync_state: "verified",
+        blocker: false,
+      },
+    ];
+    const online = await loadJob(
+      session,
+      packet.job.id,
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(packet)),
+    );
+    expect(online.proof_stream).toEqual(packet.proof_stream);
+
+    const malformed = {
+      ...packet,
+      proof_stream: [{ ...packet.proof_stream[0], blocker: "false" }],
+    };
+    await expect(
+      loadJob(
+        session,
+        packet.job.id,
+        vi.fn<typeof fetch>().mockResolvedValue(Response.json(malformed)),
+      ),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+
+    const offline = await loadJob(
+      session,
+      packet.job.id,
+      vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
+    );
+    expect(offline.proof_stream).toEqual(packet.proof_stream);
+    expect(offline.stale_fields).toContain("offline.cached_packet");
+    expect(await hasCachedJobPacket(session, packet.job.id)).toBe(true);
+  });
+
   it("keeps a legacy cached packet without a Work Package readable but not authorized", async () => {
     const current = job("JOB-LEGACY");
     const { work_package: _workPackage, ...legacyPacket } = current.packet;

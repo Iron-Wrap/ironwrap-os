@@ -93,8 +93,8 @@ export class SqliteStatement {
     return (this.statement.get(...(this.args as never[])) ?? null) as T | null;
   }
 
-  async all<T>(): Promise<{ results: T[] }> {
-    return { results: this.statement.all(...(this.args as never[])) as T[] };
+  async all<T>(): Promise<{ success: true; results: T[] }> {
+    return { success: true, results: this.statement.all(...(this.args as never[])) as T[] };
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {

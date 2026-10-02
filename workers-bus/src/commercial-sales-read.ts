@@ -87,6 +87,7 @@ export async function readCommercialSalesSources(
   env: AppEnv,
   tenantId: string,
   requestedLimit = 100,
+  leadId?: string,
 ): Promise<CommercialSalesSources> {
   const limit = Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(100, Math.trunc(requestedLimit)))
@@ -98,6 +99,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY updated_at DESC, version DESC, lead_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<OperatingSalesJobRecord>(
       env,
@@ -105,6 +107,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY updated_at DESC, version DESC, roof_job_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<OperatingSalesEstimateRecord>(
       env,
@@ -112,6 +115,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY updated_at DESC, version DESC, estimate_session_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<OperatingSalesConsentRecord>(
       env,
@@ -119,6 +123,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY recorded_at DESC, consent_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<CommercialLeadTriageRecord>(
       env,
@@ -126,6 +131,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY decided_at DESC, lead_version DESC, triage_decision_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<CommercialQuoteRecord>(
       env,
@@ -133,6 +139,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY created_at DESC, revision_number DESC, quote_revision_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<CommercialProposalRecord>(
       env,
@@ -140,6 +147,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY created_at DESC, revision_number DESC, proposal_revision_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<CommercialPublicationRecord>(
       env,
@@ -147,6 +155,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY occurred_at DESC, publication_event_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
     boundedRows<CommercialAcceptanceBindingRecord>(
       env,
@@ -154,6 +163,7 @@ export async function readCommercialSalesSources(
         WHERE tenant_id = ? ORDER BY accepted_at DESC, acceptance_binding_id ASC LIMIT ?`,
       tenantId,
       limit,
+      leadId,
     ),
   ]);
   const names = [
@@ -200,9 +210,24 @@ async function boundedRows<T>(
   sql: string,
   tenantId: string,
   limit: number,
+  leadId?: string,
 ): Promise<{ rows: T[]; partial: boolean }> {
+  const bindings: (string | number)[] = [tenantId];
+  if (leadId) {
+    let scope = "lead_id = ?";
+    if (sql.includes("FROM commercial_proposal_publication_events")) {
+      scope = `proposal_revision_id IN (SELECT proposal_revision_id FROM commercial_proposal_revisions
+        WHERE tenant_id = ? AND roof_job_id IN (SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND lead_id = ?))`;
+      bindings.push(tenantId, tenantId);
+    } else if (sql.includes("FROM commercial_quote_revisions") || sql.includes("FROM commercial_proposal_revisions") || sql.includes("FROM commercial_acceptance_bindings")) {
+      scope = "roof_job_id IN (SELECT roof_job_id FROM operating_roof_jobs WHERE tenant_id = ? AND lead_id = ?)";
+      bindings.push(tenantId);
+    }
+    sql = sql.replace("WHERE tenant_id = ? ORDER BY", `WHERE tenant_id = ? AND ${scope} ORDER BY`);
+    bindings.push(leadId);
+  }
   const result = await env.DB.prepare(sql)
-    .bind(tenantId, limit + 1)
+    .bind(...bindings, limit + 1)
     .all<T>();
   const rows = result.results ?? [];
   return { rows: rows.slice(0, limit), partial: rows.length > limit };

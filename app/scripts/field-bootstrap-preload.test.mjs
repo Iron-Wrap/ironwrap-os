@@ -36,4 +36,22 @@ describe("field bootstrap preloader", () => {
     expect(databases).not.toHaveBeenCalled();
     expect(preloadWindow).not.toHaveProperty("__ironwrapFieldBootstrapResponse");
   });
+
+  it("does not publish a stale head read after the entry has claimed bootstrap", () => {
+    const databases = vi.fn(async () => []);
+    const preloadWindow = {
+      location: { pathname: "/today" },
+      __ironwrapFieldBootstrapPreloadConsumed: true,
+    };
+
+    runInNewContext(preloadScript, {
+      Error,
+      Promise,
+      indexedDB: { databases },
+      window: preloadWindow,
+    });
+
+    expect(databases).not.toHaveBeenCalled();
+    expect(preloadWindow).not.toHaveProperty("__ironwrapFieldBootstrapResponse");
+  });
 });

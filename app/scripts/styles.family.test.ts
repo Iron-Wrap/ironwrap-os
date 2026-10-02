@@ -19,47 +19,65 @@ const fontFaces = (css: string) =>
       style: properties["font-style"],
       display: properties["font-display"],
       weight: properties["font-weight"],
-      asset: properties.src?.match(/hubot-sans-[\w-]+\.woff2/)?.[0],
+      asset: properties.src?.match(/(?:archivo|martian-mono)-[\w-]+\.woff2/)?.[0],
       format: properties.src?.match(/format\(["']?([^"')]+)["']?\)/)?.[1],
       unicodeRange: properties["unicode-range"]?.replace(/\s+/g, ""),
     };
   });
 
 describe("IronWrap OS foundation family", () => {
-  it("uses Hubot on mineral paper and dusk chrome, not Inter or cream leftovers", () => {
+  it("uses the Iron Wrap identity: Archivo on primer, a charcoal spine, brass only for place", () => {
     const styles = read("src/styles.css");
     const main = read("src/main.tsx");
     const html = read("index.html");
     const vite = read("vite.config.ts");
     const pkg = read("package.json");
-    const packagedHubot = read("node_modules/@fontsource-variable/hubot-sans/index.css");
+    const packagedArchivo = read("node_modules/@fontsource-variable/archivo/wght.css");
+    const packagedMartian = read("node_modules/@fontsource-variable/martian-mono/wght.css");
 
-    expect(styles).toMatch(/Hubot Sans/);
-    expect(styles).toMatch(/--chrome:\s*#161b21/i);
-    expect(styles).toMatch(/--background:\s*#e6e8eb/i);
-    expect(styles).toMatch(/--surface:\s*#f5f6f7/i);
-    expect(styles).toMatch(/--accent:\s*#c81d25/i);
+    // Owner-approved values from the reference implementation's tokens.css.
+    expect(styles).toMatch(/--background:\s*#f3f4f2/i);
+    expect(styles).toMatch(/--surface:\s*#ffffff/i);
+    expect(styles).toMatch(/--foreground:\s*#15181c/i);
+    expect(styles).toMatch(/--primary:\s*#15181c/i);
+    expect(styles).toMatch(/--chrome:\s*#1b1e22/i);
+    expect(styles).toMatch(/--accent:\s*#94701f/i);
+    expect(styles).toMatch(/--focus:\s*#94701f/i);
+    expect(styles).toMatch(/--local:\s*#5a4a8b/i);
+    expect(styles).toMatch(/--tag-metal-fill:/);
+    expect(styles).toMatch(/--tag-paper-fill:/);
     expect(styles).toMatch(/--motion-standard:\s*220ms/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce/);
-    expect(styles).not.toMatch(/Inter Variable/);
+    expect(styles).not.toMatch(/Hubot|Inter Variable/);
+    expect(styles).not.toMatch(/#c81d25|#161b21|#e6e8eb/i);
     expect(styles).not.toMatch(/#f2efe8/i);
     expect(styles).not.toMatch(/#fffdf9/i);
 
-    expect(fontFaces(styles)).toEqual(
-      fontFaces(packagedHubot).map((face) => ({ ...face, display: "optional" })),
-    );
-    expect(main).not.toMatch(/@fontsource-variable\/hubot-sans/);
-    expect(main).not.toMatch(/@fontsource-variable\/inter/);
+    // Self-hosted exactly as packaged, except that no face may swap in late and shift a
+    // crew phone's layout. Martian Mono sets identifiers only, so it ships latin subsets.
+    const optional = (face: ReturnType<typeof fontFaces>[number]) => ({
+      ...face,
+      display: "optional",
+    });
+    expect(fontFaces(styles)).toEqual([
+      ...fontFaces(packagedArchivo).map(optional),
+      ...fontFaces(packagedMartian)
+        .filter((face) => /martian-mono-latin(?:-ext)?-wght/.test(face.asset ?? ""))
+        .map(optional),
+    ]);
+    expect(main).not.toMatch(/@fontsource-variable\//);
 
-    expect(html).toMatch(/content="#161b21"/);
-    expect(html).toMatch(/Hubot Sans/);
-    expect(html).toMatch(/background:\s*#e6e8eb/);
-    expect(html).not.toMatch(/#f5f6f4|#121611/);
+    expect(html).toMatch(/content="#1b1e22"/);
+    expect(html).toMatch(/Archivo/);
+    expect(html).toMatch(/background:\s*#f3f4f2/);
+    expect(html).not.toMatch(/Hubot|#161b21|#e6e8eb|#f5f6f4|#121611/);
 
-    expect(vite).toMatch(/theme_color:\s*"#161b21"/);
-    expect(vite).toMatch(/background_color:\s*"#e6e8eb"/);
+    expect(vite).toMatch(/theme_color:\s*"#1b1e22"/);
+    expect(vite).toMatch(/background_color:\s*"#f3f4f2"/);
 
-    expect(pkg).toMatch(/@fontsource-variable\/hubot-sans/);
+    expect(pkg).toMatch(/@fontsource-variable\/archivo/);
+    expect(pkg).toMatch(/@fontsource-variable\/martian-mono/);
+    expect(pkg).not.toMatch(/@fontsource-variable\/hubot-sans/);
     expect(pkg).not.toMatch(/@fontsource-variable\/inter/);
   });
 
@@ -124,9 +142,12 @@ describe("IronWrap OS foundation family", () => {
     expect(styles).toMatch(/text-wrap-style:\s*pretty/);
   });
 
-  it("stays a family of Facet dusk/mineral without cloning Mona Sans", () => {
+  it("keeps the primary action ink, so brass never reads as an action colour", () => {
     const styles = read("src/styles.css");
+    const button = read("src/components/ui/button.tsx");
     expect(styles).not.toMatch(/Mona Sans/);
-    expect(styles).toMatch(/Hubot Sans Variable/);
+    expect(button).toMatch(/const primary =\s*"bg-primary /);
+    expect(button).toMatch(/accent: primary,/);
+    expect(button).not.toMatch(/bg-accent/);
   });
 });

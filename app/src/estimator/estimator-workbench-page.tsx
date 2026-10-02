@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Check,
@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -37,6 +37,7 @@ import {
 } from "./estimator-api";
 import type { EstimatorGeometry, EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { RoofGraphEvidence } from "./roof-graph-evidence";
+import { ManualMeasurementPanel } from "./manual-measurement-panel";
 
 export function EstimatorWorkbenchPage() {
   return (
@@ -92,6 +93,7 @@ function EstimatorWorkbenchScreen({
   refreshFailed: boolean;
   onRetry: () => void;
 }) {
+  const { measurementRequest } = useSearch({ strict: false }) as { measurementRequest?: string };
   const selectedMeasurement = model.measurements.selected;
   const bounded =
     model.partial_sources.length > 0 ||
@@ -123,6 +125,7 @@ function EstimatorWorkbenchScreen({
           <div className="divide-y divide-border">
             <ReviewGroup
               title="Roof details"
+              reveal={measurementRequest}
               description="Property drawing, roof graph, checks, and saved measurements."
               status={
                 selectedMeasurement
@@ -141,6 +144,7 @@ function EstimatorWorkbenchScreen({
                 locale={locale}
               />
               <MeasurementSource model={model} locale={locale} />
+              <ManualMeasurementPanel jobId={model.job.id} />
             </ReviewGroup>
 
             <ReviewGroup
@@ -181,13 +185,13 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
           </Link>
         </Button>
         <div className="mt-6 min-w-0">
-          <p className="text-sm font-bold text-muted">{jobIdentity}</p>
+          <p className="text-sm font-bold break-all text-muted">{jobIdentity}</p>
           <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
             Roof and quote review
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-            Check the roof data, materials, and quote. Nothing on this page changes customer or job
-            records.
+            Check the roof data, materials, and quote. Manual observations are recorded separately
+            and do not alter geometry, takeoff, or approved quotes.
           </p>
         </div>
         <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
@@ -212,7 +216,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
         <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <StatusChip label={decision.label} tone={decision.tone} />
-          <span className="text-xs font-semibold text-muted">View only</span>
+          <span className="text-xs font-semibold text-muted">Review before acting</span>
         </div>
       </section>
     </header>
@@ -2082,15 +2086,21 @@ function ReviewGroup({
   status,
   tone,
   children,
+  reveal,
 }: {
   title: string;
   description: string;
   status: string;
   tone: string;
   children: ReactNode;
+  reveal?: string;
 }) {
+  const details = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (reveal && details.current) details.current.open = true;
+  }, [reveal]);
   return (
-    <details className="group overflow-hidden bg-surface">
+    <details ref={details} className="group overflow-hidden bg-surface">
       <summary className="flex min-h-20 cursor-pointer list-none flex-col items-stretch gap-3 px-5 py-4 transition-colors hover:bg-surface-raised focus-visible:outline-offset-[-3px] [&::-webkit-details-marker]:hidden sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <span className="min-w-0">
           <span className="block text-lg font-bold tracking-[-0.02em] text-foreground">

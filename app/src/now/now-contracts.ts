@@ -211,6 +211,195 @@ const nowSourceSchema = z
   })
   .strict();
 
+export const decisionKindSchema = z.enum([
+  "lead_triage",
+  "quote_revision",
+  "proposal_publication",
+  "production_schedule",
+  "postiz",
+  "quickbooks_final_invoice",
+]);
+
+const approvalDecisionStateSchema = z.enum([
+  "pending",
+  "executing",
+  "failed",
+  "audit_failed",
+  "execution_uncertain",
+]);
+
+const decisionItemFields = {
+  key: nonEmptyTextSchema,
+  id: z.string().trim().min(1).max(180),
+  version: z.number().int().positive(),
+  title: z.string().trim().min(1).max(200),
+  summary: z.string().trim().min(1).max(4_000),
+  job_id: z.string().trim().min(1).max(160).nullable(),
+  updated_at: nonEmptyTextSchema,
+  expires_at: nonEmptyTextSchema.nullable(),
+  review_href: nonEmptyTextSchema,
+};
+
+export const decisionItemSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        ...decisionItemFields,
+        id: z.string().regex(/^approval:[A-Za-z0-9_-]{16,64}$/),
+        kind: z.literal("lead_triage"),
+        native_state: approvalDecisionStateSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ...decisionItemFields,
+        id: z.string().regex(/^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/),
+        kind: z.literal("quote_revision"),
+        native_state: approvalDecisionStateSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ...decisionItemFields,
+        id: z.string().regex(/^proposal-publication-approval:[A-Za-z0-9_-]{16,64}$/),
+        kind: z.literal("proposal_publication"),
+        native_state: approvalDecisionStateSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ...decisionItemFields,
+        id: z
+          .string()
+          .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+        kind: z.literal("postiz"),
+        native_state: z.enum([
+          "connection_required",
+          "pending_review",
+          "submission_pending",
+          "submitted",
+          "reconciliation_required",
+          "stop_submitted",
+          "stop_reconciliation_required",
+        ]),
+      })
+      .strict(),
+    z
+      .object({
+        ...decisionItemFields,
+        id: quickBooksIntentIdSchema,
+        kind: z.literal("quickbooks_final_invoice"),
+        native_state: z.enum([
+          "connection_required",
+          "blocked",
+          "pending_review",
+          "submission_pending",
+          "submitted",
+          "failed",
+          "reconciliation_required",
+        ]),
+      })
+      .strict(),
+  ])
+  .superRefine((item, context) => {
+    const encodedId = encodeURIComponent(item.id);
+    const href =
+      item.kind === "lead_triage"
+        ? `/approvals?review=${encodedId}`
+        : item.kind === "quote_revision"
+          ? `/quote-revision-approvals/${encodedId}`
+          : item.kind === "proposal_publication"
+            ? `/estimator/jobs/${encodeURIComponent(item.job_id ?? "")}`
+            : item.kind === "postiz"
+              ? `/marketing/postiz/${encodedId}`
+              : `/accounting/quickbooks/final-invoices/${encodedId}`;
+    if (
+      item.key !== `${item.kind}:${item.id}` ||
+      item.review_href !== href ||
+      item.job_id === "." ||
+      item.job_id === ".." ||
+      (["quote_revision", "proposal_publication", "quickbooks_final_invoice"].includes(item.kind) &&
+        !item.job_id)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Decision identity and review route must agree.",
+      });
+    }
+  });
+
+const decisionSourceSchema = z
+  .object({
+    kind: decisionKindSchema,
+    state: z.enum(["current", "limited", "unavailable", "retired"]),
+    loaded_count: z.number().int().min(0).max(25),
+    has_more: z.boolean().nullable(),
+    next_cursor: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,1024}$/)
+      .nullable(),
+    read_model_generated_at: nonEmptyTextSchema.nullable(),
+  })
+  .strict();
+
+export const decisionsReadModelSchema = z
+  .object({
+    version: z.literal(1),
+    state: z.enum(["ready", "empty", "limited"]),
+    sources: z.array(decisionSourceSchema).max(6),
+    items: z.array(decisionItemSchema).max(125),
+  })
+  .strict()
+  .superRefine((model, context) => {
+    const kinds = new Set(model.sources.map((source) => source.kind));
+    const keys = new Set(model.items.map((item) => item.key));
+    if (
+      kinds.size !== model.sources.length ||
+      keys.size !== model.items.length ||
+      model.items.some((item) => !kinds.has(item.kind))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Decision rows and sources must be unique and bound.",
+      });
+    }
+    for (const source of model.sources) {
+      const count = model.items.filter((item) => item.kind === source.kind).length;
+      const readable = source.state === "current" || source.state === "limited";
+      if (
+        source.loaded_count !== count ||
+        (source.has_more === true) !== (source.next_cursor !== null) ||
+        (source.kind === "production_schedule") !== (source.state === "retired") ||
+        (readable
+          ? source.read_model_generated_at === null ||
+            source.has_more !== (source.state === "limited")
+          : count !== 0 || source.has_more !== null || source.read_model_generated_at !== null)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Decision source coverage must describe the loaded rows.",
+        });
+      }
+    }
+    const state = model.sources.some(
+      (source) => source.state === "limited" || source.state === "unavailable",
+    )
+      ? "limited"
+      : model.items.length > 0
+        ? "ready"
+        : "empty";
+    if (state !== model.state) {
+      context.addIssue({
+        code: "custom",
+        message: "Missing decisions cannot be reported as an empty or complete inbox.",
+      });
+    }
+  });
+
+export type DecisionKind = z.infer<typeof decisionKindSchema>;
+export type DecisionItem = z.infer<typeof decisionItemSchema>;
+export type DecisionsReadModel = z.infer<typeof decisionsReadModelSchema>;
+
 export const nowResponseSchema = z
   .object({
     version: z.literal(1),
@@ -219,6 +408,8 @@ export const nowResponseSchema = z
     permissions: z.array(nonEmptyTextSchema),
     allowed_actions: z.array(nonEmptyTextSchema),
     sources: z.array(nowSourceSchema),
+    // Absent on older clients/fixtures; callers must show unavailable, never an empty inbox.
+    decisions: decisionsReadModelSchema.optional(),
     ui: z
       .object({
         schema_version: z.literal(1),

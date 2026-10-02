@@ -320,13 +320,17 @@ const authenticatedRoute = createRoute({
 const nowRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/now",
+  validateSearch: (search: Record<string, unknown>): { show?: "decide" } => ({
+    show: search.show === "decide" ? "decide" : undefined,
+  }),
   component: NowRoute,
 });
 
 function NowRoute() {
+  const { show } = nowRoute.useSearch();
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
-      <NowPage />
+      <NowPage showDecisions={show === "decide"} />
     </Suspense>
   );
 }
@@ -547,6 +551,18 @@ const ownerRoute = createRoute({
 const approvalsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/approvals",
+  validateSearch: (search: Record<string, unknown>): { review?: string; view?: "leads" } => ({
+    review:
+      typeof search.review === "string" && search.review.length > 0 && search.review.length <= 160
+        ? search.review
+        : undefined,
+    view: search.view === "leads" ? "leads" : undefined,
+  }),
+  beforeLoad: ({ search }) => {
+    if (!search.review && search.view !== "leads") {
+      throw redirect({ to: "/now", search: { show: "decide" }, replace: true });
+    }
+  },
   component: ApprovalsRoute,
 });
 
@@ -559,9 +575,10 @@ function OwnerRoute() {
 }
 
 function ApprovalsRoute() {
+  const { review } = approvalsRoute.useSearch();
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
-      <ApprovalInboxPage />
+      <ApprovalInboxPage key={review ?? "history"} reviewId={review} />
     </Suspense>
   );
 }
@@ -679,6 +696,15 @@ const facetDesignsRoute = createRoute({
 const estimatorWorkbenchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/estimator/jobs/$jobId",
+  validateSearch: (search: Record<string, unknown>): { measurementRequest?: string } => ({
+    measurementRequest:
+      typeof search.measurementRequest === "string" &&
+      /^manual-measurement:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        search.measurementRequest,
+      )
+        ? search.measurementRequest
+        : undefined,
+  }),
   component: EstimatorWorkbenchRoute,
 });
 
@@ -931,6 +957,15 @@ const settingsConfigurationDocumentsRoute = createRoute({
 const newLeadRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/sales/new-lead",
+  validateSearch: (search: Record<string, unknown>): { receipt?: string } => ({
+    receipt:
+      typeof search.receipt === "string" &&
+      /^office-lead:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        search.receipt,
+      )
+        ? search.receipt
+        : undefined,
+  }),
   component: NewLeadRoute,
 });
 

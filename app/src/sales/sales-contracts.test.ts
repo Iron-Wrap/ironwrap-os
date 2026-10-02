@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { salesResponseSchema } from "./sales-contracts";
+import {
+  officeLeadReceiptResponseSchema,
+  officeLeadReadbackSchema,
+  salesLeadDetailResponseSchema,
+  salesResponseSchema,
+} from "./sales-contracts";
 
 function salesPayload() {
   return {
@@ -161,5 +166,92 @@ describe("Sales browser contract", () => {
         ],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("office intake contracts", () => {
+  const details = {
+    name: "Morgan Example",
+    email: "morgan@example.invalid",
+    phone: null,
+    address: null,
+    city: null,
+    province: null,
+    postal_code: null,
+    service: "Custom trim",
+    message: null,
+    source: "referral",
+    intake_source: "referral",
+    preferred_contact_channel: null,
+    email_consent: {
+      status: "not_recorded",
+      purpose: "estimate_follow_up",
+      recorded_at: null,
+      captured_by: null,
+      jurisdiction: null,
+      wording_version: null,
+    },
+  };
+  const receipt = {
+    request_id: "office-lead:11111111-1111-4111-8111-111111111111",
+    state: "recorded",
+    outcome: "created",
+    canonical_envelope_id: "ow_original",
+    lead_id: null,
+    submitted_details_applied: true,
+    captured_at: "2026-09-30T12:00:00.000Z",
+    details,
+  };
+  it("keeps no preference and unrecorded consent distinct from permission to contact", () => {
+    expect(officeLeadReadbackSchema.parse(details).preferred_contact_channel).toBeNull();
+    expect(
+      officeLeadReadbackSchema.safeParse({
+        ...details,
+        email_consent: { ...details.email_consent, purpose: "marketing" },
+      }).success,
+    ).toBe(false);
+    expect(
+      officeLeadReadbackSchema.safeParse({ ...details, raw_payload: "unexpected" }).success,
+    ).toBe(false);
+  });
+  it("rejects fabricated results, unsafe lead IDs and processing details", () => {
+    expect(officeLeadReceiptResponseSchema.safeParse({ version: 1, receipt }).success).toBe(true);
+    for (const change of [
+      { outcome: "duplicate" },
+      { details: null },
+      { canonical_envelope_id: null },
+      { state: "processing" },
+      { lead_id: ".." },
+      { request_id: "../other" },
+    ]) {
+      expect(
+        officeLeadReceiptResponseSchema.safeParse({
+          version: 1,
+          receipt: { ...receipt, ...change },
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      officeLeadReceiptResponseSchema.safeParse({
+        version: 1,
+        receipt: { ...receipt, outcome: "duplicate", submitted_details_applied: false },
+      }).success,
+    ).toBe(true);
+  });
+  it("validates exact native lead detail without changing the legacy desk shape", () => {
+    const desk = salesPayload();
+    const detail = {
+      version: 1,
+      read_model_generated_at: desk.read_model_generated_at,
+      permissions: desk.permissions,
+      allowed_actions: desk.allowed_actions,
+      stale_fields: [],
+      partial_sources: [],
+      lead: { ...desk.leads[0], id: `lead:ironwrap:${"a".repeat(64)}` },
+      intake: details,
+    };
+    expect(salesLeadDetailResponseSchema.safeParse(detail).success).toBe(true);
+    expect(salesLeadDetailResponseSchema.safeParse({ ...detail, rows: [] }).success).toBe(false);
+    expect(salesResponseSchema.safeParse(desk).success).toBe(true);
   });
 });

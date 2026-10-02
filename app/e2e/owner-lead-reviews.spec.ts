@@ -7,7 +7,7 @@ const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
 const shotDir = ".playwright-mobile";
 
 const approval = {
-  id: "approval:e2e-001",
+  id: "approval:e2e-000000000001",
   kind: "lead_triage",
   state: "pending",
   version: 1,
@@ -54,7 +54,7 @@ test.describe("Owner lead review acceptance", () => {
   });
 
   test("shows the lead change first and keeps system IDs closed", async ({ page }, testInfo) => {
-    await page.route("**/api/v1/approvals*", async (route) => {
+    await page.route("**/api/v1/approvals/approval%3Ae2e-000000000001", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -63,13 +63,13 @@ test.describe("Owner lead review acceptance", () => {
           read_model_generated_at: "2026-07-18T15:00:00.000Z",
           permissions: ["approvals:read"],
           allowed_actions: ["approval.read", "approval.approve", "approval.reject"],
-          approvals: [approval],
+          approval,
         }),
       });
     });
 
-    await page.goto("/approvals");
-    await expect(page.getByRole("heading", { name: "Lead reviews" })).toBeVisible();
+    await page.goto("/approvals?review=approval%3Ae2e-000000000001");
+    await expect(page.getByRole("heading", { name: "Review lead note" })).toBeVisible();
     await expect(page.getByText("What will change")).toBeVisible();
     await expect(page.getByText("lead:e2e-001")).toBeHidden();
 

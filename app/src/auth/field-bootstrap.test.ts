@@ -62,9 +62,17 @@ const today = {
   ],
 } as const;
 
+const preloadWindow = window as Window & {
+  __ironwrapFieldBootstrapResponse?: Promise<Response>;
+  __ironwrapFieldBootstrapPreloadConsumed?: boolean;
+};
+
 describe("fieldBootstrapResponseSchema", () => {
   afterEach(async () => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    delete preloadWindow.__ironwrapFieldBootstrapResponse;
+    delete preloadWindow.__ironwrapFieldBootstrapPreloadConsumed;
     await resetDatabaseForTests();
   });
 
@@ -127,5 +135,36 @@ describe("fieldBootstrapResponseSchema", () => {
 
     await takePrimedFieldBootstrap(loader);
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes an early head response once and fetches fresh data afterward", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ version: 1, session, today }));
+    vi.stubGlobal("fetch", fetcher);
+    preloadWindow.__ironwrapFieldBootstrapResponse = Promise.resolve(
+      Response.json({ version: 1, session, today }),
+    );
+
+    await expect(fetchFieldBootstrap()).resolves.toMatchObject({ session, today });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(preloadWindow.__ironwrapFieldBootstrapPreloadConsumed).toBe(true);
+    expect(preloadWindow.__ironwrapFieldBootstrapResponse).toBeUndefined();
+
+    await expect(fetchFieldBootstrap()).resolves.toMatchObject({ session, today });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims the missing head response before the entry's fallback and later refetch", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ version: 1, session, today }));
+    vi.stubGlobal("fetch", fetcher);
+
+    const initial = fetchFieldBootstrap();
+    expect(preloadWindow.__ironwrapFieldBootstrapPreloadConsumed).toBe(true);
+    await expect(initial).resolves.toMatchObject({ session, today });
+    await expect(fetchFieldBootstrap()).resolves.toMatchObject({ session, today });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

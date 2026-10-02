@@ -318,8 +318,8 @@ jobs:
       - name: Verify the same immutable artifact bytes
         run: |
           set -euo pipefail
-          tar -xf "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" -C "$RUNNER_TEMP"
           test "$(sha256sum "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" | awk '{print $1}')" = "$(node "$RELEASE_ENFORCER" context-field --context "$RUNNER_TEMP/context-download/context.json" --field artifact_digest)"
+          tar -xf "$RUNNER_TEMP/artifact-download/ironwrap-release-artifact.tar" -C "$RUNNER_TEMP"
 
       - name: Verify isolated qa secret-name inventory before mutation
         env:
@@ -587,4 +587,3 @@ jobs:
           path: ${{ runner.temp }}/qa-failure-cleanup-receipt.json
           if-no-files-found: error
           retention-days: 30
-

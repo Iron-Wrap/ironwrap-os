@@ -5,27 +5,45 @@ import * as React from "react";
 
 import { cn } from "../../lib/cn";
 
+const primary =
+  "bg-primary text-primary-foreground shadow-[0_1px_2px_rgb(21_24_28/0.06),inset_0_1px_0_rgb(255_255_255/0.08)] hover:bg-primary-hover";
+const secondary =
+  "bg-surface text-foreground shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.06)] hover:bg-surface-hover hover:shadow-[inset_0_0_0_1px_var(--faint),0_1px_2px_rgb(21_24_28/0.06)]";
+const quiet = "bg-transparent text-muted hover:bg-surface-hover hover:text-foreground";
+
+/**
+ * Iron Wrap button language: one ink primary per context, a sheet-white secondary, a quiet
+ * text action, and a committed stop-red danger. Brass is never a button colour; it only
+ * marks focus and the active place.
+ *
+ * `default`, `accent`, `outline` and `ghost` predate the port and stay as aliases so every
+ * existing call site takes the new look without an edit: `default` and `accent` are
+ * `primary`, `outline` is `secondary`, `ghost` is `quiet`. `danger` stays filled, because a
+ * stop-work, rescue or revoke control must not go pale.
+ */
 const buttonVariants = cva(
-  "inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-transparent px-4 text-sm font-bold tracking-[-0.01em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-55 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+  "relative inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-md border border-transparent px-4 text-sm font-semibold tracking-[-0.003em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default:
-          "bg-foreground text-background shadow-[0_1px_0_color-mix(in_srgb,var(--foreground)_35%,transparent)] hover:bg-foreground/88 active:bg-foreground/78",
-        accent:
-          "bg-accent text-accent-foreground shadow-[0_8px_20px_color-mix(in_srgb,var(--accent)_18%,transparent)] hover:bg-accent-hover active:bg-accent-active",
-        outline:
-          "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-muted active:bg-border",
-        ghost:
-          "border-transparent bg-transparent text-foreground hover:bg-surface-muted active:bg-border",
+        primary,
+        secondary,
+        quiet,
         danger:
           "bg-danger-strong text-danger-strong-foreground hover:bg-danger-strong/88 active:bg-danger-strong/78",
+        default: primary,
+        accent: primary,
+        outline: secondary,
+        ghost: quiet,
       },
       size: {
         default: "min-h-11",
         field: "min-h-16 whitespace-normal px-4 text-base leading-5",
         icon: "size-11 min-h-11 px-0",
         compact: "min-h-11 px-3.5 text-sm",
+        // 32 px visual for dense office rows; the ::after keeps a 44 px hit area.
+        small:
+          "min-h-8 gap-1.5 px-3 text-[0.8125rem] after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] [&_svg]:size-[0.9375rem]",
       },
       fullWidth: {
         true: "w-full",
@@ -33,7 +51,7 @@ const buttonVariants = cva(
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "primary",
       size: "default",
       fullWidth: false,
     },

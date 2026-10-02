@@ -7,7 +7,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   FilePlus2,
-  FileText,
   Hourglass,
   RefreshCw,
   ShieldCheck,
@@ -15,7 +14,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -23,8 +22,11 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
+import { PageHeader } from "../components/ui/page-header";
+import { RefTag } from "../components/ui/ref-tag";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { Status, type StatusKind } from "../components/ui/status";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -433,7 +435,6 @@ function QuoteRevisionApprovalDetailContent() {
     !decisionReadStale &&
     model.allowed_actions.includes("quote_revision_approval.reconcile");
   const pendingAction = mutation.isPending;
-  const currentState = statePresentation[approval.state];
 
   function approve() {
     if (!canApprove || pendingAction || approval.state !== "pending") return;
@@ -468,59 +469,25 @@ function QuoteRevisionApprovalDetailContent() {
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-6">
-      <Card className="overflow-hidden">
-        <header className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="min-w-0 p-5 sm:p-7 lg:p-8">
-            <Button asChild variant="ghost" size="compact" className="-ml-2">
-              <Link to="/quote-revision-approvals">
-                <ArrowLeft aria-hidden="true" />
-                Quote change reviews
-              </Link>
-            </Button>
-            <div className="mt-5 flex min-w-0 items-start gap-4">
-              <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background">
-                <FileText className="size-6 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h1 className="mt-1 text-3xl font-bold tracking-[-0.035em] text-balance sm:text-4xl">
-                  Review a new quote
-                </h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
-                  Choose if IronWrap can make the empty draft shown here. Prices and job details are
-                  added later.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-            <p className="text-sm font-bold text-muted">Current state</p>
-            <div className="mt-3">
-              <StatusBadge status={approval.state} />
-            </div>
-            <p className="mt-3 text-sm leading-6 text-muted">{currentState.description}</p>
-            <div className="mt-5 flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="compact"
-                busy={query.isFetching}
-                disabled={query.isFetching}
-                onClick={() => void refreshCurrentRequest()}
-              >
-                <RefreshCw aria-hidden="true" />
-                Load again
-              </Button>
-              <Button asChild variant="outline" size="compact">
-                <Link to="/estimator/jobs/$jobId" params={{ jobId: approval.roof_job_id }}>
-                  Open quote
-                  <ArrowRight aria-hidden="true" />
-                </Link>
-              </Button>
-            </div>
-          </div>
-        </header>
-      </Card>
+    <section className="mx-auto grid min-w-0 max-w-7xl gap-5 pb-6 [overflow-wrap:anywhere]">
+      <PageHeader
+        back={
+          <Link
+            to="/quote-revision-approvals"
+            className="inline-flex min-h-11 items-center gap-2 hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Quote change reviews
+          </Link>
+        }
+        eyebrow={
+          <RefTag
+            id={approval.roof_job_id}
+            className="h-auto! min-h-6 max-w-full whitespace-normal! py-1! leading-4!"
+          />
+        }
+        title={`Review empty draft ${quoteVersion(approval.target.quote_version)}`}
+      />
 
       {offline ? (
         <Notice tone="warning" title="Go online before you choose">
@@ -533,7 +500,7 @@ function QuoteRevisionApprovalDetailContent() {
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Your choice was not saved">
+        <Notice tone="danger" title="Check the saved state">
           {actionError}
         </Notice>
       ) : null}
@@ -543,62 +510,91 @@ function QuoteRevisionApprovalDetailContent() {
         </p>
       ) : null}
 
-      <RevisionDecisionRail approval={approval} />
-      <CommercialFence />
-      <RevisionRequestFacts approval={approval} />
-      <RevisionSystemDetails approval={approval} />
+      <div className="grid min-w-0 items-start gap-5 min-[1100px]:grid-cols-[minmax(0,1fr)_var(--inspector-w)] min-[1100px]:gap-x-6">
+        <RevisionRequestFacts approval={approval} />
 
-      {approval.state === "pending" ? (
-        <PendingDecisionPanel
-          approval={approval}
-          canApprove={canApprove}
-          canReject={canReject}
-          offline={offline}
-          requiresFreshRead={decisionReadStale}
-          busy={pendingAction}
-          rejecting={rejecting}
-          rejectionReason={rejectionReason}
-          onApprove={approve}
-          onStartReject={() => {
-            setActionError(undefined);
-            setRejecting(true);
-          }}
-          onCancelReject={() => {
-            setRejecting(false);
-            setRejectionReason("");
-          }}
-          onRejectionReasonChange={setRejectionReason}
-          onReject={reject}
-        />
-      ) : null}
-      {approval.state === "executing" ? <ExecutingPanel /> : null}
-      {approval.state === "execution_uncertain" ? (
-        <UncertainExecutionPanel
-          approval={approval}
-          canReconcile={canReconcile}
-          offline={offline}
-          requiresFreshRead={decisionReadStale}
-          busy={pendingAction}
-          reconciling={reconciling}
-          outcome={reconciliationOutcome}
-          evidence={reconciliationEvidence}
-          onStart={() => {
-            setActionError(undefined);
-            setReconciling(true);
-          }}
-          onCancel={() => {
-            setReconciling(false);
-            setReconciliationEvidence("");
-          }}
-          onOutcomeChange={setReconciliationOutcome}
-          onEvidenceChange={setReconciliationEvidence}
-          onSubmit={reconcile}
-        />
-      ) : null}
-      {approval.state === "executed" ? <ExecutedPanel approval={approval} /> : null}
-      {["denied", "expired", "failed", "audit_failed"].includes(approval.state) ? (
-        <ClosedRequestPanel approval={approval} />
-      ) : null}
+        <aside
+          aria-label="Decision"
+          className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_2px_6px_rgb(21_24_28/0.06)] min-[1100px]:sticky min-[1100px]:top-[calc(var(--header-h,3.5rem)+1.25rem)] min-[1100px]:col-start-2 min-[1100px]:row-span-2 min-[1100px]:row-start-1"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-4">
+            <h2 className="text-base font-semibold">Decision</h2>
+            <DecisionStatus state={approval.state} />
+          </div>
+          {approval.state === "pending" ? (
+            <PendingDecisionPanel
+              approval={approval}
+              canApprove={canApprove}
+              canReject={canReject}
+              offline={offline}
+              requiresFreshRead={decisionReadStale}
+              busy={pendingAction}
+              rejecting={rejecting}
+              rejectionReason={rejectionReason}
+              onApprove={approve}
+              onStartReject={() => {
+                setActionError(undefined);
+                setRejecting(true);
+              }}
+              onCancelReject={() => {
+                setRejecting(false);
+                setRejectionReason("");
+              }}
+              onRejectionReasonChange={setRejectionReason}
+              onReject={reject}
+            />
+          ) : null}
+          {approval.state === "executing" ? <ExecutingPanel /> : null}
+          {approval.state === "execution_uncertain" ? (
+            <UncertainExecutionPanel
+              approval={approval}
+              canReconcile={canReconcile}
+              offline={offline}
+              requiresFreshRead={decisionReadStale}
+              busy={pendingAction}
+              reconciling={reconciling}
+              outcome={reconciliationOutcome}
+              evidence={reconciliationEvidence}
+              onStart={() => {
+                setActionError(undefined);
+                setReconciling(true);
+              }}
+              onCancel={() => {
+                setReconciling(false);
+                setReconciliationEvidence("");
+              }}
+              onOutcomeChange={setReconciliationOutcome}
+              onEvidenceChange={setReconciliationEvidence}
+              onSubmit={reconcile}
+            />
+          ) : null}
+          {approval.state === "executed" ? <ExecutedPanel approval={approval} /> : null}
+          {["denied", "expired", "failed", "audit_failed"].includes(approval.state) ? (
+            <ClosedRequestPanel approval={approval} />
+          ) : null}
+          <div className="flex flex-wrap gap-2 border-t border-border px-5 py-4">
+            <Button
+              type="button"
+              variant="outline"
+              size="compact"
+              busy={query.isFetching}
+              disabled={query.isFetching}
+              onClick={() => void refreshCurrentRequest()}
+            >
+              <RefreshCw aria-hidden="true" />
+              Load again
+            </Button>
+            <Button asChild variant="quiet" size="compact">
+              <Link to="/estimator/jobs/$jobId" params={{ jobId: approval.roof_job_id }}>
+                Open quote
+                <ArrowRight aria-hidden="true" />
+              </Link>
+            </Button>
+          </div>
+        </aside>
+
+        <RevisionSystemDetails approval={approval} />
+      </div>
     </section>
   );
 }
@@ -857,37 +853,6 @@ function QueueSignal({
   );
 }
 
-function RevisionDecisionRail({ approval }: { approval: QuoteRevisionApprovalRequest }) {
-  const status = statePresentation[approval.state];
-  return (
-    <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
-      aria-labelledby="revision-decision-path"
-    >
-      <div className="flex items-center justify-between gap-3 px-5 py-5 sm:px-6">
-        <h2 id="revision-decision-path" className="text-sm font-bold text-muted">
-          How this works
-        </h2>
-        <StatusBadge status={approval.state} />
-      </div>
-      <ol className="grid border-t border-border sm:grid-cols-4">
-        <RailStep label="Current quote" detail={quoteVersion(approval.source.quote_version)} />
-        <RailStep
-          label="Empty draft"
-          detail={quoteVersion(approval.target.quote_version)}
-          bordered
-        />
-        <RailStep label="Review" detail={status.label} tone={status.tone} bordered />
-        <RailStep
-          label="Save record"
-          detail={approval.hermes_run_id ? "Saved" : "Not yet"}
-          bordered
-        />
-      </ol>
-    </section>
-  );
-}
-
 function PrepareDecisionRail({
   sourceVersion,
   targetVersion,
@@ -975,75 +940,95 @@ function CommercialFence() {
 function RevisionRequestFacts({ approval }: { approval: QuoteRevisionApprovalRequest }) {
   return (
     <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
+      className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface-raised"
       aria-labelledby="quote-review-facts"
     >
-      <div className="border-b border-border px-5 py-5 sm:px-6">
-        <h2 id="quote-review-facts" className="text-lg font-bold tracking-[-0.02em]">
+      <div className="px-5 py-4 sm:px-6">
+        <h2 id="quote-review-facts" className="text-base font-semibold">
           What you are reviewing
         </h2>
-        <p className="mt-1 text-sm leading-6 text-muted">
-          Check the current quote, the new version, and the reason for the change.
+        <p className="mt-2 text-sm leading-6 text-muted">
+          One new empty draft. Prices and job details are added later.
         </p>
       </div>
-      <div className="grid sm:grid-cols-2">
-        <div className="min-w-0 px-5 py-5 sm:px-6">
-          <p className="text-sm font-bold text-muted">Current quote</p>
-          <p className="mt-2 font-bold text-foreground">
+      <div className="grid border-y border-border sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <dl className="min-w-0 px-5 py-4 sm:px-6">
+          <dt className="text-sm text-muted">Current quote</dt>
+          <dd className="mt-1 text-lg font-semibold">
             {quoteVersion(approval.source.quote_version)}
-          </p>
-          <p className="mt-1 break-words text-sm text-muted">{approval.source.status}</p>
+          </dd>
+          <dd className="mt-1 text-sm text-muted">{approval.source.status}</dd>
+        </dl>
+        <div className="hidden items-center text-faint sm:flex" aria-hidden="true">
+          <ArrowRight className="size-4" />
         </div>
-        <div className="min-w-0 border-t border-border px-5 py-5 sm:border-t-0 sm:border-l sm:px-6">
-          <p className="text-sm font-bold text-muted">New empty draft</p>
-          <p className="mt-2 font-bold text-foreground">
+        <dl className="min-w-0 border-t border-border px-5 py-4 sm:border-t-0 sm:px-6">
+          <dt className="text-sm text-muted">New empty draft</dt>
+          <dd className="mt-1 text-lg font-semibold">
             {quoteVersion(approval.target.quote_version)}
-          </p>
-          <p className="mt-1 text-sm text-muted">Starts with no prices or job details</p>
-        </div>
-        <div className="border-t border-border px-5 py-5 sm:col-span-2 sm:px-6">
-          <p className="text-sm font-bold text-muted">What needs to change</p>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground">
-            {approval.correction_reason}
-          </p>
-        </div>
+          </dd>
+          <dd className="mt-1 text-sm text-muted">No prices or job details</dd>
+        </dl>
+      </div>
+      <div className="px-5 py-4 sm:px-6">
+        <h3 className="text-sm font-semibold">Why this revision</h3>
+        <p className="mt-2 max-w-prose whitespace-pre-wrap text-sm leading-6">
+          {approval.correction_reason}
+        </p>
+      </div>
+      <div className="border-t border-border px-5 py-4 sm:px-6">
+        <h3 className="text-sm font-semibold">What stays out</h3>
+        <p className="mt-2 max-w-prose text-sm leading-6 text-muted">
+          Prices, tax, job details, payments, and customer replies are not copied. No message is
+          sent. Money records do not change.
+        </p>
       </div>
     </section>
   );
 }
 
 function RevisionSystemDetails({ approval }: { approval: QuoteRevisionApprovalRequest }) {
+  const facts = [
+    ["Current quote ID", approval.source.customer_quote_id],
+    ["New draft ID", approval.target.customer_quote_id],
+    ["Request ID", approval.id],
+    ["Request version", String(approval.version)],
+    ["Save record ID", approval.hermes_run_id ?? approval.run_id],
+    ...(approval.outcome ? [["Recorded draft ID", approval.outcome.customer_quote_id]] : []),
+    ...(approval.error_code ? [["Error code", approval.error_code]] : []),
+  ];
   return (
-    <details className="rounded-lg border border-border bg-surface-raised">
-      <summary className="min-h-14 cursor-pointer px-5 py-4 text-base font-bold sm:px-6">
+    <details className="min-w-0 rounded-lg border border-border bg-surface-raised min-[1100px]:col-start-1">
+      <summary className="min-h-14 cursor-pointer px-5 py-4 text-sm font-semibold sm:px-6">
         System details
       </summary>
       <dl className="divide-y divide-border border-t border-border text-sm">
-        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
-          <dt className="font-bold text-muted">Current quote ID</dt>
-          <dd className="break-all">{approval.source.customer_quote_id}</dd>
-        </div>
-        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
-          <dt className="font-bold text-muted">New draft ID</dt>
-          <dd className="break-all">{approval.target.customer_quote_id}</dd>
-        </div>
-        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
-          <dt className="font-bold text-muted">Request ID</dt>
-          <dd className="break-all">{approval.id}</dd>
-        </div>
-        <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
-          <dt className="font-bold text-muted">Save record</dt>
-          <dd className="break-all">{approval.hermes_run_id ?? approval.run_id}</dd>
-        </div>
-        {approval.error_code ? (
-          <div className="grid gap-1 px-5 py-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6">
-            <dt className="font-bold text-muted">Error code</dt>
-            <dd className="break-all">{approval.error_code}</dd>
+        {facts.map(([label, value]) => (
+          <div
+            key={label}
+            className="grid gap-1 px-5 py-3 sm:grid-cols-[9rem_minmax(0,1fr)] sm:px-6"
+          >
+            <dt className="text-muted">{label}</dt>
+            <dd className="break-all font-mono text-xs leading-5">{value}</dd>
           </div>
-        ) : null}
+        ))}
       </dl>
     </details>
   );
+}
+
+function DecisionStatus({ state }: { state: QuoteRevisionApprovalRequest["state"] }) {
+  const kind: Record<QuoteRevisionApprovalRequest["state"], StatusKind> = {
+    pending: "attention",
+    executing: "pending",
+    executed: "confirmed",
+    denied: "retired",
+    expired: "retired",
+    failed: "stopped",
+    audit_failed: "stopped",
+    execution_uncertain: "attention",
+  };
+  return <Status kind={kind[state]}>{statePresentation[state].label}</Status>;
 }
 
 function PendingDecisionPanel({
@@ -1075,17 +1060,26 @@ function PendingDecisionPanel({
   onRejectionReasonChange: (value: string) => void;
   onReject: () => void;
 }) {
+  const rejectButton = useRef<HTMLElement>(null);
+  const returnFocus = useRef(false);
+  useEffect(() => {
+    if (!rejecting && returnFocus.current) {
+      rejectButton.current?.querySelector<HTMLButtonElement>("[data-reject-trigger]")?.focus();
+      returnFocus.current = false;
+    }
+  }, [rejecting]);
+
   if (!canApprove && !canReject) {
     return (
-      <section className="border border-border bg-surface px-5 py-6 sm:px-6" role="status">
-        <p className="font-bold">
+      <section className="px-5 py-4" role="status">
+        <h3 className="text-sm font-semibold">
           {offline
             ? "Go online before you choose"
             : requiresFreshRead
               ? "Load this request again"
               : "Waiting for the right person"}
-        </p>
-        <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+        </h3>
+        <p className="mt-2 text-sm leading-6 text-muted">
           {offline
             ? "IronWrap will not save this choice while you are offline. No draft will be made."
             : requiresFreshRead
@@ -1097,22 +1091,19 @@ function PendingDecisionPanel({
   }
 
   return (
-    <section
-      className="overflow-hidden rounded-lg border border-border bg-surface-raised shadow-[0_1px_2px_oklch(0_0_0/0.035)]"
-      aria-labelledby="pending-decision-heading"
-    >
-      <div className="border-b border-border px-5 py-5 sm:px-6">
-        <h2 id="pending-decision-heading" className="text-lg font-bold tracking-[-0.02em]">
+    <section ref={rejectButton} aria-labelledby="pending-decision-heading">
+      <div className="px-5 pt-4">
+        <h3 id="pending-decision-heading" className="text-sm font-semibold">
           Make the empty draft?
-        </h2>
-        <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-          Yes makes one empty draft, {quoteVersion(approval.target.quote_version)}. It has no
-          prices, job details, payments, or customer reply.
+        </h3>
+        <p className="mt-2 text-sm leading-6 text-muted">
+          Create {quoteVersion(approval.target.quote_version)} with no prices, job details,
+          payments, or customer reply.
         </p>
       </div>
       {rejecting ? (
-        <div className="p-5 sm:p-6">
-          <label htmlFor="revision-rejection-reason" className="text-sm font-bold">
+        <div className="px-5 py-4">
+          <label htmlFor="revision-rejection-reason" className="text-sm font-semibold">
             Why should we stop this request?
           </label>
           <Textarea
@@ -1120,22 +1111,21 @@ function PendingDecisionPanel({
             value={rejectionReason}
             onChange={(event) => onRejectionReasonChange(event.target.value.slice(0, 1_000))}
             disabled={!canReject || busy}
+            autoFocus
             rows={4}
             maxLength={1_000}
             placeholder="Say what must be fixed before someone asks again."
-            className="mt-3"
+            className="mt-2"
           />
-          <div className="mt-2 flex justify-between text-xs text-muted">
+          <div className="mt-2 flex flex-wrap justify-between gap-1 text-xs text-muted">
             <span>At least 3 characters.</span>
             <span>{rejectionReason.length}/1000</span>
           </div>
-          <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button type="button" variant="outline" disabled={busy} onClick={onCancelReject}>
-              Cancel
-            </Button>
+          <div className="mt-4 grid gap-2">
             <Button
               type="button"
               variant="danger"
+              className="whitespace-normal"
               busy={busy}
               disabled={!canReject || busy || rejectionReason.trim().length < 3}
               onClick={onReject}
@@ -1143,32 +1133,27 @@ function PendingDecisionPanel({
               <XCircle aria-hidden="true" />
               Turn down request
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                returnFocus.current = true;
+                onCancelReject();
+              }}
+            >
+              Cancel
+            </Button>
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p className="max-w-xl text-sm leading-6 text-muted">
-            This choice only works for quote {quoteVersion(approval.source.quote_version)} and empty
-            draft {quoteVersion(approval.target.quote_version)}. If either changes, this request
-            stops.
-          </p>
-          <div className="flex flex-col-reverse gap-3 sm:flex-row">
-            {canReject ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="whitespace-nowrap"
-                disabled={busy}
-                onClick={onStartReject}
-              >
-                Turn down
-              </Button>
-            ) : null}
+        <div className="px-5 py-4">
+          <div className="grid gap-2">
             {canApprove ? (
               <Button
                 type="button"
-                variant="accent"
-                className="whitespace-nowrap"
+                variant="primary"
+                className="whitespace-normal"
                 busy={busy}
                 disabled={busy}
                 onClick={onApprove}
@@ -1177,7 +1162,22 @@ function PendingDecisionPanel({
                 Make empty draft
               </Button>
             ) : null}
+            {canReject ? (
+              <Button
+                data-reject-trigger
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={onStartReject}
+              >
+                Turn down
+              </Button>
+            ) : null}
           </div>
+          <p className="mt-4 text-xs leading-5 text-muted">
+            Only for quote {quoteVersion(approval.source.quote_version)} and empty draft{" "}
+            {quoteVersion(approval.target.quote_version)}. If either changes, this request stops.
+          </p>
         </div>
       )}
     </section>
@@ -1186,15 +1186,12 @@ function PendingDecisionPanel({
 
 function ExecutingPanel() {
   return (
-    <section
-      className="rounded-lg border border-info/35 bg-info-soft px-5 py-6 sm:px-6"
-      role="status"
-    >
+    <section className="px-5 py-4" role="status">
       <div className="flex items-start gap-3">
         <Hourglass className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
         <div>
-          <h2 className="font-bold">Saving the draft</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+          <h2 className="text-sm font-semibold">Saving the draft</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
             IronWrap is saving the approved draft. It will not send the same work again.
           </p>
         </div>
@@ -1232,18 +1229,24 @@ function UncertainExecutionPanel({
   onEvidenceChange: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const checkButton = useRef<HTMLElement>(null);
+  const returnFocus = useRef(false);
+  useEffect(() => {
+    if (!reconciling && returnFocus.current) {
+      checkButton.current?.querySelector<HTMLButtonElement>("[data-check-trigger]")?.focus();
+      returnFocus.current = false;
+    }
+  }, [reconciling]);
+
   return (
-    <section
-      className="rounded-lg border border-danger/40 bg-danger-soft px-5 py-6 sm:px-6"
-      aria-labelledby="uncertain-heading"
-    >
+    <section className="px-5 py-4" ref={checkButton} aria-labelledby="uncertain-heading">
       <div className="flex items-start gap-3">
         <TriangleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
         <div className="min-w-0">
-          <h2 id="uncertain-heading" className="font-bold">
+          <h2 id="uncertain-heading" className="text-sm font-semibold">
             Do not try this request again
           </h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+          <p className="mt-2 text-sm leading-6 text-muted">
             We could not tell if the draft was made. Check the saved record before you do anything
             else.
           </p>
@@ -1251,16 +1254,14 @@ function UncertainExecutionPanel({
       </div>
 
       {approval.reconciliation ? (
-        <div className="mt-5 border-t border-danger/25 pt-5" role="status">
-          <p className="font-bold">
+        <div className="mt-4 border-t border-border pt-4" role="status">
+          <p className="text-sm font-semibold">
             Result check saved: {resultLabel(approval.reconciliation.outcome)}
           </p>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
-            {approval.reconciliation.evidence}
-          </p>
+          <p className="mt-2 text-sm leading-6 text-muted">{approval.reconciliation.evidence}</p>
         </div>
       ) : !canReconcile ? (
-        <p className="mt-5 border-t border-danger/25 pt-5 text-sm leading-6 text-muted">
+        <p className="mt-4 border-t border-border pt-4 text-sm leading-6 text-muted">
           {offline
             ? "Go online before you save what you checked. IronWrap will not queue it offline."
             : requiresFreshRead
@@ -1268,12 +1269,13 @@ function UncertainExecutionPanel({
               : "You cannot save this check. The right person must do it."}
         </p>
       ) : reconciling ? (
-        <div className="mt-5 border-t border-danger/25 pt-5">
+        <div className="mt-4 border-t border-border pt-4">
           <label htmlFor="reconciliation-outcome" className="text-sm font-bold">
             What happened?
           </label>
           <Select
             id="reconciliation-outcome"
+            autoFocus
             value={outcome}
             disabled={busy}
             onChange={(event) => onOutcomeChange(event.target.value as ReconciliationOutcome)}
@@ -1283,7 +1285,7 @@ function UncertainExecutionPanel({
             <option value="executed">Draft was made</option>
             <option value="not_executed">Draft was not made</option>
           </Select>
-          <label htmlFor="reconciliation-evidence" className="mt-5 block text-sm font-bold">
+          <label htmlFor="reconciliation-evidence" className="mt-4 block text-sm font-bold">
             What did you check?
           </label>
           <Textarea
@@ -1300,13 +1302,22 @@ function UncertainExecutionPanel({
             <span>At least 3 characters.</span>
             <span>{evidence.length}/1000</span>
           </div>
-          <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>
+          <div className="mt-4 grid gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                returnFocus.current = true;
+                onCancel();
+              }}
+            >
               Cancel
             </Button>
             <Button
               type="button"
-              variant="danger"
+              variant="primary"
+              className="whitespace-normal"
               busy={busy}
               disabled={busy || evidence.trim().length < 3}
               onClick={onSubmit}
@@ -1317,8 +1328,15 @@ function UncertainExecutionPanel({
           </div>
         </div>
       ) : (
-        <div className="mt-5 border-t border-danger/25 pt-5">
-          <Button type="button" variant="outline" disabled={busy} onClick={onStart}>
+        <div className="mt-4 border-t border-border pt-4">
+          <Button
+            data-check-trigger
+            type="button"
+            variant="outline"
+            className="w-full whitespace-normal"
+            disabled={busy}
+            onClick={onStart}
+          >
             <ClipboardCheck aria-hidden="true" />
             Check saved result
           </Button>
@@ -1331,61 +1349,23 @@ function UncertainExecutionPanel({
 function ExecutedPanel({ approval }: { approval: QuoteRevisionApprovalRequest }) {
   const outcome = approval.outcome;
   return (
-    <section
-      className="rounded-lg border border-ok/40 bg-ok-soft px-5 py-6 sm:px-6"
-      aria-labelledby="executed-heading"
-    >
+    <section className="px-5 py-4" aria-labelledby="executed-heading">
       <div className="flex items-start gap-3">
         <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div>
-          <h2 id="executed-heading" className="font-bold">
+          <h2 id="executed-heading" className="text-sm font-semibold">
             Draft is ready
           </h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+          <p className="mt-2 text-sm leading-6 text-muted">
             The empty draft was saved. No prices or job details were copied. No customer message or
             money record changed.
           </p>
         </div>
       </div>
-      <dl className="mt-5 grid border-y border-ok/25 sm:grid-cols-3">
-        <ResultFact
-          label="Draft quote"
-          value={outcome?.customer_quote_id ?? approval.target.customer_quote_id}
-        />
-        <ResultFact
-          label="Draft version"
-          value={quoteVersion(outcome?.quote_version ?? approval.target.quote_version)}
-          bordered
-        />
-        <ResultFact
-          label="Save record"
-          value={approval.hermes_run_id ?? approval.run_id}
-          bordered
-        />
-      </dl>
+      <p className="mt-4 border-t border-border pt-4 text-sm font-semibold">
+        Empty draft {quoteVersion(outcome?.quote_version ?? approval.target.quote_version)}
+      </p>
     </section>
-  );
-}
-
-function ResultFact({
-  label,
-  value,
-  bordered = false,
-}: {
-  label: string;
-  value: string;
-  bordered?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "min-w-0 px-4 py-4",
-        bordered && "border-t border-ok/25 sm:border-t-0 sm:border-l",
-      )}
-    >
-      <dt className="text-sm font-bold text-muted">{label}</dt>
-      <dd className="mt-2 break-all text-sm font-bold text-foreground">{value}</dd>
-    </div>
   );
 }
 
@@ -1397,15 +1377,12 @@ function ClosedRequestPanel({ approval }: { approval: QuoteRevisionApprovalReque
       ? approval.rejection_reason
       : presentation.description;
   return (
-    <section
-      className="rounded-lg border border-border bg-surface-raised px-5 py-6 sm:px-6"
-      role="status"
-    >
+    <section className="px-5 py-4" role="status">
       <div className="flex items-start gap-3">
         <Icon className="mt-0.5 size-5 shrink-0 text-muted" aria-hidden="true" />
         <div>
-          <h2 className="font-bold">{presentation.label}</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{explanation}</p>
+          <h2 className="text-sm font-semibold">{presentation.label}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">{explanation}</p>
         </div>
       </div>
     </section>

@@ -6,15 +6,43 @@ import { getOutboxActionsNeedingAttention } from "./outbox";
 import { flushOutbox, initializeOutbox } from "./outbox-processor";
 import type { OutboxAction, OutboxSummary } from "./outbox-types";
 
-export function useOutboxSummary(principal: { tenantId: string; userId: string }): OutboxSummary {
+export type OutboxReadState = "checking" | "ready" | "error";
+
+export function useOutboxSummary(principal: {
+  tenantId: string;
+  userId: string;
+}): OutboxSummary & { readState: OutboxReadState } {
   const { tenantId, userId } = principal;
-  const [summary, setSummary] = useState<OutboxSummary>(emptyOutboxSummary);
+  const [snapshot, setSnapshot] = useState<{
+    tenantId: string;
+    userId: string;
+    summary: OutboxSummary;
+    readState: OutboxReadState;
+  }>();
   useEffect(() => {
     let active = true;
+    let revision = 0;
     const refresh = () => {
-      void getOutboxSummary({ tenantId, userId }).then((next) => {
-        if (active) setSummary(next);
-      });
+      const requestedRevision = ++revision;
+      void getOutboxSummary({ tenantId, userId })
+        .then((summary) => {
+          if (active && requestedRevision === revision) {
+            setSnapshot({ tenantId, userId, summary, readState: "ready" });
+          }
+        })
+        .catch(() => {
+          if (active && requestedRevision === revision) {
+            setSnapshot((previous) => ({
+              tenantId,
+              userId,
+              summary:
+                previous?.tenantId === tenantId && previous.userId === userId
+                  ? previous.summary
+                  : emptyOutboxSummary(),
+              readState: "error",
+            }));
+          }
+        });
     };
     const unsubscribe = subscribeOutboxChanges(refresh);
     refresh();
@@ -23,7 +51,10 @@ export function useOutboxSummary(principal: { tenantId: string; userId: string }
       unsubscribe();
     };
   }, [tenantId, userId]);
-  return summary;
+  if (snapshot?.tenantId !== tenantId || snapshot.userId !== userId) {
+    return { ...emptyOutboxSummary(), readState: "checking" };
+  }
+  return { ...snapshot.summary, readState: snapshot.readState };
 }
 
 export function useOutboxActionsNeedingAttention(principal: {

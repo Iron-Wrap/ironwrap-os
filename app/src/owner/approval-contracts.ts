@@ -130,6 +130,10 @@ export const approvalListResponseSchema = approvalReadEnvelopeSchema
   })
   .strict();
 
+export const approvalDetailResponseSchema = approvalReadEnvelopeSchema
+  .extend({ approval: approvalRequestSchema })
+  .strict();
+
 export const approvalMutationResponseSchema = z
   .object({
     approval: approvalRequestSchema,

@@ -32,6 +32,9 @@ export interface LeadIntakeInput {
   provider?: string;
   rawText: string;
   contentType: string | null;
+  /** Internal durable identity; never accepted from an inbound payload. */
+  ownedIdentity?: { envelopeId: string; capturedAt: string };
+  suppressAcknowledgement?: boolean;
   /**
    * Release-smoke scope (IRO-264): keep every owned write, skip the two outward
    * side effects (customer acknowledgement, JobNimbus queue push). The caller is
@@ -79,9 +82,25 @@ export async function ingestLead(
 
   const parsed = parseBody(input.rawText, input.contentType);
   const raw = input.provider ? { ...parsed, provider: input.provider } : parsed;
-  const envelopeId = newEnvelopeId();
-  const now = new Date().toISOString();
+  const envelopeId = input.ownedIdentity?.envelopeId ?? newEnvelopeId();
+  const now = input.ownedIdentity?.capturedAt ?? new Date().toISOString();
   const rawKey = `raw/${now.slice(0, 10)}/${envelopeId}.json`;
+
+  // A durable office retry reuses the exact envelope and only repairs the queue handoff.
+  if (input.ownedIdentity) {
+    const existing = await store.getEnvelope(env, envelopeId);
+    if (existing) {
+      if (existing.payload_json !== JSON.stringify(raw) || existing.source !== input.source || existing.raw_key !== rawKey)
+        throw new Error("office_intake_identity_conflict");
+      // The first attempt may have stopped after the envelope but before the audit/queue.
+      // Append a resumable intake audit; duplicate audit observations confer no extra authority.
+      await store.recordAudit(env, { automation: "ingest", trigger: input.source, envelope_id: envelopeId,
+        action: "resume", result: "ok", recovery_owner: env.OWNER_ALERT_EMAIL });
+      if (existing.status === "pending_jn_push") await env.JN_QUEUE.send({ envelope_id: envelopeId });
+      return { ok: true, body: { envelope_id: envelopeId, canonical_envelope_id: envelopeId,
+        tenant_id: tenantId, status: existing.status, duplicate: false, queue: existing.intent_queue } };
+    }
+  }
 
   // 1) Raw to R2 FIRST — nothing is lost even if everything after this throws.
   await store.putRaw(env, rawKey, input.rawText, "application/json");
@@ -104,7 +123,11 @@ export async function ingestLead(
 
   // Replay of a claimed contact returns the original identity. A second D1 lead
   // row (even status=duplicate) would mint a second operating record.
-  if (dupOf) {
+  if (dupOf && !(input.ownedIdentity && dupOf === envelopeId)) {
+    // Another request may have claimed dedup before its envelope write completed.
+    // A new receipt cannot claim that nonexistent envelope is a recorded duplicate.
+    if (input.ownedIdentity && !await store.getEnvelope(env, dupOf))
+      throw new Error("office_intake_canonical_pending");
     await store.recordAudit(env, {
       automation: "ingest",
       trigger: input.source,
@@ -152,7 +175,13 @@ export async function ingestLead(
   };
 
   // 4) Owned store write (system of record).
-  await store.insertEnvelope(env, rec);
+  try {
+    await store.insertEnvelope(env, rec);
+  } catch (error) {
+    if (!input.ownedIdentity) throw error;
+    const raced = await store.getEnvelope(env, envelopeId);
+    if (!raced || raced.payload_json !== rec.payload_json || raced.raw_key !== rawKey || raced.source !== rec.source) throw error;
+  }
   await store.recordAudit(env, {
     automation: "ingest",
     trigger: input.source,
@@ -167,7 +196,7 @@ export async function ingestLead(
   // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
   //    A release-smoke fixture is never acknowledged: the proof runs against
   //    production and this is the one step that would email a (synthetic) customer.
-  if (!input.releaseSmoke) {
+  if (!input.suppressAcknowledgement && !input.releaseSmoke) {
     ctx.waitUntil(
       sendInstantAck(env, rec).catch((error) =>
         onError({ at: "instant_ack", envelope_id: envelopeId, error: String(error) }),

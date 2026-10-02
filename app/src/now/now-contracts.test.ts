@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { nowResponseSchema } from "./now-contracts";
+import {
+  decisionsReadModelSchema,
+  nowResponseSchema,
+  type DecisionsReadModel,
+} from "./now-contracts";
 
 function validPayload() {
   return {
@@ -66,6 +70,159 @@ function validPayload() {
     },
   };
 }
+
+function validDecisions(): DecisionsReadModel {
+  const id = "approval:0000000000000001";
+  return {
+    version: 1,
+    state: "ready",
+    sources: [
+      {
+        kind: "lead_triage",
+        state: "current",
+        loaded_count: 1,
+        has_more: false,
+        next_cursor: null,
+        read_model_generated_at: "2026-09-29T12:00:00.000Z",
+      },
+    ],
+    items: [
+      {
+        key: `lead_triage:${id}`,
+        kind: "lead_triage",
+        id,
+        version: 1,
+        native_state: "pending",
+        title: "Review lead note",
+        summary: "Review the captured lead note.",
+        job_id: null,
+        updated_at: "2026-09-29T12:00:00.000Z",
+        expires_at: "2026-09-30T12:00:00.000Z",
+        review_href: `/approvals?review=${encodeURIComponent(id)}`,
+      },
+    ],
+  };
+}
+
+describe("decisionsReadModelSchema", () => {
+  it("accepts the bounded projection without inventing a model for older Now responses", () => {
+    expect(nowResponseSchema.parse(validPayload()).decisions).toBeUndefined();
+    expect(
+      nowResponseSchema.parse({ ...validPayload(), decisions: validDecisions() }).decisions,
+    ).toEqual(validDecisions());
+  });
+
+  it("rejects mutation fields, raw arguments, forged destinations and native-state drift", () => {
+    for (const extra of [
+      { allowed_actions: ["approve"] },
+      { write_args_json: "fixture" },
+      { review_href: "/approvals?review=another" },
+      { key: "quote_revision:another" },
+      { native_state: "executed" },
+      { native_state: "published" },
+    ]) {
+      const model = validDecisions();
+      expect(
+        decisionsReadModelSchema.safeParse({ ...model, items: [{ ...model.items[0], ...extra }] })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it("refuses route-normalizing IDs and the wrong native identity format", () => {
+    const lead = validDecisions().items[0]!;
+    for (const [kind, id, route] of [
+      ["lead_triage", "approval:short", "/approvals?review=approval%3Ashort"],
+      ["quote_revision", "..", "/quote-revision-approvals/.."],
+      ["postiz", "not-a-uuid", "/marketing/postiz/not-a-uuid"],
+      ["quickbooks_final_invoice", "short", "/accounting/quickbooks/final-invoices/short"],
+    ]) {
+      const item = {
+        ...lead,
+        kind,
+        id,
+        key: `${kind}:${id}`,
+        job_id: "job:fixture:1",
+        review_href: route,
+      };
+      expect(
+        decisionsReadModelSchema.safeParse({
+          ...validDecisions(),
+          sources: [{ ...validDecisions().sources[0], kind }],
+          items: [item],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("requires truthful source counts, uniqueness, retirement and unavailable coverage", () => {
+    const base = validDecisions();
+    for (const override of [
+      { loaded_count: 0 },
+      { state: "unavailable" },
+      { state: "retired" },
+      { has_more: true, next_cursor: null },
+      { next_cursor: "next" },
+      { read_model_generated_at: null },
+    ]) {
+      expect(
+        decisionsReadModelSchema.safeParse({
+          ...base,
+          sources: [{ ...base.sources[0], ...override }],
+        }).success,
+      ).toBe(false);
+    }
+    expect(decisionsReadModelSchema.safeParse({ ...base, sources: [] }).success).toBe(false);
+    expect(
+      decisionsReadModelSchema.safeParse({ ...base, items: [...base.items, ...base.items] })
+        .success,
+    ).toBe(false);
+    expect(
+      decisionsReadModelSchema.safeParse({ ...base, sources: [...base.sources, ...base.sources] })
+        .success,
+    ).toBe(false);
+    const unavailable = {
+      version: 1,
+      state: "limited",
+      items: [],
+      sources: [
+        {
+          kind: "lead_triage",
+          state: "unavailable",
+          loaded_count: 0,
+          has_more: null,
+          next_cursor: null,
+          read_model_generated_at: null,
+        },
+      ],
+    };
+    expect(decisionsReadModelSchema.safeParse(unavailable).success).toBe(true);
+    expect(decisionsReadModelSchema.safeParse({ ...unavailable, state: "empty" }).success).toBe(
+      false,
+    );
+    expect(decisionsReadModelSchema.safeParse({ ...unavailable, state: "ready" }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts an explicit partial page only with a bounded continuation cursor", () => {
+    const base = validDecisions();
+    const partial = {
+      ...base,
+      state: "limited",
+      sources: [{ ...base.sources[0], state: "limited", has_more: true, next_cursor: "next_page" }],
+    };
+    expect(decisionsReadModelSchema.safeParse(partial).success).toBe(true);
+    for (const cursor of [null, "", "../other", "x".repeat(1025)]) {
+      expect(
+        decisionsReadModelSchema.safeParse({
+          ...partial,
+          sources: [{ ...partial.sources[0], next_cursor: cursor }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
 
 describe("nowResponseSchema", () => {
   it("accepts only the declarative Now component contract", () => {

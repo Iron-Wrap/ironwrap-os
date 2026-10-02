@@ -2452,6 +2452,7 @@ export async function buildOwnerNowReadModel(
 export async function buildSalesReadModel(
   env: AppEnv,
   auth: AuthContext,
+  leadId?: string,
 ): Promise<SalesReadModel> {
   if (!auth.permissions.includes("sales:read"))
     throw new Error("office_scope_required");
@@ -2460,6 +2461,7 @@ export async function buildSalesReadModel(
     env,
     auth.session.tenant_id,
     SALES_SOURCE_LIMIT,
+    leadId,
   );
   const jobsByLead = firstRowsBy(sources.jobs, (row) => row.lead_id);
   const estimatesByLead = firstRowsBy(sources.estimates, (row) => row.lead_id);

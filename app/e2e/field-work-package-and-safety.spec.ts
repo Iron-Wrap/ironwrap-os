@@ -86,7 +86,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     await page.goto("/today");
     await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
 
-    await page.locator("summary", { hasText: "Safety" }).click();
+    await page.getByRole("button", { name: "Help", exact: true }).click();
     await expect(page.getByRole("region", { name: /^safety$/i })).toBeVisible();
     await expect(page.getByRole("list", { name: "Active safety stops" })).toHaveCount(0);
 
@@ -114,7 +114,7 @@ test.describe("Field mutation journeys (work package + safety)", () => {
     // just the local outbox write.
     await page.reload();
     await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
-    await page.locator("summary", { hasText: "Safety" }).click();
+    await page.getByRole("button", { name: "Help", exact: true }).click();
     const stops = page.getByRole("list", { name: "Active safety stops" });
     await expect(stops).toBeVisible();
     await expect(stops).toContainText("An active safety stop is in force");

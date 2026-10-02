@@ -28,7 +28,8 @@ test.describe("Operator command palette acceptance", () => {
     await expect(input).toBeFocused();
     await input.fill("no");
     await expect(page.getByRole("option", { name: /Now/ })).toBeVisible();
-    expect(searchRequests).toContain("?q=no");
+    // Destinations are local now; the debounced server search follows them.
+    await expect.poll(() => searchRequests).toContain("?q=no");
 
     await settleAnimations(page);
     const a11y = await new AxeBuilder({ page }).analyze();

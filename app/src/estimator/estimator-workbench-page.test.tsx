@@ -15,8 +15,16 @@ import {
 } from "./estimator-api";
 import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
+import { loadManualMeasurements } from "./manual-measurement-api";
+
+const manualSearch = vi.hoisted(() => ({ measurementRequest: undefined as string | undefined }));
 
 vi.mock("../capabilities/capability-api", () => ({ loadCapabilitySignal: vi.fn() }));
+vi.mock("./manual-measurement-api", () => ({
+  loadManualMeasurements: vi.fn(),
+  recordManualMeasurement: vi.fn(),
+  newManualMeasurementRequestId: vi.fn(),
+}));
 vi.mock("./estimator-api", () => ({
   createFacetLaunch: vi.fn(),
   loadEstimatorWorkbench: vi.fn(),
@@ -31,6 +39,8 @@ vi.mock("../portal/customer-portal-office-access", () => ({
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
   useParams: () => ({ jobId: "JOB-A" }),
+  useSearch: () => manualSearch,
+  useNavigate: () => vi.fn(),
 }));
 
 const ownerSession = {
@@ -292,6 +302,7 @@ function openCommercialGroup(name: "Customer quote" | "Proposal" | "Scope and ri
 describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    manualSearch.measurementRequest = undefined;
     // The default is an empty capability list: `facet_launch` is not visible to this role, so
     // every other test in this file sees exactly the behaviour it saw before the signal existed.
     vi.mocked(loadCapabilitySignal).mockResolvedValue(capabilitySignal("owner", []));
@@ -309,6 +320,36 @@ describe("EstimatorWorkbenchPage", () => {
       },
     });
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel());
+    vi.mocked(loadManualMeasurements).mockImplementation(async (_job, options) => ({
+      version: 1,
+      tenant_id: "ironwrap",
+      read_model_generated_at: "2026-07-11T12:00:00.000Z",
+      job: { id: "JOB-A", version: 1, job_number: "IW-1001" },
+      allowed_actions: [],
+      observation_head: null,
+      areas: [],
+      history: { items: [], next_before: null },
+      requested_request_id: options?.requestId ?? null,
+      receipt: null,
+    }));
+  });
+
+  it("reveals manual recovery when a numberless job is reopened with a receipt link", async () => {
+    manualSearch.measurementRequest = "manual-measurement:11111111-1111-4111-8111-111111111111";
+    const model = workbenchModel();
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...model,
+      job: { ...model.job, job_number: null },
+    });
+    renderWorkbench();
+    await screen.findByRole("heading", { name: "Roof and quote review" });
+    expect(screen.getByText("Roof details", { exact: true }).closest("details")).toHaveAttribute(
+      "open",
+    );
+    expect(await screen.findByRole("button", { name: "Check saved observation" })).toBeVisible();
+    expect(loadManualMeasurements).toHaveBeenCalledWith("JOB-A", {
+      requestId: manualSearch.measurementRequest,
+    });
   });
 
   it("renders source geometry, takeoff lineage, and versioned commercial truth without write affordances", async () => {

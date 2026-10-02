@@ -7,7 +7,6 @@ import {
   Clock3,
   FileCheck2,
   RefreshCw,
-  ShieldCheck,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -16,7 +15,7 @@ import { useRef, useState } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
-import { WorkspaceHeader } from "../components/workspace-header";
+import { PageHeader } from "../components/ui/page-header";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
@@ -27,6 +26,7 @@ import { ApiError } from "../lib/api";
 import {
   approveApproval,
   loadApprovals,
+  loadApproval,
   newApprovalDecisionKey,
   reconcileApproval,
   rejectApproval,
@@ -46,22 +46,23 @@ type ApprovalAction =
 
 const APPROVAL_HISTORY_PREVIEW_LIMIT = 3;
 
-export function ApprovalInboxPage() {
+export function ApprovalInboxPage({ reviewId }: { reviewId?: string }) {
   return (
     <RoleGuard surface="owner">
-      <ApprovalInboxContent />
+      <ApprovalInboxContent reviewId={reviewId} />
     </RoleGuard>
   );
 }
 
-function ApprovalInboxContent() {
+function ApprovalInboxContent({ reviewId }: { reviewId?: string }) {
   const session = useSession();
   const queryClient = useQueryClient();
   const offline = isOfflineSession(session);
-  const queryKey = ["approvals", session.tenant.id, session.user.id] as const;
+  const queueKey = ["approvals", session.tenant.id, session.user.id] as const;
+  const queryKey = reviewId ? [...queueKey, reviewId] : queueKey;
   const query = useQuery({
     queryKey,
-    queryFn: () => loadApprovals(),
+    queryFn: () => (reviewId ? loadApproval(reviewId) : loadApprovals()),
     retry: false,
   });
   const keys = useRef(new Map<string, string>());
@@ -75,6 +76,12 @@ function ApprovalInboxContent() {
   const [actionError, setActionError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [showAllApprovals, setShowAllApprovals] = useState(false);
+  const [requiresFreshRead, setRequiresFreshRead] = useState(false);
+
+  async function refreshCurrentRequest() {
+    const result = await query.refetch();
+    if (!result.error && result.data) setRequiresFreshRead(false);
+  }
 
   const mutation = useMutation({
     retry: false,
@@ -111,6 +118,7 @@ function ApprovalInboxContent() {
         updateApproval(current, result.approval),
       );
       setActionError(undefined);
+      setRequiresFreshRead(false);
       setRejectingId(undefined);
       setReason("");
       setReconcilingId(undefined);
@@ -129,9 +137,12 @@ function ApprovalInboxContent() {
     onError: (error) => {
       setActionError(messageFor(error));
       setNotice(undefined);
+      setRequiresFreshRead(true);
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: ["now", session.tenant.id, session.user.id] });
+      void queryClient.invalidateQueries({ queryKey: queueKey, refetchType: "none" });
+      void refreshCurrentRequest();
     },
   });
 
@@ -148,9 +159,11 @@ function ApprovalInboxContent() {
   if (!query.data) return <ApprovalInboxSkeleton />;
 
   const model = query.data;
-  const canApprove = !offline && model.allowed_actions.includes("approval.approve");
-  const canReject = !offline && model.allowed_actions.includes("approval.reject");
-  const canReconcile = !offline && model.allowed_actions.includes("approval.reconcile");
+  const stale = requiresFreshRead || query.isError;
+  const canChoose = !offline && !stale && !query.isFetching;
+  const canApprove = canChoose && model.allowed_actions.includes("approval.approve");
+  const canReject = canChoose && model.allowed_actions.includes("approval.reject");
+  const canReconcile = canChoose && model.allowed_actions.includes("approval.reconcile");
   const locale = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
   const actingId = mutation.isPending ? mutation.variables?.approval.id : undefined;
   const history = model.approvals.filter(
@@ -189,47 +202,44 @@ function ApprovalInboxContent() {
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-6">
-      <WorkspaceHeader
-        icon={<ShieldCheck aria-hidden="true" />}
-        title="Lead reviews"
-        description="Check one lead note before IronWrap saves it. Customer messages, quotes, and money records stay out."
-        aside={
-          <>
-            <p className="text-sm font-bold text-muted">Next step</p>
-            <h2 className="mt-2 text-xl font-bold tracking-[-0.025em]">
-              {model.approvals.length === 0
-                ? "No lead reviews"
-                : `${model.approvals.length} ${model.approvals.length === 1 ? "lead review" : "lead reviews"}`}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              Open each row and check the note before you choose.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="compact"
-              className="mt-5"
-              disabled={query.isFetching}
-              busy={query.isFetching}
-              onClick={() => void query.refetch()}
-            >
-              <RefreshCw aria-hidden="true" />
-              Load again
-            </Button>
-          </>
+      <PageHeader
+        title={reviewId ? "Review lead note" : "Lead reviews"}
+        back={
+          <a
+            className="inline-flex min-h-11 items-center hover:text-foreground"
+            href="/now?show=decide"
+          >
+            Back to decisions
+          </a>
+        }
+        meta="Check the lead note before saving it."
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            size="compact"
+            disabled={query.isFetching}
+            busy={query.isFetching}
+            onClick={() => void refreshCurrentRequest()}
+          >
+            <RefreshCw aria-hidden="true" />
+            Load again
+          </Button>
         }
       />
 
-      <Card className="overflow-hidden">
-        <ApprovalSummary approvals={model.approvals} />
-      </Card>
+      {!reviewId ? (
+        <Card className="overflow-hidden">
+          <ApprovalSummary approvals={model.approvals} />
+        </Card>
+      ) : null}
 
       {offline ? (
         <Notice tone="warning" title="Go online before you choose">
           IronWrap will not save this choice while you are offline. The last saved state stays here.
         </Notice>
       ) : null}
-      {query.isError ? (
+      {stale ? (
         <Notice tone="warning" title="This may be an old list">
           Load the list again before you choose.
         </Notice>
@@ -240,7 +250,7 @@ function ApprovalInboxContent() {
         </p>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Your choice was not saved">
+        <Notice tone="danger" title="Check the saved state">
           {actionError}
         </Notice>
       ) : null}
@@ -266,6 +276,7 @@ function ApprovalInboxContent() {
               <li key={approval.id}>
                 <ApprovalCard
                   approval={approval}
+                  expanded={Boolean(reviewId)}
                   locale={locale}
                   canApprove={canApprove}
                   canReject={canReject}
@@ -379,6 +390,7 @@ function SummaryMetric({
 
 function ApprovalCard({
   approval,
+  expanded = false,
   locale,
   canApprove,
   canReject,
@@ -402,6 +414,7 @@ function ApprovalCard({
   onReconcile,
 }: {
   approval: ApprovalRequest;
+  expanded?: boolean;
   locale: OwnerDateFormatOptions;
   canApprove: boolean;
   canReject: boolean;
@@ -442,7 +455,7 @@ function ApprovalCard({
         approval.state === "execution_uncertain" ? "border-warning bg-warning-soft/35" : undefined
       }
     >
-      <details className="group">
+      <details className="group" open={expanded || undefined}>
         <summary
           className="flex min-h-20 cursor-pointer list-none items-start justify-between gap-4 px-5 py-4 sm:px-6 [&::-webkit-details-marker]:hidden"
           aria-label={`Review lead check: ${state.label}. ${reviewSummary}. Asked ${created}`}

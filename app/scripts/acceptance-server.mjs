@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { createSecureServer } from "node:http2";
 import { readFile, stat } from "node:fs/promises";
@@ -1146,6 +1147,8 @@ const fixtureEstimatorEnvelope = {
 
 const fixtureEstimatorSession = {
   ...fixtureEstimatorEnvelope,
+  permissions: [...fixtureEstimatorEnvelope.permissions, "sales:lead_create"],
+  allowed_actions: [...fixtureEstimatorEnvelope.allowed_actions, "sales.lead.create"],
   authenticated: true,
   user: {
     id: "appu_acceptance_owner",
@@ -1377,6 +1380,132 @@ function fixtureOperatorSearch(query) {
       },
     ],
   };
+}
+
+// Synthetic, process-local manual observations only. Native D1 atomicity and authorization
+// are verified by Worker tests; these isolated jobs exercise the browser's real API path.
+const manualMeasurementJobs = new Map();
+const manualFixtureJob = /^JOB-MANUAL-[A-Za-z0-9-]+$/;
+const manualFixtureRequest =
+  /^manual-measurement:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function manualFixtureState(jobId) {
+  if (!manualMeasurementJobs.has(jobId))
+    manualMeasurementJobs.set(jobId, { version: 1, observations: [], receipts: new Map() });
+  return manualMeasurementJobs.get(jobId);
+}
+
+function manualFixtureWorkbench(jobId) {
+  const model = structuredClone(fixtureEstimatorWorkbench);
+  model.job = { ...model.job, id: jobId, roof_job_id: jobId, job_number: null, status: "Draft" };
+  model.lineage = { measurement_to_takeoff: "no_measurement", quote_to_proposal: "no_quote" };
+  model.measurements = { reports: [], selected: null };
+  model.visual_model = null;
+  model.takeoffs = { records: [], selected: null };
+  model.quote = null;
+  model.proposal = null;
+  model.pricing_snapshot = {
+    state: "unavailable",
+    quote_id: null,
+    quote_version: null,
+    price_book_version: null,
+    pricing_effective_at: null,
+    valid_until: null,
+  };
+  model.scope_clauses = [];
+  model.proposal_readiness = { state: "review_required", reasons: ["quote_missing"] };
+  return model;
+}
+
+async function routeManualMeasurements(request, requestUrl, method) {
+  const match = requestUrl.pathname.match(
+    /^\/api\/v1\/estimator\/jobs\/([^/]+)(\/manual-measurements)?$/,
+  );
+  if (!match) return null;
+  const jobId = decodeURIComponent(match[1]);
+  if (!manualFixtureJob.test(jobId)) return null;
+  if (!match[2]) return { status: 200, body: manualFixtureWorkbench(jobId) };
+  const state = manualFixtureState(jobId);
+  let currentHead = state.observations.at(-1)?.id ?? null;
+  if (method === "GET") {
+    const requestId = requestUrl.searchParams.get("request_id");
+    const before = Number(requestUrl.searchParams.get("before") ?? Infinity);
+    const history = state.observations.filter((item) => item.sequence < before).toReversed();
+    const latest = new Map(state.observations.map((item) => [item.area_id, item]));
+    return {
+      status: 200,
+      body: {
+        version: 1,
+        tenant_id: fixtureEstimatorSession.tenant.id,
+        read_model_generated_at: "2026-09-30T12:00:00.000Z",
+        job: { id: jobId, version: state.version, job_number: null },
+        allowed_actions: ["manual_measurement.record"],
+        observation_head: currentHead,
+        areas: [...latest.values()],
+        history: {
+          items: history.slice(0, 25),
+          next_before: history.length > 25 ? history[24].sequence : null,
+        },
+        requested_request_id: requestId,
+        receipt: state.receipts.get(requestId)?.receipt ?? null,
+      },
+    };
+  }
+  if (method !== "POST") return { status: 405, body: { error: "method_not_allowed" } };
+  if (request.headers["x-csrf-token"] !== fixtureEstimatorSession.csrf_token)
+    return { status: 403, body: { error: "csrf_token_invalid" } };
+  const key = request.headers["idempotency-key"];
+  const input = await readJsonBody(request);
+  currentHead = state.observations.at(-1)?.id ?? null;
+  if (typeof key !== "string" || !manualFixtureRequest.test(key) || !input?.target)
+    return { status: 400, body: { error: "invalid_manual_measurement" } };
+  const hash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  const previousReceipt = state.receipts.get(key);
+  if (previousReceipt) {
+    if (previousReceipt.receipt.request_hash !== hash)
+      return { status: 409, body: { error: "manual_measurement_idempotency_conflict" } };
+    return { status: 200, body: { ...previousReceipt, replayed: true } };
+  }
+  if (input.expected_job_version !== state.version)
+    return { status: 409, body: { error: "manual_measurement_job_stale" } };
+  if (input.expected_observation_head !== currentHead)
+    return { status: 409, body: { error: "manual_measurement_head_stale" } };
+  const prior = input.target.area_id
+    ? state.observations.findLast((item) => item.area_id === input.target.area_id)
+    : undefined;
+  if (input.target.area_id && (!prior || !input.correction_reason?.trim()))
+    return { status: 400, body: { error: "invalid_manual_measurement" } };
+  const digest = createHash("sha256").update(`${jobId}:${key}`).digest("hex");
+  const observation = {
+    id: `mobs_${digest}`,
+    job_id: jobId,
+    area_id: prior?.area_id ?? `marea_${digest}`,
+    area_label: prior?.area_label ?? input.target.new_area_label,
+    revision: (prior?.revision ?? 0) + 1,
+    sequence: state.observations.length + 1,
+    area_sq_ft: input.area_sq_ft,
+    area_basis: input.area_basis,
+    pitch_rise_per_12: input.pitch_rise_per_12,
+    method: input.method,
+    uncertainty: input.uncertainty,
+    correction_reason: input.correction_reason,
+    supersedes_observation_id: prior?.id ?? null,
+    previous_head_id: currentHead,
+    job_version: state.version,
+    recorded_by: fixtureEstimatorSession.user.id,
+    recorded_at: "2026-09-30T12:00:00.000Z",
+    sha256: hash,
+  };
+  state.observations.push(observation);
+  const result = {
+    version: 1,
+    tenant_id: fixtureEstimatorSession.tenant.id,
+    job_id: jobId,
+    receipt: { request_id: key, request_hash: hash, observation },
+    replayed: false,
+  };
+  state.receipts.set(key, result);
+  return { status: 201, body: result };
 }
 
 const fixtureEstimatorWorkbench = {
@@ -2165,6 +2294,8 @@ const onboardingDefaults = () => ({
     },
   ],
   leads: [],
+  intakeReceipts: {},
+  intakeDetails: {},
 });
 
 let onboardingState = onboardingDefaults();
@@ -2488,53 +2619,156 @@ async function routeOnboarding(request, requestUrl, method) {
   if (method === "GET" && requestUrl.pathname === "/api/v1/sales") {
     return { status: 200, body: onboardingSalesPayload() };
   }
+  if (method === "GET" && requestUrl.pathname.startsWith("/api/v1/sales/intakes/")) {
+    const requestId = decodeURIComponent(
+      requestUrl.pathname.slice("/api/v1/sales/intakes/".length),
+    );
+    const saved = onboardingState.intakeReceipts[requestId];
+    return saved
+      ? { status: 200, body: saved.response }
+      : { status: 404, body: { error: "office_lead_receipt_not_found" } };
+  }
+  if (
+    method === "POST" &&
+    requestUrl.pathname.startsWith("/api/v1/sales/intakes/") &&
+    requestUrl.pathname.endsWith("/resume")
+  ) {
+    const requestId = decodeURIComponent(requestUrl.pathname.split("/").at(-2));
+    const body = await readJsonBody(request);
+    if (!body || Array.isArray(body) || Object.keys(body).length) {
+      return { status: 400, body: { error: "invalid_body" } };
+    }
+    // This fixture records synchronously; resuming a recorded identity is a readback replay.
+    const saved = onboardingState.intakeReceipts[requestId];
+    return saved
+      ? { status: 200, body: saved.response }
+      : { status: 404, body: { error: "office_lead_receipt_not_found" } };
+  }
+  if (method === "GET" && requestUrl.pathname.startsWith("/api/v1/sales/leads/")) {
+    const leadId = decodeURIComponent(requestUrl.pathname.slice("/api/v1/sales/leads/".length));
+    const lead = onboardingState.leads.find((candidate) => candidate.id === leadId);
+    return lead
+      ? {
+          status: 200,
+          body: {
+            version: 1,
+            read_model_generated_at: "2026-09-30T12:00:00.000Z",
+            permissions: ["sales:read"],
+            allowed_actions: ["sales.read", "commercial.lead_triage.record"],
+            stale_fields: [],
+            partial_sources: [],
+            lead,
+            intake: onboardingState.intakeDetails[leadId] ?? null,
+          },
+        }
+      : { status: 404, body: { error: "lead_not_found" } };
+  }
   if (method === "POST" && requestUrl.pathname === "/api/v1/sales/leads") {
     const body = (await readJsonBody(request)) ?? {};
-    if (!body.email && !body.phone) {
-      return { status: 400, body: { error: "contact_required" } };
+    const receiptMode = requestUrl.searchParams.get("include_receipt") === "1";
+    const requestId = request.headers["idempotency-key"];
+    const bodySignature = JSON.stringify(body);
+    if (receiptMode) {
+      if (
+        typeof requestId !== "string" ||
+        !/^office-lead:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+          requestId,
+        )
+      ) {
+        return { status: 400, body: { error: "invalid_idempotency_key" } };
+      }
+      const saved = onboardingState.intakeReceipts[requestId];
+      if (saved)
+        return saved.bodySignature === bodySignature
+          ? { status: 200, body: saved.response }
+          : { status: 409, body: { error: "idempotency_conflict" } };
     }
-    const contact = String(body.email ?? body.phone);
-    const duplicate = onboardingState.leads.some(
-      (lead) => (lead.contact.email ?? lead.contact.phone) === contact,
+    if (!body.email && !body.phone) return { status: 400, body: { error: "contact_required" } };
+    const contact = String(body.email || body.phone)
+      .trim()
+      .toLowerCase();
+    let lead = onboardingState.leads.find(
+      (candidate) =>
+        String(candidate.contact.email || candidate.contact.phone).toLowerCase() === contact,
     );
-    if (!duplicate) {
-      onboardingState.leads = [
-        ...onboardingState.leads,
-        {
-          id: `lead_${onboardingState.leads.length}`,
-          envelope_id: `ow_acceptance-lead-${onboardingState.leads.length}`,
-          source: "manual",
-          received_at: "2026-08-22T12:33:00.000Z",
-          transport_status: "pending_jn_push",
-          intent_queue: "residential_sales",
-          contact: {
-            display_name: String(body.name ?? "") || null,
-            phone: body.phone ?? null,
-            email: body.email ?? null,
-          },
-          triage: { status: null, summary: null, version: 1 },
-          job: null,
-          estimate: null,
-          quote: null,
-          proposal: null,
-          consent: { context: "no_linked_record", records: [] },
-          partial_fields: [],
-          // A lead nobody has triaged yet carries `triage_unresolved`, exactly as
-          // `salesAttention` derives it server-side — which is why it lands on the desk's default
-          // "Needs a check" view instead of only under "All leads".
-          attention: ["triage_unresolved"],
+    const duplicate = Boolean(lead);
+    if (!lead) {
+      const digest = createHash("sha256")
+        .update(`synthetic-freshco-${onboardingState.leads.length}`)
+        .digest("hex");
+      lead = {
+        id: `lead:freshco:${digest}`,
+        envelope_id: `ow_acceptance-lead-${onboardingState.leads.length}`,
+        source: "office",
+        received_at: "2026-09-30T12:00:00.000Z",
+        transport_status: "received",
+        intent_queue: "residential_sales",
+        contact: {
+          display_name: String(body.name ?? "") || null,
+          phone: body.phone || null,
+          email: body.email || null,
         },
-      ];
+        triage: { status: "Untriaged", summary: null, version: 1 },
+        job: null,
+        estimate: null,
+        quote: null,
+        proposal: null,
+        consent: { context: "no_linked_record", records: [] },
+        partial_fields: [],
+        attention: ["triage_unresolved"],
+      };
+      onboardingState.leads.push(lead);
+      onboardingState.intakeDetails[lead.id] = {
+        name: body.name,
+        email: body.email || null,
+        phone: body.phone || null,
+        address: body.address || null,
+        city: body.city || null,
+        province: body.province || null,
+        postal_code: body.postal_code || null,
+        service: body.service || null,
+        message: body.message || null,
+        source: "office",
+        intake_source: body.intake_source ?? null,
+        preferred_contact_channel: body.preferred_contact_channel ?? null,
+        email_consent: {
+          status: body.email_estimate_follow_up_consent ? "granted" : "not_recorded",
+          purpose: "estimate_follow_up",
+          recorded_at: body.email_estimate_follow_up_consent ? "2026-09-30T12:00:00.000Z" : null,
+          captured_by: body.email_estimate_follow_up_consent ? "appu_acceptance_owner" : null,
+          jurisdiction: body.email_estimate_follow_up_consent ? "CA-AB" : null,
+          wording_version: body.email_estimate_follow_up_consent
+            ? "synthetic-estimate-follow-up-v1"
+            : null,
+        },
+      };
+    }
+    if (receiptMode) {
+      const response = {
+        version: 1,
+        receipt: {
+          request_id: requestId,
+          state: "recorded",
+          outcome: duplicate ? "duplicate" : "created",
+          canonical_envelope_id: lead.envelope_id,
+          lead_id: lead.id,
+          submitted_details_applied: !duplicate,
+          captured_at: "2026-09-30T12:00:00.000Z",
+          details: onboardingState.intakeDetails[lead.id],
+        },
+      };
+      onboardingState.intakeReceipts[requestId] = { bodySignature, response };
+      return { status: 202, body: response };
     }
     return {
       status: 200,
       body: {
         version: 1,
         lead: {
-          envelope_id: "ow_acceptance-0000-4000-8000-000000000001",
-          canonical_envelope_id: "ow_acceptance-0000-4000-8000-000000000001",
+          envelope_id: lead.envelope_id,
+          canonical_envelope_id: lead.envelope_id,
           tenant_id: "freshco",
-          status: duplicate ? "duplicate" : "pending_jn_push",
+          status: duplicate ? "duplicate" : "received",
           duplicate,
           queue: "residential_sales",
         },
@@ -2665,6 +2899,10 @@ const requestListener = async (request, response) => {
 
   if (requestUrl.pathname === "/healthz") {
     return sendJson(response, method, 200, { ok: true });
+  }
+  if (ACCEPTANCE_MODE === "estimator") {
+    const manual = await routeManualMeasurements(request, requestUrl, method);
+    if (manual) return sendJson(response, method, manual.status, manual.body);
   }
   if (method === "POST" && requestUrl.pathname === "/__acceptance/fleet/reset") {
     resetFleetCaptureState();

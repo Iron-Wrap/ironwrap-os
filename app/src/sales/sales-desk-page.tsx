@@ -557,16 +557,14 @@ function LeadRow({
                 <ArrowUpRight className="size-4" aria-hidden="true" />
               </Link>
             ) : null}
-            {canPrepareTriage &&
-            lead.triage.status === "Untriaged" &&
-            lead.attention.includes("triage_unresolved") ? (
+            {canPrepareTriage && ["Untriaged", "Triaged"].includes(lead.triage.status ?? "") ? (
               <Link
                 to="/sales/leads/$leadId/triage"
                 params={{ leadId: lead.id }}
                 className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 font-bold text-foreground transition-colors hover:bg-surface-muted"
               >
                 <ClipboardCheck className="size-4" aria-hidden="true" />
-                Start lead check
+                {lead.triage.status === "Triaged" ? "Complete lead review" : "Start lead check"}
               </Link>
             ) : null}
             {canAddToBoard ? (

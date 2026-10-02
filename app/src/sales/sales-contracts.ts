@@ -206,7 +206,104 @@ export interface NewLeadInput {
   postal_code: string;
   service: string;
   message: string;
+  intake_source?: "phone" | "referral" | "walk_in";
+  preferred_contact_channel?: "email" | "phone" | null;
+  email_estimate_follow_up_consent?: boolean;
 }
+
+export const nativeSalesLeadIdSchema = z
+  .string()
+  .regex(/^lead:[a-z0-9][a-z0-9-]{1,63}:[a-f0-9]{64}$/);
+export const officeLeadRequestIdSchema = z
+  .string()
+  .regex(/^office-lead:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const officeLeadReadbackSchema = z
+  .object({
+    name: z.string().min(1),
+    email: nullableText,
+    phone: nullableText,
+    address: nullableText,
+    city: nullableText,
+    province: nullableText,
+    postal_code: nullableText,
+    service: nullableText,
+    message: nullableText,
+    source: z.string().min(1),
+    intake_source: z.enum(["phone", "referral", "walk_in"]).nullable(),
+    preferred_contact_channel: z.enum(["email", "phone"]).nullable(),
+    email_consent: z
+      .object({
+        status: z.enum(["granted", "not_recorded"]),
+        purpose: z.literal("estimate_follow_up"),
+        recorded_at: nullableText,
+        captured_by: nullableText,
+        jurisdiction: nullableText,
+        wording_version: nullableText,
+      })
+      .strict(),
+  })
+  .strict();
+export type OfficeLeadReadback = z.infer<typeof officeLeadReadbackSchema>;
+export const officeLeadReceiptResponseSchema = z
+  .object({
+    version: z.literal(1),
+    receipt: z
+      .object({
+        request_id: officeLeadRequestIdSchema,
+        state: z.enum(["processing", "recorded"]),
+        outcome: z.enum(["created", "duplicate"]).nullable(),
+        canonical_envelope_id: nullableText,
+        lead_id: nativeSalesLeadIdSchema.nullable(),
+        submitted_details_applied: z.boolean().nullable(),
+        captured_at: z.string().min(1),
+        details: officeLeadReadbackSchema.nullable(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine(({ receipt }, ctx) => {
+    if (
+      receipt.state === "recorded" &&
+      (!receipt.outcome ||
+        !receipt.canonical_envelope_id ||
+        !receipt.details ||
+        receipt.submitted_details_applied !== (receipt.outcome === "created"))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Recorded intake needs its canonical persisted result.",
+      });
+    }
+    if (
+      receipt.state === "processing" &&
+      (receipt.outcome !== null ||
+        receipt.canonical_envelope_id !== null ||
+        receipt.lead_id !== null ||
+        receipt.details !== null ||
+        receipt.submitted_details_applied !== null)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Unconfirmed intake cannot claim a recorded result.",
+      });
+    }
+  });
+export type OfficeLeadReceiptResponse = z.infer<typeof officeLeadReceiptResponseSchema>;
+export type OfficeLeadReceipt = OfficeLeadReceiptResponse["receipt"];
+export const salesLeadDetailResponseSchema = z
+  .object({
+    version: z.literal(1),
+    read_model_generated_at: z.string().min(1),
+    permissions: z.array(z.string()),
+    allowed_actions: z.array(z.string()),
+    stale_fields: z.array(z.string()),
+    partial_sources: z.array(z.string()),
+    lead: salesLeadSchema.extend({ id: nativeSalesLeadIdSchema }),
+    intake: officeLeadReadbackSchema.nullable(),
+  })
+  .strict();
+export type SalesLeadDetailResponse = z.infer<typeof salesLeadDetailResponseSchema>;
+export type SalesLeadResponse = SalesLeadDetailResponse;
 
 export const newLeadResponseSchema = z.object({
   version: z.literal(1),

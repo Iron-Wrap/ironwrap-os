@@ -106,8 +106,8 @@ if (!indexHtml.includes('name="robots" content="noindex,nofollow"')) {
 if (!robots.includes("User-agent: *") || !robots.includes("Disallow: /")) {
   throw new Error("dist/robots.txt must disallow crawlers from the private PWA");
 }
-if (!indexHtml.includes('<script defer src="/field-bootstrap-preload.js"></script>')) {
-  throw new Error("dist/index.html must load the paired-device bootstrap preloader");
+if (!indexHtml.includes('<script async src="/field-bootstrap-preload.js"></script>')) {
+  throw new Error("dist/index.html must load the paired-device bootstrap preloader asynchronously");
 }
 if (
   !bootstrapPreload.includes("indexedDB.databases") ||
@@ -131,11 +131,11 @@ if (stylesheetIndex > entryScriptIndex) {
   );
 }
 if (
-  /<link\b(?=[^>]*\brel=["']preload["'])(?=[^>]*\bas=["']font["'])[^>]*hubot-sans[^>]*>/i.test(
+  /<link\b(?=[^>]*\brel=["']preload["'])(?=[^>]*\bas=["']font["'])[^>]*(?:archivo|martian-mono)[^>]*>/i.test(
     indexHtml,
   )
 ) {
-  throw new Error("dist/index.html must not preload optional Hubot faces");
+  throw new Error("dist/index.html must not preload optional Archivo or Martian Mono faces");
 }
 
 for (const [constant, chunk] of [

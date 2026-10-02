@@ -1,5 +1,20 @@
 import { z } from "zod";
 
+import {
+  publicEstimateBrandSchema,
+  type PublicEstimateBrand,
+  type PublicEstimateBrandDescriptor,
+} from "./public-estimate-config";
+
+export {
+  publicEstimateBrandSchema,
+  publicEstimateBrandDescriptorSchema,
+  publicEstimateConfigSchema,
+  type PublicEstimateBrand,
+  type PublicEstimateBrandDescriptor,
+  type PublicEstimateConfig,
+} from "./public-estimate-config";
+
 export const PUBLIC_ESTIMATE_DISCLAIMER =
   "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.";
 
@@ -10,21 +25,6 @@ export const PUBLIC_ESTIMATE_SERVICES = [
   { id: "gutters", label: "Gutters" },
   { id: "soffit_fascia", label: "Soffit or fascia" },
 ] as const;
-
-/**
- * A brand is whatever the Worker says it accepts, named by whatever the owner set in the company
- * profile. It used to be a two-value enum hard-coded here (`ironwrap`, `iroof`), which meant every
- * other tenant's customers were rejected with `400 invalid_request` on a page headed with someone
- * else's brand name (ELEC-158 B2).
- */
-export const publicEstimateBrandSchema = z.string().trim().min(1).max(80);
-
-export const publicEstimateBrandDescriptorSchema = z.object({
-  id: publicEstimateBrandSchema,
-  display_name: z.string().min(1),
-  short_name: z.string().min(1),
-  service_area: z.string(),
-});
 
 export const PUBLIC_ESTIMATE_DEFAULT_PROVINCE = "AB";
 
@@ -106,17 +106,6 @@ export const publicEstimateFormSchema = z
     });
   });
 
-export const publicEstimateConfigSchema = z.object({
-  enabled: z.boolean(),
-  turnstile_site_key: z.string().trim().min(1).nullable(),
-  range_available: z.literal(false),
-  disclaimer: z.string().trim().min(1),
-  review_required: z.literal(true),
-  brands: z.array(publicEstimateBrandDescriptorSchema),
-  default_brand: publicEstimateBrandSchema.nullable(),
-  logo_url: z.string().min(1).nullable(),
-});
-
 export const publicInstantEstimateRequestSchema = z.object({
   brand: publicEstimateBrandSchema,
   service: publicEstimateServiceSchema,
@@ -146,9 +135,6 @@ export const publicInstantEstimateResponseSchema = z.object({
   idempotent_replay: z.boolean().optional(),
 });
 
-export type PublicEstimateConfig = z.infer<typeof publicEstimateConfigSchema>;
-export type PublicEstimateBrand = z.infer<typeof publicEstimateBrandSchema>;
-export type PublicEstimateBrandDescriptor = z.infer<typeof publicEstimateBrandDescriptorSchema>;
 export type PublicEstimateFormValues = z.infer<typeof publicEstimateFormSchema>;
 export type PublicEstimateProvince = z.infer<typeof publicEstimateProvinceSchema>;
 export type PublicInstantEstimateRequest = z.infer<typeof publicInstantEstimateRequestSchema>;

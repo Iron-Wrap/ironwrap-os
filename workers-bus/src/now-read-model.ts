@@ -8,6 +8,11 @@ import {
 } from "./app-read-models.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import {
+  buildDecisionsReadModel,
+  type DecisionPageRequest,
+  type DecisionsReadModel,
+} from "./decision-read-model.ts";
+import {
   listFacetV2IntakeExceptions,
   listFacetV2WorkflowEvidence,
   type FacetV2IntakeException,
@@ -100,6 +105,7 @@ export interface NowReadModel {
   read_model_generated_at: string;
   permissions: string[];
   allowed_actions: string[];
+  decisions?: DecisionsReadModel;
   sources: Array<{
     id: NowSourceId;
     state: "current" | "limited" | "unavailable";
@@ -151,6 +157,22 @@ interface QuickBooksNowReadModel {
 }
 
 export async function buildNowReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  now = new Date(),
+  options?: { includeDecisions: boolean; page?: DecisionPageRequest },
+): Promise<NowReadModel> {
+  // Installed PWAs validate the original response strictly. Only opted-in
+  // clients receive the additive projection; legacy reads retain their shape.
+  if (!options?.includeDecisions) return buildRoleNowReadModel(env, auth, now);
+  const [model, decisions] = await Promise.all([
+    buildRoleNowReadModel(env, auth, now),
+    buildDecisionsReadModel(env, auth, now, options.page),
+  ]);
+  return { ...model, decisions };
+}
+
+async function buildRoleNowReadModel(
   env: AppEnv,
   auth: AuthContext,
   now = new Date(),

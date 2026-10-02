@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
 
-import { cn } from "../lib/cn";
+import { Status, type StatusKind } from "../components/ui/status";
 import {
   ageLabel,
   amountLabel,
   badgePresentation,
   kindLabel,
+  type AccountingBadge,
   type AccountingIntentRow,
 } from "./money-contracts";
 
@@ -20,17 +21,25 @@ import {
 //    line of text with a small hyperlink in it.
 //  * The badge and the amount wrap onto their own line rather than being pushed off the edge.
 
+// Each money state keeps its glyph shape as well as its colour: approval and a QuickBooks
+// difference are "someone must act", an item QuickBooks holds is "confirmed", and one that is
+// with QuickBooks or has been compensated is "pending" on someone else.
+const badgeKind: Record<AccountingBadge, StatusKind> = {
+  pending: "attention",
+  in_flight: "pending",
+  uncertain: "attention",
+  mismatched: "stopped",
+  compensated: "pending",
+  reconciled: "confirmed",
+  rejected: "retired",
+  failed: "stopped",
+};
+
 export function MoneyBadge({ badge }: { badge: AccountingIntentRow["badge"] }) {
-  const presentation = badgePresentation[badge];
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-bold",
-        presentation.tone,
-      )}
-    >
-      {presentation.label}
-    </span>
+    <Status kind={badgeKind[badge]} className="shrink-0">
+      {badgePresentation[badge].label}
+    </Status>
   );
 }
 

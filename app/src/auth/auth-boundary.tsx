@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useDeferredValue, useEffect, type ReactNode } from "react";
 
 import { ApiError, isRetryableApiError } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -32,6 +32,11 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       return error instanceof ApiError && error.status === 0 && failureCount < 1;
     },
   });
+
+  // The verified session mounts the whole shell and its first screen. Committing it at transition
+  // priority lets React yield between components instead of holding a paired phone's main thread
+  // for the entire mount; the checking state stays on screen until that render is ready.
+  const verified = useDeferredValue(sessionQuery.data);
 
   // An offline reload signs in from the IndexedDB snapshot, which carries no CSRF token, so
   // nothing queued can upload. The moment the network returns, ask the server for the live
@@ -76,8 +81,8 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!sessionQuery.data) return <LoadingState label="Checking your sign-in…" />;
-  const { session, today } = sessionQuery.data;
+  if (!verified) return <LoadingState label="Checking your sign-in…" />;
+  const { session, today } = verified;
   if (!session.authenticated) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-chrome p-4 sm:p-8">

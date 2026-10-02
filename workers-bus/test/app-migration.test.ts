@@ -2263,13 +2263,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // requires a current authority-precondition array on every non-stop field action. 0132 adds the
     // per-cron heartbeat table the token-less `/ready?scope=ops` probe reads (IRO-262). 0133
     // forward-adds `envelopes.release_smoke` so a production release proof's own rows are
-    // distinguishable from customer leads; it adds no table, index, or trigger. The 0070–0078 and
-    // 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 112);
+    // distinguishable from customer leads; it adds no table, index, or trigger. 0134 adds immutable
+    // office lead-intake receipts, and 0135 adds the separate manual-observation ledger and heads.
+    // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
+    assert.equal(migrations.length, 114);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0133_envelope_release_smoke.sql",
+      "0135_job_manual_measurements.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2387,9 +2388,13 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // revisions), two named indexes, and five head-pointer, lineage, and append-only guards.
     // 0132 adds one table (`cron_heartbeat`) with no index or trigger: its `TEXT PRIMARY KEY`
     // autoindex is excluded from every inventory and the row count (at most two) never needs one.
+    // 0133 forward-adds the envelope release-smoke marker without changing object counts. 0134
+    // adds one office lead-intake receipt table, one named index, and four immutability/canonical
+    // guards. 0135 adds three manual-observation tables, two named indexes, and twelve lineage,
+    // head-pointer, retention, and append-only guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 235, indexes: 346, triggers: 574 },
+      { tables: 239, indexes: 349, triggers: 590 },
     );
     assert.deepEqual(
       (db.prepare(

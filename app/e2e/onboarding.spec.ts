@@ -40,7 +40,7 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
   // `.sr-only` inputs are the accessible half of a visible control (the logo file input sits
   // behind its "Upload logo" button); the button is the tap target being measured, not the input.
   const controls = page.locator(
-    "main button:visible, main a:visible, main select:visible, main input:not(.sr-only):visible",
+    "main button:visible, main a:visible, main select:visible, main input:not(.sr-only):not([type=radio]):not([type=checkbox]):visible, main .new-lead-choice:visible, main .new-lead-consent:visible",
   );
   const count = await controls.count();
   expect(count, `${screen} offers no controls at all`).toBeGreaterThan(0);
@@ -175,16 +175,24 @@ test.describe("Onboarding v0 mobile acceptance", () => {
     await expect(page.getByRole("heading", { name: "Add a lead" })).toBeVisible();
 
     await page.getByLabel(/^Full name/).fill("Grace Green");
-    await page.getByLabel("Phone").fill("403-555-0117");
+    await page.getByRole("textbox", { name: "Phone", exact: true }).fill("403-555-0117");
     // A service nobody configured in advance: typed as the customer said it.
-    await page.getByLabel("What they need").fill("Cedar shake restoration");
-    await page.getByLabel("City").fill("Edmonton");
+    await page.getByLabel(/^Kind of work/).fill("Cedar shake restoration");
+    await page.getByLabel(/^City or town/).fill("Edmonton");
 
     await assertNoHorizontalScroll(page, "add a lead");
     await assertActionsAreReachable(page, "add a lead");
     await page.screenshot({ path: `${SHOT_DIR}/onboarding-07-new-lead.png`, fullPage: true });
 
-    await page.getByRole("button", { name: "Add the lead" }).click();
+    await page.getByRole("button", { name: "Save lead", exact: true }).click();
+    await expect(page.getByText("Lead intake recorded", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Saved lead details" })).toContainText(
+      "Grace Green",
+    );
+    await page.reload();
+    await expect(page.getByText("Lead intake recorded", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review this lead" })).toBeVisible();
+    await page.getByRole("link", { name: "Sales desk", exact: true }).last().click();
     await expect(page.getByRole("heading", { name: "Sales desk" })).toBeVisible();
     await expect(page.getByText("Grace Green")).toBeVisible();
 

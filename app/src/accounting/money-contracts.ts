@@ -317,15 +317,15 @@ export type AccountingExceptionResolveResponse = z.infer<
  * The sentence a user acts on comes from the server as `next_step`; this is only how the badge
  * looks. Keeping the wording server-side is what stops the screen and the aggregate drifting.
  */
-export const badgePresentation: Record<AccountingBadge, { label: string; tone: string }> = {
-  pending: { label: "Pending", tone: "border-warning/40 bg-warning-soft text-warning" },
-  in_flight: { label: "In flight", tone: "border-info/40 bg-info-soft text-info" },
-  uncertain: { label: "Uncertain", tone: "border-warning/40 bg-warning-soft text-warning" },
-  mismatched: { label: "Mismatched", tone: "border-danger/40 bg-danger-soft text-danger" },
-  compensated: { label: "Compensated", tone: "border-info/40 bg-info-soft text-info" },
-  reconciled: { label: "Reconciled", tone: "border-ok/40 bg-ok-soft text-ok" },
-  rejected: { label: "Not approved", tone: "border-border bg-surface-muted text-muted" },
-  failed: { label: "Failed", tone: "border-danger/40 bg-danger-soft text-danger" },
+export const badgePresentation: Record<AccountingBadge, { label: string }> = {
+  pending: { label: "Pending" },
+  in_flight: { label: "In flight" },
+  uncertain: { label: "Uncertain" },
+  mismatched: { label: "Mismatched" },
+  compensated: { label: "Compensated" },
+  reconciled: { label: "Reconciled" },
+  rejected: { label: "Not approved" },
+  failed: { label: "Failed" },
 };
 
 const kindLabels: Record<AccountingIntentKind, string> = {

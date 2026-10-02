@@ -111,9 +111,11 @@ jobs:
           npm ci --ignore-scripts --prefix "$RUNNER_TEMP/policy-enforcer/workers-bus"
           trusted_wrangler="$RUNNER_TEMP/policy-enforcer/workers-bus/node_modules/.bin/wrangler"
           test "$("$trusted_wrangler" --version)" = "$WORKER_VERSION"
-          printf 'RELEASE_ENFORCER=%s\n' "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs" >> "$GITHUB_ENV"
-          printf 'RELEASE_BASE_COMMIT=%s\n' "$base_commit" >> "$GITHUB_ENV"
-          printf 'WRANGLER_BIN=%s\n' "$trusted_wrangler" >> "$GITHUB_ENV"
+          {
+            printf 'RELEASE_ENFORCER=%s\n' "$RUNNER_TEMP/policy-enforcer/tools/release-promotion.mjs"
+            printf 'RELEASE_BASE_COMMIT=%s\n' "$base_commit"
+            printf 'WRANGLER_BIN=%s\n' "$trusted_wrangler"
+          } >> "$GITHUB_ENV"
 
       # The tag carries no run ids, so they are resolved from the provider: the
       # CI run that validated this commit on main, and the Deploy run that proved

@@ -5,6 +5,12 @@ import {
   commercialLeadTriageDecisionResponseSchema,
   newLeadResponseSchema,
   salesResponseSchema,
+  officeLeadReceiptResponseSchema,
+  officeLeadRequestIdSchema,
+  nativeSalesLeadIdSchema,
+  salesLeadDetailResponseSchema,
+  type OfficeLeadReceiptResponse,
+  type SalesLeadDetailResponse,
   type CommercialLeadTriageDecisionResponse,
   type CommercialLeadTriageInput,
   type NewLeadInput,
@@ -59,7 +65,18 @@ export async function createLead(
   fetcher: typeof fetch = fetch,
 ): Promise<NewLeadResponse> {
   const body: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input)) {
+  for (const key of [
+    "name",
+    "email",
+    "phone",
+    "address",
+    "city",
+    "province",
+    "postal_code",
+    "service",
+    "message",
+  ] as const) {
+    const value = input[key];
     const trimmed = value.trim();
     if (trimmed) body[key] = trimmed;
   }
@@ -69,6 +86,81 @@ export async function createLead(
     method: "POST",
     body,
     csrfToken: session.csrf_token,
+    fetcher,
+  });
+}
+
+export function newOfficeLeadRequestId(): string {
+  return `office-lead:${crypto.randomUUID()}`;
+}
+
+export async function createOfficeLead(
+  session: AuthenticatedSession,
+  input: NewLeadInput,
+  requestId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<OfficeLeadReceiptResponse> {
+  officeLeadRequestIdSchema.parse(requestId);
+  return apiRequest({
+    path: API_PATHS.officeLeadCreate,
+    schema: officeLeadReceiptResponseSchema.refine(
+      (value) => value.receipt.request_id === requestId,
+      "Intake receipt identity mismatch",
+    ),
+    method: "POST",
+    body: input,
+    csrfToken: session.csrf_token,
+    idempotencyKey: requestId,
+    fetcher,
+  });
+}
+
+export async function loadOfficeLeadReceipt(
+  requestId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<OfficeLeadReceiptResponse> {
+  officeLeadRequestIdSchema.parse(requestId);
+  return apiRequest({
+    path: API_PATHS.officeLeadReceipt(requestId),
+    schema: officeLeadReceiptResponseSchema.refine(
+      (value) => value.receipt.request_id === requestId,
+      "Intake receipt identity mismatch",
+    ),
+    fetcher,
+  });
+}
+
+/** Explicitly continue the original persisted request after reading its current receipt. */
+export async function resumeOfficeLeadIntake(
+  session: AuthenticatedSession,
+  requestId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<OfficeLeadReceiptResponse> {
+  officeLeadRequestIdSchema.parse(requestId);
+  return apiRequest({
+    path: API_PATHS.officeLeadResume(requestId),
+    schema: officeLeadReceiptResponseSchema.refine(
+      (value) => value.receipt.request_id === requestId,
+      "Intake receipt identity mismatch",
+    ),
+    method: "POST",
+    body: {},
+    csrfToken: session.csrf_token,
+    fetcher,
+  });
+}
+
+export async function loadSalesLead(
+  leadId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<SalesLeadDetailResponse> {
+  nativeSalesLeadIdSchema.parse(leadId);
+  return apiRequest({
+    path: API_PATHS.salesLead(leadId),
+    schema: salesLeadDetailResponseSchema.refine(
+      (value) => value.lead.id === leadId,
+      "Lead identity mismatch",
+    ),
     fetcher,
   });
 }

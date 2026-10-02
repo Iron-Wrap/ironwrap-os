@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CircleAlert, LoaderCircle, Search, WifiOff, X } from "lucide-react";
+import { CircleAlert, CornerDownLeft, LoaderCircle, Search, WifiOff, X } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -15,6 +15,7 @@ import { useSession } from "../auth/session-context";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useOnlineStatus } from "../hooks/use-online-status";
+import { navigationForRole } from "../lib/roles";
 import { loadOperatorSearch } from "../search/operator-search-api";
 import type {
   OperatorSearchReadModel,
@@ -22,14 +23,22 @@ import type {
 } from "../search/operator-search-contracts";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { matchDestinations } from "./shell-navigation";
+import { RefTag } from "./ui/ref-tag";
 
 interface OperatorSearchPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-interface FlattenedResult {
-  result: OperatorSearchResult;
+/** One selectable row: a server record, or one of the viewer's own destinations. */
+interface PaletteOption {
+  key: string;
+  group: string;
+  label: string;
+  detail: string | null;
+  href: string;
+  kind: "job" | "record" | "destination";
 }
 
 export function OperatorSearchPaletteTrigger({ onOpen }: { onOpen: () => void }) {
@@ -58,7 +67,8 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [queryText, setQueryText] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(-1);
+  // A deliberate choice follows its result when a pending search inserts records before it.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const titleId = useId();
   const inputId = useId();
   const listId = useId();
@@ -102,13 +112,37 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
   });
 
   const model = canSearch && !search.isError ? search.data : undefined;
-  const flattenedResults = useMemo<FlattenedResult[]>(
-    () => model?.groups.flatMap((group) => group.results.map((result) => ({ result }))) ?? [],
+  // The server also answers a `go_to` group, but it mirrors the rail from a copy of roles.ts.
+  // The palette lists the viewer's destinations from roles.ts itself, so they match the rail
+  // exactly, need no request, and still work offline.
+  const recordGroups = useMemo(
+    () =>
+      model?.outcome === "results"
+        ? model.groups.filter((group) => group.group !== "go_to" && group.results.length > 0)
+        : [],
     [model],
   );
-  const hasResults = model?.outcome === "results" && flattenedResults.length > 0 && !search.isError;
-  const visibleGroups =
-    hasResults && model ? model.groups.filter((group) => group.results.length > 0) : [];
+  const destinations = useMemo(
+    () => matchDestinations(navigationForRole(session.user.role), normalizedQuery),
+    [session.user.role, normalizedQuery],
+  );
+  const options = useMemo<PaletteOption[]>(
+    () => [
+      ...recordGroups.flatMap((group) =>
+        group.results.map((result) => recordOption(group.group, result)),
+      ),
+      ...destinations.map((item) => ({
+        key: `go_to-${item.to}`,
+        group: "go_to",
+        label: item.label,
+        detail: null,
+        href: item.to,
+        kind: "destination" as const,
+      })),
+    ],
+    [recordGroups, destinations],
+  );
+  const hasResults = options.length > 0;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -141,38 +175,43 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
   function closePalette() {
     setQueryText("");
     setDebouncedQuery("");
-    setActiveIndex(-1);
+    setActiveKey(null);
     onOpenChange(false);
   }
 
-  function activate(result: OperatorSearchResult) {
+  function activate(option: PaletteOption) {
     closePalette();
-    void navigate({ to: result.href as never });
+    void navigate({ to: option.href as never });
   }
 
   function handleQueryChange(value: string) {
     setQueryText(value);
-    setActiveIndex(-1);
+    setActiveKey(null);
   }
 
-  const resultCount = hasResults ? flattenedResults.length : 0;
+  const resultCount = options.length;
   const selectedIndex =
-    resultCount === 0 ? -1 : activeIndex < 0 ? 0 : Math.min(activeIndex, resultCount - 1);
+    resultCount === 0
+      ? -1
+      : Math.max(
+          0,
+          options.findIndex((option) => option.key === activeKey),
+        );
 
   function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       if (resultCount === 0) return;
       event.preventDefault();
-      setActiveIndex((selectedIndex + 1) % resultCount);
+      setActiveKey(options[(selectedIndex + 1) % resultCount]!.key);
     } else if (event.key === "ArrowUp") {
       if (resultCount === 0) return;
       event.preventDefault();
-      setActiveIndex(selectedIndex <= 0 ? resultCount - 1 : selectedIndex - 1);
+      setActiveKey(options[selectedIndex <= 0 ? resultCount - 1 : selectedIndex - 1]!.key);
     } else if (event.key === "Enter") {
-      const active = flattenedResults[selectedIndex];
+      const active = options[selectedIndex];
       if (!active) return;
       event.preventDefault();
-      activate(active.result);
+      activate(active);
     } else if (event.key === "Escape") {
       event.preventDefault();
       closePalette();
@@ -180,9 +219,14 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
   }
 
   const activeDescendant =
-    hasResults && selectedIndex >= 0 && flattenedResults[selectedIndex]
-      ? resultId(listId, flattenedResults[selectedIndex]!.result.id, selectedIndex)
+    selectedIndex >= 0 && options[selectedIndex]
+      ? optionId(listId, options[selectedIndex]!.key, selectedIndex)
       : undefined;
+  useEffect(() => {
+    if (open && activeDescendant) {
+      document.getElementById(activeDescendant)?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [open, activeDescendant]);
   const status = statusMessage({
     offline,
     normalizedQuery,
@@ -190,9 +234,19 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
     canSearch,
     isPending: search.isPending || search.isFetching,
     model,
-    hasResults,
+    recordCount: options.length - destinations.length,
+    destinationCount: destinations.length,
     error: search.error,
   });
+
+  const groupsToShow = [
+    ...recordGroups.map((group) => ({
+      id: group.group,
+      label: group.label,
+      more: group.more_results,
+    })),
+    ...(destinations.length ? [{ id: "go_to", label: "Go to", more: false }] : []),
+  ];
 
   return (
     <dialog
@@ -203,10 +257,10 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
       /* bottom-auto and mx-auto, not m-auto: this is a native <dialog>, and the
          UA sheet sets inset-block-end: 0 on an open one. With `m-auto` the
          block margins resolved to ~388px each and centred the box, defeating
-         the top-4 written right beside it - so the input sat at half screen
+         the top offset written right beside it - so the input sat at half screen
          height and drifted upward as results arrived, under the cursor of
-         whoever was typing. */
-      className="fixed inset-x-2 bottom-auto top-4 mx-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-1rem)] max-w-2xl overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-[0_24px_80px_oklch(0_0_0/0.28)] backdrop:bg-foreground/40 sm:top-[12vh] sm:w-[calc(100%-2rem)]"
+         whoever was typing. On a phone the palette takes the whole screen. */
+      className="palette fixed inset-0 bottom-auto m-0 h-dvh max-h-dvh w-screen max-w-none overflow-hidden bg-surface p-0 text-foreground shadow-[var(--shadow-floating)] backdrop:bg-scrim min-[721px]:top-[12vh] min-[721px]:mx-auto min-[721px]:h-auto min-[721px]:max-h-[calc(88dvh-2rem)] min-[721px]:w-[min(40rem,calc(100vw-2rem))] min-[721px]:rounded-[0.875rem]"
       onCancel={(event) => {
         event.preventDefault();
         closePalette();
@@ -218,10 +272,10 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
         if (event.target === event.currentTarget) closePalette();
       }}
     >
-      <div className="flex min-h-14 items-center gap-2 border-b border-border px-3 sm:px-4">
-        <Search className="size-5 shrink-0 text-muted" aria-hidden="true" />
+      <div className="flex min-h-15 items-center gap-2.5 border-b border-border py-1.5 pr-3 pl-4">
+        <Search className="size-[1.125rem] shrink-0 text-faint" aria-hidden="true" />
         <h2 id={titleId} className="sr-only">
-          Search IronWrap OS
+          Search Iron Wrap Exteriors
         </h2>
         <label htmlFor={inputId} className="sr-only">
           Search jobs, leads, customers, or workspaces
@@ -233,7 +287,7 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
           value={queryText}
           onChange={(event) => handleQueryChange(event.target.value)}
           onKeyDown={handleInputKeyDown}
-          placeholder="Search jobs, leads, customers, or workspaces"
+          placeholder="Job number, lead, customer or street"
           autoComplete="off"
           maxLength={120}
           aria-autocomplete="list"
@@ -241,12 +295,12 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
           aria-controls={hasResults ? listId : undefined}
           aria-expanded={hasResults}
           aria-activedescendant={activeDescendant}
-          className="min-h-12 border-0 bg-transparent px-1 shadow-none"
+          className="min-h-12 flex-1 border-0 bg-transparent px-0 text-[1.0625rem] shadow-none focus-visible:outline-none"
         />
         {queryText ? (
           <button
             type="button"
-            className="grid size-11 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-focus"
+            className="grid size-11 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface-hover hover:text-foreground focus-visible:outline-focus"
             aria-label="Clear search"
             onClick={() => {
               handleQueryChange("");
@@ -262,7 +316,7 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
             apart. This one mirrors the key that already closes the palette. */}
         <button
           type="button"
-          className="grid h-11 shrink-0 place-items-center rounded-lg px-3 text-xs font-bold text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-focus"
+          className="grid h-11 shrink-0 place-items-center rounded-md px-3 text-sm font-semibold text-muted hover:bg-surface-hover hover:text-foreground focus-visible:outline-focus"
           aria-label="Close search"
           onClick={closePalette}
         >
@@ -270,113 +324,131 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
         </button>
       </div>
 
-      <p
-        id={statusId}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="flex min-h-11 items-center gap-2 px-4 py-3 text-sm text-muted"
-      >
-        {status.icon}
-        <span>{status.text}</span>
-      </p>
-
-      {search.isError && !isAbortedError(search.error) && !offline ? (
-        <div
-          className="mx-4 mb-4 rounded-xl border border-danger/35 bg-danger-soft p-4"
-          role="alert"
+      <div className="max-h-[calc(100dvh-4rem)] overflow-y-auto p-2 min-[721px]:max-h-[min(60vh,30rem)]">
+        <p
+          id={statusId}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="flex min-h-11 items-center gap-2 px-2.5 py-2.5 text-sm text-faint"
         >
-          <div className="flex items-start gap-3">
-            <CircleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="font-bold text-foreground">Search is unavailable</p>
-              <p className="mt-1 text-sm leading-6 text-muted">{errorMessage(search.error)}</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="compact"
-                className="mt-3"
-                onClick={() => void search.refetch()}
-              >
-                Try again
-              </Button>
+          {status.icon}
+          <span>{status.text}</span>
+        </p>
+
+        {search.isError && !isAbortedError(search.error) && !offline ? (
+          <div
+            className="mx-2 mb-3 rounded-lg border border-danger-line bg-danger-soft p-4"
+            role="alert"
+          >
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-semibold text-foreground">Search is unavailable</p>
+                <p className="mt-1 text-sm leading-6 text-muted">{errorMessage(search.error)}</p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="compact"
+                  className="mt-3"
+                  onClick={() => void search.refetch()}
+                >
+                  Try again
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {hasResults ? (
-        <div
-          id={listId}
-          role="listbox"
-          aria-label="Search results"
-          className="max-h-[55dvh] overflow-y-auto px-2 pb-3 sm:px-3"
-        >
-          {visibleGroups.map((group) => (
-            <div key={group.group} role="group" aria-labelledby={`${listId}-${group.group}`}>
-              <div
-                id={`${listId}-${group.group}`}
-                role="presentation"
-                className="px-2 pb-1 pt-3 text-xs font-bold text-muted"
-              >
-                {group.label}
-              </div>
-              <div className="space-y-1">
-                {group.results.map((result) => {
-                  const index = flattenedResults.findIndex((entry) => entry.result === result);
-                  const selected = index === selectedIndex;
-                  return (
-                    <div
-                      key={`${group.group}-${result.id}`}
-                      id={resultId(listId, result.id, index)}
-                      role="option"
-                      aria-selected={selected}
-                      aria-setsize={flattenedResults.length}
-                      aria-posinset={index + 1}
-                      tabIndex={-1}
-                      className={cn(
-                        "flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-foreground outline-none",
-                        selected && "bg-surface-muted",
-                      )}
-                      onClick={() => activate(result)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        activate(result);
-                      }}
-                      onPointerDown={(event) => event.preventDefault()}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-bold text-foreground">
-                          {result.label}
-                        </span>
-                        {result.detail ? (
-                          <span className="block truncate text-sm text-foreground/80">
-                            {result.detail}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span
-                        className="shrink-0 text-xs font-semibold text-foreground/80"
-                        aria-hidden="true"
+        {hasResults ? (
+          <div
+            id={listId}
+            role="listbox"
+            aria-label="Search results"
+            className="border-t border-border-soft pt-1"
+          >
+            {groupsToShow.map((group) => {
+              const groupOptions = options.filter((option) => option.group === group.id);
+              return (
+                <div key={group.id} role="group" aria-labelledby={`${listId}-${group.id}`}>
+                  <div
+                    id={`${listId}-${group.id}`}
+                    role="presentation"
+                    className="px-2.5 pt-2 pb-1 text-xs font-semibold text-faint"
+                  >
+                    {group.label}
+                  </div>
+                  {groupOptions.map((option) => {
+                    const index = options.indexOf(option);
+                    const selected = index === selectedIndex;
+                    return (
+                      <div
+                        key={option.key}
+                        id={optionId(listId, option.key, index)}
+                        role="option"
+                        aria-selected={selected}
+                        aria-setsize={options.length}
+                        aria-posinset={index + 1}
+                        tabIndex={-1}
+                        className={cn(
+                          "flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 text-foreground outline-none hover:bg-surface-hover",
+                          selected && "bg-selected hover:bg-selected",
+                        )}
+                        onClick={() => activate(option)}
+                        onMouseMove={() => setActiveKey(option.key)}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          activate(option);
+                        }}
+                        onPointerDown={(event) => event.preventDefault()}
                       >
-                        {group.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              {group.more_results ? (
-                <p className="px-3 py-2 text-xs font-semibold text-muted" role="note">
-                  More results available. Keep typing to narrow the list.
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
+                        {option.kind === "job" ? <RefTag id={option.label} /> : null}
+                        <span className="min-w-0 flex-1">
+                          {option.kind !== "job" ? (
+                            <span className="block truncate text-[0.9375rem] font-medium">
+                              {option.label}
+                            </span>
+                          ) : null}
+                          {option.detail ? (
+                            <span className="block truncate text-sm text-muted">
+                              {option.detail}
+                            </span>
+                          ) : null}
+                        </span>
+                        {option.kind === "destination" ? (
+                          <CornerDownLeft
+                            className={cn("size-4 shrink-0 text-faint", !selected && "opacity-0")}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {group.more ? (
+                    <p className="px-2.5 py-2 text-xs font-semibold text-muted" role="note">
+                      More results available. Keep typing to narrow the list.
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
     </dialog>
   );
+}
+
+function recordOption(group: string, result: OperatorSearchResult): PaletteOption {
+  return {
+    key: `${group}-${result.id}`,
+    group,
+    label: result.label,
+    detail: result.detail,
+    href: result.href,
+    kind: group === "jobs" ? "job" : "record",
+  };
 }
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -386,8 +458,8 @@ function isTextEntry(target: EventTarget | null): boolean {
   );
 }
 
-function resultId(listId: string, id: string, index: number): string {
-  return `${listId}-result-${index}-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+function optionId(listId: string, key: string, index: number): string {
+  return `${listId}-option-${index}-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
 function isAbortedError(error: unknown): boolean {
@@ -406,7 +478,8 @@ function statusMessage({
   canSearch,
   isPending,
   model,
-  hasResults,
+  recordCount,
+  destinationCount,
   error,
 }: {
   offline: boolean;
@@ -415,13 +488,19 @@ function statusMessage({
   canSearch: boolean;
   isPending: boolean;
   model: OperatorSearchReadModel | undefined;
-  hasResults: boolean;
+  recordCount: number;
+  destinationCount: number;
   error: unknown;
 }): { text: string; icon: React.JSX.Element | null } {
   if (offline)
     return {
-      text: "Search needs a current connection. No offline index is available.",
+      text: "Search needs a current connection. No offline index is available. Go to still works.",
       icon: <WifiOff className="size-4 shrink-0 text-warning" aria-hidden="true" />,
+    };
+  if (normalizedQuery.length === 0)
+    return {
+      text: "Search by job number, lead, customer name or street.",
+      icon: null,
     };
   if (normalizedQuery.length < 2)
     return { text: "Type at least 2 characters to search.", icon: null };
@@ -440,10 +519,8 @@ function statusMessage({
   if (!canSearch || !model) return { text: "Type at least 2 characters to search.", icon: null };
   if (model.outcome === "query_too_short")
     return { text: "Type at least 2 usable characters to search.", icon: null };
-  if (model.outcome === "no_matches" || !hasResults)
+  if (recordCount === 0 && destinationCount === 0)
     return { text: `No results for “${model.query}”.`, icon: null };
-  return {
-    text: `${model.groups.reduce((count, group) => count + group.results.length, 0)} results`,
-    icon: null,
-  };
+  if (recordCount === 0) return { text: `No records match “${model.query}”.`, icon: null };
+  return { text: `${recordCount} ${recordCount === 1 ? "result" : "results"}`, icon: null };
 }

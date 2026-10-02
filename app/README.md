@@ -16,6 +16,13 @@ data. The Worker, not the browser, enforces authority. See the canonical boundar
 - Responsive desktop/sidebar and thumb-first bottom navigation. Field controls use a 64 px target;
   general primary targets use at least 56 px.
 - Semantic light/dark tokens and accessible loading, error, and teaching empty states.
+- The owner-approved Iron Wrap identity, ported from the `iron-wrap-exteriors` reference: primer
+  ground, charcoal chrome, ink primary actions, brass only for focus and the active place, and
+  self-hosted Archivo with Martian Mono for identifiers. `src/components/ui` carries its
+  primitives: the stamped `RefTag`, glyph-and-word `Status`, `Notice` tones including on-device
+  `local`, `Queue`/`QueueRow`, `PageHeader`, `Segmented`, `SaveIndicator`, `Timeline`,
+  `ErrorSummary`, a native-`<dialog>` `Dialog`/drawer, and the `Logo`/`BrandMark` assets in
+  `public/brand`. The shell itself is not yet restyled to the reference's rail layout.
 - Install, update, network, queue, upload, verification, and attention status that uses an icon,
   word, and colour together.
 - Chromium/iOS-compatible 192 px and 512 px PNG install icons plus a full-bleed maskable icon; SVG

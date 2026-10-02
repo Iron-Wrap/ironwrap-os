@@ -6,6 +6,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 import { median } from "./lighthouse-statistics.mjs";
 
@@ -155,6 +156,12 @@ async function runLighthouse(profile, runFileName, outputDir, chromeFlags) {
     );
     if (!result?.lhr) throw new Error("Lighthouse returned no result");
     await writeFile(resolve(outputDir, runFileName), `${JSON.stringify(result.lhr, null, 2)}\n`);
+    // Keep the already-collected trace so a CI regression can be attributed to actual
+    // main-thread work rather than inferred from the runner's summary score.
+    await writeFile(
+      resolve(outputDir, runFileName.replace(/\.json$/, ".trace.json.gz")),
+      gzipSync(JSON.stringify(result.artifacts.Trace)),
+    );
     await page.close();
     return result.lhr;
   } finally {

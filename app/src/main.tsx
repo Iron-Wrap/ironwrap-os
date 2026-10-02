@@ -8,7 +8,9 @@ import { createRoot } from "react-dom/client";
 import { primeFieldBootstrap } from "./auth/field-bootstrap";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
+import { applyThemePreference, readThemePreference } from "./lib/theme";
 import { router } from "./router";
+import { primeStorageDurability } from "./storage/durability";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,12 +24,19 @@ const queryClient = new QueryClient({
   },
 });
 
+// A pinned appearance applies before the first paint, so a dark-mode viewer never sees a light
+// flash while the bundle mounts.
+applyThemePreference(readThemePreference());
+
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("IronWrap OS could not find its application root.");
 
 // The field PWA opens directly at /today. Begin the same device-proofed bootstrap
 // request before route construction so verification and UI setup overlap.
-if (window.location.pathname === "/today") primeFieldBootstrap();
+if (window.location.pathname === "/today") {
+  primeFieldBootstrap();
+  void primeStorageDurability();
+}
 
 // Scrub fragment credentials before React renders or any lazy route module loads. The helpers
 // retain the token only in module memory for the route that will consume it.

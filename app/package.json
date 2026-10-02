@@ -24,16 +24,21 @@
     "test:pwa:safety": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4183 playwright test --project=mobile-chromium safety-desk",
     "test:pwa:documents": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4185 playwright test --project=mobile-chromium job-document-generation",
     "test:pwa:job-history": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4186 playwright test --project=mobile-chromium job-history",
+    "test:pwa:quote-revision": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4187 playwright test quote-revision-approval",
+    "test:pwa:decisions": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4188 playwright test decisions-inbox owner-lead-reviews now-work-list",
     "test:lighthouse": "npm run build && node scripts/lighthouse-field.mjs",
     "test:lighthouse:ab": "npm run build && node scripts/lighthouse-protocol-ab.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:pwa:sales-intake": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4189 playwright test sales-intake lead-triage",
+    "test:pwa:manual-measurements": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4195 playwright test manual-measurements"
   },
   "dependencies": {
-    "@fontsource-variable/hubot-sans": "^5.3.0",
+    "@fontsource-variable/archivo": "^5.3.0",
+    "@fontsource-variable/martian-mono": "^5.3.0",
     "@radix-ui/react-slot": "1.3.0",
     "@tanstack/react-query": "5.101.2",
     "@tanstack/react-router": "^1.170.18",

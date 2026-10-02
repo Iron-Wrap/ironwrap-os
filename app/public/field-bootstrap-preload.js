@@ -30,6 +30,9 @@
   }
 
   if (!["/today", "/now"].includes(pathname) || typeof indexedDB.databases !== "function") return;
+  // An async head script may arrive after the entry has started its ordinary read.
+  // Do not leave a late response for a later refetch to mistake for the initial one.
+  if (window.__ironwrapFieldBootstrapPreloadConsumed) return;
 
   const preload = readStoredDeviceProof().then((deviceProof) => {
     if (!deviceProof) throw new Error("field_device_proof_unavailable");

@@ -3,6 +3,7 @@ import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
   approvalListResponseSchema,
+  approvalDetailResponseSchema,
   approvalMutationResponseSchema,
   leadTriageApprovalPreparationInputSchema,
   type ApprovalListResponse,
@@ -16,6 +17,20 @@ export async function loadApprovals(fetcher: typeof fetch = fetch): Promise<Appr
     schema: approvalListResponseSchema,
     fetcher,
   });
+}
+
+export async function loadApproval(
+  approvalId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ApprovalListResponse> {
+  const { approval, ...envelope } = await apiRequest({
+    path: `${API_PATHS.approvals}/${encodeURIComponent(approvalId)}`,
+    schema: approvalDetailResponseSchema.refine((model) => model.approval.id === approvalId, {
+      message: "The saved request does not match this review link.",
+    }),
+    fetcher,
+  });
+  return { ...envelope, approvals: [approval] };
 }
 
 export async function prepareLeadTriageApproval(

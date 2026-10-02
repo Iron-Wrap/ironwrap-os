@@ -121,11 +121,11 @@ test("0085 native photo evidence authority is complete in backup and restore con
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    // Pinned to the current migration chain; 0132 adds the per-cron heartbeat table (one
-    // table, no index, no trigger), and both D1 inventories carry it.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 235);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 354);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 574);
+    // Pinned to the merged migration chain through 0135: per-cron heartbeat, office intake,
+    // and manual measurement history are included in both D1 inventories.
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 239);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 357);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 590);
   }
 
   for (const [name, table] of INDEXES) {

@@ -104,7 +104,7 @@ describe("role-shaped navigation", () => {
     expect(navigationForRole("sales").map((item) => item.to)).not.toContain("/owner/board");
     for (const role of ["owner", "ops"] as const) {
       expect(navigationForRole(role).find((item) => item.to === "/owner/board")?.workspace).toBe(
-        "Revenue",
+        "Work",
       );
       expect(navigationForRole(role).map((item) => item.to)).not.toContain("/sales/board");
     }
@@ -158,19 +158,42 @@ describe("role-shaped navigation", () => {
     }
   });
 
-  it("organizes office work around the operating flow instead of one flat list", () => {
+  // The rail follows the reference's groups (P2): what needs you now, the work, the plan, what it
+  // consumes, the money, and the settings behind it. Groups are presentation only; which
+  // destinations a role gets is still decided above and by `roleCanAccess`.
+  it("groups office work the way the reference rail does", () => {
     const ownerNavigation = navigationForRole("owner");
     expect([...new Set(ownerNavigation.map((item) => item.workspace))]).toEqual([
-      "Command",
-      "Revenue",
-      "Delivery",
+      "Now",
+      "Work",
+      "Plan",
       "Resources",
-      "Finance",
-      "Control",
+      "Money",
+      "Settings",
     ]);
-    expect(ownerNavigation.find((item) => item.to === "/inventory")?.workspace).toBe("Resources");
-    expect(ownerNavigation.find((item) => item.to === "/accounting")?.workspace).toBe("Finance");
-    expect(navigationForRole("accounting")[0]?.workspace).toBe("Finance");
+    const groupOf = (to: NavigationItem["to"]) =>
+      ownerNavigation.find((item) => item.to === to)?.workspace;
+    expect(groupOf("/approvals")).toBe("Now");
+    expect(groupOf("/sales")).toBe("Work");
+    expect(groupOf("/production")).toBe("Plan");
+    expect(groupOf("/inventory")).toBe("Resources");
+    expect(groupOf("/safety")).toBe("Resources");
+    expect(groupOf("/accounting")).toBe("Money");
+    expect(groupOf("/accounting/quickbooks")).toBe("Settings");
+    expect(navigationForRole("accounting")[0]?.workspace).toBe("Money");
+    // A group's items sit together, so the rail never shows one group label twice.
+    for (const role of appRoles) {
+      const order = navigationForRole(role).map((item) => item.workspace);
+      const collapsed = order.filter((group, index) => group !== order[index - 1]);
+      expect(new Set(collapsed).size, role).toBe(collapsed.length);
+    }
+  });
+
+  it("keeps operations off every money destination", () => {
+    expect(navigationForRole("ops").filter((item) => item.to.startsWith("/accounting"))).toEqual(
+      [],
+    );
+    expect(navigationForRole("ops").map((item) => item.workspace)).not.toContain("Money");
   });
 
   it("allows every role only onto its intended work surfaces", () => {

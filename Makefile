@@ -90,6 +90,7 @@ test-tools:
 	  tools/launch-proof.test.mjs \
 	  tools/conventional-pr-title.test.mjs \
 	  tools/deploy-workflow.test.mjs \
+	  tools/qa-artifact-flow.test.mjs \
 	  tools/release-permit.test.mjs \
 	  tools/release-promotion.test.mjs
 	npm test --prefix release-issuer
@@ -223,7 +224,7 @@ GITLEAKS_BIN ?= $(abspath $(GITLEAKS_DIR))/gitleaks
 secret-scan:
 	test -x "$(GITLEAKS_BIN)" || { \
 	  mkdir -p $(GITLEAKS_DIR); archive=$(GITLEAKS_DIR)/gitleaks.tar.gz; \
-	  curl -fsSL --retry 3 -o $$archive \
+	  curl -fsSL --retry 5 --retry-max-time 120 --connect-timeout 10 --max-time 60 -o $$archive \
 	    https://github.com/gitleaks/gitleaks/releases/download/v$(GITLEAKS_VERSION)/gitleaks_$(GITLEAKS_VERSION)_linux_x64.tar.gz; \
 	  echo "$(GITLEAKS_SHA256)  $$archive" | sha256sum -c -; \
 	  tar -xzf $$archive -C $(GITLEAKS_DIR) gitleaks; }
@@ -235,7 +236,8 @@ secret-scan:
 E2E_SUITES := test:pwa test:pwa:board test:pwa:owner-configuration test:pwa:people \
   test:pwa:safety test:pwa:documents test:pwa:job-history test:pwa:placement \
   test:pwa:capabilities test:pwa:capabilities:accounting test:pwa:accounting \
-  test:pwa:onboarding
+  test:pwa:onboarding test:pwa:quote-revision test:pwa:decisions test:pwa:sales-intake \
+  test:pwa:manual-measurements
 
 e2e: app/node_modules/.package-lock.json
 	cd app && npx playwright install $(if $(CI),--with-deps,) chromium

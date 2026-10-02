@@ -260,6 +260,30 @@ describe("OperatorSearchPalette", () => {
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sales/leads/LEAD-A/triage" });
   });
 
+  it("keeps the selected destination when delayed records arrive ahead of it", async () => {
+    const user = userEvent.setup();
+    let resolveSearch: ((value: OperatorSearchReadModel) => void) | undefined;
+    vi.mocked(loadOperatorSearch).mockImplementation(
+      () => new Promise((resolve) => (resolveSearch = resolve)),
+    );
+    renderPalette();
+    const input = screen.getByRole("combobox");
+    await user.type(input, "sa");
+    await waitFor(() => expect(resolveSearch).toBeDefined());
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("option", { name: "Safety" })).toHaveAttribute("aria-selected", "true");
+
+    resolveSearch!(searchResult({ query: "sa" }));
+    await screen.findByRole("option", { name: /IW-1001/ });
+    const safety = screen.getByRole("option", { name: "Safety" });
+    expect(safety).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", safety.id);
+
+    await user.keyboard("{Enter}");
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/safety" });
+  });
+
   it("supports pointer activation and Escape dismissal with focus return", async () => {
     vi.mocked(loadOperatorSearch).mockResolvedValue(model);
     function Harness() {

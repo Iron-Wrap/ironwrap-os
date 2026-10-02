@@ -18,7 +18,7 @@
 #                     wrangler's asset limits - IRO-267 revision 2). Nothing under
 #                     workers-bus/src imports from app/, so it is still not part
 #                     of the shard split, but it does need app's node_modules.
-#   e2e               a 12-way matrix, one Playwright PWA suite per leg via
+#   e2e               a 16-way matrix, one Playwright PWA suite per leg via
 #                     `make e2e-suite SUITE=<script>` (each still builds its own
 #                     bundle once; two suites never share a runner, since
 #                     app/playwright.config.ts pins one ACCEPTANCE_PORT per suite
@@ -220,6 +220,10 @@ jobs:
           - test:pwa:capabilities:accounting
           - test:pwa:accounting
           - test:pwa:onboarding
+          - test:pwa:quote-revision
+          - test:pwa:decisions
+          - test:pwa:sales-intake
+          - test:pwa:manual-measurements
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -370,6 +374,16 @@ jobs:
               );
             }
           ' "$summary"
+
+      - name: Preserve paired-device Lighthouse evidence
+        if: always() && steps.scope.outputs.measure == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: paired-device-lighthouse-${{ github.run_attempt }}
+          path: app/.lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   dependency-scan:
     name: dependency scan

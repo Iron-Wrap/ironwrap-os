@@ -289,6 +289,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     // used to be the only one is a deployment secret, not a person's authority.
     "sales:lead_create",
     "estimator:read",
+    "measurements:record",
     "production:read",
     // Clearing a scheduling gate is a write on the production runway, and it is
     // granted exactly where `access_control.DOCTYPE_ROLE_MATRIX` already grants
@@ -317,6 +318,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "sales:read",
     "sales:lead_create",
     "estimator:read",
+    "measurements:record",
     "production:read",
     "approvals:read",
     "approvals:prepare",

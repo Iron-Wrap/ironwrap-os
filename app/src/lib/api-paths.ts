@@ -84,7 +84,15 @@ export const API_PATHS = {
   adminSchemaFieldRevisions: (fieldId: string) =>
     `/api/v1/admin/schema-fields/${encodeURIComponent(fieldId)}/revisions`,
   companyLogo: "/public/company-logo",
+  manualMeasurements: (jobId: string) =>
+    `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}/manual-measurements`,
   salesLeads: "/api/v1/sales/leads",
+  officeLeadCreate: "/api/v1/sales/leads?include_receipt=1",
+  officeLeadReceipt: (requestId: string) =>
+    `/api/v1/sales/intakes/${encodeURIComponent(requestId)}`,
+  officeLeadResume: (requestId: string) =>
+    `/api/v1/sales/intakes/${encodeURIComponent(requestId)}/resume`,
+  salesLead: (leadId: string) => `/api/v1/sales/leads/${encodeURIComponent(leadId)}`,
   devicePairings: "/api/v1/device-pairings",
   devicePairingRevoke: (deviceId: string) =>
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,

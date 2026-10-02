@@ -30,7 +30,7 @@ export function WorkspaceHeader({
         <div className="min-w-0 p-5 pl-6 sm:p-6 sm:pl-7 lg:p-7 lg:pl-8">
           {back ? <div className="mb-3">{back}</div> : null}
           <div className="flex min-w-0 items-start gap-3.5 sm:gap-4">
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-accent/15 bg-accent/8 text-accent shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)] [&_svg]:size-5">
+            <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-surface-muted text-muted [&_svg]:size-5">
               {icon}
             </span>
             <div className="min-w-0 flex-1">

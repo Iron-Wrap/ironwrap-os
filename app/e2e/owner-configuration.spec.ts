@@ -1064,6 +1064,14 @@ async function routeSessionAsRole(page: Page, role: "ops") {
 }
 
 async function expectCachedContent(page: Page, routeCase: { path: string; cachedText: string }) {
+  if (routeCase.path.endsWith("/automations/recipients")) {
+    await expect(
+      page
+        .getByLabel("Automation recipients", { exact: true })
+        .getByText(routeCase.cachedText, { exact: true }),
+    ).toBeVisible();
+    return;
+  }
   if (routeCase.path.endsWith("/automations")) {
     await expect(page.getByRole("combobox", { name: "Pipeline" })).toHaveValue(
       pipeline.pipeline_id,

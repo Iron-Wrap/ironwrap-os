@@ -1,3 +1,4 @@
+import { trustedOfficeCapture } from "./office-lead-intake-store.ts";
 import type { EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
 import { sha256Hex } from "./newo-hash.ts";
@@ -95,7 +96,7 @@ export async function materializeOperatingCore(
     : null;
   const capturedBy = bounded(env.OPERATING_AUTOMATION_USER, "captured_by", 160) ?? "ironwrap-worker";
   const consent = await consentFacts(
-    tenantId, payload, rec, sourceRawKey, customerId, leadId, roofJobId, capturedBy, contactEmail, contactPhone,
+    env.DB, tenantId, payload, rec, sourceRawKey, customerId, leadId, roofJobId, capturedBy, contactEmail, contactPhone,
   );
 
   const db = env.DB;
@@ -731,6 +732,7 @@ interface ConsentFact {
 }
 
 async function consentFacts(
+  db: D1Database,
   tenantId: string,
   payload: Row,
   rec: EnvelopeRecord,
@@ -742,6 +744,18 @@ async function consentFacts(
   contactEmail: string | null,
   contactPhone: string | null,
 ): Promise<ConsentFact[]> {
+  if (payload.source_detail === "ironwrap_office_intake") {
+    const capture = await trustedOfficeCapture(db, tenantId, rec);
+    if (!capture) return []; // A raw marker alone confers no consent authority.
+    const input = JSON.parse(capture.input_json) as Record<string, unknown>;
+    if (input.email_estimate_follow_up_consent !== true) return [];
+    if (!contactEmail || !sourceRawKey || !capture.consent_jurisdiction)
+      throw new Error("operating_core_office_consent_incomplete");
+    return [{ consentId: await stableId("consent", tenantId, `${rec.envelope_id}:email`), leadId, customerId, roofJobId,
+      sourceEnvelopeId: rec.envelope_id, channel: "email", purpose: "estimate_follow_up", status: "granted",
+      jurisdiction: capture.consent_jurisdiction, consentBasis: "express", capturedBy: capture.actor_user_id,
+      recordedAt: capture.captured_at }];
+  }
   if (payload.source_detail !== "ironwrap_public_estimator") return [];
   const estimator = asObject(payload.public_estimator);
   const consent = asObject(estimator?.consent);

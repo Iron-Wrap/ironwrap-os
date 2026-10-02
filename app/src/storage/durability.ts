@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export const LOW_STORAGE_HEADROOM_BYTES = 512 * 1024 * 1024;
 
@@ -24,6 +24,26 @@ export interface StorageDurabilityResult {
 
 export interface StorageDurabilityPending {
   checked: false;
+}
+
+type StartupStorageCheck = {
+  promise: Promise<StorageDurabilityResult>;
+  result?: StorageDurabilityResult;
+};
+let startupCheck: StartupStorageCheck | undefined;
+
+/** Start the device check alongside field bootstrap, so its warning can be in the first paint. */
+export function primeStorageDurability(
+  storage?: StorageManagerLike,
+): Promise<StorageDurabilityResult> {
+  if (!startupCheck) {
+    const check: StartupStorageCheck = { promise: checkStorageDurability(storage) };
+    startupCheck = check;
+    void check.promise.then((result) => {
+      check.result = result;
+    });
+  }
+  return startupCheck.promise;
 }
 
 export async function checkStorageDurability(
@@ -93,12 +113,17 @@ export async function checkStorageDurability(
 }
 
 export function useStorageDurability(): StorageDurabilityPending | StorageDurabilityResult {
-  const [result, setResult] = useState<StorageDurabilityPending | StorageDurabilityResult>({
-    checked: false,
-  });
+  const mountCheck = useRef<Promise<StorageDurabilityResult> | undefined>(undefined);
+  const [result, setResult] = useState<StorageDurabilityPending | StorageDurabilityResult>(
+    () => startupCheck?.result ?? { checked: false },
+  );
   useEffect(() => {
     let active = true;
-    void checkStorageDurability().then((next) => {
+    const pending = mountCheck.current ?? startupCheck?.promise ?? checkStorageDurability();
+    // StrictMode effect replay shares this mount's check; a real remount gets a fresh check.
+    mountCheck.current = pending;
+    startupCheck = undefined;
+    void pending.then((next) => {
       if (active) setResult(next);
     });
     return () => {

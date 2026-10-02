@@ -4,6 +4,7 @@ import type { AuthenticatedSession } from "../auth/session";
 import {
   approveApproval,
   loadApprovals,
+  loadApproval,
   newLeadTriageApprovalPrepareKey,
   prepareLeadTriageApproval,
   reconcileApproval,
@@ -80,6 +81,22 @@ function approval() {
 }
 
 describe("approval API", () => {
+  it("loads exactly the linked lead request and refuses a different saved request", async () => {
+    const envelope = {
+      version: 1,
+      read_model_generated_at: "2026-07-11T12:00:00.000Z",
+      permissions: ["approvals:read"],
+      allowed_actions: ["approval.read"],
+      approval: approval(),
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(envelope));
+    expect((await loadApproval("approval:test-001", fetcher)).approvals).toEqual([approval()]);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v1/approvals/approval%3Atest-001",
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
+    );
+    await expect(loadApproval("approval:different-request", fetcher)).rejects.toThrow();
+  });
   it("loads the allowlisted approval inbox through the same-origin BFF", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json({

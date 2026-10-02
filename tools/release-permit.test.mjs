@@ -1127,6 +1127,9 @@ test("provider version identity is bound to the upload message and full readback
   assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.map((binding) => binding.name === "CFG_APP" ? { name: binding.name, type: binding.type } : binding) } }, expected), /release_permit_version_readback_binding_value_missing/);
   assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, bindings: raw.resources.bindings.filter((binding) => binding.name !== "ASSETS") } }, expected), /release_permit_version_readback_binding_manifest_drift/);
   assert.throws(() => validateWorkerVersionReadback({ ...raw, resources: { ...raw.resources, script_runtime: { ...runtimeManifest, compatibility_flags: [] } } }, expected), /release_permit_version_readback_runtime_drift/);
+  // Cloudflare reports `created_on` with microseconds; that is a valid provider timestamp.
+  assert.equal(validateWorkerVersionReadback({ ...raw, metadata: { ...raw.metadata, created_on: "2026-10-02T10:31:33.532153Z" } }, expected).version_id, QA_VERSION);
+  assert.throws(() => validateWorkerVersionReadback({ ...raw, metadata: { ...raw.metadata, created_on: "2026-10-02 10:31:33" } }, expected), /release_permit_version_readback_created_invalid/);
 });
 
 test("secret inventory readback binds names but never accepts secret values", () => {

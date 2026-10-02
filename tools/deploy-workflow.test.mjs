@@ -256,6 +256,12 @@ function validateWorkflow(workflow) {
       .length,
     1,
   );
+  // Wrangler refuses `triggers deploy` while assets.directory is missing, and the qa job
+  // never builds app/dist: it links the verified artifact's PWA first.
+  assert.match(
+    qa,
+    /ln -sfn "\$RUNNER_TEMP\/app\/dist" app\/dist\n\s+"\$WRANGLER_BIN" triggers deploy --config workers-bus\/wrangler\.jsonc --env qa/,
+  );
 
   for (const required of [
     "RELEASE_QA_CLOUDFLARE_API_TOKEN",
@@ -447,6 +453,12 @@ test("workflow validation rejects a cleanup drill that skips its own failure gua
 // below are what stop it being relaxed one line at a time.
 
 function validateProductionWorkflow(workflow) {
+  // Wrangler refuses `triggers deploy` while assets.directory is missing; production builds
+  // nothing, so it links the verified artifact's PWA first.
+  assert.match(
+    workflow,
+    /ln -sfn "\$RUNNER_TEMP\/release-artifact\/app\/dist" app\/dist\n\s+"\$WRANGLER_BIN" triggers deploy --config workers-bus\/wrangler\.jsonc\n/,
+  );
   const production = section(workflow, "production");
 
   // --- the trigger -------------------------------------------------------

@@ -194,6 +194,15 @@ function iso(value, code) {
   return value;
 }
 
+// A timestamp the provider wrote. Cloudflare reports `created_on` with microseconds
+// (`2026-10-02T10:31:33.532153Z`), which `iso` rejects because it demands the exact
+// `toISOString()` form of our own receipts.
+const PROVIDER_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+function providerTimestamp(value, code) {
+  if (typeof value !== "string" || !PROVIDER_TIMESTAMP_RE.test(value) || !Number.isFinite(Date.parse(value))) fail(code);
+  return value;
+}
+
 function nonNegativeInteger(value, code) {
   if (!Number.isSafeInteger(value) || value < 0) fail(code);
   return value;
@@ -1642,7 +1651,7 @@ export function validateWorkerVersionReadback(readback, expected = {}) {
   text(readback.id, "version_readback_id_invalid", UUID_RE);
   if (expected.versionId !== undefined) equal(expected.versionId, readback.id, "version_readback_id_drift");
   if (!isRecord(readback.metadata) || !isRecord(readback.annotations) || !isRecord(readback.resources)) fail("version_readback_shape_invalid");
-  iso(readback.metadata.created_on, "version_readback_created_invalid");
+  providerTimestamp(readback.metadata.created_on, "version_readback_created_invalid");
   const message = readback.annotations["workers/message"];
   text(message, "version_readback_message_invalid", /^[A-Za-z0-9|=_-]{120,320}$/);
   const parsed = VERSION_MESSAGE_RE.exec(message);

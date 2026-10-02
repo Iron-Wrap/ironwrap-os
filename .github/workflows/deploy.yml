@@ -419,7 +419,12 @@ jobs:
       - name: Deploy the qa Worker triggers after traffic cutover
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_QA_CLOUDFLARE_API_TOKEN }}
-        run: '"$WRANGLER_BIN" triggers deploy --config workers-bus/wrangler.jsonc --env qa'
+        run: |
+          set -euo pipefail
+          # Wrangler checks assets.directory (app/dist) even for triggers, and this job never
+          # builds the PWA. Point it at the verified artifact's PWA, the bytes uploaded above.
+          ln -sfn "$RUNNER_TEMP/app/dist" app/dist
+          "$WRANGLER_BIN" triggers deploy --config workers-bus/wrangler.jsonc --env qa
 
       - name: Read back the qa Worker cron schedules
         env:

@@ -497,10 +497,17 @@ function assertCommittedCustomer(
   contactPhone: string | null,
 ): void {
   if (!row) throw new Error("operating_core_customer_conflict");
+  // Contacts are immutable once the customer exists (identity guard). A later envelope may carry
+  // a method the row lacks; only a differing known value, or none shared, is a conflict.
+  const storedEmail = row.contact_email ?? null;
+  const storedPhone = row.contact_phone ?? null;
+  const emailKnown = contactEmail !== null && storedEmail !== null;
+  const phoneKnown = contactPhone !== null && storedPhone !== null;
   if (
     row.tenant_id !== tenantId
-    || (contactEmail !== null && (row.contact_email ?? null) !== contactEmail)
-    || (contactPhone !== null && (row.contact_phone ?? null) !== contactPhone)
+    || (!emailKnown && !phoneKnown)
+    || (emailKnown && storedEmail !== contactEmail)
+    || (phoneKnown && storedPhone !== contactPhone)
   ) {
     throw new Error("operating_core_customer_conflict");
   }

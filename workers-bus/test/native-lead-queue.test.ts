@@ -41,6 +41,7 @@ class TestD1 {
     this.raw.exec("PRAGMA foreign_keys = ON");
     for (const name of [
       "0001_init.sql",
+      "0002_erpnext_consumer.sql",
       "0009_replay_approval_audit.sql",
       "0090_operating_core.sql",
       "0082_envelope_operating_tenant.sql",

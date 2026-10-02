@@ -10,6 +10,11 @@ name: Release Please
 #   github-release on a successful Deploy of the merged release commit: tag that
 #                  commit, which is what starts the production release.
 #
+# Both release jobs write through RELEASE_TAG_TOKEN, a fine-grained PAT held only in the
+# `release` environment (deployments from main only). A pull request or tag created with
+# GITHUB_TOKEN starts no workflow without approval, so the release PR would never run CI
+# and the tag would never start deploy-production.yml. Their GITHUB_TOKEN only reads.
+#
 # release-please is run through npx, not an action: the organization allows only
 # GitHub-owned actions, and `googleapis/release-please-action` is not one.
 on:
@@ -77,10 +82,11 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # release-please pushes the release branch and opens/updates the release PR.
+    # release-please pushes the release branch and opens/updates the release PR with
+    # RELEASE_TAG_TOKEN; GITHUB_TOKEN only checks out.
+    environment: release
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -92,9 +98,10 @@ jobs:
 
       - name: Create or update the release pull request
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$GITHUB_TOKEN" || { echo "release_tag_token_missing" >&2; exit 1; }
           npx --yes "release-please@$RELEASE_PLEASE_VERSION" release-pr \
             --token "$GITHUB_TOKEN" \
             --repo-url "$GITHUB_REPOSITORY" \
@@ -114,8 +121,9 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: release
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
       actions: read
     steps:
@@ -154,9 +162,10 @@ jobs:
       - name: Tag the release commit and publish the GitHub release
         if: ${{ steps.release_commit.outputs.tag == 'true' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$GITHUB_TOKEN" || { echo "release_tag_token_missing" >&2; exit 1; }
           npx --yes "release-please@$RELEASE_PLEASE_VERSION" github-release \
             --token "$GITHUB_TOKEN" \
             --repo-url "$GITHUB_REPOSITORY" \

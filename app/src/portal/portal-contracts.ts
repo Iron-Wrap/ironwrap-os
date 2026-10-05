@@ -18,6 +18,18 @@ export const customerPortalResponseSchema = z
         status: nullableText,
       })
       .strict(),
+    // Optional while an older Worker response is still in use. A present window is an
+    // office-committed native assignment, not evidence of customer acknowledgment.
+    install_window: z
+      .object({
+        scheduled_start: z.string().datetime({ offset: true }),
+        scheduled_end: z.string().datetime({ offset: true }).nullable(),
+        confirmed: z.literal(true),
+        confirmation_basis: z.literal("office_committed_assignment"),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     proposal: z
       .object({
         status: nullableText,

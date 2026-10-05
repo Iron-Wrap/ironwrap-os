@@ -28,6 +28,7 @@ import {
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
 import { customerDecisionBackendEnabled } from "./customer-decision-config.ts";
+import { getCurrentOperatingJobAssignment } from "./operating-job-assignment-store.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
@@ -47,6 +48,13 @@ export interface CustomerPortalReadModel {
     service_type: string | null;
     status: string | null;
   };
+  install_window: {
+    scheduled_start: string;
+    scheduled_end: string | null;
+    /** The office saved this assignment; this does not assert customer consent. */
+    confirmed: true;
+    confirmation_basis: "office_committed_assignment";
+  } | null;
   proposal: {
     status: string | null;
     prepared_at: string | null;
@@ -373,14 +381,18 @@ export async function buildCustomerPortalReadModel(
     if (published.acceptance)
       sourceTimestamps.push(published.acceptance.accepted_at);
   }
-  const [contractAcceptanceAvailable, optionPackages] = await Promise.all([
+  const [contractAcceptanceAvailable, optionPackages, assignment] = await Promise.all([
     customerContractAcceptanceAvailable(env, {
       tenant_id: link.tenant_id,
       roof_job_id: link.roof_job_id,
       customer_id: link.customer_id,
     }),
     listNativeOptionPackages(env, link.tenant_id, link.roof_job_id),
+    job.job_status === "cancelled"
+      ? Promise.resolve(null)
+      : currentNativePortalAssignment(env, link),
   ]);
+  if (assignment) sourceTimestamps.push(assignment.created_at);
 
   return {
     version: 1,
@@ -396,6 +408,16 @@ export async function buildCustomerPortalReadModel(
       service_type: text(job.service_type, 120),
       status: text(job.job_status, 120),
     },
+    // The native assignment is the office's committed schedule. Private approval proposals and
+    // legacy assignments have no native commitment here and must never become customer promises.
+    install_window: assignment
+      ? {
+          scheduled_start: assignment.scheduled_start,
+          scheduled_end: assignment.scheduled_end,
+          confirmed: true,
+          confirmation_basis: "office_committed_assignment",
+        }
+      : null,
     proposal: published
       ? {
           status: published.acceptance ? "Signed" : "Sent",
@@ -429,6 +451,20 @@ export async function buildCustomerPortalReadModel(
     closeout: null,
     warranty: null,
   };
+}
+
+async function currentNativePortalAssignment(
+  env: AppEnv,
+  link: CustomerPortalLinkRecord,
+) {
+  try {
+    return await getCurrentOperatingJobAssignment(env, link.tenant_id, link.roof_job_id);
+  } catch (error) {
+    // A pre-cutover database has no native schedule to share. Other read failures must still
+    // reach the portal's unavailable response instead of presenting a false missing schedule.
+    if (String(error).includes("no such table: operating_job_assignments")) return null;
+    throw error;
+  }
 }
 
 async function listNativeOptionPackages(

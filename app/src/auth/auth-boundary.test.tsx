@@ -266,7 +266,7 @@ describe("AuthBoundary after an offline reload", () => {
     permissions: ["session:read"],
     allowed_actions: ["session.logout"],
     csrf_token: "csrf-live",
-    session_expires_at: "2026-07-11T12:00:00.000Z",
+    session_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   };
   const offlineSnapshot: SessionResponse = {
     ...liveSession,
@@ -356,11 +356,11 @@ describe("AuthBoundary after an offline reload", () => {
   });
 
   it("keeps the offline sign-in and every queued item when the re-check fails", async () => {
-    vi.mocked(fetchSession)
-      .mockResolvedValueOnce(offlineSnapshot)
-      .mockRejectedValueOnce(
-        new ApiError({ status: 503, code: "session_unavailable", message: "Try again later." }),
-      );
+    let rejectRecheck: (error: ApiError) => void = () => {};
+    const recheck = new Promise<SessionResponse>((_resolve, reject) => {
+      rejectRecheck = reject;
+    });
+    vi.mocked(fetchSession).mockResolvedValueOnce(offlineSnapshot).mockReturnValueOnce(recheck);
     const deviceActionId = await queueOneAction();
     renderBoundary();
     expect(await screen.findByText("token: offline-session-no-csrf")).toBeVisible();
@@ -368,6 +368,12 @@ describe("AuthBoundary after an offline reload", () => {
     act(() => window.dispatchEvent(new Event("online")));
 
     await waitFor(() => expect(fetchSession).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      rejectRecheck(
+        new ApiError({ status: 503, code: "session_unavailable", message: "Try again later." }),
+      );
+      await recheck.catch(() => undefined);
+    });
     expect(screen.getByText("token: offline-session-no-csrf")).toBeVisible();
     expect(screen.queryByText("This device needs the internet")).not.toBeInTheDocument();
     const kept = await getOutboxAction(deviceActionId);

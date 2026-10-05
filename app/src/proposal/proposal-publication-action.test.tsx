@@ -11,7 +11,10 @@ import {
   rejectProposalPublication,
 } from "./proposal-publication-api";
 import { ProposalPublicationAction } from "./proposal-publication-action";
-import type { ProposalPublicationApprovalRequest } from "./proposal-publication-contracts";
+import {
+  proposalPublicationApprovalRequestSchema,
+  type ProposalPublicationApprovalRequest,
+} from "./proposal-publication-contracts";
 
 vi.mock("./proposal-publication-api", async () => {
   const actual = await vi.importActual<typeof import("./proposal-publication-api")>(
@@ -145,6 +148,38 @@ function renderAction(
   );
   return { ...view, queryClient };
 }
+
+describe("proposal publication approval browser contract", () => {
+  it("accepts the frozen approved snapshot from newer servers and its absence from older ones", () => {
+    const snapshot = {
+      snapshot_id: `approval-snapshot:${"b".repeat(64)}`,
+      version_label: "Saved proposal publication review",
+    };
+    const base = approval();
+    expect(proposalPublicationApprovalRequestSchema.safeParse(base).success).toBe(true);
+    expect(
+      proposalPublicationApprovalRequestSchema.safeParse({ ...base, approved_snapshot: null })
+        .success,
+    ).toBe(true);
+    expect(
+      proposalPublicationApprovalRequestSchema.safeParse({ ...base, approved_snapshot: snapshot })
+        .success,
+    ).toBe(true);
+    expect(
+      proposalPublicationApprovalRequestSchema.safeParse({
+        ...base,
+        approved_snapshot: { ...snapshot, snapshot_id: "approval-snapshot:" },
+      }).success,
+    ).toBe(false);
+    expect(
+      proposalPublicationApprovalRequestSchema.safeParse({
+        ...base,
+        preview: null,
+        approved_snapshot: snapshot,
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("ProposalPublicationAction", () => {
   it("takes the owner from a Draft pack to a live customer proposal in two deliberate steps", async () => {

@@ -73,6 +73,45 @@ function approvalPayload() {
 }
 
 describe("quote revision approval browser contract", () => {
+  it("accepts the frozen approved snapshot from newer servers and its absence from older ones", () => {
+    const snapshot = {
+      snapshot_id: `approval-snapshot:${"a".repeat(64)}`,
+      version_label: "Source quote v1 (correction draft review)",
+    };
+    expect(quoteRevisionApprovalRequestSchema.safeParse(approvalPayload()).success).toBe(true);
+    expect(
+      quoteRevisionApprovalRequestSchema.safeParse({
+        ...approvalPayload(),
+        approved_snapshot: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      quoteRevisionApprovalRequestSchema.safeParse({
+        ...approvalPayload(),
+        approved_snapshot: snapshot,
+      }).success,
+    ).toBe(true);
+    for (const invalid of [
+      { ...snapshot, snapshot_id: "approval-snapshot:not-a-digest" },
+      { ...snapshot, extra: true },
+      { snapshot_id: snapshot.snapshot_id },
+    ]) {
+      expect(
+        quoteRevisionApprovalRequestSchema.safeParse({
+          ...approvalPayload(),
+          approved_snapshot: invalid,
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      quoteRevisionApprovalRequestSchema.safeParse({
+        ...approvalPayload(),
+        preview: null,
+        approved_snapshot: snapshot,
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts only the bounded draft-shell review DTO", () => {
     const payload = {
       version: 1,

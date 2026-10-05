@@ -117,6 +117,52 @@ describe("CompanyProfilePage", () => {
     expect(await screen.findByText("Company details saved")).toBeInTheDocument();
   });
 
+  it("shows owners what customers see from the saved contact, and says when it is withheld", async () => {
+    vi.mocked(loadCompanyProfile).mockResolvedValue(
+      profileResponse({
+        profile: { phone: "403 555 0100 ext 12", email: "hello@freshco.example" },
+        public_contact_preview: { phone: null, email: "hello@freshco.example" },
+      }) as never,
+    );
+    renderWithSession(<CompanyProfilePage />, sessionFor("owner"));
+    const preview = await screen.findByRole("region", { name: "What customers see now" });
+    expect(preview).toHaveTextContent("Email: hello@freshco.example");
+    expect(preview).not.toHaveTextContent("Phone:");
+    expect(preview).toHaveTextContent("Customers will not see your phone");
+    expect(preview).toHaveTextContent("It has an extension or letters in it.");
+    expect(preview).toHaveTextContent("leave out any extension. Then press Save company details.");
+    expect(preview).toHaveTextContent("From your last save.");
+    expect(preview).not.toHaveTextContent("Customers will not see this email");
+  });
+
+  it("lists both contacts when customers see them, and says so when there are none", async () => {
+    vi.mocked(loadCompanyProfile).mockResolvedValue(
+      profileResponse({
+        profile: { phone: "403 555 0100", email: "hello@freshco.example" },
+        public_contact_preview: { phone: "+14035550100", email: "hello@freshco.example" },
+      }) as never,
+    );
+    const { unmount } = renderWithSession(<CompanyProfilePage />, sessionFor("owner"));
+    const preview = await screen.findByRole("region", { name: "What customers see now" });
+    expect(preview).toHaveTextContent("Phone: +1 403-555-0100");
+    expect(preview).toHaveTextContent("Email: hello@freshco.example");
+    expect(preview).not.toHaveTextContent("will not see");
+    unmount();
+
+    vi.mocked(loadCompanyProfile).mockResolvedValue(
+      profileResponse({ public_contact_preview: null }) as never,
+    );
+    renderWithSession(<CompanyProfilePage />, sessionFor("owner"));
+    expect(await screen.findByText("Customers do not see a phone or email yet.")).toBeVisible();
+  });
+
+  it("shows no preview when the Worker does not send one", async () => {
+    vi.mocked(loadCompanyProfile).mockResolvedValue(profileResponse() as never);
+    renderWithSession(<CompanyProfilePage />, sessionFor("owner"));
+    await screen.findByText("How customers reach you");
+    expect(screen.queryByRole("region", { name: "What customers see now" })).toBeNull();
+  });
+
   it("says what went wrong in words the reader can act on", async () => {
     vi.mocked(loadCompanyProfile).mockResolvedValue(profileResponse() as never);
     vi.mocked(saveCompanyProfile).mockRejectedValue(

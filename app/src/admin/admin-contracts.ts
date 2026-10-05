@@ -70,6 +70,12 @@ export const companyProfileResponseSchema = z.object({
     content_types: z.array(z.string()),
   }),
   public_brands: z.array(publicBrandSchema),
+  // What the customer portal shows from the saved contact, computed by the Worker with the same
+  // rule as the portal. Absent from older Workers; null when customers see neither.
+  public_contact_preview: z
+    .object({ phone: z.string().nullable(), email: z.string().nullable() })
+    .nullable()
+    .optional(),
 });
 
 const setupStepStatusSchema = z.enum(["done", "in_progress", "skipped", "later"]);

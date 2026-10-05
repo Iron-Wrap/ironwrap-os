@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ImageUp, Trash2 } from "lucide-react";
-import { useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useId, useMemo, useRef, useState } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
@@ -63,7 +63,7 @@ const CONTACT_FIELDS: readonly FieldSpec[] = [
     label: "Phone",
     type: "tel",
     autoComplete: "tel",
-    hint: "Include the area code. Outside Canada and the US, start with + and the country code.",
+    hint: "Start with + and the country code, like +1 780 555 0134. Leave out any extension.",
   },
   { name: "email", label: "Email", type: "email", autoComplete: "email" },
   { name: "website", label: "Website", type: "url", hint: "Start with https://" },
@@ -309,7 +309,13 @@ function CompanyProfileForm({
           fields={CONTACT_FIELDS}
           values={values}
           onChange={set}
-        />
+        >
+          <CustomerContactPreview
+            preview={data.public_contact_preview}
+            savedPhone={data.profile.phone}
+            savedEmail={data.profile.email}
+          />
+        </FieldGroup>
         <FieldGroup
           title="Address"
           description="Your main office or shop."
@@ -352,12 +358,14 @@ function FieldGroup({
   fields,
   values,
   onChange,
+  children,
 }: {
   title: string;
   description: string;
   fields: readonly FieldSpec[];
   values: CompanyProfileInput;
   onChange: (name: FieldSpec["name"], value: string) => void;
+  children?: ReactNode;
 }) {
   return (
     <Card>
@@ -374,6 +382,7 @@ function FieldGroup({
             onChange={onChange}
           />
         ))}
+        {children ? <div className="sm:col-span-2">{children}</div> : null}
       </CardContent>
     </Card>
   );
@@ -433,4 +442,60 @@ function ProfileField({
 
 function AdminSection({ children }: { children: React.ReactNode }) {
   return <section className="mx-auto max-w-4xl space-y-6 pb-6">{children}</section>;
+}
+
+function readablePhone(e164: string): string {
+  const nanp = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
+  return nanp ? `+1 ${nanp[1]}-${nanp[2]}-${nanp[3]}` : e164;
+}
+
+/** Shows the saved contact as customers get it, so a withheld phone or email is never silent. */
+function CustomerContactPreview({
+  preview,
+  savedPhone,
+  savedEmail,
+}: {
+  preview: CompanyProfileResponse["public_contact_preview"];
+  savedPhone: string;
+  savedEmail: string;
+}) {
+  if (preview === undefined) return null;
+  const phoneWithheld = !preview?.phone && savedPhone.trim() !== "";
+  const emailWithheld = !preview?.email && savedEmail.trim() !== "";
+  return (
+    <section aria-label="What customers see now" className="space-y-2 border-t border-border pt-4">
+      <div>
+        <h3 className="text-sm font-semibold">What customers see now</h3>
+        <p className="text-sm text-muted">From your last save.</p>
+      </div>
+      {preview?.phone || preview?.email ? (
+        <ul className="text-sm leading-6">
+          {preview.phone ? <li>Phone: {readablePhone(preview.phone)}</li> : null}
+          {preview.email ? (
+            <li>Email: {preview.email}</li>
+          ) : savedEmail.trim() === "" ? (
+            <li className="text-muted">Email: Not added</li>
+          ) : null}
+        </ul>
+      ) : !phoneWithheld && !emailWithheld ? (
+        <p className="text-sm leading-6 text-muted">Customers do not see a phone or email yet.</p>
+      ) : null}
+      {phoneWithheld ? (
+        <Notice tone="warning" title="Customers will not see your phone">
+          {/[a-z]/i.test(savedPhone)
+            ? "It has an extension or letters in it. "
+            : savedPhone.trim().startsWith("+")
+              ? "It is not a complete number. "
+              : "It has no country code. "}
+          Type it with + and the country code, like +1 780 555 0134, and leave out any extension.
+          Then press Save company details.
+        </Notice>
+      ) : null}
+      {emailWithheld ? (
+        <Notice tone="warning" title="Customers will not see this email">
+          Use a full address, like name@company.com. Then press Save company details.
+        </Notice>
+      ) : null}
+    </section>
+  );
 }

@@ -116,6 +116,20 @@ test.describe("Onboarding v0 mobile acceptance", () => {
 
     await page.getByRole("button", { name: "Save company details" }).click();
     await expect(page.getByText("Company details saved")).toBeVisible();
+    const customerView = page.getByRole("region", { name: "What customers see now" });
+    await expect(customerView).toContainText("Phone: +1 780-555-0134");
+
+    // A local number with no country on file is withheld from customers, and the owner is told.
+    await page.getByLabel("Phone").fill("780 555 0134");
+    await page.getByRole("button", { name: "Save company details" }).click();
+    await expect(customerView.getByText("Customers will not see your phone")).toBeVisible();
+    await page.screenshot({
+      path: `${SHOT_DIR}/onboarding-02b-contact-withheld.png`,
+      fullPage: true,
+    });
+    await page.getByLabel("Phone").fill("+1 780 555 0134");
+    await page.getByRole("button", { name: "Save company details" }).click();
+    await expect(customerView).toContainText("Phone: +1 780-555-0134");
 
     // The logo: chosen from the phone's own file picker, no config file anywhere in the path.
     await page.getByLabel("Choose a logo file").setInputFiles({

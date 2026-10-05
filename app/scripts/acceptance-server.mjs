@@ -2465,6 +2465,34 @@ const ONBOARDING_REQUIRED_COMPANY_FIELDS = [
  * (ELEC-233, disposition on ELEC-231). The real Worker has emitted the full envelope since
  * `company-setup-api.ts` `companyProfileEnvelope`; this mirrors it.
  */
+/**
+ * Mirrors `publicCompanyContact` in workers-bus/src/company-profile.ts: the contact customers see
+ * is withheld when it is a default, an unreadable phone, or a local number without CA/US.
+ */
+function publicContactPreview(profile) {
+  if (profile.is_default) return null;
+  const raw = String(profile.phone ?? "").trim();
+  let phone = null;
+  if (raw && /^\+?[0-9 ().-]+$/.test(raw)) {
+    const digits = raw.replace(/\D/g, "");
+    if (raw.startsWith("+")) {
+      phone = /^[1-9][0-9]{6,14}$/.test(digits) ? `+${digits}` : null;
+    } else if (
+      ["ca", "canada", "us", "usa", "united states"].includes(
+        String(profile.country ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+    ) {
+      const ten = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+      phone = /^[2-9][0-9]{2}[2-9][0-9]{6}$/.test(ten) ? `+1${ten}` : null;
+    }
+  }
+  const email = String(profile.email ?? "").trim();
+  const publicEmail = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email) ? email : null;
+  return phone || publicEmail ? { phone, email: publicEmail } : null;
+}
+
 function onboardingProfilePayload() {
   return {
     version: 1,
@@ -2485,6 +2513,7 @@ function onboardingProfilePayload() {
       max_bytes: 512 * 1024,
       content_types: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
     },
+    public_contact_preview: publicContactPreview(onboardingState.profile),
     public_brands: [
       {
         id: "freshco",

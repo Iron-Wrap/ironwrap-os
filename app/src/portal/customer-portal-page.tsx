@@ -5,6 +5,7 @@ import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { describeInstallWindow } from "./install-window";
 import { MaterialComparisonSection } from "./material-comparison-section";
 import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "./portal-api";
 import type { CustomerPortalResponse } from "./portal-contracts";
@@ -103,6 +104,7 @@ export function CustomerPortalView({
 function ProjectOverview({ model }: { model: CustomerPortalResponse }) {
   const quote = model.proposal?.quote;
   const hasBalance = quote?.balance_due !== null && quote?.balance_due !== undefined;
+  const install = describeInstallWindow(model.install_window);
   const next =
     model.contract_acceptance_available &&
     quote?.status === "Approved" &&
@@ -134,13 +136,25 @@ function ProjectOverview({ model }: { model: CustomerPortalResponse }) {
     <section aria-label="Project overview" className="space-y-4 border-b border-border pb-5">
       <dl className="grid gap-5 sm:grid-cols-2">
         <div>
-          <dt className="text-base font-semibold text-muted">Installation</dt>
+          <dt className="text-base font-semibold text-muted">Installation date</dt>
           <dd className="mt-1">
-            <p className="text-xl font-bold leading-7">Schedule not yet shared</p>
-            <p className="mt-1 text-base leading-6 text-muted">
-              This page does not include a confirmed installation date. Ask your project team for
-              the schedule.
-            </p>
+            {install ? (
+              <>
+                <p className="text-xl font-bold leading-7">{install.day}</p>
+                <p className="mt-1 text-base leading-6">{install.time}</p>
+                <p className="mt-1 text-base leading-6 text-muted">
+                  {model.brand} booked this time. If it does not work for you, contact them.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xl font-bold leading-7">Schedule not yet shared</p>
+                <p className="mt-1 text-base leading-6 text-muted">
+                  This page does not include a confirmed installation date. Ask your project team
+                  for the schedule.
+                </p>
+              </>
+            )}
           </dd>
         </div>
         <div>
@@ -153,22 +167,26 @@ function ProjectOverview({ model }: { model: CustomerPortalResponse }) {
                 "Amount not yet shared"
               )}
             </p>
-            <p className="mt-1 text-base leading-6 text-muted">
-              {quote?.payment_due_date
-                ? `Due ${formatDate(quote.payment_due_date)}`
-                : "Payment due date not yet shared."}
-            </p>
+            {hasBalance ? (
+              <p className="mt-1 text-base leading-6 text-muted">
+                {quote?.payment_due_date
+                  ? `Due ${formatDate(quote.payment_due_date)}`
+                  : "Payment due date not yet shared."}
+              </p>
+            ) : (
+              <p className="mt-1 text-base leading-6 text-muted">
+                {quote ? "Your proposal price is not a bill. " : ""}
+                What you owe will appear here when {model.brand} shares it. Ask them if you need it
+                sooner.
+              </p>
+            )}
             {quote?.payment_status ? (
               <p className="mt-1 text-base leading-6">{quote.payment_status}</p>
-            ) : null}
-            {!hasBalance ? (
-              <p className="mt-1 text-base leading-6 text-muted">
-                A proposal total does not tell you what is still owed.
-              </p>
             ) : null}
           </dd>
         </div>
       </dl>
+      <CompanyContact brand={model.brand} contact={model.company_contact} />
       <div className="border-t border-border pt-4">
         <h2 className="text-lg font-bold">Next step</h2>
         <p className="mt-1 text-base leading-6 text-muted">{next.detail}</p>
@@ -435,4 +453,31 @@ function formatDate(value: string): string {
     // A date-only payment deadline is a calendar date, not midnight UTC shifted by the phone.
     timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? "UTC" : undefined,
   }).format(parsed);
+}
+
+function CompanyContact({
+  brand,
+  contact,
+}: {
+  brand: string;
+  contact: CustomerPortalResponse["company_contact"];
+}) {
+  if (!contact || (!contact.phone && !contact.email)) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-base font-semibold">Questions about your date or what you owe?</p>
+      <div className="flex flex-wrap gap-3">
+        {contact.phone ? (
+          <Button asChild variant="ghost" className="min-h-12 whitespace-normal text-base">
+            <a href={`tel:${contact.phone}`}>Call {brand}</a>
+          </Button>
+        ) : null}
+        {contact.email ? (
+          <Button asChild variant="ghost" className="min-h-12 whitespace-normal text-base">
+            <a href={`mailto:${contact.email}`}>Email {brand}</a>
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }

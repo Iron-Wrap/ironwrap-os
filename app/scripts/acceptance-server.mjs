@@ -2126,6 +2126,13 @@ function fixtureCustomerPortalModel() {
     source_updated_at: "2026-08-20T07:00:00.000Z",
     read_model_generated_at: "2026-08-20T07:05:00.000Z",
     job: { job_number: "IW-2026-100", service_type: "Roofing", status: "In Production" },
+    // Mirrors the Worker's office-committed native assignment (customer-portal.ts).
+    install_window: {
+      scheduled_start: "2026-08-26T08:00:00-06:00",
+      scheduled_end: "2026-08-26T16:00:00-06:00",
+      confirmed: true,
+      confirmation_basis: "office_committed_assignment",
+    },
     proposal: null,
     scope: [
       {

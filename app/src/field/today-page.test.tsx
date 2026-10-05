@@ -303,7 +303,7 @@ describe("TodayPage", () => {
     expect(screen.getByText("Launch Proof")).toBeVisible();
     expect(
       screen.getByText(
-        "These are website leads saved from the website. They are not assigned field jobs, not published portal proposals, and not money intents.",
+        "Review website enquiries before assigning work or making a customer commitment.",
       ),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Today's work" })).toBeVisible();

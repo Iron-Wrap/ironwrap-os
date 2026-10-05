@@ -142,6 +142,17 @@ describe("IronWrap OS foundation family", () => {
     expect(styles).toMatch(/text-wrap-style:\s*pretty/);
   });
 
+  it("lets Shop reading undo the sr-only clip on the compact Safety label", () => {
+    // The office top bar keeps the Safety label for screen readers only below
+    // 1101px, and Shop reading shows it again. Tailwind 4's sr-only hides with
+    // clip-path, not the retired clip property, so an override that resets only
+    // clip leaves the label clipped to nothing on a shop tablet.
+    const override = read("src/styles.css").match(
+      /\.shell:has\(\[data-environment="shop"\]\) \.shell-safety-trigger > span \{[^}]*\}/,
+    )?.[0];
+    expect(override).toMatch(/clip-path:\s*none;/);
+  });
+
   it("keeps the primary action ink, so brass never reads as an action colour", () => {
     const styles = read("src/styles.css");
     const button = read("src/components/ui/button.tsx");

@@ -196,6 +196,21 @@ describe("PipelineBoardPage", () => {
     ).toBeVisible();
   });
 
+  it("distinguishes total stage size from the bounded loaded cards", async () => {
+    vi.mocked(loadPipelineBoard).mockResolvedValue(
+      boardModel({
+        stages: [stage("new_lead", "New Lead", 0, { card_count: 115 })],
+        cards: [],
+      }),
+    );
+    renderBoard();
+    const column = await screen.findByRole("region", { name: "New Lead column" });
+    expect(within(column).getByText("115")).toBeVisible();
+    expect(within(column).getByText("No cards from this stage in the loaded list")).toBeVisible();
+    expect(within(column).queryByText("No cards in this stage")).toBeNull();
+    expect(screen.getByText("0 loaded · 115 total · 1 stage")).toBeVisible();
+  });
+
   // PO decision D4: no $ field exists before "Need Quote", and a fabricated $0.00 is
   // worse than a blank line.
   it("renders no value line on a card the server sent no amount for", async () => {

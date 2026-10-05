@@ -528,7 +528,9 @@ function PipelineBoardScreen({ scope }: { scope: "all" | "owned" }) {
               {activePipeline.name}
             </h1>
             <p className="text-xs font-semibold text-muted sm:text-sm">
-              {board ? `${boardCardCount} cards · ${stages.length} stages` : "Loading the board…"}
+              {board
+                ? `${board.cards.length} loaded · ${boardCardCount} total · ${stages.length} ${stages.length === 1 ? "stage" : "stages"}`
+                : "Loading the board…"}
             </p>
           </div>
         </div>
@@ -746,7 +748,9 @@ function StageColumn({
       <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain p-2">
         {cards.length === 0 ? (
           <p className="grid flex-1 place-items-center px-2 py-6 text-center text-xs text-muted">
-            No cards in this stage
+            {(stage.card_count ?? 0) > 0
+              ? "No cards from this stage in the loaded list"
+              : "No cards in this stage"}
           </p>
         ) : (
           cards.map((card) => (

@@ -45,10 +45,12 @@ test.describe("the People desk", () => {
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/people");
-      await settleAnimations(page);
 
+      // The route is lazy, so right after goto nothing has mounted and nothing is animating yet.
+      // Settle only once the page is on screen, or axe samples it mid-fade at reduced contrast.
       const refresh = page.getByRole("button", { name: "Refresh", exact: true });
       await expectTouchTarget(refresh, { name: "Refresh" });
+      await settleAnimations(page);
 
       // Nothing may scroll sideways at either width. Measured against the content box, not the
       // requested viewport: a Linux runner reserves a classic vertical scrollbar, so scrollWidth

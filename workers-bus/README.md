@@ -488,6 +488,21 @@ Document generation is a separate default-off capability. Keep
 the universal effect ledger is enabled. Activation does not prove runtime success: preserve the
 generation/effect/receipt IDs and exact R2 HEAD evidence from a controlled reference execution.
 
+### Customer portal install window
+
+`POST /api/v1/customer-portal/resolve` rechecks the capability's tenant, job, and customer binding
+on every request. Its `install_window` is either `null` or a redacted current native assignment:
+`{ scheduled_start, scheduled_end, confirmed: true, confirmation_basis: "office_committed_assignment" }`.
+The times retain the native assignment's ISO timestamp format; `scheduled_end` may be `null` when
+the office has committed a start without an end. `confirmed` means the office saved the schedule
+through the existing native assignment authority. It does not mean the customer acknowledged it.
+
+Only the unsuperseded `operating_job_assignments` revision for the bound job is shared, and its
+creation time participates in `source_updated_at`. A missing native schedule or a cancelled job
+returns `null`. Uncommitted approval proposals and legacy broker/Frappe assignments stay unshared.
+Crew, worker, assignment, approval, and receipt details are excluded. A database read failure
+returns the existing unavailable response; it is not reported as a missing schedule.
+
 ### Public instant-estimate activation
 
 Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`

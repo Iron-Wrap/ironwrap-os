@@ -425,6 +425,7 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
     );
     assert.equal(model.closeout, null);
     assert.equal(model.warranty, null);
+    assert.equal(model.install_window, null);
     assert.equal(model.brand, "IronWrap Exteriors");
     assert.equal(model.contract_acceptance_available, true);
     assert.equal(model.material_decision_available, false);

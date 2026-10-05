@@ -30,6 +30,36 @@ export type {
 
 export const COMPANY_LOGO_MAX_BYTES = 512 * 1024;
 
+/** Exactly the owner-saved contact that a customer may see; defaults are never published. */
+export function publicCompanyContact(
+  profile: CompanyProfile,
+): { phone: string | null; email: string | null } | null {
+  if (profile.is_default) return null;
+  const phone = publicPhone(profile.phone, profile.country);
+  const email = profile.email.trim();
+  const publicEmail = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)
+    ? email
+    : null;
+  return phone || publicEmail ? { phone, email: publicEmail } : null;
+}
+
+function publicPhone(phone: string, country: string): string | null {
+  const value = phone.trim();
+  if (!value || !/^\+?[0-9 ().-]+$/.test(value)) return null;
+  const digits = value.replace(/\D/g, "");
+  if (value.startsWith("+")) {
+    return /^[1-9][0-9]{6,14}$/.test(digits) ? `+${digits}` : null;
+  }
+  // A local number needs an explicit North American country on the saved profile. Never infer a
+  // dialling country from the deployment, customer device, or tenant name.
+  const northAmerican = ["ca", "canada", "us", "usa", "united states"].includes(
+    country.trim().toLowerCase(),
+  );
+  if (!northAmerican) return null;
+  const tenDigits = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  return /^[2-9][0-9]{2}[2-9][0-9]{6}$/.test(tenDigits) ? `+1${tenDigits}` : null;
+}
+
 export interface CompanyProfileInput {
   company_name: string;
   brand_name: string;

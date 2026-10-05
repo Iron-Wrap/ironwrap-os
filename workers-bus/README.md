@@ -503,6 +503,23 @@ returns `null`. Uncommitted approval proposals and legacy broker/Frappe assignme
 Crew, worker, assignment, approval, and receipt details are excluded. A database read failure
 returns the existing unavailable response; it is not reported as a missing schedule.
 
+### Customer portal contact
+
+The same resolve response optionally includes
+`company_contact: { phone: string | null, email: string | null }`. It reads only the current
+tenant's saved Company details, where the owner or delegated office operator enters the
+customer-facing contact. Deployment defaults and staff records never supply this field. Empty
+or invalid contact is omitted; clearing the saved values removes it on the next resolve. Phone
+numbers are emitted in E.164 form only, using a saved country for North American local numbers;
+the Worker does not infer a country from the customer's device or tenant name. The portal remains
+private and `no-store`. The PWA's strict response schema must accept this additive field before
+the Worker response containing it is released.
+The owner Company details GET and save responses include
+`public_contact_preview: { phone: string | null, email: string | null } | null` from the same
+normalization function. This lets the owner see exactly which saved contact customers can use;
+`null` means no public contact, while a null phone beside a valid email means the phone will not
+be shown. Defaults never become a public contact.
+
 ### Public instant-estimate activation
 
 Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`

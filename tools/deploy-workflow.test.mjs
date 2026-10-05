@@ -919,13 +919,13 @@ test("release-please workflow validation rejects a write-capable title check or 
     ),
   );
   // Only GitHub-owned actions, and release-please only through pinned npx.
+  const thirdPartyAction = workflow.replace(
+    /      - uses: actions\/setup-node@[^\n]+/,
+    "      - uses: googleapis/release-please-action@v4",
+  );
+  assert.notEqual(thirdPartyAction, workflow, "the refusal fixture must replace the current pinned action");
   assert.throws(() =>
-    validateReleasePleaseWorkflow(
-      workflow.replace(
-        '      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6',
-        "      - uses: googleapis/release-please-action@v4",
-      ),
-    ),
+    validateReleasePleaseWorkflow(thirdPartyAction),
   );
   assert.throws(() =>
     validateReleasePleaseWorkflow(workflow.replace("RELEASE_PLEASE_VERSION: 17.11.2", "RELEASE_PLEASE_VERSION: latest")),

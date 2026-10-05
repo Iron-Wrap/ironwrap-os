@@ -42,6 +42,7 @@ import {
   parseCompanyLogoInput,
   parseCompanyLogoRemovalInput,
   parseCompanyProfileInput,
+  publicCompanyContact,
   publicBrandDescriptors,
   removeCompanyLogo,
   saveCompanyLogo,
@@ -420,6 +421,7 @@ function companyProfileEnvelope(
   return envelope(auth, {
     ...(outcome ? { outcome } : {}),
     profile: profileView(profile),
+    public_contact_preview: publicCompanyContact(profile),
     defaults: profileView(defaults),
     missing_fields: missingCompanyFields(profile),
     week_starts: [...COMPANY_PROFILE_WEEK_STARTS],

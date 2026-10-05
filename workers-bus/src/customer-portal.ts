@@ -28,6 +28,8 @@ import {
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { customerContractAcceptanceAvailable } from "./customer-contract-acceptance.ts";
 import { customerDecisionBackendEnabled } from "./customer-decision-config.ts";
+import { getCompanyProfile } from "./company-setup-store.ts";
+import { publicCompanyContact } from "./company-profile.ts";
 import { getCurrentOperatingJobAssignment } from "./operating-job-assignment-store.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
@@ -39,6 +41,8 @@ const PORTAL_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
+  /** Owner-saved customer-facing company contact; never a staff identity or a default. */
+  company_contact?: { phone: string | null; email: string | null };
   contract_acceptance_available: boolean;
   material_decision_available: boolean;
   source_updated_at: string | null;
@@ -381,7 +385,7 @@ export async function buildCustomerPortalReadModel(
     if (published.acceptance)
       sourceTimestamps.push(published.acceptance.accepted_at);
   }
-  const [contractAcceptanceAvailable, optionPackages, assignment] = await Promise.all([
+  const [contractAcceptanceAvailable, optionPackages, assignment, companyProfile] = await Promise.all([
     customerContractAcceptanceAvailable(env, {
       tenant_id: link.tenant_id,
       roof_job_id: link.roof_job_id,
@@ -391,12 +395,16 @@ export async function buildCustomerPortalReadModel(
     job.job_status === "cancelled"
       ? Promise.resolve(null)
       : currentNativePortalAssignment(env, link),
+    getCompanyProfile(env, link.tenant_id),
   ]);
   if (assignment) sourceTimestamps.push(assignment.created_at);
+  if (companyProfile.updated_at) sourceTimestamps.push(companyProfile.updated_at);
+  const companyContact = publicCompanyContact(companyProfile);
 
   return {
     version: 1,
     brand: customerPortalBrand(job, env),
+    ...(companyContact ? { company_contact: companyContact } : {}),
     contract_acceptance_available: contractAcceptanceAvailable,
     material_decision_available: customerDecisionBackendEnabled(env) &&
       optionPackages.length > 0,

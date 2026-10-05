@@ -61,6 +61,7 @@ test("an owner reads the deployment defaults with the actions they may take", as
     defaults: { company_name: string };
     missing_fields: string[];
     week_starts: string[];
+    public_contact_preview: { phone: string | null; email: string | null } | null;
   }>(response);
 
   assert.equal(response.status, 200);
@@ -71,6 +72,7 @@ test("an owner reads the deployment defaults with the actions they may take", as
   ]);
   assert.equal(model.profile.profile_version, 0);
   assert.equal(model.profile.is_default, true);
+  assert.equal(model.public_contact_preview, null);
   assert.equal(model.defaults.company_name, "IronWrap OS");
   assert.deepEqual(model.week_starts, ["sunday", "monday", "saturday"]);
   assert.ok(model.missing_fields.includes("phone"));
@@ -205,17 +207,23 @@ test("a valid save is readable, replayable, and refuses a stale version", async 
     outcome: string;
     profile: { profile_version: number; city: string; logo_ref: string | null };
     missing_fields: string[];
+    public_contact_preview: { phone: string | null; email: string | null } | null;
   }>(saved);
   assert.equal(saved.status, 200);
   assert.equal(savedModel.outcome, "updated");
   assert.equal(savedModel.profile.profile_version, 1);
   assert.equal(savedModel.profile.logo_ref, null);
+  assert.deepEqual(savedModel.public_contact_preview, {
+    phone: "+15875550100", email: "hello@freshco.example",
+  });
   assert.deepEqual(savedModel.missing_fields, []);
 
   const read = await call(database, "owner", request("GET", PROFILE_PATH));
-  const readModel = await payload<{ profile: { city: string; profile_version: number } }>(read);
+  const readModel = await payload<{ profile: { city: string; profile_version: number };
+    public_contact_preview: { phone: string | null; email: string | null } | null }>(read);
   assert.equal(readModel.profile.city, "Edmonton");
   assert.equal(readModel.profile.profile_version, 1);
+  assert.deepEqual(readModel.public_contact_preview, savedModel.public_contact_preview);
 
   const replay = await call(
     database, "owner", request("PUT", PROFILE_PATH, { payload: body() }),
@@ -242,6 +250,16 @@ test("a valid save is readable, replayable, and refuses a stale version", async 
   assert.deepEqual(
     await payload(changedReplay), { error: "company_profile_idempotency_conflict" },
   );
+});
+
+test("owner preview withholds a local phone without a known dialling country", async () => {
+  const database = new SqliteD1();
+  const saved = await call(database, "owner", request("PUT", PROFILE_PATH, {
+    payload: body(0, { phone: "403 555 0100", country: "Bulgaria" }),
+  }));
+  assert.equal(saved.status, 200);
+  const model = await payload<{ public_contact_preview: { phone: string | null; email: string | null } | null }>(saved);
+  assert.deepEqual(model.public_contact_preview, { phone: null, email: "hello@freshco.example" });
 });
 
 test("an owner may save identity now and the address later", async () => {

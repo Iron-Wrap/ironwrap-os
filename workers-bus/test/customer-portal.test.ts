@@ -42,6 +42,12 @@ class SqliteD1 {
         "utf8",
       ),
     );
+    for (const name of [
+      "0110_tenant_company_profile_and_setup.sql",
+      "0115_company_profile_convergence.sql",
+    ]) {
+      this.raw.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+    }
     installNativePortalSchema(this.raw);
     seedNativePortal(this.raw);
     if (nativeChains === 0) {
@@ -427,6 +433,7 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
     assert.equal(model.warranty, null);
     assert.equal(model.install_window, null);
     assert.equal(model.brand, "IronWrap Exteriors");
+    assert.equal(Object.hasOwn(model, "company_contact"), false);
     assert.equal(model.contract_acceptance_available, true);
     assert.equal(model.material_decision_available, false);
     assert.deepEqual(model.option_packages, []);
@@ -467,6 +474,48 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
   } finally {
     network.restore();
   }
+});
+
+test("portal shares only current owner-saved company contact for its own tenant", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+  assert.equal(issued.status, 200);
+  const token = new URLSearchParams(
+    new URL(((await issued.json()) as { portal_url: string }).portal_url).hash.slice(1),
+  ).get("token")!;
+  const resolve = async () => {
+    const response = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(response.status, 200);
+    return await response.json() as Record<string, unknown>;
+  };
+  const saveProfile = (tenantId: string, phone: string, email: string, country: string) => {
+    db.raw.prepare(`INSERT INTO tenant_company_profiles
+      (tenant_id, profile_version, company_name, brand_name, phone, email, country,
+       address_line1, city, region, postal_code, time_zone, currency, week_start,
+       created_at, updated_at, updated_by_user_id)
+      VALUES (?, 1, 'Synthetic Exteriors', 'Synthetic', ?, ?, ?,
+              '', '', '', '', 'America/Edmonton', 'CAD', 'monday', ?, ?, ?)`)
+      .run(tenantId, phone, email, country, NOW, NOW, "appu_owner_0001");
+  };
+
+  saveProfile("another-tenant", "+1 403 555 0100", "other@example.invalid", "Canada");
+  assert.equal(Object.hasOwn(await resolve(), "company_contact"), false);
+
+  saveProfile("ironwrap", "(587) 555-0100", "office@example.invalid", "Canada");
+  const shared = await resolve();
+  assert.deepEqual(shared.company_contact, {
+    phone: "+15875550100",
+    email: "office@example.invalid",
+  });
+  assert.equal(JSON.stringify(shared).includes("appu_owner_0001"), false);
+  assert.equal(JSON.stringify(shared).includes("other@example.invalid"), false);
+
+  db.raw.prepare("UPDATE tenant_company_profiles SET phone = '', email = '' WHERE tenant_id = 'ironwrap'").run();
+  assert.equal(Object.hasOwn(await resolve(), "company_contact"), false);
+  db.raw.prepare(`UPDATE tenant_company_profiles SET phone = '+1+5875550100',
+    email = 'office?subject=unsafe@example.invalid' WHERE tenant_id = 'ironwrap'`).run();
+  assert.equal(Object.hasOwn(await resolve(), "company_contact"), false);
 });
 
 test("customer portal offers contract acceptance only for one exact native chain", async () => {

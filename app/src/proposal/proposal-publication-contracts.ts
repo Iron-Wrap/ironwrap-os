@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { optionalApprovedSnapshotSchema } from "../owner/approved-snapshot";
+
 const boundedText = (min: number, max: number) => z.string().trim().min(min).max(max);
 const nullableText = (min: number, max: number) => boundedText(min, max).nullable();
 const identifier = boundedText(1, 140);
@@ -112,6 +114,7 @@ export const proposalPublicationApprovalRequestSchema = z
     pack_status_before: boundedText(1, 80),
     request_text: boundedText(1, 4_000),
     preview: proposalPublicationPreviewSchema.nullable(),
+    approved_snapshot: optionalApprovedSnapshotSchema,
     expires_at: boundedText(1, 80),
     requested_by: z
       .object({
@@ -148,6 +151,13 @@ export const proposalPublicationApprovalRequestSchema = z
   })
   .strict()
   .superRefine((approval, context) => {
+    if (approval.approved_snapshot && !approval.preview) {
+      context.addIssue({
+        code: "custom",
+        message: "An approved snapshot needs the preview it froze.",
+        path: ["approved_snapshot"],
+      });
+    }
     const {
       preview,
       outcome,

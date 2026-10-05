@@ -12,9 +12,11 @@ import { Notice } from "../components/ui/notice";
 import { PageHeader } from "../components/ui/page-header";
 import { Status } from "../components/ui/status";
 import { ErrorState } from "../components/ui/state-panel";
+import { ErrorSystemDetails, SystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
+import { isRefusal, messageFor, type PlainErrorCopy } from "../lib/plain-error";
 import { loadSalesLead, newCommercialLeadTriageKey, recordCommercialLeadTriage } from "./sales-api";
 import type { CommercialLeadTriageInput, SalesLeadResponse } from "./sales-contracts";
 
@@ -61,7 +63,7 @@ function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
   const [category, setCategory] = useState("");
   const [summary, setSummary] = useState("");
   const [nextAction, setNextAction] = useState("");
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<{ text: string; error: unknown }>();
   const [readRequired, setReadRequired] = useState(false);
   const mutation = useMutation({
     retry: false,
@@ -83,7 +85,7 @@ function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
     onError: (error) => {
       if (!active.current) return;
       setReadRequired(true);
-      setActionError(messageFor(error));
+      setActionError({ text: messageFor(error, triageRefusals), error });
     },
     onSettled: () => {
       saving.current = false;
@@ -212,13 +214,22 @@ function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
           Saving stays locked until this read finishes.
         </Notice>
       ) : null}
-      {actionError ? (
+      {actionError && notSaved(actionError.error) ? (
+        // The office said no before saving anything, and its sentence already names the next step.
+        <Notice tone="danger" title="The review was not saved">
+          <p>{actionError.text}</p>
+          <p className="mt-2">Your notes remain here.</p>
+          <ErrorSystemDetails error={actionError.error} />
+        </Notice>
+      ) : actionError ? (
+        // No answer came back, so the review may already be saved: check before saving again.
         <Notice tone="danger" title="Check the saved review">
-          <p>{actionError}</p>
+          <p>{actionError.text}</p>
           <p className="mt-2">
             Your notes remain here. Refresh the lead to check its saved state before starting
             another review.
           </p>
+          <ErrorSystemDetails error={actionError.error} />
         </Notice>
       ) : null}
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -371,11 +382,8 @@ function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
               {lead.triage.summary ?? "No review summary recorded yet."}
             </p>
           </section>
-          <details className="rounded-xl border border-border bg-surface p-5">
-            <summary className="min-h-6 cursor-pointer text-sm font-semibold">
-              Record details
-            </summary>
-            <dl className="mt-4 space-y-3 text-sm">
+          <SystemDetails className="rounded-xl border border-border bg-surface px-5 pb-2">
+            <dl className="mt-1 space-y-3 pb-3 text-sm">
               <Fact label="Lead record">{lead.id}</Fact>
               <Fact label="Source envelope">{lead.envelope_id}</Fact>
               <Fact label="Version">{lead.triage.version}</Fact>
@@ -386,7 +394,7 @@ function LeadTriagePrepareContent({ leadId }: { leadId?: string }) {
                 </Fact>
               ) : null}
             </dl>
-          </details>
+          </SystemDetails>
         </aside>
       </div>
     </section>
@@ -495,24 +503,45 @@ function LeadReviewSkeleton() {
     </section>
   );
 }
-function messageFor(error: unknown): string {
-  if (
-    error instanceof ApiError &&
-    [
-      "commercial_triage_version_conflict",
-      "commercial_permit_idempotency_conflict",
-      "commercial_triage_idempotency_conflict",
-    ].includes(error.code)
-  )
-    return "This lead changed while you were reviewing it. Read the current lead before saving again.";
-  if (
-    error instanceof ApiError &&
-    [
-      "commercial_policy_missing",
-      "commercial_policy_invalid",
-      "commercial_policy_inactive",
-    ].includes(error.code)
-  )
-    return "The review policy is unavailable. Ask an owner to check the setup.";
-  return "The save result was not confirmed. The review may already have been recorded.";
+const leadChanged =
+  "This lead changed while you were reviewing it. Refresh the lead before you save again.";
+const policyUnavailable = "The review policy is unavailable. Ask an owner to check the setup.";
+const policyCodes = [
+  "commercial_policy_missing",
+  "commercial_policy_invalid",
+  "commercial_policy_inactive",
+];
+
+/**
+ * True when the review is known not to be saved: a refusal, or a policy the server could not load
+ * (it answers 503 before it writes anything). Anything else may have saved it.
+ */
+function notSaved(error: unknown): boolean {
+  return isRefusal(error) || (error instanceof ApiError && policyCodes.includes(error.code));
 }
+
+const unconfirmed = "The save result was not confirmed. The review may already have been recorded.";
+
+/**
+ * People-written words for the refusals this screen knows. A refusal it has no code for was not
+ * recorded. Anything else, a lost connection included, stays unconfirmed: the review may have
+ * been recorded before the answer was lost.
+ */
+const triageRefusals: PlainErrorCopy = {
+  byCode: {
+    commercial_triage_version_conflict: leadChanged,
+    commercial_permit_idempotency_conflict: leadChanged,
+    commercial_triage_idempotency_conflict: leadChanged,
+    commercial_policy_missing: policyUnavailable,
+    commercial_policy_invalid: policyUnavailable,
+    commercial_policy_inactive: policyUnavailable,
+    network_error: unconfirmed,
+    timeout: unconfirmed,
+    // A success answer this app could not read: the review may well be saved.
+    invalid_json: unconfirmed,
+    invalid_response: unconfirmed,
+  },
+  refused:
+    "The review was not accepted as entered. Check the details, then refresh the lead and save again.",
+  fallback: unconfirmed,
+};

@@ -9,11 +9,13 @@ import { Card, CardContent } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { safetyEquipmentStatusLabels } from "../field/safety-contracts";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
+import { isRefusal, messageFor, UNANSWERED_CONNECTION } from "../lib/plain-error";
 import { loadSafetyDesk } from "./safety-desk-api";
 import { equipmentKindLabel, equipmentVerdictLabel } from "./safety-desk-contracts";
 import { inspectSafetyEquipment, loadSafetyEquipment } from "./safety-equipment-api";
@@ -199,16 +201,24 @@ export function SafetyEquipmentPage({ equipmentId }: { equipmentId?: string }) {
               </Notice>
             ) : conflict ? (
               <Notice tone="warning" title="This record changed before your inspection arrived">
-                {inspection.error instanceof Error ? inspection.error.message : ""} The current
-                condition is shown above; your findings are kept. Decide again against the current
-                revision.
+                The current condition is shown above; your findings are kept. Decide again against
+                the current revision.
+              </Notice>
+            ) : inspection.isError && isRefusal(inspection.error) ? (
+              // A refusal is a confirmed "no", and its sentence already names the next step.
+              <Notice tone="danger" title="Inspection not recorded">
+                {messageFor(inspection.error, { refused: "Check the details and try again." })} Your
+                findings stay on this screen.
+                <ErrorSystemDetails error={inspection.error} />
               </Notice>
             ) : inspection.isError ? (
               <Notice tone="danger" title="Inspection not confirmed">
-                {inspection.error instanceof Error
-                  ? inspection.error.message
-                  : "The server did not confirm this inspection."}{" "}
+                {messageFor(inspection.error, {
+                  byCode: UNANSWERED_CONNECTION,
+                  fallback: "The server did not confirm this inspection.",
+                })}{" "}
                 Refresh the record and check the last inspection before submitting again.
+                <ErrorSystemDetails error={inspection.error} />
               </Notice>
             ) : null}
             {!online ? (

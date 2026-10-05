@@ -1,6 +1,7 @@
-import { formatFieldDay, formatFieldTimestamp, humanizeFieldName } from "../field/field-formatting";
+import { formatFieldDay, formatFieldTimestamp } from "../field/field-formatting";
 import type { FieldDateOptions } from "../field/field-formatting";
 import { ApiError } from "../lib/api";
+import { messageFor } from "../lib/plain-error";
 import { schemaCardFieldWritable } from "./schema-card-contracts";
 import type {
   SchemaCardEntry,
@@ -44,7 +45,7 @@ export function groupSchemaCardEntries(entries: SchemaCardEntry[]): SchemaCardGr
     const key = namespaceOf(entry.definition.field_key);
     let group = byKey.get(key);
     if (!group) {
-      group = { key, label: key ? humanizeFieldName(key) : DEFAULT_GROUP_LABEL, entries: [] };
+      group = { key, label: key ? namespaceLabel(key) : DEFAULT_GROUP_LABEL, entries: [] };
       byKey.set(key, group);
       groups.push(group);
     }
@@ -58,6 +59,17 @@ function byPosition(left: SchemaCardEntry, right: SchemaCardEntry): number {
     left.definition.position - right.definition.position ||
     left.definition.field_key.localeCompare(right.definition.field_key)
   );
+}
+
+/**
+ * A group's title is the administrator's own namespace word, so "roofing" reads "Roofing". A
+ * namespace that is not one plain word ("metal_roofing") is a key, not a title: it takes the
+ * default label instead of being spelled out with its underscores swapped for spaces.
+ */
+function namespaceLabel(namespace: string): string {
+  return /^[A-Za-z][A-Za-z0-9]*$/.test(namespace)
+    ? namespace.charAt(0).toUpperCase() + namespace.slice(1)
+    : DEFAULT_GROUP_LABEL;
 }
 
 function namespaceOf(fieldKey: string): string {
@@ -417,11 +429,13 @@ export function schemaCardWriteRefusal(
     default:
       // The record routes answer `{ error: <code> }` with no prose, so `ApiError.message` on one
       // of them is only the HTTP reason phrase — "Bad Request" tells a crew member nothing and the
-      // code at least gives the office something to look up. Everything else that can land here
-      // (a dropped connection, a timeout) carries a message written for this app, so it is used.
+      // code at least gives the office something to look up. A dropped connection or a timeout
+      // carries a message written for this app; `messageFor` keeps exactly those.
       return error.code.startsWith("schema_field_")
         ? `${definition.label} was refused (${error.code}). Tell the office what you were entering.`
-        : error.message;
+        : messageFor(error, {
+            fallback: `We could not confirm ${definition.label} was saved. Reload the card to check it before you enter it again.`,
+          });
   }
 }
 

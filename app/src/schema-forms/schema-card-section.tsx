@@ -7,7 +7,7 @@ import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import type { FieldDateOptions } from "../field/field-formatting";
-import { messageFor } from "../field/field-formatting";
+import { messageForLoad } from "../lib/plain-error";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { roleCanAccess } from "../lib/roles";
 import { subscribeOutboxChanges } from "../storage/outbox-store";
@@ -118,7 +118,13 @@ export function SchemaCardSection({
    */
   const card = query.data;
   if (!card)
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
 
   const entries = applyControllingVisibility(card.response.fields);
   const groups = groupSchemaCardEntries(entries);

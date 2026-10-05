@@ -69,7 +69,8 @@ export interface OutboxFailureGuidance {
 
 /**
  * What a crew member reads on a stopped item. Known refusals get their own next step; everything
- * else falls back to the server's own sentence, which is still better than silence.
+ * else says plainly that the office refused it. The server's own words are never shown (they are
+ * not written for a crew); they stay on the saved item for whoever checks it.
  */
 export function outboxFailureGuidance(
   action: Pick<OutboxAction, "kind" | "lastError" | "conflict">,
@@ -104,7 +105,7 @@ export function outboxFailureGuidance(
     };
   }
   return {
-    reason: error?.message ?? "The office refused this saved item.",
+    reason: "The office refused this saved item.",
     nextStep:
       "Sending it again will not change the answer. Keep it on this phone and tell the office.",
     retryable: false,

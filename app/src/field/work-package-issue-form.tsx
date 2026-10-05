@@ -13,7 +13,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { apiCommand } from "../lib/api";
 import type { JobResponse } from "./field-contracts";
-import { messageFor } from "./field-formatting";
+import { messageFor } from "../lib/plain-error";
 
 type WorkPackage = JobResponse["packet"]["work_package"];
 
@@ -148,7 +148,14 @@ export function WorkPackageIssueForm({
       setSavedVersion(nextVersion);
       await onIssued();
     } catch (caught) {
-      setError(messageFor(caught));
+      setError(
+        messageFor(caught, {
+          refused:
+            "This work plan was not accepted as written, and nothing was issued. Check every step and hold point, then issue it again.",
+          fallback:
+            "We could not confirm the work plan was issued. Open the job again to check it before you issue it again.",
+        }),
+      );
     } finally {
       setSaving(false);
     }

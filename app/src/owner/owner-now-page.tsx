@@ -18,6 +18,7 @@ import { useSession } from "../auth/session-context";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { SystemDetails } from "../components/ui/system-details";
 import { RoleGuard } from "../components/role-guard";
 import type {
   MeasurementIntakeOwnerException,
@@ -334,14 +335,7 @@ function RuntimeTruthPanel({
           </div>
         ))}
       </dl>
-      <details className="group mt-4 rounded-lg border border-border">
-        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
-          <span>System details</span>
-          <ChevronRight
-            className="size-5 text-muted transition-transform group-open:rotate-90"
-            aria-hidden="true"
-          />
-        </summary>
+      <SystemDetails className="mt-4 rounded-lg border border-border" summaryClassName="px-4">
         <div className="border-t border-border p-4">
           <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
             {systemMetrics.map((metric) => (
@@ -360,7 +354,7 @@ function RuntimeTruthPanel({
               : "All saved checks passed."}
           </p>
         </div>
-      </details>
+      </SystemDetails>
     </Card>
   );
 }

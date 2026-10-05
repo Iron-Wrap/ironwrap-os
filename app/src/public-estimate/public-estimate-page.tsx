@@ -8,11 +8,8 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { clearStableClientSubmissionId, stableClientSubmissionId } from "./client-submission-id";
-import {
-  PublicEstimateApiError,
-  loadPublicEstimateConfig,
-  submitPublicInstantEstimate,
-} from "./public-estimate-api";
+import { messageFor } from "../lib/plain-error";
+import { loadPublicEstimateConfig, submitPublicInstantEstimate } from "./public-estimate-api";
 import {
   PUBLIC_ESTIMATE_DISCLAIMER,
   PUBLIC_ESTIMATE_DEFAULT_PROVINCE,
@@ -168,9 +165,7 @@ export function PublicEstimatePage() {
       setResult(response);
     } catch (error) {
       setRequestError(
-        error instanceof PublicEstimateApiError
-          ? error.message
-          : "We could not submit your request. Please try again.",
+        messageFor(error, { fallback: "We could not submit your request. Please try again." }),
       );
       // Turnstile tokens are single-use once the Worker verifies them. Recreate
       // the challenge after any failed transport so the next stable-idempotency

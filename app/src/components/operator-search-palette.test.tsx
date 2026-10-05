@@ -369,7 +369,11 @@ describe("OperatorSearchPalette", () => {
     );
     await userEvent.clear(input);
     await userEvent.type(input, "zz");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Try again shortly.");
+    const alert = await screen.findByRole("alert");
+    // A server fault, not a refusal: the person may try again.
+    expect(alert).toHaveTextContent("Search is not answering right now. Try again in a moment.");
+    // The server's own sentence is never shown (design/ZERO-LEARNING-GATE.md, Z2).
+    expect(alert).not.toHaveTextContent("Try again shortly.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
 
     mocks.online = false;

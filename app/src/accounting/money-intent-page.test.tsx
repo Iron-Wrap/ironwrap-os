@@ -247,6 +247,25 @@ describe("money intent detail", () => {
     expect(screen.getByText("Nothing was changed")).toBeInTheDocument();
   });
 
+  it("does not claim nothing reached QuickBooks when the server failed after the decision", async () => {
+    vi.mocked(loadAccountingIntent).mockResolvedValue(detailResponse());
+    vi.mocked(approveAccountingIntent).mockRejectedValue(
+      new ApiError({ message: "Bad Gateway", status: 502, code: "upstream_unavailable" }),
+    );
+    const user = userEvent.setup();
+    renderIntent();
+
+    await user.click(await screen.findByRole("button", { name: "Approve and send to QuickBooks" }));
+    // The Worker can record the decision, and QuickBooks can post it, before the answer fails.
+    expect(await screen.findByText("The decision was not confirmed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "We could not confirm this decision was recorded. Refresh this money movement to check it before you decide again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing was changed|nothing was sent/)).not.toBeInTheDocument();
+  });
+
   it("stays honest when the intent cannot be read at all", async () => {
     vi.mocked(loadAccountingIntent).mockRejectedValue(new Error("offline"));
     renderIntent();

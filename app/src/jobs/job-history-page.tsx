@@ -13,7 +13,7 @@ import { Status } from "../components/ui/status";
 import { Timeline } from "../components/ui/timeline";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { GateChip } from "../field/gate-chip";
-import { messageFor } from "../field/field-formatting";
+import { messageForLoad } from "../lib/plain-error";
 import type { ProofStreamItem } from "../field/field-contracts";
 import { formatOwnerDate } from "../owner/owner-now-utils";
 import { loadJobHistory } from "./job-history-api";
@@ -41,7 +41,13 @@ export function JobHistoryPage() {
   if (!jobId) return <ErrorState message="This job link is incomplete." />;
   if (query.isPending) return <LoadingState label="Loading this job's record…" />;
   if (query.isError && !query.data)
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
   if (!query.data)
     return (
       <ErrorState message="This job is not one you can open, or it does not exist on this account." />

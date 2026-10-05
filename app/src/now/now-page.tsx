@@ -11,6 +11,7 @@ import { RefTag } from "../components/ui/ref-tag";
 import { Segmented, SegmentedCount } from "../components/ui/segmented";
 import { Status } from "../components/ui/status";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { loadNow } from "./now-api";
@@ -570,8 +571,7 @@ function NowScreen({
             <h2 id={`${instanceId}-status`}>List status</h2>
             <p>{model.ui.sync_label}</p>
             <p className="text-xs">Counts cover this loaded list.</p>
-            <details>
-              <summary>System details</summary>
+            <SystemDetails>
               <ul className="divide-y divide-border" aria-label="Work list status">
                 {showDecisions
                   ? model.decisions?.sources.map((source) => (
@@ -626,7 +626,7 @@ function NowScreen({
                       </li>
                     ))}
               </ul>
-            </details>
+            </SystemDetails>
           </aside>
         </div>
       </div>

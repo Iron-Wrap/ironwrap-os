@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "../../lib/api";
 import { OutboxStateBadge } from "../outbox-state-badge";
 import { Button } from "./button";
 import { Notice } from "./notice";
@@ -93,5 +94,35 @@ describe("foundation UI states", () => {
     );
     expect(screen.getByText("No assigned jobs")).toBeVisible();
     expect(screen.getByText(/gate and next action/)).toBeVisible();
+  });
+
+  it("offers no retry for a refusal and keeps its code behind System details", async () => {
+    const retry = vi.fn();
+    const refused = new ApiError({
+      status: 404,
+      code: "not_found",
+      message: "Not Found",
+      requestId: "req-job-7",
+    });
+    const { rerender } = render(
+      <ErrorState message="This job is not on your list." error={refused} onRetry={retry} />,
+    );
+    // The same request gets the same answer, so the message's own next step is the only one.
+    expect(screen.getByRole("heading", { name: "Couldn’t open this" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.getByText("not_found")).not.toBeVisible();
+    await userEvent.click(screen.getByText("System details"));
+    expect(screen.getByText("not_found")).toBeVisible();
+    expect(screen.getByText("req-job-7")).toBeVisible();
+
+    const down = new ApiError({
+      status: 502,
+      code: "upstream_unavailable",
+      message: "Bad Gateway",
+    });
+    rerender(<ErrorState message="Something went wrong." error={down} onRetry={retry} />);
+    expect(screen.getByRole("heading", { name: "Couldn’t load this yet" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 });

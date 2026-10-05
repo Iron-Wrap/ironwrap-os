@@ -1,0 +1,171 @@
+{
+  "src/accounting/money-badge.tsx": {
+    "unlabelled-code": 2
+  },
+  "src/accounting/money-contracts.ts": {
+    "machine-name": 1
+  },
+  "src/accounting/money-intent-page.tsx": {
+    "unlabelled-code": 1,
+    "machine-name": 2
+  },
+  "src/accounting/quickbooks-page.tsx": {
+    "banned-term": 14,
+    "unlabelled-code": 4,
+    "machine-name": 1
+  },
+  "src/admin/automation-configuration-page.tsx": {
+    "banned-term": 4,
+    "unlabelled-code": 4
+  },
+  "src/admin/automation-recipients-configuration-page.tsx": {
+    "unlabelled-code": 6
+  },
+  "src/admin/document-templates-configuration-page.tsx": {
+    "unlabelled-code": 2
+  },
+  "src/admin/pipeline-configuration-page.tsx": {
+    "banned-term": 4
+  },
+  "src/admin/schema-fields-configuration-page.tsx": {
+    "banned-term": 2,
+    "unlabelled-code": 2
+  },
+  "src/capabilities/capability-copy.ts": {
+    "banned-term": 1
+  },
+  "src/documents/document-section.tsx": {
+    "banned-term": 4,
+    "unlabelled-code": 1
+  },
+  "src/estimator/estimator-workbench-page.tsx": {
+    "banned-term": 5,
+    "unlabelled-code": 4,
+    "machine-name": 1
+  },
+  "src/estimator/manual-measurement-panel.tsx": {
+    "banned-term": 3
+  },
+  "src/estimator/quote-revision-approval-page.tsx": {
+    "unlabelled-code": 1
+  },
+  "src/estimator/roof-graph-evidence.tsx": {
+    "unlabelled-code": 1
+  },
+  "src/facet/facet-design-page.tsx": {
+    "banned-term": 7,
+    "unlabelled-code": 1,
+    "machine-name": 2
+  },
+  "src/field/field-pages.tsx": {
+    "banned-term": 2,
+    "unlabelled-code": 3
+  },
+  "src/field/fleet-page.tsx": {
+    "banned-term": 5
+  },
+  "src/field/safety-action-panel.tsx": {
+    "machine-name": 1
+  },
+  "src/field/today-page.tsx": {
+    "unlabelled-code": 3
+  },
+  "src/field/work-package-issue-form.tsx": {
+    "banned-term": 5
+  },
+  "src/integrations/integration-readiness-page.tsx": {
+    "banned-term": 17
+  },
+  "src/inventory/inventory-contracts.ts": {
+    "machine-name": 1
+  },
+  "src/inventory/inventory-lot-lineage.tsx": {
+    "banned-term": 2,
+    "unlabelled-code": 11,
+    "machine-name": 3
+  },
+  "src/inventory/inventory-page.tsx": {
+    "banned-term": 26,
+    "unlabelled-code": 17,
+    "machine-name": 2
+  },
+  "src/jobs/job-history-page.tsx": {
+    "machine-name": 1
+  },
+  "src/jobs/job-spine-panel.tsx": {
+    "banned-term": 9,
+    "machine-name": 2
+  },
+  "src/newo/newo-operations-page.tsx": {
+    "banned-term": 1,
+    "machine-name": 1,
+    "agent-name": 1
+  },
+  "src/now/decision-presentation.ts": {
+    "machine-name": 1
+  },
+  "src/now/now-page.tsx": {
+    "banned-term": 1,
+    "unlabelled-code": 2,
+    "machine-name": 1,
+    "agent-name": 1
+  },
+  "src/owner/approval-inbox-page.tsx": {
+    "banned-term": 1
+  },
+  "src/owner/approval-receipt.tsx": {
+    "banned-term": 9,
+    "machine-name": 1
+  },
+  "src/owner/owner-now-page.tsx": {
+    "banned-term": 1
+  },
+  "src/pairing/device-pairing-settings.tsx": {
+    "banned-term": 1,
+    "unlabelled-code": 2,
+    "agent-name": 4
+  },
+  "src/people/authority-contracts.ts": {
+    "banned-term": 3
+  },
+  "src/people/people-page.tsx": {
+    "banned-term": 5
+  },
+  "src/portal/material-comparison-section.tsx": {
+    "machine-name": 1
+  },
+  "src/postiz/postiz-page.tsx": {
+    "banned-term": 1
+  },
+  "src/production/production-gate-clearance-contracts.ts": {
+    "banned-term": 1
+  },
+  "src/production/production-runway-page.tsx": {
+    "unlabelled-code": 1,
+    "machine-name": 1
+  },
+  "src/safety/corrective-action-page.tsx": {
+    "banned-term": 4,
+    "unlabelled-code": 6
+  },
+  "src/safety/safety-desk-page.tsx": {
+    "banned-term": 1,
+    "unlabelled-code": 2
+  },
+  "src/safety/safety-equipment-page.tsx": {
+    "unlabelled-code": 2
+  },
+  "src/sales/sales-desk-page.tsx": {
+    "banned-term": 1,
+    "machine-name": 1
+  },
+  "src/service/service-case-page.tsx": {
+    "unlabelled-code": 2
+  },
+  "src/service/service-desk-page.tsx": {
+    "unlabelled-code": 1
+  },
+  "src/service/service-presentation.ts": {
+    "machine-name": 1
+  }
+}

@@ -5,7 +5,8 @@ import { useState } from "react";
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
-import { ApiError } from "../lib/api";
+import { ErrorSystemDetails } from "../components/ui/system-details";
+import { messageFor, ONLINE_ONLY_CONNECTION } from "../lib/plain-error";
 import {
   clearProductionGate,
   newProductionGateClearanceKey,
@@ -37,7 +38,7 @@ export function GateClearancePanel({ job }: { job: ProductionRunwayJob }) {
   const offline = isOfflineSession(session);
   const [openGate, setOpenGate] = useState<ClearableProductionGate | null>(null);
   const [reason, setReason] = useState("");
-  const [failure, setFailure] = useState<string>();
+  const [failure, setFailure] = useState<{ text: string; error: unknown }>();
 
   const blocked = job.scheduling_gates.filter((gate) => gate.state === "Blocked");
   const mutation = useMutation({
@@ -58,7 +59,17 @@ export function GateClearancePanel({ job }: { job: ProductionRunwayJob }) {
       setReason("");
       await queryClient.invalidateQueries({ queryKey: ["production-runway"] });
     },
-    onError: (error) => setFailure(messageFor(error)),
+    onError: (error) =>
+      setFailure({
+        error,
+        text: messageFor(error, {
+          byCode: { ...ONLINE_ONLY_CONNECTION, ...productionGateClearanceMessages },
+          refused:
+            "This clearance was not accepted, and nothing was changed. Reload the runway to see where the job stands.",
+          fallback:
+            "We could not confirm the clearance went through. Reload the runway to check it before you try again.",
+        }),
+      }),
   });
 
   if (blocked.length === 0) return null;
@@ -165,21 +176,12 @@ export function GateClearancePanel({ job }: { job: ProductionRunwayJob }) {
           </p>
         ) : null}
         {failure ? (
-          <p className="mt-2 text-sm leading-6 text-danger" role="alert">
-            {failure}
-          </p>
+          <div className="mt-2" role="alert">
+            <p className="text-sm leading-6 text-danger">{failure.text}</p>
+            <ErrorSystemDetails error={failure.error} />
+          </div>
         ) : null}
       </div>
     </details>
   );
-}
-
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError) {
-    return (
-      productionGateClearanceMessages[error.code] ??
-      "IronWrap OS refused this clearance and changed nothing. Reload the runway and try again."
-    );
-  }
-  return "The clearance could not be sent. Nothing was changed.";
 }

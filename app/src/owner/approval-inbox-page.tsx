@@ -21,6 +21,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { ErrorState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import {
@@ -778,8 +779,10 @@ function ApprovalSystemDetails({
     ? formatOwnerDate(approval.approved_by.approved_at, locale)
     : null;
   return (
-    <details className="rounded-lg border border-border bg-surface-raised">
-      <summary className="min-h-14 cursor-pointer px-4 py-4 font-bold">System details</summary>
+    <SystemDetails
+      className="rounded-lg border border-border bg-surface-raised"
+      summaryClassName="px-4"
+    >
       <dl className="grid gap-x-6 gap-y-4 border-t border-border px-4 py-4 text-sm leading-5 sm:grid-cols-2">
         <Metadata label="Request ID" value={approval.id} mono />
         <Metadata label="Lead ID" value={approval.target.lead_envelope_id} mono />
@@ -803,7 +806,7 @@ function ApprovalSystemDetails({
           <Metadata label="Error code" value={approval.error_code} mono />
         ) : null}
       </dl>
-    </details>
+    </SystemDetails>
   );
 }
 

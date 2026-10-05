@@ -24,7 +24,7 @@ import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { Textarea } from "../components/ui/textarea";
-import { apiCommand } from "../lib/api";
+import { ApiError, apiCommand } from "../lib/api";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
 import { outboxFailureGuidance } from "../storage/outbox-failure";
@@ -34,10 +34,19 @@ import type { JobResponse, ProofStreamItem, WorkObjectResponse } from "./field-c
 import {
   formatFieldSchedule,
   formatFieldTimestamp,
-  humanizeFieldName,
-  messageFor,
+  plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
+import {
+  afterFailedSend,
+  dropWorkPlanIntent,
+  keepWorkPlanIntent,
+  keptWorkPlanIntent,
+  workPlanIdentity,
+  workPlanIntentKey,
+} from "./work-plan-intent";
+import { ErrorSystemDetails } from "../components/ui/system-details";
 import { CustomerJobHistorySection } from "../customers/customer-history-section";
 import { EntityDocumentsSection } from "../documents/document-section";
 import { SchemaCardSection } from "../schema-forms/schema-card-section";
@@ -60,6 +69,84 @@ const FIELD_MEDIA_TYPES = new Set([
 const MAX_MEDIA_COUNT = 12;
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024;
 const MAX_ACTION_BYTES = 24 * 1024 * 1024;
+
+/**
+ * The job route answers `not_found` for a job that does not exist, is no longer active or is not
+ * assigned to this crew member, and cannot say which, so neither does the phone.
+ */
+const jobNotOnList =
+  "This job is not on your list. It may be finished, or not assigned to you. Ask the office if you should be on it.";
+
+const jobReadRefusals: PlainErrorCopy = { byCode: { not_found: jobNotOnList } };
+
+/** A save on this phone failed part way: it may already be in saved work, waiting to send. */
+const savedWorkUnconfirmed =
+  "This phone could not confirm it saved this. Check saved work before you try again.";
+
+/**
+ * Start and Finish whose answer was lost. The phone kept the request (`work-plan-intent.ts`), so
+ * pressing again resends the same one and is safe.
+ */
+const startUnconfirmed =
+  "We could not confirm work started. Press Start work again: it sends the same request, so work cannot start twice.";
+const finishUnconfirmed =
+  "We could not confirm the work was finished. Press Finish work again: it sends the same request, so it cannot finish twice.";
+
+const pressAgain = {
+  start: "press Start work again: it sends the same request, so work cannot start twice.",
+  finish: "press Finish work again: it sends the same request, so it cannot finish twice.",
+} as const;
+
+/**
+ * The words for a Start or Finish whose request is kept (`afterFailedSend` said keep). A session
+ * or access problem on a resend does not settle it: the first send may have committed, so the
+ * person fixes the session and presses again.
+ */
+function workPlanUnconfirmed(kind: "start" | "finish", error: unknown): PlainErrorCopy {
+  const unconfirmed = kind === "start" ? startUnconfirmed : finishUnconfirmed;
+  const byCode: Record<string, string> = { network_error: unconfirmed, timeout: unconfirmed };
+  // Keyed by the code that came back, so these win over the status words for a 401 or 403.
+  if (error instanceof ApiError && error.code === "csrf_failed") {
+    byCode.csrf_failed = `Your session needs refreshing. Reload the page, then ${pressAgain[kind]}`;
+  } else if (error instanceof ApiError && error.status === 401) {
+    byCode[error.code] =
+      `Your session expired before the office answered. Sign in again, then ${pressAgain[kind]}`;
+  } else if (error instanceof ApiError && error.status === 403) {
+    byCode[error.code] =
+      `Your account lost access before the office answered. Ask the office to check your access, then ${pressAgain[kind]}`;
+  }
+  return { byCode, fallback: unconfirmed };
+}
+
+/** The office has the same request and is still working on it. */
+function workPlanStillRunning(waitMs: number): string {
+  const seconds = Math.max(1, Math.ceil(waitMs / 1_000));
+  return `The office is still working on this. This phone sends the same request again in ${
+    seconds === 1 ? "a second" : `${seconds} seconds`
+  }.`;
+}
+
+const MAX_IN_PROGRESS_RESENDS = 3;
+
+function isIdempotencyConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "idempotency_conflict";
+}
+
+/** Start and Finish go straight to the office (no saved copy), so these are their answers. */
+const workPlanRefusals: PlainErrorCopy = {
+  byCode: {
+    not_found: jobNotOnList,
+    work_package_not_available: jobNotOnList,
+    work_package_actor_not_assigned:
+      "You are not on the crew for this work plan. Ask the office to add you to it.",
+    work_package_version_conflict:
+      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+    work_package_release_attempt_conflict:
+      "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+    idempotency_conflict:
+      "The office already holds a different request from this phone for this plan. Check the plan, then press the button again.",
+  },
+};
 const PROOF_SLOTS = [
   "Production",
   "Safety",
@@ -106,7 +193,13 @@ export function JobPage() {
   }
   if (query.isPending) return <LoadingState label="Loading job plan…" />;
   if (query.isError)
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error, jobReadRefusals)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
   return (
     <JobSurface
       key={query.data.read_model_generated_at}
@@ -155,7 +248,13 @@ export function WorkObjectPage() {
   if (!scope) return <ErrorState message="This work link is incomplete." />;
   if (query.isPending) return <LoadingState label="Loading work plan…" />;
   if (query.isError)
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
   return (
     <WorkObjectSurface
       key={query.data.read_model_generated_at}
@@ -484,14 +583,17 @@ function JobOfflineNotice({
 }
 
 function JobDataLimits({ fields }: { fields: string[] }) {
+  const names = plainFieldNames(fields);
   return (
     <details className="border border-border bg-surface-raised">
       <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
         Some job details may be old
       </summary>
       <p className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        Check the job again before you use these details: {fields.map(humanizeFieldName).join(", ")}
-        . This screen cannot clear a work check.
+        {names.length
+          ? `Check the job again before you use these details: ${names.join(", ")}.`
+          : "Check the job again before you rely on its details."}{" "}
+        This screen cannot clear a work check.
       </p>
     </details>
   );
@@ -583,7 +685,8 @@ function WorkPackagePanel({
   const workPackage = model.packet.work_package;
   const [acknowledgementConfirmed, setAcknowledgementConfirmed] = useState(false);
   const [stopReason, setStopReason] = useState("");
-  const [actionError, setActionError] = useState<string | null>(null);
+  /** The words shown, and for a failed request the error whose code System details keeps. */
+  const [actionError, setActionError] = useState<{ text: string; error?: unknown } | null>(null);
   const [savingAction, setSavingAction] = useState<
     "work_package_acknowledgement" | "work_package_stop" | null
   >(null);
@@ -591,6 +694,12 @@ function WorkPackagePanel({
   const [stopInstructionActive, setStopInstructionActive] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
   const [completingWork, setCompletingWork] = useState(false);
+  /** Set before any await, so a second tap in the same moment sends nothing. */
+  const commandInFlight = useRef(false);
+  /** The automatic resend while the office is still processing the same Start or Finish. */
+  const resendTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(resendTimer.current), []);
+  const principal = { tenantId: session.tenant.id, userId: session.user.id };
 
   useEffect(() => {
     if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
@@ -602,6 +711,33 @@ function WorkPackagePanel({
     }, 1_000);
     return () => window.clearInterval(interval);
   }, [savedAction]);
+
+  const commandScope = workPackage ? workObjectScopeForPackage(workPackage) : null;
+  const startPath = workPackageStartEndpoint(model.job.id, commandScope);
+  const finishPath = workPackageCompleteEndpoint(model.job.id, commandScope);
+  const plan = workPackage ? workPlanIdentity(workPackage) : null;
+
+  // A Start or Finish whose answer was lost is kept on this phone; say so when the panel opens.
+  useEffect(() => {
+    if (!plan) return;
+    let active = true;
+    const keeper = { tenantId: session.tenant.id, userId: session.user.id };
+    void (async () => {
+      for (const [path, unconfirmed] of [
+        [startPath, startUnconfirmed],
+        [finishPath, finishUnconfirmed],
+      ] as const) {
+        const kept = await keptWorkPlanIntent(workPlanIntentKey(keeper, path), plan);
+        if (kept && active) {
+          setActionError({ text: unconfirmed });
+          return;
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [session.tenant.id, session.user.id, startPath, finishPath, plan]);
 
   const issueScope = model.scope ?? (workPackage ? workObjectScopeForPackage(workPackage) : null);
   const issueForm = (
@@ -670,6 +806,10 @@ function WorkPackagePanel({
   const completionAllowed = model.allowed_actions.includes("work_package.complete");
   const canComplete = completionAllowed && !offline && canAttemptSync;
 
+  function showActionFailure(error: unknown, copy?: PlainErrorCopy) {
+    setActionError({ text: messageFor(error, copy), error });
+  }
+
   async function saveWorkPackageAction(kind: "work_package_acknowledgement" | "work_package_stop") {
     setSavingAction(kind);
     setActionError(null);
@@ -717,7 +857,7 @@ function WorkPackagePanel({
         ),
       });
     } catch (error) {
-      setActionError(messageFor(error));
+      showActionFailure(error, { fallback: savedWorkUnconfirmed });
     } finally {
       setSavingAction(null);
     }
@@ -725,7 +865,7 @@ function WorkPackagePanel({
 
   function saveAcknowledgement() {
     if (!acknowledgementConfirmed) {
-      setActionError("Check the box to show that you read this work plan.");
+      setActionError({ text: "Check the box to show that you read this work plan." });
       return;
     }
     void saveWorkPackageAction("work_package_acknowledgement");
@@ -733,21 +873,49 @@ function WorkPackagePanel({
 
   function saveStopWork() {
     if (!stopReason.trim()) {
-      setActionError("Say why work must stop.");
+      setActionError({ text: "Say why work must stop." });
       return;
     }
     setStopInstructionActive(true);
     void saveWorkPackageAction("work_package_stop");
   }
 
-  async function startWork() {
-    if (!canStart) return;
-    setStartingWork(true);
+  /**
+   * Start and Finish go straight to the office. The request is kept on this phone before it is
+   * sent and dropped only on a definite answer (`afterFailedSend`), so a press after a lost answer,
+   * or after signing in again, resends the same request (same device action ID, key and body) and
+   * the work cannot start or finish twice. `attempt` counts automatic resends while the office
+   * says the same request is still being processed.
+   */
+  async function sendWorkPlanCommand(kind: "start" | "finish", attempt = 0) {
+    if (commandInFlight.current) return;
+    if (kind === "start" ? !canStart : !canComplete) return;
+    commandInFlight.current = true;
+    window.clearTimeout(resendTimer.current);
+    const setBusy = kind === "start" ? setStartingWork : setCompletingWork;
+    const path = kind === "start" ? startPath : finishPath;
+    const key = workPlanIntentKey(principal, path);
+    const packetKey = fieldPacketQueryKey(
+      session,
+      model.job.id,
+      workObjectScopeForPackage(activeWorkPackage),
+    );
+    setBusy(true);
     setActionError(null);
-    const deviceActionId = crypto.randomUUID();
+    let resend = false;
     try {
-      await apiCommand({
-        path: workPackageStartEndpoint(model.job.id, workObjectScopeForPackage(activeWorkPackage)),
+      const activePlan = workPlanIdentity(activeWorkPackage);
+      const kept = await keptWorkPlanIntent(key, activePlan);
+      // An automatic resend only ever resends: if the kept request was settled meanwhile (a fresh
+      // read showed the plan moved on), it never mints a new one.
+      if (!kept && attempt > 0) return;
+      resend = kept !== undefined;
+      const deviceActionId = kept?.deviceActionId ?? crypto.randomUUID();
+      const intent = kept ?? {
+        deviceActionId,
+        path,
+        plan: activePlan,
+        createdAt: Date.now(),
         body: {
           device_action_id: deviceActionId,
           payload: workPackageActionPayload(activeWorkPackage, {
@@ -756,60 +924,43 @@ function WorkPackagePanel({
             release_attempt_id: activeWorkPackage.release_attempt_id,
           }),
         },
-        csrfToken: session.csrf_token,
-        idempotencyKey: deviceActionId,
-        deviceActionId,
-        deviceProof: getDeviceSecret,
-      });
-      await queryClient.invalidateQueries({
-        queryKey: fieldPacketQueryKey(
-          session,
-          model.job.id,
-          workObjectScopeForPackage(activeWorkPackage),
-        ),
-      });
-    } catch (error) {
-      setActionError(messageFor(error));
-    } finally {
-      setStartingWork(false);
-    }
-  }
-
-  async function completeWork() {
-    if (!canComplete) return;
-    setCompletingWork(true);
-    setActionError(null);
-    const deviceActionId = crypto.randomUUID();
-    try {
+      };
+      if (!kept) await keepWorkPlanIntent(key, intent);
       await apiCommand({
-        path: workPackageCompleteEndpoint(
-          model.job.id,
-          workObjectScopeForPackage(activeWorkPackage),
-        ),
-        body: {
-          device_action_id: deviceActionId,
-          payload: workPackageActionPayload(activeWorkPackage, {
-            work_package_id: activeWorkPackage.id,
-            work_package_version: activeWorkPackage.version,
-            release_attempt_id: activeWorkPackage.release_attempt_id,
-          }),
-        },
+        path: intent.path,
+        body: intent.body,
         csrfToken: session.csrf_token,
-        idempotencyKey: deviceActionId,
-        deviceActionId,
+        idempotencyKey: intent.deviceActionId,
+        deviceActionId: intent.deviceActionId,
         deviceProof: getDeviceSecret,
       });
-      await queryClient.invalidateQueries({
-        queryKey: fieldPacketQueryKey(
-          session,
-          model.job.id,
-          workObjectScopeForPackage(activeWorkPackage),
-        ),
-      });
+      await dropWorkPlanIntent(key);
+      await queryClient.invalidateQueries({ queryKey: packetKey });
     } catch (error) {
-      setActionError(messageFor(error));
+      const next = afterFailedSend(error, resend);
+      if (next === "drop") await dropWorkPlanIntent(key);
+      if (typeof next === "object" && attempt < MAX_IN_PROGRESS_RESENDS) {
+        setActionError({ text: workPlanStillRunning(next.waitMs), error });
+        // The same kept request goes again, whatever this render's plan shows by then: resending
+        // it is safe by design, and a moved-on plan gets a definite answer.
+        resendTimer.current = window.setTimeout(
+          () => void sendWorkPlanCommand(kind, attempt + 1),
+          next.waitMs,
+        );
+      } else {
+        showActionFailure(
+          error,
+          next === "drop" ? workPlanRefusals : workPlanUnconfirmed(kind, error),
+        );
+      }
+      // Read the plan again unless the office refused the action itself: if the work did start or
+      // finish, or the plan moved on, the fresh plan shows it and the kept request is dropped.
+      if (next !== "drop" || isIdempotencyConflict(error)) {
+        void queryClient.invalidateQueries({ queryKey: packetKey });
+      }
     } finally {
-      setCompletingWork(false);
+      setBusy(false);
+      commandInFlight.current = false;
     }
   }
 
@@ -1204,7 +1355,7 @@ function WorkPackagePanel({
                 className="mt-4"
                 variant="accent"
                 busy={startingWork}
-                onClick={() => void startWork()}
+                onClick={() => void sendWorkPlanCommand("start")}
               >
                 Start work
               </Button>
@@ -1237,7 +1388,7 @@ function WorkPackagePanel({
                   className="mt-4"
                   variant="accent"
                   busy={completingWork}
-                  onClick={() => void completeWork()}
+                  onClick={() => void sendWorkPlanCommand("finish")}
                 >
                   <Check aria-hidden="true" />
                   Finish work
@@ -1301,9 +1452,10 @@ function WorkPackagePanel({
         </section>
 
         {actionError ? (
-          <p className="font-semibold text-danger" role="alert">
-            {actionError}
-          </p>
+          <div role="alert">
+            <p className="font-semibold text-danger">{actionError.text}</p>
+            <ErrorSystemDetails error={actionError.error} />
+          </div>
         ) : null}
         {savedAction ? <WorkPackageActionState action={savedAction} /> : null}
         {!offline && !canAttemptSync ? (
@@ -2101,7 +2253,11 @@ function CheckInFlow({
   if (jobQuery.isPending) return <LoadingState label="Opening job…" />;
   if (jobQuery.isError)
     return (
-      <ErrorState message={messageFor(jobQuery.error)} onRetry={() => void jobQuery.refetch()} />
+      <ErrorState
+        message={messageForLoad(jobQuery.error, jobReadRefusals)}
+        error={jobQuery.error}
+        onRetry={() => void jobQuery.refetch()}
+      />
     );
   const model = jobQuery.data;
   if (!model.allowed_actions.includes("field.checkin.create")) {
@@ -2271,7 +2427,7 @@ function CheckInFlow({
         });
       }
     } catch (error) {
-      setFormError(messageFor(error));
+      setFormError(messageFor(error, { fallback: savedWorkUnconfirmed }));
     } finally {
       setSaving(false);
     }

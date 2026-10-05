@@ -141,7 +141,7 @@ describe("FacetDesignPage", () => {
     expect(screen.getByText("1 · active")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Design for ROOF-JOB-1" })).toBeVisible();
     expect(screen.getByText("facet-project-1")).not.toBeVisible();
-    await user.click(screen.getByText("Immutable evidence anchors"));
+    await user.click(screen.getByText("System details"));
     expect(screen.getByText("facet-project-1")).toBeVisible();
     expect(screen.getByText("facet-native-design-v2:projection-1")).toBeVisible();
     expect(screen.getByText("Google OIDC · exact project link")).toBeVisible();

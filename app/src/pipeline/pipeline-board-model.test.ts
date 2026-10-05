@@ -241,10 +241,11 @@ describe("blockers the server actually sends", () => {
     expect(messages.size).toBe(cases.length);
   });
 
-  it("says the card stayed put when the connection is the problem", () => {
+  it("does not claim the card stayed put when no answer came back", () => {
+    // The move may have reached the office before the connection dropped.
     const offline = new ApiError({ status: 0, code: "network_error", message: "offline" });
-    expect(describeMoveBlocker(offline, {}).message).toMatch(
-      /No connection to IronWrap OS\. The card stayed where it was\./,
+    expect(describeMoveBlocker(offline, {}).message).toBe(
+      "We could not confirm the move. Check where the card is on the board before you move it again.",
     );
   });
 
@@ -276,10 +277,33 @@ describe("blockers the server actually sends", () => {
       toStageName: "Deposit",
     });
     expect(blocker.code).toBe("pipeline_gate_not_cleared");
-    // The server's own message survives instead of being replaced by a category.
-    expect(blocker.message).toContain("pipeline_gate_not_cleared");
-    expect(blocker.message).toContain("The card stayed where it was.");
+    // Plain words, never the server's own wording or code (design/ZERO-LEARNING-GATE.md, Z2);
+    // the code stays on the blocker for whoever debugs it.
+    expect(blocker.message).toBe("The board did not accept this. The card stayed where it was.");
+    expect(blocker.message).not.toContain("pipeline_gate_not_cleared");
     expect(blocker.refresh).toBe(true);
+  });
+
+  it("does not word a server fault as a refusal, or claim nothing changed", () => {
+    // The Worker can commit the move and still fail before it answers.
+    const move = describeMoveBlocker(refusal("upstream_unavailable", 502), {
+      toStageName: "Deposit",
+    });
+    expect(move.message).toBe(
+      "We could not confirm the move. Check where the card is on the board before you move it again.",
+    );
+    const undo = describeUndoBlocker(refusal("upstream_unavailable", 502), {});
+    expect(undo.message).toMatch(/We could not confirm the undo/);
+    const placement = describePlacementBlocker(refusal("upstream_unavailable", 502), {
+      boardName: "Sales",
+      entityLabel: "Pat Prospect",
+    });
+    expect(placement.message).toBe(
+      "We could not confirm Pat Prospect was added to Sales. Add it again: if it is already there, you will be told.",
+    );
+    for (const message of [move.message, undo.message, placement.message]) {
+      expect(message).not.toMatch(/stayed where it was|nothing was changed|was not added/i);
+    }
   });
 });
 
@@ -612,9 +636,10 @@ describe("describePlacementBlocker", () => {
     expect(blocker.message).toContain("Pat Prospect was not added to Sales");
   });
 
-  it("says the connection failed rather than blaming the board", () => {
+  it("says the outcome is unknown when the connection failed, rather than blaming the board", () => {
     const blocker = describePlacementBlocker(refusal("network_error", 0), context);
-    expect(blocker.message).toContain("No connection");
+    expect(blocker.message).toContain("We could not confirm Pat Prospect was added to Sales");
+    expect(blocker.message).not.toMatch(/did not accept/);
   });
 
   it("still answers when the failure is not an ApiError", () => {

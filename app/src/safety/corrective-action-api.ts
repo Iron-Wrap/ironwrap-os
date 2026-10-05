@@ -8,6 +8,7 @@ import {
   type CorrectiveEvidence,
 } from "../field/safety-contracts";
 import { apiRequest, isRetryableApiError } from "../lib/api";
+import { PlainError } from "../lib/plain-error";
 import {
   getOutboxAction,
   listOutboxActionsByKind,
@@ -72,8 +73,8 @@ export async function queueCorrectiveEvidence(
   }
   const record = await getOutboxAction(saved.deviceActionId);
   if (!record)
-    throw new Error(
-      "The saved evidence could not be read back. Check Saved work before trying again.",
+    throw new PlainError(
+      "The saved evidence could not be found on this device. Check Saved work before trying again.",
     );
   return { deviceActionId: record.deviceActionId, state: record.state };
 }

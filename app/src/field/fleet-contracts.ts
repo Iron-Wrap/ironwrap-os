@@ -133,8 +133,10 @@ export function checkPointsForAsset(assetKind: string): readonly string[] {
  *
  * Frappe's `PolicyViolation` message is written for an operator reading a
  * Desk error; a driver standing beside a truck needs to know what is wrong and
- * who fixes it. The codes are the fence's own, so a new fence shows its raw
- * message rather than a wrong reassurance.
+ * who fixes it. The codes are the fence's own. Each line sits under "Dispatch
+ * will refuse it for the reasons below", so a fence this phone has no words for
+ * is still listed as a reason, with who to ask: never a wrong reassurance, and
+ * never the operator's raw message.
  */
 export const fleetBlockerText: Record<string, string> = {
   unsafe_fleet_asset:
@@ -164,7 +166,10 @@ export const fleetBlockerText: Record<string, string> = {
 };
 
 export function fleetBlockerMessage(blocker: FleetPanelBlocker): string {
-  return fleetBlockerText[blocker.code] ?? blocker.message;
+  return (
+    fleetBlockerText[blocker.code] ??
+    "One more check is not met, and this phone cannot name it. Ask the office which one."
+  );
 }
 
 /**

@@ -67,17 +67,22 @@ describe("crew guidance for a stopped item", () => {
     });
   });
 
-  it("falls back to the server's own sentence for an unknown terminal refusal", () => {
+  it("says the office refused an unknown terminal refusal, never in the server's own words", () => {
     expect(
       outboxFailureGuidance(
         checkIn({
           code: "field_action_invalid_metadata",
-          message: "The capture window is invalid.",
+          message: "Work Package acknowledgement payload is invalid.",
           status: 400,
           occurredAt: 1_000,
         }),
       ),
-    ).toMatchObject({ reason: "The capture window is invalid.", retryable: false });
+    ).toEqual({
+      reason: "The office refused this saved item.",
+      nextStep:
+        "Sending it again will not change the answer. Keep it on this phone and tell the office.",
+      retryable: false,
+    });
   });
 
   it("still promises a retry for a transient answer", () => {

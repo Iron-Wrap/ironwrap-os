@@ -12,7 +12,8 @@ import { Input } from "../components/ui/input";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
-import { ApiError } from "../lib/api";
+import { ErrorSystemDetails } from "../components/ui/system-details";
+import { isRefusal, messageFor, messageForLoad } from "../lib/plain-error";
 import { loadServiceCases, openServiceCase } from "./service-api";
 import {
   EMERGENCY_RESPONSE_SLA_CEILING_MINUTES,
@@ -56,7 +57,7 @@ function ServiceDeskContent() {
   const [consentRef, setConsentRef] = useState("");
   const [intakeEvidenceDigest, setIntakeEvidenceDigest] = useState("");
   const [responseSlaMinutes, setResponseSlaMinutes] = useState("1440");
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<unknown>();
   const [outcome, setOutcome] = useState<"opened" | "duplicate">();
 
   const mutation = useMutation({
@@ -71,7 +72,7 @@ function ServiceDeskContent() {
     },
     onError: (error) => {
       setOutcome(undefined);
-      setActionError(messageFor(error));
+      setActionError(error);
     },
   });
 
@@ -80,7 +81,8 @@ function ServiceDeskContent() {
     return (
       <ErrorState
         title="Service calls could not load"
-        message="Nothing changed. Check your link, then load the calls again."
+        message={messageForLoad(query.error)}
+        error={query.error}
         onRetry={() => void query.refetch()}
       />
     );
@@ -161,13 +163,17 @@ function ServiceDeskContent() {
           This form does not save calls while offline.
         </Notice>
       ) : null}
-      {actionError ? (
-        <Notice tone="danger" title="The call was not saved">
-          Check the details and try again.
-          <details className="mt-2">
-            <summary className="cursor-pointer text-sm font-bold">System details</summary>
-            <p className="mt-1 break-words text-sm">{actionError}</p>
-          </details>
+      {actionError !== undefined ? (
+        <Notice
+          tone="danger"
+          title={isRefusal(actionError) ? "The call was not saved" : "The call was not confirmed"}
+        >
+          {messageFor(actionError, {
+            refused: "Check the details and try again.",
+            fallback:
+              "We could not confirm the call was saved. Check the list of calls before you save it again.",
+          })}
+          <ErrorSystemDetails error={actionError} />
         </Notice>
       ) : null}
       {outcome === "opened" ? (
@@ -477,11 +483,6 @@ function SelectField({
       </Select>
     </div>
   );
-}
-
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  return "The call could not be saved. Load the page again before you try once more.";
 }
 
 function formatDateTime(value: string, locale: string, timeZone: string): string {

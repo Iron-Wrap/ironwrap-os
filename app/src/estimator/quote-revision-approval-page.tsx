@@ -27,6 +27,7 @@ import { RefTag } from "../components/ui/ref-tag";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { Status, type StatusKind } from "../components/ui/status";
+import { SystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
@@ -1005,10 +1006,10 @@ function RevisionSystemDetails({ approval }: { approval: QuoteRevisionApprovalRe
     ...(approval.error_code ? [["Error code", approval.error_code]] : []),
   ];
   return (
-    <details className="min-w-0 rounded-lg border border-border bg-surface-raised min-[1100px]:col-start-1">
-      <summary className="min-h-14 cursor-pointer px-5 py-4 text-sm font-semibold sm:px-6">
-        System details
-      </summary>
+    <SystemDetails
+      className="min-w-0 rounded-lg border border-border bg-surface-raised min-[1100px]:col-start-1"
+      summaryClassName="px-5 sm:px-6"
+    >
       <dl className="divide-y divide-border border-t border-border text-sm">
         {facts.map(([label, value]) => (
           <div
@@ -1020,7 +1021,7 @@ function RevisionSystemDetails({ approval }: { approval: QuoteRevisionApprovalRe
           </div>
         ))}
       </dl>
-    </details>
+    </SystemDetails>
   );
 }
 

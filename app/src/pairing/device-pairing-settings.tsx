@@ -23,7 +23,7 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { Textarea } from "../components/ui/textarea";
-import { ApiError } from "../lib/api";
+import { messageFor, messageForLoad, type PlainErrorCopy } from "../lib/plain-error";
 import {
   issueDevicePairing,
   issueHermesDesktopPairing,
@@ -138,7 +138,8 @@ function OfficeDevicePairingSettings() {
     return (
       <ErrorState
         title="Crew device controls could not load"
-        message={messageFor(fieldUsers.error ?? devices.error)}
+        message={messageForLoad(fieldUsers.error ?? devices.error)}
+        error={fieldUsers.error ?? devices.error}
         onRetry={() => {
           void fieldUsers.refetch();
           void devices.refetch();
@@ -179,7 +180,9 @@ function OfficeDevicePairingSettings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {desktopIssueError ? <InlineError message={messageFor(desktopIssueError)} /> : null}
+          {desktopIssueError ? (
+            <InlineError message={messageFor(desktopIssueError, pairingRefusals)} />
+          ) : null}
           <CapabilityUnavailable read={hermesDesktop} />
           {/*
             Disabled, never relabelled or hidden: a screen-reader user has to keep hearing WHAT is
@@ -280,7 +283,9 @@ function OfficeDevicePairingSettings() {
                   Linked operating user: {selectedUser.frappe_user_id}
                 </p>
               ) : null}
-              {issueError ? <InlineError message={messageFor(issueError)} /> : null}
+              {issueError ? (
+                <InlineError message={messageFor(issueError, pairingRefusals)} />
+              ) : null}
               <Button
                 type="button"
                 variant="accent"
@@ -545,7 +550,9 @@ function DeviceList({
                       {device.field_user_name} will need a new supervised pairing before this
                       browser can use Field Companion again.
                     </p>
-                    {revokeError ? <InlineError message={messageFor(revokeError)} /> : null}
+                    {revokeError ? (
+                      <InlineError message={messageFor(revokeError, pairingRefusals)} />
+                    ) : null}
                     <div className="mt-4 flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -593,10 +600,19 @@ function InlineError({ message }: { message: string }) {
   );
 }
 
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  return error instanceof Error ? error.message : "The request could not be completed. Try again.";
-}
+/** The pairing routes' own refusals, and what an owner or operations lead does about the rest. */
+const pairingRefusals: PlainErrorCopy = {
+  byCode: {
+    field_user_not_found:
+      "This crew member is no longer on the list. Reload the page and pick them again.",
+    device_not_found_or_revoked:
+      "This phone was already removed. Reload the page to see the current list.",
+  },
+  refused:
+    "IronWrap OS did not accept this, and nothing was changed. Reload the page to see the current list.",
+  fallback:
+    "We could not confirm this went through. Reload the page to see the current list before you try again.",
+};
 
 function getShareFunction(): ((data: ShareData) => Promise<void>) | undefined {
   const capability = navigator as Navigator & { share?: (data: ShareData) => Promise<void> };

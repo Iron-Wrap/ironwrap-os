@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BriefcaseBusiness,
-  ChevronRight,
   CircleAlert,
   ClipboardCheck,
   Clock3,
@@ -25,6 +24,7 @@ import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { AddToBoardDialog } from "../pipeline/add-to-board-dialog";
 import { loadPipelines } from "../pipeline/pipeline-api";
@@ -579,14 +579,7 @@ function LeadRow({
               </button>
             ) : null}
           </div>
-          <details className="group rounded-lg border border-border">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold [&::-webkit-details-marker]:hidden">
-              <span>System details</span>
-              <ChevronRight
-                className="size-4 text-muted transition-transform group-open:rotate-90"
-                aria-hidden="true"
-              />
-            </summary>
+          <SystemDetails className="rounded-lg border border-border" summaryClassName="px-4">
             <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2">
               <MetadataLine label="Lead ID" value={lead.envelope_id} />
               {lead.intent_queue ? (
@@ -597,7 +590,7 @@ function LeadRow({
               ) : null}
               {lead.job?.status ? <MetadataLine label="Job state" value={lead.job.status} /> : null}
             </dl>
-          </details>
+          </SystemDetails>
         </footer>
       </div>
     </article>

@@ -20,6 +20,7 @@ import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ErrorState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { GateChip } from "../field/gate-chip";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
@@ -488,14 +489,7 @@ function RunwayJobCard({
       <p className="mt-3 text-sm font-semibold leading-6 text-foreground">
         Next: {laneNextStep(job.lane)}
       </p>
-      <details className="group mt-3 rounded-lg border border-border">
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold [&::-webkit-details-marker]:hidden">
-          <span>System details</span>
-          <ChevronRight
-            className="size-4 text-muted transition-transform group-open:rotate-90"
-            aria-hidden="true"
-          />
-        </summary>
+      <SystemDetails className="mt-3 rounded-lg border border-border" summaryClassName="px-4">
         <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2">
           <MetadataLine label="Job ID" value={job.id} />
           <MetadataLine label="Job state" value={job.status ?? "Not found"} />
@@ -504,7 +498,7 @@ function RunwayJobCard({
           <MetadataLine label="Step data" value={job.gate_coverage} />
           <MetadataLine label="Saved next step" value={job.next_action} />
         </dl>
-      </details>
+      </SystemDetails>
     </article>
   );
 }

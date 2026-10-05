@@ -1,4 +1,5 @@
 import { ApiError, apiRequest } from "../lib/api";
+import { PlainError } from "../lib/plain-error";
 import {
   jobHistoryPath,
   jobHistoryResponseSchema,
@@ -27,7 +28,7 @@ export async function loadJobHistory(
       fetcher,
     });
     if (model.job.id !== jobId && model.job.roof_job_id !== jobId) {
-      throw new Error("The job record does not match this link.");
+      throw new PlainError("The job record does not match this link.");
     }
     return model;
   } catch (error) {

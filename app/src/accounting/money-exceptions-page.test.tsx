@@ -57,7 +57,7 @@ describe("money exception queue", () => {
     expect(
       await screen.findByRole("heading", { name: "More was paid than was invoiced" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByText("System check"));
+    await user.click(screen.getByText("System details"));
     expect(screen.getByText("Our check code")).toBeInTheDocument();
     expect(screen.getByText("QuickBooks check code")).toBeInTheDocument();
     expect(screen.getByText("a".repeat(64))).toBeInTheDocument();

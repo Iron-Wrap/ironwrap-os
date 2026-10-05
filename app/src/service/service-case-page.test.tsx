@@ -97,6 +97,54 @@ describe("service case", () => {
     vi.mocked(verifyServiceRemedy).mockReset();
   });
 
+  it("says a call that will not open is not there, with the way back and no dead retry", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(loadServiceCase).mockRejectedValue(
+      new ApiError({ status: 404, code: "not_found", message: "Not Found", requestId: "req-sc-4" }),
+    );
+    renderCase();
+
+    expect(
+      await screen.findByText(
+        "This service call is not open to you, or it no longer exists. Go back to Service calls and pick it from the list.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Couldn’t open this" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Service calls" })).toHaveAttribute(
+      "href",
+      "/service",
+    );
+    expect(screen.queryByText(/Nothing changed|Check your link/)).not.toBeInTheDocument();
+    expect(screen.getByText("not_found")).not.toBeVisible();
+    await userEvent.click(screen.getByText("System details"));
+    expect(screen.getByText("req-sc-4")).toBeVisible();
+    quiet.mockRestore();
+  });
+
+  it("names a refused read for what it is, and keeps a retry only for a server fault", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(loadServiceCase).mockRejectedValue(
+      new ApiError({ status: 403, code: "office_role_required", message: "Forbidden" }),
+    );
+    const { unmount } = renderCase();
+    expect(
+      await screen.findByText(
+        "Your account does not have access to this. Ask the office to check your access.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    unmount();
+
+    vi.mocked(loadServiceCase).mockRejectedValue(
+      new ApiError({ status: 502, code: "service_case_store_unavailable", message: "Bad Gateway" }),
+    );
+    renderCase();
+    expect(await screen.findByText("Something went wrong on our side. Try again.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    quiet.mockRestore();
+  });
+
   it("offers triage, and only triage, on a case still in intake", async () => {
     vi.mocked(loadServiceCase).mockResolvedValue(detailResponse());
     renderCase();

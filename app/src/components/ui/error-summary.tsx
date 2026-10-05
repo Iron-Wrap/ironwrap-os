@@ -37,19 +37,19 @@ export function ErrorSummary({
         {title}
       </p>
       <ul className="mt-1.5 list-disc pl-5 text-sm leading-6">
-        {errors.map((error) => (
-          <li key={error.fieldId}>
+        {errors.map((problem) => (
+          <li key={problem.fieldId}>
             <a
-              href={`#${error.fieldId}`}
+              href={`#${problem.fieldId}`}
               className="font-semibold text-danger underline underline-offset-[3px]"
               onClick={(event) => {
-                const field = document.getElementById(error.fieldId);
+                const field = document.getElementById(problem.fieldId);
                 if (!field) return;
                 event.preventDefault();
                 field.focus();
               }}
             >
-              {error.message}
+              {problem.message}
             </a>
           </li>
         ))}

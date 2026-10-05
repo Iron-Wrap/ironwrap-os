@@ -11,7 +11,9 @@ import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails, SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
+import { isRefusal } from "../lib/plain-error";
 import { MoneyBadge } from "./money-badge";
 import {
   approveAccountingIntent,
@@ -68,7 +70,11 @@ function MoneyIntentContent() {
   const { intentId } = useParams({ strict: false }) as { intentId?: string };
   const actionKeys = useRef(new Map<string, string>());
   const [rejectReason, setRejectReason] = useState<AccountingRejectionReason>("amount_disputed");
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<{
+    text: string;
+    error: unknown;
+    refused: boolean;
+  }>();
   const [outcome, setOutcome] = useState<AccountingCommandResponse>();
 
   const queryKey = ["accounting-intent", session.tenant.id, intentId ?? ""] as const;
@@ -109,7 +115,7 @@ function MoneyIntentContent() {
     },
     onError: (error) => {
       setOutcome(undefined);
-      setActionError(messageFor(error));
+      setActionError({ text: messageFor(error), error, refused: isRefusal(error) });
     },
   });
 
@@ -202,8 +208,12 @@ function MoneyIntentContent() {
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Nothing was changed">
-          {actionError}
+        <Notice
+          tone="danger"
+          title={actionError.refused ? "Nothing was changed" : "The decision was not confirmed"}
+        >
+          {actionError.text}
+          <ErrorSystemDetails error={actionError.error} />
         </Notice>
       ) : null}
       {outcome ? (
@@ -328,10 +338,7 @@ function MoneyIntentContent() {
 
       <ComparisonSection detail={detail} />
 
-      <details className="border border-border bg-surface">
-        <summary className="min-h-14 cursor-pointer px-4 py-4 text-lg font-bold tracking-[-0.02em] sm:px-6">
-          System details
-        </summary>
+      <SystemDetails className="border border-border bg-surface" summaryClassName="px-4 sm:px-6">
         <dl className="divide-y divide-border">
           <Row label="QuickBooks company">{detail.evidence.realm_id}</Row>
           <Row label="QuickBooks item">
@@ -354,7 +361,7 @@ function MoneyIntentContent() {
             </Row>
           ))}
         </dl>
-      </details>
+      </SystemDetails>
 
       <section aria-label="What has happened" className="border border-border bg-surface">
         <div className="border-b border-border px-4 py-4 sm:px-6">
@@ -472,8 +479,10 @@ function formatMoment(value: string | null): string {
  * screen should do next - not to what went wrong inside the server.
  */
 function messageFor(error: unknown): string {
-  if (!(error instanceof ApiError)) {
-    return "The decision was not recorded. Nothing was sent to QuickBooks.";
+  // Only a refusal proves nothing happened: after a lost answer or a server fault the decision,
+  // and its QuickBooks posting, may already be done.
+  if (!(error instanceof ApiError) || !isRefusal(error)) {
+    return "We could not confirm this decision was recorded. Refresh this money movement to check it before you decide again.";
   }
   const messages: Record<string, string> = {
     accounting_intent_command_version_invalid:

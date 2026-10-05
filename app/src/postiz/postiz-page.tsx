@@ -1,13 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  ChevronRight,
-  Megaphone,
-  RefreshCw,
-  ShieldAlert,
-} from "lucide-react";
+import { ArrowLeft, CheckCircle2, Megaphone, RefreshCw, ShieldAlert } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
@@ -19,6 +12,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import {
   approvePostizIntent,
   connectPostiz,
@@ -409,14 +403,10 @@ function Proof({ model }: { model: PostizIntentResponse }) {
 function PostizSystemDetails({ model }: { model: PostizIntentResponse }) {
   const intent = model.intent;
   return (
-    <details className="group rounded-lg border border-border bg-surface-raised">
-      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-bold sm:min-h-14 sm:px-5 [&::-webkit-details-marker]:hidden">
-        <span>System details</span>
-        <ChevronRight
-          className="size-4 text-muted transition-transform group-open:rotate-90"
-          aria-hidden="true"
-        />
-      </summary>
+    <SystemDetails
+      className="rounded-lg border border-border bg-surface-raised"
+      summaryClassName="px-4 sm:px-5"
+    >
       <dl className="grid gap-3 border-t border-border px-4 py-3 text-sm text-muted sm:grid-cols-2 sm:px-5">
         <MetadataLine label="Post ID" value={intent.id} />
         <MetadataLine label="Connection" value={intent.integration_id ?? "Not found"} />
@@ -433,7 +423,7 @@ function PostizSystemDetails({ model }: { model: PostizIntentResponse }) {
           <MetadataLine key={reference} label="Proof record" value={reference} />
         ))}
       </dl>
-    </details>
+    </SystemDetails>
   );
 }
 

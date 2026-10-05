@@ -22,6 +22,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
 import { loadAccountingSummary } from "./money-api";
@@ -243,16 +244,9 @@ function ReconciliationHealthCard() {
             >
               Review the oldest unfinished item
             </Link>
-            <details className="group mt-2 text-xs text-muted">
-              <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 font-bold [&::-webkit-details-marker]:hidden">
-                System reference
-                <ChevronDown
-                  className="size-4 transition-transform group-open:rotate-180"
-                  aria-hidden="true"
-                />
-              </summary>
-              <p className="mt-1 break-all font-mono">{health.oldest_unreconciled_intent_id}</p>
-            </details>
+            <SystemDetails className="mt-2 text-xs text-muted">
+              <p className="break-all font-mono">{health.oldest_unreconciled_intent_id}</p>
+            </SystemDetails>
           </>
         ) : (
           <p>Nothing is outstanding. Every money movement has reached a settled state.</p>
@@ -485,18 +479,11 @@ function QuickBooksSettingsContent() {
                   : "Connection required"}
           </h2>
           {connectionModel.realm_id ? (
-            <details className="group mt-5 border-t border-border pt-4 text-sm">
-              <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 font-bold text-muted [&::-webkit-details-marker]:hidden">
-                Company record
-                <ChevronDown
-                  className="size-4 shrink-0 transition-transform group-open:rotate-180"
-                  aria-hidden="true"
-                />
-              </summary>
-              <p className="mt-2 break-all font-mono text-xs text-muted">
+            <SystemDetails className="mt-5 border-t border-border pt-1 text-sm text-muted">
+              <p className="break-all font-mono text-xs">
                 QuickBooks company ID {connectionModel.realm_id}
               </p>
-            </details>
+            </SystemDetails>
           ) : null}
         </Card>
 
@@ -1074,19 +1061,12 @@ function IntentStatus({ model }: { model: QuickBooksFinalInvoiceResponse }) {
             </p>
           ) : null}
           {intent.provider ? (
-            <details className="group mt-4 border-t border-current/15 pt-3 text-xs text-muted">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-bold [&::-webkit-details-marker]:hidden">
-                Provider readback recorded
-                <ChevronDown
-                  className="size-4 transition-transform group-open:rotate-180"
-                  aria-hidden="true"
-                />
-              </summary>
-              <p className="mt-2 break-all font-mono">
+            <SystemDetails className="mt-4 border-t border-current/15 pt-1 text-xs text-muted">
+              <p className="break-all font-mono">
                 QuickBooks invoice {intent.provider.invoice_id}
                 {intent.provider.matched_at ? " · authenticated match recorded" : ""}
               </p>
-            </details>
+            </SystemDetails>
           ) : null}
         </div>
       </div>
@@ -1210,15 +1190,8 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
           value={dateFormatter.format(new Date(`${intent.due_date}T00:00:00.000Z`))}
         />
       </dl>
-      <details className="group mt-5 border-t border-border pt-3">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 text-sm font-bold text-muted [&::-webkit-details-marker]:hidden">
-          System evidence anchors
-          <ChevronDown
-            className="size-4 shrink-0 transition-transform group-open:rotate-180"
-            aria-hidden="true"
-          />
-        </summary>
-        <dl className="mt-3 grid gap-4 rounded-lg bg-surface-raised p-4 text-sm sm:grid-cols-2">
+      <SystemDetails className="mt-5 border-t border-border pt-1 text-muted">
+        <dl className="grid gap-4 rounded-lg bg-surface-raised p-4 text-sm text-foreground sm:grid-cols-2">
           <HashFact label="Completion record" value={intent.basis.completion_id} />
           <HashFact label="Quote record" value={intent.basis.quote_id} />
           <HashFact label="Candidate version" value={String(intent.version)} />
@@ -1227,7 +1200,7 @@ function ReviewBasis({ model, locale }: { model: QuickBooksFinalInvoiceResponse;
           <HashFact label="Quote hash" value={intent.basis.quote_hash} />
           <HashFact label="Accepted changes hash" value={intent.basis.changes_hash} />
         </dl>
-      </details>
+      </SystemDetails>
     </section>
   );
 }

@@ -18,10 +18,10 @@ import {
   formatFieldDay,
   formatFieldSchedule,
   formatFieldTimestamp,
-  humanizeFieldName,
-  messageFor,
+  plainFieldNames,
   type FieldDateOptions,
 } from "./field-formatting";
+import { messageForLoad } from "../lib/plain-error";
 import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 
@@ -120,7 +120,13 @@ export function TodayPage() {
 
   if (query.isPending) return <LoadingState label="Loading assigned work…" />;
   if (query.isError) {
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
   }
   if (!today) return <LoadingState label="Loading assigned work…" />;
   const offline = today.stale_fields.includes("offline.cached_packet");
@@ -290,14 +296,16 @@ function OfflineScheduleNotice({
 }
 
 function TodayDataLimits({ fields }: { fields: string[] }) {
+  const names = plainFieldNames(fields);
   return (
     <details className="border border-border bg-surface-raised">
       <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
         Some details may be old
       </summary>
       <div className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        Check the job again before you use these details: {fields.map(humanizeFieldName).join(", ")}
-        .
+        {names.length
+          ? `Check the job again before you use these details: ${names.join(", ")}.`
+          : "Check the job again before you rely on its details."}
       </div>
     </details>
   );

@@ -12,7 +12,9 @@ import { Input } from "../components/ui/input";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails, SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
+import { isRefusal, messageFor, messageForLoad } from "../lib/plain-error";
 import {
   closeServiceCase,
   issueServiceRemedy,
@@ -54,7 +56,7 @@ function ServiceCaseContent() {
   const session = useSession();
   const offline = isOfflineSession(session);
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<unknown>();
   const queryKey = ["service-case", session.tenant.id, caseId];
   const query = useQuery({
     queryKey,
@@ -79,15 +81,24 @@ function ServiceCaseContent() {
   }
   if (!query.data && query.isPending) return <LoadingState label="Loading this call…" />;
   if (!query.data) {
+    // A refusal gets its own words and no retry; only a call that is not there gets the way back.
+    const missing = query.error instanceof ApiError && query.error.status === 404;
     return (
       <ErrorState
-        title="We could not load this call"
-        message="Nothing changed. Check your link and try again."
+        message={messageForLoad(query.error, {
+          byCode: {
+            not_found:
+              "This service call is not open to you, or it no longer exists. Go back to Service calls and pick it from the list.",
+          },
+        })}
+        error={query.error}
         onRetry={() => void query.refetch()}
         action={
-          <Button asChild variant="outline">
-            <Link to="/service">Back to Service calls</Link>
-          </Button>
+          missing ? (
+            <Button asChild variant="outline">
+              <Link to="/service">Back to Service calls</Link>
+            </Button>
+          ) : undefined
         }
       />
     );
@@ -137,12 +148,11 @@ function ServiceCaseContent() {
                 session.tenant.time_zone,
               )}
             </p>
-            <details className="mt-4 text-xs text-muted">
-              <summary className="cursor-pointer font-bold text-foreground">System details</summary>
-              <p className="mt-2 break-all leading-5">
+            <SystemDetails className="mt-4 text-xs text-muted">
+              <p className="break-all leading-5">
                 Call ID {serviceCase.service_case_id} · Version {serviceCase.version}
               </p>
-            </details>
+            </SystemDetails>
           </div>
         </header>
       </Card>
@@ -152,13 +162,21 @@ function ServiceCaseContent() {
           This page does not save work while you are offline.
         </Notice>
       ) : null}
-      {actionError ? (
-        <Notice tone="danger" title="We could not save this step">
-          <p>Check the call and try again.</p>
-          <details className="mt-2">
-            <summary className="cursor-pointer font-bold text-foreground">System details</summary>
-            <p className="mt-1 break-words">{actionError}</p>
-          </details>
+      {actionError !== undefined ? (
+        <Notice
+          tone="danger"
+          title={
+            isRefusal(actionError) ? "We could not save this step" : "This step was not confirmed"
+          }
+        >
+          <p>
+            {messageFor(actionError, {
+              refused: "Check the details and try again.",
+              fallback:
+                "We could not confirm this step was saved. Reload the call to check it before you try again.",
+            })}
+          </p>
+          <ErrorSystemDetails error={actionError} />
         </Notice>
       ) : null}
       {serviceCase.duplicate_of_case_id ? (
@@ -207,14 +225,11 @@ function ServiceCaseContent() {
                 {formatDateTime(event.created_at, session.tenant.locale, session.tenant.time_zone)}
                 {event.detail_code ? ` · ${codeLabel(event.detail_code)}` : ""}
               </p>
-              <details className="mt-2 text-xs text-muted">
-                <summary className="cursor-pointer font-bold text-foreground">
-                  System details
-                </summary>
-                <p className="mt-1 break-all">
+              <SystemDetails className="mt-2 text-xs text-muted">
+                <p className="break-all">
                   Event {event.event_id} · Version {event.case_version}
                 </p>
-              </details>
+              </SystemDetails>
             </li>
           ))}
         </ol>
@@ -228,7 +243,7 @@ interface StepProps {
   caseId: string;
   remedy: ServiceRemedy | null;
   offline: boolean;
-  onError: (message: string) => void;
+  onError: (error: unknown) => void;
   onDone: () => Promise<void>;
 }
 
@@ -264,7 +279,7 @@ function TriagePanel({ model, caseId, offline, onError, onDone }: StepProps) {
         evidenceDigest: evidenceDigest.trim(),
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
   const unknownBlame = finalCategory === "unknown" && responsibility !== "undetermined";
 
@@ -331,7 +346,7 @@ function DiagnosisPanel({ caseId, offline, onError, onDone }: StepProps) {
         evidenceDigest: evidenceDigest.trim(),
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
 
   return (
@@ -403,7 +418,7 @@ function RemedyPanel({ caseId, offline, onError, onDone }: StepProps) {
         partsManifestDigest: partsManifestDigest.trim(),
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
   const windowValid = Boolean(start) && Boolean(end) && Date.parse(end) > Date.parse(start);
 
@@ -448,7 +463,7 @@ function VerificationPanel({ caseId, remedy, offline, onError, onDone }: StepPro
         failureCode: outcome === "failed" ? failureCode.trim() : null,
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
 
   return (
@@ -518,7 +533,7 @@ function CustomerDecisionPanel({ caseId, remedy, offline, onError, onDone }: Ste
         evidenceDigest: evidenceDigest.trim(),
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
 
   return (
@@ -574,7 +589,7 @@ function ClosurePanel({ caseId, offline, onError, onDone }: StepProps) {
     retry: false,
     mutationFn: async () => await closeServiceCase(session, caseId, { closureReason }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
 
   return (
@@ -604,7 +619,7 @@ function ReopenPanel({ model, caseId, offline, onError, onDone }: StepProps) {
     retry: false,
     mutationFn: async () => await reopenServiceCase(session, caseId, reopenCode.trim()),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
   if (model.service_case.duplicate_of_case_id) return null;
 
@@ -634,7 +649,7 @@ function CostPanel({
   caseId: string;
   canRecoverCost: boolean;
   offline: boolean;
-  onError: (message: string) => void;
+  onError: (error: unknown) => void;
   onDone: () => Promise<void>;
 }) {
   const cost = model.cost;
@@ -710,7 +725,7 @@ function ClaimPanel({
   caseId: string;
   model: ServiceCaseDetailResponse;
   offline: boolean;
-  onError: (message: string) => void;
+  onError: (error: unknown) => void;
   onDone: () => Promise<void>;
 }) {
   const session = useSession();
@@ -733,7 +748,7 @@ function ClaimPanel({
         deadlineAt: new Date(deadline).toISOString(),
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
   const diagnosed = model.diagnoses.length > 0;
 
@@ -806,7 +821,7 @@ function ReconcilePanel({
   caseId: string;
   claim: CostRecoveryClaim;
   offline: boolean;
-  onError: (message: string) => void;
+  onError: (error: unknown) => void;
   onDone: () => Promise<void>;
 }) {
   const session = useSession();
@@ -823,7 +838,7 @@ function ReconcilePanel({
         recoveredAmountCents: outcome === "executed" ? recoveredCents : null,
       }),
     onSuccess: onDone,
-    onError: (error) => onError(messageFor(error)),
+    onError: (error) => onError(error),
   });
 
   return (
@@ -1065,11 +1080,6 @@ function Choice({
       </Select>
     </div>
   );
-}
-
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  return "This step was not saved. Open the call again and try once more.";
 }
 
 function formatDateTime(value: string, locale: string, timeZone: string): string {

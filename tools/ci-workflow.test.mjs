@@ -285,7 +285,7 @@ test("the e2e matrix runs exactly the Makefile's E2E_SUITES, one suite per leg, 
     .replace(/\\\n/g, " ")
     .split(/\s+/)
     .filter(Boolean);
-  assert.equal(suites.length, 16);
+  assert.equal(suites.length, 17);
 
   const e2e = section(workflow, "e2e");
   const matrixSection = e2e.slice(e2e.indexOf("suite:"), e2e.indexOf("runs-on:"));

@@ -224,6 +224,7 @@ jobs:
           - test:pwa:decisions
           - test:pwa:sales-intake
           - test:pwa:manual-measurements
+          - test:pwa:service-calls
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

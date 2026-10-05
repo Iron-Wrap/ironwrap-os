@@ -34,7 +34,8 @@
     "format:check": "prettier --check .",
     "preview": "vite preview",
     "test:pwa:sales-intake": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4189 playwright test sales-intake lead-triage",
-    "test:pwa:manual-measurements": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4195 playwright test manual-measurements"
+    "test:pwa:manual-measurements": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4195 playwright test manual-measurements",
+    "test:pwa:service-calls": "npm run build:pwa && ACCEPTANCE_MODE=estimator ACCEPTANCE_PORT=4196 playwright test e2e/service-calls.spec.ts"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.3.0",

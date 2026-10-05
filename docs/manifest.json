@@ -83,6 +83,31 @@
       ]
     },
     {
+      "path": "design/README.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/ZERO-LEARNING-GATE.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/MIGRATION.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/PIPELINE.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/TOKENS.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "docs/AI-NATIVE-ARCHITECTURE.md",
       "class": "canonical",
       "authority": []

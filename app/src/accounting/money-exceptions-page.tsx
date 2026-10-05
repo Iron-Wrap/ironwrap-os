@@ -11,7 +11,9 @@ import { Button } from "../components/ui/button";
 import { Notice } from "../components/ui/notice";
 import { Select } from "../components/ui/select";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails, SystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
+import { isRefusal } from "../lib/plain-error";
 import {
   loadAccountingExceptions,
   newAccountingActionKey,
@@ -81,7 +83,11 @@ function MoneyExceptionsContent() {
   const queryClient = useQueryClient();
   const actionKeys = useRef(new Map<string, string>());
   const [showResolved, setShowResolved] = useState(false);
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<{
+    text: string;
+    error: unknown;
+    confirmed: boolean;
+  }>();
   const [resolved, setResolved] = useState<string>();
 
   const queryKey = ["accounting-exceptions", session.tenant.id, showResolved] as const;
@@ -109,7 +115,7 @@ function MoneyExceptionsContent() {
     },
     onError: (error) => {
       setResolved(undefined);
-      setActionError(messageFor(error));
+      setActionError({ ...closeFailure(error), error });
     },
   });
 
@@ -156,8 +162,12 @@ function MoneyExceptionsContent() {
         </Notice>
       ) : null}
       {actionError ? (
-        <Notice tone="danger" title="Nothing was changed">
-          {actionError}
+        <Notice
+          tone="danger"
+          title={actionError.confirmed ? "Nothing was changed" : "Closing was not confirmed"}
+        >
+          {actionError.text}
+          <ErrorSystemDetails error={actionError.error} />
         </Notice>
       ) : null}
       {resolved ? (
@@ -242,10 +252,7 @@ function ExceptionCard({
         ) : null}
       </div>
 
-      <details className="border-b border-border">
-        <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold sm:px-6">
-          System check
-        </summary>
+      <SystemDetails className="border-b border-border" summaryClassName="px-4 sm:px-6">
         <dl className="divide-y divide-border border-t border-border">
           <div className="px-4 py-3 sm:px-6">
             <dt className="text-sm font-bold text-muted">Our check code</dt>
@@ -264,7 +271,7 @@ function ExceptionCard({
             </dd>
           </div>
         </dl>
-      </details>
+      </SystemDetails>
 
       {canResolve ? (
         <div className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:px-6">
@@ -331,8 +338,16 @@ function BackToDesk() {
   );
 }
 
-function messageFor(error: unknown): string {
-  if (!(error instanceof ApiError)) return "The issue was not closed.";
+/**
+ * Only a refusal or a code the office named proves the issue is still open (`confirmed`): after a
+ * lost answer or a server fault it may already be closed.
+ */
+function closeFailure(error: unknown): { text: string; confirmed: boolean } {
+  const unconfirmed = {
+    text: "We could not confirm the issue was closed. Refresh this list to check it before you try again.",
+    confirmed: false,
+  };
+  if (!(error instanceof ApiError)) return unconfirmed;
   const messages: Record<string, string> = {
     accounting_exception_compensating_effect_required:
       "A remedy that moves money is authorized on the money movement, not closed from here.",
@@ -352,5 +367,9 @@ function messageFor(error: unknown): string {
       "That is not a remedy this finding offers. Pick one from the list.",
     csrf_failed: "Your session needs refreshing. Reload the page and try again.",
   };
-  return messages[error.code] ?? "The issue was not closed. Nothing was changed.";
+  const named = messages[error.code];
+  if (named) return { text: named, confirmed: true };
+  return isRefusal(error)
+    ? { text: "The issue was not closed. Nothing was changed.", confirmed: true }
+    : unconfirmed;
 }

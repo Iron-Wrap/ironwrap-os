@@ -177,7 +177,7 @@ describe("LeadTriagePreparePage", () => {
 
     await screen.findByRole("heading", { name: "Lead review" });
     expect(screen.getByText(`lead:ironwrap:${"a".repeat(64)}`)).not.toBeVisible();
-    await user.click(screen.getByText("Record details"));
+    await user.click(screen.getByText("System details"));
     expect(screen.getByText(`lead:ironwrap:${"a".repeat(64)}`)).toBeVisible();
     expect(screen.getByText("bus-external-reference")).toBeVisible();
     expect(container.textContent).not.toMatch(/15000|Never show this/i);
@@ -308,7 +308,14 @@ describe("LeadTriagePreparePage", () => {
     await user.type(screen.getByLabelText("Next internal action"), "Verify access.");
     await user.click(screen.getByRole("button", { name: "Save lead review" }));
 
-    expect(await screen.findByText("Check the saved review")).toBeVisible();
+    // A refusal is a confirmed "no": it is not worded as a save that may have gone through.
+    expect(await screen.findByText("The review was not saved")).toBeVisible();
+    expect(
+      screen.getByText(
+        "This lead changed while you were reviewing it. Refresh the lead before you save again.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Check the saved review")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh lead" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save lead review" })).toBeDisabled();
   });

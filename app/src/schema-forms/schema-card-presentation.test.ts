@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../lib/api";
 import type { SchemaCardEntry, SchemaCardFieldDefinition } from "./schema-card-contracts";
@@ -88,6 +88,16 @@ describe("grouping more than one service type onto one card", () => {
       "gutters.linear_feet",
       "gutters.downspouts",
     ]);
+  });
+
+  it("titles a block only with a plain word, never with a key spelled out as one", () => {
+    const groups = groupSchemaCardEntries([
+      entry({ field_key: "metal_roofing.panel_profile", position: 0 }),
+      entry({ field_key: "roofing.underlayment", position: 1 }),
+    ]);
+
+    expect(groups.map((group) => group.key)).toEqual(["metal_roofing", "roofing"]);
+    expect(groups.map((group) => group.label)).toEqual(["Details", "Roofing"]);
   });
 
   it("keeps un-namespaced fields in one default block, so a flat field set is unaffected", () => {
@@ -472,16 +482,29 @@ describe("saying what the server refused, in words a crew member can act on", ()
 });
 
 describe("saying what stopped a write that never reached a rule", () => {
-  it("keeps the connection message written for this app rather than restating a code", () => {
+  it("says a write with no answer may have landed, rather than restating a code", () => {
+    // The value may have reached the office before the connection dropped.
+    const words = schemaCardWriteRefusal(
+      new ApiError({
+        status: 0,
+        code: "network_error",
+        message: "No connection to IronWrap OS. Your saved work stays on this device.",
+      }),
+      definition({}),
+    );
+    expect(words).toMatch(/The connection dropped before IronWrap OS answered/);
+    expect(words).toMatch(/Check what was saved/);
+    expect(words).not.toMatch(/saved work stays|network_error/);
+  });
+
+  it("does not claim a value was not saved when the server failed after it was sent", () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(
       schemaCardWriteRefusal(
-        new ApiError({
-          status: 0,
-          code: "network_error",
-          message: "No connection to IronWrap OS. Your saved work stays on this device.",
-        }),
+        new ApiError({ status: 502, code: "upstream_unavailable", message: "Bad Gateway" }),
         definition({}),
       ),
-    ).toMatch(/No connection to IronWrap OS/);
+    ).toMatch(/^We could not confirm .+ was saved\. Reload the card to check it/);
+    quiet.mockRestore();
   });
 });

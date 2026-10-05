@@ -4,6 +4,7 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { Notice } from "../components/ui/notice";
 import { Status } from "../components/ui/status";
+import { SystemDetails } from "../components/ui/system-details";
 import { loadQuoteRevisionApprovals } from "../estimator/quote-revision-approval-api";
 import { ApprovalReceipt } from "../owner/approval-receipt";
 import { formatOwnerDate } from "../owner/owner-now-utils";
@@ -266,11 +267,8 @@ export function JobEconomicsSummary({ model, locale }: { model: JobEconomics; lo
         Actual profit is unavailable: posted revenue recognition is not supplied. Known amounts are
         not complete job totals when source coverage is incomplete.
       </p>
-      <details className="border border-border px-4 py-2">
-        <summary className="flex min-h-11 cursor-pointer items-center font-semibold">
-          Cost lineage and missing sources
-        </summary>
-        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+      <SystemDetails className="border border-border px-4">
+        <dl className="mt-1 grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-muted">Material lots observed</dt>
             <dd>{model.source_coverage.material_lots}</dd>
@@ -305,7 +303,7 @@ export function JobEconomicsSummary({ model, locale }: { model: JobEconomics; lo
             No reconciliation gaps were reported by this read.
           </p>
         )}
-      </details>
+      </SystemDetails>
     </>
   );
 }

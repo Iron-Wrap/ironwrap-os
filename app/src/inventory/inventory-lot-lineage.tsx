@@ -61,7 +61,7 @@ export function InventoryLotLineage({
             </select>
           </label>
           <div className="flex flex-wrap items-center gap-3">
-            <RefTag kind="record" id={selected.lot_code} />
+            <RefTag kind="lot" id={selected.lot_code} />
             <Status kind={selected.lot_status === "quarantined" ? "stopped" : "neutral"}>
               {selected.lot_status.replaceAll("_", " ")}
             </Status>

@@ -105,7 +105,7 @@ test.describe("Facet design acceptance", () => {
       fullPage: true,
     });
 
-    await page.getByText("Immutable evidence anchors").click();
+    await page.getByText("System details").click();
     await expect(page.getByText("facet-project-acceptance")).toBeVisible();
     await expect(page.getByRole("button", { name: /connect|prepare/i })).toHaveCount(0);
   });

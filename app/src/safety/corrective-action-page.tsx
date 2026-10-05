@@ -9,10 +9,12 @@ import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails } from "../components/ui/system-details";
 import { Textarea } from "../components/ui/textarea";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
+import { isRefusal, messageFor, messageForLoad, UNANSWERED_CONNECTION } from "../lib/plain-error";
 import { subscribeOutboxChanges } from "../storage/outbox-store";
 import {
   loadCorrectiveAction,
@@ -101,9 +103,8 @@ export function CorrectiveActionPage({ actionId }: { actionId: string }) {
       {record.isPending ? <LoadingState label="Reading corrective action…" /> : null}
       {record.isError ? (
         <ErrorState
-          message={
-            record.error instanceof Error ? record.error.message : "This action could not be read."
-          }
+          message={messageForLoad(record.error, { fallback: "This action could not be read." })}
+          error={record.error}
           onRetry={() => void refresh()}
         />
       ) : null}
@@ -196,12 +197,27 @@ export function CorrectiveActionPage({ actionId }: { actionId: string }) {
                 again.
               </Notice>
             ) : evidence.isError || decision.isError ? (
-              <Notice tone="danger" title="Submission not confirmed">
-                {(evidence.error ?? decision.error)?.message}{" "}
-                {mustRefresh
-                  ? "Refresh and review the action before trying again."
-                  : "Your entered details remain here."}
-              </Notice>
+              isRefusal(evidence.error ?? decision.error) ? (
+                // A refusal is a confirmed "no", and its sentence already names the next step.
+                <Notice tone="danger" title="Submission not recorded">
+                  {messageFor(evidence.error ?? decision.error, {
+                    refused: "Check the details and try again.",
+                  })}{" "}
+                  Your entered details remain here.
+                  <ErrorSystemDetails error={evidence.error ?? decision.error} />
+                </Notice>
+              ) : (
+                <Notice tone="danger" title="Submission not confirmed">
+                  {messageFor(evidence.error ?? decision.error, {
+                    byCode: UNANSWERED_CONNECTION,
+                    fallback: "The office did not confirm it.",
+                  })}{" "}
+                  {mustRefresh
+                    ? "Refresh and review the action before trying again."
+                    : "Your entered details remain here."}
+                  <ErrorSystemDetails error={evidence.error ?? decision.error} />
+                </Notice>
+              )
             ) : null}
             {allowed.includes("submit_evidence") &&
             !evidence.isSuccess &&

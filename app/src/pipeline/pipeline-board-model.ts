@@ -195,7 +195,8 @@ export function describeMoveBlocker(
   if (!(error instanceof ApiError)) {
     return {
       code: "unknown_error",
-      message: "The move did not go through. The card stayed where it was.",
+      message:
+        "We could not confirm the move. Check where the card is on the board before you move it again.",
       outcome: "refused",
       refresh: false,
     };
@@ -275,7 +276,11 @@ export function describeMoveBlocker(
     default:
       return {
         code: error.code,
-        message: fallbackMoveMessage(error, "The card stayed where it was."),
+        message: fallbackMoveMessage(error, {
+          refused: "The card stayed where it was.",
+          unconfirmed:
+            "We could not confirm the move. Check where the card is on the board before you move it again.",
+        }),
         outcome: "refused",
         refresh: error.status === 409,
       };
@@ -356,16 +361,38 @@ export function describeUndoBlocker(
     default:
       return {
         code: error.code,
-        message: fallbackMoveMessage(error, "The move could not be undone."),
+        message: fallbackMoveMessage(error, {
+          refused: "The move could not be undone.",
+          unconfirmed:
+            "We could not confirm the undo. Check where the card is on the board before you try again.",
+        }),
         outcome: "refused",
         refresh: error.status === 409,
       };
   }
 }
 
-function fallbackMoveMessage(error: ApiError, fallback: string): string {
-  if (error.status === 0) return "No connection to IronWrap OS. The card stayed where it was.";
-  return error.message ? `${error.message} ${fallback}`.trim() : fallback;
+/**
+ * The server's own wording is never shown: it was not written for the person moving cards. Only a
+ * refusal proves the card stayed put; after a lost answer or a server fault the move may have
+ * happened, so the person checks the board (it is read again once the move settles).
+ */
+function fallbackMoveMessage(
+  error: ApiError,
+  copy: { refused: string; unconfirmed: string },
+): string {
+  if (outcomeUnknown(error)) return copy.unconfirmed;
+  return `The board did not accept this. ${copy.refused}`;
+}
+
+/** No answer, or a server fault: the change may or may not have happened. */
+function outcomeUnknown(error: ApiError): boolean {
+  return error.status === 0 || error.status === 408 || error.status >= 500;
+}
+
+/** A placement is safe to repeat: a card that is already there is reported, never doubled. */
+function placementUnconfirmed(entity: string, board: string): string {
+  return `We could not confirm ${entity} was added to ${board}. Add it again: if it is already there, you will be told.`;
 }
 
 export function stageById(stages: readonly BoardStage[], stageId: string): BoardStage | undefined {
@@ -670,7 +697,7 @@ export function describePlacementBlocker(
   if (!(error instanceof ApiError)) {
     return {
       code: "unknown_error",
-      message: `${entity} was not added to ${board}. Nothing was changed.`,
+      message: placementUnconfirmed(entity, board),
       alreadyPlaced: false,
     };
   }
@@ -725,12 +752,9 @@ export function describePlacementBlocker(
     default:
       return {
         code: error.code,
-        message:
-          error.status === 0
-            ? `No connection to IronWrap OS. ${entity} was not added to ${board}.`
-            : error.message
-              ? `${error.message} ${entity} was not added to ${board}.`
-              : `${entity} was not added to ${board}.`,
+        message: outcomeUnknown(error)
+          ? placementUnconfirmed(entity, board)
+          : `${entity} was not added to ${board}. The board did not accept it.`,
         alreadyPlaced: false,
       };
   }

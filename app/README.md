@@ -166,6 +166,16 @@ A workflow board is a read model: its lanes are versioned predicates over author
 drag/drop gesture requests a typed Worker command with aggregate-version and idempotency
 preconditions; it never edits a generic status in the browser.
 
+Plain language is checked in CI, not left to review. `scripts/plain-language.family.test.ts` reads
+every screen and copy module and fails when a banned or system word, a code with no plain label, an
+error's own message, or a machine key spelled out as words reaches a primary surface
+(`design/ZERO-LEARNING-GATE.md`, Z2). System facts go inside `<SystemDetails>`, a code goes in
+`<RefTag>` (which prints its plain kind first), and an error's words come from `messageFor` in
+`src/lib/plain-error.ts`. The offenders that remain are counted per file in
+`scripts/plain-language.baseline.json`; a count can only fall, and
+`UPDATE_PLAIN_BASELINE=1 npx vitest run scripts/plain-language.family.test.ts` lowers the file after
+a fix.
+
 Operational forms follow versioned domain schemas with typed fields, field-level read/write
 authority, provenance, conditional evidence, offline rules, and correction audit. This is a target
 composition contract, not a claim that the PWA currently contains a generic form builder.

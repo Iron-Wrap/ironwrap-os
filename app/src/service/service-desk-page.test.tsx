@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { ApiError } from "../lib/api";
 import { loadServiceCases, openServiceCase } from "./service-api";
 import { DIGEST_A, listResponse, serviceCase } from "./service-fixtures";
 import { ServiceDeskPage } from "./service-desk-page";
@@ -134,6 +135,81 @@ describe("callback desk", () => {
       responseSlaMinutes: 1440,
     });
     expect(await screen.findByText("Callback saved")).toBeInTheDocument();
+  });
+
+  it("says one plain sentence when the save fails and keeps the office's wording out of sight", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(loadServiceCases).mockResolvedValue(listResponse([]));
+    vi.mocked(openServiceCase).mockRejectedValue(
+      new ApiError({
+        status: 400,
+        code: "service_case_intake_invalid",
+        message: "D1_ERROR: constraint failed: service_cases.consent_ref",
+        requestId: "req-service-42",
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderDesk();
+    await screen.findByRole("heading", { name: "Service calls" });
+    await fillIntake(user);
+    await user.click(screen.getByRole("button", { name: /Save call/ }));
+
+    expect(await screen.findByText("The call was not saved")).toBeInTheDocument();
+    expect(screen.getByText(/Check the details and try again\./)).toBeVisible();
+    expect(screen.queryByText(/D1_ERROR|constraint failed/)).not.toBeInTheDocument();
+    // The code and the request reference wait behind the one disclosure.
+    expect(screen.getByText("service_case_intake_invalid")).not.toBeVisible();
+    await user.click(screen.getByText("System details"));
+    expect(screen.getByText("service_case_intake_invalid")).toBeVisible();
+    expect(screen.getByText("req-service-42")).toBeVisible();
+    quiet.mockRestore();
+  });
+
+  it("does not claim the call was not saved when the server failed after it was sent", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(loadServiceCases).mockResolvedValue(listResponse([]));
+    vi.mocked(openServiceCase).mockRejectedValue(
+      new ApiError({ status: 502, code: "service_case_store_unavailable", message: "Bad Gateway" }),
+    );
+    const user = userEvent.setup();
+
+    renderDesk();
+    await screen.findByRole("heading", { name: "Service calls" });
+    await fillIntake(user);
+    await user.click(screen.getByRole("button", { name: /Save call/ }));
+
+    // The Worker can write the call and still fail before it answers.
+    expect(await screen.findByText("The call was not confirmed")).toBeVisible();
+    expect(
+      screen.getByText(
+        "We could not confirm the call was saved. Check the list of calls before you save it again.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/was not saved|Nothing was changed/)).not.toBeInTheDocument();
+    quiet.mockRestore();
+  });
+
+  it("does not promise saved work on this device when the connection drops during a save", async () => {
+    vi.mocked(loadServiceCases).mockResolvedValue(listResponse([]));
+    vi.mocked(openServiceCase).mockRejectedValue(
+      new ApiError({
+        status: 0,
+        code: "network_error",
+        message: "No connection to IronWrap OS. Your saved work stays on this device.",
+      }),
+    );
+    const user = userEvent.setup();
+
+    renderDesk();
+    await screen.findByRole("heading", { name: "Service calls" });
+    await fillIntake(user);
+    await user.click(screen.getByRole("button", { name: /Save call/ }));
+
+    expect(
+      await screen.findByText(/The connection dropped before IronWrap OS answered/),
+    ).toBeVisible();
+    expect(screen.queryByText(/saved work stays/i)).not.toBeInTheDocument();
   });
 
   it("says plainly when a second report was kept as a linked duplicate", async () => {

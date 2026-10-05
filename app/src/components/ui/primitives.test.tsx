@@ -4,6 +4,7 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { MoneyBadge } from "../../accounting/money-badge";
+import { ApiError } from "../../lib/api";
 import { Logo, BrandMark } from "./brand";
 import { Button } from "./button";
 import { Dialog } from "./dialog";
@@ -15,6 +16,7 @@ import { RefTag } from "./ref-tag";
 import { SaveIndicator } from "./save-indicator";
 import { Segmented, SegmentedCount } from "./segmented";
 import { Status, type StatusKind } from "./status";
+import { ErrorSystemDetails, SystemDetails } from "./system-details";
 import { Timeline } from "./timeline";
 
 describe("Iron Wrap primitives", () => {
@@ -57,7 +59,7 @@ describe("Iron Wrap primitives", () => {
     expect(assign).toHaveBeenCalledOnce();
   });
 
-  it("stamps a reference tag that is announced with its kind", () => {
+  it("stamps a reference tag that shows and announces its plain kind before the code", () => {
     render(
       <>
         <RefTag id="IW-1001" />
@@ -68,19 +70,92 @@ describe("Iron Wrap primitives", () => {
       </>,
     );
     const job = screen.getByRole("img", { name: "Job IW-1001" });
-    expect(job).toHaveTextContent("IW-1001");
+    // The gate's rule: a code never stands alone, and the plain label comes first.
+    expect(job.textContent).toBe("Job IW-1001");
     expect(job).toHaveClass("ref-tag");
     expect(job).toHaveAttribute("data-kind", "job");
 
     const lead = screen.getByRole("img", { name: "Lead L-2207" });
+    expect(lead.textContent).toBe("Lead L-2207");
     expect(lead).toHaveAttribute("data-kind", "lead");
     expect(lead).toHaveAttribute("data-size", "large");
 
     const link = screen.getByRole("link", { name: "Job IW-1002" });
+    expect(link.textContent).toBe("Job IW-1002");
     expect(link).toHaveAttribute("href", "/jobs/IW-1002");
     expect(link).toHaveClass("ref-tag");
     expect(link).toHaveAttribute("data-interactive", "true");
     expect(job).not.toHaveAttribute("data-interactive");
+  });
+
+  it("names the shop, field and office codes the gate lists in their own words", () => {
+    render(
+      <>
+        <RefTag id="PMS-2231" kind="coil" />
+        <RefTag id="L-114" kind="lot" />
+        <RefTag id="S-7" kind="survey" />
+        <RefTag id="C-14" kind="cutlist" />
+        <RefTag id="CO-3" kind="change_order" />
+        <RefTag id="NCR-31" kind="quality_problem" />
+        <RefTag id="P-9" kind="person" />
+        <RefTag id="SC-12" kind="case" />
+      </>,
+    );
+    expect(screen.getAllByRole("img").map((tag) => tag.textContent)).toEqual([
+      "Coil PMS-2231",
+      "Lot L-114",
+      "Survey reading S-7",
+      "Cut list C-14",
+      "Change order CO-3",
+      "Quality problem NCR-31",
+      "Person P-9",
+      "Service call SC-12",
+    ]);
+  });
+
+  it("keeps system facts behind one closed disclosure with the same word everywhere", async () => {
+    render(
+      <SystemDetails className="border" summaryClassName="px-4">
+        <p>Request ID approval:42</p>
+      </SystemDetails>,
+    );
+    const summary = screen.getByText("System details");
+    const disclosure = summary.closest("details")!;
+    expect(summary.tagName).toBe("SUMMARY");
+    expect(disclosure).toHaveAttribute("data-system-details");
+    expect(disclosure).not.toHaveAttribute("open");
+    // 48px is the gate's floor for every target; the summary is the target here.
+    expect(summary).toHaveClass("min-h-12", "px-4");
+    expect(disclosure).toHaveClass("border");
+    await userEvent.click(summary);
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getByText("Request ID approval:42")).toBeVisible();
+  });
+
+  it("keeps a refused request's code and reference behind System details, and shows nothing for any other error", async () => {
+    const { container, rerender } = render(
+      <ErrorSystemDetails error={new Error("D1_ERROR: no such table")} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+
+    rerender(
+      <ErrorSystemDetails
+        error={
+          new ApiError({
+            status: 409,
+            code: "approval_conflict",
+            message: "The request changed.",
+            requestId: "req-7",
+          })
+        }
+      />,
+    );
+    const code = screen.getByText("approval_conflict");
+    expect(code).not.toBeVisible();
+    await userEvent.click(screen.getByText("System details"));
+    expect(code).toBeVisible();
+    expect(screen.getByText("req-7")).toBeVisible();
+    expect(screen.queryByText(/The request changed/)).not.toBeInTheDocument();
   });
 
   it("gives every status its own glyph shape and always says it in words", () => {

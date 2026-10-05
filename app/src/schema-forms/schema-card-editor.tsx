@@ -8,6 +8,7 @@ import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import type { FieldDateOptions } from "../field/field-formatting";
 import { ApiError, isRetryableApiError } from "../lib/api";
+import { messageFor } from "../lib/plain-error";
 import type { OutboxAction } from "../storage/outbox-types";
 import { queueSchemaCardValue, writeSchemaCardValue } from "./schema-card-api";
 import type { SchemaCardEntry } from "./schema-card-contracts";
@@ -164,9 +165,9 @@ export function SchemaCardValueEditor({
       await queueSchemaCardValue(session, command, fetcher);
     } catch (error) {
       setRefusal(
-        error instanceof Error
-          ? error.message
-          : "This value could not be saved on this phone. Write it down.",
+        messageFor(error, {
+          fallback: "This phone could not confirm it saved this value. Write it down.",
+        }),
       );
       setState({ phase: "editing" });
       return;

@@ -2,8 +2,10 @@ import { AlertTriangle, CircleAlert, CircleOff, Lock, LoaderCircle, RotateCcw } 
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/cn";
+import { isRefusal } from "../../lib/plain-error";
 import { Button } from "./button";
 import { Card } from "./card";
+import { ErrorSystemDetails } from "./system-details";
 
 /**
  * `neutral` is for a state nobody needs to act on urgently — an intentional administrator choice
@@ -23,6 +25,8 @@ interface StatePanelProps {
   /** Visible state name. Colour and icon never carry the meaning on their own. */
   stateLabel?: string;
   footer?: ReactNode;
+  /** Below the action: what only someone looking into the problem needs. */
+  trailing?: ReactNode;
 }
 
 function StatePanel({
@@ -34,6 +38,7 @@ function StatePanel({
   tone = "neutral",
   stateLabel,
   footer,
+  trailing,
 }: StatePanelProps) {
   return (
     <Card className="mx-auto max-w-xl overflow-hidden" aria-live={live}>
@@ -54,6 +59,7 @@ function StatePanel({
           <p className="mt-2 max-w-md text-sm leading-6 text-muted">{message}</p>
           {footer}
           {action ? <div className="mt-5 flex flex-wrap items-center gap-2">{action}</div> : null}
+          {trailing}
         </div>
       </div>
     </Card>
@@ -82,26 +88,35 @@ export function LoadingState({ label = "Loading your work…" }: { label?: strin
   );
 }
 
+/**
+ * Pass the `error` the message was written for: a refusal then drops the retry button (the same
+ * request gets the same answer, so the message's own next step is the only one), and a server
+ * answer keeps its code and request ID behind System details.
+ */
 export function ErrorState({
-  title = "Couldn’t load this yet",
+  title,
   message,
   onRetry,
   action,
+  error,
 }: {
   title?: string;
   message: string;
   onRetry?: () => void;
   action?: ReactNode;
+  error?: unknown;
 }) {
+  const refused = isRefusal(error);
   return (
     <StatePanel
-      title={title}
+      title={title ?? (refused ? "Couldn’t open this" : "Couldn’t load this yet")}
       message={message}
       live="assertive"
       icon={<AlertTriangle className="size-6 text-danger" aria-hidden="true" />}
+      trailing={<ErrorSystemDetails error={error} />}
       action={
         action ??
-        (onRetry ? (
+        (onRetry && !refused ? (
           <Button variant="outline" onClick={onRetry}>
             <RotateCcw aria-hidden="true" />
             Try again

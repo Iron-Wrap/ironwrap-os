@@ -12,6 +12,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-pan
 import { Textarea } from "../components/ui/textarea";
 import { apiRequest, ApiError, isRetryableApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { messageFor } from "../lib/plain-error";
 import { queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { JsonValue, OutboxActionKind } from "../storage/outbox-types";
@@ -873,20 +874,19 @@ async function loadFleetPanel(
 }
 
 function refusalMessage(error: unknown): string {
-  const fallback =
-    error instanceof Error
-      ? error.message
-      : "This could not be saved on this device. Tell your supervisor directly.";
   if (error instanceof ApiError) {
     return fleetRefusalMessage(
       error.code,
       isRetryableApiError(error)
         ? "The office could not be reached. Your work is saved on this device and goes up on its own."
-        : fallback,
+        : messageFor(error, { fallback: saveFallback }),
     );
   }
-  return fallback;
+  return messageFor(error, { fallback: saveFallback });
 }
+
+/** A save on this phone failed part way, so it may or may not be in saved work. */
+const saveFallback = "This phone could not confirm it saved this. Tell your supervisor directly.";
 
 function isNonNegativeNumber(value: string): boolean {
   const parsed = Number(value);

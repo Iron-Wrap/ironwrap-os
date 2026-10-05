@@ -132,7 +132,7 @@ test.describe("Lead check acceptance", () => {
       fullPage: true,
     });
 
-    await page.getByText("Record details", { exact: true }).click();
+    await page.getByText("System details", { exact: true }).click();
     await expect(page.getByText(leadId, { exact: true })).toBeVisible();
 
     for (const [role, name] of [

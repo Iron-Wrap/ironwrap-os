@@ -78,10 +78,41 @@ function formatWithLocale(
   }
 }
 
-export function humanizeFieldName(value: string): string {
-  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+/**
+ * Plain names for the record fields a read flags as possibly old (`stale_fields`). A key that
+ * is not listed is hidden, never title-cased: machine keys printed as words
+ * ("Packet Materials Takeoffs Native Unavailable") are vocabulary nobody on a crew learned.
+ */
+const fieldNames: Readonly<Record<string, string>> = {
+  "job.address": "Job address",
+  "jobs.address": "Job addresses",
+  "jobs.address_partial": "Job addresses",
+  "jobs.partial_source": "Job list",
+  "jobs.partial_sources": "Job list",
+  "jobs.blocked_gates_partial": "Work checks",
+  "jobs.gate_coverage": "Work checks",
+  "gates.partial_source": "Work checks",
+  "gates.native_incomplete": "Work checks",
+  "packet.contact.display_name": "Job contact name",
+  "packet.contact.phone": "Job contact phone",
+  "packet.contact.access_instructions": "Site access instructions",
+  "packet.scope_clauses.native_unavailable": "Approved scope",
+  "packet.measurements.native_unavailable": "Measurements",
+  "packet.materials.takeoffs.native_unavailable": "Materials list",
+  "packet.materials.supplier_orders.native_unavailable": "Supplier orders",
+  "packet.change_orders.native_unavailable": "Change orders",
+  "packet.safety_plan.native_unavailable": "Safety plan",
+  "packet.work_package.native_unavailable": "Work plan",
+  "proof_stream.native_scope_unavailable": "Photos and notes",
+  "proof_stream.unavailable": "Photos and notes",
+};
+
+/** The plain name of one flagged field, or null when nobody has written one. */
+export function humanizeFieldName(key: string): string | null {
+  return Object.hasOwn(fieldNames, key) ? (fieldNames[key] ?? null) : null;
 }
 
-export function messageFor(error: unknown): string {
-  return error instanceof Error ? error.message : "This field packet could not be loaded.";
+/** Plain names for flagged fields, each once, in order; unknown keys are left out. */
+export function plainFieldNames(keys: readonly string[]): string[] {
+  return [...new Set(keys.map(humanizeFieldName).filter((name): name is string => name !== null))];
 }

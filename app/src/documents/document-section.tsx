@@ -9,9 +9,10 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ErrorSystemDetails } from "../components/ui/system-details";
 import { ApiError } from "../lib/api";
 import type { FieldDateOptions } from "../field/field-formatting";
-import { messageFor } from "../field/field-formatting";
+import { isRefusal, messageFor, messageForLoad, ONLINE_ONLY_CONNECTION } from "../lib/plain-error";
 import { cn } from "../lib/cn";
 import { loadSchemaCard } from "../schema-forms/schema-card-api";
 import { schemaCardQueryKey } from "../schema-forms/schema-card-contracts";
@@ -85,10 +86,20 @@ export function EntityDocumentsSection({
     return <LoadingState label={`Loading ${title.toLowerCase()}…`} />;
   if (documents.isError)
     return (
-      <ErrorState message={messageFor(documents.error)} onRetry={() => void documents.refetch()} />
+      <ErrorState
+        message={messageForLoad(documents.error)}
+        error={documents.error}
+        onRetry={() => void documents.refetch()}
+      />
     );
   if (card.isError)
-    return <ErrorState message={messageFor(card.error)} onRetry={() => void card.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(card.error)}
+        error={card.error}
+        onRetry={() => void card.refetch()}
+      />
+    );
 
   const resolved = sortDocumentsForShelf(
     readableDocuments(
@@ -336,10 +347,22 @@ function MakeDocumentAction({
         </Notice>
       ) : null}
       {!result && generation.isError && !unavailable && !sessionLost ? (
-        <Notice tone="danger" title="Not confirmed">
-          {generation.error instanceof Error ? generation.error.message : "No answer arrived."}{" "}
-          Trying again sends the same request, never a second document.
-        </Notice>
+        isRefusal(generation.error) ? (
+          // A refusal is a confirmed "no": nothing was made, and the same request gets the same answer.
+          <Notice tone="danger" title="Not made">
+            {messageFor(generation.error)}
+            <ErrorSystemDetails error={generation.error} />
+          </Notice>
+        ) : (
+          <Notice tone="danger" title="Not confirmed">
+            {messageFor(generation.error, {
+              byCode: ONLINE_ONLY_CONNECTION,
+              fallback: "Something went wrong on our side.",
+            })}{" "}
+            Trying again sends the same request, never a second document.
+            <ErrorSystemDetails error={generation.error} />
+          </Notice>
+        )
       ) : null}
       {offline ? (
         <p className="text-sm text-muted">Connect to make this document from the current values.</p>

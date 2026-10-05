@@ -10,6 +10,7 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { loadFacetDesignEvidence } from "./facet-design-api";
 import type { FacetDesignEvidence, FacetDesignIntakeException } from "./facet-design-contracts";
@@ -253,11 +254,8 @@ function EvidenceCard({ evidence }: { evidence: FacetDesignEvidence }) {
             />
           ) : null}
         </dl>
-        <details className="border-t border-border pt-4 text-sm">
-          <summary className="cursor-pointer font-semibold text-muted">
-            Immutable evidence anchors
-          </summary>
-          <dl className="mt-3 grid gap-3 break-all text-xs">
+        <SystemDetails className="border-t border-border pt-1 text-sm">
+          <dl className="grid gap-3 break-all text-xs">
             <Detail label="Facet project" value={evidence.facet_project_id} mono />
             <Detail label="Event" value={evidence.event_id} mono />
             <Detail label="Revision" value={evidence.design_revision_id} mono />
@@ -304,7 +302,7 @@ function EvidenceCard({ evidence }: { evidence: FacetDesignEvidence }) {
               />
             ) : null}
           </dl>
-        </details>
+        </SystemDetails>
       </div>
     </Card>
   );

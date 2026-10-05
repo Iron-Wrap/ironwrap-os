@@ -8,6 +8,7 @@ import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { apiRequest, isRetryableApiError } from "../lib/api";
+import { messageFor } from "../lib/plain-error";
 import { cacheFieldModel, getCachedFieldModel } from "./field-cache";
 import { queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
@@ -150,9 +151,10 @@ export function SafetyActionPanel({ session, scope, fetcher }: SafetyActionPanel
       }
     } catch (caught) {
       setError(
-        caught instanceof Error
-          ? caught.message
-          : "This report could not be saved on this device. Tell your supervisor directly.",
+        messageFor(caught, {
+          fallback:
+            "This phone could not confirm it saved this report. Tell your supervisor directly.",
+        }),
       );
     } finally {
       setBusy(false);

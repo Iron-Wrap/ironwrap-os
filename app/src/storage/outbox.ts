@@ -1,4 +1,5 @@
 import { correctiveEvidenceSchema } from "../field/safety-contracts";
+import { PlainError } from "../lib/plain-error";
 import { getDatabase } from "./db";
 import { classifyOutboxFailure } from "./outbox-failure";
 import { notifyOutboxChanged } from "./outbox-store";
@@ -188,7 +189,7 @@ export async function retryOutboxAction(
   const action = await getOutboxAction(deviceActionId);
   if (!action) throw new Error(`Outbox action ${deviceActionId} was not found.`);
   if (!isOutboxActionSafeToRetry(action)) {
-    throw new Error("This saved item needs office review and cannot be retried safely.");
+    throw new PlainError("This saved item needs office review and cannot be retried safely.");
   }
   return queueOutboxAction(deviceActionId, now);
 }
@@ -545,7 +546,7 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   if (input.kind === "schema_field_value") assertSchemaFieldValuePayload(input.payload);
   if (input.kind === "safety_corrective_evidence") correctiveEvidenceSchema.parse(input.payload);
   for (const attachment of input.attachments ?? []) {
-    if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
+    if (!attachment.fileName.trim()) throw new PlainError("Every attachment needs a file name.");
   }
   assertNoSessionSecrets(input.payload);
 }
@@ -590,7 +591,7 @@ function assertSchemaFieldValuePayload(payload: unknown): void {
   // The server refuses one without the other. Catching it here keeps a half-formed correction from
   // sitting in the queue until it reaches a network only to be rejected.
   if ((basedOn === null) !== (reason === null)) {
-    throw new Error("A correction needs both the value it replaces and a reason.");
+    throw new PlainError("A correction needs both the value it replaces and a reason.");
   }
 }
 
@@ -699,10 +700,10 @@ function assertFleetInspectionPayload(payload: unknown): void {
   assertBoundedText(value.fleet_asset_id, "Fleet Asset ID", FLEET_ASSET_ID_MAX_LENGTH);
   assertUtcTimestamp(value.performed_at, "Inspection time");
   if (!Array.isArray(value.items) || value.items.length < 1) {
-    throw new Error("An inspection needs at least one recorded check point.");
+    throw new PlainError("An inspection needs at least one recorded check point.");
   }
   if (value.items.length > FLEET_INSPECTION_ITEM_LIMIT) {
-    throw new Error("An inspection carries at most 60 check points.");
+    throw new PlainError("An inspection carries at most 60 check points.");
   }
   value.items.forEach((row, index) => assertFleetInspectionItem(row, index + 1));
   if (value.meter_reading !== undefined) {
@@ -726,10 +727,10 @@ function assertFleetInspectionItem(row: unknown, expectedSequence: number): void
     "An inspection check point is invalid.",
   );
   if (value.sequence !== expectedSequence) {
-    throw new Error("Inspection check points must stay in order.");
+    throw new PlainError("Inspection check points must stay in order.");
   }
   if (typeof value.result !== "string" || !fleetItemResults.has(value.result)) {
-    throw new Error("An inspection check point needs a Pass, Fail, or Not Applicable result.");
+    throw new PlainError("An inspection check point needs a Pass, Fail, or Not Applicable result.");
   }
   assertBoundedText(value.check_point, "Check point", FLEET_ASSET_ID_MAX_LENGTH);
   const severity = value.severity === undefined ? "None" : value.severity;
@@ -742,7 +743,7 @@ function assertFleetInspectionItem(row: unknown, expectedSequence: number): void
   // A failed check point must always name its severity; a passing one must not
   // carry one, so a device can never downgrade a real defect into a note.
   if ((value.result === "Fail") !== (severity !== "None")) {
-    throw new Error("A failed check point needs a severity and a passing one carries none.");
+    throw new PlainError("A failed check point needs a severity and a passing one carries none.");
   }
   if (value.observation !== undefined) {
     assertBoundedText(value.observation, "Observation", FLEET_TEXT_MAX_LENGTH);
@@ -760,7 +761,7 @@ function assertFleetDefectPayload(payload: unknown): void {
   assertBoundedText(value.fleet_asset_id, "Fleet Asset ID", FLEET_ASSET_ID_MAX_LENGTH);
   assertUtcTimestamp(value.detected_at, "Defect time");
   if (typeof value.severity !== "string" || !fleetDefectSeverities.has(value.severity)) {
-    throw new Error("A defect report needs a Minor, Major, or Out of Service severity.");
+    throw new PlainError("A defect report needs a Minor, Major, or Out of Service severity.");
   }
   assertBoundedText(value.description, "Defect description", FLEET_TEXT_MAX_LENGTH);
   if (value.asset_inspection_id !== undefined) {

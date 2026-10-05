@@ -205,7 +205,7 @@ describe("the driver's vehicle surface", () => {
     expect(screen.getByRole("button", { name: "Pre-trip inspection" })).toBeEnabled();
   });
 
-  it("falls back to the fence's own words for a policy code the app has never seen", async () => {
+  it("says a policy code the app has never seen refuses and who to ask, never the fence's own words", async () => {
     respondWith(
       panel({
         assets: [
@@ -219,7 +219,14 @@ describe("the driver's vehicle surface", () => {
     );
     renderPage();
 
-    expect(await screen.findByText("the fence refused this asset")).toBeVisible();
+    expect(
+      await screen.findByText(
+        "One more check is not met, and this phone cannot name it. Ask the office which one.",
+      ),
+    ).toBeVisible();
+    // The fence's message is written for an operator reading a Desk error, not for a driver.
+    expect(screen.queryByText(/the fence refused this asset/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/a_fence_added_later/)).not.toBeInTheDocument();
   });
 
   it("queues a pre-trip in the Worker envelope with every check point recorded", async () => {

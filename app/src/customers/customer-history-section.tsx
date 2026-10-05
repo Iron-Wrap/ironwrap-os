@@ -7,7 +7,8 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import type { FieldDateOptions } from "../field/field-formatting";
-import { formatFieldDay, messageFor } from "../field/field-formatting";
+import { formatFieldDay } from "../field/field-formatting";
+import { messageForLoad } from "../lib/plain-error";
 import { loadCustomerJobHistory } from "./customer-history-api";
 import {
   customerJobHistoryQueryKey,
@@ -47,7 +48,13 @@ export function CustomerJobHistorySection({
   if (!jobId) return null;
   if (query.isPending) return <LoadingState label="Loading earlier work…" />;
   if (query.isError)
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+    return (
+      <ErrorState
+        message={messageForLoad(query.error)}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
+    );
   // Not permitted, or a job the server will not name. Either way there is nothing to say here.
   if (!query.data) return null;
 

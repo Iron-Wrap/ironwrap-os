@@ -14,6 +14,7 @@ import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { isRefusal, messageForLoad } from "../lib/plain-error";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { navigationForRole } from "../lib/roles";
 import { loadOperatorSearch } from "../search/operator-search-api";
@@ -25,6 +26,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { matchDestinations } from "./shell-navigation";
 import { RefTag } from "./ui/ref-tag";
+import { ErrorSystemDetails } from "./ui/system-details";
 
 interface OperatorSearchPaletteProps {
   open: boolean;
@@ -344,17 +346,22 @@ export function OperatorSearchPalette({ open, onOpenChange }: OperatorSearchPale
             <div className="flex items-start gap-3">
               <CircleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
               <div className="min-w-0">
-                <p className="font-semibold text-foreground">Search is unavailable</p>
+                <p className="font-semibold text-foreground">
+                  {isRefusal(search.error) ? "This search did not run" : "Search is unavailable"}
+                </p>
                 <p className="mt-1 text-sm leading-6 text-muted">{errorMessage(search.error)}</p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="compact"
-                  className="mt-3"
-                  onClick={() => void search.refetch()}
-                >
-                  Try again
-                </Button>
+                {isRefusal(search.error) ? null : (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="compact"
+                    className="mt-3"
+                    onClick={() => void search.refetch()}
+                  >
+                    Try again
+                  </Button>
+                )}
+                <ErrorSystemDetails error={search.error} />
               </div>
             </div>
           </div>
@@ -467,8 +474,10 @@ function isAbortedError(error: unknown): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  return "The search request failed. Try again when the connection is available.";
+  return messageForLoad(error, {
+    byCode: { search_query_too_long: "That search is too long. Use fewer words." },
+    fallback: "Search is not answering right now. Try again in a moment.",
+  });
 }
 
 function statusMessage({

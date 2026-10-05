@@ -57,7 +57,8 @@ describe("persisted approval proof", () => {
       "Not provided by the saved receipt",
     );
     expect(screen.getByText(/v7 · Needs Review/)).toBeVisible();
-    expect(screen.getByText("QUOTE-READ-001")).toBeVisible();
+    // A code never stands alone: the tag prints its plain kind word first.
+    expect(screen.getByText("Record QUOTE-READ-001")).toBeVisible();
     expect(screen.getByText(/material release, and crew dispatch still require/)).toBeVisible();
     expect(screen.queryByText(/v39/)).not.toBeInTheDocument();
   });
@@ -140,7 +141,7 @@ describe("persisted approval proof", () => {
       },
     };
     render(<ApprovalReceipt approval={approval} locale={locale} />);
-    expect(screen.getByText("PACK-READ-001")).toBeVisible();
+    expect(screen.getByText("Record PACK-READ-001")).toBeVisible();
     expect(screen.getByText("Draft · quote QUOTE-READ-001")).toBeVisible();
     expect(screen.getByText(/already-issued customer link/)).toBeVisible();
     expect(screen.getByText(/recording customer acceptance remain separate/)).toBeVisible();

@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
-import { apiCommand } from "../lib/api";
+import { ApiError, apiCommand } from "../lib/api";
+import { getDatabase } from "../storage/db";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
@@ -31,7 +32,14 @@ vi.mock("../storage/outbox", () => ({
 
 vi.mock("../storage/outbox-processor", () => ({ flushOutbox: vi.fn() }));
 
-vi.mock("../lib/api", () => ({ apiCommand: vi.fn() }));
+// The job page also mounts the schema card, documents and customer history sections. This file
+// tests the job page, so their reads refuse at once instead of reaching a network, and every
+// other export (ApiError, which `messageFor` reads) stays real.
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
+  apiCommand: vi.fn(),
+  apiRequest: vi.fn(() => Promise.reject(new Error("Reads are not under test."))),
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -1108,6 +1116,314 @@ describe("JobPage", () => {
     expect(options?.body).toMatchObject({ device_action_id: options?.deviceActionId });
     expect(saveOutboxAction).not.toHaveBeenCalled();
   });
+
+  it("says a refused Start is not this crew member's, never a fault on our side", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockRejectedValue(
+      new ApiError({
+        status: 403,
+        code: "work_package_actor_not_assigned",
+        message: "The field actor is not assigned to this Work Package.",
+      }),
+    );
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+
+    const refusal = (
+      await screen.findByText(
+        "You are not on the crew for this work plan. Ask the office to add you to it.",
+      )
+    ).closest<HTMLElement>('[role="alert"]')!;
+    expect(refusal).toBeVisible();
+    expect(refusal).not.toHaveTextContent(/on our side|try again|field actor/i);
+    // The code waits behind System details for whoever looks into it.
+    expect(within(refusal).getByText("work_package_actor_not_assigned")).not.toBeVisible();
+    quiet.mockRestore();
+  });
+
+  it("says a job the office will not open is not on this list, and offers no dead retry", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // What the job route answers for a job that is missing, closed or not assigned to this crew.
+    vi.mocked(loadJob).mockRejectedValue(
+      new ApiError({ status: 404, code: "not_found", message: "Not Found" }),
+    );
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <SessionProvider session={fieldSession}>
+          <JobPage />
+        </SessionProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText(
+        "This job is not on your list. It may be finished, or not assigned to you. Ask the office if you should be on it.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/on our side/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    quiet.mockRestore();
+  });
+});
+
+describe("Start work after a lost answer", () => {
+  /**
+   * Start goes straight to the office. When its answer is lost the work may already have started,
+   * so the phone keeps the request and a second press resends it unchanged; the Worker replays its
+   * recorded answer for a device action ID it has seen, so work cannot start twice.
+   */
+  const lost = () => new ApiError({ status: 0, code: "network_error", message: "No connection" });
+  const sent = () => vi.mocked(apiCommand).mock.calls.map(([options]) => options);
+
+  function laterPlan(): JobResponse {
+    const model = startableWorkPackageModel();
+    const workPackage = model.packet.work_package!;
+    return {
+      ...model,
+      read_model_generated_at: "2026-07-10T16:00:00.000Z",
+      packet: {
+        ...model.packet,
+        work_package: { ...workPackage, version: workPackage.version + 1 },
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    routeParams = { jobId: "JOB-1" };
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+    vi.mocked(getOutboxAction).mockResolvedValue(undefined);
+    // Kept requests live on the device; each test starts with none.
+    await (await getDatabase()).clear("meta");
+  });
+
+  it("resends the same request, key and body after a lost answer, even after a reload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockRejectedValueOnce(lost()).mockResolvedValue(undefined);
+    const { unmount } = renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText(
+        "We could not confirm work started. Press Start work again: it sends the same request, so work cannot start twice.",
+      ),
+    ).toBeVisible();
+
+    // The phone is closed and opened again: the kept request, and what it means, survive.
+    unmount();
+    renderJob(startableWorkPackageModel());
+    expect(await screen.findByText(/We could not confirm work started/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+    const [first, second] = sent();
+    expect(second?.deviceActionId).toBe(first?.deviceActionId);
+    expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
+    expect(second?.body).toEqual(first?.body);
+    // Answered: nothing is kept, and the next Start is a new request.
+    await waitFor(() =>
+      expect(screen.queryByText(/We could not confirm work started/)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("never replays a kept request against a plan that has changed since", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockRejectedValueOnce(lost()).mockResolvedValue(undefined);
+    const { unmount } = renderJob(startableWorkPackageModel());
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    await screen.findByText(/We could not confirm work started/);
+
+    // A fresh read shows a newer version of the plan: the old request is stale and is dropped.
+    unmount();
+    const fresh = laterPlan();
+    renderJob(fresh);
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+    const [first, second] = sent();
+    expect(second?.deviceActionId).not.toBe(first?.deviceActionId);
+    expect(second?.body).toMatchObject({
+      payload: { work_package_version: fresh.packet.work_package!.version },
+    });
+  });
+
+  it("keeps nothing once the office refuses a stale plan, and says so", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    vi.mocked(apiCommand)
+      .mockRejectedValueOnce(
+        new ApiError({ status: 409, code: "work_package_version_conflict", message: "stale" }),
+      )
+      .mockResolvedValue(undefined);
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText(
+        "The work plan changed after this phone opened it. Open the job again to see the new plan.",
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+    const [first, second] = sent();
+    // A refusal is a definite answer, so the next press is a new request, not a replay.
+    expect(second?.deviceActionId).not.toBe(first?.deviceActionId);
+    quiet.mockRestore();
+  });
+
+  it.each([
+    {
+      name: "the session ended",
+      refused: new ApiError({ status: 401, code: "unauthorized", message: "Unauthorized" }),
+      words:
+        "Your session expired before the office answered. Sign in again, then press Start work again: it sends the same request, so work cannot start twice.",
+    },
+    {
+      name: "the role changed",
+      refused: new ApiError({ status: 403, code: "field_role_required", message: "Forbidden" }),
+      words:
+        "Your account lost access before the office answered. Ask the office to check your access, then press Start work again: it sends the same request, so work cannot start twice.",
+    },
+  ])(
+    "keeps the request when $name before the replay, and resends it after signing in",
+    async ({ refused, words }) => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const user = userEvent.setup();
+      vi.mocked(apiCommand)
+        .mockRejectedValueOnce(lost())
+        // The Worker checks the session before it replays a verified answer, so the first send
+        // may have committed even though this one is refused.
+        .mockRejectedValueOnce(refused)
+        .mockResolvedValue(undefined);
+      const { unmount } = renderJob(startableWorkPackageModel());
+
+      await user.click(await screen.findByRole("button", { name: "Start work" }));
+      await screen.findByText(/We could not confirm work started/);
+      await user.click(screen.getByRole("button", { name: "Start work" }));
+      expect(await screen.findByText(words)).toBeVisible();
+
+      // The person signs in again (or the office restores the role) and opens the job.
+      unmount();
+      renderJob(startableWorkPackageModel());
+      await screen.findByText(/We could not confirm work started/);
+      await user.click(screen.getByRole("button", { name: "Start work" }));
+
+      await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(3));
+      const [first, , third] = sent();
+      expect(third?.deviceActionId).toBe(first?.deviceActionId);
+      expect(third?.idempotencyKey).toBe(first?.idempotencyKey);
+      expect(third?.body).toEqual(first?.body);
+      await waitFor(() =>
+        expect(screen.queryByText(/We could not confirm work started/)).not.toBeInTheDocument(),
+      );
+      quiet.mockRestore();
+    },
+  );
+
+  it("drops a request that was refused on its first send: it never ran", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    vi.mocked(apiCommand)
+      .mockRejectedValueOnce(new ApiError({ status: 401, code: "unauthorized", message: "x" }))
+      .mockResolvedValue(undefined);
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText("Your session expired. Sign in again to carry on."),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+    const [first, second] = sent();
+    expect(second?.deviceActionId).not.toBe(first?.deviceActionId);
+    quiet.mockRestore();
+  });
+
+  it("drops the request and reads the plan again when the ID belongs to a different request", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    vi.mocked(apiCommand)
+      .mockRejectedValueOnce(lost())
+      .mockRejectedValueOnce(
+        new ApiError({ status: 409, code: "idempotency_conflict", message: "conflict" }),
+      )
+      .mockResolvedValue(undefined);
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    await screen.findByText(/We could not confirm work started/);
+    const readsBefore = vi.mocked(loadJob).mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText(
+        "The office already holds a different request from this phone for this plan. Check the plan, then press the button again.",
+      ),
+    ).toBeVisible();
+    await waitFor(() => expect(vi.mocked(loadJob).mock.calls.length).toBeGreaterThan(readsBefore));
+
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(3));
+    const [first, , third] = sent();
+    expect(third?.deviceActionId).not.toBe(first?.deviceActionId);
+    quiet.mockRestore();
+  });
+
+  it("waits while the office is still working on the same request, then resends it unchanged", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    vi.mocked(apiCommand)
+      .mockRejectedValueOnce(
+        new ApiError({
+          status: 503,
+          code: "action_in_progress",
+          message: "Service Unavailable",
+          retryAfterMs: 50,
+        }),
+      )
+      .mockResolvedValue(undefined);
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText(
+        "The office is still working on this. This phone sends the same request again in a second.",
+      ),
+    ).toBeVisible();
+
+    // No press needed: after Retry-After the same request goes again.
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+    const [first, second] = sent();
+    expect(second?.deviceActionId).toBe(first?.deviceActionId);
+    expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
+    expect(second?.body).toEqual(first?.body);
+    await waitFor(() =>
+      expect(screen.queryByText(/still working on this/)).not.toBeInTheDocument(),
+    );
+    quiet.mockRestore();
+  });
+
+  it("sends one request for a double tap", async () => {
+    let answer: (() => void) | undefined;
+    vi.mocked(apiCommand).mockImplementation(
+      () => new Promise<void>((resolve) => (answer = resolve)),
+    );
+    renderJob(startableWorkPackageModel());
+    const start = await screen.findByRole("button", { name: "Start work" });
+
+    fireEvent.click(start);
+    fireEvent.click(start);
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
+    answer?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start work" })).toBeEnabled());
+    expect(apiCommand).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("packet slots this system does not carry", () => {
@@ -1167,11 +1483,18 @@ describe("packet slots this system does not carry", () => {
 });
 
 describe("what the stale-details disclosure is for", () => {
-  it("keeps a marker the screen cannot explain anywhere else", async () => {
+  it("keeps a marker the screen cannot explain anywhere else, in plain words", async () => {
     renderJob(jobModel({ stale_fields: ["job.address", "packet.contact.phone"] }));
 
     expect(await screen.findByText(/Some job details may be old/)).toBeInTheDocument();
-    expect(screen.getByText(/Job Address, Packet Contact Phone/)).toBeInTheDocument();
+    expect(screen.getByText(/these details: Job address, Job contact phone\./)).toBeInTheDocument();
+  });
+
+  it("hides a field key nobody has written words for instead of title-casing it", async () => {
+    renderJob(jobModel({ stale_fields: ["job.address", "packet.crew.lead_badge_unverified"] }));
+
+    expect(await screen.findByText(/these details: Job address\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Lead Badge|lead badge|unverified/i)).not.toBeInTheDocument();
   });
 
   it("does not repeat a slot the panel already explains", async () => {

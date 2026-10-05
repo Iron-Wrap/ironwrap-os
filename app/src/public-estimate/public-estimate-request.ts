@@ -1,9 +1,12 @@
 import { z, type ZodType } from "zod";
 
+import { PlainError } from "../lib/plain-error";
+
 const publicErrorSchema = z.object({ error: z.string().min(1) });
 const REQUEST_TIMEOUT_MS = 12_000;
 
-export class PublicEstimateApiError extends Error {
+/** Its message always comes from `publicErrorMessage`, so it is written for the homeowner. */
+export class PublicEstimateApiError extends PlainError {
   readonly code: string;
 
   constructor(code: string) {

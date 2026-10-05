@@ -24,6 +24,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
 import { ErrorState } from "../components/ui/state-panel";
+import { SystemDetails } from "../components/ui/system-details";
 import { cn } from "../lib/cn";
 import { loadNewoOperations } from "./newo-operations-api";
 import type {
@@ -431,12 +432,9 @@ function SessionQueue({
                     .join(" · ") || "Call details not found"}
                 </p>
                 <SessionStates session={session} />
-                <details className="mt-3 text-xs text-muted">
-                  <summary className="cursor-pointer font-bold text-foreground">
-                    System details
-                  </summary>
-                  <p className="mt-1 break-all leading-5">Call ID {session.session_id}</p>
-                </details>
+                <SystemDetails className="mt-3 text-xs text-muted">
+                  <p className="break-all leading-5">Call ID {session.session_id}</p>
+                </SystemDetails>
               </div>
               <p className="shrink-0 text-sm text-muted sm:text-right">
                 {dateLabel}
@@ -552,10 +550,9 @@ function RecoveryRow({
           <p className="shrink-0 text-sm text-muted">{at ?? "Time not found"}</p>
         </div>
         <p className="mt-1 text-sm text-muted">Needs a check</p>
-        <details className="mt-2 text-xs text-muted">
-          <summary className="cursor-pointer font-bold text-foreground">System details</summary>
-          <p className="mt-1 break-all leading-5">{details}</p>
-        </details>
+        <SystemDetails className="mt-2 text-xs text-muted">
+          <p className="break-all leading-5">{details}</p>
+        </SystemDetails>
       </div>
     </li>
   );
@@ -591,12 +588,9 @@ function RecentSessions({
                     {humanize(session.outcome ?? session.status)}
                   </p>
                   <SessionStates session={session} />
-                  <details className="mt-3 text-xs text-muted">
-                    <summary className="cursor-pointer font-bold text-foreground">
-                      System details
-                    </summary>
-                    <p className="mt-1 break-all leading-5">Call ID {session.session_id}</p>
-                  </details>
+                  <SystemDetails className="mt-3 text-xs text-muted">
+                    <p className="break-all leading-5">Call ID {session.session_id}</p>
+                  </SystemDetails>
                 </div>
                 <p className="shrink-0 text-sm font-semibold text-muted sm:text-right">
                   {format(session.updated_at) ?? "Time not found"}
@@ -658,16 +652,15 @@ function ReadinessPanel({ model }: { model: NewoOperationsResponse }) {
         ))}
       </ul>
       {model.readiness.drift_reasons.length > 0 ? (
-        <details className="border-t border-border px-5 py-4 text-sm text-muted">
-          <summary className="cursor-pointer font-bold text-foreground">System details</summary>
-          <ul className="mt-2 space-y-1.5 leading-5">
+        <SystemDetails className="border-t border-border px-5 pb-4 text-sm text-muted">
+          <ul className="space-y-1.5 leading-5">
             {model.readiness.drift_reasons.map((reason) => (
               <li key={reason} className="break-words">
                 {humanize(reason)}
               </li>
             ))}
           </ul>
-        </details>
+        </SystemDetails>
       ) : null}
     </Card>
   );

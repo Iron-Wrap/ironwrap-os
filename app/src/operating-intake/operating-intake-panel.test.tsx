@@ -61,7 +61,7 @@ describe("OperatingIntakePanel", () => {
     expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
     expect(
       screen.getByText(
-        "These are website leads saved from the website. They are not assigned field jobs, not published portal proposals, and not money intents.",
+        "Review website enquiries before assigning work or making a customer commitment.",
       ),
     ).toBeVisible();
     expect(screen.getByText("Launch Proof")).toBeVisible();
@@ -77,7 +77,7 @@ describe("OperatingIntakePanel", () => {
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
     renderPanel();
 
-    expect(await screen.findByText("No website intake leads for this tenant.")).toBeVisible();
+    expect(await screen.findByText("No website leads in this loaded list.")).toBeVisible();
     expect(screen.queryByText("Launch Proof")).toBeNull();
   });
 

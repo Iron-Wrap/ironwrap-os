@@ -101,7 +101,7 @@ function EstimatorWorkbenchScreen({
     model.source_updated_at === null;
 
   return (
-    <section className="mx-auto max-w-[86rem] space-y-8 overflow-x-hidden pb-8">
+    <section className="mx-auto max-w-[86rem] space-y-6 overflow-x-hidden pb-8 sm:space-y-8">
       <WorkbenchHeader model={model} locale={locale} />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
@@ -115,7 +115,11 @@ function EstimatorWorkbenchScreen({
           aria-labelledby="review-workspace-heading"
         >
           <header className="border-b border-border px-5 py-5 sm:px-6">
-            <h2 id="review-workspace-heading" className="text-lg font-bold tracking-[-0.02em]">
+            <h2
+              id="review-workspace-heading"
+              tabIndex={-1}
+              className="scroll-mt-24 text-lg font-bold tracking-[-0.02em]"
+            >
               What needs review
             </h2>
             <p className="mt-1 text-sm leading-6 text-muted">
@@ -176,7 +180,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
   const decision = nextSafeStep(model);
   const jobIdentity = model.job.job_number ?? model.job.id;
   return (
-    <header className="grid min-w-0 gap-6 border-b border-border pb-8 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
+    <header className="grid min-w-0 gap-4 border-b border-border pb-5 sm:gap-6 sm:pb-8 md:grid-cols-[minmax(0,1fr)_18rem] md:gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10">
       <div className="min-w-0">
         <Button asChild variant="ghost" size="compact" className="-ml-2">
           <Link to="/sales">
@@ -184,7 +188,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
             Back to sales
           </Link>
         </Button>
-        <div className="mt-6 min-w-0">
+        <div className="mt-3 min-w-0 sm:mt-6">
           <p className="text-sm font-bold break-all text-muted">{jobIdentity}</p>
           <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-balance sm:text-[2.5rem] sm:leading-[1.05]">
             Roof and quote review
@@ -194,7 +198,7 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
             and do not alter geometry, takeoff, or approved quotes.
           </p>
         </div>
-        <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+        <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 sm:mt-7 sm:grid-cols-3 sm:gap-y-4">
           <HeaderFact label="Service" value={model.job.service_type ?? "Not recorded"} />
           <HeaderFact label="Job plan" value={model.job.workflow_profile ?? "Not recorded"} />
           <HeaderFact
@@ -204,20 +208,30 @@ function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse;
         </dl>
       </div>
       <section
-        className={cn("self-end rounded-xl border border-border/80 p-5 sm:p-6", decision.surface)}
+        className={cn("self-end rounded-xl border border-border/80 p-4 sm:p-6", decision.surface)}
         aria-labelledby="next-safe-step-heading"
       >
         <h2 id="next-safe-step-heading" className="text-sm font-bold text-muted">
           Next step
         </h2>
-        <p className={cn("mt-2 text-xl font-bold tracking-[-0.03em]", decision.titleTone)}>
+        <p
+          className={cn(
+            "mt-1 text-lg font-bold tracking-[-0.03em] sm:mt-2 sm:text-xl",
+            decision.titleTone,
+          )}
+        >
           {decision.title}
         </p>
-        <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <p className="mt-2 text-sm leading-6 text-muted sm:mt-3">{decision.detail}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-3 sm:mt-5">
           <StatusChip label={decision.label} tone={decision.tone} />
-          <span className="text-xs font-semibold text-muted">Review before acting</span>
+          <span className="sr-only text-xs font-semibold text-muted sm:not-sr-only">
+            Review before acting
+          </span>
         </div>
+        <Button asChild variant="outline" className="mt-3 w-full sm:hidden">
+          <a href="#review-workspace-heading">Open review sections</a>
+        </Button>
       </section>
     </header>
   );

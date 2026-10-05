@@ -381,6 +381,11 @@ describe("NowPage", () => {
     renderNow();
 
     expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
+    const urgentWork = screen.getByRole("button", { name: "Delivery confirmation is missing" });
+    expect(
+      urgentWork.compareDocumentPosition(screen.getByRole("heading", { name: "Website intake" })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByText("Launch Proof")).toBeVisible();
     expect(screen.getByText("Intake")).toBeVisible();
     expect(loadOperatingIntake).toHaveBeenCalledTimes(1);

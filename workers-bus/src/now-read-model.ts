@@ -295,7 +295,7 @@ export function projectProductionNowReadModel(
           summary:
             cards.length > 0
               ? `${cards.length} job${cards.length === 1 ? "" : "s"} need a check`
-              : "No job needs a check.",
+              : "No job needs a check in this loaded list.",
           cards,
         },
         ...(unavailable
@@ -366,7 +366,7 @@ export function projectSalesNowReadModel(
           summary:
             cards.length > 0
               ? `${cards.length} customer${cards.length === 1 ? "" : "s"} need a check`
-              : "No customer needs a check.",
+              : "No customer needs a check in this loaded list.",
           cards,
         },
         ...(unavailable
@@ -517,7 +517,7 @@ export function projectNowReadModel(
           summary:
             quickBooksCards.length + postizCards.length + ownerCards.length > 0
               ? `${quickBooksCards.length + postizCards.length + ownerCards.length} item${quickBooksCards.length + postizCards.length + ownerCards.length === 1 ? "" : "s"} need a check`
-              : "No item needs a check.",
+              : "No item needs a check in this loaded list.",
           cards: [...quickBooksCards, ...postizCards, ...ownerCards],
         },
         {
@@ -526,7 +526,7 @@ export function projectNowReadModel(
           summary:
             facetCards.length > 0
               ? `${facetCards.length} Facet design${facetCards.length === 1 ? "" : "s"} need a check`
-              : "No Facet design needs a check.",
+              : "No Facet design needs a check in this loaded list.",
           cards: facetCards,
         },
         {
@@ -535,7 +535,7 @@ export function projectNowReadModel(
           summary:
             productionCards.length > 0
               ? `${productionCards.length} job${productionCards.length === 1 ? "" : "s"} need a check`
-              : "No job needs a check.",
+              : "No job needs a check in this loaded list.",
           cards: productionCards,
         },
         {
@@ -544,7 +544,7 @@ export function projectNowReadModel(
           summary:
             salesCards.length > 0
               ? `${salesCards.length} customer${salesCards.length === 1 ? "" : "s"} need a check`
-              : "No customer needs a check.",
+              : "No customer needs a check in this loaded list.",
           cards: salesCards,
         },
         ...(failedSourceCards.length > 0
@@ -606,7 +606,7 @@ export function projectAccountingNowReadModel(
           summary:
             cards.length > 0
               ? `${cards.length} final invoice${cards.length === 1 ? "" : "s"} need a check`
-              : "No final invoice needs a check.",
+              : "No final invoice needs a check in this loaded list.",
           cards,
         },
       ],

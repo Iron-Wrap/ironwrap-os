@@ -408,8 +408,6 @@ function NowScreen({
         </div>
       ) : null}
 
-      {!showDecisions ? <OperatingIntakePanel /> : null}
-
       {showDecisions && offline ? (
         <div className="now-refresh-error" role="status">
           <div>
@@ -632,6 +630,8 @@ function NowScreen({
           </aside>
         </div>
       </div>
+
+      {!showDecisions ? <OperatingIntakePanel /> : null}
 
       <Dialog
         open={!wide && Boolean(selected)}

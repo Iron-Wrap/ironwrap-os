@@ -53,17 +53,14 @@ export function OperatingIntakePanel(): JSX.Element | null {
             <h2 id="operating-intake-heading" className="text-xl font-bold tracking-[-0.025em]">
               Website intake
             </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-              These are website leads saved from the website. They are not assigned field jobs, not
-              published portal proposals, and not money intents.
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+              {model.leads.length === 0
+                ? "No website leads in this loaded list."
+                : "Review website enquiries before assigning work or making a customer commitment."}
             </p>
           </div>
         </header>
-        {model.leads.length === 0 ? (
-          <p className="mt-5 text-sm leading-6 text-muted">
-            No website intake leads for this tenant.
-          </p>
-        ) : (
+        {model.leads.length > 0 ? (
           <ul
             id="operating-intake-leads"
             className="mt-5 divide-y divide-border"
@@ -73,7 +70,7 @@ export function OperatingIntakePanel(): JSX.Element | null {
               <IntakeLeadRow key={lead.envelope_id} lead={lead} />
             ))}
           </ul>
-        )}
+        ) : null}
         {remaining > 0 ? (
           <footer className="mt-4 border-t border-border pt-3">
             <Button

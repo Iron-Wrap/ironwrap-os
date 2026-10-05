@@ -10,7 +10,7 @@ import { expectTouchTarget } from "./touch-target";
  */
 
 const ownerMode = process.env.ACCEPTANCE_MODE === "estimator";
-const shotDir = ".playwright-mobile";
+const shotDir = process.env.BOARD_SHOT_DIR ?? ".playwright-mobile";
 
 const envelope = {
   version: 1,
@@ -275,7 +275,9 @@ test.describe("Pipeline board acceptance", () => {
     { label: "desktop-1280x800", width: 1280, height: 800 },
     { label: "desktop-1440x900", width: 1440, height: 900 },
   ]) {
-    test(`reads as a board at ${viewport.label} without a sideways page`, async ({ page }) => {
+    test(`reads as a board at ${viewport.label} without a sideways page`, async ({
+      page,
+    }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await installBoardRoutes(page, []);
       await page.goto("/owner/board");
@@ -286,6 +288,12 @@ test.describe("Pipeline board acceptance", () => {
       }
       await expect(page.getByText("$6,414,205.40")).toBeVisible();
       await expect(page.getByText("WON").first()).toBeVisible();
+      await expect(page.getByText("3 loaded · 118 total · 7 stages")).toBeVisible();
+      await expect(
+        page
+          .getByRole("region", { name: "Quote Sent column" })
+          .getByText("No cards from this stage in the loaded list"),
+      ).toBeAttached();
 
       const geometry = await pageOverflow(page);
       expect(geometry.page).toBeLessThanOrEqual(geometry.viewport);
@@ -328,7 +336,44 @@ test.describe("Pipeline board acceptance", () => {
         await expectTouchTarget(controls.nth(index), { name: label });
       }
 
-      await page.screenshot({ path: `${shotDir}/pipeline-board-${viewport.label}.png` });
+      await page.screenshot({
+        path: `${shotDir}/pipeline-board-${viewport.label}-${testInfo.project.name}.png`,
+      });
+
+      await page.goto("/estimator/jobs/JOB-ESTIMATOR-ACCEPTANCE");
+      await expect(page.getByRole("heading", { name: "Roof and quote review" })).toBeVisible();
+      const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+      const compactStatus = page.locator('[aria-label="App status"]');
+      if (await compactStatus.isVisible()) {
+        const crumbBox = await breadcrumb.boundingBox();
+        const statusBox = await compactStatus.boundingBox();
+        expect(crumbBox).not.toBeNull();
+        expect(statusBox).not.toBeNull();
+        expect(crumbBox!.x + crumbBox!.width).toBeLessThanOrEqual(statusBox!.x + 1);
+        if (viewport.width === 768) {
+          expect(crumbBox!.width).toBeGreaterThan(48);
+          const statusWidth = await compactStatus.evaluate((element) => ({
+            content: element.scrollWidth,
+            visible: element.clientWidth,
+          }));
+          expect(statusWidth.content).toBeLessThanOrEqual(statusWidth.visible + 1);
+          await expect(breadcrumb.locator("a")).toBeHidden();
+        }
+      }
+      await expectTouchTarget(
+        page.getByRole("button", { name: "Open search (Command or Control K)" }),
+      );
+      await expectTouchTarget(page.getByRole("button", { name: "Safety", exact: true }));
+      await page.screenshot({
+        path: `${shotDir}/review-overview-${viewport.label}-${testInfo.project.name}.png`,
+      });
+      if (viewport.width < 640) {
+        await page.getByRole("link", { name: "Open review sections" }).click();
+        await expect(page.locator("#review-workspace-heading")).toBeFocused();
+        const reviewBox = await page.locator("#review-workspace-heading").boundingBox();
+        expect(reviewBox!.y).toBeGreaterThanOrEqual(56);
+        expect(reviewBox!.y).toBeLessThan(viewport.height / 2);
+      }
     });
   }
 

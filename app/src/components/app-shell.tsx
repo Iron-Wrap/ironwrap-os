@@ -150,9 +150,9 @@ function OfficeShell() {
             className="shell-topbar-row-item flex min-w-0 flex-1 items-center text-[0.84375rem] text-faint"
           >
             <ol className="flex min-w-0 items-center gap-2">
-              <li className="hidden shrink-0 min-[721px]:block">{place.item.workspace}</li>
+              <li className="sr-only shrink-0 min-[1101px]:not-sr-only">{place.item.workspace}</li>
               {place.record ? (
-                <li className="hidden shrink-0 items-center gap-2 min-[721px]:flex">
+                <li className="hidden shrink-0 items-center gap-2 min-[1101px]:flex">
                   <span aria-hidden="true">/</span>
                   <Link
                     to={place.item.to}
@@ -164,7 +164,7 @@ function OfficeShell() {
                 </li>
               ) : null}
               <li className="flex min-w-0 items-center gap-2">
-                <span aria-hidden="true" className="hidden min-[721px]:inline">
+                <span aria-hidden="true" className="hidden min-[1101px]:inline">
                   /
                 </span>
                 <strong className="truncate font-[580] text-foreground" aria-current="page">
@@ -176,26 +176,26 @@ function OfficeShell() {
           <SystemStatus bannerClassName="-mx-8 basis-[calc(100%+4rem)] max-[1100px]:-mx-6 max-[1100px]:basis-[calc(100%+3rem)] max-[720px]:-mx-4 max-[720px]:basis-[calc(100%+2rem)]" />
           <button
             type="button"
-            className="shell-search-trigger environment-control inline-flex h-11 shrink-0 items-center gap-2.5 rounded-md bg-surface px-3 text-left text-[0.84375rem] text-faint shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.05)] transition-shadow hover:shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.05)] max-[720px]:w-11 max-[720px]:justify-center max-[720px]:px-0 min-[1101px]:min-w-[17.5rem]"
+            className="shell-search-trigger environment-control inline-flex h-11 shrink-0 items-center gap-2.5 rounded-md bg-surface px-3 text-left text-[0.84375rem] text-faint shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.05)] transition-shadow hover:shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.05)] max-[1100px]:w-11 max-[1100px]:justify-center max-[1100px]:px-0 min-[1101px]:min-w-[17.5rem]"
             aria-label="Open search (Command or Control K)"
             aria-keyshortcuts="Control+K Meta+K"
             title="Search (⌘K / Ctrl+K)"
             onClick={search.openSearch}
           >
             <Search className="size-4 shrink-0" aria-hidden="true" />
-            <span className="max-[720px]:hidden">Search work…</span>
-            <kbd className="ml-auto rounded border border-border bg-surface-sunk px-1.5 font-mono text-xs text-muted max-[720px]:hidden">
+            <span className="max-[1100px]:hidden">Search work…</span>
+            <kbd className="ml-auto rounded border border-border bg-surface-sunk px-1.5 font-mono text-xs text-muted max-[1100px]:hidden">
               ⌘K
             </kbd>
           </button>
           <Button
             variant="quiet"
-            className="shell-safety-trigger px-3 text-foreground max-[720px]:w-11 max-[720px]:px-0"
+            className="shell-safety-trigger px-3 text-foreground max-[1100px]:w-11 max-[1100px]:px-0"
             aria-haspopup="dialog"
             onClick={() => setSafetyOpen(true)}
           >
             <ShieldAlert className="text-danger" aria-hidden="true" />
-            <span className="max-[720px]:sr-only">Safety</span>
+            <span className="max-[1100px]:sr-only">Safety</span>
           </Button>
           <PersonMenu
             triggerClassName="shell-person-trigger environment-control -mr-2 inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-2.5 rounded-md px-1 text-left hover:bg-surface-hover min-[721px]:pr-2"
@@ -207,7 +207,7 @@ function OfficeShell() {
                 >
                   {initials(name)}
                 </span>
-                <span className="hidden flex-col text-[0.84375rem] leading-tight font-[560] min-[721px]:flex">
+                <span className="hidden flex-col text-[0.84375rem] leading-tight font-[560] min-[1101px]:flex">
                   <span className="max-w-40 truncate">{name}</span>
                   <span className="text-xs font-normal text-faint">
                     {roleLabel(session.user.role)}

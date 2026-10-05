@@ -91,7 +91,7 @@ const nowResponse = {
       {
         id: "production",
         title: "Keep jobs moving",
-        summary: "No job needs a check.",
+        summary: "No job needs a check in this loaded list.",
         cards: [],
       },
     ],
@@ -134,6 +134,14 @@ test.describe("Now work list acceptance", () => {
     const mainAction = page.getByRole("button", { name: "Check all lists again" });
     await expectTouchTarget(mainAction, { name: "Check all lists again", axis: "height" });
     await expect(page.getByRole("link", { name: "Open item" })).toHaveAttribute("href", "/owner");
+    await expect(page.getByText("No website leads in this loaded list.")).toBeVisible();
+    const urgentRow = await page
+      .getByRole("button", { name: "Material drop is not confirmed" })
+      .boundingBox();
+    const intake = await page.getByRole("heading", { name: "Website intake" }).boundingBox();
+    expect(urgentRow).not.toBeNull();
+    expect(intake).not.toBeNull();
+    expect(urgentRow!.y + urgentRow!.height).toBeLessThan(intake!.y);
 
     const listStatus = page.getByRole("complementary", { name: "List status" });
     await expect(listStatus.getByText("System details")).toBeVisible();

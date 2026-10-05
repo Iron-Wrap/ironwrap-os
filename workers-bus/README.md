@@ -378,6 +378,14 @@ source drift, quote-version drift, or a deterministic target collision fails
 before the write. An invoked-write transport failure is terminal
 `execution_uncertain`, not an automatic retry.
 
+New quote-revision approval records freeze `approved_snapshot: {snapshot_id,
+version_label}` inside their immutable `preview_json` during preparation. The
+browser DTO exposes that saved descriptor alongside the safe preview. The label
+`Source quote vN (correction draft review)` refers to the saved source version:
+this approval creates a correction draft and does not approve quote terms. Reads,
+decisions, replay, failure, and reconciliation use the saved descriptor; legacy
+records without a complete descriptor project `approved_snapshot: null`.
+
 ### Proposal-publication approval broker (optional, separate authority)
 
 Publishing a Proposal Evidence Pack is the one command that makes quote terms
@@ -419,6 +427,22 @@ receipts, the raw write arguments, and the private digests never reach the
 browser projection. A partial unique index permits exactly one live intent per
 pack, and an invoked-write transport failure is terminal `execution_uncertain`,
 never an automatic retry.
+
+New publication approvals freeze and project `approved_snapshot: {snapshot_id,
+version_label}` during preparation. The label is `Saved proposal publication
+review`: this broker preview does not bind an exact native proposal revision,
+so it cannot truthfully claim a proposal version. Legacy or incomplete saved
+descriptors project `null`; no receipt read looks up a current revision.
+
+For both approval kinds, `snapshot_id` is `approval-snapshot:` followed by the
+SHA-256 of canonical JSON containing the tenant, approval request id, request
+kind, original saved preview, version label, and the saved argument, preview,
+and private receipt-preview digests. The descriptor is excluded from that
+hash. Existing SQL guards make the stored preview and digests immutable. The
+Worker removes only its descriptor when sending the original saved preview to
+the broker. It preserves the broker's exact JSON bytes and key order, which the
+broker validates at execution; the existing digest and dry-run receipt contracts
+remain intact. The projected snapshot id is an identifier and grants no authority.
 
 The session cookie is `Secure; HttpOnly; SameSite=Strict; Path=/`, has no `Domain`, and expires
 after a fixed 12 hours. The D1 row contains only an HMAC; the CSRF value is separately derived and

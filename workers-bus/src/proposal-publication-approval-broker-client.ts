@@ -1,4 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
+import { brokerApprovalPreviewJson } from "./approval-snapshot.ts";
 import type { ProposalPublicationApprovalRequestRecord } from "./proposal-publication-approval-store.ts";
 
 const INTERNAL_VERSION = "1";
@@ -151,7 +152,7 @@ export async function executeProposalPublicationApproval(
       customer_quote_id: request.customer_quote_id,
       request_text: request.request_text,
       write_args_json: request.write_args_json,
-      preview_json: request.preview_json,
+      preview_json: brokerApprovalPreviewJson(request.preview_json),
       args_digest: request.args_digest,
       preview_digest: request.preview_digest,
       receipt_preview_digest: request.receipt_preview_digest,

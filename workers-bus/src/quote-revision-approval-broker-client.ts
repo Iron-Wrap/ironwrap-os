@@ -1,4 +1,5 @@
 import type { AppEnv } from "./app-types.ts";
+import { brokerApprovalPreviewJson } from "./approval-snapshot.ts";
 import type { QuoteRevisionApprovalRequestRecord } from "./quote-revision-approval-store.ts";
 
 const INTERNAL_VERSION = "1";
@@ -142,7 +143,7 @@ export async function executeQuoteRevisionApproval(
       correction_reason: request.correction_reason,
       request_text: request.request_text,
       write_args_json: request.write_args_json,
-      preview_json: request.preview_json,
+      preview_json: brokerApprovalPreviewJson(request.preview_json),
       args_digest: request.args_digest,
       preview_digest: request.preview_digest,
       receipt_preview_digest: request.receipt_preview_digest,

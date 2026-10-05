@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import type { ApprovedSnapshot } from "../src/approval-snapshot.ts";
+import { proposalPublicationApprovalProjection, type ProposalPublicationApprovalRequestRecord } from "../src/proposal-publication-approval-store.ts";
 
 const TENANT = "ironwrap";
 const SHARED_SECRET = "proposal-publication-broker-shared-secret-0001";
@@ -141,7 +143,7 @@ function containsCapability(value: unknown): boolean {
   return false;
 }
 
-function installBrokerMock(options: { invalidExecuteSignature?: boolean } = {}) {
+function installBrokerMock(options: { invalidExecuteSignature?: boolean; customerQuoteId?: string; executeState?: "failed" | "audit_failed" } = {}) {
   const original = globalThis.fetch;
   const calls: string[] = [];
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -152,10 +154,21 @@ function installBrokerMock(options: { invalidExecuteSignature?: boolean } = {}) 
     assertValidWorkerSignature(inbound, path, raw);
     const body = JSON.parse(raw) as Record<string, unknown>;
     if (path === "/v1/proposal-publication/preview") {
-      return signedBrokerResponse(inbound, path, raw, previewResponse(body));
+      const response = previewResponse(body);
+      const packet = response.packet as Record<string, unknown>;
+      const preview = JSON.parse(String(packet.preview_json));
+      packet.customer_quote_id = options.customerQuoteId ?? CUSTOMER_QUOTE;
+      preview.before.quotation = packet.customer_quote_id;
+      packet.preview_json = JSON.stringify(preview);
+      return signedBrokerResponse(inbound, path, raw, response);
     }
     if (path === "/v1/proposal-publication/execute") {
       if (options.invalidExecuteSignature) return Response.json({ outcome: { state: "executed" } });
+      const approvalRequest = body.approval_request as Record<string, unknown>;
+      if (options.executeState) return signedBrokerResponse(inbound, path, raw, {
+        outcome: { state: options.executeState, hermes_run_id: approvalRequest.run_id,
+          result_json: null, error_code: "broker_saved_review_failed" },
+      });
       return signedBrokerResponse(inbound, path, raw, executeResponse(body));
     }
     return signedBrokerResponse(inbound, path, raw, { error: "not_found" }, 404);
@@ -222,6 +235,11 @@ function previewResponse(body: Record<string, unknown>): Record<string, unknown>
 
 function executeResponse(body: Record<string, unknown>): Record<string, unknown> {
   const record = body.approval_request as Record<string, unknown>;
+  const brokerPreview = JSON.parse(String(record.preview_json));
+  assert.equal(Object.hasOwn(brokerPreview, "approved_snapshot"), false, "Worker metadata must not alter the broker contract");
+  assert.equal(brokerPreview.before.quotation, CUSTOMER_QUOTE, "execute must use the originally saved review");
+  assert.equal(record.preview_digest, "b".repeat(64));
+  assert.equal(record.receipt_preview_digest, "c".repeat(64));
   return {
     outcome: {
       state: "executed",
@@ -294,8 +312,10 @@ function sha256(value: string): string {
 }
 
 test("proposal publication publishes once, replays idempotently, and never leaks its capability", async () => {
-  const appEnv = env();
-  const broker = installBrokerMock();
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const source = { customerQuoteId: CUSTOMER_QUOTE };
+  const broker = installBrokerMock(source);
   try {
     const body = preparationBody();
     const prepared = await handleAuthenticatedRoute(
@@ -311,10 +331,24 @@ test("proposal publication publishes once, replays idempotently, and never leaks
         state: string;
         proposal_evidence_pack_id: string;
         customer_quote_id: string;
+        approved_snapshot: ApprovedSnapshot;
         preview: { customer_portal: { portal_link_issued: boolean }; effects: Record<string, boolean> } | null;
       };
     };
     assert.equal(preparedJson.approval.state, "pending");
+    assert.match(preparedJson.approval.approved_snapshot.snapshot_id, /^approval-snapshot:[0-9a-f]{64}$/);
+    assert.equal(preparedJson.approval.approved_snapshot.version_label, "Saved proposal publication review");
+    const stored = db.raw.prepare("SELECT * FROM proposal_publication_approval_requests WHERE proposal_publication_approval_id = ?").get(preparedJson.approval.id) as ProposalPublicationApprovalRequestRecord;
+    assert.deepEqual(JSON.parse(stored.preview_json).approved_snapshot, preparedJson.approval.approved_snapshot);
+    for (const column of ["preview_json", "preview_digest", "receipt_preview_digest", "customer_quote_id"]) {
+      assert.throws(() => db.raw.prepare(
+        `UPDATE proposal_publication_approval_requests SET ${column} = ? WHERE proposal_publication_approval_id = ?`,
+      ).run(column.endsWith("digest") ? "f".repeat(64) : column === "customer_quote_id" ? "quote-other" : "{}", preparedJson.approval.id),
+      /proposal_publication_approval_binding_immutable/);
+    }
+    const { approved_snapshot: _snapshot, ...legacyPreview } = JSON.parse(stored.preview_json);
+    assert.equal(proposalPublicationApprovalProjection({ ...stored, preview_json: JSON.stringify(legacyPreview) }).approved_snapshot, null);
+    assert.equal(proposalPublicationApprovalProjection({ ...stored, customer_quote_id: "quote-other" }).approved_snapshot, null);
     assert.equal(preparedJson.approval.proposal_evidence_pack_id, PACK);
     assert.equal(preparedJson.approval.customer_quote_id, CUSTOMER_QUOTE);
     assert.equal(preparedJson.approval.preview?.customer_portal.portal_link_issued, false);
@@ -326,13 +360,21 @@ test("proposal publication publishes once, replays idempotently, and never leaks
     assert.equal(containsCapability(preparedJson), false);
     assert.deepEqual(broker.calls, ["/v1/proposal-publication/preview"]);
 
+    source.customerQuoteId = "customer-quote:source-edited";
+    const frozenRead = await handleAuthenticatedRoute(request(`/api/v1/proposal-publication-approvals/${preparedJson.approval.id}`), appEnv, auth("owner"));
+    assert.deepEqual((await frozenRead.json() as { approval: { approved_snapshot: ApprovedSnapshot } }).approval.approved_snapshot, preparedJson.approval.approved_snapshot);
+    const foreign = auth("owner");
+    foreign.session.tenant_id = "tenant-other";
+    assert.equal((await handleAuthenticatedRoute(request(`/api/v1/proposal-publication-approvals/${preparedJson.approval.id}`), appEnv, foreign)).status, 404);
     const replayed = await handleAuthenticatedRoute(
       request("/api/v1/proposal-publication-approvals", body, "prepare-proposal-publication-0001"),
       appEnv,
       auth("owner"),
     );
     assert.equal(replayed.status, 200);
-    assert.equal((await replayed.json() as { replayed: boolean }).replayed, true);
+    const replayedJson = await replayed.json() as { replayed: boolean; approval: { approved_snapshot: ApprovedSnapshot } };
+    assert.equal(replayedJson.replayed, true);
+    assert.deepEqual(replayedJson.approval.approved_snapshot, preparedJson.approval.approved_snapshot);
     assert.deepEqual(
       broker.calls,
       ["/v1/proposal-publication/preview"],
@@ -380,6 +422,7 @@ test("proposal publication publishes once, replays idempotently, and never leaks
     const executedJson = await executed.json() as {
       approval: {
         state: string;
+        approved_snapshot: ApprovedSnapshot;
         outcome: {
           published: boolean;
           status: string;
@@ -390,6 +433,7 @@ test("proposal publication publishes once, replays idempotently, and never leaks
       };
     };
     assert.equal(executedJson.approval.state, "executed");
+    assert.deepEqual(executedJson.approval.approved_snapshot, preparedJson.approval.approved_snapshot);
     assert.equal(executedJson.approval.outcome.published, true);
     assert.equal(executedJson.approval.outcome.status, "Approved");
     assert.equal(executedJson.approval.outcome.audit_finalized, true);
@@ -411,7 +455,14 @@ test("proposal publication publishes once, replays idempotently, and never leaks
       auth("owner"),
     );
     assert.equal(executeReplay.status, 200);
-    assert.equal((await executeReplay.json() as { replayed: boolean }).replayed, true);
+    const executeReplayJson = await executeReplay.json() as { replayed: boolean; approval: { approved_snapshot: ApprovedSnapshot } };
+    assert.equal(executeReplayJson.replayed, true);
+    assert.deepEqual(executeReplayJson.approval.approved_snapshot, preparedJson.approval.approved_snapshot);
+    const competing = await handleAuthenticatedRoute(request(
+      `/api/v1/proposal-publication-approvals/${preparedJson.approval.id}/approve`,
+      { version: preparedJson.approval.version }, "decision-proposal-publication-competing-0001",
+    ), appEnv, auth("owner"));
+    assert.equal(competing.status, 409);
     assert.deepEqual(
       broker.calls,
       ["/v1/proposal-publication/preview", "/v1/proposal-publication/execute"],
@@ -544,7 +595,7 @@ test("an unverified broker execution becomes reconciliation-only uncertainty, ne
       appEnv,
       auth("owner"),
     );
-    const json = await prepared.json() as { approval: { id: string; version: number } };
+    const json = await prepared.json() as { approval: { id: string; version: number; approved_snapshot: ApprovedSnapshot } };
     const uncertain = await handleAuthenticatedRoute(
       request(
         `/api/v1/proposal-publication-approvals/${json.approval.id}/approve`,
@@ -557,10 +608,11 @@ test("an unverified broker execution becomes reconciliation-only uncertainty, ne
     assert.equal(uncertain.status, 502);
     const uncertainJson = await uncertain.json() as {
       error: string;
-      approval: { state: string; error_code: string; version: number; id: string };
+      approval: { state: string; error_code: string; version: number; id: string; approved_snapshot: ApprovedSnapshot };
     };
     assert.equal(uncertainJson.error, "execution_uncertain");
     assert.equal(uncertainJson.approval.state, "execution_uncertain");
+    assert.deepEqual(uncertainJson.approval.approved_snapshot, json.approval.approved_snapshot);
 
     const reconciled = await handleAuthenticatedRoute(
       request(`/api/v1/proposal-publication-approvals/${json.approval.id}/reconcile`, {
@@ -573,11 +625,42 @@ test("an unverified broker execution becomes reconciliation-only uncertainty, ne
     );
     assert.equal(reconciled.status, 200);
     const reconciledJson = await reconciled.json() as {
-      approval: { reconciliation: { outcome: string } | null };
+      approval: { reconciliation: { outcome: string } | null; approved_snapshot: ApprovedSnapshot };
     };
     assert.equal(reconciledJson.approval.reconciliation?.outcome, "not_executed");
+    assert.deepEqual(reconciledJson.approval.approved_snapshot, json.approval.approved_snapshot);
   } finally {
     broker.restore();
+  }
+});
+
+test("publication failure and audit failure retain the frozen review through decision replay", async () => {
+  for (const executeState of ["failed", "audit_failed"] as const) {
+    const appEnv = env();
+    const broker = installBrokerMock({ executeState });
+    try {
+      const prepared = await handleAuthenticatedRoute(request(
+        "/api/v1/proposal-publication-approvals", preparationBody(), "prepare-failure-0001",
+      ), appEnv, auth("owner"));
+      assert.equal(prepared.status, 201);
+      const json = await prepared.json() as { approval: { id: string; version: number; approved_snapshot: ApprovedSnapshot } };
+      const approve = () => handleAuthenticatedRoute(request(
+        `/api/v1/proposal-publication-approvals/${json.approval.id}/approve`, { version: json.approval.version }, "decision-failure-0001",
+      ), appEnv, auth("owner"));
+      const failed = await approve();
+      assert.equal(failed.status, 422);
+      const result = await failed.json() as { approval: { state: string; approved_snapshot: ApprovedSnapshot } };
+      assert.equal(result.approval.state, executeState);
+      assert.deepEqual(result.approval.approved_snapshot, json.approval.approved_snapshot);
+      const replay = await approve();
+      assert.equal(replay.status, 200);
+      const replayJson = await replay.json() as { replayed: boolean; approval: { approved_snapshot: ApprovedSnapshot } };
+      assert.equal(replayJson.replayed, true);
+      assert.deepEqual(replayJson.approval.approved_snapshot, json.approval.approved_snapshot);
+      assert.deepEqual(broker.calls, ["/v1/proposal-publication/preview", "/v1/proposal-publication/execute"]);
+    } finally {
+      broker.restore();
+    }
   }
 });
 

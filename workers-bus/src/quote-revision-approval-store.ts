@@ -1,4 +1,10 @@
 import type { AppEnv } from "./app-types.ts";
+import {
+  approvedSnapshotFromPreview,
+  freezeApprovalSnapshot,
+  quoteRevisionSnapshotLabel,
+  type ApprovedSnapshot,
+} from "./approval-snapshot.ts";
 
 export const QUOTE_REVISION_APPROVAL_STATES = [
   "pending",
@@ -132,6 +138,7 @@ export interface QuoteRevisionApprovalRequestProjection {
   correction_reason: string;
   request_text: string;
   preview: QuoteRevisionApprovalPreview | null;
+  approved_snapshot: ApprovedSnapshot | null;
   expires_at: string;
   requested_by: { user_id: string; frappe_user: string | null };
   approved_by: { user_id: string; frappe_user: string; approved_at: string } | null;
@@ -217,6 +224,16 @@ export async function createQuoteRevisionApprovalRequest(
   env: AppEnv,
   input: CreateQuoteRevisionApprovalRequestInput,
 ): Promise<CreateQuoteRevisionApprovalRequestResult> {
+  const previewJson = await freezeApprovalSnapshot({
+    tenantId: input.tenantId,
+    requestId: input.id,
+    requestKind: "quote_revision",
+    previewJson: input.previewJson,
+    argsDigest: input.argsDigest,
+    previewDigest: input.previewDigest,
+    receiptPreviewDigest: input.receiptPreviewDigest,
+    versionLabel: quoteRevisionSnapshotLabel(input.sourceQuoteVersion),
+  });
   const inserted = await env.DB.prepare(
     `INSERT INTO quote_revision_approval_requests (
        quote_revision_approval_id, tenant_id, request_kind, state, version, prepare_idempotency_key,
@@ -255,7 +272,7 @@ export async function createQuoteRevisionApprovalRequest(
     input.correctionReason,
     input.requestText,
     input.writeArgsJson,
-    input.previewJson,
+    previewJson,
     input.argsDigest,
     input.previewDigest,
     input.receiptPreviewDigest,
@@ -608,6 +625,7 @@ export async function reconcileQuoteRevisionApprovalUncertainty(
 export function quoteRevisionApprovalProjection(
   record: QuoteRevisionApprovalRequestRecord,
 ): QuoteRevisionApprovalRequestProjection {
+  const preview = safeQuoteRevisionApprovalPreview(record.preview_json, record);
   return {
     id: record.quote_revision_approval_id,
     kind: "quote_revision",
@@ -628,7 +646,10 @@ export function quoteRevisionApprovalProjection(
     },
     correction_reason: record.correction_reason,
     request_text: record.request_text,
-    preview: safeQuoteRevisionApprovalPreview(record.preview_json, record),
+    preview,
+    approved_snapshot: preview
+      ? approvedSnapshotFromPreview(record.preview_json, quoteRevisionSnapshotLabel(record.source_quote_version))
+      : null,
     expires_at: record.expires_at,
     requested_by: { user_id: record.requested_by_user_id, frappe_user: record.requested_by_frappe_user },
     approved_by: record.approved_by_user_id && record.approved_by_frappe_user && record.approved_at

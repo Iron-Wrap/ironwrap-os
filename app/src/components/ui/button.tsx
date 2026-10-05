@@ -22,7 +22,7 @@ const quiet = "bg-transparent text-muted hover:bg-surface-hover hover:text-foreg
  * stop-work, rescue or revoke control must not go pale.
  */
 const buttonVariants = cva(
-  "relative inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-md border border-transparent px-4 text-sm font-semibold tracking-[-0.003em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+  "ui-button relative inline-flex min-h-11 select-none items-center justify-center gap-2 whitespace-nowrap rounded-md border border-transparent px-4 text-sm font-semibold tracking-[-0.003em] transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--motion-fast)] active:translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:transform-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -41,9 +41,8 @@ const buttonVariants = cva(
         field: "min-h-16 whitespace-normal px-4 text-base leading-5",
         icon: "size-11 min-h-11 px-0",
         compact: "min-h-11 px-3.5 text-sm",
-        // 32 px visual for dense office rows; the ::after keeps a 44 px hit area.
-        small:
-          "min-h-8 gap-1.5 px-3 text-[0.8125rem] after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] [&_svg]:size-[0.9375rem]",
+        // Dense pointer/keyboard rows stay 32px; touch and environment CSS enlarges the box.
+        small: "min-h-8 gap-1.5 px-3 text-[0.8125rem] [&_svg]:size-[0.9375rem]",
       },
       fullWidth: {
         true: "w-full",
@@ -78,7 +77,12 @@ export function Button({
   const classes = cn(buttonVariants({ variant, size, fullWidth }), className);
   if (asChild) {
     return (
-      <Slot className={classes} aria-busy={busy || undefined} {...props}>
+      <Slot
+        className={classes}
+        data-ui-size={size ?? "default"}
+        aria-busy={busy || undefined}
+        {...props}
+      >
         {children}
       </Slot>
     );
@@ -86,6 +90,7 @@ export function Button({
   return (
     <button
       className={classes}
+      data-ui-size={size ?? "default"}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       {...props}

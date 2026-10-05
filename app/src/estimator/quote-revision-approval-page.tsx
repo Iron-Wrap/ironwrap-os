@@ -30,6 +30,7 @@ import { Status, type StatusKind } from "../components/ui/status";
 import { Textarea } from "../components/ui/textarea";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { ApprovalReceipt } from "../owner/approval-receipt";
 import { loadEstimatorWorkbench } from "./estimator-api";
 import {
   approveQuoteRevisionApproval,
@@ -593,7 +594,13 @@ function QuoteRevisionApprovalDetailContent() {
           </div>
         </aside>
 
-        <RevisionSystemDetails approval={approval} />
+        <div className="grid min-w-0 gap-5">
+          <ApprovalReceipt
+            approval={approval}
+            locale={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+          />
+          <RevisionSystemDetails approval={approval} />
+        </div>
       </div>
     </section>
   );

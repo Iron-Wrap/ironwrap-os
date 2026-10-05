@@ -7,13 +7,18 @@ import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Notice } from "../components/ui/notice";
+import { PageHeader } from "../components/ui/page-header";
+import { Queue, QueueRow } from "../components/ui/queue";
+import { Status } from "../components/ui/status";
+import { Timeline } from "../components/ui/timeline";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { GateChip } from "../field/gate-chip";
 import { messageFor } from "../field/field-formatting";
 import type { ProofStreamItem } from "../field/field-contracts";
-import { ProofStream } from "../field/proof-stream";
+import { formatOwnerDate } from "../owner/owner-now-utils";
 import { loadJobHistory } from "./job-history-api";
 import { jobHistoryQueryKey, type JobHistoryResponse } from "./job-history-contracts";
+import { JobSpinePanel } from "./job-spine-panel";
 
 /**
  * What happened on one job, including a job that is over.
@@ -21,8 +26,8 @@ import { jobHistoryQueryKey, type JobHistoryResponse } from "./job-history-contr
  * The work plan at `/jobs/$jobId` refuses anything that is not live, which left a finished job with
  * no route at all: the office could not open the roof a customer was calling about, and nobody
  * could see what had been done to it. This page is the other reading of a job — the record — and it
- * is read-only by construction: the server returns no allowed actions and nothing here is a
- * control, apart from a link back to the live plan when the work is still running.
+ * is read-only by construction: the server returns no allowed actions. Links connect the record
+ * to existing live plans and permission-gated money and approval records.
  */
 export function JobHistoryPage() {
   const session = useSession();
@@ -35,56 +40,103 @@ export function JobHistoryPage() {
 
   if (!jobId) return <ErrorState message="This job link is incomplete." />;
   if (query.isPending) return <LoadingState label="Loading this job's record…" />;
-  if (query.isError)
+  if (query.isError && !query.data)
     return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
   if (!query.data)
     return (
       <ErrorState message="This job is not one you can open, or it does not exist on this account." />
     );
 
-  return <JobHistorySurface model={query.data} jobId={jobId} />;
+  return (
+    <JobHistorySurface
+      key={JSON.stringify([session.tenant.id, session.user.id, jobId])}
+      model={query.data}
+      jobId={jobId}
+      refreshFailed={query.isError}
+    />
+  );
 }
 
-function JobHistorySurface({ model, jobId }: { model: JobHistoryResponse; jobId: string }) {
+function JobHistorySurface({
+  model,
+  jobId,
+  refreshFailed,
+}: {
+  model: JobHistoryResponse;
+  jobId: string;
+  refreshFailed: boolean;
+}) {
   const session = useSession();
-  const [items, setItems] = useState<ProofStreamItem[]>(model.proof.items);
-  const [cursor, setCursor] = useState(model.proof.next_cursor);
+  const [loadedProof, setLoadedProof] = useState({
+    firstPage: model.proof,
+    items: model.proof.items,
+    cursor: model.proof.next_cursor,
+    paged: false,
+  });
+  // A fresh first page updates matching events without discarding pages already read.
+  // Only the identity key above resets this history; a refresh must not rewind its cursor.
+  if (loadedProof.firstPage !== model.proof) {
+    setLoadedProof({
+      firstPage: model.proof,
+      items: model.proof_unavailable
+        ? loadedProof.items
+        : mergeProofItems(model.proof.items, loadedProof.items),
+      cursor:
+        loadedProof.paged || model.proof_unavailable ? loadedProof.cursor : model.proof.next_cursor,
+      paged: loadedProof.paged,
+    });
+  }
+  const { items, cursor } = loadedProof;
   const [loadingMore, setLoadingMore] = useState(false);
+  const [olderError, setOlderError] = useState<string>();
   const title = model.job.job_number?.trim() || model.job.id;
+  const locale = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
 
   async function loadOlder() {
     if (!cursor || loadingMore) return;
     setLoadingMore(true);
+    setOlderError(undefined);
     try {
       const page = await loadJobHistory(jobId, cursor);
-      if (!page) return;
-      setItems((current) => {
-        const seen = new Set(current.map((item) => item.id));
-        return [...current, ...page.proof.items.filter((item) => !seen.has(item.id))];
-      });
-      setCursor(page.proof.next_cursor);
+      if (!page || page.job.id !== model.job.id || page.proof_unavailable) {
+        setOlderError("Older events could not be read. The loaded events remain here.");
+        return;
+      }
+      setLoadedProof((current) => ({
+        ...current,
+        items: mergeProofItems(current.items, page.proof.items),
+        cursor: page.proof.next_cursor,
+        paged: true,
+      }));
+    } catch {
+      setOlderError("Older events could not be read. The loaded events remain here.");
     } finally {
       setLoadingMore(false);
     }
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
-      <Button asChild variant="ghost" size="compact">
-        <Link to="/now">
-          <ChevronLeft aria-hidden="true" />
-          Now
-        </Link>
-      </Button>
-
-      <header className="border-b border-border pb-4">
-        <p className="text-sm font-semibold text-muted">
-          {model.job.status ?? "Status unknown"}
-          {model.job.service_type ? ` · ${model.job.service_type}` : ""}
-        </p>
-        <h1 className="mt-1 break-words text-2xl font-bold tracking-[-0.03em] sm:text-3xl">
-          {title}
-        </h1>
+    <section className="mx-auto max-w-5xl space-y-7 pb-8 [overflow-wrap:anywhere] lg:pb-4">
+      <PageHeader
+        title={title}
+        back={
+          <Button asChild variant="ghost" size="compact">
+            <Link to="/now">
+              <ChevronLeft aria-hidden="true" />
+              Now
+            </Link>
+          </Button>
+        }
+        meta={
+          <>
+            <span>
+              {model.job.status ?? "Status unknown"}
+              {model.job.service_type ? ` · ${model.job.service_type}` : ""}
+            </span>
+            <span>Read {formatOwnerDate(model.read_model_generated_at, locale)}</span>
+          </>
+        }
+      >
         {/*
           Said once, at the top, because everything below is a record and none of it can be acted
           on. A reader who misses that will look for buttons that are deliberately not here.
@@ -92,7 +144,54 @@ function JobHistorySurface({ model, jobId }: { model: JobHistoryResponse; jobId:
         <p className="mt-2 text-sm leading-6 text-muted">
           This is the record of this job. Nothing on this page changes it.
         </p>
-      </header>
+      </PageHeader>
+
+      {refreshFailed ? (
+        <Notice tone="warning" title="The latest job record could not be checked">
+          The loaded events remain here. Reconnect or try the read again before treating this as the
+          current record.
+        </Notice>
+      ) : null}
+
+      {model.stale_fields.length > 0 || !model.source_updated_at ? (
+        <Notice tone="warning" title="This record has source limits">
+          {!model.source_updated_at ? "The source update time is not available. " : ""}
+          {model.stale_fields.length
+            ? `Fields to check: ${model.stale_fields.map((field) => field.replaceAll("_", " ")).join(", ")}.`
+            : ""}{" "}
+          The record does not prove current release readiness.
+        </Notice>
+      ) : null}
+
+      <nav
+        aria-label="Job record sections"
+        className="flex flex-wrap gap-x-5 gap-y-2 border-b border-border pb-3 text-sm font-semibold"
+      >
+        <a
+          className="inline-flex min-h-11 items-center underline underline-offset-4"
+          href="#job-history-gates-heading"
+        >
+          Handoffs
+        </a>
+        <a
+          className="inline-flex min-h-11 items-center underline underline-offset-4"
+          href="#job-history-proof-heading"
+        >
+          Events
+        </a>
+        <a
+          className="inline-flex min-h-11 items-center underline underline-offset-4"
+          href="#job-spine-money-heading"
+        >
+          Money
+        </a>
+        <a
+          className="inline-flex min-h-11 items-center underline underline-offset-4"
+          href="#job-spine-approvals-heading"
+        >
+          Approvals
+        </a>
+      </nav>
 
       <Card className="space-y-3 p-4 sm:p-5">
         {model.job.address ? (
@@ -124,27 +223,39 @@ function JobHistorySurface({ model, jobId }: { model: JobHistoryResponse; jobId:
         ) : null}
       </Card>
 
-      {model.gates.length > 0 ? (
-        <section className="space-y-3" aria-labelledby="job-history-gates-heading">
-          <h2 id="job-history-gates-heading" className="text-lg font-bold tracking-[-0.025em]">
-            Work checks
-          </h2>
-          <div className="flex flex-wrap gap-2">
+      <section className="space-y-3" aria-labelledby="job-history-gates-heading">
+        <h2 id="job-history-gates-heading" className="text-lg font-bold tracking-[-0.025em]">
+          Handoffs and work checks
+        </h2>
+        {model.gates.length > 0 ? (
+          <Queue label="Saved job handoffs">
             {model.gates.map((gate) => (
-              <GateChip key={gate.id} name={gate.name ?? gate.id} state={gate.state ?? "Unknown"} />
+              <QueueRow
+                key={gate.id}
+                title={gate.name ?? gate.id}
+                next={gate.blocker_reason ?? "No blocker reason recorded"}
+                meta={
+                  <>
+                    <GateChip name={gate.name ?? gate.id} state={gate.state ?? "Unknown"} />
+                    <span className="break-words">Holder: {gate.owner ?? "Not recorded"}</span>
+                    {gate.due_at ? <span>Due {formatOwnerDate(gate.due_at, locale)}</span> : null}
+                  </>
+                }
+              />
             ))}
-          </div>
-        </section>
-      ) : null}
+          </Queue>
+        ) : (
+          <p className="text-sm text-muted">No work-check records were returned for this job.</p>
+        )}
+      </section>
 
       <section className="space-y-4" aria-labelledby="job-history-proof-heading">
         <header className="border-b border-border pb-4">
-          <p className="text-sm font-semibold text-muted">Sent job proof</p>
           <h2
             id="job-history-proof-heading"
             className="mt-1 text-2xl font-bold tracking-[-0.03em] sm:text-3xl"
           >
-            What was done
+            Job events
           </h2>
         </header>
         {model.proof_unavailable ? (
@@ -158,16 +269,71 @@ function JobHistorySurface({ model, jobId }: { model: JobHistoryResponse; jobId:
             not answering — ask whoever runs the system before you conclude anything about this job.
           </Notice>
         ) : (
-          <ProofStream
-            items={items}
-            hasMore={Boolean(cursor)}
-            loadingMore={loadingMore}
-            onLoadMore={() => void loadOlder()}
-            locale={session.tenant.locale}
-            timeZone={session.tenant.time_zone}
-          />
+          <>
+            <p className="text-sm leading-6 text-muted">
+              Photos, notes, and check-ins received by the server. Source and saved state are
+              recorded; these events do not provide a named actor or approval version.
+            </p>
+            {items.length ? (
+              <Timeline
+                label="Received job events"
+                entries={items.map((item) => ({
+                  id: item.id,
+                  actor: <span>{item.type ?? "Job proof"}</span>,
+                  text: (
+                    <span className="[overflow-wrap:anywhere]">
+                      <span className="block">{item.summary ?? "Summary not recorded"}</span>
+                      <span className="mt-1 flex flex-wrap items-center gap-2">
+                        <Status
+                          kind={
+                            item.blocker
+                              ? "stopped"
+                              : item.sync_state?.toLowerCase() === "verified"
+                                ? "confirmed"
+                                : "neutral"
+                          }
+                        >
+                          {item.blocker
+                            ? "Work-stop report"
+                            : (item.sync_state ?? "Saved state unknown")}
+                        </Status>
+                        <span className="text-muted">
+                          {item.source ?? "Source not recorded"}
+                          {item.proof_slot ? ` · ${item.proof_slot}` : ""}
+                        </span>
+                      </span>
+                    </span>
+                  ),
+                  ...(item.occurred_at ? { at: item.occurred_at } : {}),
+                  when: formatOwnerDate(item.occurred_at, locale),
+                }))}
+              />
+            ) : (
+              <p className="text-sm text-muted">No sent job proof yet</p>
+            )}
+            {olderError ? (
+              <Notice tone="warning" title="Older events unavailable">
+                {olderError}
+              </Notice>
+            ) : null}
+            {cursor ? (
+              <Button variant="secondary" busy={loadingMore} onClick={() => void loadOlder()}>
+                Load older events
+              </Button>
+            ) : null}
+          </>
         )}
       </section>
+      <JobSpinePanel jobId={model.job.roof_job_id ?? model.job.id} />
     </section>
   );
+}
+
+function mergeProofItems(first: ProofStreamItem[], later: ProofStreamItem[]) {
+  const seen = new Set<string>();
+  return [...first, ...later].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }

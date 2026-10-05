@@ -40,6 +40,7 @@ export function RefTag({
     className: cn("ref-tag", className),
     "data-kind": kind,
     "data-size": size,
+    "data-interactive": asChild || undefined,
     "aria-label": `${spokenKind[kind]} ${id}`,
   };
   if (asChild) return <Slot {...shared}>{children}</Slot>;

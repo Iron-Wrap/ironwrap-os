@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ShieldCheck,
   UserRoundPlus,
+  Warehouse,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -138,13 +139,20 @@ function ProductionRunwayScreen({
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0;
   const canOpenJob = roleCanAccess(role, "job");
+  const canOpenHistory = roleCanAccess(role, "jobHistory");
+  const [shopMode, setShopMode] = useState(() =>
+    Boolean(window.matchMedia?.("(max-width: 1023px)").matches),
+  );
   // Server-derived, not role-derived: the read model already knows whether this
   // session's app user carries the Frappe identity a clearance is attributed to,
   // so a button that would only ever 403 is never drawn.
   const canClearGates = model.allowed_actions.includes("production_gate.clear");
 
   return (
-    <section className="mx-auto max-w-7xl space-y-6 pb-4">
+    <section
+      data-environment={shopMode ? "shop" : undefined}
+      className="mx-auto max-w-7xl space-y-6 pb-4"
+    >
       <WorkspaceHeader
         icon={<CalendarClock aria-hidden="true" />}
         title="Production plan"
@@ -162,6 +170,15 @@ function ProductionRunwayScreen({
                 : "List time not found"}
             </p>
             <p className="mt-4 text-sm font-semibold text-foreground">Check stopped work first.</p>
+            <Button
+              className="mt-3"
+              variant="secondary"
+              aria-pressed={shopMode}
+              onClick={() => setShopMode((current) => !current)}
+            >
+              <Warehouse aria-hidden="true" />
+              {shopMode ? "Shop reading on" : "Shop reading"}
+            </Button>
           </>
         }
       />
@@ -180,6 +197,7 @@ function ProductionRunwayScreen({
             locale={locale}
             timeZone={timeZone}
             canOpenJob={canOpenJob}
+            canOpenHistory={canOpenHistory}
             canClearGates={canClearGates}
           />
         ))}
@@ -276,6 +294,7 @@ function RunwayLane({
   locale,
   timeZone,
   canOpenJob,
+  canOpenHistory,
   canClearGates,
 }: {
   lane: ProductionRunwayLane;
@@ -283,6 +302,7 @@ function RunwayLane({
   locale: string;
   timeZone: string;
   canOpenJob: boolean;
+  canOpenHistory: boolean;
   canClearGates: boolean;
 }) {
   const copy = laneCopy[lane];
@@ -319,6 +339,7 @@ function RunwayLane({
                   locale={locale}
                   timeZone={timeZone}
                   canOpenJob={canOpenJob}
+                  canOpenHistory={canOpenHistory}
                   canClearGates={canClearGates}
                 />
               </li>
@@ -351,12 +372,14 @@ function RunwayJobCard({
   locale,
   timeZone,
   canOpenJob,
+  canOpenHistory,
   canClearGates,
 }: {
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
   canOpenJob: boolean;
+  canOpenHistory: boolean;
   canClearGates: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
@@ -389,6 +412,18 @@ function RunwayJobCard({
                 aria-label={`Open ${job.job_number ?? job.id}`}
               >
                 Open job
+                <ChevronRight aria-hidden="true" />
+              </Link>
+            </Button>
+          ) : null}
+          {canOpenHistory ? (
+            <Button asChild variant="quiet" size="compact">
+              <Link
+                to="/jobs/$jobId/history"
+                params={{ jobId: job.id }}
+                aria-label={`History of ${job.job_number ?? job.id}`}
+              >
+                Job record
                 <ChevronRight aria-hidden="true" />
               </Link>
             </Button>

@@ -41,8 +41,8 @@ describe("IronWrap OS foundation family", () => {
     expect(styles).toMatch(/--foreground:\s*#15181c/i);
     expect(styles).toMatch(/--primary:\s*#15181c/i);
     expect(styles).toMatch(/--chrome:\s*#1b1e22/i);
-    expect(styles).toMatch(/--accent:\s*#94701f/i);
-    expect(styles).toMatch(/--focus:\s*#94701f/i);
+    expect(styles).toMatch(/--accent:\s*#87651c/i);
+    expect(styles).toMatch(/--focus:\s*#87651c/i);
     expect(styles).toMatch(/--local:\s*#5a4a8b/i);
     expect(styles).toMatch(/--tag-metal-fill:/);
     expect(styles).toMatch(/--tag-paper-fill:/);
@@ -149,5 +149,116 @@ describe("IronWrap OS foundation family", () => {
     expect(button).toMatch(/const primary =\s*"bg-primary /);
     expect(button).toMatch(/accent: primary,/);
     expect(button).not.toMatch(/bg-accent/);
+  });
+
+  const tokensIn = (selector: string): Record<string, string> => {
+    const styles = read("src/styles.css");
+    const start = styles.indexOf(`${selector} {`);
+    if (start < 0) throw new Error(`Missing token scope: ${selector}`);
+    const block = styles.slice(start, styles.indexOf("}", start));
+    return Object.fromEntries(
+      [...block.matchAll(/--([\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [
+        name,
+        value?.trim(),
+      ]),
+    );
+  };
+
+  const resolveToken = (tokens: Record<string, string>, name: string): string => {
+    const value = tokens[name];
+    if (!value) throw new Error(`Missing color token: ${name}`);
+    const alias = value.match(/^var\(--([\w-]+)\)$/)?.[1];
+    return alias ? resolveToken(tokens, alias) : value;
+  };
+
+  const luminance = (hex: string) => {
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`Expected a solid sRGB color: ${hex}`);
+    const channels = hex
+      .slice(1)
+      .match(/../g)!
+      .map((part) => {
+        const value = Number.parseInt(part, 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+    return channels.reduce(
+      (total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index]!,
+      0,
+    );
+  };
+
+  const contrast = (tokens: Record<string, string>, foreground: string, background: string) => {
+    const a = luminance(resolveToken(tokens, foreground));
+    const b = luminance(resolveToken(tokens, background));
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
+
+  const surfaces = [
+    "background",
+    "surface",
+    "surface-raised",
+    "surface-muted",
+    "surface-sunk",
+    "surface-hover",
+  ];
+
+  it("qualifies resting and hover control edges plus small brass text on every office ground", () => {
+    const light = tokensIn(":root");
+    const dark = { ...light, ...tokensIn(':root[data-theme="dark"]') };
+    expect(tokensIn(':root:not([data-theme="light"])')).toEqual(
+      tokensIn(':root[data-theme="dark"]'),
+    );
+    for (const [scheme, tokens] of [
+      ["light", light],
+      ["dark", dark],
+    ] as const) {
+      for (const surface of surfaces) {
+        for (const edge of ["border-control", "border-strong"]) {
+          expect(
+            contrast(tokens, edge, surface),
+            `${scheme} ${edge} on ${surface}`,
+          ).toBeGreaterThanOrEqual(3);
+        }
+        expect(
+          contrast(tokens, "accent", surface),
+          `${scheme} brass on ${surface}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("keeps Sun and Shop text and status receipts at 7:1 across their scoped surfaces", () => {
+    const light = tokensIn(":root");
+    const tags = tokensIn(':is(:root, [data-environment="field-sun"], [data-environment="shop"])');
+    for (const environment of ["field-sun", "shop"]) {
+      const tokens = { ...light, ...tokensIn(`[data-environment="${environment}"]`), ...tags };
+      for (const surface of surfaces) {
+        for (const text of ["foreground", "muted", "faint", "accent"]) {
+          expect(
+            contrast(tokens, text, surface),
+            `${environment} ${text} on ${surface}`,
+          ).toBeGreaterThanOrEqual(7);
+        }
+        expect(
+          contrast(tokens, "border-control", surface),
+          `${environment} control on ${surface}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+      for (const kind of ["ok", "warning", "danger", "info", "local", "neutral"]) {
+        expect(
+          contrast(tokens, kind, `${kind}-soft`),
+          `${environment} ${kind} status`,
+        ).toBeGreaterThanOrEqual(7);
+      }
+      for (const kind of ["metal", "paper", "case", "supply", "record", "asset"]) {
+        expect(
+          contrast(tokens, `tag-${kind}-text`, `tag-${kind}-fill`),
+          `${environment} ${kind} tag`,
+        ).toBeGreaterThanOrEqual(7);
+      }
+      expect(contrast(tokens, "primary-foreground", "primary")).toBeGreaterThanOrEqual(7);
+      expect(contrast(tokens, "danger-strong-foreground", "danger-strong")).toBeGreaterThanOrEqual(
+        7,
+      );
+    }
   });
 });

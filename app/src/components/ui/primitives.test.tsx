@@ -39,11 +39,22 @@ describe("Iron Wrap primitives", () => {
     expect(className("Accent")).not.toContain("bg-accent");
   });
 
-  it("keeps a small button's hit area at 44px while it draws 32px", () => {
-    render(<Button size="small">Assign</Button>);
+  it("keeps a dense small action keyboard-operable without a pseudo hit area", async () => {
+    const assign = vi.fn();
+    render(
+      <Button size="small" onClick={assign}>
+        Assign
+      </Button>,
+    );
     const button = screen.getByRole("button", { name: "Assign" });
-    // 32px + 6px above and below = 44px.
-    expect(button).toHaveClass("min-h-8", "relative", "after:-inset-y-1.5");
+    // The office recipe stays dense. CSS enlarges this element's real box on touch.
+    expect(button).toHaveClass("ui-button", "min-h-8");
+    expect(button).toHaveAttribute("data-ui-size", "small");
+    expect(button.className).not.toContain("after:");
+    await userEvent.tab();
+    expect(button).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(assign).toHaveBeenCalledOnce();
   });
 
   it("stamps a reference tag that is announced with its kind", () => {
@@ -68,6 +79,8 @@ describe("Iron Wrap primitives", () => {
     const link = screen.getByRole("link", { name: "Job IW-1002" });
     expect(link).toHaveAttribute("href", "/jobs/IW-1002");
     expect(link).toHaveClass("ref-tag");
+    expect(link).toHaveAttribute("data-interactive", "true");
+    expect(job).not.toHaveAttribute("data-interactive");
   });
 
   it("gives every status its own glyph shape and always says it in words", () => {

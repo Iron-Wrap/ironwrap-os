@@ -1,5 +1,5 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { CircleHelp, Phone, Search } from "lucide-react";
+import { CircleHelp, Phone, Search, Sun } from "lucide-react";
 import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
@@ -27,10 +27,17 @@ export function CrewShell() {
   const search = useSearchPalette();
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpMounted, setHelpMounted] = useState(false);
+  const [sunMode, setSunMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("ironwrap.field.sun-mode") === "on";
+    } catch {
+      return false;
+    }
+  });
   const name = session.user.display_name || session.user.email;
 
   return (
-    <div className="crew" style={{ "--header-h": "3.75rem" } as React.CSSProperties}>
+    <div className="crew" data-environment={sunMode ? "field-sun" : "field"}>
       <a
         href="#main-content"
         className="fixed top-4 left-4 z-[60] -translate-y-24 rounded-md bg-primary px-4 py-3 font-semibold text-primary-foreground transition-transform focus:translate-y-0"
@@ -40,7 +47,7 @@ export function CrewShell() {
       <header className="crew-top flex flex-wrap items-center gap-x-2">
         <Link
           to="/now"
-          className="grid h-15 w-7 shrink-0 place-items-center"
+          className="environment-control grid min-h-12 min-w-12 shrink-0 place-items-center"
           aria-label={`${session.tenant.brand}, Today`}
         >
           {logoUrl ? (
@@ -50,10 +57,12 @@ export function CrewShell() {
           )}
         </Link>
         <PersonMenu
-          triggerClassName="flex min-h-11 min-w-0 flex-1 flex-col items-start justify-center rounded-md px-1 text-left leading-tight hover:bg-surface-hover"
+          triggerClassName="crew-person environment-control flex min-h-12 min-w-0 flex-1 flex-col items-start justify-center rounded-md px-1 py-2 text-left leading-tight hover:bg-surface-hover"
           trigger={
             <>
-              <strong className="max-w-full truncate text-[0.9375rem] font-[620]">{name}</strong>
+              <strong className="max-w-full whitespace-normal break-words text-base font-[620]">
+                {name}
+              </strong>
               <span className="text-[0.78125rem] text-faint">Crew phone</span>
             </>
           }
@@ -62,10 +71,27 @@ export function CrewShell() {
           variant="crew"
           bannerClassName="crew-banner -mr-3 -ml-4 basis-[calc(100%+1.75rem)]"
         />
+        <button
+          type="button"
+          className="crew-sun-mode environment-control inline-flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-md px-3 text-base font-semibold text-foreground hover:bg-surface-hover"
+          aria-pressed={sunMode}
+          onClick={() => {
+            const next = !sunMode;
+            setSunMode(next);
+            try {
+              window.localStorage.setItem("ironwrap.field.sun-mode", next ? "on" : "off");
+            } catch {
+              // The visible choice still works when this browser cannot retain preferences.
+            }
+          }}
+        >
+          <Sun aria-hidden="true" className="size-5" />
+          Sun mode
+        </button>
         <Button
           variant="quiet"
           size="icon"
-          className="text-foreground"
+          className="environment-control min-h-12 min-w-12 text-foreground"
           aria-label="Open search (Command or Control K)"
           aria-keyshortcuts="Control+K Meta+K"
           title="Search (⌘K / Ctrl+K)"
@@ -76,7 +102,7 @@ export function CrewShell() {
         <button
           type="button"
           aria-haspopup="dialog"
-          className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full bg-surface py-0 pr-3.5 pl-3 text-[0.9375rem] font-[640] text-foreground shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.06)] transition-colors hover:bg-surface-hover"
+          className="environment-control inline-flex min-h-12 min-w-12 shrink-0 items-center gap-1.5 rounded-full bg-surface py-0 pr-3.5 pl-3 text-base font-[640] text-foreground shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.06)] transition-colors hover:bg-surface-hover"
           onClick={() => {
             setHelpMounted(true);
             setHelpOpen(true);
@@ -87,7 +113,11 @@ export function CrewShell() {
         </button>
       </header>
 
-      <main id="main-content" tabIndex={-1} className="crew-main app-main min-w-0 space-y-5">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="crew-main app-main environment-copy min-w-0 space-y-5"
+      >
         <Outlet />
       </main>
 
@@ -98,7 +128,7 @@ export function CrewShell() {
             <Link
               key={item.to}
               to={item.to}
-              className="shell-tab"
+              className="shell-tab environment-control"
               aria-current={item.to === current.to ? "page" : undefined}
             >
               <Icon aria-hidden="true" />

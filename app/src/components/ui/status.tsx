@@ -95,7 +95,7 @@ export function Status({
     <span
       data-status={kind}
       className={cn(
-        "inline-flex min-h-[1.375rem] max-w-full items-center gap-1.5 whitespace-nowrap rounded-md py-[3px] pr-2 pl-[7px] text-[0.78125rem] font-medium leading-tight max-sm:whitespace-normal",
+        "ui-status inline-flex min-h-[1.375rem] max-w-full items-center gap-1.5 whitespace-nowrap rounded-md py-[3px] pr-2 pl-[7px] text-[0.78125rem] font-medium leading-tight max-sm:whitespace-normal",
         kindClassName[kind],
         className,
       )}

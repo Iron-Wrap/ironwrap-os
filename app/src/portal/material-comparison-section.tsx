@@ -53,7 +53,7 @@ export function MaterialComparisonSection({
   }
 
   return (
-    <Card>
+    <Card id="project-materials">
       <CardHeader>
         <div className="flex items-start gap-3">
           <Palette className="mt-0.5 size-5 text-info" aria-hidden="true" />
@@ -144,7 +144,7 @@ function OptionCard({
       {selectable ? (
         <>
           <Button
-            className="mt-4"
+            className="mt-4 min-h-12 min-w-12 whitespace-normal text-base"
             fullWidth
             type="button"
             variant={chosen ? "outline" : "default"}

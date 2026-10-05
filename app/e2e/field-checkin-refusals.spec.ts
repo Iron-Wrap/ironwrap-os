@@ -35,8 +35,8 @@ test.describe("Check-in refusals on the crew phone", () => {
     await expect(page.getByRole("heading", { name: "Capture what you see" })).toBeVisible();
     await expect(page.locator('input[type="file"][accept*="image"]')).toHaveCount(1);
     await expect(page.locator('input[type="file"][accept*="audio"]')).toHaveCount(1);
-    // Step one still carries the file pickers, so its label must not be degraded.
-    await expect(page.getByText("Step 1 of 3 · Files")).toBeVisible();
+    const progress = page.getByRole("list", { name: "Check-in progress, step 1 of 3" });
+    await expect(progress.locator('[aria-current="step"]')).toHaveText("1Files");
     await expect(
       page.getByText("Photos can be attached once production issues a work plan."),
     ).toHaveCount(0);
@@ -148,6 +148,49 @@ test.describe("Check-in refusals on the crew phone", () => {
       }),
       contentType: "image/png",
     });
+  });
+
+  test("opens the camera from the job in one app action and keeps the sent receipt across readback", async ({
+    page,
+  }, testInfo) => {
+    let reads = 0;
+    await page.route("**/api/v1/jobs/JOB-ACCEPTANCE", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      model.packet.work_package = null;
+      model.allowed_actions = ["field.checkin.create"];
+      model.read_model_generated_at = `2026-10-02T12:00:${String(++reads).padStart(2, "0")}.000Z`;
+      await route.fulfill({ response, json: model });
+    });
+    await page.goto("/jobs/JOB-ACCEPTANCE");
+    const camera = page.getByLabel("Take photo for this job");
+    await expect(camera).toHaveAttribute("capture", "environment");
+    await expect(camera).not.toHaveAttribute("multiple", "");
+    const picker = page.waitForEvent("filechooser");
+    await page.getByText("Take photo", { exact: true }).click();
+    await (
+      await picker
+    ).setFiles({
+      name: "direct-job-photo.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    });
+    await expect(page.getByRole("heading", { name: "Add job details" })).toBeVisible();
+    await expect(page.getByText("direct-job-photo.jpg")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue to review" })).toHaveCount(0);
+    const save = page.getByRole("button", { name: "Save on device" });
+    expect((await save.boundingBox())!.height).toBeGreaterThanOrEqual(48);
+    await save.click();
+    await expect(page.getByRole("heading", { name: "Check-in saved" })).toBeVisible();
+    await expect(page.getByText("Sent", { exact: true })).toBeVisible();
+    await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText("The server got this check-in.")).toBeVisible();
+    await testInfo.attach("direct-photo-receipt-390px.png", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
+    await page.getByRole("button", { name: "Return to job" }).click();
+    await expect(page.getByText("Take photo", { exact: true })).toBeVisible();
   });
 });
 

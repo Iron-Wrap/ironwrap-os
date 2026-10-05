@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "font": "Archivo",
+    "monoFont": "Martian Mono",
+    "accentRole": "location, focus and selection"
+  },
+  "colors": [
+    {
+      "figma": "bg/app",
+      "css": "--background",
+      "variableId": "VariableID:2:11"
+    },
+    {
+      "figma": "bg/surface",
+      "css": "--surface",
+      "variableId": "VariableID:2:13"
+    },
+    {
+      "figma": "bg/sunk",
+      "css": "--surface-sunk",
+      "variableId": "VariableID:2:16"
+    },
+    {
+      "figma": "bg/hover",
+      "css": "--surface-hover",
+      "variableId": "VariableID:2:19"
+    },
+    {
+      "figma": "bg/document",
+      "css": "--surface-sunk",
+      "variableId": "VariableID:2:22"
+    },
+    {
+      "figma": "bg/scrim",
+      "css": "--scrim",
+      "variableId": "VariableID:2:25"
+    },
+    {
+      "figma": "text/primary",
+      "css": "--foreground",
+      "variableId": "VariableID:2:27"
+    },
+    {
+      "figma": "text/secondary",
+      "css": "--muted",
+      "variableId": "VariableID:2:30"
+    },
+    {
+      "figma": "text/tertiary",
+      "css": "--faint",
+      "variableId": "VariableID:2:33"
+    },
+    {
+      "figma": "border/default",
+      "css": "--border",
+      "variableId": "VariableID:2:36"
+    },
+    {
+      "figma": "border/strong",
+      "css": "--border-control",
+      "variableId": "VariableID:2:39"
+    },
+    {
+      "figma": "accent/default",
+      "css": "--accent",
+      "variableId": "VariableID:2:41"
+    },
+    {
+      "figma": "accent/soft",
+      "css": "--accent-soft",
+      "variableId": "VariableID:2:44"
+    },
+    {
+      "figma": "accent/line",
+      "css": "--accent-line",
+      "variableId": "VariableID:2:47"
+    },
+    {
+      "figma": "accent/focus",
+      "css": "--focus",
+      "variableId": "VariableID:2:49"
+    },
+    {
+      "figma": "accent/highlight",
+      "css": "--highlight",
+      "variableId": "VariableID:2:52"
+    },
+    {
+      "figma": "action/primary-bg",
+      "css": "--primary",
+      "variableId": "VariableID:2:53"
+    },
+    {
+      "figma": "action/primary-bg-hover",
+      "css": "--primary-hover",
+      "variableId": "VariableID:2:55"
+    },
+    {
+      "figma": "action/primary-fg",
+      "css": "--primary-foreground",
+      "variableId": "VariableID:2:57"
+    },
+    {
+      "figma": "status/ok",
+      "css": "--ok",
+      "variableId": "VariableID:2:60"
+    },
+    {
+      "figma": "status/ok-soft",
+      "css": "--ok-soft",
+      "variableId": "VariableID:2:63"
+    },
+    {
+      "figma": "status/info",
+      "css": "--info",
+      "variableId": "VariableID:2:66"
+    },
+    {
+      "figma": "status/info-soft",
+      "css": "--info-soft",
+      "variableId": "VariableID:2:69"
+    },
+    {
+      "figma": "status/warn",
+      "css": "--warning",
+      "variableId": "VariableID:2:72"
+    },
+    {
+      "figma": "status/warn-soft",
+      "css": "--warning-soft",
+      "variableId": "VariableID:2:75"
+    },
+    {
+      "figma": "status/warn-line",
+      "css": "--warning-line",
+      "variableId": "VariableID:2:78"
+    },
+    {
+      "figma": "status/stop",
+      "css": "--danger",
+      "variableId": "VariableID:2:81"
+    },
+    {
+      "figma": "status/stop-soft",
+      "css": "--danger-soft",
+      "variableId": "VariableID:2:84"
+    },
+    {
+      "figma": "status/stop-line",
+      "css": "--danger-line",
+      "variableId": "VariableID:2:87"
+    },
+    {
+      "figma": "status/local",
+      "css": "--local",
+      "variableId": "VariableID:2:90"
+    },
+    {
+      "figma": "status/local-soft",
+      "css": "--local-soft",
+      "variableId": "VariableID:2:93"
+    },
+    {
+      "figma": "status/neutral",
+      "css": "--neutral",
+      "variableId": "VariableID:2:96"
+    },
+    {
+      "figma": "status/neutral-soft",
+      "css": "--neutral-soft",
+      "variableId": "VariableID:2:99"
+    },
+    {
+      "figma": "rail/bg",
+      "css": "--chrome",
+      "variableId": "VariableID:2:101"
+    },
+    {
+      "figma": "rail/text",
+      "css": "--chrome-muted",
+      "variableId": "VariableID:2:103"
+    },
+    {
+      "figma": "rail/text-strong",
+      "css": "--chrome-foreground",
+      "variableId": "VariableID:2:104"
+    },
+    {
+      "figma": "rail/muted",
+      "css": "--chrome-faint",
+      "variableId": "VariableID:2:106"
+    },
+    {
+      "figma": "rail/hover",
+      "css": "--chrome-raised",
+      "variableId": "VariableID:2:109"
+    },
+    {
+      "figma": "rail/active",
+      "css": "--chrome-active",
+      "variableId": "VariableID:2:112"
+    },
+    {
+      "figma": "rail/focus",
+      "css": "--chrome-focus",
+      "variableId": "VariableID:2:113"
+    },
+    {
+      "figma": "tag/metal-text",
+      "css": "--tag-metal-text",
+      "variableId": "VariableID:2:116"
+    },
+    {
+      "figma": "tag/paper-text",
+      "css": "--tag-paper-text",
+      "variableId": "VariableID:2:118"
+    },
+    {
+      "figma": "tag/metal",
+      "css": "--tag-metal-fill",
+      "variableId": "VariableID:2:121"
+    },
+    {
+      "figma": "tag/paper",
+      "css": "--tag-paper-fill",
+      "variableId": "VariableID:2:123"
+    },
+    {
+      "figma": "tag/case",
+      "css": "--tag-case-fill",
+      "variableId": "VariableID:7:15"
+    },
+    {
+      "figma": "tag/case-text",
+      "css": "--tag-case-text",
+      "variableId": "VariableID:7:17"
+    },
+    {
+      "figma": "tag/supply",
+      "css": "--tag-supply-fill",
+      "variableId": "VariableID:7:19"
+    },
+    {
+      "figma": "tag/supply-text",
+      "css": "--tag-supply-text",
+      "variableId": "VariableID:7:21"
+    },
+    {
+      "figma": "tag/record",
+      "css": "--tag-record-fill",
+      "variableId": "VariableID:7:23"
+    },
+    {
+      "figma": "tag/record-text",
+      "css": "--tag-record-text",
+      "variableId": "VariableID:7:25"
+    },
+    {
+      "figma": "tag/asset",
+      "css": "--tag-asset-fill",
+      "variableId": "VariableID:7:27"
+    },
+    {
+      "figma": "tag/asset-text",
+      "css": "--tag-asset-text",
+      "variableId": "VariableID:7:29"
+    },
+    {
+      "figma": "bg/raised",
+      "css": "--surface-raised",
+      "variableId": "VariableID:60:5"
+    },
+    {
+      "figma": "bg/selected",
+      "css": "--selected",
+      "variableId": "VariableID:60:8"
+    },
+    {
+      "figma": "border/soft",
+      "css": "--border-soft",
+      "variableId": "VariableID:60:11"
+    },
+    {
+      "figma": "rail/line",
+      "css": "--chrome-border",
+      "variableId": "VariableID:60:14"
+    },
+    {
+      "figma": "tag/metal-edge",
+      "css": "--tag-metal-edge",
+      "variableId": "VariableID:60:17"
+    }
+  ],
+  "environments": {
+    "office": {
+      "colorModes": ["Light", "Dark"],
+      "controlMinPx": 44,
+      "bodyMinPx": 16
+    },
+    "touch": {
+      "controlMinPx": 48,
+      "bodyMinPx": 16
+    },
+    "field-sun": {
+      "colorMode": "Field Sun",
+      "controlMinPx": 48,
+      "bodyMinPx": 16,
+      "textContrastMin": 7
+    },
+    "shop": {
+      "colorMode": "Shop",
+      "controlMinPx": 64,
+      "bodyMinPx": 24
+    }
+  },
+  "sourceCss": "app/src/styles.css",
+  "variableCollections": [
+    {
+      "id": "VariableCollectionId:2:3",
+      "name": "Color",
+      "modes": [
+        {
+          "name": "Light",
+          "modeId": "2:1"
+        },
+        {
+          "name": "Dark",
+          "modeId": "2:2"
+        },
+        {
+          "name": "Field Sun",
+          "modeId": "782:0"
+        },
+        {
+          "name": "Shop",
+          "modeId": "782:1"
+        }
+      ]
+    },
+    {
+      "id": "VariableCollectionId:2:124",
+      "name": "Layout",
+      "modes": [
+        {
+          "name": "Office",
+          "modeId": "2:3"
+        },
+        {
+          "name": "Touch",
+          "modeId": "782:2"
+        },
+        {
+          "name": "Shop",
+          "modeId": "782:3"
+        }
+      ]
+    }
+  ],
+  "fileId": "0eK7JOWRYmAtESSwPWQOwx"
+}

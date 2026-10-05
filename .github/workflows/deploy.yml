@@ -123,7 +123,7 @@ jobs:
             --qa "$RUNNER_TEMP/qa-config.json" --output "$RUNNER_TEMP/context.json"
 
       - name: Publish admission context (no secrets)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iro41-admission-${{ github.event.workflow_run.head_sha }}
           path: |
@@ -215,7 +215,7 @@ jobs:
 
       - name: Upload the artifact exactly once
         id: upload_artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iro41-release-artifact-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/ironwrap-release-artifact.tar
@@ -252,7 +252,7 @@ jobs:
           cp "$RUNNER_TEMP/artifact-components.json" "$RUNNER_TEMP/built-context/artifact-components.json"
 
       - name: Publish context bound to the single artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iro41-built-context-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/built-context
@@ -539,7 +539,7 @@ jobs:
         # archive holds nine flat files plus context-download/context.json -- exactly the layout
         # the seven reads in deploy-production.yml expect. Unlike the built-context upload above,
         # this rooting was never ambiguous.
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iro41-qa-proof-${{ github.event.workflow_run.head_sha }}
           path: |
@@ -581,7 +581,7 @@ jobs:
 
       - name: Publish isolated qa failure cleanup receipt
         if: ${{ always() && steps.cleanup_qa.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iro41-qa-cleanup-${{ github.event.workflow_run.head_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/qa-failure-cleanup-receipt.json

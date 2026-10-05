@@ -58,7 +58,13 @@ const IDENTITY_FIELDS: readonly FieldSpec[] = [
 ];
 
 const CONTACT_FIELDS: readonly FieldSpec[] = [
-  { name: "phone", label: "Phone", type: "tel", autoComplete: "tel" },
+  {
+    name: "phone",
+    label: "Phone",
+    type: "tel",
+    autoComplete: "tel",
+    hint: "Include the area code. Outside Canada and the US, start with + and the country code.",
+  },
   { name: "email", label: "Email", type: "email", autoComplete: "email" },
   { name: "website", label: "Website", type: "url", hint: "Start with https://" },
 ];
@@ -299,7 +305,7 @@ function CompanyProfileForm({
         />
         <FieldGroup
           title="How customers reach you"
-          description="Used on customer-facing documents."
+          description="Customers see this phone and email on their documents and on their project page, where they can tap to call or email you."
           fields={CONTACT_FIELDS}
           values={values}
           onChange={set}

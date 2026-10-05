@@ -18,6 +18,24 @@ export const customerPortalResponseSchema = z
         status: nullableText,
       })
       .strict(),
+    // Optional while an older Worker response is still in use. Present only when the owner
+    // saved a customer-facing company contact; never a staff identity.
+    company_contact: z
+      .object({
+        phone: z
+          .string()
+          .regex(/^\+[1-9]\d{6,14}$/)
+          .nullable(),
+        // Mirrors the Worker's acceptance rule exactly: a stricter browser check would fail the
+        // whole page on an address the Worker shares.
+        email: z
+          .string()
+          .regex(/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i)
+          .nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     // Optional while an older Worker response is still in use. A present window is an
     // office-committed native assignment, not evidence of customer acknowledgment.
     install_window: z

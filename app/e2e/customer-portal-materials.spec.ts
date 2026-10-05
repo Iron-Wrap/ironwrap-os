@@ -60,6 +60,9 @@ async function openPortal(page: Page): Promise<void> {
   await page.goto(`/portal#token=${PORTAL_TOKEN}`);
   await expect(page.getByRole("heading", { name: "Your project", level: 1 })).toBeVisible();
   await expect(page.getByText("IW-2026-100", { exact: false })).toBeVisible();
+  const overview = page.getByRole("region", { name: "Project overview" });
+  await expect(overview.getByText("Wednesday, August 26, 2026")).toBeVisible();
+  await expect(overview.getByText("Work planned from 8:00 a.m. to 4:00 p.m.")).toBeVisible();
 }
 
 // Pinned at file scope rather than inherited from the project: mobile-first is what is being
@@ -83,7 +86,7 @@ test.describe("Customer portal materials mobile acceptance", () => {
     // The token never survives in the URL the customer could share or a referrer could leak.
     expect(new URL(page.url()).hash).toBe("");
     const overview = page.getByRole("region", { name: "Project overview" });
-    await expect(overview.getByText("Schedule not yet shared")).toBeVisible();
+    await expect(overview.getByText(/IronWrap Exteriors booked this time/)).toBeVisible();
     await expect(overview.getByText("Amount not yet shared")).toBeVisible();
     await expect(
       overview.getByRole("link", { name: "Choose materials and colours" }),

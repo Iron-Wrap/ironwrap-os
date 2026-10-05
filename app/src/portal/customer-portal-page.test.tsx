@@ -63,6 +63,59 @@ describe("CustomerPortalView", () => {
     expect(overview.compareDocumentPosition(proposal!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  it("shows the booked installation in the office's own time, whatever the phone's zone", () => {
+    render(
+      <CustomerPortalView
+        model={{
+          ...model,
+          install_window: {
+            scheduled_start: "2026-10-14T08:00:00-06:00",
+            scheduled_end: "2026-10-14T12:00:00-06:00",
+            confirmed: true,
+            confirmation_basis: "office_committed_assignment",
+          },
+        }}
+      />,
+    );
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(within(overview).getByText("Wednesday, October 14, 2026")).toBeVisible();
+    expect(within(overview).getByText("Work planned from 8:00 a.m. to 12:00 p.m.")).toBeVisible();
+    expect(
+      within(overview).getByText(
+        "IronWrap Exteriors booked this time. If it does not work for you, contact them.",
+      ),
+    ).toBeVisible();
+    expect(within(overview).queryByText("Schedule not yet shared")).toBeNull();
+  });
+
+  it("offers the company's own phone and email only when the office shared them", () => {
+    const { rerender } = render(<CustomerPortalView model={model} />);
+    expect(screen.queryByRole("link", { name: /^Call / })).toBeNull();
+    rerender(
+      <CustomerPortalView
+        model={{
+          ...model,
+          company_contact: { phone: "+14035550100", email: "office@example.com" },
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Call IronWrap Exteriors" })).toHaveAttribute(
+      "href",
+      "tel:+14035550100",
+    );
+    expect(screen.getByRole("link", { name: "Email IronWrap Exteriors" })).toHaveAttribute(
+      "href",
+      "mailto:office@example.com",
+    );
+    rerender(
+      <CustomerPortalView
+        model={{ ...model, company_contact: { phone: null, email: "office@example.com" } }}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: /^Call / })).toBeNull();
+    expect(screen.getByRole("link", { name: "Email IronWrap Exteriors" })).toBeVisible();
+  });
+
   it("does not infer a balance from the proposal total or a customer contact from a placeholder", () => {
     const { container } = render(
       <CustomerPortalView
@@ -94,7 +147,8 @@ describe("CustomerPortalView", () => {
     const overview = screen.getByRole("region", { name: "Project overview" });
     expect(within(overview).getByText("Amount not yet shared")).toBeVisible();
     expect(within(overview).queryByText(/9,000/)).not.toBeInTheDocument();
-    expect(within(overview).getByText("Payment due date not yet shared.")).toBeVisible();
+    expect(within(overview).getByText(/Your proposal price is not a bill\./)).toBeVisible();
+    expect(within(overview).getByText(/Ask them if you need it sooner/)).toBeVisible();
     expect(container.querySelector("img")).toBeNull();
     expect(screen.queryByText("MR", { exact: true })).not.toBeInTheDocument();
     expect(within(overview).getByRole("link", { name: "See project updates" })).toHaveAttribute(

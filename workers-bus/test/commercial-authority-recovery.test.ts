@@ -250,12 +250,12 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // These counts move with the migration chain, and moving them is the point: the backup and
   // restore scripts must name every object the chain defines, so a migration that adds one and
   // leaves these pinned is a backup set that would silently restore an incomplete database.
-  // The merged frontier through 0135 includes the automation recipient catalog, per-cron
+  // The merged frontier through 0139 includes the automation recipient catalog, per-cron
   // heartbeat, durable office intake receipts, and manual measurement history.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 239],
-    ["REQUIRED_INDEX_COUNT", 357],
-    ["REQUIRED_TRIGGER_COUNT", 590],
+    ["REQUIRED_TABLE_COUNT", 241],
+    ["REQUIRED_INDEX_COUNT", 358],
+    ["REQUIRED_TRIGGER_COUNT", 597],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -289,7 +289,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0135", () => {
+test("the full schema matches the recovery frontier through 0139", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -348,7 +348,7 @@ test("the full schema matches the recovery frontier through 0135", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 239, indexes: 357, triggers: 590 },
+      { tables: 241, indexes: 358, triggers: 597 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

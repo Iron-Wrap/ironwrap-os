@@ -1,5 +1,6 @@
 import { validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { evidenceReceiptsRequired, evidenceUploadFailure, EvidenceUploadError, resolveEvidenceUploads } from "./evidence-uploads.ts";
 import {
   parseSafetyActionRequest,
   processSafetyDeviceAction,
@@ -69,6 +70,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 function safetyFailure(error: unknown): Response {
+  if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
   if (error instanceof SafetyError) {
     return json({ error: error.code, message: error.message }, error.status);
   }
@@ -542,9 +544,14 @@ export async function handleSafetyRoute(
   if (correctiveEvidence) {
     const actionId = pathPart(correctiveEvidence[1] ?? "");
     if (!actionId) return json({ error: "not_found" }, 404);
-    const evidence = evidenceField(parsed.value);
-    if (!evidence) return json({ error: "safety_evidence_invalid" }, 400);
+    const receiptBased = parsed.value.evidence_receipt_ids !== undefined || evidenceReceiptsRequired(env);
+    if (receiptBased && !exactKeys(parsed.value, ["evidence_receipt_ids", "detail"])) return json({ error: "evidence_receipts_required" }, 400);
+    const legacy = receiptBased ? null : evidenceField(parsed.value);
+    if (!receiptBased && !legacy) return json({ error: "safety_evidence_invalid" }, 400);
     try {
+      const evidence = receiptBased ? await resolveEvidenceUploads(env, auth, {
+        purpose: "corrective_action", targetId: actionId, action: "submit", operationId: "",
+      }, parsed.value.evidence_receipt_ids) : legacy!;
       const action = await submitCorrectiveActionEvidence(env, {
         tenantId,
         correctiveActionId: actionId,

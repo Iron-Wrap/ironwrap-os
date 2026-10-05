@@ -3,12 +3,15 @@
 // returns -- rather than the store, which `service-case-store.test.ts` covers directly.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import { EvidenceR2 } from "./evidence-upload-fixture.ts";
+import type { EvidenceScope } from "../src/evidence-uploads.ts";
 
 const TENANT = "ironwrap";
 const OWNER_ID = "appu_owner_0001";
@@ -78,9 +81,14 @@ class SqliteD1 {
       "0042_external_effect_runtime.sql",
       "0056_service_case_lifecycle.sql",
       "0062_external_effect_insert_replace_guards.sql",
+      "0139_evidence_upload_receipts.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
+    this.raw.exec(`ALTER TABLE app_users ADD COLUMN access_role TEXT;
+      CREATE TABLE operating_roof_jobs (tenant_id TEXT, roof_job_id TEXT);
+      INSERT INTO operating_roof_jobs VALUES ('ironwrap', 'JOB-0001');
+      CREATE TABLE app_action_throttles (tenant_id TEXT, user_id TEXT, scope TEXT, window_started_at TEXT, window_expires_at TEXT, attempts INTEGER, updated_at TEXT, PRIMARY KEY(tenant_id,user_id,scope));`);
     const now = "2026-08-18T09:00:00.000Z";
     const insert = this.raw.prepare(
       `INSERT INTO app_users (
@@ -143,7 +151,9 @@ class SqliteD1 {
 function env(db = new SqliteD1()): AppEnv {
   return {
     DB: db as never,
+    RAW: new EvidenceR2() as never,
     APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_EVIDENCE_RECEIPTS_REQUIRED: "true",
   } as AppEnv;
 }
 
@@ -197,7 +207,31 @@ async function call(
   body?: Record<string, unknown>,
   csrf = true,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await handleAuthenticatedRoute(request(method, path, body, csrf), appEnv, auth(role));
+  const actor = auth(role);
+  const mutationKey = crypto.randomUUID();
+  let command = body ? { ...body } : undefined;
+  // Legacy symbolic fixture labels select synthetic FILES; production requests carry receipts only.
+  const evidenceField = ["intake_evidence_digest", "evidence_digest", "field_evidence_digest", "parts_manifest_digest"].find((key) => command && key in command);
+  if (evidenceField && command) {
+    delete command[evidenceField];
+    const parts = path.split("/");
+    const action = ({ triage: "triage", diagnoses: "diagnose", remedies: "issue_remedy", verification: "verify_remedy", "customer-decision": "customer_decision", closure: "close", "cost-recovery-claims": "recover_cost" } as Record<string,string>)[parts.at(-1)!];
+    const scope: EvidenceScope = path === "/api/v1/service-cases"
+      ? { purpose: "service_intake", targetId: String(command.roof_job_id), action: "open", operationId: mutationKey }
+      : { purpose: "service_step", targetId: parts[4]!, action, operationId: ["verify_remedy", "customer_decision"].includes(action) ? parts[6]! : "" };
+    if (csrf && ["owner", "ops"].includes(role) && !(action === "recover_cost" && role !== "owner")) {
+      // Control-plane throttling is covered in evidence-uploads.test; lifecycle suites exercise transitions.
+      (appEnv.DB as never as SqliteD1).raw.exec("DELETE FROM app_action_throttles");
+      const upload = await import("../src/evidence-uploads.ts");
+      const { evidenceUploadRequest } = await import("./evidence-upload-fixture.ts");
+      const result = await upload.handleEvidenceUpload(evidenceUploadRequest(scope, scope.purpose === "service_intake" ? mutationKey : `fixture-${createHash("sha256").update(role + path).digest("hex")}`), appEnv, actor);
+      const uploaded = await result.json() as { receipt?: { receipt_id: string } };
+      command.evidence_receipt_ids = [uploaded.receipt?.receipt_id ?? `evu_${"0".repeat(64)}`];
+    } else command.evidence_receipt_ids = [`evu_${"0".repeat(64)}`];
+  }
+  const req = request(method, path, command, csrf);
+  req.headers.set("idempotency-key", mutationKey);
+  const response = await handleAuthenticatedRoute(req, appEnv, actor);
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
@@ -441,6 +475,22 @@ test("an illegal lifecycle step is answered with the rule that refused it, not a
   });
   assert.equal(withdrawn.status, 200);
   assert.equal((withdrawn.body.service_case as Record<string, unknown>).state, "closed");
+});
+
+test("default-off receipt rollout accepts the current PWA's null evidence on an allowed closure", async () => {
+  const appEnv = env();
+  delete appEnv.APP_EVIDENCE_RECEIPTS_REQUIRED;
+  const opened = await call(appEnv, "ops", "POST", "/api/v1/service-cases", intakeBody());
+  const id = caseId(opened.body);
+  // Bypass call(): it replaces every legacy digest field with a synthetic file receipt.
+  const response = await handleAuthenticatedRoute(request("POST", `/api/v1/service-cases/${id}/closure`, {
+    closure_reason: "withdrawn",
+    detail_code: null,
+    evidence_digest: null,
+  }), appEnv, auth("ops"));
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal((body.service_case as Record<string, unknown>).state, "closed");
 });
 
 test("an unexpected field is refused rather than silently dropped", async () => {

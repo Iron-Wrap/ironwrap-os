@@ -17,8 +17,9 @@
 //     reconciles an already-unknown historical attempt. New execution is fail-closed until a real
 //     provider adapter and evidence resolver can enter through the canonical effect runtime.
 
-import { validAppCsrf } from "./app-auth.ts";
+import { sha256Hex, validAppCsrf } from "./app-auth.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
+import { evidenceIdempotencyKey, evidenceReceiptsRequired, evidenceUploadFailure, EvidenceUploadError, resolveEvidenceUploads, type EvidenceScope } from "./evidence-uploads.ts";
 import {
   SERVICE_CASE_SEVERITIES,
   SERVICE_CLOSURE_REASONS,
@@ -189,6 +190,7 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
     "reported_channel",
     "consent_ref",
     "intake_evidence_digest",
+    "evidence_receipt_ids",
     "response_sla_minutes",
     "intake_code",
   ];
@@ -201,7 +203,7 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
   const symptomCode = codeText(body.symptom_code, 3, 80);
   const reportedChannel = oneOf(body.reported_channel, REPORTED_CHANNELS);
   const consentRef = boundedText(body.consent_ref, 3, 140);
-  const intakeEvidenceDigest = digest(body.intake_evidence_digest);
+  if (rejectLegacyEvidence(env, body, "intake_evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
   const responseSlaMinutes = boundedInteger(body.response_sla_minutes, 1, 60 * 24 * 30);
   if (
     !customerId ||
@@ -211,7 +213,6 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
     !symptomCode ||
     !reportedChannel ||
     !consentRef ||
-    !intakeEvidenceDigest ||
     responseSlaMinutes === null
   ) {
     return json({ error: "invalid_service_case_intake" }, 400);
@@ -221,8 +222,21 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
   }
 
   try {
+    const receiptBased = body.evidence_receipt_ids !== undefined || evidenceReceiptsRequired(env);
+    const operationId = receiptBased ? evidenceIdempotencyKey(req) : "";
+    const evidenceDigest = await serviceEvidenceDigest(env, auth, {
+      purpose: "service_intake", targetId: roofJobId, action: "open", operationId,
+    }, body, "intake_evidence_digest");
+    const intakeIntent = {
+      customerId, propertyKey, roofJobId, severity, symptomCode, reportedChannel, consentRef, responseSlaMinutes,
+      assetRef: optionalText(body.asset_ref, 3, 140), warrantyPacketId: optionalText(body.warranty_packet_id, 3, 140),
+      originWorkPackageRef: optionalRefText(body.origin_work_package_ref, 1, 140), intakeCode: optionalCode(body.intake_code, 3, 120),
+      evidenceDigest,
+    };
+    const intakeRequestSha256 = receiptBased ? await sha256Hex(JSON.stringify(intakeIntent)) : undefined;
     const result = await openServiceCase(env, {
-      serviceCaseId: newId("svc_case"),
+      serviceCaseId: receiptBased ? `svc_case_${(await sha256Hex(JSON.stringify([auth.session.tenant_id, auth.session.user_id, operationId]))).slice(0, 32)}` : newId("svc_case"),
+      intakeRequestSha256,
       tenantId: auth.session.tenant_id,
       customerId,
       propertyKey,
@@ -234,7 +248,7 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
       symptomCode,
       reportedChannel,
       consentRef,
-      intakeEvidenceDigest,
+      intakeEvidenceDigest: evidenceDigest,
       responseSlaMinutes,
       openedByUserId: auth.session.user_id,
       intakeCode: optionalCode(body.intake_code, 3, 120),
@@ -244,9 +258,12 @@ async function openCase(req: Request, env: AppEnv, auth: AuthContext): Promise<R
       envelope(auth, {
         result: result.kind,
         service_case: projectCase(result.serviceCase),
-        original_case: result.kind === "duplicate" ? projectCase(result.original) : null,
+        original_case: result.kind === "duplicate" ? projectCase(result.original) :
+          result.serviceCase.duplicate_of_case_id ? projectCase((await getServiceCase(env, {
+            tenantId: auth.session.tenant_id, serviceCaseId: result.serviceCase.duplicate_of_case_id,
+          }))!) : null,
       }),
-      201,
+      result.kind === "replayed" ? 200 : 201,
     );
   } catch (error) {
     return storeError(error);
@@ -269,7 +286,7 @@ async function recordTriage(
       "advisory_confidence_bps",
       "final_category",
       "responsibility",
-      "evidence_digest",
+      "evidence_digest", "evidence_receipt_ids",
     ])
   ) {
     return json({ error: "unexpected_field" }, 400);
@@ -277,8 +294,8 @@ async function recordTriage(
   const advisorySource = oneOf(body.advisory_source, ADVISORY_SOURCES);
   const finalCategory = oneOf(body.final_category, SERVICE_TRIAGE_CATEGORIES);
   const responsibility = oneOf(body.responsibility, SERVICE_RESPONSIBILITIES);
-  const evidenceDigest = digest(body.evidence_digest);
-  if (!advisorySource || !finalCategory || !responsibility || !evidenceDigest) {
+  if (rejectLegacyEvidence(env, body, "evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
+  if (!advisorySource || !finalCategory || !responsibility) {
     return json({ error: "invalid_service_triage" }, 400);
   }
   const advisoryCategory =
@@ -299,6 +316,9 @@ async function recordTriage(
   }
 
   try {
+    const evidenceDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "triage", operationId: "",
+      }, body, "evidence_digest");
     const result = await recordServiceTriage(env, {
       triageId: newId("svc_triage"),
       tenantId: auth.session.tenant_id,
@@ -340,7 +360,7 @@ async function recordDiagnosis(
       "work_package_ref",
       "work_package_version",
       "warranty_reserve_cents",
-      "evidence_digest",
+      "evidence_digest", "evidence_receipt_ids",
     ])
   ) {
     return json({ error: "unexpected_field" }, 400);
@@ -350,19 +370,21 @@ async function recordDiagnosis(
   const workPackageRef = refText(body.work_package_ref, 1, 140);
   const workPackageVersion = boundedInteger(body.work_package_version, 1, 1_000_000);
   const warrantyReserveCents = boundedInteger(body.warranty_reserve_cents, 0, 100_000_000);
-  const evidenceDigest = digest(body.evidence_digest);
+  if (rejectLegacyEvidence(env, body, "evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
   if (
     !rootCauseCode ||
     !correctiveActionCode ||
     !workPackageRef ||
     workPackageVersion === null ||
-    warrantyReserveCents === null ||
-    !evidenceDigest
+    warrantyReserveCents === null
   ) {
     return json({ error: "invalid_service_diagnosis" }, 400);
   }
 
   try {
+    const evidenceDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "diagnose", operationId: "",
+      }, body, "evidence_digest");
     const tenantId = auth.session.tenant_id;
     // The diagnosis binds to the triage this case actually carries, so the browser cannot cite
     // another case's decision as the basis for dispatching remedy work.
@@ -405,14 +427,14 @@ async function issueRemedy(
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
   const body = parsed.value;
   if (
-    !onlyKeys(body, ["scheduled_start_at", "scheduled_end_at", "parts_manifest_digest"])
+    !onlyKeys(body, ["scheduled_start_at", "scheduled_end_at", "parts_manifest_digest", "evidence_receipt_ids"])
   ) {
     return json({ error: "unexpected_field" }, 400);
   }
   const scheduledStartAt = isoTimestamp(body.scheduled_start_at);
   const scheduledEndAt = isoTimestamp(body.scheduled_end_at);
-  const partsManifestDigest = digest(body.parts_manifest_digest);
-  if (!scheduledStartAt || !scheduledEndAt || !partsManifestDigest) {
+  if (rejectLegacyEvidence(env, body, "parts_manifest_digest")) return json({ error: "evidence_receipts_required" }, 400);
+  if (!scheduledStartAt || !scheduledEndAt) {
     return json({ error: "invalid_service_remedy" }, 400);
   }
   if (Date.parse(scheduledEndAt) <= Date.parse(scheduledStartAt)) {
@@ -420,6 +442,9 @@ async function issueRemedy(
   }
 
   try {
+    const partsManifestDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "issue_remedy", operationId: "",
+      }, body, "parts_manifest_digest");
     const tenantId = auth.session.tenant_id;
     const diagnosis = (
       await listServiceCaseDiagnoses(env, { tenantId, serviceCaseId: caseId })
@@ -456,15 +481,15 @@ async function verifyRemedy(
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
   const body = parsed.value;
   if (
-    !onlyKeys(body, ["outcome", "field_evidence_digest", "cost_actual_cents", "failure_code"])
+    !onlyKeys(body, ["outcome", "field_evidence_digest", "evidence_receipt_ids", "cost_actual_cents", "failure_code"])
   ) {
     return json({ error: "unexpected_field" }, 400);
   }
   const outcome = oneOf(body.outcome, ["verified", "failed"] as const);
-  const fieldEvidenceDigest = digest(body.field_evidence_digest);
+  if (rejectLegacyEvidence(env, body, "field_evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
   const costActualCents = boundedInteger(body.cost_actual_cents, 0, 100_000_000);
   const failureCode = optionalCode(body.failure_code, 3, 120);
-  if (!outcome || !fieldEvidenceDigest || costActualCents === null) {
+  if (!outcome || costActualCents === null) {
     return json({ error: "invalid_service_remedy_verification" }, 400);
   }
   if (outcome === "failed" && !failureCode) {
@@ -472,6 +497,9 @@ async function verifyRemedy(
   }
 
   try {
+    const fieldEvidenceDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "verify_remedy", operationId: remedyId,
+      }, body, "field_evidence_digest");
     const owned = await remedyBelongsToCase(env, auth, caseId, remedyId);
     if (!owned) return json({ error: "not_found" }, 404);
     const result = await verifyServiceRemedy(env, {
@@ -504,15 +532,15 @@ async function recordCustomerDecision(
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
   const body = parsed.value;
   if (
-    !onlyKeys(body, ["decision", "acceptance_ref", "dispute_code", "evidence_digest"])
+    !onlyKeys(body, ["decision", "acceptance_ref", "dispute_code", "evidence_digest", "evidence_receipt_ids"])
   ) {
     return json({ error: "unexpected_field" }, 400);
   }
   const decision = oneOf(body.decision, ["accepted", "disputed"] as const);
-  const evidenceDigest = digest(body.evidence_digest);
+  if (rejectLegacyEvidence(env, body, "evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
   const acceptanceRef = optionalText(body.acceptance_ref, 3, 140);
   const disputeCode = optionalCode(body.dispute_code, 3, 120);
-  if (!decision || !evidenceDigest) {
+  if (!decision) {
     return json({ error: "invalid_service_customer_decision" }, 400);
   }
   if (decision === "accepted" && !acceptanceRef) {
@@ -523,6 +551,9 @@ async function recordCustomerDecision(
   }
 
   try {
+    const evidenceDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "customer_decision", operationId: remedyId,
+      }, body, "evidence_digest");
     const owned = await remedyBelongsToCase(env, auth, caseId, remedyId);
     if (!owned) return json({ error: "not_found" }, 404);
     const result = await recordCustomerServiceDecision(env, {
@@ -553,7 +584,7 @@ async function closeCase(
   const parsed = await readJson(req);
   if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
   const body = parsed.value;
-  if (!onlyKeys(body, ["closure_reason", "detail_code", "evidence_digest"])) {
+  if (!onlyKeys(body, ["closure_reason", "detail_code", "evidence_digest", "evidence_receipt_ids"])) {
     return json({ error: "unexpected_field" }, 400);
   }
   const closureReason = oneOf(
@@ -561,15 +592,14 @@ async function closeCase(
     SERVICE_CLOSURE_REASONS.filter((reason) => reason !== "duplicate"),
   );
   if (!closureReason) return json({ error: "invalid_service_closure" }, 400);
-  const evidenceDigest =
-    body.evidence_digest === undefined || body.evidence_digest === null
-      ? null
-      : digest(body.evidence_digest);
-  if (body.evidence_digest !== undefined && body.evidence_digest !== null && !evidenceDigest) {
-    return json({ error: "invalid_service_closure" }, 400);
-  }
+  if (rejectLegacyEvidence(env, body, "evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
 
   try {
+    const noEvidence = body.evidence_receipt_ids === undefined &&
+      (body.evidence_digest === undefined || body.evidence_digest === null);
+    const evidenceDigest = noEvidence ? null : await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "close", operationId: "",
+      }, body, "evidence_digest");
     const serviceCase = await closeServiceCase(env, {
       tenantId: auth.session.tenant_id,
       serviceCaseId: caseId,
@@ -628,7 +658,7 @@ async function openClaim(
       "counterparty_ref",
       "claim_basis_code",
       "claimed_amount_cents",
-      "evidence_digest",
+      "evidence_digest", "evidence_receipt_ids",
       "deadline_at",
     ])
   ) {
@@ -638,14 +668,13 @@ async function openClaim(
   const counterpartyRef = boundedText(body.counterparty_ref, 3, 140);
   const claimBasisCode = codeText(body.claim_basis_code, 3, 120);
   const claimedAmountCents = boundedInteger(body.claimed_amount_cents, 1, 100_000_000);
-  const evidenceDigest = digest(body.evidence_digest);
+  if (rejectLegacyEvidence(env, body, "evidence_digest")) return json({ error: "evidence_receipts_required" }, 400);
   const deadlineAt = isoTimestamp(body.deadline_at);
   if (
     !counterpartyKind ||
     !counterpartyRef ||
     !claimBasisCode ||
     claimedAmountCents === null ||
-    !evidenceDigest ||
     !deadlineAt
   ) {
     return json({ error: "invalid_cost_recovery_claim" }, 400);
@@ -656,6 +685,9 @@ async function openClaim(
   }
 
   try {
+    const evidenceDigest = await serviceEvidenceDigest(env, auth, {
+        purpose: "service_step", targetId: caseId, action: "recover_cost", operationId: "",
+      }, body, "evidence_digest");
     const tenantId = auth.session.tenant_id;
     const diagnosis = (
       await listServiceCaseDiagnoses(env, { tenantId, serviceCaseId: caseId })
@@ -790,7 +822,7 @@ async function claimBelongsToCase(
 }
 
 function projectCase(record: ServiceCaseRecord): Record<string, unknown> {
-  const { tenant_id: _tenantId, ...rest } = record;
+  const { tenant_id: _tenantId, intake_request_sha256: _intakeRequestHash, ...rest } = record;
   return rest;
 }
 
@@ -828,6 +860,7 @@ function officeRole(auth: AuthContext): boolean {
  * this state" rather than "IronWrap OS is broken".
  */
 function storeError(error: unknown): Response {
+  if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
   const message = error instanceof Error ? error.message : "service_case_store_unavailable";
   if (message === "service_case_not_found") return json({ error: "not_found" }, 404);
   if (message === "service_case_diagnosis_not_found") return json({ error: "not_found" }, 404);
@@ -935,6 +968,22 @@ function optionalCaseId(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   const text = boundedText(value, 10, 100);
   return text && /^svc_case_[a-z0-9_]+$/.test(text) ? text : null;
+}
+
+function rejectLegacyEvidence(env: AppEnv, body: Record<string, unknown>, field: string): boolean {
+  return field in body && (evidenceReceiptsRequired(env) || body.evidence_receipt_ids !== undefined);
+}
+
+async function serviceEvidenceDigest(env: AppEnv, auth: AuthContext, scope: EvidenceScope,
+  body: Record<string, unknown>, legacyField: string): Promise<string> {
+  if (body.evidence_receipt_ids !== undefined || evidenceReceiptsRequired(env)) {
+    return (await resolveEvidenceUploads(env, auth, scope, body.evidence_receipt_ids)).sha256;
+  }
+  // Rollout compatibility: a legacy digest remains an unverified assertion. It is never
+  // written into the upload receipt/manifest stores or upgraded to file provenance.
+  const legacy = digest(body[legacyField]);
+  if (!legacy) throw new EvidenceUploadError("invalid_service_evidence", 400);
+  return legacy;
 }
 
 function digest(value: unknown): string | null {

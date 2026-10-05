@@ -212,6 +212,7 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/api/v1/document-generations` | owner session + CSRF + idempotency + `APP_DOCUMENT_GENERATION_ENABLED=true` | snapshot authorized inputs, persist intent/attempt, store deterministic immutable HTML in R2, require exact HEAD readback, and optionally atomically bind a server-minted derived attachment receipt |
 | GET | `/api/v1/document-generations/{receipt_id}` | owner session | reconstruct one browser-safe immutable generation receipt, its durable settled reconciliation outcome, and exact input versions |
 | POST | `/api/v1/document-generations/{generation_attempt_id}/reconcile` | owner session + CSRF + idempotency + enabled generation | perform server-side R2 HEAD reconciliation; no browser-supplied provider evidence or implicit retry |
+| POST | `/api/v1/evidence-uploads` | session + CSRF + Origin + Idempotency-Key; Field requires paired-device proof | bounded file/photo upload, Worker-computed binary SHA256, immutable R2 readback then D1 receipt; see file evidence contract below |
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
@@ -237,7 +238,200 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/api/v1/proposal-publication-approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection of a prepared publication; invokes no broker |
 | POST | `/api/v1/proposal-publication-approvals/:id/reconcile` | configured owner + CSRF + recent session | one immutable reconciliation append for an uncertain publication |
 
-### PWA auth and tenant boundary
+### File evidence contract
+
+Source-present in `src/evidence-uploads.ts`, `src/inventory-control-api.ts`,
+`src/service-cases.ts`, `src/service-case-store.ts`, and `src/safety-api.ts`; D1 migration
+`0139_evidence_upload_receipts.sql`. Focused local checks are in `test/evidence-uploads.test.ts`,
+`test/inventory-control-api.test.ts`, `test/service-cases-api.test.ts`, and `test/app-auth.test.ts`.
+These checks use synthetic files and controlled D1/R2 adapters; they do not prove deployment,
+provider configuration, real-device operation, or accepted UI behavior.
+
+Receipt enforcement is controlled by `APP_EVIDENCE_RECEIPTS_REQUIRED="true"`, a non-secret rollout
+flag that is off by default. No deployment configuration is changed by this slice. With the flag
+unset or false, existing stock refs and service/corrective typed digests remain accepted under
+their existing rules; they are legacy assertions and never become upload receipts or manifests.
+Legacy stock refs still have their actual binary R2 bytes checked. Confirmed upload receipt IDs
+may be submitted while the flag is off and always receive the full scope/readback verification.
+Mixing legacy evidence fields with receipt IDs is refused in either mode. Enable required receipt
+enforcement only after the UI owner has wired file selection, upload, and receipt submission.
+
+Upload one selected file through `POST /api/v1/evidence-uploads`. The multipart fields are
+`file`, `purpose`, `target_id`, `action`, and `operation_id` (empty for actions whose table entry
+says empty). `Idempotency-Key` identifies this upload, independently of its domain operation ID.
+Choose a distinct upload key for each selected file and retain it through retries. Upload keys
+are 8-120 characters using letters, digits, period, underscore, colon, or hyphen, beginning with
+a letter or digit. Stock operation IDs are 8-200 characters with the same character set; other
+target/operation tokens are 3-200 characters. Intake operation IDs follow the upload-key rules.
+
+| Purpose | target_id | action | operation_id | Current authorization |
+|---|---|---|---|---|
+| stock | Selected inventory lot | receive, reserve, release_reservation, issue_use, return, transfer, quarantine, release_quarantine, count_freeze, count_adjustment, yield, reversal | Stock command_id | Owner/Ops; Field only issue_use, return, quarantine |
+| service_intake | Selected native roof_job_id, before a case exists | open | Intake request Idempotency-Key | Owner/Ops |
+| service_step | Service case ID | triage, diagnose, issue_remedy, close | Empty | Owner/Ops |
+| service_step | Service case ID | verify_remedy, customer_decision | Remedy ID belonging to that case | Owner/Ops |
+| service_step | Service case ID | recover_cost | Empty | Owner only |
+| corrective_action | Corrective action ID | submit | Empty | Current active safety actor |
+
+Stock resolves the current source position's lot before using a receipt. Receiving/returning may
+open a new position, using the selected lot. Reversal uses the first movement lot of the referenced
+original command. The receipt does not supply policy, authority, stock approval, or safety release.
+The command, conservation checks, current safety actor checks, and independent verifier rules
+continue to decide whether a transition is permitted.
+
+```sh
+curl https://app.example.invalid/api/v1/evidence-uploads \
+  -H 'Origin: https://app.example.invalid' \
+  -H 'Cookie: __Host-ironwrap_session=<session-token>' \
+  -H 'X-CSRF-Token: <session-csrf>' \
+  -H 'Idempotency-Key: upload-stock-synthetic-01' \
+  -F 'purpose=stock' -F 'target_id=lot_synthetic_1' \
+  -F 'action=receive' -F 'operation_id=stock-cmd-1' \
+  -F 'file=@synthetic-proof.png;type=image/png'
+```
+
+Field calls also carry `X-IronWrap-Device-Proof`. The global authentication gate rejects a missing
+or mismatched proof before parsing files. The upload returns `201` with this shape; exact retries
+return `200` and `result: replayed` with the original receipt:
+
+```json
+{"result":"stored","receipt":{"receipt_id":"evu_<64-lowercase-hex>","file_name":"synthetic-proof.png","content_type":"image/png","byte_size":15,"purpose":"stock","target_id":"lot_synthetic_1","action":"receive","operation_id":"stock-cmd-1"}}
+```
+
+Pass `evidence_receipt_ids: ["evu_<64-lowercase-hex>"]` in the domain JSON after upload confirmation.
+One mutation may select 1-4 distinct receipts with exactly the same scope. No digest or R2 key is
+needed from the browser. The actual `evu_` token is the one returned by the upload, not a token
+constructed from the displayed placeholder. For stock, the rest of the intent is unchanged and
+`request_fingerprint_sha256` is optional: the Worker derives the replay fingerprint from the
+complete normalized intent and resolved files. A supplied compatibility fingerprint never overrides
+that calculation.
+
+For example, `POST /api/v1/inventory/commands` with a receipt uploaded for `receive`, the same
+`command_id`, and the selected `lot_id`:
+
+```json
+{"command_id":"stock-cmd-1","idempotency_key":"stock-cmd-1","transition":"receive","authority_ref":"<current-authority-readback-id>","policy_ref":"policy:inventory-command","policy_version":"1","item_id":"<selected-item-id>","lot_id":"lot_synthetic_1","bin_id":"<selected-bin-id>","uom_id":"<selected-uom-id>","job_custody":"-","quantity_scaled":10,"unit_cost_minor":500,"receipt_id":"<business-receipt-id>","po_line_id":"<owned-po-line-id>","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+Select IDs and the current authority readback from the inventory API; the example placeholders
+do not create an authority or native row. `receipt_id` is the existing business receipt reference;
+`evidence_receipt_ids` contains the confirmed file-upload receipts. Other stock transitions use
+their existing intent fields and the exact transition/command scope in the table above.
+
+Service intake uses the same stable domain `Idempotency-Key` in its scope and request header:
+
+```json
+{"customer_id":"CUSTOMER-SYNTHETIC","property_key":"PROPERTY-SYNTHETIC","roof_job_id":"JOB-SYNTHETIC-1","severity":"standard","symptom_code":"synthetic_leak","reported_channel":"phone","consent_ref":"consent-synthetic","response_sla_minutes":60,"evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/triage`:
+
+```json
+{"advisory_source":"none","final_category":"material_manufacturer","responsibility":"manufacturer","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/diagnoses` (receipt action `diagnose`):
+
+```json
+{"root_cause_code":"granule_loss_defect","corrective_action_code":"replace_affected_field","work_package_ref":"<owned-work-package-ref>","work_package_version":1,"warranty_reserve_cents":120000,"evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/remedies` (receipt action `issue_remedy`):
+
+```json
+{"scheduled_start_at":"<selected-start-ISO-timestamp>","scheduled_end_at":"<selected-end-ISO-timestamp>","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+Replace the timestamp placeholders with user-selected operational inputs to the existing service
+API; the end must follow the start.
+
+`POST /api/v1/service-cases/{case_id}/remedies/{remedy_id}/verification`:
+
+```json
+{"outcome":"verified","cost_actual_cents":1000,"evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/remedies/{remedy_id}/customer-decision` (receipt action
+`customer_decision`, operation ID `{remedy_id}`):
+
+```json
+{"decision":"accepted","acceptance_ref":"<customer-acceptance-ref>","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/closure` (receipt action `close`):
+
+```json
+{"closure_reason":"remedied_accepted","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+`POST /api/v1/service-cases/{case_id}/cost-recovery-claims` (receipt action `recover_cost`, Owner):
+
+```json
+{"counterparty_kind":"manufacturer","counterparty_ref":"<counterparty-ref>","claim_basis_code":"material_defect","claimed_amount_cents":1000,"deadline_at":"<selected-future-ISO-timestamp>","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+The claim API retains its existing user-selected operational `deadline_at` validation and
+diagnosis requirement. Creating a file receipt or a claim does not configure provider execution.
+
+`POST /api/v1/safety/corrective-actions/{action_id}/evidence`:
+
+```json
+{"detail":"Synthetic control photographed","evidence_receipt_ids":["evu_<64-lowercase-hex>"]}
+```
+
+The remaining service actions retain their existing non-evidence inputs. Their previous
+`evidence_digest`, `field_evidence_digest`, and `parts_manifest_digest` fields are replaced by
+`evidence_receipt_ids`. Closure may omit receipts when its existing state/rule allows closure
+without new evidence. Intake replaces `intake_evidence_digest`; stock replaces `evidence_refs`;
+corrective submission replaces `evidence_refs_json` and `evidence_sha256`. Required receipt mode
+refuses those legacy public fields, and both rollout modes refuse them beside receipt IDs.
+Historical reads and internal legacy fixtures retain their original digest fields and do not gain
+verified file provenance retroactively. UI adoption is required before enabling the rollout flag.
+
+Only JPEG, PNG, WebP, HEIC, HEIF, and PDF are accepted; the declared MIME must match the file
+signature. Signature checks identify a format, not its truth or physical quality. Each file must be
+1 byte through 8 MiB. Actual streamed multipart bytes are capped at 8 MiB plus 16 KiB, including
+requests without an accurate Content-Length. Extra or duplicate multipart fields are refused.
+Field and non-office uploads share the existing 8-attempts-per-60-seconds throttle. Owner and Ops
+may make 16 attempts in the same window so a four-file step and exact retries remain workable.
+Every attempt, including a replay, counts; exhausted windows return `429` with `Retry-After`.
+Domain JSON retains its existing body limits.
+
+The Worker writes R2 conditionally to an immutable actor/upload-key identity, then reads the
+object and hashes its binary `arrayBuffer()` before issuing a D1 receipt. D1 records tenant, actor,
+role, purpose, target, action, operation ID, R2 pointer, size, MIME, name, and Worker digest.
+Receipts and resolved manifests reject update/delete/replace. Resolution checks current role and
+current target ownership, receipt tenant/actor/action/operation, R2 size/type/metadata, and the hash
+of the actual stored bytes before starting any domain mutation. Stock retains per-file refs and
+hashes; service and corrective aggregate digests identify the immutable server-derived manifest
+in `evidence_upload_manifests`, which retains the exact per-file refs and binary hashes.
+
+Recovery invariants:
+
+- R2 failure creates no receipt. R2 success with D1 failure returns a retryable store error and leaves
+  only retained raw evidence. Re-send the original upload key, scope, name, type, and bytes; the
+  Worker verifies and anchors the original object without overwriting it. Changed intent conflicts,
+  including while no D1 receipt exists. An R2 object alone never authorizes a domain write.
+- Missing or tampered files, wrong tenant/actor/target/action/operation, duplicate receipt selections,
+  and manifest-store failure refuse before stock/service/safety mutation. Exact upload retries are
+  also subject to the throttle. No receipt is returned before both stores are verified.
+- Receipt-based intake IDs are derived from tenant, actor, and domain Idempotency-Key. Exact retries, including
+  concurrent first requests and retries of an originally linked duplicate, return the same case
+  with `result: replayed`; changed normalized intake intent returns a conflict. A separate new
+  customer report uses a new intake key and retains the existing linked-duplicate policy.
+  Legacy intake retains its existing report/duplicate behavior while enforcement is off; its typed
+  digest and absent upload receipt do not gain file proof or the new receipt-based replay contract.
+- Files need connectivity to upload. Retain each file and upload key locally until a receipt is
+  confirmed; a JSON outbox must never treat a digest or file name as uploaded evidence. After a lost
+  response, retry the upload first, then submit the confirmed receipt IDs. Stock uses its existing
+  command idempotency; intake uses its stable request key; corrective submission preserves exact
+  evidence/detail replay. Other service-step transition conflicts require a current-case read before
+  another attempt; uploading evidence alone does not make a service transition retry-safe.
+- A retained file is capture evidence, not independent safety acceptance. The reporter, corrective
+  owner, and evidence capturer remain excluded from verifying their own closure. No provider
+  credentials or external-effect authority are added; cost-recovery execution stays unconfigured.
+
+## PWA auth and tenant boundary
 
 This slice is intentionally **one tenant + one Worker deployment**. `APP_TENANT_ID` is the
 deployment/session isolation boundary: provisioning rejects any other tenant, every session joins

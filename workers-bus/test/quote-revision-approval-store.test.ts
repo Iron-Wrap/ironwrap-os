@@ -14,6 +14,7 @@ import {
   type CreateQuoteRevisionApprovalRequestInput,
 } from "../src/quote-revision-approval-store.ts";
 import type { AppEnv } from "../src/app-types.ts";
+import { approvedSnapshotFromPreview, quoteRevisionSnapshotLabel } from "../src/approval-snapshot.ts";
 
 const CREATED = "2026-07-12T10:00:00.000Z";
 const EXPIRES = "2026-07-12T10:05:00.000Z";
@@ -147,6 +148,9 @@ test("quote revision ledger is immutable and projects only non-commercial Draft-
   );
 
   const projection = quoteRevisionApprovalProjection(created.request);
+  assert.match(projection.approved_snapshot?.snapshot_id ?? "", /^approval-snapshot:[0-9a-f]{64}$/);
+  assert.equal(projection.approved_snapshot?.version_label, "Source quote v1 (correction draft review)");
+  assert.deepEqual(projection.approved_snapshot, approvedSnapshotFromPreview(created.request.preview_json, quoteRevisionSnapshotLabel(1)));
   assert.equal(projection.preview?.draft.status, "Draft");
   assert.equal(projection.preview?.effects.commercial_terms_copied, false);
   assert.equal(containsForbidden(projection), false, "browser projection must never contain raw commercial or receipt data");
@@ -157,6 +161,16 @@ test("quote revision ledger is immutable and projects only non-commercial Draft-
   assert.throws(() => db.raw.prepare(
     "UPDATE quote_revision_approval_request_events SET detail_code = 'rewritten' WHERE id = 1",
   ).run(), /quote_revision_approval_events_immutable/);
+  for (const column of ["preview_json", "preview_digest", "receipt_preview_digest", "source_quote_version"]) {
+    assert.throws(() => db.raw.prepare(
+      `UPDATE quote_revision_approval_requests SET ${column} = ? WHERE quote_revision_approval_id = ?`,
+    ).run(column.endsWith("digest") ? "f".repeat(64) : column === "source_quote_version" ? 9 : "{}", created.request.quote_revision_approval_id),
+    /quote_revision_approval_binding_immutable/);
+  }
+  assert.equal(await getQuoteRevisionApprovalRequest(appEnv, "tenant-other", created.request.quote_revision_approval_id), null);
+  const { approved_snapshot: _snapshot, ...legacyPreview } = JSON.parse(created.request.preview_json);
+  assert.equal(quoteRevisionApprovalProjection({ ...created.request, preview_json: JSON.stringify(legacyPreview) }).approved_snapshot, null);
+  assert.equal(quoteRevisionApprovalProjection({ ...created.request, source_quote_version: 9 }).approved_snapshot, null);
 });
 
 test("quote revision preparation is intent-bound and permits only one active deterministic target", async () => {
@@ -226,6 +240,7 @@ test("one quote revision approval claim can execute, a stale lease becomes uncer
     leaseExpiresAt: "2026-07-12T10:01:30.000Z",
   });
   assert.equal(claimed.kind, "claimed");
+  assert.ok("request" in claimed);
 
   const sameDecision = await claimQuoteRevisionApprovalExecution(appEnv, {
     tenantId: "ironwrap",
@@ -238,6 +253,16 @@ test("one quote revision approval claim can execute, a stale lease becomes uncer
     leaseExpiresAt: "2026-07-12T10:01:31.000Z",
   });
   assert.equal(sameDecision.kind, "replayed");
+  assert.ok("request" in sameDecision);
+  assert.deepEqual(quoteRevisionApprovalProjection(sameDecision.request).approved_snapshot,
+    quoteRevisionApprovalProjection(claimed.request).approved_snapshot);
+  const otherDecision = await claimQuoteRevisionApprovalExecution(appEnv, {
+    tenantId: "ironwrap", requestId: "quote-revision-approval:0001", expectedVersion: 1,
+    decisionIdempotencyKey: "quote-revision-competing-0001", approvedByUserId: "appu_owner_0001",
+    approvedByFrappeUser: "owner@example.com", now: "2026-07-12T10:01:01.000Z",
+    leaseExpiresAt: "2026-07-12T10:01:31.000Z",
+  });
+  assert.equal(otherDecision.kind, "already_decided");
 
   assert.equal(await markExpiredQuoteRevisionApprovalExecutionLeases(appEnv, "2026-07-12T10:02:00.000Z", "ironwrap"), 1);
   const uncertain = await getQuoteRevisionApprovalRequest(appEnv, "ironwrap", "quote-revision-approval:0001");
@@ -257,6 +282,8 @@ test("one quote revision approval claim can execute, a stale lease becomes uncer
   assert.equal(reconciled.kind, "reconciled");
   assert.equal(reconciled.request.state, "execution_uncertain");
   assert.equal(reconciled.request.reconciliation_outcome, "inconclusive");
+  assert.deepEqual(quoteRevisionApprovalProjection(reconciled.request).approved_snapshot,
+    quoteRevisionApprovalProjection(claimed.request).approved_snapshot);
 
   const events = db.raw.prepare(
     "SELECT event_type FROM quote_revision_approval_request_events WHERE quote_revision_approval_id = ? ORDER BY id",

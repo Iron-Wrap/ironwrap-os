@@ -1,4 +1,10 @@
 import type { AppEnv } from "./app-types.ts";
+import {
+  approvedSnapshotFromPreview,
+  freezeApprovalSnapshot,
+  PROPOSAL_PUBLICATION_SNAPSHOT_LABEL,
+  type ApprovedSnapshot,
+} from "./approval-snapshot.ts";
 
 export const PROPOSAL_PUBLICATION_APPROVAL_STATES = [
   "pending",
@@ -133,6 +139,7 @@ export interface ProposalPublicationApprovalRequestProjection {
   pack_status_before: string;
   request_text: string;
   preview: ProposalPublicationApprovalPreview | null;
+  approved_snapshot: ApprovedSnapshot | null;
   expires_at: string;
   requested_by: { user_id: string; frappe_user: string | null };
   approved_by: { user_id: string; frappe_user: string; approved_at: string } | null;
@@ -214,6 +221,16 @@ export async function createProposalPublicationApprovalRequest(
   env: AppEnv,
   input: CreateProposalPublicationApprovalRequestInput,
 ): Promise<CreateProposalPublicationApprovalRequestResult> {
+  const previewJson = await freezeApprovalSnapshot({
+    tenantId: input.tenantId,
+    requestId: input.id,
+    requestKind: "proposal_publication",
+    previewJson: input.previewJson,
+    argsDigest: input.argsDigest,
+    previewDigest: input.previewDigest,
+    receiptPreviewDigest: input.receiptPreviewDigest,
+    versionLabel: PROPOSAL_PUBLICATION_SNAPSHOT_LABEL,
+  });
   const inserted = await env.DB.prepare(
     `INSERT INTO proposal_publication_approval_requests (
        proposal_publication_approval_id, tenant_id, request_kind, state, version, prepare_idempotency_key,
@@ -247,7 +264,7 @@ export async function createProposalPublicationApprovalRequest(
     input.packStatusBefore,
     input.requestText,
     input.writeArgsJson,
-    input.previewJson,
+    previewJson,
     input.argsDigest,
     input.previewDigest,
     input.receiptPreviewDigest,
@@ -612,6 +629,7 @@ export async function reconcileProposalPublicationApprovalUncertainty(
 export function proposalPublicationApprovalProjection(
   record: ProposalPublicationApprovalRequestRecord,
 ): ProposalPublicationApprovalRequestProjection {
+  const preview = safeProposalPublicationApprovalPreview(record.preview_json, record);
   return {
     id: record.proposal_publication_approval_id,
     kind: "proposal_publication",
@@ -627,7 +645,10 @@ export function proposalPublicationApprovalProjection(
     },
     pack_status_before: record.pack_status_before,
     request_text: record.request_text,
-    preview: safeProposalPublicationApprovalPreview(record.preview_json, record),
+    preview,
+    approved_snapshot: preview
+      ? approvedSnapshotFromPreview(record.preview_json, PROPOSAL_PUBLICATION_SNAPSHOT_LABEL)
+      : null,
     expires_at: record.expires_at,
     requested_by: { user_id: record.requested_by_user_id, frappe_user: record.requested_by_frappe_user },
     approved_by: record.approved_by_user_id && record.approved_by_frappe_user && record.approved_at

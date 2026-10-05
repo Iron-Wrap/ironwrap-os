@@ -4,7 +4,7 @@ import { memo, useCallback, useMemo, useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
-import { WorkspaceHeader } from "../components/workspace-header";
+import { PageHeader } from "../components/ui/page-header";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -29,6 +29,8 @@ import {
   type InventoryScanInput,
   type InventoryTransition,
 } from "./inventory-contracts";
+import { BarcodeCamera } from "./barcode-camera";
+import { InventoryLotLineage } from "./inventory-lot-lineage";
 
 type Position = InventoryOverviewResponse["positions"][number];
 type Layer = InventoryOverviewResponse["valuation_layers"][number];
@@ -211,6 +213,10 @@ function InventoryDesk({
   refreshing: boolean;
 }) {
   const [barcode, setBarcode] = useState("");
+  const [shopMode, setShopMode] = useState(
+    () =>
+      session.user.role !== "field" && Boolean(window.matchMedia?.("(max-width: 1023px)").matches),
+  );
   const [lookupState, setLookupState] = useState<{
     phase: "idle" | "pending" | "success" | "not_found" | "rejected" | "uncertain";
     response?: InventoryLookupResponse;
@@ -314,7 +320,10 @@ function InventoryDesk({
 
   async function submitLookup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const value = barcode.trim();
+    await resolveBarcode(barcode.trim());
+  }
+
+  async function resolveBarcode(value: string) {
     if (!value) {
       setLookupState({ phase: "rejected", message: "Enter a barcode before looking it up." });
       return;
@@ -447,22 +456,35 @@ function InventoryDesk({
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-6 pb-4">
-      <WorkspaceHeader
-        icon={<Warehouse aria-hidden="true" />}
+    <section
+      data-environment={shopMode ? "shop" : undefined}
+      className="mx-auto max-w-6xl space-y-6 pb-4"
+    >
+      <PageHeader
         title="Inventory"
-        description="Scan a stock identity, choose what happened, and submit one governed warehouse action."
+        meta="Scan a stock label, check its lot and custody, then choose the next recorded action."
         actions={
-          <Button
-            type="button"
-            variant="outline"
-            size="compact"
-            busy={refreshing}
-            onClick={onRefresh}
-          >
-            <RefreshCw aria-hidden="true" />
-            Refresh
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              aria-pressed={shopMode}
+              onClick={() => setShopMode((current) => !current)}
+            >
+              <Warehouse aria-hidden="true" />
+              {shopMode ? "Shop reading on" : "Shop reading"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="compact"
+              busy={refreshing}
+              onClick={onRefresh}
+            >
+              <RefreshCw aria-hidden="true" />
+              Refresh
+            </Button>
+          </>
         }
       />
 
@@ -472,8 +494,6 @@ function InventoryDesk({
           and idempotency checks.
         </Notice>
       ) : null}
-
-      <InventoryReadBack overview={overview} currency={session.tenant.currency} />
 
       <section
         aria-labelledby="inventory-scan-heading"
@@ -506,6 +526,7 @@ function InventoryDesk({
                 autoComplete="off"
                 inputMode="text"
                 placeholder="Scan or enter a barcode"
+                maxLength={200}
               />
               <div className="flex flex-wrap gap-3">
                 <Button type="submit" variant="outline" busy={lookupState.phase === "pending"}>
@@ -523,6 +544,13 @@ function InventoryDesk({
                 </Button>
               </div>
             </form>
+            <BarcodeCamera
+              disabled={offline || lookupState.phase === "pending" || scanState.phase === "pending"}
+              onBarcode={(value) => {
+                setBarcode(value);
+                void resolveBarcode(value);
+              }}
+            />
             {lookupState.phase === "success" && lookupState.response?.result ? (
               <Notice tone="success" title="Barcode resolved">
                 <LookupResult result={lookupState.response.result} />
@@ -574,6 +602,14 @@ function InventoryDesk({
         <RecentScans scans={overview.recent_scans} />
       </section>
 
+      <InventoryReadBack overview={overview} currency={session.tenant.currency} />
+      <InventoryLotLineage
+        overview={overview}
+        role={session.user.role}
+        locale={session.tenant.locale}
+        onChoose={choosePosition}
+      />
+
       <PositionsTable positions={overview.positions} onChoose={choosePosition} />
 
       <section aria-labelledby="inventory-command-heading">
@@ -599,7 +635,7 @@ function InventoryDesk({
                   <label className="block text-sm font-bold">
                     What happened?
                     <select
-                      className="mt-2 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base"
+                      className="environment-control mt-2 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base"
                       value={transition}
                       onChange={(event) => {
                         setSelectedTransition(event.target.value as InventoryTransition);
@@ -724,7 +760,7 @@ const InventoryReadBack = memo(function InventoryReadBack({
         </Notice>
       ) : null}
 
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+      <dl className="grid grid-cols-1 gap-3 min-[390px]:grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
         <Tile label="Items" value={overview.summary.item_count} />
         <Tile label="Positions" value={overview.summary.position_count} />
         <Tile label="On hand" value={summaryQuantity(overview, "quantity_scaled")} />
@@ -905,7 +941,7 @@ function TransitionFields({
   );
 
   return (
-    <fieldset className="space-y-4 border-t border-border pt-5">
+    <fieldset className="min-w-0 space-y-4 border-t border-border pt-5 [overflow-wrap:anywhere]">
       <legend className="text-base font-bold">{guide.summary}</legend>
       <div className="grid gap-4 sm:grid-cols-2">
         {transition !== "reversal" ? (
@@ -1226,7 +1262,7 @@ const IdentitySelect = memo(function IdentitySelect({
       {label}
       <select
         id={id}
-        className="mt-2 min-h-12 w-full rounded-lg border bg-surface-raised px-3 text-base"
+        className="environment-control mt-2 min-h-12 w-full rounded-lg border bg-surface-raised px-3 text-base"
         value={value}
         onChange={(event) => onChange(field, event.target.value)}
       >
@@ -1273,7 +1309,7 @@ const PositionSelect = memo(function PositionSelect({
       {label}
       <select
         id={id}
-        className="mt-2 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base"
+        className="environment-control mt-2 min-h-14 w-full rounded-lg border bg-surface-raised px-4 text-base"
         value={value}
         onChange={(event) => onChange(field, event.target.value)}
       >
@@ -1296,7 +1332,7 @@ const EvidenceFields = memo(function EvidenceFields({
   onChange: FieldChange;
 }) {
   return (
-    <fieldset className="space-y-4 border-t border-border pt-5">
+    <fieldset className="min-w-0 space-y-4 border-t border-border pt-5 [overflow-wrap:anywhere]">
       <legend className="text-base font-bold">Action evidence</legend>
       <p className="text-sm leading-6 text-muted">
         Use the tenant-bound evidence reference and its SHA-256 digest. The server verifies the
@@ -1742,7 +1778,7 @@ function IdentityTile({ label, value, detail }: { label: string; value: string; 
 
 function Tile({ label, value, tone }: { label: string; value: number | string; tone?: "danger" }) {
   return (
-    <div className="border border-border bg-surface px-4 py-3">
+    <div className="min-w-0 border border-border bg-surface px-4 py-3 [overflow-wrap:anywhere]">
       <dt className="text-xs font-bold text-muted">{label}</dt>
       <dd
         className={`mt-1 text-2xl font-bold tabular-nums ${tone === "danger" ? "text-danger" : ""}`}

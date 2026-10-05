@@ -20,7 +20,7 @@ export function CustomerContractAcceptancePage() {
 
   if (!token || !tokenPattern.test(token)) {
     return (
-      <main className="grid min-h-dvh place-items-center p-4">
+      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
         <ErrorState
           title="This link is no longer ready"
           message="Open your private project page and ask for a new email."
@@ -48,7 +48,10 @@ export function CustomerContractAcceptancePage() {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-background p-4">
+    <main
+      data-environment="customer"
+      className="grid min-h-dvh place-items-center bg-background p-4"
+    >
       <Card className="w-full max-w-xl">
         <CardHeader>
           <CardTitle>Accept your contract</CardTitle>
@@ -74,7 +77,7 @@ export function CustomerContractAcceptancePage() {
                 </label>
                 <Input
                   id="contract-signer-name"
-                  className="mt-2"
+                  className="mt-2 min-h-12 text-base"
                   value={signerName}
                   autoComplete="name"
                   maxLength={140}
@@ -82,10 +85,10 @@ export function CustomerContractAcceptancePage() {
                   onChange={(event) => setSignerName(event.target.value)}
                 />
               </div>
-              <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
+              <label className="flex min-h-12 cursor-pointer items-center gap-3 text-base leading-6">
                 <input
                   type="checkbox"
-                  className="mt-0.5 size-5 shrink-0 rounded-sm border-border text-accent"
+                  className="environment-control size-12 min-h-12 min-w-12 shrink-0 rounded-sm border-border-control text-accent"
                   checked={attested}
                   required
                   onChange={(event) => setAttested(event.target.checked)}
@@ -96,6 +99,7 @@ export function CustomerContractAcceptancePage() {
               </label>
               <Button
                 type="submit"
+                className="min-h-12 min-w-12 w-full whitespace-normal text-base"
                 disabled={!attested || !signerName.trim() || state === "submitting"}
               >
                 {state === "submitting" ? "Saving acceptance…" : "Accept contract"}

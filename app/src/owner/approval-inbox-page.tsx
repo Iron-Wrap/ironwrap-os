@@ -32,6 +32,7 @@ import {
   rejectApproval,
 } from "./approval-api";
 import type { ApprovalListResponse, ApprovalRequest } from "./approval-contracts";
+import { ApprovalReceipt } from "./approval-receipt";
 import { formatOwnerDate, type OwnerDateFormatOptions } from "./owner-now-utils";
 
 type ApprovalAction =
@@ -489,7 +490,12 @@ function ApprovalCard({
         </summary>
         <CardContent className="space-y-5 border-t border-border pt-5">
           <ScopeFence />
-          {approval.preview ? <TriageDiff preview={approval.preview} /> : <PreviewUnavailable />}
+          {approval.preview ? (
+            <TriageDiff preview={approval.preview} recorded={Boolean(approval.approved_by)} />
+          ) : (
+            <PreviewUnavailable />
+          )}
+          <ApprovalReceipt approval={approval} locale={locale} />
           <ApprovalSystemDetails approval={approval} locale={locale} expiration={expiration} />
           <ApprovalStateNotice approval={approval} />
 
@@ -677,12 +683,22 @@ function ScopeFence() {
   );
 }
 
-function TriageDiff({ preview }: { preview: NonNullable<ApprovalRequest["preview"]> }) {
+function TriageDiff({
+  preview,
+  recorded = false,
+}: {
+  preview: NonNullable<ApprovalRequest["preview"]>;
+  recorded?: boolean;
+}) {
   return (
     <section aria-label="What will change">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-bold text-muted">What will change</h3>
-        <span className="text-sm font-semibold text-muted">Check only · not saved yet</span>
+        <h3 className="text-sm font-bold text-muted">
+          {recorded ? "Recorded review snapshot" : "What will change"}
+        </h3>
+        <span className="text-sm font-semibold text-muted">
+          {recorded ? "Preview retained with this request" : "Check only · not saved yet"}
+        </span>
       </div>
       <div className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-2">
         <DiffColumn
@@ -692,6 +708,7 @@ function TriageDiff({ preview }: { preview: NonNullable<ApprovalRequest["preview
             ["Lead status", leadStatus(preview.before.triage_status)],
             ["Lead note", preview.before.triage_summary ?? "Not saved"],
             ["Checked by", preview.before.triaged_by ?? "Not saved"],
+            ["Checked at", preview.before.triaged_at ?? "Not saved"],
           ]}
         />
         <DiffColumn

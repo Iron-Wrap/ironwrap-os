@@ -8,7 +8,7 @@ import { SessionProvider } from "../auth/session-context";
 import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
 import { operatingIntakePayload } from "../operating-intake/operating-intake-fixture";
 import { loadNow } from "./now-api";
-import type { NowResponse } from "./now-contracts";
+import { nowResponseSchema, type NowResponse } from "./now-contracts";
 import { NowPage } from "./now-page";
 
 vi.mock("./now-api", () => ({ loadNow: vi.fn() }));
@@ -289,12 +289,91 @@ describe("NowPage", () => {
     expect(await screen.findByRole("heading", { name: "Accounting Now" })).toBeVisible();
     expect(screen.getByText("JOB-0001")).toBeVisible();
     expect(screen.getByText("CAD 1050.00")).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "Handoffs and evidence" })).toHaveTextContent(
+      "CAD 1,050.00",
+    );
+    expect(
+      screen.getByText("1 loaded invoice balance. This is not total receivables."),
+    ).toBeVisible();
     expect(screen.getByRole("link", { name: "Review final invoice" })).toHaveAttribute(
       "href",
       href,
     );
     expect(screen.queryByText(/@|street|customer/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+  });
+
+  it("keeps missing proposal sources explicit and never claims agent authorship", async () => {
+    const model = nowModel();
+    model.decisions = {
+      version: 1,
+      state: "empty",
+      sources: [
+        {
+          kind: "quote_revision",
+          state: "current",
+          loaded_count: 0,
+          has_more: false,
+          next_cursor: null,
+          read_model_generated_at: model.read_model_generated_at,
+        },
+      ],
+      items: [],
+    };
+    vi.mocked(loadNow).mockResolvedValue(nowResponseSchema.parse(model));
+    renderNow();
+
+    expect(
+      await screen.findByText("Proposal verdicts are unavailable or incomplete."),
+    ).toBeVisible();
+    expect(screen.getByText(/Agent authorship is not recorded/)).toBeVisible();
+    expect(screen.getByText(/older receipts may be absent/)).toBeVisible();
+    expect(
+      screen.queryByText(/Completed approvals are on each job record/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("No open proposals in the loaded list.")).not.toBeInTheDocument();
+    expect(screen.getByText("Money amounts are not included in this work list.")).toBeVisible();
+  });
+
+  it("links an uncertain proposal result to the existing review route and current request version", async () => {
+    const model = nowModel();
+    const id = "proposal-publication-approval:test_approval_001";
+    model.decisions = {
+      version: 1,
+      state: "ready",
+      sources: ["quote_revision", "proposal_publication"].map((kind) => ({
+        kind: kind as "quote_revision" | "proposal_publication",
+        state: "current" as const,
+        loaded_count: kind === "proposal_publication" ? 1 : 0,
+        has_more: false,
+        next_cursor: null,
+        read_model_generated_at: model.read_model_generated_at,
+      })),
+      items: [
+        {
+          kind: "proposal_publication",
+          key: `proposal_publication:${id}`,
+          id,
+          version: 9,
+          title: "Check the publication result",
+          summary: "The recorded run needs a result check.",
+          native_state: "execution_uncertain",
+          job_id: "JOB-0001",
+          updated_at: model.read_model_generated_at,
+          expires_at: null,
+          review_href: "/estimator/jobs/JOB-0001",
+        },
+      ],
+    };
+    vi.mocked(loadNow).mockResolvedValue(nowResponseSchema.parse(model));
+    renderNow();
+
+    const verdicts = await screen.findByRole("list", { name: "Loaded proposal verdicts" });
+    expect(
+      within(verdicts).getByRole("link", { name: "Check the publication result" }),
+    ).toHaveAttribute("href", "/estimator/jobs/JOB-0001");
+    expect(within(verdicts).getByText("Current request v9")).toBeVisible();
+    expect(verdicts).not.toHaveTextContent("Approved");
   });
 
   it("shows D1 website intake on the office work list without calling it a scheduled job", async () => {

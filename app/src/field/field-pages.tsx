@@ -85,12 +85,25 @@ const BLOCKER_CATEGORIES = [
 export function JobPage() {
   const session = useSession();
   const { jobId } = useParams({ strict: false }) as { jobId?: string };
+  // Keep the capture and its receipt above the versioned plan. A job readback can replace the
+  // plan after sending without discarding the saved action the person is still reviewing.
+  const [quickCapture, setQuickCapture] = useState<{ jobId: string; photos: File[] } | null>(null);
   const query = useQuery({
     queryKey: ["job", session.tenant.id, session.user.id, jobId],
     enabled: Boolean(jobId),
     queryFn: () => loadJob(session, jobId!),
   });
   if (!jobId) return <ErrorState message="This job link is incomplete." />;
+  if (quickCapture?.jobId === jobId) {
+    return (
+      <CheckInFlow
+        key={jobId}
+        jobId={jobId}
+        initialPhotos={quickCapture.photos}
+        onReturnToJob={() => setQuickCapture(null)}
+      />
+    );
+  }
   if (query.isPending) return <LoadingState label="Loading job plan…" />;
   if (query.isError)
     return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
@@ -99,6 +112,7 @@ export function JobPage() {
       key={query.data.read_model_generated_at}
       model={query.data}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
+      onPhotosCaptured={(photos) => setQuickCapture({ jobId, photos })}
     />
   );
 }
@@ -231,8 +245,17 @@ function WorkObjectPacketHeader({
   );
 }
 
-function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }) {
+function JobSurface({
+  model,
+  offline,
+  onPhotosCaptured,
+}: {
+  model: JobResponse;
+  offline: boolean;
+  onPhotosCaptured: (photos: File[]) => void;
+}) {
   const session = useSession();
+  const [quickPhotoError, setQuickPhotoError] = useState<string | null>(null);
   const [proof, setProof] = useState<ProofStreamItem[]>(model.proof_stream);
   const [cursor, setCursor] = useState(model.proof_page.next_cursor);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -266,6 +289,14 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
     }
   }
 
+  function capturePhotos(files: FileList | null) {
+    if (!files?.length) return;
+    const photos = [...files];
+    const error = validateMedia(photos);
+    setQuickPhotoError(error);
+    if (!error) onPhotosCaptured(photos);
+  }
+
   return (
     <RoleGuard surface="job">
       <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
@@ -287,6 +318,29 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
         ) : null}
         {dataLimits.length > 0 ? <JobDataLimits fields={dataLimits} /> : null}
+        {session.user.role === "field" ? (
+          <CaptureProofPanel
+            jobId={model.job.id}
+            workObjectScope={
+              model.packet.work_package
+                ? workObjectScopeForPackage(model.packet.work_package)
+                : null
+            }
+            blocked={blockedGates.length > 0}
+            fieldCaptureAllowed={fieldCaptureAllowed}
+            fieldRole
+            onPhotosSelected={capturePhotos}
+            error={quickPhotoError}
+          />
+        ) : null}
+        {session.user.role !== "field" && session.permissions.includes("jobs:read:any") ? (
+          <Button asChild variant="outline">
+            <Link to="/jobs/$jobId/history" params={{ jobId: model.job.id }}>
+              Job history
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+        ) : null}
         <WorkPackagePanel
           model={model}
           offline={offline}
@@ -325,15 +379,19 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           dateOptions={dateOptions}
           headingId="customer-history-heading"
         />
-        <CaptureProofPanel
-          jobId={model.job.id}
-          workObjectScope={
-            model.packet.work_package ? workObjectScopeForPackage(model.packet.work_package) : null
-          }
-          blocked={blockedGates.length > 0}
-          fieldCaptureAllowed={fieldCaptureAllowed}
-          fieldRole={session.user.role === "field"}
-        />
+        {session.user.role !== "field" ? (
+          <CaptureProofPanel
+            jobId={model.job.id}
+            workObjectScope={
+              model.packet.work_package
+                ? workObjectScopeForPackage(model.packet.work_package)
+                : null
+            }
+            blocked={blockedGates.length > 0}
+            fieldCaptureAllowed={fieldCaptureAllowed}
+            fieldRole={false}
+          />
+        ) : null}
         <SafetyAndAccess model={model} dateOptions={dateOptions} />
         <section className="space-y-4" aria-labelledby="proof-stream-heading">
           <header className="border-b border-border pb-4">
@@ -1355,12 +1413,16 @@ function CaptureProofPanel({
   blocked,
   fieldCaptureAllowed,
   fieldRole,
+  onPhotosSelected,
+  error,
 }: {
   jobId: string;
   workObjectScope: TypedWorkObjectScope | null;
   blocked: boolean;
   fieldCaptureAllowed: boolean;
   fieldRole: boolean;
+  onPhotosSelected?: (files: FileList | null) => void;
+  error?: string | null;
 }) {
   if (!fieldCaptureAllowed) {
     return (
@@ -1385,29 +1447,59 @@ function CaptureProofPanel({
       className="border-2 border-foreground bg-surface-raised p-4 sm:p-5"
       aria-labelledby="capture-proof-heading"
     >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-4">
         <div className="max-w-2xl">
-          <p className="text-sm font-semibold text-muted">Job proof</p>
           <h2 id="capture-proof-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             {blocked ? "Show the blocked site" : "Show this site"}
           </h2>
           <p className="mt-2 leading-6 text-muted">
             {blocked
               ? "Add a photo or note that shows the block. This does not clear the work check."
-              : "Add photos, a voice note, or a short job note after you read this plan."}
+              : "Add photos, a voice note, or a site note. Capturing proof does not authorize work."}
           </p>
         </div>
-        <Button
-          asChild
-          size="field"
-          variant={blocked ? "outline" : "accent"}
-          className="sm:min-w-72"
-        >
-          <a href={fieldCheckInHref(jobId, workObjectScope)}>
-            <Camera aria-hidden="true" />
-            {blocked ? "Add blocker proof" : "Add job proof"}
-          </a>
-        </Button>
+        {onPhotosSelected ? (
+          <label className="field-capture-dock environment-control flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-center text-base font-bold text-primary-foreground focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+            <Camera aria-hidden="true" className="size-5" />
+            Take photo
+            <input
+              className="sr-only"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              capture="environment"
+              aria-label="Take photo for this job"
+              onChange={(event) => {
+                onPhotosSelected(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        ) : null}
+        {error ? (
+          <p className="text-base font-semibold text-danger" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Button asChild size="field" variant={onPhotosSelected || blocked ? "outline" : "accent"}>
+            <a href={fieldCheckInHref(jobId, workObjectScope)}>
+              <Camera aria-hidden="true" />
+              {blocked ? "Add blocker proof" : "Add job proof"}
+            </a>
+          </Button>
+          <Button asChild size="field" variant="outline">
+            <a
+              href={`${fieldCheckInHref(jobId, workObjectScope)}${workObjectScope ? "&" : "?"}capture_purpose=measurement`}
+            >
+              <ClipboardCheck aria-hidden="true" />
+              Measurement evidence
+            </a>
+          </Button>
+        </div>
+        <p className="text-base leading-6 text-muted">
+          Measurement photos and readings go to the office for review. They do not update the
+          survey, design, or cut list.
+        </p>
       </div>
     </section>
   );
@@ -1884,7 +1976,15 @@ function evidenceCaptureContext(): EvidenceCaptureContext | null {
   };
 }
 
-function CheckInFlow({ jobId }: { jobId: string }) {
+function CheckInFlow({
+  jobId,
+  initialPhotos = [],
+  onReturnToJob,
+}: {
+  jobId: string;
+  initialPhotos?: File[];
+  onReturnToJob?: () => void;
+}) {
   const session = useSession();
   const queryClient = useQueryClient();
   const stepPanelRef = useRef<HTMLElement>(null);
@@ -1915,8 +2015,11 @@ function CheckInFlow({ jobId }: { jobId: string }) {
         : loadJob(session, jobId),
   });
   const startedAt = useRef(new Date().toISOString());
-  const [step, setStep] = useState(1);
-  const [photos, setPhotos] = useState<File[]>([]);
+  const [step, setStep] = useState(initialPhotos.length > 0 ? 2 : 1);
+  const [photos, setPhotos] = useState<File[]>(initialPhotos);
+  const [measurementEvidence, setMeasurementEvidence] = useState(
+    () => new URLSearchParams(window.location.search).get("capture_purpose") === "measurement",
+  );
   const [voice, setVoice] = useState<File | null>(null);
   const [proofSlot, setProofSlot] = useState("Production");
   const [notes, setNotes] = useState("");
@@ -1935,7 +2038,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAction, setSavedAction] = useState<OutboxAction | null>(null);
-  const lastScrollStep = useRef(step);
+  const lastScrollStep = useRef(0);
   const typedEvidence = evidenceCaptureContext();
 
   useEffect(() => {
@@ -1951,13 +2054,20 @@ function CheckInFlow({ jobId }: { jobId: string }) {
 
   useEffect(() => {
     if (lastScrollStep.current === step) return;
-    lastScrollStep.current = step;
     const panel = stepPanelRef.current;
     if (!panel || typeof panel.scrollIntoView !== "function") return;
+    const initialStep = lastScrollStep.current === 0;
+    lastScrollStep.current = step;
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    panel.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+    const crewHeader = panel.closest(".crew")?.querySelector(".crew-top");
+    const headerBottom = Math.max(0, crewHeader?.getBoundingClientRect().bottom ?? 112);
+    panel.style.scrollMarginTop = `${headerBottom + 16}px`;
+    panel.scrollIntoView({
+      block: "start",
+      behavior: initialStep || reduceMotion ? "auto" : "smooth",
+    });
     stepHeadingRef.current?.focus({ preventScroll: true });
-  }, [step]);
+  }, [step, jobQuery.isPending]);
 
   if (session.user.role !== "field") {
     return (
@@ -1965,6 +2075,26 @@ function CheckInFlow({ jobId }: { jobId: string }) {
         title="Assigned field account required"
         message="Office users can read job plans but cannot add field proof."
       />
+    );
+  }
+
+  // A stored receipt is independent of whether the next plan read succeeds or the assignment
+  // changes. Keep showing the saved/queued/verified result until the person leaves it.
+  if (step === 3 && savedAction) {
+    return (
+      <RoleGuard surface="field">
+        <section className="mx-auto max-w-3xl space-y-4 pb-8">
+          <h1 className="text-2xl font-bold tracking-[-0.03em]">Job proof receipt</h1>
+          <section ref={stepPanelRef} className="scroll-mt-32">
+            <CheckInSaved
+              action={savedAction}
+              jobId={jobId}
+              headingRef={stepHeadingRef}
+              onReturnToJob={onReturnToJob}
+            />
+          </section>
+        </section>
+      </RoleGuard>
     );
   }
 
@@ -2048,6 +2178,10 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     const files = [...photos, ...(voice ? [voice] : [])];
     const mediaError = validateMedia(files);
     if (mediaError) return setFormError(mediaError);
+    if (measurementEvidence && !notes.trim())
+      return setFormError(
+        "Add the readings, units, and where you measured for the office to review.",
+      );
     if (files.length === 0 && !notes.trim() && !blocker)
       return setFormError("Add a photo, voice note, field note, or blocker before saving.");
     if (typedEvidence && files.length === 0)
@@ -2071,7 +2205,9 @@ function CheckInFlow({ jobId }: { jobId: string }) {
           proof_slot: proofSlot,
           capture_started_at: startedAt.current,
           capture_completed_at: new Date().toISOString(),
-          notes: notes.trim() || null,
+          notes: measurementEvidence
+            ? `Measurement evidence for office review\n${notes.trim()}`
+            : notes.trim() || null,
           blocker,
           blocker_category: blocker ? blockerCategory : null,
           blocker_summary: blocker ? blockerSummary.trim() : null,
@@ -2149,8 +2285,8 @@ function CheckInFlow({ jobId }: { jobId: string }) {
 
   return (
     <RoleGuard surface="field">
-      <section className="mx-auto max-w-3xl space-y-7 pb-16 lg:pb-4">
-        <CheckInHeader model={model} step={step} />
+      <section className="field-capture-flow mx-auto max-w-3xl space-y-4 pb-16 lg:pb-4">
+        <CheckInHeader model={model} />
         <CheckInProgress step={step} />
         {formError ? (
           <div
@@ -2166,19 +2302,18 @@ function CheckInFlow({ jobId }: { jobId: string }) {
             className="scroll-mt-32 border border-border bg-surface-raised"
             aria-labelledby="capture-evidence-heading"
           >
-            <header className="border-b border-border px-4 py-4 sm:px-5">
-              <p className="text-sm font-semibold text-muted">Start with a photo or voice note</p>
+            <header className="border-b border-border px-4 py-3 sm:px-5">
               <h2
                 ref={stepHeadingRef}
                 id="capture-evidence-heading"
                 tabIndex={-1}
-                className="mt-1 text-2xl font-bold tracking-[-0.03em]"
+                className="text-2xl font-bold tracking-[-0.03em]"
               >
                 Capture what you see
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
-              <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+              <label className="grid min-h-16 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
                 <span className="flex items-center gap-2 text-lg font-bold">
                   <Camera aria-hidden="true" />
                   Take photos
@@ -2217,6 +2352,21 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                 onRemovePhoto={removePhoto}
                 onRemoveVoice={removeVoice}
               />
+              <button
+                type="button"
+                aria-pressed={measurementEvidence}
+                className="environment-control flex min-h-12 w-full items-center gap-2 rounded-md border border-border-control bg-surface px-4 py-3 text-left text-base font-semibold text-foreground"
+                onClick={() => setMeasurementEvidence((current) => !current)}
+              >
+                <ClipboardCheck aria-hidden="true" className="size-5 shrink-0" />
+                {measurementEvidence ? "Measurement evidence selected" : "Add measurement readings"}
+              </button>
+              {measurementEvidence ? (
+                <p className="text-base leading-6 text-muted">
+                  Photograph the reading and add its units and location in the next step. This is
+                  evidence for office review; it does not update the survey, design, or cut list.
+                </p>
+              ) : null}
               <details className="border border-border">
                 <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
                   <span>Proof type</span>
@@ -2281,6 +2431,14 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
+              {selectedMedia.length > 0 ? (
+                <CaptureReview
+                  photos={photos}
+                  voice={voice}
+                  onRemovePhoto={removePhoto}
+                  onRemoveVoice={removeVoice}
+                />
+              ) : null}
               {typedEvidence?.evidenceCorrectionOf ? (
                 <section
                   className="border-2 border-warning/45 bg-warning-soft p-4"
@@ -2348,21 +2506,33 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   />
                 </div>
               ) : null}
-              <details className="border border-border">
+              <details className="border border-border" open={measurementEvidence || undefined}>
                 <summary className="min-h-16 cursor-pointer px-4 py-4 font-bold">
-                  Add a note (optional)
+                  {measurementEvidence ? "Measurement readings" : "Add a note (optional)"}
                 </summary>
                 <div className="border-t border-border p-4">
                   <label className="block font-bold" htmlFor="field-notes">
-                    What changed or what did you finish?
+                    {measurementEvidence
+                      ? "Readings, units, location, and how you measured"
+                      : "What changed or what did you finish?"}
                   </label>
                   <Textarea
                     id="field-notes"
                     className="mt-3 min-h-32 rounded-none bg-surface"
                     maxLength={2000}
+                    placeholder={
+                      measurementEvidence
+                        ? "For example: north flashing, 450 mm wide, measured with a tape."
+                        : undefined
+                    }
                     value={notes}
                     onChange={(event) => setNotes(event.target.value)}
                   />
+                  {measurementEvidence ? (
+                    <p className="mt-3 text-base leading-6 text-muted">
+                      For office review. Saving this proof does not approve a measurement revision.
+                    </p>
+                  ) : null}
                 </div>
               </details>
               <LocationCapture
@@ -2398,26 +2568,17 @@ function CheckInFlow({ jobId }: { jobId: string }) {
             </CheckInActionBar>
           </section>
         ) : null}
-        {step === 3 && savedAction ? (
-          <section ref={stepPanelRef} className="scroll-mt-32">
-            <CheckInSaved action={savedAction} jobId={jobId} headingRef={stepHeadingRef} />
-          </section>
-        ) : null}
       </section>
     </RoleGuard>
   );
 }
 
-function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
+function CheckInHeader({ model }: { model: JobResponse }) {
   return (
-    <header className="border-b border-border pb-5 sm:pb-6">
-      <p className="text-sm font-semibold text-muted">{model.job.job_number ?? "Assigned job"}</p>
-      <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Add job proof</h1>
-      <p className="mt-2 text-base leading-7 text-muted">
-        {model.job.address ?? "Address unavailable"}
-      </p>
-      <p className="mt-4 text-sm font-semibold text-muted">
-        Step {step} of 3 · {step === 1 ? "Files" : step === 2 ? "Add details" : "Saved"}
+    <header>
+      <h1 className="text-2xl font-bold tracking-[-0.03em] sm:text-3xl">Add job proof</h1>
+      <p className="mt-1 text-base font-semibold leading-6 text-muted">
+        {model.job.job_number ?? "Assigned job"} · {model.job.address ?? "Address unavailable"}
       </p>
     </header>
   );
@@ -2425,18 +2586,21 @@ function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
 
 function CheckInProgress({ step }: { step: number }) {
   return (
-    <ol className="grid grid-cols-3 border-y border-border" aria-label="Check-in progress">
+    <ol
+      className="grid grid-cols-3 border-y border-border"
+      aria-label={`Check-in progress, step ${step} of 3`}
+    >
       {["Files", "Details", "Saved"].map((label, index) => {
         const active = index + 1 === step;
         const complete = index + 1 < step;
         return (
           <li
             key={label}
-            className={`min-h-14 px-2 py-3 text-center text-sm font-bold ${index > 0 ? "border-l border-border" : ""} ${active ? "border-b-4 border-accent text-foreground" : complete ? "text-ok" : "text-muted"}`}
+            className={`flex min-h-12 items-center justify-center gap-2 px-2 py-2 text-center text-base font-bold ${index > 0 ? "border-l border-border" : ""} ${active ? "border-b-4 border-accent text-foreground" : complete ? "text-ok" : "text-muted"}`}
             aria-current={active ? "step" : undefined}
           >
-            <span className="block text-xs font-bold">{index + 1}</span>
-            <span className="mt-0.5 block">{label}</span>
+            <span>{index + 1}</span>
+            <span>{label}</span>
           </li>
         );
       })}
@@ -2500,7 +2664,7 @@ function CaptureReview({
               </div>
               <Button
                 type="button"
-                size="default"
+                size="field"
                 variant="ghost"
                 onClick={item.remove}
                 aria-label={`Remove ${item.file.name || item.kind}`}
@@ -2518,8 +2682,8 @@ function CaptureReview({
 
 function CheckInActionBar({ message, children }: { message: string; children: ReactNode }) {
   return (
-    <div className="border-t border-border bg-surface-raised p-3 sm:p-4">
-      <p className="pb-2 text-xs font-semibold leading-5 text-muted">{message}</p>
+    <div className="field-action-bar border-t border-border bg-surface-raised p-3 sm:p-4">
+      <p className="pb-2 text-base font-semibold leading-6 text-muted">{message}</p>
       {children}
     </div>
   );
@@ -2570,10 +2734,12 @@ function CheckInSaved({
   action,
   jobId,
   headingRef,
+  onReturnToJob,
 }: {
   action: OutboxAction;
   jobId: string;
   headingRef: RefObject<HTMLHeadingElement | null>;
+  onReturnToJob?: () => void;
 }) {
   const guidance = outboxFailureGuidance(action);
   return (
@@ -2606,11 +2772,17 @@ function CheckInSaved({
             : "This check-in is safe on this phone. Keep the app open so it can send when it can."}
         </p>
       )}
-      <Button asChild size="field" fullWidth variant="accent" className="mt-5">
-        <Link to="/jobs/$jobId" params={{ jobId }}>
+      {onReturnToJob ? (
+        <Button size="field" fullWidth variant="accent" className="mt-5" onClick={onReturnToJob}>
           Return to job
-        </Link>
-      </Button>
+        </Button>
+      ) : (
+        <Button asChild size="field" fullWidth variant="accent" className="mt-5">
+          <Link to="/jobs/$jobId" params={{ jobId }}>
+            Return to job
+          </Link>
+        </Button>
+      )}
     </section>
   );
 }

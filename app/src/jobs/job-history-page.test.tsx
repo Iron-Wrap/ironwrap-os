@@ -1,14 +1,20 @@
-import { screen } from "@testing-library/react";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render as renderUi, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { renderWithSession, sessionFor } from "../admin/admin-test-harness";
+import type { AuthenticatedSession } from "../auth/session";
+import { SessionProvider } from "../auth/session-context";
 import { loadJobHistory } from "./job-history-api";
-import type { JobHistoryResponse } from "./job-history-contracts";
+import { jobHistoryQueryKey, type JobHistoryResponse } from "./job-history-contracts";
 import { JobHistoryPage } from "./job-history-page";
 
+const routing = vi.hoisted(() => ({ jobId: "JOB-FINISHED" }));
+
 vi.mock("@tanstack/react-router", () => ({
-  useParams: () => ({ jobId: "JOB-FINISHED" }),
+  useParams: () => routing,
   Link: ({
     children,
     to,
@@ -83,9 +89,30 @@ function render() {
   return renderWithSession(<JobHistoryPage />, sessionFor("owner"));
 }
 
+function renderControlled() {
+  const session = sessionFor("owner");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (current: AuthenticatedSession) => (
+    <QueryClientProvider client={client}>
+      <SessionProvider session={current}>
+        <JobHistoryPage />
+      </SessionProvider>
+    </QueryClientProvider>
+  );
+  const rendered = renderUi(view(session));
+  return {
+    client,
+    session,
+    rerenderWithSession: (next: AuthenticatedSession) => rendered.rerender(view(next)),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  routing.jobId = "JOB-FINISHED";
 });
+
+afterEach(() => focusManager.setFocused(undefined));
 
 it("opens a finished job and shows what was done to it", async () => {
   loadJobHistoryMock.mockResolvedValue(model());
@@ -141,3 +168,175 @@ it("says so when the reader may not open this job", async () => {
 
   expect(await screen.findByText(/not one you can open/)).toBeInTheDocument();
 });
+
+it("keeps gate holders and event saved state tied to their recorded sources", async () => {
+  loadJobHistoryMock.mockResolvedValue(
+    model({
+      gates: [
+        {
+          id: "gate:materials",
+          name: "Materials",
+          state: "Blocked",
+          blocker_reason: "Delivery receipt missing",
+          owner: "Dispatch desk",
+          due_at: "2026-10-02T13:00:00.000Z",
+        },
+      ],
+    }),
+  );
+  render();
+
+  expect(await screen.findByText("Delivery receipt missing")).toBeVisible();
+  expect(screen.getByText("Holder: Dispatch desk")).toBeVisible();
+  expect(screen.getByLabelText("Materials: Blocked")).toBeVisible();
+  expect(screen.getByRole("list", { name: "Received job events" })).toHaveTextContent(
+    "VerifiedDevice camera · North slope",
+  );
+  expect(screen.getByText(/do not provide a named actor or approval version/)).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /clear|approve|release|dispatch/i }),
+  ).not.toBeInTheDocument();
+});
+
+it("preserves loaded job events and the cursor when an older page cannot be read", async () => {
+  loadJobHistoryMock
+    .mockResolvedValueOnce(
+      model({ proof: { items: model().proof.items, next_cursor: "older:001" } }),
+    )
+    .mockRejectedValueOnce(new Error("evidence read failed"));
+  render();
+  await userEvent.click(await screen.findByRole("button", { name: "Load older events" }));
+
+  expect(await screen.findByText("Older events unavailable")).toBeVisible();
+  expect(screen.getByText("Finished roof, north slope")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Load older events" })).toBeEnabled();
+  expect(loadJobHistoryMock).toHaveBeenLastCalledWith("JOB-FINISHED", "older:001");
+});
+
+it("does not splice another job's events into this spine", async () => {
+  const other = model({
+    job: { ...model().job, id: "OTHER-JOB" },
+    proof: {
+      items: [{ ...model().proof.items[0]!, id: "other-evi", summary: "Other job event" }],
+      next_cursor: null,
+    },
+  });
+  loadJobHistoryMock
+    .mockResolvedValueOnce(
+      model({ proof: { items: model().proof.items, next_cursor: "older:001" } }),
+    )
+    .mockResolvedValueOnce(other);
+  render();
+  await userEvent.click(await screen.findByRole("button", { name: "Load older events" }));
+
+  expect(await screen.findByText("Older events unavailable")).toBeVisible();
+  expect(screen.queryByText("Other job event")).not.toBeInTheDocument();
+});
+
+it("merges a focus refresh without losing older events or rewinding their cursor", async () => {
+  const original = model().proof.items[0]!;
+  const older = { ...original, id: "older-evi", summary: "Older received event" };
+  const refreshed = { ...original, summary: "Updated first-page event" };
+  const newest = { ...original, id: "newest-evi", summary: "Newly received event" };
+  loadJobHistoryMock
+    .mockResolvedValueOnce(model({ proof: { items: [original], next_cursor: "older:001" } }))
+    .mockResolvedValueOnce(model({ proof: { items: [older], next_cursor: "older:002" } }))
+    .mockResolvedValueOnce(
+      model({ proof: { items: [newest, refreshed], next_cursor: "refreshed:001" } }),
+    )
+    .mockResolvedValueOnce(model({ proof: { items: [older], next_cursor: null } }));
+  renderControlled();
+  await userEvent.click(await screen.findByRole("button", { name: "Load older events" }));
+  expect(await screen.findByText("Older received event")).toBeVisible();
+
+  act(() => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+  });
+  expect(await screen.findByText("Newly received event")).toBeVisible();
+  expect(screen.getByText("Updated first-page event")).toBeVisible();
+  expect(screen.queryByText("Finished roof, north slope")).not.toBeInTheDocument();
+  expect(screen.getAllByText("Older received event")).toHaveLength(1);
+
+  await userEvent.click(screen.getByRole("button", { name: "Load older events" }));
+  await waitFor(() =>
+    expect(loadJobHistoryMock).toHaveBeenLastCalledWith("JOB-FINISHED", "older:002"),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Load older events" })).not.toBeInTheDocument(),
+  );
+  expect(screen.getAllByText("Older received event")).toHaveLength(1);
+});
+
+it("retains paginated events with an explicit limit when a background refresh fails", async () => {
+  const original = model().proof.items[0]!;
+  loadJobHistoryMock
+    .mockResolvedValueOnce(model({ proof: { items: [original], next_cursor: "older:001" } }))
+    .mockResolvedValueOnce(
+      model({
+        proof: {
+          items: [{ ...original, id: "older-evi", summary: "Older received event" }],
+          next_cursor: "older:002",
+        },
+      }),
+    )
+    .mockRejectedValueOnce(new Error("background read failed"));
+  const { client, session } = renderControlled();
+  await userEvent.click(await screen.findByRole("button", { name: "Load older events" }));
+  expect(await screen.findByText("Older received event")).toBeVisible();
+
+  await act(async () => {
+    await client.refetchQueries({
+      queryKey: jobHistoryQueryKey(session.tenant.id, session.user.id, "JOB-FINISHED"),
+    });
+  });
+  expect(await screen.findByText("The latest job record could not be checked")).toBeVisible();
+  expect(screen.getByText("Older received event")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Load older events" })).toBeEnabled();
+});
+
+it.each(["job", "tenant", "user"] as const)(
+  "resets loaded pagination when the %s identity changes",
+  async (identity) => {
+    const original = model().proof.items[0]!;
+    loadJobHistoryMock
+      .mockResolvedValueOnce(model({ proof: { items: [original], next_cursor: "older:001" } }))
+      .mockResolvedValueOnce(
+        model({
+          proof: {
+            items: [{ ...original, id: "older-evi", summary: "Previous identity event" }],
+            next_cursor: "older:002",
+          },
+        }),
+      );
+    const { client, session, rerenderWithSession } = renderControlled();
+    await userEvent.click(await screen.findByRole("button", { name: "Load older events" }));
+    expect(await screen.findByText("Previous identity event")).toBeVisible();
+
+    const next = {
+      ...session,
+      ...(identity === "tenant" ? { tenant: { ...session.tenant, id: "other-tenant" } } : {}),
+      ...(identity === "user" ? { user: { ...session.user, id: "other-user" } } : {}),
+    };
+    if (identity === "job") routing.jobId = "OTHER-JOB";
+    const fresh = model({
+      job: {
+        ...model().job,
+        id: routing.jobId,
+        roof_job_id: routing.jobId,
+        job_number: "IW-NEW-IDENTITY",
+      },
+      proof: {
+        items: [{ ...original, id: "fresh-evi", summary: "Current identity event" }],
+        next_cursor: null,
+      },
+    });
+    loadJobHistoryMock.mockResolvedValue(fresh);
+    client.setQueryData(jobHistoryQueryKey(next.tenant.id, next.user.id, routing.jobId), fresh);
+    rerenderWithSession(next);
+
+    expect(await screen.findByText("Current identity event")).toBeVisible();
+    expect(screen.queryByText("Previous identity event")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load older events" })).not.toBeInTheDocument();
+  },
+);

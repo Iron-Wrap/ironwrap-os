@@ -14,6 +14,7 @@ import {
 } from "./inventory-api";
 import type { InventoryOverviewResponse } from "./inventory-contracts";
 import { InventoryPage } from "./inventory-page";
+import { InventoryLotLineage } from "./inventory-lot-lineage";
 
 vi.mock("./inventory-api", () => ({
   loadInventoryOverview: vi.fn(),
@@ -21,6 +22,19 @@ vi.mock("./inventory-api", () => ({
   newInventoryActionKey: (kind: string) => `inventory:${kind}:test`,
   recordInventoryScan: vi.fn(),
   submitInventoryCommand: vi.fn(),
+}));
+vi.mock("./barcode-camera", () => ({
+  BarcodeCamera: ({
+    onBarcode,
+    disabled,
+  }: {
+    onBarcode: (value: string) => void;
+    disabled: boolean;
+  }) => (
+    <button disabled={disabled} onClick={() => onBarcode("LOT-0001-BARCODE")}>
+      Read camera label
+    </button>
+  ),
 }));
 
 const opsSession = {
@@ -425,6 +439,59 @@ describe("InventoryPage", () => {
     expect(screen.queryByText("pos_panel_a001")).not.toBeInTheDocument();
     expect(screen.queryByText("layer_panel_0001")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record scan" })).toBeEnabled();
+  });
+
+  it("uses a decoded camera label only for lookup until the user records an observation", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Read camera label" }));
+
+    expect(await screen.findByText("Barcode resolved")).toBeVisible();
+    expect(lookupInventoryBarcode).toHaveBeenCalledWith(opsSession, "LOT-0001-BARCODE");
+    expect(recordInventoryScan).not.toHaveBeenCalled();
+    expect(submitInventoryCommand).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Barcode")).toHaveValue("LOT-0001-BARCODE");
+  });
+
+  it("traces only loaded parent and output lots without posting a movement", async () => {
+    const onChoose = vi.fn();
+    render(
+      <InventoryLotLineage overview={overview} role="ops" locale="en-CA" onChoose={onChoose} />,
+    );
+    expect(screen.getByText("Quarantined stock in this lot")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Trace REMNANT-0001 · remnant" }));
+    expect(screen.getByRole("combobox", { name: "Lot to trace" })).toHaveValue(
+      "lot_panel_remnant001",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Trace L-0001" }));
+    expect(screen.getByRole("combobox", { name: "Lot to trace" })).toHaveValue("lot_panel_0001");
+    await userEvent.click(screen.getAllByRole("button", { name: "Choose this stock" })[0]!);
+
+    expect(onChoose).toHaveBeenCalledWith(overview.positions[0]);
+    expect(submitInventoryCommand).not.toHaveBeenCalled();
+    expect(screen.getByText(/does not contain NCR findings or disposition/)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /disposition|scrap|rework/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("links recorded job custody only for existing history roles", () => {
+    const jobStock = {
+      ...overview,
+      positions: [{ ...overview.positions[0]!, job_custody: "JOB-CUSTODY-001" }],
+    };
+    const office = render(
+      <InventoryLotLineage overview={jobStock} role="ops" locale="en-CA" onChoose={vi.fn()} />,
+    );
+    expect(screen.getByRole("link", { name: "JOB-CUSTODY-001" })).toHaveAttribute(
+      "href",
+      "/jobs/JOB-CUSTODY-001/history",
+    );
+    office.unmount();
+    render(
+      <InventoryLotLineage overview={jobStock} role="field" locale="en-CA" onChoose={vi.fn()} />,
+    );
+    expect(screen.getByText("JOB-CUSTODY-001")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "JOB-CUSTODY-001" })).not.toBeInTheDocument();
   });
 
   it("resolves a barcode and reports the duplicate-safe scan outcome", async () => {

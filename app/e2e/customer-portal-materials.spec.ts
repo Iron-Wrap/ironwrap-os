@@ -58,7 +58,8 @@ async function assertActionsAreReachable(page: Page, screen: string): Promise<vo
 
 async function openPortal(page: Page): Promise<void> {
   await page.goto(`/portal#token=${PORTAL_TOKEN}`);
-  await expect(page.getByRole("heading", { name: "IW-2026-100", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your project", level: 1 })).toBeVisible();
+  await expect(page.getByText("IW-2026-100", { exact: false })).toBeVisible();
 }
 
 // Pinned at file scope rather than inherited from the project: mobile-first is what is being
@@ -81,6 +82,15 @@ test.describe("Customer portal materials mobile acceptance", () => {
 
     // The token never survives in the URL the customer could share or a referrer could leak.
     expect(new URL(page.url()).hash).toBe("");
+    const overview = page.getByRole("region", { name: "Project overview" });
+    await expect(overview.getByText("Schedule not yet shared")).toBeVisible();
+    await expect(overview.getByText("Amount not yet shared")).toBeVisible();
+    await expect(
+      overview.getByRole("link", { name: "Choose materials and colours" }),
+    ).toHaveAttribute("href", "#project-materials");
+    for (const control of await page.getByRole("button").all()) {
+      expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(48);
+    }
 
     const materials = page.getByRole("heading", { name: "Materials and colours" });
     await expect(materials).toBeVisible();

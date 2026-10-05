@@ -1,4 +1,4 @@
-import { BadgeCheck, ClipboardList, FileCheck2, Hammer, ShieldCheck, Wrench } from "lucide-react";
+import { BadgeCheck, ClipboardList, FileCheck2, Hammer, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
@@ -42,7 +42,7 @@ export function CustomerPortalPage() {
 
   if (!token || state.kind === "error") {
     return (
-      <main className="grid min-h-dvh place-items-center p-4">
+      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
         <ErrorState
           title="This project link no longer works"
           message="Ask your project team for a new private link."
@@ -53,7 +53,7 @@ export function CustomerPortalPage() {
   }
   if (state.kind === "loading") {
     return (
-      <main className="grid min-h-dvh place-items-center p-4">
+      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
         <LoadingState label="Opening your private project page…" />
       </main>
     );
@@ -70,22 +70,21 @@ export function CustomerPortalView({
 }) {
   const quote = model.proposal?.quote;
   return (
-    <main className="min-h-dvh bg-background px-4 py-8 sm:px-6 sm:py-12">
+    <main data-environment="customer" className="min-h-dvh bg-background px-4 py-5 sm:px-6 sm:py-8">
       <div className="mx-auto max-w-4xl space-y-6">
-        <header className="border-b border-border pb-6">
-          <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-surface-muted text-foreground">
-            <ShieldCheck className="size-6" aria-hidden="true" />
-          </div>
+        <header className="border-b border-border pb-4">
           <p className="text-sm font-bold text-muted">{model.brand}</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">
-            {model.job.job_number ?? "Your project"}
-          </h1>
-          <p className="mt-3 text-base leading-7 text-muted">
+          <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em] sm:text-4xl">Your project</h1>
+          <p className="mt-2 text-base leading-6 text-muted">
+            {model.job.job_number ? (
+              <span className="font-mono">{model.job.job_number} · </span>
+            ) : null}
             {model.job.service_type ?? "Project"}
             {model.job.status ? ` · ${model.job.status}` : ""}
           </p>
         </header>
 
+        <ProjectOverview model={model} />
         {quote || model.proposal ? <ProposalCard model={model} portalToken={portalToken} /> : null}
         <ScopeCard model={model} />
         {/* Materials sit below the published scope and above progress: what the project will be
@@ -101,6 +100,90 @@ export function CustomerPortalView({
   );
 }
 
+function ProjectOverview({ model }: { model: CustomerPortalResponse }) {
+  const quote = model.proposal?.quote;
+  const hasBalance = quote?.balance_due !== null && quote?.balance_due !== undefined;
+  const next =
+    model.contract_acceptance_available &&
+    quote?.status === "Approved" &&
+    !model.proposal?.signed_at
+      ? {
+          title: "Review your proposal",
+          detail: "Read the shared terms before requesting the acceptance email.",
+          href: "#project-proposal",
+        }
+      : model.material_decision_available && model.option_packages.length > 0
+        ? {
+            title: "Choose materials and colours",
+            detail: "Compare the choices your project team has shared.",
+            href: "#project-materials",
+          }
+        : model.closeout || model.warranty
+          ? {
+              title: "Review completion and warranty",
+              detail: "Read your shared completion record and coverage.",
+              href: "#project-closeout",
+            }
+          : {
+              title: "See project updates",
+              detail: "Read the progress your project team has shared below.",
+              href: "#project-progress",
+            };
+
+  return (
+    <section aria-label="Project overview" className="space-y-4 border-b border-border pb-5">
+      <dl className="grid gap-5 sm:grid-cols-2">
+        <div>
+          <dt className="text-base font-semibold text-muted">Installation</dt>
+          <dd className="mt-1">
+            <p className="text-xl font-bold leading-7">Schedule not yet shared</p>
+            <p className="mt-1 text-base leading-6 text-muted">
+              This page does not include a confirmed installation date. Ask your project team for
+              the schedule.
+            </p>
+          </dd>
+        </div>
+        <div>
+          <dt className="text-base font-semibold text-muted">Amount due</dt>
+          <dd className="mt-1">
+            <p className="text-xl font-bold leading-7">
+              {hasBalance && quote ? (
+                <span className="font-mono">{formatMoney(quote.balance_due!, quote.currency)}</span>
+              ) : (
+                "Amount not yet shared"
+              )}
+            </p>
+            <p className="mt-1 text-base leading-6 text-muted">
+              {quote?.payment_due_date
+                ? `Due ${formatDate(quote.payment_due_date)}`
+                : "Payment due date not yet shared."}
+            </p>
+            {quote?.payment_status ? (
+              <p className="mt-1 text-base leading-6">{quote.payment_status}</p>
+            ) : null}
+            {!hasBalance ? (
+              <p className="mt-1 text-base leading-6 text-muted">
+                A proposal total does not tell you what is still owed.
+              </p>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+      <div className="border-t border-border pt-4">
+        <h2 className="text-lg font-bold">Next step</h2>
+        <p className="mt-1 text-base leading-6 text-muted">{next.detail}</p>
+        <Button
+          asChild
+          variant="outline"
+          className="mt-3 min-h-12 w-full whitespace-normal text-base sm:w-auto"
+        >
+          <a href={next.href}>{next.title}</a>
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ProposalCard({
   model,
   portalToken,
@@ -110,7 +193,7 @@ function ProposalCard({
 }) {
   const quote = model.proposal?.quote;
   return (
-    <Card>
+    <Card id="project-proposal">
       <CardHeader>
         <div className="flex items-start gap-3">
           <FileCheck2 className="mt-0.5 size-5 text-info" aria-hidden="true" />
@@ -179,7 +262,7 @@ function ContractAcceptanceRequest({ brand, portalToken }: { brand: string; port
       ) : (
         <>
           <Button
-            className="mt-4"
+            className="mt-4 min-h-12 w-full whitespace-normal text-base sm:w-auto"
             type="button"
             disabled={state === "pending"}
             onClick={requestChallenge}
@@ -233,7 +316,7 @@ function ScopeCard({ model }: { model: CustomerPortalResponse }) {
 
 function ProgressCard({ model }: { model: CustomerPortalResponse }) {
   return (
-    <Card>
+    <Card id="project-progress">
       <CardHeader>
         <div className="flex items-start gap-3">
           <Hammer className="mt-0.5 size-5 text-info" aria-hidden="true" />
@@ -273,7 +356,7 @@ function ProgressCard({ model }: { model: CustomerPortalResponse }) {
 
 function CloseoutCard({ model }: { model: CustomerPortalResponse }) {
   return (
-    <Card>
+    <Card id="project-closeout">
       <CardHeader>
         <div className="flex items-start gap-3">
           <Wrench className="mt-0.5 size-5 text-info" aria-hidden="true" />
@@ -290,7 +373,7 @@ function CloseoutCard({ model }: { model: CustomerPortalResponse }) {
             value={
               model.closeout.approved_at
                 ? `Approved ${formatDate(model.closeout.approved_at)}`
-                : "Approved"
+                : "Approval not yet shared"
             }
           />
         ) : null}
@@ -338,7 +421,6 @@ function formatMoney(value: number, currency: string | null): string {
     return new Intl.NumberFormat("en-CA", {
       style: "currency",
       currency: currency ?? "CAD",
-      maximumFractionDigits: 0,
     }).format(value);
   } catch {
     return `${currency ?? "CAD"} ${value.toLocaleString("en-CA")}`;
@@ -348,5 +430,9 @@ function formatMoney(value: number, currency: string | null): string {
 function formatDate(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" }).format(parsed);
+  return new Intl.DateTimeFormat("en-CA", {
+    dateStyle: "medium",
+    // A date-only payment deadline is a calendar date, not midnight UTC shifted by the phone.
+    timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? "UTC" : undefined,
+  }).format(parsed);
 }

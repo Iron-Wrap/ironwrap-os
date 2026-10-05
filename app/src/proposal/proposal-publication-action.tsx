@@ -4,6 +4,7 @@ import { useRef, useState, type ReactNode } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { ApprovalReceipt } from "../owner/approval-receipt";
 import { CapabilityUnavailable } from "../capabilities/capability-unavailable";
 import {
   capabilityHasNotice,
@@ -180,7 +181,11 @@ export function ProposalPublicationAction({
   }
 
   return (
-    <section className="border-b border-border py-6" aria-labelledby="proposal-publication-heading">
+    <section
+      id="proposal-publication"
+      className="border-b border-border py-6"
+      aria-labelledby="proposal-publication-heading"
+    >
       <div className="px-4 sm:px-5">
         <div className="flex items-start gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-foreground text-background">
@@ -331,6 +336,14 @@ export function ProposalPublicationAction({
           </div>
         )}
 
+        {published || uncertain ? (
+          <div className="mt-5">
+            <ApprovalReceipt
+              approval={(published ?? uncertain)!}
+              locale={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+            />
+          </div>
+        ) : null}
         {uncertain ? (
           <PublicationNotice tone="danger" title="A publication attempt is unresolved.">
             The publication command may already have run. Reconcile the recorded run before trying

@@ -730,6 +730,74 @@ describe("JobPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Current job needed" })).toBeVisible();
     expect(screen.queryByRole("link", { name: /Add .*proof/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Take photo for this job")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Measurement evidence" })).not.toBeInTheDocument();
+  });
+
+  it("takes a photo from the job directly to review and retains its receipt when the plan refreshes", async () => {
+    const user = userEvent.setup();
+    const queued: OutboxAction = {
+      ...queuedWorkPackageAction("work_package_acknowledgement"),
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-1/check-ins",
+      payload: {},
+    };
+    const verified: OutboxAction = {
+      ...queued,
+      state: "verified",
+      verification: { serverRef: "checkin-direct-photo", verifiedAt: 2000 },
+    };
+    vi.mocked(saveOutboxAction).mockResolvedValue({ ...queued, state: "saved_locally" });
+    vi.mocked(queueOutboxAction).mockResolvedValue(queued);
+    vi.mocked(getOutboxAction).mockResolvedValue(verified);
+    vi.mocked(flushOutbox).mockResolvedValue({
+      processed: 1,
+      verified: 1,
+      needsAttention: 0,
+      requeued: 0,
+    });
+    renderJob();
+
+    await user.upload(
+      await screen.findByLabelText("Take photo for this job"),
+      new File(["photo"], "flashing.jpg", { type: "image/jpeg" }),
+    );
+    expect(await screen.findByRole("heading", { name: "Add job details" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Add job details" })).toHaveFocus();
+    expect(screen.getByText("flashing.jpg")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Continue to review" })).not.toBeInTheDocument();
+    expect(saveOutboxAction).not.toHaveBeenCalled();
+
+    vi.mocked(loadJob).mockResolvedValue({
+      ...jobModel(),
+      read_model_generated_at: "2026-07-10T17:00:00.000Z",
+      allowed_actions: [],
+    });
+    const readsBeforeSave = vi.mocked(loadJob).mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Save on device" }));
+    expect(await screen.findByRole("heading", { name: "Check-in saved" })).toBeVisible();
+    expect(await screen.findByText("Sent", { exact: true })).toBeVisible();
+    await waitFor(() =>
+      expect(vi.mocked(loadJob).mock.calls.length).toBeGreaterThan(readsBeforeSave),
+    );
+    expect(screen.getByText("The server got this check-in.")).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "You cannot add a check-in" }),
+    ).not.toBeInTheDocument();
+    expect(saveOutboxAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/JOB-1/check-ins",
+        payload: expect.objectContaining({
+          assignment_id: "ASSIGN-1",
+          customer_safe_requested: false,
+        }),
+        attachments: [expect.objectContaining({ fileName: "flashing.jpg" })],
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Return to job" }));
+    expect(await screen.findByRole("heading", { name: "Current job needed" })).toBeVisible();
   });
 
   it("lets office authority supersede an exact assignment-bound Work Package", async () => {

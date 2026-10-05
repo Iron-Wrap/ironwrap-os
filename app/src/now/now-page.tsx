@@ -563,6 +563,7 @@ function NowScreen({
               )}
             </aside>
           ) : null}
+          {!showDecisions ? <NowEvidenceSummary model={model} locale={locale} /> : null}
           <aside
             className={cn("now-list-status", model.ui.state === "limited" && "now-list-limited")}
             aria-labelledby={`${instanceId}-status`}
@@ -859,6 +860,116 @@ function sessionCanReviewLeads(model: NowResponse) {
   return model.role === "owner" || model.role === "ops";
 }
 
+function NowEvidenceSummary({ model, locale }: { model: NowResponse; locale: string }) {
+  const invoices = [
+    ...new Map(
+      model.ui.sections
+        .flatMap((section) => section.cards)
+        .filter((card) => "kind" in card && card.kind === "quickbooks_final_invoice")
+        .map((card) => [card.id, card] as const),
+    ).values(),
+  ];
+  const invoiceCents = invoices.reduce((sum, card) => {
+    if (!("kind" in card)) return sum;
+    const [whole, fraction] = card.final_balance.split(".");
+    return sum + Number(whole) * 100 + Number(fraction);
+  }, 0);
+  const proposalSources = model.decisions?.sources.filter(
+    (source) => source.kind === "quote_revision" || source.kind === "proposal_publication",
+  );
+  const proposals =
+    model.decisions?.items.filter(
+      (item) => item.kind === "quote_revision" || item.kind === "proposal_publication",
+    ) ?? [];
+  const proposalsUnknown =
+    new Set(proposalSources?.map((source) => source.kind)).size < 2 ||
+    proposalSources?.some(
+      (source) => source.state === "unavailable" || source.state === "limited" || source.has_more,
+    );
+  const moneySource = model.sources.find((source) => source.id === "quickbooks_final_invoices");
+
+  return (
+    <aside className="now-evidence-summary" aria-label="Handoffs and evidence">
+      <section aria-labelledby="now-handoffs-heading">
+        <h2 id="now-handoffs-heading">Handoffs in this list</h2>
+        <p className="mt-1 text-sm text-muted">The next step is shown with each work record.</p>
+        <dl className="mt-3 divide-y divide-border-soft">
+          {model.ui.sections.map((section) => (
+            <div key={section.id} className="flex items-center justify-between gap-3 py-2">
+              <dt className="min-w-0 break-words text-sm">{section.title}</dt>
+              <dd className="shrink-0 font-mono text-sm">{section.cards.length}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section aria-labelledby="now-money-heading">
+        <h2 id="now-money-heading">Invoice balances to review</h2>
+        {invoices.length ? (
+          <>
+            <p className="mt-2 font-mono text-lg font-semibold">
+              {new Intl.NumberFormat(locale, {
+                style: "currency",
+                currency: "CAD",
+                currencyDisplay: "code",
+              }).format(invoiceCents / 100)}
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              {invoices.length} loaded{" "}
+              {invoices.length === 1 ? "invoice balance" : "invoice balances"}. This is not total
+              receivables.
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-muted">
+            {!moneySource
+              ? "Money amounts are not included in this work list."
+              : moneySource.state === "current"
+                ? "No invoice balances in the loaded list."
+                : "Invoice balances could not be fully checked."}
+          </p>
+        )}
+        {invoices.length && moneySource?.state !== "current" ? (
+          <p className="mt-2 text-sm text-warning">The invoice source is incomplete.</p>
+        ) : null}
+      </section>
+      <section aria-labelledby="now-verdicts-heading">
+        <h2 id="now-verdicts-heading">Proposal verdicts</h2>
+        <p className="mt-1 text-sm text-muted">
+          Open review and result-check requests. Job records show matching approvals from the loaded
+          records; older receipts may be absent. Agent authorship is not recorded in this list.
+        </p>
+        {proposals.length ? (
+          <ul className="mt-3 grid gap-3" aria-label="Loaded proposal verdicts">
+            {proposals.slice(0, 3).map((item) => (
+              <li key={item.key} className="grid gap-1">
+                <a
+                  className="inline-flex min-h-11 items-center text-sm font-semibold underline underline-offset-4"
+                  href={item.review_href}
+                >
+                  {item.title}
+                </a>
+                <Status kind={decisionStatus(item).kind}>{decisionStatus(item).label}</Status>
+                <p className="text-xs text-muted">Current request v{item.version}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-sm text-muted">
+            {proposalsUnknown
+              ? "Proposal verdicts are unavailable or incomplete."
+              : "No open proposals in the loaded list."}
+          </p>
+        )}
+        {proposals.length > 3 || proposalsUnknown ? (
+          <p className="mt-2 text-sm text-muted">
+            Check Decisions for the available sources and remaining requests.
+          </p>
+        ) : null}
+      </section>
+    </aside>
+  );
+}
+
 function ActionControl({
   action,
   describedBy,
@@ -884,7 +995,7 @@ function ActionControl({
     return (
       <Button asChild {...props}>
         <a href={action.href} aria-describedby={describedBy}>
-          {action.label}
+          {action.label === "Open stop" ? "Review work stop" : action.label}
           {quiet ? <ArrowRight aria-hidden="true" /> : null}
         </a>
       </Button>

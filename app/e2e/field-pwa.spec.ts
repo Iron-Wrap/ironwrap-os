@@ -4,6 +4,59 @@ import { expectTouchTarget } from "./touch-target";
 import { settleAnimations } from "./settle";
 
 test.describe("Field Companion PWA acceptance", () => {
+  test("keeps the full crew name, Sun mode, and thumb actions usable on narrow phones", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/field/bootstrap", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      if (model.session?.user) model.session.user.display_name = "Sam Kennedy Long Example Name";
+      await route.fulfill({ response, json: model });
+    });
+    await seedPairedFieldDevice(page);
+    await page.reload();
+    await page.getByRole("button", { name: "Sun mode" }).click();
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const name = page.locator(".crew-person strong");
+      await expect(name).toHaveText("Sam Kennedy Long Example Name");
+      await expect(name).toHaveCSS("white-space", "normal");
+      expect(await name.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      await expect(page.locator(".crew")).toHaveAttribute("data-environment", "field-sun");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      for (const control of await page.locator(".crew-top > :is(button,a)").all()) {
+        const box = (await control.boundingBox())!;
+        expect(box.height).toBeGreaterThanOrEqual(48);
+        expect(box.width).toBeGreaterThanOrEqual(48);
+      }
+    }
+    await page.reload();
+    await expect(page.locator(".crew")).toHaveAttribute("data-environment", "field-sun");
+    await page.goto("/jobs/JOB-ACCEPTANCE");
+    const camera = page.locator(".field-capture-dock");
+    const cameraBox = (await camera.boundingBox())!;
+    const tabsBox = (await page.locator(".crew-tabs").boundingBox())!;
+    expect(cameraBox.height).toBeGreaterThanOrEqual(48);
+    expect(cameraBox.y + cameraBox.height).toBeLessThan(tabsBox.y);
+    await page.goto("/check-in/JOB-ACCEPTANCE");
+    await expect(page.getByRole("heading", { name: "Capture what you see" })).toBeFocused();
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const capture = page.getByText("Take photos", { exact: true }).locator("..");
+      const captureBox = (await capture.boundingBox())!;
+      const actionBox = (await page.locator(".field-action-bar").boundingBox())!;
+      const headerBox = (await page.locator(".crew-top").boundingBox())!;
+      expect(captureBox.height).toBeGreaterThanOrEqual(64);
+      expect(captureBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height);
+      expect(captureBox.y + captureBox.height).toBeLessThanOrEqual(actionBox.y);
+      expect(actionBox.y + actionBox.height).toBeLessThan(tabsBox.y);
+    }
+  });
+
   for (const width of [320, 412, 576]) {
     test(`keeps the run sheet in place when installation becomes available at ${width}px`, async ({
       page,

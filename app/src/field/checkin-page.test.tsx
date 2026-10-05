@@ -238,8 +238,8 @@ describe("CheckInPage", () => {
     expect(screen.getByLabelText(/Take photos/i)).toBeVisible();
     expect(screen.getByLabelText(/Add voice note/i)).toBeVisible();
     expect(screen.getByText(/Change proof type/i)).toBeInTheDocument();
-    // Step one still carries the file pickers, so its label must not be degraded.
-    expect(screen.getByText(/Step 1 of 3 · Files/)).toBeVisible();
+    const progress = screen.getByRole("list", { name: "Check-in progress, step 1 of 3" });
+    expect(progress.querySelector('[aria-current="step"]')).toHaveTextContent("1Files");
     expect(
       screen.queryByText(/Photos can be attached once production issues a work plan/i),
     ).not.toBeInTheDocument();
@@ -365,5 +365,39 @@ describe("CheckInPage", () => {
 
     expect(await screen.findByRole("heading", { name: "You cannot add a check-in" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Take photos/i })).not.toBeInTheDocument();
+  });
+
+  it("queues measurement readings as office-review proof without claiming a measurement revision", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    renderCheckIn();
+
+    await user.click(await screen.findByRole("button", { name: "Add measurement readings" }));
+    expect(screen.getByText(/does not update the survey, design, or cut list/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+    await user.click(screen.getByRole("button", { name: "Save on device" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Add the readings, units, and where you measured/,
+    );
+    expect(await listOutboxActionsByKind(principal, "field_checkin")).toHaveLength(0);
+
+    await user.type(
+      screen.getByLabelText("Readings, units, location, and how you measured"),
+      "North flashing: 450 mm wide, measured with a tape.",
+    );
+    await user.click(screen.getByRole("button", { name: "Save on device" }));
+
+    expect(await screen.findByRole("heading", { name: "Check-in saved" })).toBeVisible();
+    const [queued] = await listOutboxActionsByKind(principal, "field_checkin");
+    expect(queued).toMatchObject({
+      kind: "field_checkin",
+      state: "queued",
+      endpoint: "/api/v1/jobs/JOB-1/check-ins",
+      payload: {
+        notes:
+          "Measurement evidence for office review\nNorth flashing: 450 mm wide, measured with a tape.",
+      },
+    });
+    expect(screen.queryByText("The server got this check-in.")).not.toBeInTheDocument();
   });
 });

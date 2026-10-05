@@ -64,14 +64,18 @@ function OfficeShell() {
     drawer.querySelector<HTMLElement>("a[aria-current='page'], a")?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const tablet = window.matchMedia("(min-width: 721px) and (max-width: 1100px)");
+    const compact = window.matchMedia("(max-width: 1100px)");
+    const phone = window.matchMedia("(max-width: 720px)");
     const onResize = () => {
-      if (!tablet.matches) setNavOpenOn(null);
+      const shop = document.querySelector('.shell [data-environment="shop"]');
+      if (!compact.matches || (phone.matches && !shop)) setNavOpenOn(null);
     };
-    tablet.addEventListener("change", onResize);
+    compact.addEventListener("change", onResize);
+    phone.addEventListener("change", onResize);
     return () => {
       document.body.style.overflow = previousOverflow;
-      tablet.removeEventListener("change", onResize);
+      compact.removeEventListener("change", onResize);
+      phone.removeEventListener("change", onResize);
     };
   }, [navOpen]);
 
@@ -132,7 +136,7 @@ function OfficeShell() {
           <Link
             to="/now"
             {...nowLinkOptions}
-            className="shell-topbar-mark shell-topbar-row-item grid w-8 shrink-0 place-items-center"
+            className="shell-topbar-mark shell-topbar-row-item environment-control grid min-w-12 shrink-0 place-items-center"
             aria-label={`${session.tenant.brand}, Now`}
           >
             {logoUrl ? (
@@ -153,7 +157,7 @@ function OfficeShell() {
                   <Link
                     to={place.item.to}
                     {...(place.item.to === "/now" ? nowLinkOptions : {})}
-                    className="hover:text-foreground"
+                    className="environment-control inline-flex items-center hover:text-foreground"
                   >
                     {place.item.label}
                   </Link>
@@ -172,7 +176,7 @@ function OfficeShell() {
           <SystemStatus bannerClassName="-mx-8 basis-[calc(100%+4rem)] max-[1100px]:-mx-6 max-[1100px]:basis-[calc(100%+3rem)] max-[720px]:-mx-4 max-[720px]:basis-[calc(100%+2rem)]" />
           <button
             type="button"
-            className="inline-flex h-11 shrink-0 items-center gap-2.5 rounded-md bg-surface px-3 text-left text-[0.84375rem] text-faint shadow-[inset_0_0_0_1px_var(--border),0_1px_2px_rgb(21_24_28/0.05)] transition-shadow hover:shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.05)] max-[720px]:w-11 max-[720px]:justify-center max-[720px]:px-0 min-[1101px]:min-w-[17.5rem]"
+            className="shell-search-trigger environment-control inline-flex h-11 shrink-0 items-center gap-2.5 rounded-md bg-surface px-3 text-left text-[0.84375rem] text-faint shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.05)] transition-shadow hover:shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.05)] max-[720px]:w-11 max-[720px]:justify-center max-[720px]:px-0 min-[1101px]:min-w-[17.5rem]"
             aria-label="Open search (Command or Control K)"
             aria-keyshortcuts="Control+K Meta+K"
             title="Search (⌘K / Ctrl+K)"
@@ -186,7 +190,7 @@ function OfficeShell() {
           </button>
           <Button
             variant="quiet"
-            className="px-3 text-foreground max-[720px]:w-11 max-[720px]:px-0"
+            className="shell-safety-trigger px-3 text-foreground max-[720px]:w-11 max-[720px]:px-0"
             aria-haspopup="dialog"
             onClick={() => setSafetyOpen(true)}
           >
@@ -194,7 +198,7 @@ function OfficeShell() {
             <span className="max-[720px]:sr-only">Safety</span>
           </Button>
           <PersonMenu
-            triggerClassName="-mr-2 inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-2.5 rounded-md px-1 text-left hover:bg-surface-hover min-[721px]:pr-2"
+            triggerClassName="shell-person-trigger environment-control -mr-2 inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-2.5 rounded-md px-1 text-left hover:bg-surface-hover min-[721px]:pr-2"
             trigger={
               <>
                 <span
@@ -323,7 +327,7 @@ function RailLink({ item, active }: { item: NavigationItem; active: boolean }) {
       aria-current={active ? "page" : undefined}
     >
       <Icon aria-hidden="true" />
-      {item.label}
+      <span className="shell-nav-link-label">{item.label}</span>
     </Link>
   );
 }
@@ -364,7 +368,7 @@ function MoreTab({
             type="button"
             popoverTarget="mobile-workspace-popover"
             popoverTargetAction="hide"
-            className="grid size-11 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+            className="environment-control grid size-11 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
             aria-label="Close all workspaces"
           >
             <X className="size-5" aria-hidden="true" />
@@ -374,7 +378,7 @@ function MoreTab({
           {groups.map((group) => (
             <section key={group.workspace}>
               <h2 className="mb-1 px-2 text-xs font-semibold text-faint">{group.workspace}</h2>
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-2 gap-1 max-[360px]:grid-cols-1">
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   const active = item.to === currentTo;
@@ -384,13 +388,13 @@ function MoreTab({
                       to={item.to}
                       {...(item.to === "/now" ? nowLinkOptions : {})}
                       className={cn(
-                        "flex min-h-12 items-center gap-2.5 rounded-lg px-3 text-sm font-medium text-muted transition-colors hover:bg-surface-hover hover:text-foreground",
+                        "environment-control flex min-h-12 min-w-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-hover hover:text-foreground",
                         active && "bg-selected text-foreground [&_svg]:text-accent",
                       )}
                       aria-current={active ? "page" : undefined}
                     >
                       <Icon className="size-[1.125rem] shrink-0" aria-hidden="true" />
-                      <span className="truncate">{item.label}</span>
+                      <span className="min-w-0 [overflow-wrap:anywhere]">{item.label}</span>
                     </Link>
                   );
                 })}

@@ -21,11 +21,15 @@ export async function loadJobHistory(
   fetcher: typeof fetch = fetch,
 ): Promise<JobHistoryResponse | null> {
   try {
-    return await apiRequest({
+    const model = await apiRequest({
       path: jobHistoryPath(jobId, cursor),
       schema: jobHistoryResponseSchema,
       fetcher,
     });
+    if (model.job.id !== jobId && model.job.roof_job_id !== jobId) {
+      throw new Error("The job record does not match this link.");
+    }
+    return model;
   } catch (error) {
     if (error instanceof ApiError && (error.status === 403 || error.status === 404)) return null;
     throw error;

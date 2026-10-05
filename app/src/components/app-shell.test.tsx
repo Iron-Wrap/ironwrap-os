@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   searchStr: "",
   navigate: vi.fn(),
   removeQueries: vi.fn(),
+  outletEnvironment: undefined as string | undefined,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -59,7 +60,7 @@ vi.mock("@tanstack/react-router", () => ({
       </a>
     );
   },
-  Outlet: () => <div data-testid="outlet" />,
+  Outlet: () => <div data-testid="outlet" data-environment={mocks.outletEnvironment} />,
   useNavigate: () => mocks.navigate,
   useRouterState: ({
     select,
@@ -147,6 +148,7 @@ describe("AppShell", () => {
     mocks.pathname = "/now";
     mocks.search = {};
     mocks.searchStr = "";
+    mocks.outletEnvironment = undefined;
     Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
     vi.mocked(loadPublicEstimateConfig).mockResolvedValue({ logo_url: null } as never);
   });
@@ -298,6 +300,39 @@ describe("AppShell", () => {
     expect(within(phoneBar()).queryByRole("button", { name: "Open all workspaces" })).toBeNull();
   });
 
+  it("closes the drawer and restores page scrolling when resized beyond tablet", async () => {
+    const matchMedia = window.matchMedia.bind(window);
+    const tablet = Object.assign(new EventTarget(), {
+      matches: true,
+      media: "(max-width: 1100px)",
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    });
+    vi.spyOn(window, "matchMedia").mockImplementation((query) =>
+      query === tablet.media ? (tablet as unknown as MediaQueryList) : matchMedia(query),
+    );
+    document.body.style.overflow = "auto";
+    try {
+      renderShell(ownerSession);
+      const menu = screen.getByRole("button", { name: "Open navigation" });
+      await userEvent.click(menu);
+      const drawer = screen.getByRole("dialog", { name: "Navigation" });
+      expect(drawer).toHaveAttribute("open");
+      expect(document.body.style.overflow).toBe("hidden");
+
+      act(() => {
+        tablet.matches = false;
+        tablet.dispatchEvent(new Event("change"));
+      });
+      await waitFor(() => expect(drawer).not.toHaveAttribute("open"));
+      expect(menu).toHaveAttribute("aria-expanded", "false");
+      expect(document.body.style.overflow).toBe("auto");
+    } finally {
+      document.body.style.overflow = "";
+    }
+  });
+
   it("pins the viewer's appearance from the person menu and remembers it", async () => {
     renderShell(ownerSession);
     expect(screen.getByRole("button", { name: "Owner, account menu" })).toBeInTheDocument();
@@ -315,6 +350,41 @@ describe("AppShell", () => {
     expect(document.documentElement).not.toHaveAttribute("data-theme");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
     expect(screen.getByRole("button", { name: "Sign out", hidden: true })).toBeInTheDocument();
+  });
+
+  it("retains the Shop drawer on a phone resize and exits it when the desktop rail returns", async () => {
+    const matchMedia = window.matchMedia.bind(window);
+    const query = (media: string, matches: boolean) =>
+      Object.assign(new EventTarget(), {
+        media,
+        matches,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      });
+    const compact = query("(max-width: 1100px)", true);
+    const phone = query("(max-width: 720px)", false);
+    vi.spyOn(window, "matchMedia").mockImplementation((media) => {
+      const target = [compact, phone].find((item) => item.media === media);
+      return target ? (target as unknown as MediaQueryList) : matchMedia(media);
+    });
+    mocks.outletEnvironment = "shop";
+    renderShell(ownerSession);
+    await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    const drawer = screen.getByRole("dialog", { name: "Navigation" });
+    act(() => {
+      phone.matches = true;
+      phone.dispatchEvent(new Event("change"));
+    });
+    expect(drawer).toHaveAttribute("open");
+    expect(document.body.style.overflow).toBe("hidden");
+
+    act(() => {
+      compact.matches = false;
+      compact.dispatchEvent(new Event("change"));
+    });
+    await waitFor(() => expect(drawer).not.toHaveAttribute("open"));
+    expect(document.body.style.overflow).not.toBe("hidden");
   });
 
   it("reaches Safety from the office header on every screen", async () => {

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { CustomerPortalView } from "./customer-portal-page";
@@ -29,6 +29,80 @@ const model: CustomerPortalResponse = {
 };
 
 describe("CustomerPortalView", () => {
+  it("prioritizes the published balance and due date while keeping the installation schedule unknown", () => {
+    const withPayment: CustomerPortalResponse = {
+      ...model,
+      proposal: {
+        status: "Sent",
+        prepared_at: null,
+        approved_at: null,
+        signed_at: null,
+        quote: {
+          version: 2,
+          status: "Approved",
+          total: 9000,
+          currency: "CAD",
+          deposit_amount: null,
+          balance_due: 5384.25,
+          payment_status: "Part paid",
+          payment_due_date: "2026-10-13",
+          valid_until: null,
+          scope_summary: null,
+          assumptions: null,
+          exclusions: null,
+        },
+      },
+    };
+    render(<CustomerPortalView model={withPayment} />);
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(within(overview).getByText("$5,384.25")).toBeVisible();
+    expect(within(overview).getByText(/Due Oct 13, 2026/)).toBeVisible();
+    expect(within(overview).getByText("Part paid")).toBeVisible();
+    expect(within(overview).getByText("Schedule not yet shared")).toBeVisible();
+    const proposal = screen.getByText("Project proposal").closest("#project-proposal");
+    expect(overview.compareDocumentPosition(proposal!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("does not infer a balance from the proposal total or a customer contact from a placeholder", () => {
+    const { container } = render(
+      <CustomerPortalView
+        model={{
+          ...model,
+          proposal: {
+            status: "Sent",
+            prepared_at: null,
+            approved_at: null,
+            signed_at: null,
+            quote: {
+              version: 2,
+              status: "Approved",
+              total: 9000,
+              currency: "CAD",
+              deposit_amount: null,
+              balance_due: null,
+              payment_status: null,
+              payment_due_date: null,
+              valid_until: null,
+              scope_summary: null,
+              assumptions: null,
+              exclusions: null,
+            },
+          },
+        }}
+      />,
+    );
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(within(overview).getByText("Amount not yet shared")).toBeVisible();
+    expect(within(overview).queryByText(/9,000/)).not.toBeInTheDocument();
+    expect(within(overview).getByText("Payment due date not yet shared.")).toBeVisible();
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.queryByText("MR", { exact: true })).not.toBeInTheDocument();
+    expect(within(overview).getByRole("link", { name: "See project updates" })).toHaveAttribute(
+      "href",
+      "#project-progress",
+    );
+    expect(container.querySelector("#project-progress")).toHaveTextContent("Project updates");
+  });
   it("renders published text as text, never as customer-supplied HTML", () => {
     const { container } = render(<CustomerPortalView model={model} />);
 

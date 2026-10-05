@@ -156,12 +156,9 @@
   --faint: #656c74;
   --border: #e2e4e1;
   --border-soft: #eceeeb;
-  /* The resting edge of an input, select or textarea: the reference's line-strong. */
-  --border-control: #c6cbce;
-  /* Hover borders, dashed drop targets and unchecked control outlines are drawn with
-     this, so it owes a UI boundary's 3:1 on every ground: 3.53:1 on `--background` and
-     3.40:1 on `--surface-muted`. The reference's line-strong is too pale for that job,
-     which is why it lives on as `--border-control` instead. */
+  /* Resting controls need a visible boundary too: 3.40:1 or better on every light surface. */
+  --border-control: #7b8289;
+  /* Hover borders, drop targets and unchecked controls use the same qualified edge. */
   --border-strong: #7b8289;
   --chrome: #1b1e22;
   --chrome-raised: #262a2f;
@@ -176,13 +173,13 @@
   --primary-hover: #2b3036;
   --primary-foreground: #ffffff;
   /* Brass marks where you are: focus, selection, the active place. It is not an action colour. */
-  --accent: #94701f;
+  --accent: #87651c;
   --accent-hover: #7f601a;
   --accent-active: #6b5116;
   --accent-foreground: #ffffff;
   --accent-soft: #f6efdc;
   --accent-line: #dcc387;
-  --focus: #94701f;
+  --focus: #87651c;
   --selected: #fbf6e8;
   --highlight: #f8efd2;
   --ok: #17603b;
@@ -218,6 +215,10 @@
   --tag-paper-text: #4a3b12;
   --rail-w: 240px;
   --inspector-w: 380px;
+  /* Office density stays explicit; local environments and input media raise these floors. */
+  --environment-control-size: 2.75rem;
+  --environment-body-size: 1rem;
+  --environment-control-type: 0.875rem;
   --motion-fast: 140ms;
   --motion-standard: 220ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -248,7 +249,7 @@
     --faint: #8f969e;
     --border: #2c3137;
     --border-soft: #24282d;
-    --border-control: #3d434a;
+    --border-control: #767d85;
     /* 3.61:1 on `--surface-raised`. Same 3:1 reasoning as the light scheme. */
     --border-strong: #767d85;
     --chrome: #0b0c0e;
@@ -303,7 +304,7 @@
   --faint: #8f969e;
   --border: #2c3137;
   --border-soft: #24282d;
-  --border-control: #3d434a;
+  --border-control: #767d85;
   /* 3.61:1 on `--surface-raised`. Same 3:1 reasoning as the light scheme. */
   --border-strong: #767d85;
   --chrome: #0b0c0e;
@@ -342,6 +343,155 @@
   --tag-metal-edge: #9aa2a8;
   --tag-metal-text: #1a1e23;
   --shadow-floating: 0 18px 44px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.07);
+}
+
+/* Environments are local to a shell or work surface. They never change the viewer's
+   saved appearance or make the office pay the shop's density cost. */
+:is([data-environment="field"], [data-environment="field-sun"]) {
+  --environment-control-size: 3rem;
+  --environment-body-size: 1rem;
+  --environment-control-type: 1rem;
+  font-size: var(--environment-body-size);
+}
+
+[data-environment="customer"] {
+  --environment-control-size: 3rem;
+}
+
+[data-environment="field-sun"] {
+  color-scheme: light;
+  --background: #ffffff;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-muted: #f0f2ee;
+  --surface-sunk: #f7f8f6;
+  --surface-hover: #eef0ee;
+  --foreground: #15181c;
+  --muted: #343a40;
+  --faint: #444a50;
+  --border: #8d959b;
+  --border-soft: #c6cbce;
+  --border-control: #59616a;
+  --border-strong: #434a52;
+  --primary: #15181c;
+  --primary-hover: #2b3036;
+  --primary-foreground: #ffffff;
+  --accent: #62450f;
+  --accent-hover: #533a0c;
+  --accent-active: #453009;
+  --accent-foreground: #ffffff;
+  --accent-soft: #f6efdc;
+  --accent-line: #8d6c25;
+  --focus: #62450f;
+  --selected: #fbf6e8;
+  --highlight: #f8efd2;
+  --ok: #12492e;
+  --ok-soft: #e6f2ea;
+  --warning: #704500;
+  --warning-soft: #fbf1d9;
+  --warning-line: #a16b00;
+  --danger: #8e2118;
+  --danger-foreground: #ffffff;
+  --danger-soft: #fcebe8;
+  --danger-line: #b0261b;
+  --danger-strong: #8e2118;
+  --danger-strong-foreground: #ffffff;
+  --info: #174771;
+  --info-soft: #e8eff8;
+  --local: #483670;
+  --local-soft: #efebf8;
+  --neutral: #3e454d;
+  --neutral-soft: #eef0ee;
+  --tag-metal-fill: #dfe3e5;
+  --tag-metal-edge: #59616a;
+  --tag-metal-text: #15181c;
+  --tag-paper-fill: #efe2bb;
+  --tag-paper-edge: #8d6c25;
+  --tag-paper-text: #3b2d0b;
+  --scrim: rgb(21 24 28 / 0.36);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+[data-environment="shop"] {
+  color-scheme: dark;
+  --environment-control-size: 4rem;
+  --environment-body-size: 1.5rem;
+  --environment-control-type: 1.5rem;
+  --background: #0b0c0e;
+  --surface: #15181c;
+  --surface-raised: #1b1e22;
+  --surface-muted: #1b1e22;
+  --surface-sunk: #111316;
+  --surface-hover: #2a3036;
+  --foreground: #ffffff;
+  --muted: #d9dde0;
+  --faint: #c2c8cf;
+  --border: #767d85;
+  --border-soft: #434a52;
+  --border-control: #b8bfc5;
+  --border-strong: #d9dde0;
+  --primary: #ffffff;
+  --primary-hover: #e8eaec;
+  --primary-foreground: #111316;
+  --accent: #e0b85a;
+  --accent-hover: #f0cd80;
+  --accent-active: #d8b25a;
+  --accent-foreground: #111316;
+  --accent-soft: #2a2415;
+  --accent-line: #d8b25a;
+  --focus: #e0b85a;
+  --selected: #272216;
+  --highlight: #372f18;
+  --ok: #a4e2bb;
+  --ok-soft: #13271c;
+  --warning: #f0cd80;
+  --warning-soft: #2a2211;
+  --warning-line: #e6b457;
+  --danger: #ffb3a8;
+  --danger-foreground: #1a1d20;
+  --danger-soft: #311714;
+  --danger-line: #f08a7e;
+  --danger-strong: #8e2118;
+  --danger-strong-foreground: #ffffff;
+  --info: #b4d5fc;
+  --info-soft: #14202f;
+  --local: #d4c0ff;
+  --local-soft: #201c30;
+  --neutral: #d9dde0;
+  --neutral-soft: #1b1e22;
+  --tag-metal-fill: #cfd4d8;
+  --tag-metal-edge: #9aa2a8;
+  --tag-metal-text: #111316;
+  --tag-paper-fill: #efe2bb;
+  --tag-paper-edge: #cdb676;
+  --tag-paper-text: #3b2d0b;
+  --scrim: rgb(0 0 0 / 0.6);
+  font-size: var(--environment-body-size);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Semantic tag names are shared with Figma. Declare aliases on each color scope so
+   a local environment resolves its own plate palette rather than a parent's value. */
+:is(:root, [data-environment="field-sun"], [data-environment="shop"]) {
+  --tag-case-fill: var(--tag-metal-fill);
+  --tag-case-edge: var(--tag-metal-edge);
+  --tag-case-text: var(--tag-metal-text);
+  --tag-supply-fill: var(--tag-metal-fill);
+  --tag-supply-edge: var(--tag-metal-edge);
+  --tag-supply-text: var(--tag-metal-text);
+  --tag-record-fill: var(--tag-metal-fill);
+  --tag-record-edge: var(--tag-metal-edge);
+  --tag-record-text: var(--tag-metal-text);
+  --tag-asset-fill: #30353c;
+  --tag-asset-edge: #1f2328;
+  --tag-asset-text: #eef0ee;
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"]) {
+  accent-color: var(--foreground);
+  caret-color: var(--accent);
 }
 
 @layer base {
@@ -589,9 +739,27 @@ select {
 }
 
 .ref-tag[data-kind="asset"] {
-  --tag-fill: #30353c;
-  --tag-edge: #1f2328;
-  color: #eef0ee;
+  --tag-fill: var(--tag-asset-fill);
+  --tag-edge: var(--tag-asset-edge);
+  color: var(--tag-asset-text);
+}
+
+.ref-tag[data-kind="case"] {
+  --tag-fill: var(--tag-case-fill);
+  --tag-edge: var(--tag-case-edge);
+  color: var(--tag-case-text);
+}
+
+.ref-tag[data-kind="supply"] {
+  --tag-fill: var(--tag-supply-fill);
+  --tag-edge: var(--tag-supply-edge);
+  color: var(--tag-supply-text);
+}
+
+.ref-tag[data-kind="record"] {
+  --tag-fill: var(--tag-record-fill);
+  --tag-edge: var(--tag-record-edge);
+  color: var(--tag-record-text);
 }
 
 .ref-tag[data-size="large"] {
@@ -615,7 +783,7 @@ a.ref-tag:focus-visible {
 /*
  * Segmented: section tabs (underlined, `nav`), filter chips and a segmented control (both a
  * `role="group"` of `aria-pressed` buttons). Selection is brass; the current section is ink.
- * A 32px chip keeps a 44px hit area through its ::after.
+ * Dense pointer/keyboard chips stay 32px. Touch and environment scopes enlarge their real box.
  */
 .segmented {
   display: flex;
@@ -633,7 +801,7 @@ a.ref-tag:focus-visible {
   border: 0;
   border-radius: 999px;
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: inset 0 0 0 1px var(--border-control);
   color: var(--muted);
   font-size: 0.84375rem;
   font-weight: 560;
@@ -643,12 +811,6 @@ a.ref-tag:focus-visible {
     background-color var(--motion-fast) var(--motion-ease),
     color var(--motion-fast) var(--motion-ease),
     box-shadow var(--motion-fast) var(--motion-ease);
-}
-
-.segmented > :is(a, button)::after {
-  position: absolute;
-  inset: -6px 0;
-  content: "";
 }
 
 .segmented > :is(a, button):hover {
@@ -698,10 +860,6 @@ a.ref-tag:focus-visible {
   font-size: 0.875rem;
 }
 
-.segmented[data-variant="tabs"] > :is(a, button)::after {
-  content: none;
-}
-
 .segmented[data-variant="tabs"] > :is(a, button):hover {
   background: transparent;
   box-shadow: inset 0 -2px 0 var(--border-strong);
@@ -722,7 +880,7 @@ a.ref-tag:focus-visible {
   padding: 3px;
   border-radius: 0.625rem;
   background: var(--surface-sunk);
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: inset 0 0 0 1px var(--border-control);
 }
 
 .segmented[data-variant="control"] > :is(a, button) {
@@ -734,8 +892,130 @@ a.ref-tag:focus-visible {
 .segmented[data-variant="control"] > [aria-pressed="true"]:hover {
   background: var(--surface);
   box-shadow:
-    0 0 0 1px var(--border),
+    0 0 0 1px var(--border-control),
     0 1px 2px rgb(21 24 28 / 0.06);
+}
+
+/* Size floors apply to the actual element. Overlapping pseudo hit areas make adjacent
+   filter chips compete for a tap, so they are deliberately absent from these recipes. */
+.ui-button {
+  --ui-control-size: 2.75rem;
+}
+
+.ui-button[data-ui-size="small"] {
+  --ui-control-size: 2rem;
+}
+
+:is(.ui-input, .ui-select) {
+  --ui-control-size: 3rem;
+}
+
+:is(.ui-button, .ui-select)[data-ui-size="field"] {
+  --ui-control-size: 4rem;
+}
+
+.ui-textarea {
+  --ui-control-size: 6rem;
+}
+
+:is(
+    [data-environment="field"],
+    [data-environment="field-sun"],
+    [data-environment="shop"],
+    [data-environment="customer"]
+  )
+  :is(
+    .ui-button,
+    .ui-input,
+    .ui-select,
+    .ui-textarea,
+    .environment-control,
+    .segmented[data-variant] > :is(a, button)
+  ) {
+  min-width: var(--environment-control-size);
+  min-height: max(var(--ui-control-size, 0px), var(--environment-control-size));
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  :is(
+    .ui-button,
+    .ui-input,
+    .ui-select,
+    .ui-textarea,
+    .environment-control,
+    .segmented[data-variant] > :is(a, button)
+  ) {
+  font-size: var(--environment-control-type);
+  line-height: 1.4;
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  :is(.environment-copy, .ui-status, .segmented-count) {
+  font-size: var(--environment-body-size);
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  .ui-status {
+  white-space: normal;
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  .segmented-count {
+  min-width: calc(var(--environment-body-size) * 1.5);
+  min-height: calc(var(--environment-body-size) * 1.5);
+  height: auto;
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  .ui-status
+  > svg {
+  width: 1em;
+  height: 1em;
+}
+
+/* Existing office utilities may occur inside shared field content. Raise only the small
+   type steps, leaving the title ramp and office selectors intact. */
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  :is(.text-xs, .text-sm, [class*="text-[0."]) {
+  font-size: var(--environment-body-size);
+}
+
+[data-environment="shop"] :is(.text-base, .text-lg, .text-xl) {
+  font-size: var(--environment-body-size);
+}
+
+:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+  .ref-tag {
+  --tag-h: calc(var(--environment-body-size) * 2);
+  font-size: var(--environment-body-size);
+}
+
+:is(
+    [data-environment="field"],
+    [data-environment="field-sun"],
+    [data-environment="shop"],
+    [data-environment="customer"]
+  )
+  .ref-tag[data-interactive] {
+  --tag-h: var(--environment-control-size);
+  min-width: var(--environment-control-size);
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+  :is(.ui-button, .ui-input, .ui-select, .ui-textarea, .environment-control),
+  .segmented[data-variant] > :is(a, button) {
+    min-width: max(3rem, var(--environment-control-size));
+    min-height: max(var(--ui-control-size, 0px), 3rem, var(--environment-control-size));
+  }
+
+  .ref-tag[data-interactive] {
+    --tag-h: max(3rem, var(--environment-control-size));
+    min-width: var(--tag-h);
+  }
+
+  :is(.shell-nav-link, .shell-brand, .shell-tab) {
+    min-height: 3rem;
+  }
 }
 
 /* A queue row whose only action is a link is clickable as a whole: the link goes static so
@@ -804,13 +1084,19 @@ a.ref-tag:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  min-width: 0;
+  min-height: 0;
+  align-self: start;
   height: 100dvh;
-  padding: 0.875rem 0.75rem;
+  padding: max(0.875rem, env(safe-area-inset-top)) 0.75rem
+    max(0.875rem, env(safe-area-inset-bottom));
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--chrome);
   color: var(--chrome-muted);
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--chrome-faint) var(--chrome);
 }
 
 :root[data-theme="dark"] .shell-rail {
@@ -832,6 +1118,7 @@ a.ref-tag:focus-visible {
   align-items: center;
   gap: 0.6875rem;
   min-height: 2.75rem;
+  flex-shrink: 0;
   margin: 0 -0.75rem;
   padding: 0.375rem 0.75rem 1rem 1.375rem;
   border-bottom: 1px solid var(--chrome-border);
@@ -841,6 +1128,8 @@ a.ref-tag:focus-visible {
 
 .shell-nav-group {
   display: grid;
+  flex-shrink: 0;
+  min-width: 0;
   gap: 1px;
 }
 
@@ -857,15 +1146,21 @@ a.ref-tag:focus-visible {
   align-items: center;
   gap: 0.6875rem;
   min-height: 2.5rem;
-  padding: 0 0.625rem;
+  padding: 0.5rem 0.625rem;
   border-radius: 0.4375rem;
   color: var(--chrome-muted);
   font-size: 0.90625rem;
   font-weight: 520;
+  line-height: 1.35;
   text-decoration: none;
   transition:
     background-color var(--motion-fast) var(--motion-ease),
     color var(--motion-fast) var(--motion-ease);
+}
+
+.shell-nav-link-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .shell-nav-link svg {
@@ -904,11 +1199,13 @@ a.ref-tag:focus-visible {
 }
 
 .shell-rail-foot {
+  flex-shrink: 0;
   margin-top: auto;
   padding: 0.75rem 0.625rem 0;
   border-top: 1px solid var(--chrome-border);
   color: var(--chrome-faint);
   font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
 .shell-scrim {
@@ -1083,7 +1380,7 @@ a.ref-tag:focus-visible {
  */
 .crew {
   --crew-w: 36rem;
-  --crew-tabs-h: 4rem;
+  --crew-tabs-h: 5rem;
   min-height: 100dvh;
   background: var(--background);
 }
@@ -1103,6 +1400,35 @@ a.ref-tag:focus-visible {
   max-width: var(--crew-w);
   margin: 0 auto;
   padding: 0.75rem 1rem calc(var(--crew-tabs-h) + 2rem + env(safe-area-inset-bottom));
+  /* The camera and send docks must anchor to the viewport, not an office query container. */
+  container-type: normal;
+}
+
+.crew-main > * {
+  animation: none;
+}
+
+.crew-main:has(.field-action-bar) {
+  padding-bottom: calc(var(--crew-tabs-h) + 11rem + env(safe-area-inset-bottom));
+}
+
+.crew-main:has(.field-capture-dock) {
+  padding-bottom: calc(var(--crew-tabs-h) + 6rem + env(safe-area-inset-bottom));
+}
+
+.crew :is(.field-action-bar, .field-capture-dock) {
+  position: fixed;
+  z-index: 25;
+  inset-inline: 1rem;
+  bottom: calc(var(--crew-tabs-h) + env(safe-area-inset-bottom) + 0.75rem);
+  max-width: calc(var(--crew-w) - 2rem);
+  margin-inline: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-floating);
+}
+
+.crew .field-capture-dock {
+  --ui-control-size: 4rem;
 }
 
 .crew-tabs {
@@ -1122,8 +1448,15 @@ a.ref-tag:focus-visible {
 
 .crew-tabs .shell-tab {
   gap: 0.25rem;
-  font-size: 0.78125rem;
+  font-size: var(--environment-body-size);
   font-weight: 560;
+  padding-inline: 0.25rem;
+}
+
+.crew-tabs .shell-tab > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
 }
 
 .crew-tabs .shell-tab svg {
@@ -1136,28 +1469,171 @@ a.ref-tag:focus-visible {
   font-weight: 650;
 }
 
-/* Sync and the late install prompt share a stable row, so neither reflows the run sheet. */
+/* The name spans the flexible and appearance tracks. Even at 320px it does not
+   inherit the Sun button's width constraint; Help and search keep real 48px boxes. */
 .crew-top {
   display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr) 2.75rem auto;
-  grid-template-areas: "brand person search help" "sync sync sync sync" "banner banner banner banner";
+  grid-template-columns: 3rem minmax(0, 1fr) auto 3rem;
+  grid-template-areas:
+    "brand person person help"
+    "sync sync appearance search"
+    "banner banner banner banner";
+  row-gap: 0.25rem;
 }
 .crew-top > a {
   grid-area: brand;
 }
-.crew-top > button[popoverTarget] {
+.crew-top > .crew-person {
   grid-area: person;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.crew-top > .crew-sun-mode {
+  grid-area: appearance;
 }
 .crew-top > button[aria-keyshortcuts] {
   grid-area: search;
 }
 .crew-top > button[aria-haspopup="dialog"] {
   grid-area: help;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.125rem;
+  padding-inline: 0.25rem;
+  border-radius: var(--radius-md);
 }
 .crew-status {
   grid-area: sync;
   margin-bottom: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  min-height: 3rem;
+}
+
+/* Install is discovered after the shell paints. Reserve its flow footprint so that
+   its arrival neither moves the run sheet nor changes where a crew member is tapping. */
+.crew-status > .ui-button,
+.crew-status:not(:has(> .ui-button))::after {
+  flex: 0 0 6.5rem;
+  width: 6.5rem;
+  min-height: 3rem;
+}
+
+.crew-status:not(:has(> .ui-button))::after {
+  content: "";
 }
 .crew-banner {
   grid-area: banner;
+}
+
+/* Reading mode belongs to the active Inventory surface. Its surrounding chrome
+   becomes a small set of glove-sized escapes rather than an office search toolbar. */
+.shell:has([data-environment="shop"]) {
+  --header-h: 5rem;
+  --tabbar-h: 5.5rem;
+  --environment-control-size: 4rem;
+  --environment-body-size: 1.5rem;
+  --environment-control-type: 1.5rem;
+}
+
+.shell:has([data-environment="shop"]) .shell-topbar {
+  --background: #0b0c0e;
+  --surface: #15181c;
+  --surface-raised: #1b1e22;
+  --surface-muted: #1b1e22;
+  --surface-sunk: #111316;
+  --surface-hover: #2a3036;
+  --foreground: #ffffff;
+  --muted: #d9dde0;
+  --faint: #c2c8cf;
+  --border-control: #b8bfc5;
+  --border-strong: #d9dde0;
+  --primary: #ffffff;
+  --primary-hover: #e8eaec;
+  --primary-foreground: #111316;
+  --focus: #e0b85a;
+  --danger: #ffb3a8;
+  font-size: var(--environment-body-size);
+  color: var(--foreground);
+}
+
+.shell:has([data-environment="shop"]) :is(.shell-search-trigger, .shell-topbar-mark) {
+  display: none;
+}
+
+.shell:has([data-environment="shop"]) .shell-menu-btn {
+  display: inline-grid;
+}
+
+@media (min-width: 1101px) {
+  .shell:has([data-environment="shop"]) .shell-menu-btn {
+    display: none;
+  }
+}
+
+.shell:has([data-environment="shop"])
+  :is(
+    .shell-topbar button,
+    .shell-topbar .environment-control,
+    .shell-nav-dialog .ui-button,
+    .shell-nav-link,
+    .shell-tab,
+    #mobile-workspace-popover a
+  ) {
+  min-width: 4rem;
+  min-height: 4rem;
+  font-size: var(--environment-control-type);
+}
+
+.shell:has([data-environment="shop"])
+  :is(.shell-topbar .text-xs, .shell-topbar .text-sm, .shell-nav-label, .shell-rail-foot) {
+  font-size: var(--environment-body-size);
+}
+
+.shell:has([data-environment="shop"]) .shell-topbar nav[aria-label="Breadcrumb"] {
+  font-size: var(--environment-body-size);
+}
+
+.shell:has([data-environment="shop"])
+  .shell-topbar
+  nav[aria-label="Breadcrumb"]
+  > ol
+  > li:not(:last-child) {
+  display: none;
+}
+
+.shell:has([data-environment="shop"]) .shell-person-trigger span {
+  font-size: inherit;
+}
+
+.shell:has([data-environment="shop"]) .shell-person-trigger > span[aria-hidden="true"] {
+  width: 3rem;
+  height: 3rem;
+}
+
+.shell:has([data-environment="shop"]) .shell-safety-trigger > span {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+.shell:has([data-environment="shop"]) .shell-safety-trigger {
+  width: auto;
+  padding-inline: 0.75rem;
+}
+
+.shell:has([data-environment="shop"]) .shell-topbar button > svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.shell:has([data-environment="shop"]) .shell-tab > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
 }

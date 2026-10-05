@@ -1,0 +1,1991 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-02",
+  "status": "bounded UI audit checkpoint; Claude visual ownership resumes after push",
+  "authority": "Owner temporary visual exception closed by controller handback; no new visual or Figma work after checkpoint",
+  "source": {
+    "repository": "Iron-Wrap/ironwrap-os",
+    "branch": "codex/ui-audit-repair-20261002",
+    "base": "69ef786260aa04b7c03d8c0b9a3d6242bda282fb",
+    "sourceShaLocation": "output/control/lanes.json lane ironwrap.ui_audit_delivery_2026_10_02"
+  },
+  "figma": {
+    "account": "owner@example.invalid",
+    "accountVerified": true,
+    "collections": [
+      {
+        "id": "VariableCollectionId:2:2",
+        "name": "Primitives",
+        "count": 143,
+        "modes": [
+          {
+            "name": "Value",
+            "modeId": "2:0"
+          }
+        ],
+        "hiddenFromPublishing": false
+      },
+      {
+        "id": "VariableCollectionId:2:3",
+        "name": "Color",
+        "count": 57,
+        "modes": [
+          {
+            "name": "Light",
+            "modeId": "2:1"
+          },
+          {
+            "name": "Dark",
+            "modeId": "2:2"
+          },
+          {
+            "name": "Field Sun",
+            "modeId": "782:0"
+          },
+          {
+            "name": "Shop",
+            "modeId": "782:1"
+          }
+        ],
+        "hiddenFromPublishing": false
+      },
+      {
+        "id": "VariableCollectionId:2:124",
+        "name": "Layout",
+        "count": 41,
+        "modes": [
+          {
+            "name": "Office",
+            "modeId": "2:3"
+          },
+          {
+            "name": "Touch",
+            "modeId": "782:2"
+          },
+          {
+            "name": "Shop",
+            "modeId": "782:3"
+          }
+        ],
+        "hiddenFromPublishing": false
+      },
+      {
+        "id": "VariableCollectionId:679:8432",
+        "name": "Prototype \u00b7 Manual history",
+        "count": 16,
+        "modes": [
+          {
+            "name": "Mode 1",
+            "modeId": "679:0"
+          }
+        ],
+        "hiddenFromPublishing": true
+      }
+    ],
+    "semanticColorMappingsVerified": 57,
+    "textStyles": [
+      {
+        "id": "S:1b1d02a5585d95ada09324115cd16b1d631962e2,",
+        "name": "Body",
+        "size": 16,
+        "lineHeight": {
+          "unit": "PIXELS",
+          "value": 24
+        }
+      },
+      {
+        "id": "S:17cc75bac24bddb385f354c0b2a98fa1adb9eeff,",
+        "name": "Body/Strong",
+        "size": 16,
+        "lineHeight": {
+          "unit": "PIXELS",
+          "value": 24
+        }
+      },
+      {
+        "id": "S:8cfb9e5ca7501e11ab160421251a16d72d356880,",
+        "name": "Shop/Body",
+        "size": 24,
+        "lineHeight": {
+          "unit": "PERCENT",
+          "value": 150
+        }
+      },
+      {
+        "id": "S:02231e41917461dcbc56ed8509aecc5f93c80887,",
+        "name": "Shop/Control",
+        "size": 24,
+        "lineHeight": {
+          "unit": "PERCENT",
+          "value": 150
+        }
+      },
+      {
+        "id": "S:a7e152173c3dcea421a6db858898f5ed18c329f4,",
+        "name": "Shop/Title",
+        "size": 32,
+        "lineHeight": {
+          "unit": "PERCENT",
+          "value": 150
+        }
+      },
+      {
+        "id": "S:95eeea5851ddd01b239040e397099a319742497f,",
+        "name": "Field/Ref",
+        "size": 16,
+        "lineHeight": {
+          "unit": "PERCENT",
+          "value": 150
+        }
+      }
+    ],
+    "componentSets": [
+      "8:75",
+      "488:39579",
+      "10:21",
+      "488:39588",
+      "10:51",
+      "784:1204",
+      "784:1205",
+      "784:1206"
+    ],
+    "keyChangedRegisterFrames": {
+      "home": [
+        "104:61",
+        "104:1691",
+        "104:1849",
+        "104:3400",
+        "104:4988",
+        "104:12349",
+        "104:12650",
+        "104:12827"
+      ],
+      "shop": ["109:6758", "109:6960", "109:44380", "109:44461"],
+      "jobSpine": ["802:6145", "802:6146", "802:6518", "806:6236", "806:6354"],
+      "lotLookup": ["803:4264", "803:4505"]
+    },
+    "customerRegister": [
+      {
+        "id": "110:78141",
+        "name": "CUST-01 Public request / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:78363",
+        "name": "CUST-01 Public request / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:78437",
+        "name": "CUST-01 Public request / Phone 390 / State \u00b7 Details need attention",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:78680",
+        "name": "CUST-01 Public request / Phone 390 / State \u00b7 Request form turned off",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:78816",
+        "name": "CUST-02 Request received / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:78874",
+        "name": "CUST-02 Request received / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:79186",
+        "name": "CUST-03 Project overview / Phone 390 / State \u00b7 Project link doesn\u2019t work",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57223",
+        "name": "CUST-03 Project overview / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57423",
+        "name": "CUST-03 Project overview / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:79546",
+        "name": "CUST-04 Quote and choices / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:79804",
+        "name": "CUST-04 Quote and choices / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:80101",
+        "name": "CUST-05 Decision verification email / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "110:80161",
+        "name": "CUST-05 Decision verification email / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57682",
+        "name": "CUST-06 Consequential decision / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57755",
+        "name": "CUST-06 Consequential decision / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57810",
+        "name": "CUST-06 Consequential decision / Phone 390 / State \u00b7 Confirmation link expired",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:57850",
+        "name": "CUST-06 Consequential decision / Phone 390 / State \u00b7 Acceptance recorded",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58094",
+        "name": "CUST-07 Service request / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58231",
+        "name": "CUST-07 Service request / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58392",
+        "name": "CUST-08 Change/cancel/complaint request / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58466",
+        "name": "CUST-08 Change/cancel/complaint request / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58480",
+        "name": "CUST-08 Change/cancel/complaint request / Phone 390 / State \u00b7 Request received and owned",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58569",
+        "name": "CUST-09 Customer money/documents / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58604",
+        "name": "CUST-09 Customer money/documents / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:58902",
+        "name": "CUST-10 Order/fulfillment / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59145",
+        "name": "CUST-10 Order/fulfillment / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59364",
+        "name": "CUST-11 Customer service case / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59432",
+        "name": "CUST-11 Customer service case / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59595",
+        "name": "CUST-12 Contact/preferences/privacy / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59672",
+        "name": "CUST-12 Contact/preferences/privacy / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59784",
+        "name": "CUST-13 Decision history/receipt / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:59836",
+        "name": "CUST-13 Decision history/receipt / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      }
+    ],
+    "fieldRegister": [
+      {
+        "id": "111:59874",
+        "name": "FIELD-01 Today / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60022",
+        "name": "FIELD-01 Today / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60079",
+        "name": "FIELD-01 Today / Phone 390 / State \u00b7 Offline with pending sync",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60165",
+        "name": "FIELD-02 Current package / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60488",
+        "name": "FIELD-02 Current package / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60664",
+        "name": "FIELD-02 Current package / Phone 390 / State \u00b7 Work stopped",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:60956",
+        "name": "FIELD-03 Capture / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61079",
+        "name": "FIELD-03 Capture / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61112",
+        "name": "FIELD-03 Capture / Phone 390 / State \u00b7 Phone storage full",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61238",
+        "name": "FIELD-04 Evidence details / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61445",
+        "name": "FIELD-04 Evidence details / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61502",
+        "name": "FIELD-05 Pending sync / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61654",
+        "name": "FIELD-05 Pending sync / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61720",
+        "name": "FIELD-05 Pending sync / Phone 390 / State \u00b7 Nothing saved on this phone yet",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:61809",
+        "name": "FIELD-06 Stop/report / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62004",
+        "name": "FIELD-06 Stop/report / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62053",
+        "name": "FIELD-06 Stop/report / Phone 390 / State \u00b7 Stop recorded",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62144",
+        "name": "FIELD-07 Vehicle inspection / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62367",
+        "name": "FIELD-07 Vehicle inspection / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62442",
+        "name": "FIELD-08 Pending item recovery / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62578",
+        "name": "FIELD-08 Pending item recovery / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62636",
+        "name": "FIELD-09 Package invalid/clock uncertain / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "111:62952",
+        "name": "FIELD-09 Package invalid/clock uncertain / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:1715",
+        "name": "FIELD-10 Device recovery / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:1883",
+        "name": "FIELD-10 Device recovery / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:1950",
+        "name": "FIELD-10 Device recovery / Phone 390 / State \u00b7 Phone access removed",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:2087",
+        "name": "FIELD-11 Storage/update readiness / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:2227",
+        "name": "FIELD-11 Storage/update readiness / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:2287",
+        "name": "FIELD-12 Observation/time/material scan / Phone 390 / Light",
+        "modes": {
+          "VariableCollectionId:2:3": "782:0",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      },
+      {
+        "id": "112:2453",
+        "name": "FIELD-12 Observation/time/material scan / Phone 390 / Dark",
+        "modes": {
+          "VariableCollectionId:2:3": "2:2",
+          "VariableCollectionId:2:124": "782:2"
+        }
+      }
+    ],
+    "touchPropagation": [
+      {
+        "pageId": "3:8",
+        "screens": [
+          {
+            "id": "100:89",
+            "name": "AUTH-01 Sign in / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:250",
+            "name": "AUTH-02 Email/link verification / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:755",
+            "name": "AUTH-03 Crew pairing / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:844",
+            "name": "AUTH-04 Access changed / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:1003",
+            "name": "AUTH-05 MFA enrollment / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:1682",
+            "name": "AUTH-06 Challenge/step-up / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:2108",
+            "name": "AUTH-07 Account recovery / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "100:2368",
+            "name": "AUTH-08 Session/device/logout / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:9",
+        "screens": [
+          {
+            "id": "104:1849",
+            "name": "HOME-01 Now / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "104:8409",
+            "name": "HOME-02 Search / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "104:10787",
+            "name": "HOME-03 Work board / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "104:11839",
+            "name": "HOME-04 Approvals / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "104:12827",
+            "name": "HOME-05 Decision detail / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "104:13685",
+            "name": "HOME-06 Typed Work directory / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:9992",
+            "name": "HOME-07 Plan / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:10344",
+            "name": "HOME-07 Plan / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:11774",
+            "name": "HOME-08 Notifications / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:13852",
+            "name": "HOME-09 Operating review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:14587",
+            "name": "HOME-10 Customers/contacts / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:16135",
+            "name": "HOME-11 Party/property relationships / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": false
+      },
+      {
+        "pageId": "3:10",
+        "screens": [
+          {
+            "id": "105:16891",
+            "name": "SALES-01 Leads/opportunities / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:17531",
+            "name": "SALES-02 Add lead / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "105:18774",
+            "name": "SALES-03 Qualification / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:16515",
+            "name": "SALES-04 Estimate workspace / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:17198",
+            "name": "SALES-05 Associated design / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:17405",
+            "name": "SALES-06 Commercial revision comparison / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:19057",
+            "name": "SALES-07 Full quote editor / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:20594",
+            "name": "SALES-08 Publication preview / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:21178",
+            "name": "SALES-09 Integrated reception / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:22029",
+            "name": "SALES-10 Manual observations / Phone 390 / Method required",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:23463",
+            "name": "SALES-11 Report/import review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "106:24900",
+            "name": "SALES-12 Measurement revision impact / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:7181",
+            "name": "SALES-13 Site verification request / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:8123",
+            "name": "SALES-14 Paid report purchase / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "620:7944",
+            "name": "SALES-10 Native / Phone 390 / ready",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "620:8301",
+            "name": "SALES-10 Native / Phone 390 / saved",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "620:8697",
+            "name": "SALES-10 Native / Phone 390 / correction",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "620:9090",
+            "name": "SALES-10 Native / Phone 390 / corrected",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "620:9499",
+            "name": "SALES-10 Native / Phone 390 / unknown",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "622:6791",
+            "name": "SALES-10 Native / Phone 390 / current",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "622:7009",
+            "name": "SALES-10 Native / Phone 390 / current-corrected",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "623:6765",
+            "name": "SALES-10 Native / Phone 390 / correction draft \u00b7 Revision 2",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "671:8400",
+            "name": "SALES-10 Native / Phone 390 / saved \u00b7 history open",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "671:35387",
+            "name": "SALES-10 Native / Phone 390 / corrected \u00b7 history closed",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:21362",
+            "name": "SALES-10 Native / Phone 390 / ready / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:21623",
+            "name": "SALES-10 Native / Phone 390 / saved / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:21864",
+            "name": "SALES-10 Native / Phone 390 / correction / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:22161",
+            "name": "SALES-10 Native / Phone 390 / corrected / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:22420",
+            "name": "SALES-10 Native / Phone 390 / unknown / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:23440",
+            "name": "SALES-10 Native / Phone 390 / current / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:23735",
+            "name": "SALES-10 Native / Phone 390 / current-corrected / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:24469",
+            "name": "SALES-10 Native / Phone 390 / correction draft \u00b7 Revision 2 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:25132",
+            "name": "SALES-10 Native / Phone 390 / saved \u00b7 history open / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "682:25741",
+            "name": "SALES-10 Native / Phone 390 / corrected \u00b7 history closed / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:11447",
+            "name": "SALES-11 Native / Phone 390 / transcription / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:13274",
+            "name": "SALES-11 Native / Phone 390 / review / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:14262",
+            "name": "SALES-11 Native / Phone 390 / history / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:15277",
+            "name": "SALES-11 Native / Phone 390 / review-correction / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:16309",
+            "name": "SALES-11 Native / Phone 390 / successor-history / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:17260",
+            "name": "SALES-11 Native / Phone 390 / pending / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:18153",
+            "name": "SALES-11 Native / Phone 390 / receipt-checked / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "705:19024",
+            "name": "SALES-11 Native / Phone 390 / recovered / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "717:14809",
+            "name": "SALES-11 Native / Phone 390 / read-only / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "717:15881",
+            "name": "SALES-11 Native / Phone 390 / offline / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "717:16912",
+            "name": "SALES-11 Native / Phone 390 / unavailable / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:16250",
+            "name": "SALES-11 Native / Phone 390 / transcription / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:17198",
+            "name": "SALES-11 Native / Phone 390 / review / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:18052",
+            "name": "SALES-11 Native / Phone 390 / history / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:18928",
+            "name": "SALES-11 Native / Phone 390 / review-correction / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:19821",
+            "name": "SALES-11 Native / Phone 390 / successor-history / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "719:20643",
+            "name": "SALES-11 Native / Phone 390 / pending / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "720:18634",
+            "name": "SALES-11 Native / Phone 390 / receipt-checked / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "720:19379",
+            "name": "SALES-11 Native / Phone 390 / recovered / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "720:20093",
+            "name": "SALES-11 Native / Phone 390 / read-only / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "720:20991",
+            "name": "SALES-11 Native / Phone 390 / offline / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "720:21846",
+            "name": "SALES-11 Native / Phone 390 / unavailable / Dark",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:11",
+        "screens": [
+          {
+            "id": "107:9162",
+            "name": "JOB-01 Readiness runway / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:9514",
+            "name": "JOB-01 Readiness runway / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:10492",
+            "name": "JOB-02 Typed work overview / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:11728",
+            "name": "JOB-03 Readiness detail / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:12399",
+            "name": "JOB-04 Schedule check / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:14510",
+            "name": "JOB-05 Package editor / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:15769",
+            "name": "JOB-06 Physical work area / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:15830",
+            "name": "JOB-06 Physical work area / Phone 390 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:15858",
+            "name": "JOB-07 Discovery/hidden condition / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:16043",
+            "name": "JOB-07 Discovery/hidden condition / Phone 390 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "107:16710",
+            "name": "JOB-08 Quality/completion review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:5670",
+            "name": "JOB-09 Closeout / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:6392",
+            "name": "JOB-10 Commercial change / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:7193",
+            "name": "JOB-11 Cancellation/disposition / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:7817",
+            "name": "JOB-12 Delay/complaint/dispute / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:8244",
+            "name": "JOB-13 Tender/submittal / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "802:6518",
+            "name": "JOB-14 Job history / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "806:6354",
+            "name": "JOB-14 Quote approval spine / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:12",
+        "screens": [
+          {
+            "id": "108:8924",
+            "name": "SERVICE-01 Service queue / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:9794",
+            "name": "SERVICE-02 Service case / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:10785",
+            "name": "SERVICE-03 Service visit / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:11607",
+            "name": "SERVICE-04 Warranty/coverage review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "108:12448",
+            "name": "SERVICE-05 Responsibility and paid remedy / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:13",
+        "screens": [
+          {
+            "id": "108:13112",
+            "name": "SUPPLY-01 Supply orders / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:793",
+            "name": "SUPPLY-02 Supply order editor / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:1164",
+            "name": "SUPPLY-03 Customer drawing review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:1209",
+            "name": "SUPPLY-03 Customer drawing review / Phone 390 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:1601",
+            "name": "SUPPLY-04 Fulfillment/custody / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:1832",
+            "name": "SUPPLY-04 Fulfillment/custody / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:2851",
+            "name": "SUPPLY-05 Customer return / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:14",
+        "screens": [
+          {
+            "id": "109:3667",
+            "name": "RES-01 Inventory / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:4020",
+            "name": "RES-01 Inventory / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:4407",
+            "name": "RES-02 Receive delivery/material / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:4629",
+            "name": "RES-02 Receive delivery/material / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:5168",
+            "name": "RES-03 Reserve/issue/return/transfer / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:5372",
+            "name": "RES-03 Reserve/issue/return/transfer / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:6114",
+            "name": "RES-04 Procurement/order / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:6758",
+            "name": "RES-05 Shop work / Tablet 768 / Light",
+            "mode": "Shop",
+            "floor": 64
+          },
+          {
+            "id": "109:6960",
+            "name": "RES-05 Shop work / Tablet 768 / Dark",
+            "mode": "Shop",
+            "floor": 64
+          },
+          {
+            "id": "109:7881",
+            "name": "RES-06 People / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:8571",
+            "name": "RES-07 Person readiness / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:40857",
+            "name": "RES-08 Safety occurrence/holds / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:41489",
+            "name": "RES-09 Asset/fleet/facility readiness / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:42135",
+            "name": "RES-10 Customer-owned stock / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:42319",
+            "name": "RES-10 Customer-owned stock / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:42800",
+            "name": "RES-11 Substitution / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:43506",
+            "name": "RES-12 Supplier return/recovery / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:43921",
+            "name": "RES-13 Count/adjustment / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:44122",
+            "name": "RES-13 Count/adjustment / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:44380",
+            "name": "RES-14 Shop QC/NCR / Tablet 768 / Light",
+            "mode": "Shop",
+            "floor": 64
+          },
+          {
+            "id": "109:44461",
+            "name": "RES-14 Shop QC/NCR / Tablet 768 / Dark",
+            "mode": "Shop",
+            "floor": 64
+          },
+          {
+            "id": "109:44720",
+            "name": "RES-15 Drawing/shop release / Tablet 768 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:44837",
+            "name": "RES-15 Drawing/shop release / Tablet 768 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:15",
+        "screens": [
+          {
+            "id": "109:45334",
+            "name": "MONEY-01 Money desk / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:46139",
+            "name": "MONEY-02 Financial intent/result / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:46912",
+            "name": "MONEY-03 Money issues / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:47335",
+            "name": "MONEY-04 Issued/final invoice / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:47745",
+            "name": "MONEY-05 Accounting readiness / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "109:48443",
+            "name": "MONEY-06 Payment allocation / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:2350",
+            "name": "MONEY-07 Credits/adjustments / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:2922",
+            "name": "MONEY-08 Refunds / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:3136",
+            "name": "MONEY-09 Milestones/progress/holdback / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:3645",
+            "name": "MONEY-10 Settlement / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:4363",
+            "name": "MONEY-11 Protected payee change / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:5061",
+            "name": "MONEY-12 Cost/variance / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:16",
+        "screens": [
+          {
+            "id": "110:5446",
+            "name": "COMM-01 Compose approved communication / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:6145",
+            "name": "COMM-02 Communication history / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:7078",
+            "name": "COMM-03 Contact verification/consent / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:17",
+        "screens": [
+          {
+            "id": "110:8095",
+            "name": "SET-01 Settings hub / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:9221",
+            "name": "SET-02 Company / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:10160",
+            "name": "SET-03 Team/roles / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:10990",
+            "name": "SET-04 Devices / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:11832",
+            "name": "SET-05 Pipeline views / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:13198",
+            "name": "SET-06 Approved fields/forms / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:53628",
+            "name": "SET-07 Registered automations / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:54917",
+            "name": "SET-08 Recipients/consent routes / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:56236",
+            "name": "SET-09 Document templates / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:57460",
+            "name": "SET-10 Connections / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:59105",
+            "name": "SET-11 Work profiles / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:61899",
+            "name": "SET-12 Catalog/units/assemblies / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:65116",
+            "name": "SET-13 Package/QC templates / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:66283",
+            "name": "SET-14 Authority/limits / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:67380",
+            "name": "SET-15 Privacy/retention / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:68155",
+            "name": "SET-16 Spend/usage / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:69495",
+            "name": "SET-17 Go-live checklist / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:73447",
+            "name": "SET-18 Support/service offer / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:18",
+        "screens": [
+          {
+            "id": "110:73998",
+            "name": "OPS-01 External action recovery / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:74864",
+            "name": "OPS-02 Import reconciliation / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:76004",
+            "name": "PRIV-01 Privacy case / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:76865",
+            "name": "PRIV-02 Scoped export delivery / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:76917",
+            "name": "PRIV-02 Scoped export delivery / Phone 390 / Dark",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:76954",
+            "name": "PRIV-02 Scoped export delivery / Phone 390 / State \u00b7 Export code check",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      },
+      {
+        "pageId": "3:19",
+        "screens": [
+          {
+            "id": "110:77085",
+            "name": "ASSIST-01 Scoped assistance / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          },
+          {
+            "id": "110:77476",
+            "name": "MKT-01 Marketing publication review / Phone 390 / Light",
+            "mode": "Touch",
+            "floor": 48
+          }
+        ],
+        "receiptComplete": true
+      }
+    ],
+    "prototype": {
+      "pageId": "3:25",
+      "repairedFrames": [
+        "113:54",
+        "113:1527",
+        "113:2766",
+        "114:4754",
+        "114:4810",
+        "114:5011",
+        "114:5043",
+        "114:5098",
+        "114:5518",
+        "114:5550",
+        "114:5605",
+        "114:5670",
+        "114:3205",
+        "115:4464",
+        "115:4512",
+        "115:4545",
+        "143:65844"
+      ],
+      "preservedReviewWarnings": true,
+      "scope": "Visual and navigation consistency; native camera, acceptance and work release are not simulated as persisted effects"
+    },
+    "mutationReceipts": "output/ui-audit-2026-10-02/figma-write-receipts.json",
+    "receiptLimitation": "The broad Home touch receipt was truncated by the MCP serializer. Exact root frame scope and saved Touch modes were separately read back; the truncated raw receipt is preserved. This is not a complete all-leaf mutation log.",
+    "visualReadback": [
+      "output/ui-audit-2026-10-02/figma-final-field.png",
+      "output/ui-audit-2026-10-02/figma-final-customer.png",
+      "output/ui-audit-2026-10-02/figma-final-shop.png",
+      "output/ui-audit-2026-10-02/figma-final-quotephone.png",
+      "output/ui-audit-2026-10-02/figma-final-proto-customer.png",
+      "output/ui-audit-2026-10-02/figma-final-proto-approval.png",
+      "output/ui-audit-2026-10-02/figma-final-proto-now-repaired.png"
+    ],
+    "fileId": "0eK7JOWRYmAtESSwPWQOwx"
+  },
+  "figjam": {
+    "sections": [
+      {
+        "id": "189:10779",
+        "name": "Intake and draft work",
+        "x": 117737,
+        "y": 193.5,
+        "width": 928,
+        "height": 416
+      },
+      {
+        "id": "189:10798",
+        "name": "Field proof",
+        "x": 115761,
+        "y": 497.5,
+        "width": 1832,
+        "height": 308
+      },
+      {
+        "id": "189:10817",
+        "name": "Job spine and approval",
+        "x": 118825,
+        "y": 346,
+        "width": 1576,
+        "height": 513.3333129882812
+      },
+      {
+        "id": "189:10836",
+        "name": "Inventory and Shop",
+        "x": 120561,
+        "y": 176,
+        "width": 1544,
+        "height": 416
+      },
+      {
+        "id": "189:10843",
+        "name": "Customer and accounting",
+        "x": 120561,
+        "y": 688,
+        "width": 608,
+        "height": 224
+      }
+    ],
+    "createdNodeIds": [
+      "189:10779",
+      "189:10767",
+      "189:10770",
+      "189:10844",
+      "189:10773",
+      "189:10848",
+      "189:10776",
+      "189:10852",
+      "189:10798",
+      "189:10780",
+      "189:10783",
+      "189:10856",
+      "189:10786",
+      "189:10860",
+      "189:10789",
+      "189:10864",
+      "189:10792",
+      "189:10868",
+      "189:10795",
+      "189:10872",
+      "189:10817",
+      "189:10799",
+      "189:10802",
+      "189:10884",
+      "189:10805",
+      "189:10888",
+      "189:10808",
+      "189:10892",
+      "189:10811",
+      "189:10896",
+      "189:10814",
+      "189:10900",
+      "189:10836",
+      "189:10818",
+      "189:10821",
+      "189:10908",
+      "189:10824",
+      "189:10912",
+      "189:10827",
+      "189:10916",
+      "189:10830",
+      "189:10920",
+      "189:10833",
+      "189:10924",
+      "189:10843",
+      "189:10837",
+      "189:10840",
+      "189:10936",
+      "189:10876",
+      "189:10880",
+      "189:10904",
+      "189:10928",
+      "189:10932",
+      "189:10940"
+    ],
+    "diagram": "Job spine, human approvals and lot custody",
+    "qualification": "Target service flow; AI drafts are proposals for the named human reviewer. The diagram is not runtime or authority evidence.",
+    "visualReadback": "output/ui-audit-2026-10-02/figma-final-figjam-spine.png",
+    "fileId": "7jGzJSNHHeie81z4s3VvqO"
+  },
+  "checks": {
+    "proofClass": "Locally-validated",
+    "unit": {
+      "command": "cd app && npm test",
+      "files": 140,
+      "passed": 1260,
+      "exitCode": 0,
+      "log": "output/ui-audit-2026-10-02/app-unit-final.log"
+    },
+    "lint": {
+      "command": "cd app && npm run lint",
+      "exitCode": 0,
+      "log": "output/ui-audit-2026-10-02/app-lint-final.log"
+    },
+    "typecheck": {
+      "command": "cd app && npm run typecheck",
+      "exitCode": 0,
+      "log": "output/ui-audit-2026-10-02/job-office-correctness-typecheck.log"
+    },
+    "build": {
+      "command": "cd app && npm run build:pwa",
+      "exitCode": 0,
+      "indexSha256": "8be1e6ddf9f73fec40613aaa10903a0881d6d4b026f4095a6e7a605e8ebcd32f",
+      "swSha256": "6c719f405189c0f22b87dd2b7ea28a2e70584d49c6701f96c6c2139ca6aef966",
+      "log": "output/ui-audit-2026-10-02/job-office-correctness-build.log"
+    },
+    "format": {
+      "command": "Prettier --check on the complete changed app file list",
+      "exitCode": 0,
+      "log": "output/ui-audit-2026-10-02/app-format-final.log"
+    },
+    "documentation": {
+      "command": "node tools/validate-documentation.mjs",
+      "exitCode": 0,
+      "registeredDocuments": 71,
+      "log": "output/ui-audit-2026-10-02/documentation-final.log"
+    }
+  },
+  "browser": {
+    "environment": "Local acceptance harness with synthetic/session-local fixtures",
+    "production": false,
+    "qaAcceptance": false,
+    "field": {
+      "finalMobileE2E": 12,
+      "earlierBroadSlice": 18,
+      "measured320Camera": {
+        "top": 352.67,
+        "bottom": 416.67,
+        "headerBottom": 267.92,
+        "footerTop": 583
+      },
+      "journeys": [
+        "Permitted assigned job opens native capture input and returns a file to review",
+        "Saved proof receipt survives plan read refresh and offline refusal",
+        "Customer choice and acceptance controls retain existing submission behavior"
+      ],
+      "evidence": "output/ui-audit-2026-10-02/field-customer-readback.md"
+    },
+    "office": {
+      "checks": 24,
+      "widths": [320, 390, 768, 1440],
+      "themes": ["light", "dark"],
+      "surfaces": ["Now", "Job history", "Inventory"],
+      "documentOverflow": false,
+      "minimumShopTarget": 64,
+      "typedBarcodeLookup": "GET /api/v1/inventory/lookup only; selecting lookup result does not record a stock movement",
+      "evidence": "output/ui-audit-2026-10-02/job-office-handoff.md"
+    },
+    "reviewCorrections": {
+      "unitTests": 38,
+      "runtimeConfirmed": [
+        "Visibility-triggered history refresh retains older pages and advances the cursor",
+        "Money paused read shows reconnect guidance"
+      ],
+      "unqualified": [
+        "Managed tab switching did not emit a focus refresh",
+        "Synthetic offline session lost approvals:read; approval pause/reconnect browser journey remains unqualified"
+      ],
+      "unitCoverage": "Actual QueryClient focus and onlineManager regressions cover identity reset, refresh retention, paused reads and resume",
+      "evidence": "output/ui-audit-2026-10-02/job-office-correctness-handoff.md"
+    }
+  },
+  "remaining": [
+    {
+      "owner": "Claude visual session",
+      "item": "Review residual capture sprawl (86 Sales capture frames and Settings P5 captures) without deleting prototype-linked or incoming-reference nodes; remaining contextual metadata wrapping and other curated copies need visual acceptance."
+    },
+    {
+      "owner": "Backend / integration owner",
+      "item": "Expose job-scoped complete approval receipts, approved snapshot version, event actor/version and public schedule/payment/contact projections before presenting those values as known."
+    },
+    {
+      "owner": "Backend / operations owner",
+      "item": "NCR disposition, lot yield, rework/scrap economics and accounting revenue recognition remain absent or partial; the UI explicitly states those limits."
+    },
+    {
+      "owner": "Field / estimator contract owner",
+      "item": "Field measurement readings are evidence notes for office review using existing field_checkin outbox; they do not create or approve structured estimator measurement revisions."
+    },
+    {
+      "owner": "AI / workflow owner",
+      "item": "AI phone and marketing automation remain proposed/guarded. No machine authority, sender, stock movement, approval or safety release is enabled by this repair."
+    },
+    {
+      "owner": "Device / QA acceptance owner",
+      "item": "Physical camera shutter and barcode hardware, gloves and sunlight remain unverified; source checkpoint is not deployed or accepted on live QA. Complete approval pause/reconnect browser evidence is still required."
+    }
+  ]
+}

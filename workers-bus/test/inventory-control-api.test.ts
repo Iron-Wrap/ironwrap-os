@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import { handleInventoryRoute } from "../src/inventory-control-api.ts";
+import { handleInventoryRoute as inventoryRoute } from "../src/inventory-control-api.ts";
+import { INVENTORY_TRANSITIONS } from "../src/inventory-control.ts";
+import { EVIDENCE_BYTES, EvidenceR2, uploadedEvidence } from "./evidence-upload-fixture.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -227,13 +230,8 @@ class SqliteStatement {
 function env(db: SqliteD1): AppEnv {
   return {
     DB: db as never,
-    RAW: {
-      async get(key: string) {
-        return key === `inventory-evidence/${TENANT}/receipt`
-          ? { async text() { return "receipt"; } }
-          : null;
-      },
-    } as never,
+    RAW: new EvidenceR2() as never,
+    APP_EVIDENCE_RECEIPTS_REQUIRED: "true",
   } as AppEnv;
 }
 
@@ -274,6 +272,28 @@ function request(
     headers,
     body: payload ? JSON.stringify(payload) : undefined,
   });
+}
+
+// Every successful fixture crosses the actual multipart upload + D1 receipt + binary R2 readback.
+async function handleInventoryRoute(req: Request, appEnv: AppEnv, actor: AuthContext): Promise<Response | null> {
+  if (req.method !== "POST" || new URL(req.url).pathname !== "/api/v1/inventory/commands") return inventoryRoute(req, appEnv, actor);
+  const body = await req.clone().json() as Record<string, unknown>;
+  const refs = body.evidence_refs as Array<{ ref: string; sha256: string }> | undefined;
+  if (refs?.length === 1 && refs[0].ref === EVIDENCE_REF && refs[0].sha256 === EVIDENCE_SHA256) {
+    delete body.evidence_refs;
+    body.evidence_receipt_ids = [`evu_${"0".repeat(64)}`];
+    const allowed = actor.session.role === "owner" || actor.session.role === "ops" || actor.session.role === "field" && ["issue_use", "return", "quarantine"].includes(String(body.transition));
+    if (allowed && req.headers.has("x-csrf-token") && INVENTORY_TRANSITIONS.some((transition) => transition === body.transition)) {
+      const db = appEnv.DB as never as SqliteD1;
+      db.raw.exec("DELETE FROM app_action_throttles");
+      const position = db.raw.prepare("SELECT lot_id FROM inventory_positions WHERE tenant_id = ? AND position_id = ?").get(actor.session.tenant_id, String(body.source_position_id ?? "")) as { lot_id: string } | undefined;
+      body.evidence_receipt_ids = [await uploadedEvidence(appEnv, actor, {
+        purpose: "stock", targetId: position?.lot_id ?? String(body.lot_id), action: String(body.transition), operationId: String(body.command_id),
+      }, `upload-${body.command_id}`)];
+    }
+    req = new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body) });
+  }
+  return inventoryRoute(req, appEnv, actor);
 }
 
 function receivePayload(commandId: string, quantity: number) {
@@ -998,6 +1018,52 @@ test("an identical retry over the route replays instead of applying twice", asyn
   assert.equal(position.quantity_scaled, 10);
 });
 
+test("stock intent needs no caller fingerprint and changed quantities cannot reuse a caller hash", async () => {
+  const db = new SqliteD1(); const appEnv = env(db);
+  const payload = receivePayload("cmd_receipt_server_hash_1", 10);
+  const { request_fingerprint_sha256: _legacy, ...withoutFingerprint } = payload;
+  const first = await handleInventoryRoute(request("POST", "/api/v1/inventory/commands", withoutFingerprint), appEnv, auth("ops"));
+  assert.equal(first?.status, 201);
+  const retry = await handleInventoryRoute(request("POST", "/api/v1/inventory/commands", payload), appEnv, auth("ops"));
+  assert.equal(retry?.status, 200);
+  const changed = await handleInventoryRoute(request("POST", "/api/v1/inventory/commands", { ...payload, quantity_scaled: 11 }), appEnv, auth("ops"));
+  assert.equal(changed?.status, 409);
+  assert.equal((db.raw.prepare("SELECT quantity_scaled FROM inventory_positions").get() as { quantity_scaled: number }).quantity_scaled, 10);
+});
+
+test("default rollout preserves legacy stock refs but verifies their binary bytes", async () => {
+  const db = new SqliteD1(); const appEnv = env(db); delete appEnv.APP_EVIDENCE_RECEIPTS_REQUIRED;
+  const raw = appEnv.RAW as never as EvidenceR2;
+  raw.rows.set(`inventory-evidence/${TENANT}/receipt`, { bytes: EVIDENCE_BYTES.slice(), httpMetadata: { contentType: "image/png" }, customMetadata: {} });
+  const payload = { ...receivePayload("cmd_legacy_binary_01", 10), evidence_refs: [{ ref: EVIDENCE_REF, sha256: createHash("sha256").update(EVIDENCE_BYTES).digest("hex") }] };
+  const first = await inventoryRoute(request("POST", "/api/v1/inventory/commands", payload), appEnv, auth("ops"));
+  assert.equal(first?.status, 201);
+  assert.equal((db.raw.prepare("SELECT count(*) AS n FROM evidence_upload_receipts").get() as { n: number }).n, 0);
+  raw.rows.values().next().value!.bytes[14] ^= 1;
+  const changed = await inventoryRoute(request("POST", "/api/v1/inventory/commands", { ...payload, command_id: "cmd_legacy_binary_02", idempotency_key: "cmd_legacy_binary_02" }), appEnv, auth("ops"));
+  assert.equal(changed?.status, 403);
+  assert.equal((await changed!.json() as { error: string }).error, "inventory_evidence_hash_mismatch");
+  assert.equal((db.raw.prepare("SELECT quantity_scaled FROM inventory_positions").get() as { quantity_scaled: number }).quantity_scaled, 10);
+});
+
+test("stock missing or tampered receipt files and wrong command scopes cannot start a ledger mutation", async () => {
+  for (const failure of ["missing", "tampered", "wrong_command", "wrong_lot"]) {
+    const db = new SqliteD1(); const appEnv = env(db); const actor = auth("ops");
+    const payload = receivePayload("cmd_evidence_actual_01", 5);
+    const id = await uploadedEvidence(appEnv, actor, { purpose: "stock", targetId: LOT_ONE, action: "receive", operationId: "cmd_evidence_actual_01" });
+    const { evidence_refs: _legacy, ...command } = payload;
+    command.evidence_receipt_ids = [id];
+    const raw = appEnv.RAW as never as EvidenceR2;
+    if (failure === "missing") raw.rows.clear();
+    if (failure === "tampered") raw.rows.values().next().value!.bytes[14] ^= 1;
+    if (failure === "wrong_command") command.command_id = "cmd_evidence_actual_02";
+    if (failure === "wrong_lot") command.lot_id = "lot_other_0001";
+    const refused = await inventoryRoute(request("POST", "/api/v1/inventory/commands", command), appEnv, actor);
+    assert.ok([403,404,409].includes(refused!.status));
+    assert.deepEqual(ledgerCounts(db), { commands: 0, events: 0, positions: 0 });
+  }
+});
+
 test("a server-planned transfer with no distinct target moves nothing", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
@@ -1263,7 +1329,7 @@ test("a malformed command is a 400 and never reaches the ledger", async () => {
     [{ ...receivePayload("cmd_api_bad_0001", 5), transition: "teleport" }, "invalid_inventory_command"],
     [{ ...receivePayload("cmd_api_bad_0002", 5), movements: [] }, "inventory_command_intent_required"],
     [{ ...receivePayload("cmd_api_bad_0003", 5), request_fingerprint_sha256: "short" }, "invalid_inventory_command"],
-    [{ ...receivePayload("cmd_api_bad_0004", 5), evidence_refs: [{ ref: "r2://x", sha256: "no" }] }, "invalid_inventory_command"],
+    [{ ...receivePayload("cmd_api_bad_0004", 5), evidence_refs: [{ ref: "r2://x", sha256: "no" }] }, "evidence_receipts_required"],
   ] as const) {
     const response = await handleInventoryRoute(
       request("POST", "/api/v1/inventory/commands", payload),
@@ -1321,8 +1387,8 @@ test("a crafted ledger-shaped body is rejected before any inventory mutation", a
 
 test("missing or tampered evidence fails closed before any inventory mutation", async () => {
   for (const [evidence, expected] of [
-    [{ ref: EVIDENCE_REF, sha256: "0".repeat(64) }, "inventory_evidence_hash_mismatch"],
-    [{ ref: `r2://inventory-evidence/${TENANT}/not-present`, sha256: EVIDENCE_SHA256 }, "inventory_evidence_unavailable"],
+    [{ ref: EVIDENCE_REF, sha256: "0".repeat(64) }, "evidence_receipts_required"],
+    [{ ref: `r2://inventory-evidence/${TENANT}/not-present`, sha256: EVIDENCE_SHA256 }, "evidence_receipts_required"],
   ] as const) {
     const db = new SqliteD1();
     const response = await handleInventoryRoute(
@@ -1333,7 +1399,7 @@ test("missing or tampered evidence fails closed before any inventory mutation", 
       env(db),
       auth("ops"),
     );
-    assert.equal(response?.status, 403);
+    assert.equal(response?.status, 400);
     assert.equal((await response?.json() as { error: string }).error, expected);
     assert.deepEqual(ledgerCounts(db), { commands: 0, events: 0, positions: 0 });
   }

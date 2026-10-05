@@ -102,6 +102,7 @@ export interface ServiceCaseRecord {
   reported_channel: "phone" | "portal" | "email" | "field" | "partner";
   consent_ref: string;
   intake_evidence_digest: string;
+  intake_request_sha256?: string | null;
   response_sla_minutes: number;
   response_due_at: string;
   state: ServiceCaseState;
@@ -242,6 +243,7 @@ export interface OpenServiceCaseInput {
   reportedChannel: ServiceCaseRecord["reported_channel"];
   consentRef: string;
   intakeEvidenceDigest: string;
+  intakeRequestSha256?: string;
   responseSlaMinutes: number;
   openedByUserId: string;
   intakeCode?: string | null;
@@ -249,7 +251,7 @@ export interface OpenServiceCaseInput {
 }
 
 export type OpenServiceCaseResult =
-  | { kind: "opened"; serviceCase: ServiceCaseRecord }
+  | { kind: "opened" | "replayed"; serviceCase: ServiceCaseRecord }
   | { kind: "duplicate"; serviceCase: ServiceCaseRecord; original: ServiceCaseRecord };
 
 const SELECT_CASE = `SELECT * FROM service_cases`;
@@ -301,8 +303,20 @@ export async function openServiceCase(
   if (input.severity === "emergency" && input.responseSlaMinutes > EMERGENCY_RESPONSE_SLA_CEILING_MINUTES) {
     throw new Error("service_case_emergency_sla_exceeded");
   }
+  const replay = async (): Promise<OpenServiceCaseResult | null> => {
+    if (!input.intakeRequestSha256) return null;
+    const existing = await getServiceCase(env, input);
+    if (!existing) return null;
+    if (existing.intake_request_sha256 !== input.intakeRequestSha256) throw new Error("service_case_intake_request_conflict");
+    return { kind: "replayed", serviceCase: existing };
+  };
+  const prior = await replay();
+  if (prior) return prior;
   const original = await findOpenCaseForSymptom(env, input);
-  if (original) return await insertDuplicateCase(env, input, original);
+  if (original) {
+    try { return await insertDuplicateCase(env, input, original); }
+    catch (error) { const prior = await replay(); if (prior) return prior; throw error; }
+  }
   try {
     const serviceCase = await insertServiceCase(env, input, {
       state: "intake",
@@ -313,10 +327,13 @@ export async function openServiceCase(
     });
     return { kind: "opened", serviceCase };
   } catch (error) {
+    const prior = await replay();
+    if (prior) return prior;
     if (!isUniqueConstraintFailure(error)) throw error;
     const winner = await findOpenCaseForSymptom(env, input);
     if (!winner) throw error;
-    return await insertDuplicateCase(env, input, winner);
+    try { return await insertDuplicateCase(env, input, winner); }
+    catch (error) { const prior = await replay(); if (prior) return prior; throw error; }
   }
 }
 
@@ -358,8 +375,8 @@ async function insertServiceCase(
       consent_ref, intake_evidence_digest, response_sla_minutes, response_due_at, state, version,
       last_event_type, last_transition_code, last_evidence_digest, duplicate_of_case_id,
       closure_reason, closed_at, reopen_count, opened_by_user_id, last_actor_user_id,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      created_at, updated_at${input.intakeRequestSha256 ? ", intake_request_sha256" : ""}
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?${input.intakeRequestSha256 ? ", ?" : ""})`,
   ).bind(
     input.serviceCaseId,
     input.tenantId,
@@ -387,6 +404,7 @@ async function insertServiceCase(
     input.openedByUserId,
     input.now,
     input.now,
+    ...(input.intakeRequestSha256 ? [input.intakeRequestSha256] : []),
   ).run();
   const created = await getServiceCase(env, input);
   if (!created) throw new Error("service_case_insert_missing");

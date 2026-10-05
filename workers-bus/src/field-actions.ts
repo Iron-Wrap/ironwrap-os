@@ -361,6 +361,7 @@ export async function claimFieldUploadWindow(
   env: AppEnv,
   auth: AuthContext,
   now = new Date(),
+  maxAttempts = FIELD_UPLOADS_PER_WINDOW,
 ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
   const windowStartedAt = now.toISOString();
   const windowExpiresAt = new Date(
@@ -397,7 +398,7 @@ export async function claimFieldUploadWindow(
     Math.ceil((Date.parse(row.window_expires_at) - now.getTime()) / 1_000),
   );
   return {
-    allowed: Number(row.attempts) <= FIELD_UPLOADS_PER_WINDOW,
+    allowed: Number(row.attempts) <= maxAttempts,
     retryAfterSeconds,
   };
 }

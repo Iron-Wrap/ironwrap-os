@@ -1437,6 +1437,17 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
   assert.deepEqual(await bootstrapWithoutProof.json(), { error: "device_proof_required" });
   assert.equal(bootstrapWithoutProof.headers.get("set-cookie"), null);
 
+  // Every new upload passes the global paired-device gate before multipart parsing or storage.
+  for (const proof of [undefined, "q".repeat(43)]) {
+    const refused = await worker.fetch(new Request("https://worker.example.com/api/v1/evidence-uploads", {
+      method: "POST", headers: { cookie: fieldCookie, origin: "https://app.example.com",
+        ...(proof ? { "x-ironwrap-device-proof": proof } : {}) },
+    }), env, ctx.ctx as never);
+    assert.equal(refused.status, 401);
+    assert.deepEqual(await refused.json(), { error: "device_proof_required" });
+    assert.equal(refused.headers.get("set-cookie"), null);
+  }
+
   const wrongProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: {
       cookie: fieldCookie,

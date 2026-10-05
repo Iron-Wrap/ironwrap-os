@@ -24,7 +24,9 @@ import {
   type AuthorityLifecycleDenial,
   type AuthorityRecordReadback,
 } from "./authority-records.ts";
+import { canonicalJson } from "./newo-hash.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
+import { binarySha256, evidenceReceiptsRequired, resolveEvidenceUploads, evidenceUploadFailure, EvidenceUploadError } from "./evidence-uploads.ts";
 
 /**
  * Inventory routes.
@@ -119,7 +121,7 @@ function pathPart(value: string): string | null {
   }
 }
 
-function evidenceRefs(value: unknown): readonly EvidenceRef[] | null {
+function legacyEvidenceRefs(value: unknown): readonly EvidenceRef[] | null {
   if (!Array.isArray(value) || value.length > 100) return null;
   const refs: EvidenceRef[] = [];
   for (const entry of value) {
@@ -130,6 +132,38 @@ function evidenceRefs(value: unknown): readonly EvidenceRef[] | null {
     refs.push({ ref, sha256 });
   }
   return refs;
+}
+
+// Retained during the off-by-default receipt rollout. Legacy refs are not scoped upload
+// receipts; hashes still must match actual binary bytes and any historical field-media row.
+async function verifyLegacyInventoryEvidence(env: AppEnv, tenantId: string, refs: readonly EvidenceRef[]): Promise<string | null> {
+  if (refs.length < 1) return "inventory_evidence_required";
+  for (const ref of refs) {
+    let r2Key: string | null = null;
+    let receiptSha256: string | null = null;
+    const inventoryKey = ref.ref.match(/^r2:\/\/inventory-evidence\/([a-z0-9][a-z0-9-]{1,63})\/([A-Za-z0-9._:-]{1,160})$/);
+    if (inventoryKey) {
+      if (inventoryKey[1] !== tenantId) return "inventory_evidence_scope_mismatch";
+      r2Key = `inventory-evidence/${inventoryKey[1]}/${inventoryKey[2]}`;
+    } else {
+      const fieldEvidenceId = ref.ref.match(/^field-media:\/\/([A-Za-z0-9._:-]{12,80})$/);
+      const requestedR2Key = ref.ref.startsWith("r2://") ? ref.ref.slice(5) : null;
+      const receipt = await env.DB.prepare(`SELECT media.r2_key, media.checksum_sha256
+          FROM field_action_media AS media JOIN field_actions AS action ON action.device_action_id = media.device_action_id
+          WHERE action.tenant_id = ? AND ((? IS NULL AND media.evidence_id = ?) OR (? IS NOT NULL AND media.r2_key = ?)) LIMIT 1`)
+        .bind(tenantId, fieldEvidenceId?.[1] ?? null, fieldEvidenceId?.[1] ?? "", requestedR2Key, requestedR2Key ?? "")
+        .first<{ r2_key: string; checksum_sha256: string }>();
+      if (!receipt) return requestedR2Key ? "inventory_evidence_missing" : "inventory_evidence_scope_mismatch";
+      r2Key = receipt.r2_key;
+      receiptSha256 = receipt.checksum_sha256;
+    }
+    if (!r2Key || receiptSha256 && receiptSha256 !== ref.sha256) return "inventory_evidence_hash_mismatch";
+    const object = await env.RAW?.get(r2Key);
+    if (!object) return "inventory_evidence_unavailable";
+    const actualSha256 = await binarySha256(await object.arrayBuffer());
+    if (actualSha256 !== ref.sha256 || receiptSha256 && actualSha256 !== receiptSha256) return "inventory_evidence_hash_mismatch";
+  }
+  return null;
 }
 
 function optionalStringField(
@@ -160,63 +194,9 @@ function optionalConditionStatus(
     : null;
 }
 
-/**
- * Evidence refs are receipts, not user assertions. Inventory accepts either a tenant-bound
- * inventory R2 key or an existing field-media receipt whose D1 row already binds the key and
- * checksum to this tenant. The object body is hashed again before any ledger batch is started.
- */
-async function verifyInventoryEvidence(
-  env: AppEnv,
-  tenantId: string,
-  refs: readonly EvidenceRef[],
-): Promise<string | null> {
-  if (refs.length < 1) return "inventory_evidence_required";
-  for (const ref of refs) {
-    let r2Key: string | null = null;
-    let receiptSha256: string | null = null;
-    const inventoryKey = ref.ref.match(
-      /^r2:\/\/inventory-evidence\/([a-z0-9][a-z0-9-]{1,63})\/([A-Za-z0-9._:-]{1,160})$/,
-    );
-    if (inventoryKey) {
-      if (inventoryKey[1] !== tenantId) return "inventory_evidence_scope_mismatch";
-      r2Key = `inventory-evidence/${inventoryKey[1]}/${inventoryKey[2]}`;
-    } else {
-      const fieldEvidenceId = ref.ref.match(/^field-media:\/\/([A-Za-z0-9._:-]{12,80})$/);
-      const requestedR2Key = ref.ref.startsWith("r2://") ? ref.ref.slice(5) : null;
-      const receipt = await env.DB.prepare(
-        `SELECT media.r2_key, media.checksum_sha256
-          FROM field_action_media AS media
-           JOIN field_actions AS action ON action.device_action_id = media.device_action_id
-          WHERE action.tenant_id = ?
-            AND ((? IS NULL AND media.evidence_id = ?) OR
-                 (? IS NOT NULL AND media.r2_key = ?))
-          LIMIT 1`,
-      ).bind(
-        tenantId,
-        fieldEvidenceId?.[1] ?? null,
-        fieldEvidenceId?.[1] ?? "",
-        requestedR2Key,
-        requestedR2Key ?? "",
-      ).first<{ r2_key: string; checksum_sha256: string }>();
-      if (!receipt) return requestedR2Key ? "inventory_evidence_missing" : "inventory_evidence_scope_mismatch";
-      r2Key = receipt.r2_key;
-      receiptSha256 = receipt.checksum_sha256;
-    }
-    if (!r2Key || receiptSha256 && receiptSha256 !== ref.sha256) {
-      return "inventory_evidence_hash_mismatch";
-    }
-    const object = await env.RAW?.get(r2Key);
-    if (!object) return "inventory_evidence_unavailable";
-    const actualSha256 = await sha256Hex(await object.text());
-    if (actualSha256 !== ref.sha256 || receiptSha256 && actualSha256 !== receiptSha256) {
-      return "inventory_evidence_hash_mismatch";
-    }
-  }
-  return null;
-}
-
 /** A ledger refusal is a 409: the request was well-formed but the state refuses it. */
 function ledgerErrorResponse(error: unknown): Response {
+  if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
   if (error instanceof InventoryLedgerError) {
     return json({ error: error.code }, error.code.endsWith("_input_invalid") ? 400 : 409);
   }
@@ -566,7 +546,10 @@ export async function handleInventoryRoute(
     const authorityRef = stringField(parsed.value.authority_ref);
     const policyRef = stringField(parsed.value.policy_ref);
     const policyVersion = stringField(parsed.value.policy_version);
-    const refs = evidenceRefs(parsed.value.evidence_refs ?? []);
+    const receiptBased = parsed.value.evidence_receipt_ids !== undefined || evidenceReceiptsRequired(env);
+    if ("evidence_refs" in parsed.value && receiptBased) return json({ error: "evidence_receipts_required" }, 400);
+    const legacyRefs = receiptBased ? null : legacyEvidenceRefs(parsed.value.evidence_refs);
+    if (!receiptBased && !legacyRefs) return json({ error: "invalid_inventory_command" }, 400);
     const approvalId = parsed.value.approval_id === undefined || parsed.value.approval_id === null
       ? null
       : stringField(parsed.value.approval_id);
@@ -609,9 +592,10 @@ export async function handleInventoryRoute(
       ["unit_cost_minor", unitCostMinor],
     ] as const;
 
-    if (!commandId || !idempotencyKey || !fingerprint || !SHA256.test(fingerprint) ||
+    if (!commandId || !idempotencyKey ||
+        parsed.value.request_fingerprint_sha256 !== undefined && (!fingerprint || !SHA256.test(fingerprint)) ||
         !transition || !INVENTORY_TRANSITIONS.includes(transition) || !authorityRef ||
-        !policyRef || !policyVersion || !refs ||
+        !policyRef || !policyVersion ||
         optionalStrings.some(([key, value]) => value === null &&
           (parsed.value as Record<string, unknown>)[key] !== null) ||
         optionalIntegers.some(([key, value]) => value === null &&
@@ -640,10 +624,29 @@ export async function handleInventoryRoute(
     );
     if (authorityDenial) return json({ error: authorityDenial }, 403);
 
-    const evidenceDenial = await verifyInventoryEvidence(env, auth.session.tenant_id, refs);
-    if (evidenceDenial) return json({ error: evidenceDenial }, 403);
-
     try {
+      // Resolve the actual current source lot. A browser-supplied lot cannot relabel a position.
+      const source = sourcePositionId && transition !== "reversal"
+        ? await getInventoryPosition(env, auth.session.tenant_id, sourcePositionId) : null;
+      if (sourcePositionId && !source && !["receive", "return", "reversal"].includes(transition)) return json({ error: "inventory_position_not_found" }, 404);
+      if (source && lotId && source.lot_id !== lotId) return json({ error: "evidence_receipt_scope_mismatch" }, 403);
+      const original = transition === "reversal" && reversalReference
+        ? await env.DB.prepare(`SELECT lot_id FROM inventory_events
+            WHERE tenant_id = ? AND command_id = ? ORDER BY movement_seq ASC LIMIT 1`)
+          .bind(auth.session.tenant_id, reversalReference).first<{ lot_id: string }>() : null;
+      const targetLot = transition === "reversal" ? original?.lot_id : source?.lot_id ?? lotId;
+      if (transition === "reversal" && lotId && targetLot !== lotId) return json({ error: "evidence_receipt_scope_mismatch" }, 403);
+      if (!targetLot) return json({ error: "evidence_scope_invalid" }, 400);
+      let refs: readonly EvidenceRef[];
+      if (receiptBased) {
+        refs = (await resolveEvidenceUploads(env, auth, {
+          purpose: "stock", targetId: targetLot, action: transition, operationId: commandId,
+        }, parsed.value.evidence_receipt_ids)).refs;
+      } else {
+        const denial = await verifyLegacyInventoryEvidence(env, auth.session.tenant_id, legacyRefs!);
+        if (denial) return json({ error: denial }, 403);
+        refs = legacyRefs!;
+      }
       const intent: InventoryCommandIntentInput = {
         commandId,
         tenantId: auth.session.tenant_id,
@@ -656,7 +659,7 @@ export async function handleInventoryRoute(
         policyRef,
         policyVersion,
         idempotencyKey,
-        requestFingerprintSha256: fingerprint,
+        requestFingerprintSha256: "",
         approvalId,
         evidenceRefs: refs,
         payload: commandPayload,
@@ -681,6 +684,10 @@ export async function handleInventoryRoute(
         conditionStatus: conditionStatus ?? null,
         now: new Date().toISOString(),
       };
+      // A browser fingerprint is a compatibility hint. Exact replay identity comes from the
+      // complete server-normalized intent and verified references, never a supplied hash.
+      const { now: _now, requestFingerprintSha256: _fingerprint, ...facts } = intent;
+      intent.requestFingerprintSha256 = await sha256Hex(canonicalJson(facts));
       const result = await applyInventoryCommandIntent(env, intent);
       const status = result.kind === "applied"
         ? 201

@@ -181,6 +181,7 @@ import { parseAuthorityRequirements } from "./authority-records.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
+import { handleEvidenceUpload } from "./evidence-uploads.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import { handleProductionGateClearance } from "./production-gate-clearance.ts";
 import {
@@ -748,6 +749,7 @@ export async function handleAuthenticatedRoute(
     const authorityResponse = await handleAuthorityRecordRoute(req, env, auth);
     if (authorityResponse) return authorityResponse;
   }
+  if (url.pathname === "/api/v1/evidence-uploads") return await handleEvidenceUpload(req, env, auth);
   // The safety rail is intentionally reachable by every authenticated role,
   // including a field worker with no current assignment. Authority, separation
   // of duties, and rights are enforced inside the store, not by this router.

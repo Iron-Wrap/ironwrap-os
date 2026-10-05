@@ -387,6 +387,34 @@ reconciliation satisfy that receipt; an unknown or mismatched result blocks the 
 `unknown`), while `reconciliation_outcome` preserves a later `not_executed` or `manual_exception`
 conclusion on the immutable receipt.
 
+## Uploaded file evidence
+
+The stock, service-intake, service-step, and corrective-evidence HTTP boundaries accept immutable
+Worker upload receipt IDs. The bounded multipart route computes SHA256 from actual binary bytes,
+writes R2 conditionally, verifies readback, and then commits an immutable tenant/actor/target/action
+receipt in D1. Domain writes resolve the current authorization and the exact stored bytes again;
+a browser-supplied digest, file name, or R2 pointer cannot stand in for a verified receipt.
+
+Required receipt enforcement is off by default behind `APP_EVIDENCE_RECEIPTS_REQUIRED="true"`.
+Before UI adoption, legacy HTTP evidence fields retain their existing behavior without claiming
+uploaded-file verification or entering the immutable receipt/manifest stores. Receipt IDs always
+resolve actual files in either mode; mixed legacy fields and receipt IDs are refused. Enabling
+the flag follows UI file-selection/upload/receipt adoption and requires the deployment owner's
+normal configuration authority. This source change modifies no deployed configuration.
+
+R2 success with D1 failure is retained raw evidence only. An exact upload retry can finish the
+original receipt; changed scope or bytes cannot overwrite it. Receipt-based intake also binds an immutable
+normalized request hash to a stable case identity, so a lost-response retry cannot create another
+linked duplicate. Receipt resolution does not replace stock conservation, required approval,
+current safety authority, or independent verification.
+
+The executable contract and recovery procedure are in
+[`workers-bus/README.md`](../workers-bus/README.md#file-evidence-contract), implemented by
+`workers-bus/src/evidence-uploads.ts` and migration `0139_evidence_upload_receipts.sql`.
+Historical syntactic digests remain historical assertions; this change cannot retroactively grant
+them verified file provenance. Focused deterministic tests establish local storage/domain behavior;
+deployment, authenticated real-device operation, and human acceptance require their own evidence.
+
 ## Side-effect contract
 
 External writes must have:

@@ -1,13 +1,6 @@
 # CLAUDE.md
 
-Read [`AGENTS.md`](./AGENTS.md) before working in this repository.
+@AGENTS.md
 
-The current architecture and AI-native target are
-[`docs/AI-NATIVE-ARCHITECTURE.md`](./docs/AI-NATIVE-ARCHITECTURE.md). The operating target is
-[`docs/AUTONOMOUS-OPERATING-SYSTEM.md`](./docs/AUTONOMOUS-OPERATING-SYSTEM.md); authority and
-evidence rules are in
-[`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md); actual
-implementation gaps are in [`docs/CAPABILITY-MATRIX.md`](./docs/CAPABILITY-MATRIX.md).
-
-Do not copy mutable provider facts or status claims into this loader file. Never commit secrets,
-customer files, production exports, or generated reports.
+System map and AI-native target: [`docs/AI-NATIVE-ARCHITECTURE.md`](./docs/AI-NATIVE-ARCHITECTURE.md).
+Keep this file a loader: do not copy mutable provider facts or status claims into it.

@@ -10,16 +10,14 @@ deterministic policy, permits, tools, provider readback, and reconciliation make
 reliable while people retain physical, legal, customer-choice, safety-release, and
 relationship-sensitive authority.
 
-Read these in order:
+Read the documents relevant to the change:
 
-1. `docs/DOCUMENTATION-CONTRACT.md` — which documents may claim authority.
-2. `docs/AI-NATIVE-ARCHITECTURE.md` — current system map, target AI control loop, repository
-   boundaries, user journeys, closure gaps, and proof path.
-3. `docs/AUTONOMOUS-OPERATING-SYSTEM.md` — complete target company and workflow.
-4. `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md` — transition, work-package, evidence, safety,
-   side-effect, and reconciliation rules.
-5. `docs/CAPABILITY-MATRIX.md` — implemented capabilities and gaps.
-6. `docs/COMPLIANCE-REGISTER.md` — current external obligations and review cadence.
+- Documentation authority or new docs: `docs/DOCUMENTATION-CONTRACT.md`.
+- Architecture, repository boundaries, or cross-surface changes: `docs/AI-NATIVE-ARCHITECTURE.md`.
+- Target company/workflow design: `docs/AUTONOMOUS-OPERATING-SYSTEM.md`.
+- Transitions, work packages, side effects, evidence, or safety: `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`.
+- Capability/status claims: `docs/CAPABILITY-MATRIX.md` and current source evidence.
+- Compliance-sensitive changes: `docs/COMPLIANCE-REGISTER.md`.
 
 Do not treat target prose as implementation evidence. Do not treat a passing local check as
 deployment, runtime verification, business acceptance, or production proof.
@@ -86,15 +84,7 @@ work without penalty. No automation may reward bypassing a safety stop or suppre
 
 ## Code discovery
 
-Use the configured CodeGraph/codebase-memory tools first for structural questions:
-
-- symbol discovery and definitions;
-- callers, callees, and impact;
-- routes and cross-service flow;
-- architecture and focused code context.
-
-Use `rg` for literal strings, non-code documents, configs, and log/error text. If the graph is not
-initialized, ask before building an index. Do not duplicate graph findings with a grep/read loop.
+Use `rg` for text, configuration, and checks of current edits. For structural questions, prefer available CodeGraph tools when the project is indexed and pass the actual project path. Treat graph links as best-effort; inspect current source when results are stale or incomplete. Use tgrep for repeated broad searches when its index helps. An unavailable index does not block a task that ordinary search can finish cheaply.
 
 ## Working contract
 

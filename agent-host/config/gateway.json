@@ -1,0 +1,59 @@
+{
+  "schema": "ironwrap_agent_gateway_config_v1",
+  "providers": {
+    "claude": {
+      "enabled": true,
+      "auth": "oauth",
+      "oauth_token_env": "CLAUDE_CODE_OAUTH_TOKEN",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "executable_path": null
+    },
+    "codex": {
+      "enabled": true,
+      "auth": "chatgpt",
+      "api_key_env": "CODEX_API_KEY",
+      "codex_home_env": "CODEX_HOME",
+      "signin_max_age_hours": 216
+    }
+  },
+  "routes": {
+    "routine": { "provider": "codex", "model": "gpt-6.1-sol", "effort": "medium" },
+    "hard": { "provider": "codex", "model": "gpt-6-astra", "effort": "high" },
+    "audit": { "provider": "claude", "model": "claude-opus-5-5", "effort": "high" }
+  },
+  "pricing_usd_per_mtok": {
+    "gpt-6.1-sol": { "input": 2, "cached_input": 0.2, "output": 10 },
+    "gpt-6-astra": { "input": 10, "cached_input": 1, "output": 50 }
+  },
+  "ceilings": {
+    "window_hours": 24,
+    "team": { "calls": 6000, "cost_usd": 300 },
+    "specialist_default": { "calls": 400, "cost_usd": 30, "cost_usd_per_call": 3 },
+    "specialists": {
+      "orchestrator": { "calls": 1000, "cost_usd": 60, "cost_usd_per_call": 3 },
+      "lead_concierge": { "calls": 600, "cost_usd": 40, "cost_usd_per_call": 3 },
+      "independent_auditor": { "calls": 800, "cost_usd": 60, "cost_usd_per_call": 3 }
+    }
+  },
+  "retry": { "max_attempts": 3, "base_delay_ms": 2000, "max_delay_ms": 60000, "auth_probe_after_ms": 900000 },
+  "timeout_ms": 240000,
+  "max_turns": 16,
+  "specialists": {
+    "orchestrator": ["routine", "hard"],
+    "market_analyst": ["routine", "hard"],
+    "lead_concierge": ["routine", "hard"],
+    "estimator": ["routine", "hard"],
+    "measurement_design": ["routine", "hard"],
+    "proposal_contract": ["routine", "hard"],
+    "purchasing_inventory": ["routine", "hard"],
+    "shop_planner": ["routine", "hard"],
+    "scheduler_dispatcher": ["routine", "hard"],
+    "field_safety": ["routine", "hard"],
+    "quality_inspector": ["routine", "hard"],
+    "billing_reconciliation": ["routine", "hard"],
+    "compliance": ["routine", "hard"],
+    "customer_care_warranty": ["routine", "hard"],
+    "marketing_reputation": ["routine", "hard"],
+    "independent_auditor": ["audit"]
+  }
+}

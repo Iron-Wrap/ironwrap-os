@@ -11,7 +11,7 @@ const mcpPackages = ["mcp/erpnext-roofing-mcp", "mcp/ironwrap-bus-mcp", "mcp/new
 const expectedCalls = [
   "audit --prefix app",
   "audit --prefix workers-bus",
-  ...["app", ...mcpPackages, "workers-bus"].map((prefix) => `audit --omit=dev --prefix ${prefix}`),
+  ...["app", ...mcpPackages, "agent-host", "workers-bus"].map((prefix) => `audit --omit=dev --prefix ${prefix}`),
 ];
 
 async function runAudit(t, failPrefix = "") {
@@ -33,7 +33,7 @@ exit 0
   return { ...result, calls: (await readFile(log, "utf8")).trim().split("\n") };
 }
 
-for (const prefix of mcpPackages) {
+for (const prefix of [...mcpPackages, "agent-host"]) {
   test(`audit fails and stops after an audit failure in ${prefix}`, async (t) => {
     const result = await runAudit(t, prefix);
     assert.notEqual(result.status, 0, result.stdout + result.stderr);

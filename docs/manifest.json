@@ -66,6 +66,39 @@
       ]
     },
     {
+      "path": "agent-host/evals/README.md",
+      "class": "component",
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
+    },
+    {
+      "path": "agent-host/evals/judge.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/COMMON.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/README.md",
+      "class": "component",
+      "authority": [
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
+    },
+    {
       "path": "app/README.md",
       "class": "component",
       "authority": [

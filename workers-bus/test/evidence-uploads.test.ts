@@ -239,11 +239,22 @@ test("intake retry converges when a competing report wins the open-symptom race"
   ]);
   assert.deepEqual(responses.map((res) => res.status).sort(), [200, 201, 201]);
   const reports = await Promise.all(responses.map(responseBody));
-  const duplicate = reports.find((body) => body.result === "duplicate")!;
-  const replay = reports.find((body) => body.result === "replayed")!;
-  assert.equal(duplicate.service_case?.service_case_id, replay.service_case?.service_case_id);
-  assert.equal((db.raw.prepare("SELECT count(*) AS n FROM service_cases").get() as { n: number }).n, 2);
-  assert.equal((db.raw.prepare("SELECT count(*) AS n FROM service_cases WHERE state != 'closed'").get() as { n: number }).n, 1);
+  assert.deepEqual(reports.map((body) => body.result).sort(), ["duplicate", "opened", "replayed"]);
+  // Either report may win the open-symptom race. The two sends with the same intake key
+  // must converge on one case, whether that case is the original or the duplicate.
+  assert.equal(reports[1]?.service_case?.service_case_id, reports[2]?.service_case?.service_case_id);
+  const cases = db.raw.prepare("SELECT service_case_id, state, closure_reason, duplicate_of_case_id FROM service_cases")
+    .all() as Array<{ service_case_id: string; state: string; closure_reason: string | null; duplicate_of_case_id: string | null }>;
+  const originals = cases.filter((row) => row.state !== "closed");
+  const duplicates = cases.filter((row) => row.state === "closed" && row.closure_reason === "duplicate");
+  assert.equal(cases.length, 2);
+  assert.equal(originals.length, 1);
+  assert.equal(duplicates.length, 1);
+  const original = originals[0]!;
+  const duplicate = duplicates[0]!;
+  assert.equal(duplicate.duplicate_of_case_id, original.service_case_id);
+  assert.equal(reports.find((body) => body.result === "opened")?.service_case?.service_case_id, original.service_case_id);
+  assert.equal(reports.find((body) => body.result === "duplicate")?.service_case?.service_case_id, duplicate.service_case_id);
 });
 
 test("receipt enforcement is off by default; legacy service and corrective assertions stay unverified", async () => {

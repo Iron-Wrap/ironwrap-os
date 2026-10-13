@@ -57,6 +57,15 @@
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
+      "path": "agent-host/README.md",
+      "class": "component",
+      "authority": [
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
       "path": "app/README.md",
       "class": "component",
       "authority": [

@@ -10,21 +10,21 @@ SHELL := bash
 
 # Test logs feed the capability evidence receipt at the end of `check`.
 OUT ?= tmp/check
-NODE_PACKAGES := app mcp/erpnext-roofing-mcp mcp/ironwrap-bus-mcp mcp/newo-mcp
+NODE_PACKAGES := app mcp/erpnext-roofing-mcp mcp/ironwrap-bus-mcp mcp/newo-mcp agent-host
 FRAPPE_APP := frappe-apps/ironwrap_roofing
 FRAPPE_VENV := tmp/frappe-venv
 
-.PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp app \
+.PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp agent-host app \
   worker worker-contract worker-tests worker-shard frappe audit static evidence \
   evidence-receipt e2e e2e-suite secret-scan seed
 
-check: validate test-tools mcp app worker frappe audit static evidence
+check: validate test-tools mcp agent-host app worker frappe audit static evidence
 
 # Per-area sub-targets for CI's parallel jobs. Together they cover exactly what
 # `check` covers, minus `evidence` (which needs both the pwa and worker legs merged
 # onto one filesystem, so it runs in its own CI job instead): `make -n check-contracts
 # check-pwa check-worker` and `make -n check` list the same set of commands.
-check-contracts: validate test-tools mcp frappe audit static
+check-contracts: validate test-tools mcp agent-host frappe audit static
 check-pwa: app
 check-worker: worker
 
@@ -34,6 +34,11 @@ check-worker: worker
 
 workers-bus/node_modules/.package-lock.json: workers-bus/package-lock.json
 	npm ci --ignore-scripts --no-audit --no-fund --prefix workers-bus
+
+# The Claude and Codex SDKs pull their CLIs in as optional platform binaries (about 700 MB);
+# the tests inject fakes, so checks install the SDK code only.
+agent-host/node_modules/.package-lock.json: agent-host/package-lock.json
+	npm ci --omit=optional --ignore-scripts --no-audit --no-fund --prefix agent-host
 
 deps: $(addsuffix /node_modules/.package-lock.json,$(NODE_PACKAGES) workers-bus)
 
@@ -99,6 +104,10 @@ mcp: $(addsuffix /node_modules/.package-lock.json,$(filter mcp/%,$(NODE_PACKAGES
 	npm test --prefix mcp/erpnext-roofing-mcp
 	npm test --prefix mcp/ironwrap-bus-mcp
 	npm test --prefix mcp/newo-mcp
+
+agent-host: agent-host/node_modules/.package-lock.json
+	npm run typecheck --prefix agent-host
+	npm test --prefix agent-host
 
 app: app/node_modules/.package-lock.json
 	mkdir -p $(OUT)

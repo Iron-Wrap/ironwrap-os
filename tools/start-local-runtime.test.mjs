@@ -154,6 +154,39 @@ test("the launcher waits for the stub, forwards one Worker port, and leaves stdi
   );
 });
 
+test("the opt-in agent host starts on loopback and serves health before the stack reports ready", async (t) => {
+  const state = mkdtempSync(join(tmpdir(), "ironwrap-agent-host-"));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const agentPort = await freePort();
+  const runtime = await launchRuntime(t, {
+    IRONWRAP_LOCAL_AGENT_HOST: "on",
+    AGENT_HOST_PORT: String(agentPort),
+    AGENT_HOST_STATE_DIR: state,
+    AGENT_HOST_WORKER_TOKEN: "synthetic-local-agent-token",
+    // No provider sign-in: an empty Codex home and no Claude token, whatever the caller's shell has.
+    CODEX_HOME: state,
+    CLAUDE_CODE_OAUTH_TOKEN: "",
+    AGENT_HOST_ENV_FILE: join(state, "no-local-sign-ins.env"),
+  });
+  for (let attempt = 0; attempt < 150 && !runtime.output().includes("All services started."); attempt += 1) {
+    if (runtime.child.exitCode !== null) break;
+    await delay(100);
+  }
+  assert.match(runtime.output(), /agent-host ready[\s\S]*All services started\./);
+  const health = await fetch(`http://127.0.0.1:${agentPort}/health`);
+  assert.equal(health.status, 200);
+  const body = await health.json();
+  assert.equal(body.ready, false);
+  // Separate reasons, each named: no sign-ins and, until the agent API lands, no Worker answer.
+  for (const alert of ["claude_credential_missing", "codex_credential_missing", "worker_unreachable"]) {
+    assert.ok(body.alerts.includes(alert), `${alert} in ${JSON.stringify(body.alerts)}`);
+  }
+  assert.equal(body.worker.reachable, false);
+  assert.equal((await fetch(`http://127.0.0.1:${agentPort}/ready`)).status, 503);
+  assert.doesNotMatch(runtime.output(), /synthetic-local-agent-token/);
+  assert.doesNotMatch(launcher, /export AGENT_HOST_WORKER_TOKEN/, "the agent token must not reach the brokers");
+});
+
 test("a required child exit fails the supervisor with its service name and log", async (t) => {
   const runtime = await launchRuntime(t, {
     IRONWRAP_RUNTIME_TEST_FAIL_CWD: join(root, "app"),

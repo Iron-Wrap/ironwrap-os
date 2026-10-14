@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertStrictSchema, canonicalJson, validate } from "../src/gateway/schema.ts";
+import { assertStrictSchema, canonicalJson, providerSchema, validate } from "../src/gateway/schema.ts";
 import { OUTPUT_SCHEMA } from "./helpers.ts";
 
 test("strict schemas are accepted and loose ones are refused before any provider call", () => {
@@ -60,4 +60,26 @@ test("field names inherited from Object.prototype are unknown fields too", () =>
     "$: unknown field __proto__",
     "$: missing field note",
   ]);
+});
+
+test("providers receive the shape only; bounds stay with the local validator", () => {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["text", "ids"],
+    properties: {
+      text: { type: "string", maxLength: 3, pattern: "^[a-z]+$", description: "kept" },
+      ids: { type: "array", items: { type: "integer", minimum: 0 }, maxItems: 2, uniqueItems: true },
+    },
+  };
+  assert.deepEqual(providerSchema(schema), {
+    type: "object",
+    additionalProperties: false,
+    required: ["text", "ids"],
+    properties: {
+      text: { type: "string", description: "kept" },
+      ids: { type: "array", items: { type: "integer" } },
+    },
+  });
+  assert.deepEqual(validate(schema, { text: "abcd", ids: [-1] }), ["$.text: too long", "$.ids[0]: below minimum"]);
 });

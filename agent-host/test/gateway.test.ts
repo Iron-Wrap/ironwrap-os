@@ -68,6 +68,7 @@ test("a routine run goes to Codex on the configured model and returns validated 
   assert.match(result.hashes.prompt, /^[0-9a-f]{64}$/);
   assert.equal(h.codex.calls[0].effort, "medium");
   assert.equal(h.codex.calls[0].maxCostUsd, 3);
+  assert.equal((h.codex.calls[0].outputSchema.properties as Record<string, Record<string, unknown>>).note.maxLength, undefined);
   assert.equal(h.claude.calls.length, 0);
   const ledger = readFileSync(join(h.stateDir, "gateway-usage.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(

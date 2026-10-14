@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { GatewayConfig } from "./config.ts";
 import { UsageLedger } from "./ledger.ts";
-import { assertStrictSchema, canonicalJson, sha256, validate } from "./schema.ts";
+import { assertStrictSchema, canonicalJson, providerSchema, sha256, validate } from "./schema.ts";
 import { createClaudeAdapter } from "./claude.ts";
 import { createCodexAdapter } from "./codex.ts";
 import {
@@ -183,7 +183,7 @@ export class ProviderGateway {
           effort: route.effort,
           system: request.system,
           prompt: request.prompt,
-          outputSchema: request.outputSchema,
+          outputSchema: providerSchema(request.outputSchema),
           tools: request.tools,
           maxTurns: request.maxTurns ?? this.config.maxTurns,
           maxCostUsd: reserved.reservation.costUsd,

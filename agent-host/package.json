@@ -7,6 +7,8 @@
     "node": ">=22.18"
   },
   "scripts": {
+    "start": "node src/host/main.ts",
+    "smoke": "node src/host/smoke.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

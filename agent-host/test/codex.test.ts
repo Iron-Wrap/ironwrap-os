@@ -196,3 +196,17 @@ test("a run that costs more than the per-call ceiling is refused after the fact"
     return true;
   });
 });
+
+test("a CODEX_HOME with its own config.toml is refused, so no personal MCP server or profile leaks in", async (t) => {
+  const home = tempDir(t);
+  signedIn(home);
+  writeFileSync(join(home, "config.toml"), "[mcp_servers.personal]\ncommand = \"x\"\n");
+  const seen = newSeen();
+  const adapter = createCodexAdapter(shippedConfig(), tempDir(t), { CODEX_HOME: home }, factory(turn(), seen));
+  await assert.rejects(adapter.call(call()), (error: ProviderError) => {
+    assert.equal(error.kind, "fatal");
+    assert.match(error.message, /dedicated home/);
+    return true;
+  });
+  assert.equal(seen.codex.length, 0);
+});

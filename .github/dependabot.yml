@@ -2,13 +2,14 @@
 # package-lock.json), and pip (frappe-apps/ironwrap_roofing/pyproject.toml).
 #
 # Patch and minor updates arrive as one grouped PR per ecosystem; majors come
-# one PR each.
+# one PR each. Version updates run monthly: each one costs a full CI run, and
+# security updates do not wait for this schedule (IRW-R8 CI cost).
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: ci
       include: scope
@@ -19,7 +20,7 @@ updates:
   - package-ecosystem: npm
     directories: ['**/*']
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: fix
       prefix-development: chore
@@ -31,7 +32,7 @@ updates:
   - package-ecosystem: pip
     directories: ['**/*']
     schedule:
-      interval: weekly
+      interval: monthly
     commit-message:
       prefix: fix
       prefix-development: chore

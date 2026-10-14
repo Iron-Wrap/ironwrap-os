@@ -18,11 +18,14 @@
 #                     wrangler's asset limits - IRO-267 revision 2). Nothing under
 #                     workers-bus/src imports from app/, so it is still not part
 #                     of the shard split, but it does need app's node_modules.
-#   e2e               a 16-way matrix, one Playwright PWA suite per leg via
-#                     `make e2e-suite SUITE=<script>` (each still builds its own
-#                     bundle once; two suites never share a runner, since
-#                     app/playwright.config.ts pins one ACCEPTANCE_PORT per suite
-#                     and runs single-worker).
+#   e2e               a 3-way matrix of balanced suite groups via
+#                     `make e2e-suite SUITE="<script> <script> ..."`: one bundle
+#                     build and one Chromium install per leg, then the group's
+#                     suites in sequence, as `make e2e` runs them locally (each
+#                     suite pins its own ACCEPTANCE_PORT and runs single-worker,
+#                     and CI never reuses a server). Seventeen one-suite legs
+#                     spent half of every run's billed minutes on setup and
+#                     per-job rounding (IRW-R8 CI cost).
 #   evidence          needs both `pwa` and `worker`: the capability evidence receipt
 #                     (`make evidence-receipt`) requires both test outputs on one
 #                     filesystem, so this job downloads both artifacts, merges the
@@ -34,8 +37,14 @@
 #                     CRITICAL vulnerability that is present at head and absent
 #                     at base. Inherited findings are Dependabot's job.
 #   paired-device-lighthouse  a timing budget, so it keeps a runner of its own.
+#   changes           tools/ci-scope.mjs: for a pull request, whether the PWA
+#                     bundle legs (`app`: e2e, paired-device-lighthouse) and the
+#                     test suites (`code`: pwa, worker, worker-contract,
+#                     evidence) have anything new to prove. A push to main, a
+#                     merge group and a manual run always prove everything, so
+#                     the commit Deploy promotes carries the full gate.
 #   gate              always runs; fails if any job it needs failed or was
-#                     cancelled.
+#                     cancelled, or was skipped without its scope saying so.
 #
 # `make check` itself is unchanged and stays the local, sequential entry point.
 # tools/ci-workflow.test.mjs derives every `make <target>` invocation this
@@ -49,8 +58,9 @@
 # or `e2e (test:pwa)`) may ever appear in deploy.yml's job-names list, because
 # tools/release-promotion.mjs requires exactly one job per requested name.
 #
-# No path filters, so `gate` reports on every change. The single required
-# status check is `gate`.
+# No workflow-level path filters, so `gate` reports on every change; scoping is
+# per job, through `changes`, and gate checks every skip against it. The single
+# required status check is `gate`.
 name: CI
 
 on:
@@ -86,6 +96,30 @@ env:
   WORKER_TEST_FLOOR: 1670
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.scope.outputs.app }}
+      code: ${{ steps.scope.outputs.code }}
+    steps:
+      # Depth 2 so HEAD^ resolves: a pull request checks out the merge commit,
+      # whose first parent is the base branch tip.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide what this change has to prove
+        id: scope
+        run: node tools/ci-scope.mjs
+
   contracts:
     runs-on: ubuntu-latest
     # Measured 9m08s-10m41s (630/641/548 s) on revision 3's three green runs
@@ -114,6 +148,8 @@ jobs:
         run: make check-contracts
 
   pwa:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -141,6 +177,8 @@ jobs:
           if-no-files-found: error
 
   worker:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -180,6 +218,8 @@ jobs:
   # nothing), so it is not a test input to anything else and needs no shared
   # state with the worker shards.
   worker-contract:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -200,31 +240,22 @@ jobs:
       - name: make worker-contract
         run: make worker-contract
 
-  # One Playwright PWA suite per leg. app/playwright.config.ts pins
-  # fullyParallel: false, workers: 1, and one ACCEPTANCE_PORT per suite, so two
-  # suites must never share a runner.
+  # Balanced groups of Playwright PWA suites, one bundle build per leg. Each suite
+  # pins its own ACCEPTANCE_PORT and runs single-worker, and CI never reuses a
+  # server, so a group runs its suites one after another on one runner, exactly as
+  # `make e2e` runs all of them locally. Grouped by measured leg time (CI run
+  # 38202713134) so no leg outlasts `contracts`; e2e-suite runs every suite in its
+  # group and fails if any failed.
   e2e:
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     strategy:
       fail-fast: false
       matrix:
-        suite:
-          - test:pwa
-          - test:pwa:board
-          - test:pwa:owner-configuration
-          - test:pwa:people
-          - test:pwa:safety
-          - test:pwa:documents
-          - test:pwa:job-history
-          - test:pwa:placement
-          - test:pwa:capabilities
-          - test:pwa:capabilities:accounting
-          - test:pwa:accounting
-          - test:pwa:onboarding
-          - test:pwa:quote-revision
-          - test:pwa:decisions
-          - test:pwa:sales-intake
-          - test:pwa:manual-measurements
-          - test:pwa:service-calls
+        group:
+          - "test:pwa test:pwa:owner-configuration test:pwa:people test:pwa:capabilities"
+          - "test:pwa:manual-measurements test:pwa:quote-revision test:pwa:documents test:pwa:onboarding test:pwa:board"
+          - "test:pwa:sales-intake test:pwa:decisions test:pwa:safety test:pwa:placement test:pwa:capabilities:accounting test:pwa:job-history test:pwa:accounting test:pwa:service-calls"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -240,14 +271,24 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
+      # The ubuntu runner image already carries Chromium's system libraries, so
+      # only the browser itself is installed, from this cache when the lockfile
+      # (and so the Playwright version) is unchanged (IRO-269).
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('app/package-lock.json') }}
+
       - name: make e2e-suite
-        run: make e2e-suite SUITE=${{ matrix.suite }}
+        run: make e2e-suite SUITE="${{ matrix.group }}"
 
   # Exact-source capability evidence, bound to the pwa and worker test logs. The
   # identity check this performs in CI (tools/validate-documentation.mjs's
   # ciCheckIdentity) needs a plain checkout: no `ref:`, no `fetch-depth: 2`.
   evidence:
-    needs: [pwa, worker]
+    needs: [changes, pwa, worker]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -306,6 +347,8 @@ jobs:
   # ~10 minutes of prior work on the machine before Lighthouse started and
   # pushed the job into its own 20-minute timeout on slower runners.
   paired-device-lighthouse:
+    needs: [changes]
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -472,6 +515,7 @@ jobs:
     if: always()
     needs:
       [
+        changes,
         contracts,
         pwa,
         worker,
@@ -485,16 +529,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # dependency-scan is the only job with a job-level `if:` (pull requests and
-      # merge groups only), so it is the only one a skip is legitimate for. A
-      # stray `if:` or path filter on any other job used to pass here as
-      # readily as a real success (IRO-267 blocker 12, revision 2 step 22).
-      - name: Require every job to succeed, except dependency-scan which may be skipped
+      # A skip passes only where it is legitimate: dependency-scan outside pull
+      # requests and merge groups, and a scoped job whose scope output from
+      # `changes` is exactly "false". A stray `if:` on any other job, or a scoped
+      # job skipped while its scope said to run (or `changes` itself failing),
+      # fails here (IRO-267 blocker 12, revision 2 step 22).
+      - name: Require every job to succeed, or to be skipped where its scope allows
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${NEEDS}"
-          jq -e 'to_entries | all(.value.result == "success" or (.key == "dependency-scan" and .value.result == "skipped"))' <<<"${NEEDS}" >/dev/null
+          jq -r '"scope: app=\(.changes.outputs.app // "unset") code=\(.changes.outputs.code // "unset")"' <<<"${NEEDS}"
+          jq -e '
+            {
+              "e2e": "app",
+              "paired-device-lighthouse": "app",
+              "pwa": "code",
+              "worker": "code",
+              "worker-contract": "code",
+              "evidence": "code"
+            } as $scoped
+            | (.changes.outputs // {}) as $scope
+            | to_entries
+            | all(
+                .value.result == "success"
+                or (.value.result == "skipped"
+                    and (.key == "dependency-scan"
+                         or ($scoped[.key] != null and $scope[$scoped[.key]] == "false")))
+              )
+          ' <<<"${NEEDS}" >/dev/null
 
   validate-and-test:
     if: always()

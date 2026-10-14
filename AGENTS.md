@@ -112,7 +112,9 @@ dependency additions, generated artifacts, and speculative scaffolding.
 CI runs what `make check` (validators, tool/MCP/app/Worker/Frappe suites, npm audits, capability
 evidence receipt), `make e2e` (Playwright PWA suites), and `make secret-scan` cover, split across
 parallel jobs that together reach exactly the same checks (`.github/workflows/ci.yml`); the
-required check is `gate`. The individual steps, run locally and sequentially:
+required check is `gate`. On a pull request, `tools/ci-scope.mjs` skips the Playwright and
+Lighthouse legs when nothing they build from changed and every suite for a markdown-only change;
+a push to `main` always runs everything. The individual steps, run locally and sequentially:
 
 ```bash
 make check

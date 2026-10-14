@@ -240,6 +240,8 @@ access, checksum, and legal-hold controls. They do not belong in the source repo
 - canonical files carry current review metadata;
 - runtime and component documents point back to canonical authority where required.
 - the AI-native architecture snapshot matches checkable code/configuration reachability;
+- the AI team contract's machine-readable block keeps its stable specialist ids, receipt fields,
+  and the owner's launch rule, and matches its prose catalog;
 - forbidden legacy authority claims do not reappear in current Markdown.
 
 The validator prevents structural drift. It cannot prove that a legal interpretation, live

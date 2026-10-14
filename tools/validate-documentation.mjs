@@ -78,6 +78,7 @@ const historicalDesignDocuments = new Set([
 const failures = [];
 const fail = (message) => failures.push(message);
 const allowedOptions = new Set([
+  "--ai-team-contract",
   "--app-test-output",
   "--architecture",
   "--capability-matrix",
@@ -846,6 +847,524 @@ if (architectureContract) {
       contract[section],
     );
   }
+}
+
+// docs/AI-TEAM-CONTRACT.md embeds the roster, action catalog, watches and receipt schema that the
+// agent runtime, the Worker action registry and the specialist evaluations read mechanically.
+// Specialist ids are directory names, and the owner's decisions pin the actions and watches below:
+// a catalog edit cannot let a consequential action stop asking first, turn live answering on by
+// default, slow an owner report, or hand a people-only act to an agent without this gate changing
+// too. The prose catalog rows must match the block, so neither drifts alone.
+const AI_TEAM_LABEL = "docs/AI-TEAM-CONTRACT.md";
+const AI_TEAM_SCHEMA = "ironwrap_ai_team_contract_v1";
+const AI_TEAM_KEYS = ["schema", "specialists", "actions", "watches", "receipt"];
+const AI_TEAM_SPECIALISTS = [
+  "orchestrator",
+  "market_analyst",
+  "lead_concierge",
+  "estimator",
+  "measurement_design",
+  "proposal_contract",
+  "purchasing_inventory",
+  "shop_planner",
+  "scheduler_dispatcher",
+  "field_safety",
+  "quality_inspector",
+  "billing_reconciliation",
+  "compliance",
+  "customer_care_warranty",
+  "marketing_reputation",
+  "independent_auditor",
+];
+const AI_TEAM_ROLES = new Set(["owner", "ops", "sales", "production", "accounting", "field"]);
+const AI_TEAM_CLASSES = new Set(["A0", "A1", "A2", "A3", "H"]);
+const AI_TEAM_SIDE_EFFECTS = new Set([
+  "none",
+  "internal_reversible",
+  "external_reversible",
+  "external_irreversible",
+  "money",
+  "legal",
+  "safety",
+]);
+const AI_TEAM_UNDO = new Set(["none", "automatic", "manual"]);
+const AI_TEAM_READBACKS = new Set(["none", "owned_store", "provider"]);
+const AI_TEAM_START_WORDS = {
+  asks_first: "Asks first",
+  within_limits: "Acts within your limits",
+  off_until_enabled: "Off until you turn it on",
+};
+const AI_TEAM_AGGREGATES = new Set([
+  "any",
+  "coordination_run",
+  "exception",
+  "report",
+  "notification",
+  "delegation",
+  "policy",
+  "finding",
+  "envelope",
+  "inbound",
+  "alert",
+  "storm_watch",
+  "market_watch_item",
+  "lead",
+  "consent",
+  "conversation",
+  "appointment",
+  "reception_script",
+  "portal_link",
+  "privacy_case",
+  "property",
+  "measurement",
+  "design_basis",
+  "takeoff",
+  "quote",
+  "proposal",
+  "change_order",
+  "insurance_supplement",
+  "acceptance",
+  "terms",
+  "job",
+  "gate",
+  "work_package",
+  "evidence",
+  "field_record",
+  "safety_occurrence",
+  "ncr",
+  "completion",
+  "service_case",
+  "crew_assignment",
+  "authority_record",
+  "user_access",
+  "asset",
+  "supplier",
+  "supplier_quote",
+  "catalog_snapshot",
+  "purchase_order",
+  "payee",
+  "inventory_position",
+  "shop_order",
+  "money_item",
+  "tax_snapshot",
+  "filing",
+  "content",
+  "claim",
+  "campaign",
+  "note",
+  "price_book",
+  "storm_mode",
+  "tax_slip",
+  "specialist_hold",
+]);
+const AI_TEAM_RECEIPT_FIELDS = [
+  "specialist_id",
+  "run_id",
+  "action_id",
+  "did",
+  "doing",
+  "needs_from_you",
+  "sources",
+  "policy",
+  "permit",
+  "tool",
+  "readback",
+  "outcome",
+  "undo",
+  "do_it_myself",
+];
+const AI_TEAM_SOURCE_FIELDS = ["fact_id", "version", "hash"];
+const AI_TEAM_OUTCOMES = ["succeeded", "failed", "unknown", "abstained"];
+// Owner decision IRW-R8: these stay with a person until the owner delegates them.
+const AI_TEAM_OWNER_ASKS_FIRST = [
+  "customer_message.send",
+  "visit.confirm",
+  "portal_link.send",
+  "change_order.send_for_decision",
+  "remedy.offer",
+  "campaign.send",
+  "privacy_request.answer",
+  "proposal.publish",
+  "proposal.withdraw",
+  "claim.approve",
+  "content.publish",
+  "review_response.publish",
+  "reception_script.publish",
+  "crew_date.commit",
+  "purchase_order.place",
+  "purchase_order.change",
+  "shop_order.release",
+  "work_package.issue",
+  "quote.commit_revision",
+  "quote.apply_discount",
+  "price_book.propose_change",
+  "change_order.commit",
+  "insurance_supplement.send",
+  "invoice.commit_intent",
+  "reconciliation.resolve",
+  "supplier_bill.approve",
+  "tax_snapshot.record",
+  "holdback.release",
+  "cost_recovery.claim",
+  "ad_spend.commit",
+  "stock.adjust_count",
+  "ncr.disposition",
+  "consent.record",
+  "cancellation.record",
+  "authority.record",
+  "completion.accept",
+];
+// Releasing a protection, approving a control the agents work under, or an owner-only right:
+// these ask first whatever the owner delegates elsewhere.
+const AI_TEAM_ALWAYS_ASKS_FIRST = [
+  "inbound.release",
+  "stock.release_quarantine",
+  "work_package.release_hold",
+  "gate.clear",
+  "hold_point.release",
+  "claim.approve",
+  "reception_script.publish",
+  "finding.close",
+  "supplier.onboard",
+  "authority.record",
+  "consent.record",
+  "holdback.release",
+  "privacy_request.answer",
+  "price_book.propose_change",
+  "storm_mode.propose",
+];
+// Human-only: never an agent's act, never delegable.
+const AI_TEAM_PEOPLE_ONLY = [
+  "acceptance.customer_decision",
+  "safety_stop.release",
+  "gate.waive",
+  "refund.issue",
+  "write_off.record",
+  "terms.legal_signoff",
+  "filing.submit",
+  "payee.change_details",
+  "delegation.set",
+  "policy.activate",
+  "access.change",
+  "payee.unfreeze",
+];
+// Nothing answers a live conversation before the owner turns it on.
+const AI_TEAM_OFF_UNTIL_ENABLED = ["conversation.answer_live"];
+// The reviewed A2 actions with an outside effect: a new one fails here until it is reviewed and listed.
+const AI_TEAM_EXTERNAL_A2 = [
+  "conversation.answer_live",
+  "portal_link.revoke",
+  "rfq.send",
+  "purchase_order.expedite",
+  "document.request",
+  "privacy_incident.contain",
+  "content.stop",
+];
+// Delegation, policy and access change only by owner acts; no agent action may write them.
+const AI_TEAM_OWNER_ONLY_AGGREGATES = new Set(["delegation", "policy", "user_access"]);
+// The owner's report cadence and the detected-storm watch.
+const AI_TEAM_REQUIRED_WATCHES = [
+  ["new_leads", "lead_concierge", "PT15M"],
+  ["pipeline", "orchestrator", "PT1H"],
+  ["daily_owner_brief", "orchestrator", "P1D"],
+  ["weekly_review", "orchestrator", "P7D"],
+  ["storm_events", "market_analyst", null],
+];
+const AI_TEAM_ACTION_ID = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+const AI_TEAM_WATCH_ID = /^[a-z][a-z0-9_]*$/;
+const AI_TEAM_EVENT = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+const AI_TEAM_DURATION =
+  /^P(?!$)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
+const AI_TEAM_CATALOG_GROUP =
+  /^#### (?:Catalog: .* \(`([a-z][a-z0-9_]*)`\)|(Shared by every specialist)|(People only, owned by no specialist))$/;
+const AI_TEAM_PROSE_OWNERS = /Owners: ((?:`[a-z][a-z0-9_]*`(?:, )?)+)\.$/;
+
+const sameList = (actual, expected) =>
+  Array.isArray(actual) &&
+  actual.length === expected.length &&
+  actual.every((item, index) => item === expected[index]);
+const sameSet = (actual, expected) =>
+  Array.isArray(actual) && sameList([...actual].sort(), [...expected].sort());
+
+function aiTeamStartStates(action) {
+  if (action.autonomy === "A3") return ["asks_first"];
+  if (action.autonomy !== "A2") return [null];
+  if (action.side_effect_class === "internal_reversible") return ["within_limits"];
+  return ["asks_first", "off_until_enabled"];
+}
+
+function validateAiTeamAction(action, actionById) {
+  const id = action?.action_id;
+  if (typeof id !== "string" || !AI_TEAM_ACTION_ID.test(id)) {
+    fail(`${AI_TEAM_LABEL}: invalid action_id ${JSON.stringify(id)}`);
+    return;
+  }
+  if (actionById.has(id)) fail(`${AI_TEAM_LABEL}: duplicate action_id ${id}`);
+  actionById.set(id, action);
+  const where = `${AI_TEAM_LABEL}: ${id}`;
+  const owners = Array.isArray(action.owners) ? action.owners : [];
+  if (owners.length === 0 && action.autonomy !== "H") fail(`${where}: owners must be a non-empty array unless the act is H`);
+  if (new Set(owners).size !== owners.length) fail(`${where}: duplicate owner`);
+  for (const owner of owners) {
+    if (!AI_TEAM_SPECIALISTS.includes(owner)) fail(`${where}: owner ${owner} is not a specialist`);
+  }
+  if (!AI_TEAM_CLASSES.has(action.autonomy)) fail(`${where}: autonomy must be A0, A1, A2, A3 or H`);
+  const draftsOnly = ["A0", "A1"].includes(action.autonomy);
+  const acts = ["A2", "A3"].includes(action.autonomy);
+  if (action.human_only !== (action.autonomy === "H")) {
+    fail(`${where}: human_only must be true exactly when the class is H`);
+  }
+  if (action.requires_citations !== (action.autonomy !== "H")) {
+    fail(`${where}: requires_citations must be true for every agent action and false for H`);
+  }
+  if (!AI_TEAM_SIDE_EFFECTS.has(action.side_effect_class)) fail(`${where}: unknown side_effect_class`);
+  if (!AI_TEAM_UNDO.has(action.undo)) fail(`${where}: unknown undo`);
+  if (draftsOnly && (action.side_effect_class !== "none" || action.undo !== "none")) {
+    fail(`${where}: A0 and A1 actions have no side effect and nothing to undo`);
+  }
+  if (acts && action.side_effect_class === "none") fail(`${where}: A2 and A3 actions need a side_effect_class`);
+  if (["money", "legal", "safety"].includes(action.side_effect_class) && !["A3", "H"].includes(action.autonomy)) {
+    fail(`${where}: a ${action.side_effect_class} effect must be class A3 or H`);
+  }
+  if (!AI_TEAM_AGGREGATES.has(action.aggregate) || (action.aggregate === "any" && action.autonomy !== "A0")) {
+    fail(`${where}: aggregate must be a listed aggregate, and any is for A0 reads only`);
+  }
+  if (acts && AI_TEAM_OWNER_ONLY_AGGREGATES.has(action.aggregate)) {
+    fail(`${where}: an A2 or A3 action may not act on ${action.aggregate}`);
+  }
+  if (action.autonomy === "A2" && /^external_/.test(action.side_effect_class ?? "") && !AI_TEAM_EXTERNAL_A2.includes(id)) {
+    fail(`${where}: an A2 action with an outside effect must be on the reviewed list`);
+  }
+  if (!AI_TEAM_READBACKS.has(action.readback) || (action.readback === "none") !== draftsOnly) {
+    fail(`${where}: readback must be none exactly for A0 and A1 actions`);
+  }
+  const starts = aiTeamStartStates(action);
+  if (!starts.includes(action.default_delegation)) {
+    fail(`${where}: default_delegation must be ${starts.map((start) => start ?? "null").join(" or ")}`);
+  }
+  if (typeof action.protective !== "boolean") fail(`${where}: protective must be a boolean`);
+  if (action.protective && !(action.autonomy === "A2" && action.side_effect_class === "internal_reversible")) {
+    fail(`${where}: protective actions are A2 with an internal_reversible effect`);
+  }
+  const delegable = acts && !action.protective && !AI_TEAM_ALWAYS_ASKS_FIRST.includes(id);
+  if (action.delegable !== delegable) fail(`${where}: delegable must be ${delegable}`);
+  if (action.reviewer_role !== null && action.reviewer_role !== undefined) {
+    if (!AI_TEAM_ROLES.has(action.reviewer_role) || !acts) {
+      fail(`${where}: reviewer_role must be null or a reviewer role on an A2 or A3 action`);
+    }
+  }
+}
+
+function validateAiTeamWatches(watches, actionById, specialistIds) {
+  const seen = new Set();
+  const byOwner = new Map();
+  for (const watch of watches) {
+    const watchId = watch?.watch_id;
+    const owner = watch?.owner;
+    const where = `${AI_TEAM_LABEL}: ${owner}`;
+    if (typeof watchId !== "string" || !AI_TEAM_WATCH_ID.test(watchId)) {
+      fail(`${where}: invalid watch_id ${JSON.stringify(watchId)}`);
+      continue;
+    }
+    if (!specialistIds.includes(owner)) fail(`${AI_TEAM_LABEL}: watch ${watchId} owner ${owner} is not a specialist`);
+    if (seen.has(`${owner}/${watchId}`)) fail(`${where}: duplicate watch_id ${watchId}`);
+    seen.add(`${owner}/${watchId}`);
+    byOwner.set(owner, [...(byOwner.get(owner) ?? []), watchId]);
+    const hasEvery = Object.hasOwn(watch, "every");
+    const hasTrigger = Object.hasOwn(watch, "trigger");
+    if (hasEvery === hasTrigger) fail(`${where}: watch ${watchId} needs exactly one of every or trigger`);
+    if (hasEvery && !AI_TEAM_DURATION.test(watch.every ?? "")) {
+      fail(`${where}: watch ${watchId} every must be an ISO 8601 duration`);
+    }
+    if (hasTrigger && !AI_TEAM_EVENT.test(watch.trigger ?? "")) {
+      fail(`${where}: watch ${watchId} trigger must be an event name`);
+    }
+    if (Object.hasOwn(watch, "after")) {
+      if (!hasTrigger || !Array.isArray(watch.after) || watch.after.length === 0 ||
+        !watch.after.every((duration) => AI_TEAM_DURATION.test(duration ?? ""))) {
+        fail(`${where}: watch ${watchId} after must list ISO 8601 durations after a trigger`);
+      }
+    }
+    const proposes = Array.isArray(watch.proposes) ? watch.proposes : [];
+    if (proposes.length === 0) fail(`${where}: watch ${watchId} must propose at least one action`);
+    for (const actionId of proposes) {
+      const action = actionById.get(actionId);
+      if (!action) fail(`${where}: watch ${watchId} proposes unknown action ${actionId}`);
+      else if (!action.owners?.includes(owner)) {
+        fail(`${where}: watch ${watchId} proposes ${actionId}, which ${owner} does not own`);
+      }
+    }
+  }
+  for (const [watchId, owner, every] of AI_TEAM_REQUIRED_WATCHES) {
+    const watch = watches.find((item) => item?.watch_id === watchId && item?.owner === owner);
+    if (every && watch?.every !== every) {
+      fail(`${AI_TEAM_LABEL}: owner report watch ${watchId} for ${owner} must run every ${every}`);
+    } else if (!every && !watch?.trigger) {
+      fail(`${AI_TEAM_LABEL}: watch ${watchId} for ${owner} must be event-triggered`);
+    }
+  }
+  return byOwner;
+}
+
+function validateAiTeamContract(contract, content) {
+  if (!sameSet(Object.keys(contract ?? {}), AI_TEAM_KEYS)) {
+    fail(`${AI_TEAM_LABEL}: top-level keys must be ${AI_TEAM_KEYS.join(", ")}`);
+  }
+  if (contract?.schema !== AI_TEAM_SCHEMA) fail(`${AI_TEAM_LABEL}: schema must be ${AI_TEAM_SCHEMA}`);
+  const specialists = Array.isArray(contract?.specialists) ? contract.specialists : [];
+  const actions = Array.isArray(contract?.actions) ? contract.actions : [];
+  const watches = Array.isArray(contract?.watches) ? contract.watches : [];
+  const specialistIds = specialists.map((specialist) => specialist?.specialist_id);
+  if (!sameSet(specialistIds, AI_TEAM_SPECIALISTS) || new Set(specialistIds).size !== specialistIds.length) {
+    fail(`${AI_TEAM_LABEL}: specialists must be exactly ${AI_TEAM_SPECIALISTS.join(", ")}`);
+  }
+
+  const actionById = new Map();
+  for (const action of actions) validateAiTeamAction(action, actionById);
+  const pins = [
+    [AI_TEAM_OWNER_ASKS_FIRST, (action) => action.autonomy === "A3", "the owner's launch rule requires class A3"],
+    [AI_TEAM_ALWAYS_ASKS_FIRST, (action) => action.autonomy === "A3", "always asks first, so it must be class A3"],
+    [AI_TEAM_PEOPLE_ONLY, (action) => action.autonomy === "H", "the owner's launch rule requires class H"],
+    [
+      AI_TEAM_EXTERNAL_A2,
+      (action) => action.autonomy === "A2" && /^external_/.test(action.side_effect_class ?? ""),
+      "is on the reviewed list of A2 actions with an outside effect, so it must be one",
+    ],
+    [
+      ["specialist.hold"],
+      (action) => action.aggregate === "specialist_hold",
+      "sets a hold flag on its own aggregate, specialist_hold",
+    ],
+    [
+      AI_TEAM_OFF_UNTIL_ENABLED,
+      (action) => action.default_delegation === "off_until_enabled",
+      "nothing answers live before the owner turns it on, so default_delegation must be off_until_enabled",
+    ],
+  ];
+  for (const [ids, holds, rule] of pins) {
+    for (const id of ids) {
+      const action = actionById.get(id);
+      if (!action) fail(`${AI_TEAM_LABEL}: ${id}: missing from the catalog; an owner decision names it`);
+      else if (!holds(action)) fail(`${AI_TEAM_LABEL}: ${id}: ${rule}`);
+    }
+  }
+
+  const watchesByOwner = validateAiTeamWatches(watches, actionById, specialistIds);
+  for (const specialist of specialists) {
+    const id = specialist?.specialist_id;
+    const where = `${AI_TEAM_LABEL}: ${id}`;
+    if (typeof specialist?.display_name !== "string" || !specialist.display_name.trim()) {
+      fail(`${where}: display_name is required`);
+    }
+    if (!AI_TEAM_ROLES.has(specialist?.reviewer_role)) fail(`${where}: reviewer_role is not a reviewer role`);
+    if (![1, 2, 3].includes(specialist?.wave)) fail(`${where}: wave must be 1, 2 or 3`);
+    // The auditor runs on a different model family from the proposers it audits.
+    const tiers = id === "independent_auditor" ? ["audit"] : ["routine", "hard"];
+    if (!sameList(specialist?.tiers, tiers)) fail(`${where}: tiers must be ${tiers.join(", ")}`);
+    if (!Array.isArray(specialist?.watches) || specialist.watches.length === 0 ||
+      !sameSet(specialist.watches, watchesByOwner.get(id) ?? [])) {
+      fail(`${where}: watches must list exactly the top-level watches it owns`);
+    }
+  }
+
+  const receipt = contract?.receipt ?? {};
+  if (!sameList(receipt.fields, AI_TEAM_RECEIPT_FIELDS)) {
+    fail(`${AI_TEAM_LABEL}: receipt.fields must be exactly ${AI_TEAM_RECEIPT_FIELDS.join(", ")}`);
+  }
+  if (!sameList(receipt.nested?.sources, AI_TEAM_SOURCE_FIELDS)) {
+    fail(`${AI_TEAM_LABEL}: receipt.nested.sources must be exactly ${AI_TEAM_SOURCE_FIELDS.join(", ")}`);
+  }
+  for (const key of Object.keys(receipt.nested ?? {})) {
+    if (!AI_TEAM_RECEIPT_FIELDS.includes(key)) fail(`${AI_TEAM_LABEL}: receipt.nested.${key} is not a receipt field`);
+  }
+  if (!sameList(receipt.outcomes, AI_TEAM_OUTCOMES)) {
+    fail(`${AI_TEAM_LABEL}: receipt.outcomes must be exactly ${AI_TEAM_OUTCOMES.join(", ")}`);
+  }
+
+  const reviewerOf = new Map(specialists.map((specialist) => [specialist?.specialist_id, specialist?.reviewer_role]));
+  const rows = parseAiTeamCatalog(content);
+  for (const [id, action] of actionById) {
+    const row = rows.get(id);
+    if (!row) {
+      fail(`${AI_TEAM_LABEL}: ${id} has no prose catalog row`);
+      continue;
+    }
+    if (row.autonomy !== action.autonomy) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog says ${row.autonomy}, contract says ${action.autonomy}`);
+    }
+    const starts = AI_TEAM_START_WORDS[action.default_delegation] ?? "—";
+    if (row.starts !== starts) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog starts "${row.starts}", contract starts "${starts}"`);
+    }
+    const owners = Array.isArray(action.owners) ? action.owners : [];
+    const listed = AI_TEAM_PROSE_OWNERS.exec(row.does)?.[1].match(/[a-z][a-z0-9_]*/g) ?? null;
+    const proseOwners =
+      row.group === "*" ? AI_TEAM_SPECIALISTS : row.group === "" ? [] : row.group ? listed ?? [row.group] : null;
+    const ownersMatch =
+      proseOwners !== null &&
+      (row.group === "*" ? sameSet(owners, proseOwners) : sameList(owners, proseOwners)) &&
+      (!listed || listed[0] === row.group);
+    if (!ownersMatch) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog owners ${JSON.stringify(proseOwners)} differ from contract owners ${JSON.stringify(owners)}`);
+    }
+    if (row.does.startsWith("Protective.") !== (action.protective === true)) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog protective marker differs from the contract`);
+    }
+    if (row.does.startsWith("Always asks first.") !== (action.autonomy === "A3" && action.delegable === false)) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog always-asks-first marker differs from the contract`);
+    }
+    const reviewer = aiTeamReviewerWords(action, reviewerOf);
+    if (!(row.reviewer === reviewer || (reviewer.length > 1 && row.reviewer.startsWith(reviewer)))) {
+      fail(`${AI_TEAM_LABEL}: ${id}: prose catalog reviewer "${row.reviewer}" does not match contract reviewer "${reviewer}"`);
+    }
+  }
+  for (const id of rows.keys()) {
+    if (!actionById.has(id)) fail(`${AI_TEAM_LABEL}: prose catalog row ${id} is not in the contract`);
+  }
+}
+
+// Each catalog row: | action | class | starts | does | evidence | checks | reviewer | effect | binds |.
+// The group heading above a row names its first owner, every specialist, or no specialist.
+function parseAiTeamCatalog(content) {
+  const rows = new Map();
+  let group;
+  for (const line of content.split("\n")) {
+    if (line.startsWith("#")) {
+      const heading = AI_TEAM_CATALOG_GROUP.exec(line);
+      group = heading ? heading[1] ?? (heading[2] ? "*" : "") : undefined;
+      continue;
+    }
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    const id = /^`([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)`$/.exec(cells[0] ?? "")?.[1];
+    if (!id || !AI_TEAM_CLASSES.has(cells[1])) continue;
+    if (rows.has(id)) fail(`${AI_TEAM_LABEL}: the prose catalog lists ${id} twice`);
+    rows.set(id, { group, autonomy: cells[1], starts: cells[2], does: cells[3] ?? "", reviewer: cells[6] ?? "" });
+  }
+  return rows;
+}
+
+function aiTeamReviewerWords(action, reviewerOf) {
+  if (action.autonomy === "H") return "People only: ";
+  if (action.autonomy === "A0" || action.autonomy === "A1") return "—";
+  if (action.protective) return "Never asks first";
+  if (action.default_delegation === "off_until_enabled") return "The owner turns it on";
+  const owners = Array.isArray(action.owners) ? action.owners : [];
+  const role = action.reviewer_role ?? (owners.length === 1 ? reviewerOf.get(owners[0]) : null);
+  if (!role) return "The proposing specialist's reviewer";
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+const aiTeamContractPath = resolve(
+  options.get("--ai-team-contract") ?? resolve(root, AI_TEAM_LABEL),
+);
+const aiTeamContract = loadEmbeddedJsonContract(
+  aiTeamContractPath,
+  AI_TEAM_LABEL,
+  "<!-- ai-team-contract:start -->",
+  "<!-- ai-team-contract:end -->",
+);
+if (aiTeamContract) {
+  validateAiTeamContract(aiTeamContract.value, readFileSync(aiTeamContractPath, "utf8"));
 }
 
 const evidencePath = options.get("--evidence");

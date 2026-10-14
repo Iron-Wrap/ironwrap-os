@@ -15,6 +15,8 @@ Read the documents relevant to the change:
 - Documentation authority or new docs: `docs/DOCUMENTATION-CONTRACT.md`.
 - Architecture, repository boundaries, or cross-surface changes: `docs/AI-NATIVE-ARCHITECTURE.md`.
 - Target company/workflow design: `docs/AUTONOMOUS-OPERATING-SYSTEM.md`.
+- AI team roster, action catalog, delegation, receipts, watches, reports, or model routing:
+  `docs/AI-TEAM-CONTRACT.md`.
 - Transitions, work packages, side effects, evidence, or safety: `docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`.
 - Capability/status claims: `docs/CAPABILITY-MATRIX.md` and current source evidence.
 - Compliance-sensitive changes: `docs/COMPLIANCE-REGISTER.md`.

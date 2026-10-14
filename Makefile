@@ -95,6 +95,7 @@ test-tools:
 	  tools/production-readiness-misc.test.mjs \
 	  tools/merge-worker-tap.test.mjs \
 	  tools/ci-workflow.test.mjs \
+	  tools/ci-scope.test.mjs \
 	  tools/launch-proof.test.mjs \
 	  tools/conventional-pr-title.test.mjs \
 	  tools/deploy-workflow.test.mjs \
@@ -251,15 +252,20 @@ E2E_SUITES := test:pwa test:pwa:board test:pwa:owner-configuration test:pwa:peop
   test:pwa:onboarding test:pwa:quote-revision test:pwa:decisions test:pwa:sales-intake \
   test:pwa:manual-measurements test:pwa:service-calls
 
+# Every suite runs even after one fails, and the recipe fails if any did: a bare
+# `for` loop exits with its last command's status, which used to pass `make e2e`
+# whenever only an earlier suite failed.
 e2e: app/node_modules/.package-lock.json
-	cd app && npx playwright install $(if $(CI),--with-deps,) chromium
+	cd app && npx playwright install chromium
 	npm run build --prefix app
-	for suite in $(E2E_SUITES); do PW_SKIP_BUILD=1 npm run $$suite --prefix app; done
+	status=0; for suite in $(E2E_SUITES); do PW_SKIP_BUILD=1 npm run $$suite --prefix app || status=1; done; exit $$status
 
-# One e2e leg, for CI's e2e matrix (SUITE=<npm script>). Builds once, then runs
-# its own suite; app/playwright.config.ts pins one ACCEPTANCE_PORT per suite and
-# runs single-worker, so two suites must never share a job.
+# One e2e leg, for CI's e2e matrix (SUITE="<npm script> ..."). Builds once, then
+# runs the leg's suites one after another; each pins its own ACCEPTANCE_PORT in
+# app/package.json and runs single-worker, so they never overlap. The runner
+# image already carries Chromium's system libraries (IRO-269), so only the
+# browser is installed.
 e2e-suite: app/node_modules/.package-lock.json
-	cd app && npx playwright install $(if $(CI),--with-deps,) chromium
+	cd app && npx playwright install chromium
 	npm run build --prefix app
-	PW_SKIP_BUILD=1 npm run $(SUITE) --prefix app
+	status=0; for suite in $(SUITE); do PW_SKIP_BUILD=1 npm run $$suite --prefix app || status=1; done; exit $$status

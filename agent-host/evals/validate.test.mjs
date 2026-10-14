@@ -260,3 +260,36 @@ test("synthetic-data scan: E.164 and bare Canadian numbers, month names, and nam
     assert.ok(text.includes(fragment), `missed ${fragment}`);
   }
 });
+
+test("expected receipt outcome follows the decision and the expected action classes", () => {
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].expected.receipt.outcome = null;
+    cases[1].expected.decision = "abstain";
+    cases[1].expected.actions = [];
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.match(failures, /golden\.001: expected\.receipt\.outcome must be "succeeded"/);
+  assert.match(failures, /golden\.002: expected\.receipt\.outcome must be "abstained"/);
+});
+
+test("escalate with an own required action is propose unless it is an emergency", () => {
+  const allowlist = {
+    schema_version: "ironwrap.specialist-allowlist.v1",
+    specialist_id: ID,
+    catalog_sha256: CATALOG_SHA,
+    actions: [
+      { action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" },
+      { action_id: "exception.escalate", autonomy: "A2", purpose: "Escalate" },
+    ],
+  };
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].expected.decision = "escalate";
+    cases[0].expected.escalate_to = "owner";
+    cases[0].expected.receipt.outcome = "abstained";
+    cases[0].expected.actions = [{ action_id: "lead.qualify" }, { action_id: "exception.escalate" }];
+    return cases;
+  });
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures.join("\n");
+  assert.match(failures, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
+});

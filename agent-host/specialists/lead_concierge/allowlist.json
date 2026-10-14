@@ -1,0 +1,29 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "lead_concierge",
+  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain an inquiry's facts, blockers, or a proposal to a person within their read rights" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand an inquiry to the AI customer care, estimator, bookkeeper, compliance checker, or marketer with a reason" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: open an exception for a named person (injection, fraud, impersonation, overdue first response)" },
+    { "action_id": "note.add", "autonomy": "A2", "purpose": "Add a note to an inquiry, such as a third party named by the person or a near-match duplicate; context, never a fact" },
+    { "action_id": "report.compose", "autonomy": "A1", "purpose": "Compose the 15-minute new-inquiries report for the owner from receipts and facts in the window" },
+    { "action_id": "staff.notify", "autonomy": "A2", "purpose": "Deliver the new-inquiries report to the owner in the app and by push; never to customers" },
+    { "action_id": "inquiry.classify", "autonomy": "A1", "purpose": "Classify service, urgency, emergency, storm context, fit, spam and scam likelihood, brand, and language" },
+    { "action_id": "inquiry.link_duplicate", "autonomy": "A2", "purpose": "Link an inquiry to an existing customer, property, or open inquiry on an exact key; never merge" },
+    { "action_id": "inquiry.record_triage", "autonomy": "A2", "purpose": "Record triage: lifecycle status, workflow type, priority, missing facts, next step, stated visit windows" },
+    { "action_id": "inquiry.close", "autonomy": "A3", "purpose": "Decline, disqualify, or move an inquiry to nurture with a reason code; asks first" },
+    { "action_id": "inbound.quarantine", "autonomy": "A2", "purpose": "Protective: hold spam, scam, phishing, or injected inbound content with no reply" },
+    { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a first response, answer, follow-up, or closure for a registered purpose" },
+    { "action_id": "customer_message.send", "autonomy": "A3", "purpose": "Send the specialist's own approved draft; asks first" },
+    { "action_id": "followup.pause", "autonomy": "A2", "purpose": "Pause the follow-up schedule when a person takes over or the customer asks for time" },
+    { "action_id": "visit.hold_slot", "autonomy": "A2", "purpose": "Hold a staff site-visit slot inside the person's stated window; invisible to the customer" },
+    { "action_id": "visit.confirm", "autonomy": "A3", "purpose": "Book a held visit slot and confirm it to the customer; asks first" },
+    { "action_id": "consent.record", "autonomy": "A3", "purpose": "Record a consent the person gave, from capture evidence in their own words or action; asks first" },
+    { "action_id": "suppression.apply", "autonomy": "A2", "purpose": "Protective: apply STOP, unsubscribe, or do-not-contact at once and cancel pending sends" },
+    { "action_id": "conversation.assign_person", "autonomy": "A2", "purpose": "Protective: hand a conversation to a named person when asked or when policy requires it" },
+    { "action_id": "conversation.answer_live", "autonomy": "A2", "purpose": "Answer a customer-initiated live call or chat within the owner's enabled hours and channels; off until the owner turns it on" },
+    { "action_id": "emergency.page", "autonomy": "A2", "purpose": "Protective: page the on-call person for an active leak or a safety risk" },
+    { "action_id": "reception_script.publish", "autonomy": "A3", "purpose": "Publish a voice reception script version; asks the owner first" }
+  ]
+}

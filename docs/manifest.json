@@ -69,6 +69,7 @@
       "path": "agent-host/evals/README.md",
       "class": "component",
       "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
         "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
       ]
@@ -77,6 +78,7 @@
       "path": "agent-host/evals/judge.md",
       "class": "runtime",
       "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
         "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
       ]
@@ -85,6 +87,7 @@
       "path": "agent-host/specialists/COMMON.md",
       "class": "runtime",
       "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
         "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
         "docs/COMPLIANCE-REGISTER.md"
@@ -94,8 +97,69 @@
       "path": "agent-host/specialists/README.md",
       "class": "component",
       "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
         "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/billing_reconciliation/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/estimator/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/independent_auditor/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/lead_concierge/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/measurement_design/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/orchestrator/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
       ]
     },
     {

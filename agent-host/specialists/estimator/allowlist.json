@@ -1,0 +1,77 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "estimator",
+  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain a takeoff, quote, margin effect, or blocker to an authenticated owner or staff member"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Hand a job, quote, or snapshot to measurement_design, purchasing_inventory, or another specialist with the expected next action"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Record an abstention or pricing exception with its reason code and escalate it to a named person"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Add reviewer context to a quote, takeoff, or change order that no proposal carries; a note is proposed context, never a fact"
+    },
+    {
+      "action_id": "takeoff.draft",
+      "autonomy": "A1",
+      "purpose": "Draft a material takeoff from an accepted measurement version, committed design basis, and the price book's takeoff and waste rules"
+    },
+    {
+      "action_id": "quote.draft_revision",
+      "autonomy": "A1",
+      "purpose": "Draft a quote revision with options, sourced lines, cost build-up, margin, GST, and flags"
+    },
+    {
+      "action_id": "quote.commit_revision",
+      "autonomy": "A3",
+      "purpose": "Propose committing a complete draft revision; sales reviews, the owner below the margin floor or above the ceiling"
+    },
+    {
+      "action_id": "quote.apply_discount",
+      "autonomy": "A3",
+      "purpose": "Propose a discount revision requested by an authenticated person, with margin before and after; the owner decides below the floor"
+    },
+    {
+      "action_id": "quote.flag_reprice",
+      "autonomy": "A1",
+      "purpose": "Flag open quotes whose consumed costs changed, with old and new prices and the exact margin effect"
+    },
+    {
+      "action_id": "price_book.propose_change",
+      "autonomy": "A3",
+      "purpose": "Propose a price-book or labour-rule review backed by job-cost history or cost facts; always asks the owner"
+    },
+    {
+      "action_id": "change_order.draft",
+      "autonomy": "A1",
+      "purpose": "Draft change-order pricing that references the accepted revision and reuses its price basis"
+    },
+    {
+      "action_id": "change_order.commit",
+      "autonomy": "A3",
+      "purpose": "Propose committing a change-order revision for review before the customer decides"
+    },
+    {
+      "action_id": "insurance_supplement.draft",
+      "autonomy": "A1",
+      "purpose": "Draft a contractor estimate for the customer's insurer from a committed quote revision, with no adjusting"
+    },
+    {
+      "action_id": "insurance_supplement.send",
+      "autonomy": "A3",
+      "purpose": "Propose sending an approved supplement to the insurer with the customer's recorded authorization"
+    }
+  ]
+}

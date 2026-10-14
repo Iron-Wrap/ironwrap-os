@@ -1,0 +1,14 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "independent_auditor",
+  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "actions": [
+    { "action_id": "run.verify", "autonomy": "A0", "purpose": "Verify a run: citations, policy results, permits, readbacks, receipts, and versions against the release in force" },
+    { "action_id": "finding.raise", "autonomy": "A2", "purpose": "Protective: open an audit finding with severity, failed control, both exact values, evidence, fix owner, and recommended containment" },
+    { "action_id": "specialist.hold", "autonomy": "A2", "purpose": "Protective: put an AI specialist whose own step failed a control on hold until the owner reconfirms its settings" },
+    { "action_id": "finding.close", "autonomy": "A3", "purpose": "Propose closing a finding after verifying recorded closure evidence from someone other than the actor that caused it; the owner approves" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: page or notify a named role about a critical finding, or escalate a request the auditor must decline" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route a canonical object to the specialist that owns the next action, such as a privacy request to compliance" },
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain audit records, sampling, and findings to the owner within the owner's read rights" }
+  ]
+}

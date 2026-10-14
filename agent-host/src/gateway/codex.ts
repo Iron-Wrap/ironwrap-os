@@ -4,6 +4,7 @@
 // The run is isolated: shell and every optional tool disabled, read-only sandbox, no network, no
 // web search, no AGENTS.md, no history, an empty working directory.
 
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +62,11 @@ export function createCodexAdapter(
     async call(request: ProviderCall) {
       const home = codexHome();
       if (!home) throw new ProviderError("fatal", `codex: ${provider.codexHomeEnv} is not set`);
+      // A personal CODEX_HOME carries its own config.toml (MCP servers, profiles, trust) that
+      // command-line overrides cannot remove; the host needs a home of its own.
+      if (existsSync(join(home, "config.toml"))) {
+        throw new ProviderError("fatal", `codex: ${provider.codexHomeEnv} holds a config.toml; give the agent host a dedicated home`);
+      }
       if (provider.auth === "api_key") await mkdir(home, { recursive: true });
       const key = provider.auth === "api_key" ? apiKey() : null;
       if (provider.auth === "api_key" && !key) throw new ProviderError("auth", "codex: API key is not configured");

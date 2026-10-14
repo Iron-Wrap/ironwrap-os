@@ -1,0 +1,33 @@
+# IronWrap agent host. Build from the repository root:
+#   podman build -f agent-host/deploy/Containerfile -t ironwrap-agent-host:<git-sha> .
+# The image holds code only. Sign-ins, the usage ledger and the signal cursor live on the
+# /var/lib/agent-host volume, which must be persistent and writable so the Codex CLI can refresh
+# its ChatGPT sign-in across restarts.
+FROM docker.io/library/node:22.22-bookworm-slim
+
+WORKDIR /srv/ironwrap
+
+# Production dependencies including the Claude and Codex CLI platform binaries.
+COPY agent-host/package.json agent-host/package-lock.json agent-host/
+RUN npm ci --prefix agent-host --omit=dev --ignore-scripts --no-audit --no-fund
+COPY mcp/ironwrap-bus-mcp/package.json mcp/ironwrap-bus-mcp/package-lock.json mcp/ironwrap-bus-mcp/
+RUN npm ci --prefix mcp/ironwrap-bus-mcp --omit=dev --ignore-scripts --no-audit --no-fund
+
+COPY agent-host/config agent-host/config
+COPY agent-host/src agent-host/src
+COPY agent-host/specialists agent-host/specialists
+COPY mcp/ironwrap-bus-mcp/src mcp/ironwrap-bus-mcp/src
+
+ENV NODE_ENV=production \
+    HOME=/var/lib/agent-host/home \
+    AGENT_HOST_STATE_DIR=/var/lib/agent-host/state \
+    CODEX_HOME=/var/lib/agent-host/codex-home \
+    AGENT_HOST_BIND=0.0.0.0 \
+    AGENT_HOST_BIND_PUBLIC=true \
+    AGENT_HOST_PORT=8790
+
+RUN mkdir -p /var/lib/agent-host && chown node:node /var/lib/agent-host
+USER node
+VOLUME ["/var/lib/agent-host"]
+EXPOSE 8790
+CMD ["node", "agent-host/src/host/main.ts"]

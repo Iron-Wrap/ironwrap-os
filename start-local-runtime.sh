@@ -143,6 +143,35 @@ start_service "workers-bus" "$ROOT_DIR/workers-bus" "$LOG_DIR/workers-bus.log" \
 start_service "app" "$ROOT_DIR/app" "$LOG_DIR/app.log" \
   npm run dev -- --host 0.0.0.0
 
+# AI team runtime (agent-host): polls the local Worker for signals and serves /health and /ready
+# on loopback. Opt in with IRONWRAP_LOCAL_AGENT_HOST=on. It starts without provider sign-ins and
+# reports them missing; see agent-host/README.md for the local sign-in steps.
+if [[ "${IRONWRAP_LOCAL_AGENT_HOST:-off}" == "on" ]]; then
+  AGENT_HOST_PORT="$(find_free_port "${AGENT_HOST_PORT:-8790}")" || {
+    echo "ERROR: Could not find a free local agent-host port after 20 attempts."
+    exit 1
+  }
+  # The Worker's local agent token comes from the .dev.vars predev writes; wait briefly for it.
+  local_agent_token="${AGENT_HOST_WORKER_TOKEN:-}"
+  for _ in $(seq 1 50); do
+    [[ -n "$local_agent_token" || -f "$ROOT_DIR/workers-bus/.dev.vars" ]] && break
+    sleep 0.1
+  done
+  if [[ -z "$local_agent_token" ]]; then
+    local_agent_token="$(sed -n 's/^AGENT_HOST_TOKEN=//p' "$ROOT_DIR/workers-bus/.dev.vars" 2>/dev/null | head -n 1)"
+  fi
+  # Scoped to the agent host alone: assigned for this one call, never exported to the brokers.
+  AGENT_HOST_PORT="$AGENT_HOST_PORT" \
+  AGENT_HOST_STATE_DIR="${AGENT_HOST_STATE_DIR:-$LOG_DIR/agent-host-state}" \
+  AGENT_HOST_WORKER_URL="$HERMES_BUS_BASE_URL" \
+  AGENT_HOST_ALLOW_INSECURE_LOCAL=true \
+  AGENT_HOST_WORKER_TOKEN="${local_agent_token:-local-agent-host-token}" \
+    start_service "agent-host" "$ROOT_DIR/agent-host" "$LOG_DIR/agent-host.log" \
+      node src/host/main.ts
+  unset local_agent_token
+  wait_for_http "agent-host" "http://127.0.0.1:$AGENT_HOST_PORT/health" "$LAST_STARTED_PID"
+fi
+
 # MCP servers use stdio, so their client owns their process and pipe lifecycle.
 # Launching them as background services gives them closed stdin and makes them
 # exit cleanly before any client can connect.
@@ -169,6 +198,9 @@ echo "- bus:       $HERMES_BUS_BASE_URL"
 echo "- app:       http://localhost:5173"
 echo "- stub ERP:  http://127.0.0.1:$ERPNEXT_STUB_PORT"
 echo "- brokers:   http://127.0.0.1:9104 (proposal publication), http://127.0.0.1:9103 (production schedule)"
+if [[ "${IRONWRAP_LOCAL_AGENT_HOST:-off}" == "on" ]]; then
+  echo "- agent:     http://127.0.0.1:$AGENT_HOST_PORT/health"
+fi
 echo "- MCPs:      spawned on demand by their stdio clients"
 echo "- logs:     $LOG_DIR"
 echo "- stop with Ctrl-C (trap will terminate all child processes)."

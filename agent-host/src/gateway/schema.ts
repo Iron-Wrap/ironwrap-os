@@ -118,6 +118,28 @@ export function validate(schema: JsonSchema, value: unknown, path = "$", errors:
   return errors;
 }
 
+// Bounds the providers' strict structured-output modes may reject. They are left out of the
+// schema sent to the provider and enforced by `validate` here instead.
+const LOCAL_ONLY = new Set(["minLength", "maxLength", "pattern", "minItems", "maxItems", "uniqueItems", "minimum", "maximum", "title"]);
+
+/** The schema as sent to a provider: shape, types, enums and required fields only. */
+export function providerSchema(schema: JsonSchema): JsonSchema {
+  const result: JsonSchema = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (LOCAL_ONLY.has(key)) continue;
+    if (key === "properties" && isPlainObject(value)) {
+      result.properties = Object.fromEntries(
+        Object.entries(value).map(([name, child]) => [name, providerSchema(child as JsonSchema)]),
+      );
+    } else if (key === "items" && isPlainObject(value)) {
+      result.items = providerSchema(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isPlainObject(value)) {

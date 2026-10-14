@@ -22,6 +22,14 @@ Recovery is deliberately envelope-scoped in Hermes:
 Bulk replay exists only in the Worker admin route with a hard confirmation string; this MCP never
 exposes it.
 
+Agent action server (`src/agent-server.mjs`): the per-run tool surface of the AI team runtime in
+[`agent-host`](../../agent-host/README.md). The provider CLI spawns it over stdio for one
+coordination run. It lists the run's tools from the Worker, narrowed to the host's allowlist
+(`AGENT_ALLOWED_ACTIONS`, catalog action ids), and turns each call into a proposed step
+(`POST /api/v1/agents/runs/:id/steps` with `{action_id, args, citations}`). It holds no authority
+and no provider credential; the Worker decides every step and the decision is returned verbatim.
+It needs `IRONWRAP_BUS_BASE_URL`, `AGENT_HOST_WORKER_TOKEN` (forwarded by name), and `AGENT_RUN_ID`.
+
 Required environment:
 
 ```bash

@@ -1,0 +1,28 @@
+# IronWrap agent host on the broker host. Install as
+# /etc/systemd/system/ironwrap-agent-host.service with the environment file root-readable only.
+# The container publishes health on loopback only; Cloudflare Tunnel/Access may reach it, but it
+# must never bind a public interface. Same secret-store and restart discipline as the brokers.
+[Unit]
+Description=IronWrap AI team runtime (agent host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ironwrap/agent-host.env
+# The container runs as the image's node user (uid 1000), which must own the volume.
+ExecStartPre=/usr/bin/install -d -m 0700 -o 1000 -g 1000 /var/lib/ironwrap-agent-host
+ExecStartPre=-/usr/bin/podman rm -f ironwrap-agent-host
+ExecStart=/usr/bin/podman run --rm --init --name ironwrap-agent-host \
+  --env-file /etc/ironwrap/agent-host.env \
+  --volume /var/lib/ironwrap-agent-host:/var/lib/agent-host:Z \
+  --publish 127.0.0.1:8790:8790 \
+  --read-only --tmpfs /tmp \
+  --cap-drop all --security-opt no-new-privileges \
+  ironwrap-agent-host:${AGENT_HOST_IMAGE_TAG}
+ExecStop=/usr/bin/podman stop --time 60 ironwrap-agent-host
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

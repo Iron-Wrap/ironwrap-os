@@ -13,6 +13,7 @@ const validator = resolve(root, "tools/validate-documentation.mjs");
 const matrix = resolve(root, "docs/CAPABILITY-MATRIX.md");
 const architecture = resolve(root, "docs/AI-NATIVE-ARCHITECTURE.md");
 const playbook = resolve(root, "docs/WHITE-LABEL-CLONE-PLAYBOOK.md");
+const aiTeamContract = resolve(root, "docs/AI-TEAM-CONTRACT.md");
 const workerReadme = resolve(root, "workers-bus/README.md");
 const localReadme = resolve(root, "deploy/local/README.md");
 const releaseControlPublication = resolve(
@@ -443,4 +444,204 @@ test("documentation gate separates source from the tested checkout", () => {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+function rejectsAiTeamEdit(prefix, rewrite, pattern) {
+  withDocumentCopy(
+    prefix,
+    aiTeamContract,
+    "AI-TEAM-CONTRACT.md",
+    "--ai-team-contract",
+    rewrite,
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, pattern);
+    },
+  );
+}
+
+test("documentation gate rejects an AI team action owned by an unknown specialist", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-owner-",
+    (content) => content.replace(
+      '{"action_id": "inquiry.classify", "owners": ["lead_concierge"]',
+      '{"action_id": "inquiry.classify", "owners": ["lead_concierge", "night_receptionist"]',
+    ),
+    /inquiry\.classify: owner night_receptionist is not a specialist/,
+  );
+});
+
+test("documentation gate rejects a people-only AI team action that is not marked human_only", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-human-only-",
+    (content) => content.replace(
+      /("action_id": "refund\.issue", [^\n]*?"human_only": )true/,
+      "$1false",
+    ),
+    /refund\.issue: human_only must be true exactly when the class is H/,
+  );
+});
+
+test("documentation gate rejects lowering an action the owner's launch rule keeps asking first", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-launch-rule-",
+    (content) => content.replace(
+      /("action_id": "customer_message\.send", [^\n]*?"autonomy": )"A3"/,
+      '$1"A2"',
+    ),
+    /customer_message\.send: the owner's launch rule requires class A3/,
+  );
+});
+
+test("documentation gate rejects an outside effect that starts within limits", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-start-state-",
+    (content) => content.replace(
+      /("action_id": "rfq\.send", [^\n]*?"default_delegation": )"asks_first"/,
+      '$1"within_limits"',
+    ),
+    /rfq\.send: default_delegation must be asks_first/,
+  );
+});
+
+test("documentation gate rejects a watch that proposes another specialist's action", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-watch-owner-",
+    (content) => content.replace(
+      '{"watch_id": "quote_expiring", "owner": "estimator", "every": "P1D", "proposes": ["quote.flag_reprice"]}',
+      '{"watch_id": "quote_expiring", "owner": "estimator", "every": "P1D", "proposes": ["quote.flag_reprice", "invoice.commit_intent"]}',
+    ),
+    /watch quote_expiring proposes invoice\.commit_intent, which estimator does not own/,
+  );
+});
+
+test("documentation gate rejects a duplicate AI team action id", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-duplicate-",
+    (content) => content.replace(
+      /\n( {4}\{"action_id": "fact\.explain"[^\n]*)\n/,
+      (match, entry) => `\n${entry}\n${entry}\n`,
+    ),
+    /duplicate action_id fact\.explain/,
+  );
+});
+
+test("documentation gate rejects renaming an AI team receipt field", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-receipt-",
+    (content) => content.replace('"undo", "do_it_myself"],', '"undo", "manual_path"],'),
+    /receipt\.fields must be exactly/,
+  );
+});
+
+test("documentation gate rejects prose AI team catalog drift", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-prose-",
+    (content) => content.replace("| `stock.reserve` | A2 |", "| `stock.reserve` | A3 |"),
+    /stock\.reserve: prose catalog says A3, contract says A2/,
+  );
+});
+
+test("documentation gate rejects live answering that is on before the owner turns it on", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-live-",
+    (content) => content.replace(
+      /("action_id": "conversation\.answer_live", [^\n]*?"default_delegation": )"off_until_enabled"/,
+      '$1"asks_first"',
+    ),
+    /conversation\.answer_live: nothing answers live before the owner turns it on/,
+  );
+});
+
+test("documentation gate rejects delegating an action that always asks first", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-always-",
+    (content) => content.replace(
+      /("action_id": "claim\.approve", [^\n]*?"delegable": )false/,
+      "$1true",
+    ),
+    /claim\.approve: delegable must be false/,
+  );
+});
+
+test("documentation gate rejects slowing an owner report watch", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-cadence-",
+    (content) => content.replace(
+      '{"watch_id": "new_leads", "owner": "lead_concierge", "every": "PT15M"',
+      '{"watch_id": "new_leads", "owner": "lead_concierge", "every": "PT30M"',
+    ),
+    /owner report watch new_leads for lead_concierge must run every PT15M/,
+  );
+});
+
+test("documentation gate rejects a drifted owners line in the prose AI team catalog", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-prose-owners-",
+    (content) => content.replace("Owners: `field_safety`, `quality_inspector`.", "Owners: `field_safety`."),
+    /evidence\.request: prose catalog owners/,
+  );
+});
+
+test("documentation gate rejects a drifted reviewer in the prose AI team catalog", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-prose-reviewer-",
+    (content) => content.replace(
+      /^(\| `dead_letter\.replay` \|.*)\| Ops \|/m,
+      "$1| Owner |",
+    ),
+    /dead_letter\.replay: prose catalog reviewer "Owner" does not match contract reviewer "Ops"/,
+  );
+});
+
+test("documentation gate rejects an owner added to the AI team contract but not the prose", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-added-owner-",
+    (content) => content.replace(
+      '{"action_id": "takeoff.draft", "owners": ["estimator"]',
+      '{"action_id": "takeoff.draft", "owners": ["estimator", "purchasing_inventory"]',
+    ),
+    /takeoff\.draft: prose catalog owners \["estimator"\] differ from contract owners/,
+  );
+});
+
+test("documentation gate rejects a protective marker that drifted from the AI team contract", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-prose-protective-",
+    (content) => content.replace("| Protective. Freeze payments", "| Freeze payments"),
+    /payee\.freeze: prose catalog protective marker differs/,
+  );
+});
+
+test("documentation gate rejects an acting AI team action on a delegation record", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-owner-only-aggregate-",
+    (content) => content.replace(
+      '"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold"',
+      '"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "delegation"',
+    ),
+    /specialist\.hold: an A2 or A3 action may not act on delegation/,
+  );
+});
+
+test("documentation gate keeps the specialist hold on its own aggregate", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-hold-aggregate-",
+    (content) => content.replace(
+      '"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold"',
+      '"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "finding"',
+    ),
+    /specialist\.hold: sets a hold flag on its own aggregate, specialist_hold/,
+  );
+});
+
+test("documentation gate rejects an unreviewed A2 action with an outside effect", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-external-a2-",
+    (content) => content.replace(
+      /("action_id": "supplier_message\.send", [^\n]*?"autonomy": )"A3"/,
+      '$1"A2"',
+    ),
+    /supplier_message\.send: an A2 action with an outside effect must be on the reviewed list/,
+  );
 });

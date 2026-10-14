@@ -16,6 +16,7 @@ production-proven.
 |---|---|
 | [`docs/AI-NATIVE-ARCHITECTURE.md`](./docs/AI-NATIVE-ARCHITECTURE.md) | Current executable architecture, authority map, AI control loop, role journeys, repository boundaries, and production reference path |
 | [`docs/AUTONOMOUS-OPERATING-SYSTEM.md`](./docs/AUTONOMOUS-OPERATING-SYSTEM.md) | Complete company model, workflows, agent responsibilities, human work, exceptions, and target state machine |
+| [`docs/AI-TEAM-CONTRACT.md`](./docs/AI-TEAM-CONTRACT.md) | The AI team: the face and fifteen specialists, the action catalog with classes and delegation, receipts, shared memory, watches and owner reports, orchestration, model routing, and abuse controls |
 | [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md) | Decision authority, work-package, evidence, safety, side-effect, and reconciliation contracts |
 | [`docs/CAPABILITY-MATRIX.md`](./docs/CAPABILITY-MATRIX.md) | Target-to-code gap register and implementation order |
 | [`docs/COMPLIANCE-REGISTER.md`](./docs/COMPLIANCE-REGISTER.md) | Alberta/Canada obligations, official sources, owners, evidence, and review dates |

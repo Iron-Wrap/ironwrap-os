@@ -1,0 +1,17 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "measurement_design",
+  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain measurement, hazard, and design facts to the owner, staff, or an inspector, with citations" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route visit requests, capture items, customer photo requests, option pricing, privacy requests, and bulletins to the owning specialist" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Abstain and escalate conflicts, hazards, emergencies, injection, impersonation, and suspicious documents to a named person" },
+    { "action_id": "measurement.extract", "autonomy": "A1", "purpose": "Extract measurement candidates with source, unit, basis, status, and confidence, marked for review" },
+    { "action_id": "measurement.match_report", "autonomy": "A2", "purpose": "Match an unmatched measurement report to its job on an exact key only" },
+    { "action_id": "measurement.accept_version", "autonomy": "A3", "purpose": "Propose a measurement version, with its uncertainty list, as the pricing basis for the sales reviewer" },
+    { "action_id": "property_fact.propose", "autonomy": "A1", "purpose": "Propose property and roof facts, hidden conditions, and suspected or observed hazards from evidence" },
+    { "action_id": "property_fact.confirm", "autonomy": "A3", "purpose": "Propose confirming a property or roof fact into the record for the sales reviewer" },
+    { "action_id": "design_basis.commit", "autonomy": "A3", "purpose": "Propose the issued design basis or a supply-only fabrication basis, every constraint cited" },
+    { "action_id": "design_basis.substitute", "autonomy": "A3", "purpose": "Propose a manufacturer-allowed substitution as a new design-basis revision, price delta to the estimator" }
+  ]
+}

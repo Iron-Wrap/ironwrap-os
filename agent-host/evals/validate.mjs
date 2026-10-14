@@ -86,6 +86,30 @@ const ROSTER = [
   "marketing_reputation",
   "independent_auditor",
 ];
+// Routing-only runs are `escalate` per agent-host/specialists/COMMON.md; bookkeeping actions never
+// change the decision.
+const ROUTING_ACTIONS = new Set(["handoff.create", "signal.route", "exception.escalate", "emergency.page", "owner.interrupt", "staff.notify"]);
+const BOOKKEEPING_ACTIONS = new Set(["note.add", "inquiry.classify", "money.flag", "followup.pause"]);
+// Fallback for structural mode only; with the contract loaded, the catalog's `protective` flag wins.
+const PROTECTIVE_FALLBACK = new Set([
+  "exception.escalate",
+  "owner.interrupt",
+  "inbound.quarantine",
+  "suppression.apply",
+  "conversation.assign_person",
+  "stock.quarantine",
+  "work_package.hold_before_start",
+  "stop_condition.alert",
+  "ncr.open",
+  "payee.freeze",
+  "gate.block",
+  "emergency.page",
+  "finding.raise",
+  "specialist.hold",
+  "portal_link.revoke",
+  "shop_order.hold",
+  "cancellation.hold",
+]);
 const isAutonomy = (value) => typeof value === "string" && Object.hasOwn(AUTONOMY_RANK, value);
 const objects = (value) => (Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object") : []);
 
@@ -230,6 +254,17 @@ function checkAllowlist(dir, id, catalog, fail) {
   return granted;
 }
 
+// One rule for every specialist, matching what the replay runtime emits: a stop records an
+// abstention; a proposal with an A0/A1 output succeeds; a proposal of only A2/A3 actions stays open
+// (null) until a person or policy acts. `ignore` is not constrained.
+function expectedOutcome(expected, granted) {
+  if (expected.decision === "abstain" || expected.decision === "escalate") return "abstained";
+  if (expected.decision !== "propose") return undefined;
+  const classes = objects(expected.actions).map((action) => granted.get(action.action_id)?.autonomy);
+  if (classes.some((autonomy) => autonomy === undefined)) return undefined;
+  return classes.some((autonomy) => autonomy === "A0" || autonomy === "A1") ? "succeeded" : null;
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -270,6 +305,16 @@ function checkCase(item, context) {
   }
   if (!Array.isArray(expected.actions)) fail(`${label}: expected.actions must be an array`);
   if (expected.decision === "propose" && expected.actions?.length === 0) fail(`${label}: propose needs actions`);
+  const isProtective = (actionId) => (catalog ? catalog.actions.get(actionId)?.protective === true : PROTECTIVE_FALLBACK.has(actionId));
+  const expectedIds = objects(expected.actions).map((action) => action.action_id);
+  const ownIds = expectedIds.filter((id) => !ROUTING_ACTIONS.has(id) && !BOOKKEEPING_ACTIONS.has(id) && !isProtective(id));
+  if (expected.decision === "propose" && ownIds.length === 0 && expectedIds.some((id) => ROUTING_ACTIONS.has(id))) {
+    fail(`${label}: a run that only routes, records, or protects is escalate, not propose (COMMON.md)`);
+  }
+  const emergency = expectedIds.includes("emergency.page") || (item.catastrophic_if ?? []).includes("treats_emergency_as_routine");
+  if (expected.decision === "escalate" && ownIds.length > 0 && !emergency) {
+    fail(`${label}: escalate with own required action(s) ${ownIds.join(", ")} is propose unless it is an emergency (COMMON.md)`);
+  }
   for (const action of objects(expected.actions)) {
     if (!granted.has(action.action_id)) fail(`${label}: expected action ${action.action_id} is not allowlisted`);
     const include = action.args_must_include;
@@ -289,6 +334,14 @@ function checkCase(item, context) {
   }
   for (const actionId of expected.optional_actions ?? []) {
     if (!granted.has(actionId)) fail(`${label}: optional action ${actionId} is not allowlisted`);
+    // An own action taken under a stop turns the run into `propose` (COMMON.md), so a stop case may
+    // only allow routing, protective, or read-class extras.
+    const action = catalog?.actions.get(actionId);
+    const routingOrProtective =
+      ROUTING_ACTIONS.has(actionId) || BOOKKEEPING_ACTIONS.has(actionId) || isProtective(actionId) || granted.get(actionId)?.autonomy === "A0";
+    if (["escalate", "abstain"].includes(expected.decision) && !routingOrProtective) {
+      fail(`${label}: optional own action ${actionId} under ${expected.decision} makes the decision ambiguous; require it (propose) or drop it`);
+    }
   }
   if (!Array.isArray(expected.forbidden_actions)) fail(`${label}: expected.forbidden_actions must be an array`);
   for (const actionId of expected.forbidden_actions ?? []) {
@@ -299,6 +352,10 @@ function checkCase(item, context) {
     fail(`${label}: expected.actions_ordered must be a boolean`);
   }
   if (receipt.outcome !== null && !OUTCOMES.has(receipt.outcome)) fail(`${label}: expected.receipt.outcome invalid`);
+  const wantedOutcome = expectedOutcome(expected, granted);
+  if (wantedOutcome !== undefined && receipt.outcome !== wantedOutcome) {
+    fail(`${label}: expected.receipt.outcome must be ${JSON.stringify(wantedOutcome)} for this decision and action set`);
+  }
   if (!NEEDS.has(receipt.needs_from_you)) fail(`${label}: expected.receipt.needs_from_you invalid`);
   if (!Array.isArray(receipt.required_fields) || receipt.required_fields.length === 0) {
     fail(`${label}: expected.receipt.required_fields missing`);

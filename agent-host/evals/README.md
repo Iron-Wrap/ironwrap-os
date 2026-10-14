@@ -123,8 +123,10 @@ Field rules (the validator enforces them):
 - `expected.optional_actions`: non-read actions that may appear without penalty (for example
   recording an exception). Any other non-read action not in `expected.actions` caps `actions` at
   0.5.
-- `expected.receipt.outcome` uses the contract's receipt outcome values, or `null` for a step that
-  stays open waiting on a person (for example an asks-first proposal in replay). `needs_from_you` is
+- `expected.receipt.outcome` follows one rule, matching what the replay runtime emits: `abstained`
+  for `abstain` and `escalate`; for `propose`, `succeeded` when an expected action is A0 or A1 (its
+  output was produced) and `null` when every expected action is A2 or A3 (the step stays open until
+  policy or a person acts); `ignore` is not constrained. `needs_from_you` is
   `approval`, `fact`, `decision`, or `none`. A receipt may cite the pseudo-fact `signal` for the
   signal itself; every other `fact_id` must be a case fact at its current version.
 - `expected.draft`: `null` when no draft is expected; otherwise the audience

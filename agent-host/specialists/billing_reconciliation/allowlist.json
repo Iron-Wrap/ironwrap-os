@@ -1,0 +1,30 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "billing_reconciliation",
+  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain cited money facts to a person, including what a people-only refund, credit, write-off, or filing decision needs" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a money object to another specialist: unaccepted extra work to proposal_contract, payment facts to customer_care_warranty, WCB refreshes and privacy matters to compliance" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: record a stop or money exception with its reason code, route, and urgency, and notify the named person" },
+    { "action_id": "note.add", "autonomy": "A2", "purpose": "Preserve lien and holdback facts on a job as proposed context for compliance and counsel" },
+    { "action_id": "inbound.quarantine", "autonomy": "A2", "purpose": "Protective: hold a suspicious bill, payment request, or message carrying instructions so no tool acts on it" },
+    { "action_id": "payee.freeze", "autonomy": "A2", "purpose": "Protective: freeze payments to a counterparty after any request to change its bank or remittance details" },
+    { "action_id": "followup.pause", "autonomy": "A2", "purpose": "Pause an invoice's reminder schedule for an open dispute, an emergency, or a person taking over" },
+    { "action_id": "followup.resume", "autonomy": "A2", "purpose": "Resume a paused reminder schedule when the fact behind the pause is lifted" },
+    { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a payment_reminder, invoice_cover_note, or payment_receipt from QuickBooks readback facts" },
+    { "action_id": "customer_message.send", "autonomy": "A3", "purpose": "Send a billing message only after a person approved that exact draft, in a later run" },
+    { "action_id": "supplier_message.draft", "autonomy": "A1", "purpose": "Draft a bill discrepancy, duplicate, statement, or document question to the vendor contact on file; never about bank details" },
+    { "action_id": "supplier_message.send", "autonomy": "A3", "purpose": "Send a supplier message only after a person approved that exact draft, in a later run" },
+    { "action_id": "invoice.commit_intent", "autonomy": "A3", "purpose": "Commit a deposit, progress, or final invoice intent with its tax once the contract trigger holds" },
+    { "action_id": "holdback.release", "autonomy": "A3", "purpose": "Release holdback a customer or general contractor retained from IronWrap once the release condition is cited" },
+    { "action_id": "reconciliation.resolve", "autonomy": "A3", "purpose": "Resolve a payment on an exact match" },
+    { "action_id": "supplier_bill.match", "autonomy": "A1", "purpose": "Three-way match a supplier bill to its PO line and receipt line and record the exception code" },
+    { "action_id": "supplier_bill.approve", "autonomy": "A3", "purpose": "Approve a bill with a recorded matched three-way match and a protected, unchanged payee" },
+    { "action_id": "payment_run.draft", "autonomy": "A1", "purpose": "Draft the list of approved bills due for payment with their timers; a person pays them in the bank" },
+    { "action_id": "money.flag", "autonomy": "A1", "purpose": "Flag a suspected error, duplicate, short payment, tax difference, statement difference, or margin move with both values" },
+    { "action_id": "job_cost.attribute", "autonomy": "A2", "purpose": "Attribute a bill line's cost before recoverable GST to the job its PO is bound to" },
+    { "action_id": "tax_slip.capture", "autonomy": "A1", "purpose": "Capture a tax document received in the period, such as a subcontractor's T5018 information form, as proposed values" },
+    { "action_id": "tax_snapshot.record", "autonomy": "A3", "purpose": "Record the GST snapshot for a closed period from cited tax facts" },
+    { "action_id": "filing.draft_packet", "autonomy": "A1", "purpose": "Draft a GST return or T5018 information return packet for a person to submit" }
+  ]
+}

@@ -220,6 +220,14 @@ function validateWorkflow(workflow) {
   assert.doesNotMatch(qa, /secrets\.RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN|secrets\.CLOUDFLARE_API_TOKEN/);
   assert.match(qa, /version-readback/);
   assert.match(qa, /environment-preflight[\s\S]*qa-environment-preflight\.json/);
+  const drillStart = qa.indexOf("      - name: Export and restore qa data into a separate local drill target");
+  const drill = qa.slice(drillStart, qa.indexOf("\n      - name:", drillStart + 1));
+  assert.match(drill, /ADMIN_TOKEN: \$\{\{ secrets\.RELEASE_QA_ADMIN_TOKEN \}\}/);
+  assert.match(drill, /--header "Authorization: Bearer \$ADMIN_TOKEN" "\$RELEASE_QA_BASE_URL\/admin\/status"/);
+  ordered(drill, [
+    "set -euo pipefail", "drain_deadline=", "release_qa_queue_drained pending=0 open_dead_letters=0",
+    "export_log=", "release_qa_export_starting", '"$WRANGLER_BIN" d1 export',
+  ]);
   assert.match(
     qa,
     /d1 export[\s\S]*> "\$export_log" 2>&1[\s\S]*restore-local[\s\S]*--database "\$source_database"[\s\S]*restore-local[\s\S]*--database "\$restored_database"[\s\S]*restore-readback[\s\S]*--source-target "\$source_database"[\s\S]*--restored-target "\$restored_database"[\s\S]*backup-receipt/,
@@ -236,7 +244,7 @@ function validateWorkflow(workflow) {
   );
   assert.doesNotMatch(qa, /restore-query|--persist-to|d1 execute/);
   const qaProof = qa.slice(qa.indexOf("- name: Publish redacted qa proof"));
-  assert.doesNotMatch(qaProof, /qa\.sql|qa-export\.log/);
+  assert.doesNotMatch(qaProof, /qa\.sql|qa-export\.log|qa-drain-status\.json/);
   assert.match(qa, /rollback-receipt/);
   assert.match(
     qa,
@@ -337,6 +345,20 @@ test("workflow validation rejects omitted component artifacts", async () => {
   assert.throws(() =>
     validateWorkflow(workflow.replace("--frappe-wheel", "--unbound-wheel")),
   );
+});
+
+test("workflow rejects a drill without its scoped token or drain-before-export guard", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  const start = workflow.indexOf("      - name: Export and restore qa data into a separate local drill target");
+  const before = workflow.slice(0, start);
+  const drillAndAfter = workflow.slice(start);
+  assert.throws(() => validateWorkflow(before + drillAndAfter.replace(
+    "          ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}\n", "",
+  )));
+  assert.throws(() => validateWorkflow(before + drillAndAfter.replace(
+    '          echo "release_qa_export_starting"\n',
+    '          echo "release_qa_export_starting"\n          echo "release_qa_queue_drained pending=0 open_dead_letters=0"\n',
+  ).replace('                echo "release_qa_queue_drained pending=0 open_dead_letters=0"\n', "")));
 });
 
 test("workflow rejects candidate toolchain and cross-environment provider credentials", async () => {

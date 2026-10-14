@@ -4,9 +4,7 @@
 #                  -f deploy/local/docker-compose.amd64.yml --profile frappe up -d
 #
 # The base file pins linux/arm64 (the development topology is arm64-native);
-# this override exists so an x86_64 stand never edits the base file in place -
-# the hand-edit recorded as a deviation in ironwrap-prod's .stand-revision
-# retires with it. converge.sh applies this file automatically on x86_64.
+# this override exists so an x86_64 host never edits the base file in place.
 services:
   mariadb:
     platform: linux/amd64

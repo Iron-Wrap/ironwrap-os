@@ -11,6 +11,11 @@ The owned store is the initial durable write. Instant acknowledgement follows ow
 acceptance; bridge pushes are separate retried jobs. An unavailable bridge must not lose or delay
 owned intake, and intake success must not be reported as bridge-delivery proof.
 
+Failed primary lead, measurement, and Newo deliveries back off by 10, 20, 40, 80, then
+120 seconds using Cloudflare transport attempts. The five-retry limits and DLQ behavior
+remain unchanged. See [Stuck Envelopes](../docs/OPERATIONS-RUNBOOK.md#stuck-envelopes)
+for durable-counter differences, sweep recovery, and the measurement lease caveat.
+
 ## Flow
 
 ```
@@ -25,7 +30,7 @@ inbound (website/phone/gbp/ad/referral/manual)
         ▼  queue consumer (idempotent, auto-retried)
      push to JobNimbus
      optional Frappe compatibility projection → status=pushed
-        │ fail ×5 → DLQ → dead_letter table + owner email
+        │ initial delivery + 5 retries exhausted → DLQ → dead_letter table + owner email
         ▼
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
   cron 0 14 → reconcile: independent source counts vs landed; daily digest = heartbeat

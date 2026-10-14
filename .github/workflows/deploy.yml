@@ -59,7 +59,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -123,7 +123,7 @@ jobs:
             --qa "$RUNNER_TEMP/qa-config.json" --output "$RUNNER_TEMP/context.json"
 
       - name: Publish admission context (no secrets)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iro41-admission-${{ github.event.workflow_run.head_sha }}
           path: |
@@ -146,11 +146,11 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: iro41-admission-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/admission
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -215,7 +215,7 @@ jobs:
 
       - name: Upload the artifact exactly once
         id: upload_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iro41-release-artifact-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/ironwrap-release-artifact.tar
@@ -252,7 +252,7 @@ jobs:
           cp "$RUNNER_TEMP/artifact-components.json" "$RUNNER_TEMP/built-context/artifact-components.json"
 
       - name: Publish context bound to the single artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iro41-built-context-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/built-context
@@ -278,15 +278,15 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: iro41-release-artifact-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/artifact-download
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: iro41-built-context-${{ github.event.workflow_run.head_sha }}
           path: ${{ runner.temp }}/context-download
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -445,7 +445,18 @@ jobs:
           BUS_BASE_URL: ${{ env.RELEASE_QA_BASE_URL }}
           INGEST_TOKEN: ${{ secrets.RELEASE_QA_INGEST_TOKEN }}
           ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}
-        run: node "$(dirname "$RELEASE_ENFORCER")/launch-proof.mjs" --execute > "$RUNNER_TEMP/qa-smoke-evidence.json"
+        run: |
+          set -euo pipefail
+          smoke_status=0
+          node "$(dirname "$RELEASE_ENFORCER")/launch-proof.mjs" --execute > "$RUNNER_TEMP/qa-smoke-evidence.json" 2> "$RUNNER_TEMP/qa-smoke-raw.log" || smoke_status=$?
+          if [[ "$smoke_status" -ne 0 ]]; then
+            if ! env -i PATH="$PATH" node "$GITHUB_WORKSPACE/tools/qa-smoke-diagnostic.mjs" initial "$smoke_status" "$RUNNER_TEMP/qa-smoke-raw.log" > "$RUNNER_TEMP/qa-smoke-diagnostic.json"; then
+              printf '{"proof":"ironwrap-qa-smoke-failure-v1","phase":"initial","exit_status":%s,"diagnostic":"unavailable"}\n' "$smoke_status" > "$RUNNER_TEMP/qa-smoke-diagnostic.json"
+            fi
+            cat "$RUNNER_TEMP/qa-smoke-diagnostic.json" >&2
+            exit "$smoke_status"
+          fi
+          cat "$RUNNER_TEMP/qa-smoke-raw.log" >&2
 
       - name: Re-read and bind the post-smoke staged revision
         env:
@@ -466,9 +477,51 @@ jobs:
       - name: Export and restore qa data into a separate local drill target
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.RELEASE_QA_CLOUDFLARE_API_TOKEN }}
+          ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
+          drain_started=$(date +%s)
+          drain_deadline=$((drain_started + 300))
+          drain_response="$RUNNER_TEMP/qa-drain-status.json"
+          while true; do
+            drain_now=$(date +%s)
+            drain_remaining=$((drain_deadline - drain_now))
+            if (( drain_remaining <= 0 )); then
+              echo "release_qa_queue_not_drained" >&2
+              exit 1
+            fi
+            drain_request_limit=$((drain_remaining < 10 ? drain_remaining : 10))
+            drain_connect_limit=$((drain_remaining < 3 ? drain_remaining : 3))
+            drain_counts="unavailable"
+            if drain_http=$(curl --silent --show-error --connect-timeout "$drain_connect_limit" \
+              --max-time "$drain_request_limit" --output "$drain_response" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $ADMIN_TOKEN" "$RELEASE_QA_BASE_URL/admin/status") \
+              && [[ "$drain_http" == "200" ]]; then
+              drain_counts=$(jq -rs '
+                if length == 1 and (.[0].counts.pending | type) == "number"
+                  and (.[0].counts.open_dead_letters | type) == "number"
+                then "pending=\(.[0].counts.pending) open_dead_letters=\(.[0].counts.open_dead_letters)"
+                else "unavailable" end
+              ' "$drain_response" 2>/dev/null) || drain_counts="unavailable"
+              drain_now=$(date +%s)
+              if (( drain_now < drain_deadline )) \
+                && jq -es 'length == 1 and .[0].counts.pending == 0 and .[0].counts.open_dead_letters == 0' "$drain_response" >/dev/null 2>&1; then
+                echo "release_qa_queue_drained pending=0 open_dead_letters=0"
+                break
+              fi
+            fi
+            drain_now=$(date +%s)
+            echo "release_qa_queue_wait $drain_counts elapsed=$((drain_now - drain_started))"
+            drain_remaining=$((drain_deadline - drain_now))
+            if (( drain_remaining <= 0 )); then
+              echo "release_qa_queue_not_drained" >&2
+              exit 1
+            fi
+            drain_sleep=$((drain_remaining < 5 ? drain_remaining : 5))
+            sleep "$drain_sleep"
+          done
           export_log="$RUNNER_TEMP/qa-export.log"
+          echo "release_qa_export_starting"
           if ! "$WRANGLER_BIN" d1 export ironwrap-bus-qa \
             --config workers-bus/wrangler.jsonc --env qa --remote --output "$RUNNER_TEMP/qa.sql" \
             > "$export_log" 2>&1
@@ -520,7 +573,16 @@ jobs:
           curl --silent --show-error --fail --connect-timeout 10 --max-time 20 "$BUS_BASE_URL/ready?scope=core" > "$RUNNER_TEMP/qa-rollback-ready.json"
           node "$RELEASE_ENFORCER" readiness \
             --health "$RUNNER_TEMP/qa-rollback-health.json" --ready "$RUNNER_TEMP/qa-rollback-ready.json"
-          node "$(dirname "$RELEASE_ENFORCER")/launch-proof.mjs" --execute > "$RUNNER_TEMP/qa-rollback-smoke-evidence.json"
+          smoke_status=0
+          node "$(dirname "$RELEASE_ENFORCER")/launch-proof.mjs" --execute > "$RUNNER_TEMP/qa-rollback-smoke-evidence.json" 2> "$RUNNER_TEMP/qa-rollback-smoke-raw.log" || smoke_status=$?
+          if [[ "$smoke_status" -ne 0 ]]; then
+            if ! env -i PATH="$PATH" node "$GITHUB_WORKSPACE/tools/qa-smoke-diagnostic.mjs" rollback "$smoke_status" "$RUNNER_TEMP/qa-rollback-smoke-raw.log" > "$RUNNER_TEMP/qa-rollback-smoke-diagnostic.json"; then
+              printf '{"proof":"ironwrap-qa-smoke-failure-v1","phase":"rollback","exit_status":%s,"diagnostic":"unavailable"}\n' "$smoke_status" > "$RUNNER_TEMP/qa-rollback-smoke-diagnostic.json"
+            fi
+            cat "$RUNNER_TEMP/qa-rollback-smoke-diagnostic.json" >&2
+            exit "$smoke_status"
+          fi
+          cat "$RUNNER_TEMP/qa-rollback-smoke-raw.log" >&2
           "$WRANGLER_BIN" versions deploy --config workers-bus/wrangler.jsonc --env qa --version-id "$(cat "$RUNNER_TEMP/qa-version.id")" --yes
           "$WRANGLER_BIN" deployments list --config workers-bus/wrangler.jsonc --env qa --json > "$RUNNER_TEMP/qa-repromoted.json"
           node "$RELEASE_ENFORCER" deployment-revision \
@@ -539,7 +601,7 @@ jobs:
         # archive holds nine flat files plus context-download/context.json -- exactly the layout
         # the seven reads in deploy-production.yml expect. Unlike the built-context upload above,
         # this rooting was never ambiguous.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iro41-qa-proof-${{ github.event.workflow_run.head_sha }}
           path: |
@@ -581,9 +643,23 @@ jobs:
 
       - name: Publish isolated qa failure cleanup receipt
         if: ${{ always() && steps.cleanup_qa.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iro41-qa-cleanup-${{ github.event.workflow_run.head_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/qa-failure-cleanup-receipt.json
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish isolated qa smoke failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: iro41-qa-smoke-failure-${{ github.event.workflow_run.head_sha }}-${{ github.run_attempt }}
+          # qa-active.id records the candidate revision observed before smoke and cleanup.
+          path: |
+            ${{ runner.temp }}/qa-smoke-diagnostic.json
+            ${{ runner.temp }}/qa-rollback-smoke-diagnostic.json
+            ${{ runner.temp }}/qa.json
+            ${{ runner.temp }}/qa-active.id
+          if-no-files-found: ignore
           retention-days: 30

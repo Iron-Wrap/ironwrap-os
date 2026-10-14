@@ -271,6 +271,22 @@ If candidates have different causes, replay them individually.
 
 ## Stuck Envelopes
 
+Failed primary-queue deliveries for leads, measurements, and Newo events use exponential
+back-off in production and qa: `min(120, 10 * 2 ** (msg.attempts - 1))` seconds.
+Cloudflare transport attempts start at 1; failures of deliveries 1–5 schedule delays of
+10, 20, 40, 80, and 120 seconds (cumulative 10, 30, 70, 150, and 270 seconds).
+The configured five retries still allow six total deliveries. DLQ consumers retain their
+existing immediate retry behavior and limits. See the Cloudflare
+[Message API](https://developers.cloudflare.com/queues/configuration/javascript-apis/#message)
+and [retry delays](https://developers.cloudflare.com/queues/configuration/batching-retries/).
+
+Transport `msg.attempts` is independent of durable `envelopes.attempts`: a D1 export lock can
+throw before the durable counter increments. Missing or invalid transport attempt values
+use the first delay. The schedule excludes processing time and provider scheduling latency;
+measurement leases remain five minutes, so a late delivery can still become the existing
+no-op with scheduled recovery. This change does not extend leases or guarantee DLQ delivery
+for every measurement failure.
+
 The five-minute retry sweep re-enqueues envelopes left in `pending_jn_push` longer than
 `STUCK_THRESHOLD_MIN` (15 minutes by default). Repeatedly stuck envelopes indicate a downstream
 failure, not a missing queue message. Inspect the envelope and structured logs, repair the target,

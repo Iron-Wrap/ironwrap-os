@@ -256,18 +256,24 @@
     },
     "CFG_ERPNEXT": {
       // Frappe compatibility projection: OFF in production (owner decision, 2026-09-27).
-      // This supersedes the 2026-08-19 decision that switched it on against
-      // ironwrap.mindburn.org. Frappe is a temporary projection with no operating authority and
-      // is out of scope for the release train, so production readiness and the release smoke do
-      // not require Frappe credentials. With the flag on, /ready's frappe_configuration and
-      // rail_credential_isolation checks require the broad ERPNEXT pair plus the per-rail
-      // fleet-capture and work-package pairs, and launch-proof fails on any red check.
+      // This supersedes the 2026-08-19 decision that switched it on. Frappe is a temporary
+      // projection with no operating authority and is out of scope for the release train, so
+      // production readiness and the release smoke do not require Frappe credentials. With the
+      // flag on, /ready's frappe_configuration and rail_credential_isolation checks require the
+      // broad ERPNEXT pair plus the per-rail fleet-capture and work-package pairs, and
+      // launch-proof fails on any red check.
       //
-      // ERPNEXT_BASE_URL stays: office BFF reads (frappe-read.ts) use it independently of this
-      // flag. ironwrap.mindburn.org is the Cloudflare Tunnel host of the leftover Frappe site;
-      // move it to os.ironwrapexteriors.com once IronWrap holds DNS authority for that zone.
+      // ERPNEXT_BASE_URL is empty: the Frappe host it pointed at, on ironwrap-prod, is
+      // decommissioned (IRO-280). While ERPNEXT_ENABLED and
+      // FACET_DESIGN_FRAPPE_PROJECTION_ENABLED are "false", the guards in erpnext.ts,
+      // operations.ts and facet-design-frappe-projection.ts return before they read the URL,
+      // and the frappe-read.ts list helpers have no caller in workers-bus/src. The one reader
+      // that ignores the flags is the projection verdict: /ready?scope=projection
+      // (projection_rails_ok) needs a non-empty URL and the API key pair, so it answers 503
+      // until a Frappe host exists. The default, core, office and ops scopes do not use it.
+      // Set the URL together with ERPNEXT_ENABLED when a Frappe host exists (IRO-240).
       "ERPNEXT_ENABLED": "false",
-      "ERPNEXT_BASE_URL": "https://ironwrap.mindburn.org",
+      "ERPNEXT_BASE_URL": "",
       "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
       // Out of scope for the lead path: only the public-estimator consent mirror requires it,
       // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".

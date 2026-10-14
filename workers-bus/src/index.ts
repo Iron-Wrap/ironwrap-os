@@ -223,6 +223,17 @@ const safeJson = (s: string): Record<string, unknown> => {
   }
 };
 
+const QUEUE_RETRY_BASE_SECONDS = 10;
+const QUEUE_RETRY_MAX_SECONDS = 120;
+
+function queueRetryDelay(attempts: number): number {
+  const attempt = Number.isInteger(attempts) && attempts > 0 ? attempts : 1;
+  return Math.min(
+    QUEUE_RETRY_MAX_SECONDS,
+    QUEUE_RETRY_BASE_SECONDS * 2 ** (attempt - 1),
+  );
+}
+
 export default {
   async fetch(
     req: Request,
@@ -299,7 +310,9 @@ export default {
               : msg.body.envelope_id,
           error: String(err),
         });
-        msg.retry(); // exhausting retries on the main queue routes to the DLQ (wrangler.jsonc)
+        // Exhausting primary retries still routes to the configured DLQ.
+        if (isDlq) msg.retry();
+        else msg.retry({ delaySeconds: queueRetryDelay(msg.attempts) });
       }
     }
   },

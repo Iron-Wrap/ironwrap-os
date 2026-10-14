@@ -341,6 +341,14 @@ and accepts cleanup only after exact active-deployment readback; that cleanup re
 successful compatibility drill. A production deploy that returns failure after changing traffic is
 also treated as attempted: recovery forces the captured previous version and trusts only readback.
 
+If authenticated qa smoke fails, Deploy publishes `iro41-qa-smoke-failure-<sha>-<attempt>`.
+Its diagnostic JSON names the phase, original exit status, and only the completed launch-proof
+step names and HTTP statuses; the candidate revision readbacks are kept separately in the same
+artifact. The diagnostic parser runs without inherited QA token variables. Raw stderr stays on
+the temporary runner and is never uploaded. A failed rollback smoke stops before candidate
+re-promotion, and the failure cleanup must prove the previous revision.
+This diagnostic artifact explains a failure; it never satisfies the successful qa proof gate.
+
 The release builds one deterministic aggregate containing the Worker bundle, PWA assets, and the
 leftover Frappe wheel. It records each component digest and uploads the aggregate once. Wrangler uploads
 the same bytes separately to the distinct qa and production Worker services; their provider
@@ -350,6 +358,18 @@ revision identity, `/health`, `/ready?scope=core`, authenticated affected-workfl
 explicit nonempty export plus structured `d1 execute --json` schema/row-count/sentinel manifest
 restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
 against the migrated schema with health/readiness/smoke proof, but binds none of it into a permit.
+Before the qa drill's D1 export, the restore step authenticates `/admin/status` using
+`RELEASE_QA_ADMIN_TOKEN` and waits up to 300 seconds for numeric zeros in both
+`counts.pending` and `counts.open_dead_letters`. It polls every five seconds with connect/total
+request limits of 3/10 seconds, capped by the remaining deadline. Network or HTTP errors,
+malformed JSON, and missing or nonnumeric counts cannot authorize export. Timeout fails with
+`release_qa_queue_not_drained` and invokes the existing post-cutover cleanup. A successful wait
+logs `release_qa_queue_drained pending=0 open_dead_letters=0` before
+`release_qa_export_starting`; archive the executed log markers in that order after merge.
+Only counts and elapsed time are logged; the response stays in `$RUNNER_TEMP` outside published proof.
+This gate covers durable envelope/open-dead-letter state, not measurement/Newo queue depths,
+in-flight acknowledgements, or new arrivals. Keep isolated qa quiet during the drain/export interval;
+retry back-off protects against residual D1 contention. Existing smoke and rollback assertions remain strict.
 Only then (IRO-264) is the short-lived permit assembled and consumed once through D1; the exact
 admitted squash commit is read back as the tip
 of `main` before production migrations or traffic promotion. Production promotes the pre-uploaded Worker/PWA

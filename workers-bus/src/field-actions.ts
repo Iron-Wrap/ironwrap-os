@@ -1299,7 +1299,8 @@ export interface JobEvidenceD1Query {
  * is why a completed job could show no proof at all. `field_actions.job_id` outlives all of them.
  *
  * Same trust predicates as the live read: verified, manifested, stored. Newest first, because a
- * history is read backwards, and one row past the limit so the caller can say whether there is more
+ * history is read backwards. Page by capture time and evidence ID, matching the displayed proof;
+ * upload time can be much later for offline evidence. Read one row past the limit to report more
  * rather than inferring it from a full page.
  */
 export async function listJobEvidenceFromD1(
@@ -1311,7 +1312,8 @@ export async function listJobEvidenceFromD1(
     result = await env.DB.prepare(
       `${FIELD_EVIDENCE_SELECT}
           AND a.job_id = ?
-        ORDER BY a.created_at DESC, a.device_action_id DESC, m.attachment_id DESC
+        ORDER BY julianday(COALESCE(a.capture_completed_at, a.created_at)) DESC,
+                 m.evidence_id DESC
         LIMIT ? OFFSET ?`,
     )
       .bind(input.tenantId, input.jobId, input.limit + 1, input.offset)

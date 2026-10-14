@@ -8,6 +8,7 @@ import {
   documentGenerationResponseSchema,
   entityDocumentsResponseSchema,
   type EntityDocumentsModel,
+  type DocumentGenerationResponse,
 } from "./document-contracts";
 
 /**
@@ -98,4 +99,44 @@ export function generateEntityDocument(
     },
     schema: documentGenerationResponseSchema,
   });
+}
+
+/** Latest receipt for a known request. Reading never retries the generation effect. */
+export async function loadDocumentGeneration(
+  idempotencyKey: string,
+): Promise<DocumentGenerationResponse | null> {
+  try {
+    return await apiRequest({
+      path: DOCUMENT_GENERATIONS_ROUTE,
+      idempotencyKey,
+      schema: documentGenerationResponseSchema,
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function loadGeneratedDocument(
+  receiptId: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const response = await fetch(
+    `${DOCUMENT_GENERATIONS_ROUTE}/${encodeURIComponent(receiptId)}/document`,
+    {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
+    },
+  );
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError({
+      status: response.status,
+      code: detail.error,
+      message: "The document could not be opened.",
+    });
+  }
+  // The Worker verifies the exact bytes and enforces the 8 MiB retrieval bound.
+  return response.text();
 }

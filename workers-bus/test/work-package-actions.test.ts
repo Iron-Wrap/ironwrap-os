@@ -917,6 +917,124 @@ test("work-package action writes immutable raw evidence before one native comman
   });
 });
 
+test("a stop without typed words preserves the attempt and records that no reason was provided", async () => {
+  const raw = {
+    device_action_id: "stop-no-reason-123",
+    payload: {
+      work_package_id: "work_package_a",
+      work_package_version: 1,
+      blocker_reason: "",
+    },
+  };
+  const request = new Request(
+    "https://app.example.com/api/v1/jobs/JOB-A/work-package/stop-work",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-device-action-id": raw.device_action_id,
+        "idempotency-key": raw.device_action_id,
+      },
+      body: JSON.stringify(raw),
+    },
+  );
+  const parsed = await parseWorkPackageActionRequest(
+    request,
+    "JOB-A",
+    "ASSIGN-A",
+    "stop_work",
+  );
+  assert.equal(parsed.payload.blocker_reason, "");
+
+  const { store, objects, native, dependency } = dependencies();
+  const first = await processWorkPackageAction(parsed, auth(), dependency);
+  assert.deepEqual(
+    await processWorkPackageAction(parsed, auth(), dependency),
+    first,
+  );
+  assert.equal(native.calls.length, 1);
+  assert.equal(native.calls[0]?.blockerReason, null);
+  assert.equal(store.completed, 1);
+  assert.equal(objects.calls.length, 1);
+  const manifest = objects.bodies.get(objects.calls[0]!);
+  assert.ok(manifest);
+  assert.equal(JSON.parse(manifest).payload.blocker_reason, "");
+
+  await assert.rejects(
+    processWorkPackageAction(
+      {
+        ...parsed,
+        payload: { ...parsed.payload, blocker_reason: "Ice on the roof" },
+      },
+      auth(),
+      dependency,
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "idempotency_conflict",
+  );
+});
+
+test("a stop accepts an absent, null, or longer explanation without changing its words", async () => {
+  for (const [suffix, reason] of [
+    ["absent", undefined],
+    ["null", null],
+    ["long", "A".repeat(1_201)],
+  ] as const) {
+    const deviceActionId = `stop-reason-${suffix}-123`;
+    const payload = {
+      work_package_id: "work_package_a",
+      work_package_version: 1,
+      ...(reason === undefined ? {} : { blocker_reason: reason }),
+    };
+    const request = new Request(
+      "https://app.example.com/api/v1/jobs/JOB-A/work-package/stop-work",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-device-action-id": deviceActionId,
+          "idempotency-key": deviceActionId,
+        },
+        body: JSON.stringify({ device_action_id: deviceActionId, payload }),
+      },
+    );
+    const parsed = await parseWorkPackageActionRequest(request, "JOB-A", "ASSIGN-A", "stop_work");
+    assert.deepEqual(parsed.payload, payload);
+    const { objects, native, dependency } = dependencies();
+    await processWorkPackageAction(parsed, auth(), dependency);
+    assert.equal(native.calls[0]?.blockerReason, typeof reason === "string" ? reason : null);
+    assert.deepEqual(JSON.parse(objects.bodies.get(objects.calls[0]!)!).payload, payload);
+  }
+});
+
+test("a stop refuses an overlong explanation before any command is written", async () => {
+  const deviceActionId = "stop-overlong-123";
+  const request = new Request(
+    "https://app.example.com/api/v1/jobs/JOB-A/work-package/stop-work",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-device-action-id": deviceActionId,
+        "idempotency-key": deviceActionId,
+      },
+      body: JSON.stringify({
+        device_action_id: deviceActionId,
+        payload: {
+          work_package_id: "work_package_a",
+          work_package_version: 1,
+          blocker_reason: "A".repeat(4_001),
+        },
+      }),
+    },
+  );
+  await assert.rejects(
+    parseWorkPackageActionRequest(request, "JOB-A", "ASSIGN-A", "stop_work"),
+    (error: unknown) => error instanceof FieldActionError && error.status === 400,
+  );
+});
+
 test("production completion action uses the bounded native command and replays", async () => {
   const { store, objects, native, dependency } = dependencies();
   const first = await processWorkPackageAction(

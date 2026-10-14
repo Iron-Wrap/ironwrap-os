@@ -956,6 +956,37 @@ describe("offline outbox", () => {
     ).rejects.toThrow("Only field check-ins can include attachments.");
   });
 
+  it("keeps a Stop Work attempt without a reason and preserves a longer reason", async () => {
+    for (const [suffix, extra] of [
+      ["absent", {}],
+      ["null", { blocker_reason: null }],
+      ["long", { blocker_reason: "A".repeat(1_201) }],
+    ] as const) {
+      const payload = { work_package_id: "WP-1", work_package_version: 1, ...extra };
+      const saved = await saveOutboxAction({
+        ...principal,
+        deviceActionId: `stop-${suffix}-123`,
+        kind: "work_package_stop",
+        endpoint: "/api/v1/jobs/JOB-A/work-package/stop-work",
+        payload,
+      });
+      expect(saved.payload).toEqual(payload);
+    }
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        deviceActionId: "stop-too-long-123",
+        kind: "work_package_stop",
+        endpoint: "/api/v1/jobs/JOB-A/work-package/stop-work",
+        payload: {
+          work_package_id: "WP-1",
+          work_package_version: 1,
+          blocker_reason: "A".repeat(4_001),
+        },
+      }),
+    ).rejects.toThrow("Stop Work reason is too long");
+  });
+
   it("accepts a configured-field value only on the governed record-value route", async () => {
     const value = {
       field_definition_revision_id: "rev_permit_number_1",

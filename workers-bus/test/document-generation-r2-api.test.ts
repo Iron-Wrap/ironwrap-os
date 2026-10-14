@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { handleAppApi, handleAuthenticatedRoute } from "../src/app-api.ts";
 import {
   auth,
   OTHER_TENANT,
@@ -43,6 +43,8 @@ class MemoryR2 {
     const value = this.objects.get(key);
     if (!value) return null;
     return {
+      size: new TextEncoder().encode(value.body).byteLength,
+      body: new Blob([value.body]).stream(),
       text: async () => value.body,
       httpMetadata: { contentType: value.contentType },
     };
@@ -741,6 +743,173 @@ test("a receipt whose write never succeeded has no document to read back", async
         "document_generation_not_stored",
       ].includes(read.body.error),
     );
+  } finally {
+    harness.db.close();
+  }
+});
+
+test("request recovery reads the latest reconciliation without executing another write", async () => {
+  const { harness, bucket } = runtime("after_put");
+  try {
+    const config = await seedDocumentConfiguration(harness, "recover-0001");
+    const key = "document-request-recover-0001";
+    const initial = await call(harness, "POST", GENERATIONS, {
+      idempotency: key,
+      body: generationBody(config),
+    });
+    assert.equal(initial.status, 202);
+    const pending = await call(harness, "GET", GENERATIONS, {
+      idempotency: key,
+    });
+    assert.equal(pending.body.outcome, "unknown");
+    bucket.headUnavailable = false;
+    const reconciled = await call(
+      harness,
+      "POST",
+      `${GENERATIONS}/${encodeURIComponent(initial.body.generation.generation_attempt_id)}/reconcile`,
+      { idempotency: "document-recover-reconcile-0001", body: {} },
+    );
+    assert.equal(reconciled.status, 200);
+    const recovered = await call(harness, "GET", GENERATIONS, {
+      idempotency: key,
+    });
+    assert.equal(recovered.body.outcome, "succeeded");
+    assert.equal(
+      recovered.body.generation.receipt_id,
+      reconciled.body.generation.receipt_id,
+    );
+    assert.equal(bucket.puts, 1);
+    assert.equal(
+      (
+        await call(harness, "GET", GENERATIONS, {
+          idempotency: key,
+          tenant: OTHER_TENANT,
+        })
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await call(harness, "GET", GENERATIONS, {
+          idempotency: key,
+          who: "ops",
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await call(harness, "GET", GENERATIONS, {
+          idempotency: "document-request-absent-0001",
+        })
+      ).status,
+      404,
+    );
+    assert.equal((await call(harness, "GET", GENERATIONS)).status, 400);
+  } finally {
+    harness.db.close();
+  }
+});
+
+test("document retrieval bounds declared and streamed bytes and handles interrupted reads", async () => {
+  const { harness, bucket } = runtime();
+  try {
+    const config = await seedDocumentConfiguration(harness, "bounded-0001");
+    const generated = await call(harness, "POST", GENERATIONS, {
+      idempotency: "document-bounded-0001",
+      body: generationBody(config),
+    });
+    const path = `${GENERATIONS}/${encodeURIComponent(generated.body.generation.receipt_id)}/document`;
+    const originalGet = bucket.get.bind(bucket);
+    let cancelled = false;
+    bucket.get = async () =>
+      ({
+        size: 8 * 1024 * 1024 + 1,
+        body: new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      }) as never;
+    assert.equal((await callRaw(harness, path)).status, 413);
+    assert.equal(cancelled, true);
+    bucket.get = async () =>
+      ({
+        size: 1,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(2));
+          },
+        }),
+      }) as never;
+    assert.equal((await callRaw(harness, path)).status, 413);
+    bucket.get = async () =>
+      ({
+        size: 10,
+        body: new ReadableStream({
+          start(controller) {
+            controller.error(new Error("connection lost"));
+          },
+        }),
+      }) as never;
+    assert.equal((await callRaw(harness, path)).status, 503);
+    bucket.get = originalGet;
+    const download = await callRaw(harness, `${path}?download=1`);
+    assert.equal(download.status, 200);
+    assert.match(
+      download.headers.get("content-disposition") ?? "",
+      /^attachment;/,
+    );
+    assert.match(
+      download.headers.get("content-security-policy") ?? "",
+      /sandbox;/,
+    );
+    assert.equal(download.headers.get("x-content-type-options"), "nosniff");
+  } finally {
+    harness.db.close();
+  }
+});
+
+test("the raw file and request read reject a missing browser session before storage access", async () => {
+  const { harness, bucket } = runtime();
+  try {
+    Object.assign(harness.env, {
+      APP_BFF_ENABLED: "true",
+      APP_TENANT_NAME: "Synthetic IronWrap",
+      APP_TENANT_BRAND: "IronWrap",
+      APP_LOCALE: "en-CA",
+      APP_TIME_ZONE: "America/Edmonton",
+      APP_CURRENCY: "CAD",
+      APP_PUBLIC_ORIGIN: "http://localhost:7100",
+      APP_ALLOWED_ORIGINS: "http://localhost:7100",
+      APP_ALLOW_INSECURE_LOCAL: "true",
+      APP_AUTH_PEPPER:
+        "synthetic-local-auth-pepper-at-least-thirty-two-characters",
+    });
+    let reads = 0;
+    bucket.get = async () => {
+      reads += 1;
+      throw new Error("must not reach R2");
+    };
+    for (const path of [
+      GENERATIONS,
+      `${GENERATIONS}/docreceipt:unknown:1/document`,
+    ]) {
+      const response = await handleAppApi(
+        new Request(`http://localhost:7100${path}`, {
+          headers: { "idempotency-key": "document-no-session-0001" },
+        }),
+        harness.env,
+        { waitUntil() {} } as never,
+      );
+      assert.equal(response.status, 401);
+      assert.equal(
+        ((await response.json()) as { error: string }).error,
+        "unauthorized",
+      );
+      assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+    }
+    assert.equal(reads, 0);
   } finally {
     harness.db.close();
   }

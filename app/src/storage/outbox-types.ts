@@ -21,6 +21,9 @@ export const outboxActionKinds = [
   "fleet_pre_trip_inspection",
   "fleet_post_trip_inspection",
   "fleet_defect_report",
+  // A vehicle collision, reported from the cab with no signal. The route takes its own body and
+  // keys it by the client's collision_id, so one saved report replays to one record.
+  "fleet_collision_report",
   // An administrator-defined job-card field, filled in on a roof with no signal. The value is a
   // governed append-only command, so replaying it is safe: the server keys it by idempotency and
   // refuses it outright if the card moved on underneath.

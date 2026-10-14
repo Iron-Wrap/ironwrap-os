@@ -507,6 +507,7 @@ function env(
   nativeOverrides: Partial<
     Record<NativeOperationsSource, Array<Record<string, unknown>>>
   > = {},
+  companyProfileRow: Record<string, unknown> | null = null,
 ): AppEnv {
   const nativeRows: Record<
     NativeOperationsSource,
@@ -631,7 +632,14 @@ function env(
         return {
           bind(...ids: unknown[]) {
             return {
-              ...(sql.includes("FROM authority_record_readbacks")
+              ...(sql.includes("FROM tenant_company_profiles")
+                ? {
+                    first: async () =>
+                      companyProfileRow?.tenant_id === ids[0]
+                        ? companyProfileRow
+                        : null,
+                  }
+                : sql.includes("FROM authority_record_readbacks")
                 ? {
                     first: async () =>
                       authorityReadbacks.find(
@@ -1019,6 +1027,39 @@ function env(
       },
     },
   } as never;
+}
+
+function savedCompanyProfile(
+  overrides: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    tenant_id: "ironwrap",
+    profile_version: 1,
+    company_name: "IronWrap Exteriors",
+    brand_name: "IronWrap",
+    service_area: "Calgary",
+    phone: "+1 (780) 555-0134",
+    email: "office@ironwrap.example",
+    website: "",
+    address_line1: "",
+    address_line2: "",
+    city: "",
+    region: "",
+    postal_code: "",
+    country: "Canada",
+    brand_labels_json: "{}",
+    time_zone: "America/Edmonton",
+    currency: "CAD",
+    week_start: "monday",
+    logo_ref: null,
+    logo_content_type: null,
+    logo_byte_size: null,
+    logo_version: null,
+    logo_updated_at: null,
+    updated_at: MODIFIED,
+    updated_by_user_id: "appu_owner",
+    ...overrides,
+  };
 }
 
 function authorityReadbacksIndex(
@@ -1824,13 +1865,17 @@ test("typed Shop Order packet is served through the universal BFF route without 
       new Request(
         "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
       ),
-      env({
-        typedAssignments: [nativeTypedAssignment()],
-        workPackages: [shopPackage],
-      }),
+      env(
+        {
+          typedAssignments: [nativeTypedAssignment()],
+          workPackages: [shopPackage],
+        },
+        savedCompanyProfile(),
+      ),
       auth("field", "crew@example.com"),
     );
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
     const body = (await response.json()) as {
       version: number;
       source_updated_at: string;
@@ -1855,6 +1900,10 @@ test("typed Shop Order packet is served through the universal BFF route without 
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
     );
     assert.deepEqual(body.stale_fields, []);
+    assert.deepEqual((body as typeof body & { office_contact: unknown }).office_contact, {
+      phone: "+17805550134",
+      email: "office@ironwrap.example",
+    });
     assert.equal(body.permissions.includes("jobs:read:assigned"), true);
     assert.deepEqual(body.work_object, {
       workObjectType: "Shop Order",
@@ -1876,6 +1925,68 @@ test("typed Shop Order packet is served through the universal BFF route without 
       false,
       "typed assignment authority must not consult Frappe",
     );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("crew job keeps customer and public office contact separate", async () => {
+  const mock = installFrappeMock({});
+  try {
+    const crew = auth("field", "crew@example.com");
+    const saved = await buildJobReadModel(
+      env({}, savedCompanyProfile()),
+      crew,
+      "JOB-A",
+    );
+    assert.deepEqual(saved?.office_contact, {
+      phone: "+17805550134",
+      email: "office@ironwrap.example",
+    });
+    assert.equal(saved?.packet.contact?.phone, "+14035550000");
+    const jobResponse = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/jobs/JOB-A"),
+      env({}, savedCompanyProfile()),
+      crew,
+    );
+    assert.equal(jobResponse.status, 200);
+    assert.equal(jobResponse.headers.get("cache-control"), "private, no-store");
+
+    const unsaved = await buildJobReadModel(env(), crew, "JOB-A");
+    assert.equal(unsaved?.office_contact, null);
+    assert.equal(unsaved?.stale_fields.includes("office_contact.unavailable"), false);
+
+    const base = env();
+    const profileUnavailable = {
+      ...base,
+      DB: {
+        ...base.DB,
+        prepare(sql: string) {
+          if (sql.includes("FROM tenant_company_profiles")) {
+            throw new Error("company_profile_unavailable");
+          }
+          return base.DB.prepare(sql);
+        },
+      },
+    } as AppEnv;
+    const degraded = await buildJobReadModel(profileUnavailable, crew, "JOB-A");
+    assert.equal(degraded?.office_contact, null);
+    assert.equal(degraded?.stale_fields.includes("office_contact.unavailable"), true);
+    assert.equal(degraded?.packet.work_package?.id, saved?.packet.work_package?.id);
+
+    const withheld = await buildJobReadModel(
+      env({}, savedCompanyProfile({ phone: "403-555-0100 ext 12", email: "" })),
+      crew,
+      "JOB-A",
+    );
+    assert.equal(withheld?.office_contact, null);
+
+    const otherTenant = await buildJobReadModel(
+      env({}, savedCompanyProfile({ tenant_id: "other-tenant" })),
+      crew,
+      "JOB-A",
+    );
+    assert.equal(otherTenant?.office_contact, null);
   } finally {
     mock.restore();
   }

@@ -92,6 +92,54 @@ const workPackageSchema = z.lazy(() =>
     ),
   }),
 );
+/**
+ * The company contact the owner saved, as the crew job and work-object reads carry it. The same
+ * rules as the customer portal's `company_contact` (`portal/portal-contracts.ts`): a dialable
+ * E.164 number and the Worker's own email acceptance rule. Optional while an older Worker is
+ * still in use; `null` when the owner saved none. Built on first use, like the packet validators.
+ */
+const officeContactShape = () =>
+  z
+    .object({
+      phone: z
+        .string()
+        .regex(/^\+[1-9]\d{6,14}$/)
+        .nullable(),
+      email: z
+        .string()
+        .regex(/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i)
+        .nullable(),
+    })
+    .strict()
+    .nullable();
+
+export const officeContactSchema = z.lazy(officeContactShape);
+
+/** The last office contact this phone read, kept so screens with no contact of their own can call. */
+export const savedOfficeContactSchema = z.lazy(() =>
+  z.object({ contact: officeContactShape(), synced_at: z.string().min(1) }),
+);
+
+/** A live read this phone could not keep, so it will not open without signal. */
+export const NOT_SAVED_ON_DEVICE = "offline.not_saved";
+
+/**
+ * The office contact is optional to the crew. A malformed one is dropped and marked unavailable,
+ * the way the Worker marks a failed profile read, so it never hides a valid job or work plan or
+ * sends the phone back to an older packet. Safety and work-package fields stay strict.
+ */
+function keepValidOfficeContact<T extends { office_contact?: unknown; stale_fields: string[] }>(
+  read: T,
+): Omit<T, "office_contact"> & { office_contact?: OfficeContact } {
+  const contact = officeContactSchema.optional().safeParse(read.office_contact);
+  if (contact.success) return { ...read, office_contact: contact.data };
+  return {
+    ...read,
+    office_contact: undefined,
+    stale_fields: [...new Set([...read.stale_fields, "office_contact.unavailable"])],
+  };
+}
+
 export const envelopeSchema = z.object({
   version: z.literal(1),
   source_updated_at: nullableText,
@@ -160,118 +208,124 @@ export const todayResponseSchema = envelopeSchema.extend({
 });
 
 export const workObjectResponseSchema = z.lazy(() =>
-  envelopeSchema.extend({
-    work_object: z.object({
-      workObjectType: z.string().min(1),
-      workObjectId: z.string().min(1),
-      physicalContextType: z.string().min(1),
-      physicalContextId: z.string().min(1),
-    }),
-    assignment: assignmentSchema.nullable(),
-    work_package: workPackageSchema.nullish().transform((value) => value ?? null),
-  }),
+  envelopeSchema
+    .extend({
+      work_object: z.object({
+        workObjectType: z.string().min(1),
+        workObjectId: z.string().min(1),
+        physicalContextType: z.string().min(1),
+        physicalContextId: z.string().min(1),
+      }),
+      assignment: assignmentSchema.nullable(),
+      work_package: workPackageSchema.nullish().transform((value) => value ?? null),
+      office_contact: z.unknown().optional(),
+    })
+    .transform(keepValidOfficeContact),
 );
 
 export const jobResponseSchema = z.lazy(() =>
-  envelopeSchema.extend({
-    job: z.object({
-      id: z.string().min(1),
-      roof_job_id: nullableText,
-      job_number: nullableText,
-      brand: nullableText,
-      service_type: nullableText,
-      status: nullableText,
-      address: nullableText,
-      current_gate_state: nullableText,
-    }),
-    assignment: assignmentSchema.nullable(),
-    gates: z.array(
-      z.object({
+  envelopeSchema
+    .extend({
+      office_contact: z.unknown().optional(),
+      job: z.object({
         id: z.string().min(1),
-        name: nullableText,
-        state: nullableText,
-        blocker_reason: nullableText,
-        owner: nullableText,
-        due_at: nullableText,
+        roof_job_id: nullableText,
+        job_number: nullableText,
+        brand: nullableText,
+        service_type: nullableText,
+        status: nullableText,
+        address: nullableText,
+        current_gate_state: nullableText,
       }),
-    ),
-    packet: z.object({
-      scope_clauses: z.array(
+      assignment: assignmentSchema.nullable(),
+      gates: z.array(
         z.object({
           id: z.string().min(1),
-          type: nullableText,
-          title: nullableText,
-          text: nullableText,
-          version: nullableText,
+          name: nullableText,
+          state: nullableText,
+          blocker_reason: nullableText,
+          owner: nullableText,
+          due_at: nullableText,
         }),
       ),
-      measurements: z.array(
-        z.object({
-          id: z.string().min(1),
-          provider: nullableText,
-          review_status: nullableText,
-          parsed_at: nullableText,
-        }),
-      ),
-      materials: z.object({
-        takeoffs: z.array(
-          z.object({ id: z.string().min(1), status: nullableText, prepared_at: nullableText }),
-        ),
-        supplier_orders: z.array(
+      packet: z.object({
+        scope_clauses: z.array(
           z.object({
             id: z.string().min(1),
-            status: nullableText,
-            requested_delivery_date: nullableText,
-            delivery_notes: nullableText,
+            type: nullableText,
+            title: nullableText,
+            text: nullableText,
+            version: nullableText,
           }),
         ),
+        measurements: z.array(
+          z.object({
+            id: z.string().min(1),
+            provider: nullableText,
+            review_status: nullableText,
+            parsed_at: nullableText,
+          }),
+        ),
+        materials: z.object({
+          takeoffs: z.array(
+            z.object({ id: z.string().min(1), status: nullableText, prepared_at: nullableText }),
+          ),
+          supplier_orders: z.array(
+            z.object({
+              id: z.string().min(1),
+              status: nullableText,
+              requested_delivery_date: nullableText,
+              delivery_notes: nullableText,
+            }),
+          ),
+        }),
+        change_orders: z.array(
+          z.object({
+            id: z.string().min(1),
+            number: nullableText,
+            version: z.number().nullable(),
+            status: nullableText,
+            title: nullableText,
+            scope_delta: nullableText,
+          }),
+        ),
+        safety_plan: z
+          .object({
+            id: z.string().min(1),
+            version: z.number().nullable(),
+            status: nullableText,
+            effective_date: nullableText,
+            hazard_summary: nullableText,
+            controls: nullableText,
+            emergency_plan: nullableText,
+            ppe_requirements: nullableText,
+            weather_limits: nullableText,
+          })
+          .nullable(),
+        contact: z
+          .object({
+            display_name: nullableText,
+            phone: nullableText,
+            access_instructions: nullableText,
+          })
+          .nullable(),
+        // Older packets remain readable from IndexedDB after an app upgrade. A missing
+        // package is never treated as a release or permission to start work.
+        work_package: workPackageSchema.nullish().transform((value) => value ?? null),
       }),
-      change_orders: z.array(
+      proof_stream: z.array(proofStreamItemSchema),
+      proof_page: z.object({ next_cursor: nullableText, page_size: z.number().int().positive() }),
+      required_proof: z.array(
         z.object({
           id: z.string().min(1),
-          number: nullableText,
-          version: z.number().nullable(),
-          status: nullableText,
-          title: nullableText,
-          scope_delta: nullableText,
+          slot: z.string().min(1),
+          label: z.string().min(1),
+          state: z.string().min(1),
+          blocker_reason: nullableText,
         }),
       ),
-      safety_plan: z
-        .object({
-          id: z.string().min(1),
-          version: z.number().nullable(),
-          status: nullableText,
-          effective_date: nullableText,
-          hazard_summary: nullableText,
-          controls: nullableText,
-          emergency_plan: nullableText,
-          ppe_requirements: nullableText,
-          weather_limits: nullableText,
-        })
-        .nullable(),
-      contact: z
-        .object({
-          display_name: nullableText,
-          phone: nullableText,
-          access_instructions: nullableText,
-        })
-        .nullable(),
-      // Older packets remain readable from IndexedDB after an app upgrade. A missing
-      // package is never treated as a release or permission to start work.
-      work_package: workPackageSchema.nullish().transform((value) => value ?? null),
-    }),
-    proof_stream: z.array(proofStreamItemSchema),
-    proof_page: z.object({ next_cursor: nullableText, page_size: z.number().int().positive() }),
-    required_proof: z.array(
-      z.object({
-        id: z.string().min(1),
-        slot: z.string().min(1),
-        label: z.string().min(1),
-        state: z.string().min(1),
-        blocker_reason: nullableText,
-      }),
-    ),
-  }),
+    })
+    .transform(keepValidOfficeContact),
 );
 
 export const proofPageResponseSchema = z.lazy(() =>
@@ -286,3 +340,5 @@ export type WorkObjectResponse = z.infer<typeof workObjectResponseSchema>;
 export type JobResponse = z.infer<typeof jobResponseSchema>;
 export type ProofStreamItem = z.infer<typeof proofStreamItemSchema>;
 export type ProofPageResponse = z.infer<typeof proofPageResponseSchema>;
+export type OfficeContact = z.infer<typeof officeContactSchema>;
+export type SavedOfficeContact = z.infer<typeof savedOfficeContactSchema>;

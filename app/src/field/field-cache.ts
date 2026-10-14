@@ -4,11 +4,14 @@ import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { getDatabase } from "../storage/db";
 import {
   jobResponseSchema,
+  NOT_SAVED_ON_DEVICE,
   proofPageResponseSchema,
+  savedOfficeContactSchema,
   todayResponseSchema,
   workObjectResponseSchema,
   type JobResponse,
   type ProofPageResponse,
+  type SavedOfficeContact,
   type TodayResponse,
   type WorkObjectResponse,
 } from "./field-contracts";
@@ -17,18 +20,18 @@ export async function loadToday(
   session: AuthenticatedSession,
   fetcher: typeof fetch = fetch,
 ): Promise<TodayResponse> {
+  let model: TodayResponse;
   try {
-    const model = await apiRequest({
+    model = await apiRequest({
       path: "/api/v1/today",
       schema: todayResponseSchema,
       fetcher,
       deviceProof: proofFor(session),
     });
-    await cacheToday(session, model);
-    return model;
   } catch (error) {
     return await offlineModel(cacheKey(session, "today"), todayResponseSchema, error);
   }
+  return await keepForOffline(cacheKey(session, "today"), model);
 }
 
 export async function cacheToday(
@@ -44,18 +47,19 @@ export async function loadJob(
   fetcher: typeof fetch = fetch,
 ): Promise<JobResponse> {
   const key = cacheKey(session, `job:${jobId}`);
+  let model: JobResponse;
   try {
-    const model = await apiRequest({
+    model = await apiRequest({
       path: `/api/v1/jobs/${encodeURIComponent(jobId)}`,
       schema: jobResponseSchema,
       fetcher,
       deviceProof: proofFor(session),
     });
-    await cacheFieldModel(key, model, model.source_updated_at);
-    return model;
   } catch (error) {
     return await offlineModel(key, jobResponseSchema, error);
   }
+  await rememberOfficeContact(session, model);
+  return await keepForOffline(key, model);
 }
 
 export async function loadWorkObject(
@@ -65,18 +69,94 @@ export async function loadWorkObject(
 ): Promise<WorkObjectResponse> {
   const key = cacheKey(session, workObjectCacheSuffix(scope));
   const path = workObjectPath(scope);
+  let model: WorkObjectResponse;
   try {
-    const model = await apiRequest({
+    model = await apiRequest({
       path,
       schema: workObjectResponseSchema,
       fetcher,
       deviceProof: proofFor(session),
     });
-    await cacheFieldModel(key, model, model.source_updated_at);
-    return model;
   } catch (error) {
     return await offlineModel(key, workObjectResponseSchema, error);
   }
+  await rememberOfficeContact(session, model);
+  return await keepForOffline(key, model);
+}
+
+/**
+ * Keeps a validated live read for offline use. Storage failing (full, blocked, private mode)
+ * never hides that read: it comes back marked, so the screen can say this copy will not open
+ * without signal and the packet count does not claim it is saved.
+ */
+async function keepForOffline<
+  T extends { source_updated_at: string | null; stale_fields: string[] },
+>(key: string, model: T): Promise<T> {
+  try {
+    await cacheFieldModel(key, model, model.source_updated_at);
+    return model;
+  } catch {
+    return { ...model, stale_fields: [...new Set([...model.stale_fields, NOT_SAVED_ON_DEVICE])] };
+  }
+}
+
+/**
+ * The office contact from the newest job or work-object read this phone got from the network, so
+ * a screen whose own read carries none (Today, Vehicle, saved work, a refused job) can still offer
+ * a call. An older Worker sends no contact and a failed profile read (`office_contact.unavailable`)
+ * says nothing about it, so neither replaces what the phone already knows; a `null` contact does,
+ * because it means the owner saved none.
+ *
+ * Reads can finish out of order, so the read generated last wins, checked and written in one
+ * transaction. Keeping the contact is best effort: it never hides the fresh read it came with.
+ */
+async function rememberOfficeContact(
+  session: AuthenticatedSession,
+  model: Pick<JobResponse, "office_contact" | "read_model_generated_at" | "stale_fields">,
+): Promise<void> {
+  if (model.office_contact === undefined) return;
+  if (model.stale_fields.includes("office_contact.unavailable")) return;
+  const incoming: SavedOfficeContact = {
+    contact: model.office_contact,
+    synced_at: model.read_model_generated_at,
+  };
+  const key = cacheKey(session, "office-contact");
+  try {
+    const transaction = (await getDatabase()).transaction("field_cache", "readwrite");
+    const current = savedOfficeContactSchema.safeParse((await transaction.store.get(key))?.value);
+    if (!current.success || isNewerOfficeContact(incoming, current.data)) {
+      await transaction.store.put({
+        key,
+        value: structuredClone(incoming),
+        sourceUpdatedAt: incoming.synced_at,
+        updatedAt: Date.now(),
+      });
+    }
+    await transaction.done;
+  } catch {
+    // The phone keeps its last contact; the next read tries again.
+  }
+}
+
+/** A later read wins; an exact tie is settled by the contact itself, never by arrival order. */
+function isNewerOfficeContact(incoming: SavedOfficeContact, current: SavedOfficeContact): boolean {
+  const generatedAt = (saved: SavedOfficeContact) => {
+    const time = Date.parse(saved.synced_at);
+    return Number.isNaN(time) ? -Infinity : time;
+  };
+  const [next, previous] = [generatedAt(incoming), generatedAt(current)];
+  if (next !== previous) return next > previous;
+  return JSON.stringify(incoming.contact) > JSON.stringify(current.contact);
+}
+
+/** The office contact this phone last read, or null when it has never read one. */
+export async function loadOfficeContact(
+  session: AuthenticatedSession,
+): Promise<SavedOfficeContact | null> {
+  const parsed = savedOfficeContactSchema.safeParse(
+    await getCachedFieldModel(cacheKey(session, "office-contact")),
+  );
+  return parsed.success ? parsed.data : null;
 }
 
 export async function loadProofPage(
@@ -138,8 +218,9 @@ export async function prefetchAssignedPackets(
         if (!job) return;
         try {
           const model = await loadJob(session, job.id, options.fetcher ?? fetch);
-          result[job.id] = true;
-          options.onPacket?.(job.id, true, model);
+          const saved = !model.stale_fields.includes(NOT_SAVED_ON_DEVICE);
+          result[job.id] = saved;
+          options.onPacket?.(job.id, saved, model);
         } catch {
           const cached = await hasCachedJobPacket(session, job.id);
           result[job.id] = cached;

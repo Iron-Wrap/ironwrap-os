@@ -683,3 +683,29 @@ test("the board is reachable through the authenticated app router, not only its 
   assert.equal((body.pipeline as Record<string, unknown>).key, "sales");
   harness.db.close();
 });
+
+test("an authenticated app POST commits the New Lead to Visit Booked transition", async () => {
+  const harness = setup();
+  try {
+    const card = await cardIn(harness, "new_lead");
+    const response = await handleAuthenticatedRoute(
+      move(card.cardId, "visit_booked", card.version),
+      harness.env,
+      auth("sales"),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.from_stage_id, stageId("new_lead"));
+    assert.equal(body.to_stage_id, stageId("visit_booked"));
+    assert.equal(body.safeguard, "direct");
+    assert.equal(body.card_version, card.version + 1);
+    const stored = harness.db.raw
+      .prepare("SELECT stage_id, version FROM pipeline_cards WHERE card_id = ?")
+      .get(card.cardId);
+    assert.deepEqual({ ...stored }, { stage_id: stageId("visit_booked"), version: card.version + 1 });
+    assert.equal(transitions(harness, card.cardId).at(-1)?.transition_id, body.transition_id);
+  } finally {
+    harness.db.close();
+  }
+});

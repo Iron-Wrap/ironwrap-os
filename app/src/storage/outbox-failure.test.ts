@@ -64,6 +64,7 @@ describe("crew guidance for a stopped item", () => {
       nextStep:
         "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
       retryable: false,
+      notSent: true,
     });
   });
 
@@ -82,7 +83,45 @@ describe("crew guidance for a stopped item", () => {
       nextStep:
         "Sending it again will not change the answer. Keep it on this phone and tell the office.",
       retryable: false,
+      notSent: true,
     });
+  });
+
+  it("never says not sent, nor offers a resend, when the office answered with something else", () => {
+    // A 2xx whose body did not verify: the office may already have recorded the item.
+    expect(
+      outboxFailureGuidance(
+        checkIn({
+          code: "verification_mismatch",
+          message: "The server answered, but did not verify this exact saved item.",
+          status: 201,
+          occurredAt: 1_000,
+        }),
+      ),
+    ).toEqual({
+      reason:
+        "The office answered, but this phone could not confirm the office has this exact item.",
+      nextStep:
+        "Do not save it again. Call the office and ask whether it arrived. It stays on this phone.",
+      retryable: false,
+      notSent: false,
+    });
+  });
+
+  it("stops a collision whose stored record the office cannot read, without saying not sent", () => {
+    const stopped = {
+      kind: "fleet_collision_report" as const,
+      lastError: {
+        code: "fleet_collision_storage_mismatch",
+        message: "A stored collision could not be read safely.",
+        status: 502,
+        occurredAt: 1_000,
+      },
+    };
+    expect(classifyOutboxFailure({ status: 502, code: "fleet_collision_storage_mismatch" })).toBe(
+      "terminal",
+    );
+    expect(outboxFailureGuidance(stopped)).toMatchObject({ retryable: false, notSent: false });
   });
 
   it("still promises a retry for a transient answer", () => {
@@ -90,7 +129,11 @@ describe("crew guidance for a stopped item", () => {
       outboxFailureGuidance(
         checkIn({ code: "http_503", message: "Busy.", status: 503, occurredAt: 1_000 }),
       ),
-    ).toMatchObject({ reason: "The server could not take this item yet.", retryable: true });
+    ).toMatchObject({
+      reason: "The server could not take this item yet.",
+      retryable: true,
+      notSent: false,
+    });
   });
 
   it("routes a preserved conflict to the office rather than to a retry", () => {
@@ -114,6 +157,7 @@ describe("crew guidance for a stopped item", () => {
     ).toMatchObject({
       reason: "The office copy changed after this item was saved.",
       retryable: false,
+      notSent: false,
     });
   });
 });

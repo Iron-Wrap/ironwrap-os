@@ -5,8 +5,9 @@
  * return. It is not an injury, near-miss, hazard, environmental, or emergency
  * occurrence. Those stay on the safety spine.
  *
- * Records live as immutable R2 JSON so this leftover can ship without a D1
- * migration or a new Frappe DocType (both owned by the IRO-195 cutover pile).
+ * Records live as R2 JSON with conditional create and transition writes.
+ * The object keys are the list authority; a shared mutable index can lose
+ * concurrently reported collisions.
  */
 
 import { SAFETY_OCCURRENCE_KINDS } from "./safety-lifecycle.ts";
@@ -82,8 +83,8 @@ export function collisionRecordKey(scopeDigest: string, collisionId: FleetCollis
   return `fleet/v1/${scopeDigest}/collision/${collisionId}/record.json`;
 }
 
-export function collisionIndexKey(scopeDigest: string): string {
-  return `fleet/v1/${scopeDigest}/collision/index.json`;
+export function collisionRecordPrefix(scopeDigest: string): string {
+  return `fleet/v1/${scopeDigest}/collision/`;
 }
 
 export function assertCollisionNotTelematicsAuthorized(

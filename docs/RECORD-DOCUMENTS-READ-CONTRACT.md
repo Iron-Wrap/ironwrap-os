@@ -2,7 +2,7 @@
 
 Status: source-level route contract
 Owner: IronWrap OS product owner
-Last verified: 2026-08-28
+Last verified: 2026-09-14
 Review trigger: any change to `workers-bus/src/schema-forms-api.ts` document routes,
 `recordReadableByActor` in `workers-bus/src/schema-forms.ts`,
 `workers-bus/src/document-templates.ts`, or `app/src/documents/`
@@ -27,7 +27,7 @@ Templates, revisions and generation receipts live in `workers-bus/src/document-t
 `workers-bus/migrations/0125_document_templates_and_generation.sql`. Per-field read authority lives
 in `listAuthorizedSchemaFieldValues` (`workers-bus/src/schema-forms.ts`).
 
-A route in source is only **Implemented**. Use [`CAPABILITY-MATRIX.md`](CAPABILITY-MATRIX.md) for
+A route in source is only **Source-present**. Use [`CAPABILITY-MATRIX.md`](CAPABILITY-MATRIX.md) for
 current implementation gaps and
 [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](AUTHORITY-AND-EVIDENCE-CONTRACT.md) for the proof boundary.
 
@@ -36,8 +36,8 @@ current implementation gaps and
 A contract, an estimate and a materials list must be smart forms filled from the job and reachable
 in the workflow, not static files in a separate area. `/api/v1/admin/document-templates` is where an
 owner authors them and is owner-only, correctly: authoring is configuration. Reading is not. The
-shop and the crew never see the templates route, so today a generated document exists in R2 with no
-screen that opens it.
+shop and the crew read the authorized layout. The owner can generate a file, open a sandboxed
+preview, and download the verified HTML through the job shelf when the capability is available.
 
 ## Shape
 
@@ -88,7 +88,23 @@ GET /api/v1/documents/{entity_type}/{entity_id}
    (owner-only, tenant-scoped by the receipt, bytes digest-checked against `output_digest` before
    they leave; `409 document_generation_pending` / `document_generation_not_stored` when the effect
    never reached `succeeded`, `409 document_generation_readback_mismatch` when the object no longer
-   matches, `404 document_object_missing` when it is gone). No client composes a storage URL.
+   matches, `404 document_object_missing` when it is gone). Retrieval checks the provider id against
+   the receipt's tenant/attempt/digest path and hashes the original bytes, with an 8 MiB declared
+   and streamed byte limit (`413 document_object_too_large`). Interrupted R2 reads return 503.
+   Responses use `private, no-store`, `nosniff` and a sandbox CSP; `?download=1` sets attachment
+   disposition. No client composes a storage URL.
+7. `GET /api/v1/document-generations` with the original `Idempotency-Key` header reads the latest
+   receipt for that tenant's request. It is owner-only and never executes or reconciles an effect.
+   An absent attempt is 404, an attempt awaiting a receipt is 409 `document_generation_in_flight`,
+   and a recorded result is 200 with the generation response shape, even for a failed outcome.
+   The original receipt-by-id route remains an immutable historical read.
+8. The PWA retains request identity and original template revision in session storage, partitioned
+   by tenant, user, entity and template. It stores no document body or success claim there. A reload
+   re-reads the latest receipt; an uncertain result offers Check result. Only a read that finds no
+   attempt offers an explicit resend of the same saved request. Unavailable/corrupt site storage
+   stops a new submission. The preview fetch has cancellation and a deadline; closing removes its
+   observer, cancels the read, drops cached bytes and returns focus. File expiry, auth refusal and
+   verification failure stay on the job shelf with the receipt.
 
 ### Known boundary: assignment is a per-field decision, not a per-record one
 
@@ -108,5 +124,5 @@ route.
 client), resolved by `app/src/documents/document-resolution.ts` and rendered by
 `app/src/documents/document-section.tsx` on the job workflow surface.
 
-A route in source is only **Implemented**: this page describes tested behaviour against a real
+A route in source is only **Source-present**: this page describes tested behaviour against a real
 migrated database, not deployment, runtime verification, or business acceptance.

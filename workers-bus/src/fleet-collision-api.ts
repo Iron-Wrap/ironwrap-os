@@ -5,7 +5,7 @@ import { FieldActionError } from "./field-actions.ts";
 import {
   assertCollisionNotTelematicsAuthorized,
   canTransitionFleetCollision,
-  collisionIndexKey,
+  collisionRecordPrefix,
   collisionRecordKey,
   FLEET_COLLISION_KIND,
   FLEET_COLLISION_STATES,
@@ -23,9 +23,9 @@ import {
 const MAX_COLLISION_BYTES = 16 * 1024;
 const MAX_DESCRIPTION = 1_200;
 
-export interface FleetCollisionIndex {
-  collision_ids: FleetCollisionId[];
-}
+const COLLISION_PAGE_SIZE = 100;
+const MAX_R2_CURSOR_BYTES = 2048;
+const COLLISION_CURSOR_VERSION = "v1";
 
 export async function handleFleetCollisionCollection(
   req: Request,
@@ -35,12 +35,21 @@ export async function handleFleetCollisionCollection(
 ): Promise<Response> {
   const scoped = await scopedFleetAsset(req, env, auth, encodedAssetName, req.method !== "GET");
   if (scoped instanceof Response) return scoped;
-  if (req.method === "GET") {
-    const collisions = await listCollisions(env.RAW, scoped.scopeDigest);
-    return json({ collisions });
-  }
-  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   try {
+    if (req.method === "GET") {
+      const cursor = new URL(req.url).searchParams.get("cursor");
+      const r2Cursor = cursor === null ? undefined : await decodeCollisionCursor(auth, scoped.scopeDigest, cursor);
+      const page = await listCollisions(
+        env.RAW,
+        scoped.scopeDigest,
+        auth.session.tenant_id,
+        scoped.assetName,
+        r2Cursor,
+      );
+      return json({ collisions: page.collisions,
+        next_cursor: page.next_cursor === null ? null : await encodeCollisionCursor(auth, scoped.scopeDigest, page.next_cursor) });
+    }
+    if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     const created = await createCollision(req, env, auth, scoped.assetName, scoped.scopeDigest);
     return json({ collision: created }, 201);
   } catch (error) {
@@ -61,7 +70,14 @@ export async function handleFleetCollisionTransition(
   const collisionId = parseFleetCollisionId(decodeSegment(encodedCollisionId) ?? "");
   if (!collisionId) return json({ error: "not_found" }, 404);
   try {
-    const updated = await transitionCollision(req, env, auth, scoped.scopeDigest, collisionId);
+    const updated = await transitionCollision(
+      req,
+      env,
+      auth,
+      scoped.assetName,
+      scoped.scopeDigest,
+      collisionId,
+    );
     return json({ collision: updated });
   } catch (error) {
     return collisionError(error);
@@ -87,7 +103,7 @@ async function scopedFleetAsset(
   };
 }
 
-async function createCollision(
+export async function createCollision(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
@@ -131,26 +147,27 @@ async function createCollision(
     updated_at: now,
   };
   const key = collisionRecordKey(scopeDigest, collisionId);
+  const written = await env.RAW.put(key, JSON.stringify(record), {
+    onlyIf: new Headers({ "If-None-Match": "*" }),
+    httpMetadata: { contentType: "application/json" },
+  });
+  if (written !== null) return record;
   const existing = await readRecord(env.RAW, key);
-  if (existing) {
-    if (!sameCollisionFacts(existing, record)) {
-      throw new FieldActionError(
-        "idempotency_conflict",
-        409,
-        "This collision id is already bound to a different report.",
-      );
-    }
-    return existing;
+  if (!existing || !sameCollisionFacts(existing.record, record)) {
+    throw new FieldActionError(
+      "idempotency_conflict",
+      409,
+      "This collision id is already bound to a different report.",
+    );
   }
-  await putJson(env.RAW, key, record);
-  await addToIndex(env.RAW, scopeDigest, collisionId);
-  return record;
+  return existing.record;
 }
 
-async function transitionCollision(
+export async function transitionCollision(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
+  fleetAssetId: string,
   scopeDigest: string,
   collisionId: FleetCollisionId,
 ): Promise<FleetCollisionRecord> {
@@ -171,7 +188,16 @@ async function transitionCollision(
   if (!existing) {
     throw new FieldActionError("not_found", 404, "This collision was not found.");
   }
-  if (!canTransitionFleetCollision(existing.state, to)) {
+  if (existing.record.collision_id !== collisionId
+    || existing.record.tenant_id !== auth.session.tenant_id
+    || existing.record.fleet_asset_id !== fleetAssetId) {
+    throw new FieldActionError(
+      "fleet_collision_storage_mismatch",
+      502,
+      "A stored collision could not be read safely.",
+    );
+  }
+  if (!canTransitionFleetCollision(existing.record.state, to)) {
     throw new FieldActionError(
       "invalid_fleet_collision_transition",
       409,
@@ -179,77 +205,143 @@ async function transitionCollision(
     );
   }
   const updated: FleetCollisionRecord = {
-    ...existing,
+    ...existing.record,
     state: to,
     updated_at: new Date().toISOString(),
   };
-  await putJson(env.RAW, key, updated);
+  const written = await env.RAW.put(key, JSON.stringify(updated), {
+    onlyIf: { etagMatches: existing.etag },
+    httpMetadata: { contentType: "application/json" },
+  });
+  if (written === null) {
+    throw new FieldActionError(
+      "fleet_collision_state_changed",
+      409,
+      "This collision changed. Reload it before choosing its next state.",
+    );
+  }
   return updated;
 }
 
-async function listCollisions(
+export async function listCollisions(
   bucket: R2Bucket,
   scopeDigest: string,
-): Promise<FleetCollisionRecord[]> {
-  const index = await readIndex(bucket, scopeDigest);
-  const records: FleetCollisionRecord[] = [];
-  for (const collisionId of index.collision_ids) {
-    const record = await readRecord(bucket, collisionRecordKey(scopeDigest, collisionId));
-    if (record) records.push(record);
+  tenantId: string,
+  assetName: string,
+  cursor?: string,
+): Promise<{ collisions: FleetCollisionRecord[]; next_cursor: string | null }> {
+  const prefix = collisionRecordPrefix(scopeDigest);
+  const page = await bucket.list({ prefix, limit: COLLISION_PAGE_SIZE, cursor });
+  const collisions: FleetCollisionRecord[] = [];
+  for (const object of page.objects) {
+    const suffix = object.key.slice(prefix.length);
+    if (!suffix.endsWith("/record.json")) continue;
+    const collisionId = parseFleetCollisionId(suffix.slice(0, -"/record.json".length));
+    if (!collisionId || collisionRecordKey(scopeDigest, collisionId) !== object.key) continue;
+    const stored = await readRecord(bucket, object.key);
+    if (!stored || stored.record.collision_id !== collisionId
+      || stored.record.tenant_id !== tenantId
+      || stored.record.fleet_asset_id !== assetName) {
+      throw new FieldActionError(
+        "fleet_collision_storage_mismatch",
+        502,
+        "A stored collision could not be read safely.",
+      );
+    }
+    collisions.push(stored.record);
   }
-  return records;
+  if (page.truncated && !page.cursor) {
+    throw new FieldActionError(
+      "fleet_collision_storage_mismatch",
+      502,
+      "More collisions could not be listed safely.",
+    );
+  }
+  return { collisions, next_cursor: page.truncated ? page.cursor ?? null : null };
 }
 
-async function readRecord(bucket: R2Bucket, key: string): Promise<FleetCollisionRecord | null> {
+/** Keep R2's opaque token scoped to the current vehicle and signed-in session. */
+async function encodeCollisionCursor(auth: AuthContext, scopeDigest: string, cursor: string): Promise<string> {
+  const bytes = new TextEncoder().encode(cursor);
+  if (bytes.length === 0 || bytes.length > MAX_R2_CURSOR_BYTES) {
+    throw new FieldActionError("fleet_collision_storage_mismatch", 502, "The next collision page could not be saved safely.");
+  }
+  const encoded = base64Url(bytes);
+  const signature = await cursorSignature(auth, scopeDigest, encoded);
+  return `${COLLISION_CURSOR_VERSION}.${encoded}.${signature}`;
+}
+
+async function decodeCollisionCursor(auth: AuthContext, scopeDigest: string, value: string): Promise<string> {
+  if (value.length === 0 || value.length > 3072) throw invalidCollisionCursor();
+  const parts = value.split(".");
+  if (parts.length !== 3 || parts[0] !== COLLISION_CURSOR_VERSION ||
+      !/^[A-Za-z0-9_-]+$/.test(parts[1] ?? "") || !/^[0-9a-f]{64}$/.test(parts[2] ?? "")) {
+    throw invalidCollisionCursor();
+  }
+  const bytes = fromBase64Url(parts[1]!);
+  if (bytes.length === 0 || bytes.length > MAX_R2_CURSOR_BYTES || base64Url(bytes) !== parts[1]) {
+    throw invalidCollisionCursor();
+  }
+  const signature = Uint8Array.from(parts[2]!.match(/../g)!, (pair) => Number.parseInt(pair, 16));
+  const key = await cursorKey(auth);
+  const valid = await crypto.subtle.verify("HMAC", key, signature,
+    new TextEncoder().encode(`${COLLISION_CURSOR_VERSION}:${scopeDigest}:${parts[1]}`));
+  if (!valid) throw invalidCollisionCursor();
+  try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes); }
+  catch { throw invalidCollisionCursor(); }
+}
+
+async function cursorSignature(auth: AuthContext, scopeDigest: string, encoded: string): Promise<string> {
+  const key = await cursorKey(auth);
+  const signed = new Uint8Array(await crypto.subtle.sign("HMAC", key,
+    new TextEncoder().encode(`${COLLISION_CURSOR_VERSION}:${scopeDigest}:${encoded}`)));
+  return Array.from(signed, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function cursorKey(auth: AuthContext): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", new TextEncoder().encode(auth.rawSessionToken),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+
+function base64Url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(value: string): Uint8Array {
+  try {
+    const decoded = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+  } catch { throw invalidCollisionCursor(); }
+}
+
+function invalidCollisionCursor(): FieldActionError {
+  return new FieldActionError("fleet_collision_cursor_invalid", 400,
+    "This list position is no longer valid. Reload collisions from the start.");
+}
+
+async function readRecord(
+  bucket: R2Bucket,
+  key: string,
+): Promise<{ record: FleetCollisionRecord; etag: string } | null> {
   const object = await bucket.get(key);
   if (!object) return null;
   try {
     const parsed: unknown = JSON.parse(await object.text());
-    return isCollisionRecord(parsed) ? parsed : null;
+    if (isCollisionRecord(parsed)) return { record: parsed, etag: object.etag };
   } catch {
-    return null;
+    // A malformed stored record must not be treated as an absent report.
   }
-}
-
-async function readIndex(bucket: R2Bucket, scopeDigest: string): Promise<FleetCollisionIndex> {
-  const object = await bucket.get(collisionIndexKey(scopeDigest));
-  if (!object) return { collision_ids: [] };
-  try {
-    const parsed: unknown = JSON.parse(await object.text());
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { collision_ids: [] };
-    const ids = (parsed as { collision_ids?: unknown }).collision_ids;
-    if (!Array.isArray(ids)) return { collision_ids: [] };
-    return {
-      collision_ids: ids.flatMap((id) => {
-        const parsedId = typeof id === "string" ? parseFleetCollisionId(id) : null;
-        return parsedId ? [parsedId] : [];
-      }),
-    };
-  } catch {
-    return { collision_ids: [] };
-  }
-}
-
-async function addToIndex(
-  bucket: R2Bucket,
-  scopeDigest: string,
-  collisionId: FleetCollisionId,
-): Promise<void> {
-  const index = await readIndex(bucket, scopeDigest);
-  if (index.collision_ids.includes(collisionId)) return;
-  await putJson(bucket, collisionIndexKey(scopeDigest), {
-    collision_ids: [...index.collision_ids, collisionId],
-  } satisfies FleetCollisionIndex);
-}
-
-async function putJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
-  await bucket.put(key, JSON.stringify(value), {
-    httpMetadata: { contentType: "application/json" },
-  });
+  throw new FieldActionError(
+    "fleet_collision_storage_mismatch",
+    502,
+    "A stored collision could not be read safely.",
+  );
 }
 
 function sameCollisionFacts(existing: FleetCollisionRecord, next: FleetCollisionRecord): boolean {
-  return existing.fleet_asset_id === next.fleet_asset_id
+  return existing.collision_id === next.collision_id
+    && existing.tenant_id === next.tenant_id
+    && existing.fleet_asset_id === next.fleet_asset_id
     && existing.kind === next.kind
     && existing.severity === next.severity
     && existing.occurred_at === next.occurred_at
@@ -265,6 +357,24 @@ function isCollisionRecord(value: unknown): value is FleetCollisionRecord {
   return parseFleetCollisionId(String(record.collision_id ?? "")) !== null
     && record.kind === FLEET_COLLISION_KIND
     && isCollisionState(record.state)
+    && typeof record.tenant_id === "string"
+    && record.tenant_id.length > 0
+    && typeof record.fleet_asset_id === "string"
+    && record.fleet_asset_id.length > 0
+    && (record.severity === "Minor" || record.severity === "Major" || record.severity === "Out of Service")
+    && typeof record.occurred_at === "string"
+    && typeof record.description === "string"
+    && record.description.length >= 3
+    && Array.isArray(record.photo_evidence)
+    && record.photo_evidence.every((photo) => !!photo && typeof photo === "object"
+      && typeof photo.attachment_id === "string"
+      && typeof photo.file_name === "string"
+      && typeof photo.content_type === "string"
+      && typeof photo.sha256 === "string"
+      && typeof photo.r2_key === "string")
+    && (record.telematics_reference === null || typeof record.telematics_reference === "string")
+    && typeof record.created_at === "string"
+    && typeof record.updated_at === "string"
     && typeof record.reported_by === "string"
     && record.reported_by.trim().length > 0;
 }

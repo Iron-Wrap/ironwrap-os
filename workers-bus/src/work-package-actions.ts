@@ -26,7 +26,7 @@ import {
 } from "./work-package-store.ts";
 
 const MAX_WORK_PACKAGE_ACTION_BYTES = 16 * 1024;
-const MAX_BLOCKER_REASON_LENGTH = 1_200;
+const MAX_BLOCKER_REASON_LENGTH = 4_000;
 const WORK_PACKAGE_ACTION_LEASE_MS = 90_000;
 
 export type WorkPackageActionKind =
@@ -39,7 +39,7 @@ export interface WorkPackageActionPayload {
   work_package_id: string;
   work_package_version: number;
   release_attempt_id?: string;
-  blocker_reason?: string;
+  blocker_reason?: string | null;
   work_object_type?: string;
   work_object_id?: string;
   physical_context_type?: string;
@@ -349,7 +349,7 @@ export async function parseWorkPackageActionRequest(
   const suppliedKeys = Object.keys(decoded.payload);
   const requiredPayloadKeys =
     kind === "stop_work"
-      ? ["work_package_id", "work_package_version", "blocker_reason"]
+      ? ["work_package_id", "work_package_version"]
       : ["work_package_id", "work_package_version", "release_attempt_id"];
   if (scope) requiredPayloadKeys.push(...scopePayloadKeys);
   if (
@@ -366,12 +366,8 @@ export async function parseWorkPackageActionRequest(
       ? optionalBoundedId(decoded.payload.release_attempt_id, 140)
       : boundedId(decoded.payload.release_attempt_id, 1, 140);
   const blockerReason =
-    kind === "stop_work"
-      ? boundedText(
-          decoded.payload.blocker_reason,
-          1,
-          MAX_BLOCKER_REASON_LENGTH,
-        )
+    kind === "stop_work" && "blocker_reason" in decoded.payload
+      ? optionalBlockerReason(decoded.payload.blocker_reason)
       : undefined;
   const parsedScope = scope
     ? {
@@ -498,7 +494,7 @@ export async function processWorkPackageAction(
       actorUser: auth.session.user_id,
       actorRole: auth.session.role,
       deviceActionId: submission.deviceActionId,
-      blockerReason: submission.payload.blocker_reason ?? null,
+      blockerReason: submission.payload.blocker_reason?.trim() || null,
       releaseAttemptId: submission.payload.release_attempt_id ?? null,
       workObjectType: submission.payload.work_object_type ?? null,
       workObjectId: submission.payload.work_object_id ?? null,
@@ -910,11 +906,8 @@ function validateSubmission(
     );
   }
   if (submission.kind === "stop_work") {
-    boundedText(
-      submission.payload.blocker_reason,
-      1,
-      MAX_BLOCKER_REASON_LENGTH,
-    );
+    if ("blocker_reason" in submission.payload)
+      optionalBlockerReason(submission.payload.blocker_reason);
   } else if (submission.payload.blocker_reason !== undefined) {
     throw invalidWorkPackageAction();
   }
@@ -983,6 +976,15 @@ function boundedText(value: unknown, min: number, max: number): string {
   if (parsed.length < min || parsed.length > max)
     throw invalidWorkPackageAction();
   return parsed;
+}
+
+function optionalBlockerReason(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || value.length > MAX_BLOCKER_REASON_LENGTH)
+    throw invalidWorkPackageAction();
+  // Keep the submitted words in the immutable manifest and action identity.
+  // The native event alone reduces a blank explanation to null.
+  return value;
 }
 
 function boundedPositiveInteger(value: unknown): number {

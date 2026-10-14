@@ -82,6 +82,7 @@ class SqliteD1 {
       "0056_service_case_lifecycle.sql",
       "0062_external_effect_insert_replace_guards.sql",
       "0139_evidence_upload_receipts.sql",
+      "0140_service_case_atomic_steps.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -797,6 +798,15 @@ test("a transition whose version another writer already took is still refused wi
     (detail.body.events as { event_type: string }[]).map((event) => event.event_type),
     ["case_opened"],
   );
+  assert.deepEqual(detail.body.triage, []);
+
+  const retry = await call(appEnv, "ops", "POST", `/api/v1/service-cases/${id}/triage`, {
+    advisory_source: "none",
+    final_category: "material_manufacturer",
+    responsibility: "manufacturer",
+    evidence_digest: DIGEST_TRIAGE,
+  });
+  assert.equal(retry.status, 201);
 });
 
 test("D1's error wrapper does not turn a refused transition into a server fault", async () => {

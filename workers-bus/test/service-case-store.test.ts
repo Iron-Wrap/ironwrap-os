@@ -44,6 +44,7 @@ class SqliteD1 {
     for (const migration of [
       "0011_app_bff_auth.sql",
       "0056_service_case_lifecycle.sql",
+      "0140_service_case_atomic_steps.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -83,6 +84,19 @@ class SqliteD1 {
         };
       },
     };
+  }
+
+  async batch(statements: Array<{ run: () => Promise<unknown> }>): Promise<unknown[]> {
+    this.raw.exec("BEGIN IMMEDIATE");
+    try {
+      const results: unknown[] = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
   }
 
 }
@@ -179,6 +193,208 @@ async function remedyIssued(appEnv: AppEnv, remedyId = "svc_remedy_0001", diagno
     now: "2026-08-18T13:00:00.000Z",
   });
 }
+
+function refuseCaseTransition(db: SqliteD1, state: string): void {
+  db.raw.exec(`CREATE TRIGGER reject_service_step
+    BEFORE UPDATE OF state ON service_cases
+    WHEN NEW.state = '${state}'
+    BEGIN SELECT RAISE(ABORT, 'forced_transition_failure'); END`);
+}
+
+function allowCaseTransition(db: SqliteD1): void {
+  db.raw.exec("DROP TRIGGER reject_service_step");
+}
+
+function rowCount(db: SqliteD1, table: string): number {
+  return Number((db.raw.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get() as { total: number }).total);
+}
+
+test("a refused service step rolls back its child row and accepts a valid retry", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await openServiceCase(appEnv, intake());
+
+  refuseCaseTransition(db, "triaged");
+  await assert.rejects(triaged(appEnv), /forced_transition_failure/);
+  assert.equal(rowCount(db, "service_case_triage"), 0);
+  assert.equal(rowCount(db, "service_case_events"), 1);
+  allowCaseTransition(db);
+  await triaged(appEnv);
+
+  refuseCaseTransition(db, "diagnosed");
+  await assert.rejects(diagnosed(appEnv), /forced_transition_failure/);
+  assert.equal(rowCount(db, "service_case_diagnoses"), 0);
+  assert.equal(rowCount(db, "service_case_events"), 2);
+  allowCaseTransition(db);
+  await diagnosed(appEnv);
+
+  refuseCaseTransition(db, "remedy_issued");
+  await assert.rejects(remedyIssued(appEnv), /forced_transition_failure/);
+  assert.equal(rowCount(db, "service_case_remedies"), 0);
+  assert.equal(rowCount(db, "service_case_events"), 3);
+  allowCaseTransition(db);
+  await remedyIssued(appEnv);
+
+  const verify = () => verifyServiceRemedy(appEnv, {
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0001",
+    remedyId: "svc_remedy_0001",
+    fieldEvidenceDigest: DIGEST_FIELD,
+    costActualCents: 96_500,
+    verifiedByUserId: SUPERVISOR,
+    outcome: "verified",
+    now: "2026-08-19T19:30:00.000Z",
+  });
+  refuseCaseTransition(db, "remedy_verified");
+  await assert.rejects(verify(), /forced_transition_failure/);
+  assert.equal(rowCount(db, "service_case_events"), 4);
+  assert.equal(
+    db.raw.prepare("SELECT verification_state FROM service_case_remedies").get()?.verification_state,
+    "pending",
+  );
+  allowCaseTransition(db);
+  await verify();
+
+  const decide = () => recordCustomerServiceDecision(appEnv, {
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0001",
+    remedyId: "svc_remedy_0001",
+    decision: "accepted",
+    acceptanceRef: "ACCEPT-0001",
+    evidenceDigest: DIGEST_CUSTOMER,
+    actorUserId: OWNER,
+    now: "2026-08-20T09:00:00.000Z",
+  });
+  refuseCaseTransition(db, "customer_accepted");
+  await assert.rejects(decide(), /forced_transition_failure/);
+  assert.equal(rowCount(db, "service_case_events"), 5);
+  assert.equal(
+    db.raw.prepare("SELECT customer_acceptance_state FROM service_case_remedies").get()?.customer_acceptance_state,
+    "pending",
+  );
+  allowCaseTransition(db);
+  await decide();
+  assert.equal(rowCount(db, "service_case_batch_guard"), 0);
+  assert.equal(rowCount(db, "service_case_events"), 6);
+});
+
+test("a competing case version cannot leave a ghost diagnosis after a lost CAS", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await openServiceCase(appEnv, intake());
+  await triaged(appEnv);
+  db.onPrepare = (sql) => {
+    if (!sql.startsWith("UPDATE service_cases")) return;
+    db.onPrepare = null;
+    db.raw.prepare(`UPDATE service_cases
+      SET state = 'closed', version = version + 1, last_event_type = 'closed',
+          last_transition_code = 'withdrawn', last_evidence_digest = NULL,
+          closure_reason = 'withdrawn', closed_at = ?, last_actor_user_id = ?, updated_at = ?
+      WHERE service_case_id = 'svc_case_0001' AND version = 2`
+    ).run("2026-08-18T12:00:00.000Z", OWNER, "2026-08-18T12:00:00.000Z");
+  };
+  await assert.rejects(diagnosed(appEnv), /service_case_transition_conflict/);
+  assert.equal(rowCount(db, "service_case_diagnoses"), 0);
+  assert.equal(rowCount(db, "service_case_batch_guard"), 0);
+  assert.deepEqual(
+    (await listServiceCaseEvents(appEnv, { tenantId: TENANT, serviceCaseId: "svc_case_0001" }))
+      .map((event) => event.event_type),
+    ["case_opened", "triaged", "closed"],
+  );
+});
+
+test("a remedy from another case cannot verify or decide this case", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await openServiceCase(appEnv, intake());
+  await triaged(appEnv);
+  await diagnosed(appEnv);
+  await remedyIssued(appEnv);
+
+  await openServiceCase(appEnv, intake({
+    serviceCaseId: "svc_case_0002",
+    customerId: "CUST-0002",
+    propertyKey: "PROP-0002",
+    symptomCode: "wind_rattle",
+  }));
+  await triaged(appEnv, { caseId: "svc_case_0002", triageId: "svc_triage_0002" });
+  await recordServiceDiagnosis(appEnv, {
+    diagnosisId: "svc_diag_0002",
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0002",
+    triageId: "svc_triage_0002",
+    rootCauseCode: "loose_flashing",
+    correctiveActionCode: "secure_flashing",
+    workPackageRef: "wp:JOB-0001:service-002",
+    workPackageVersion: 1,
+    warrantyReserveCents: 50_000,
+    evidenceDigest: DIGEST_DIAGNOSIS,
+    diagnosedByUserId: SUPERVISOR,
+    now: "2026-08-18T12:00:00.000Z",
+  });
+  await issueServiceRemedy(appEnv, {
+    remedyId: "svc_remedy_0002",
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0002",
+    diagnosisId: "svc_diag_0002",
+    scheduledStartAt: "2026-08-19T15:00:00.000Z",
+    scheduledEndAt: "2026-08-19T19:00:00.000Z",
+    partsManifestDigest: DIGEST_PARTS,
+    issuedByUserId: SUPERVISOR,
+    now: "2026-08-18T13:00:00.000Z",
+  });
+
+  await assert.rejects(verifyServiceRemedy(appEnv, {
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0001",
+    remedyId: "svc_remedy_0002",
+    fieldEvidenceDigest: DIGEST_FIELD,
+    costActualCents: 100,
+    verifiedByUserId: SUPERVISOR,
+    outcome: "verified",
+    now: "2026-08-19T19:30:00.000Z",
+  }), /service_case_remedy_verification_not_recorded/);
+  assert.equal((await getServiceCase(appEnv, {
+    tenantId: TENANT, serviceCaseId: "svc_case_0001",
+  }))?.state, "remedy_issued");
+  assert.equal(
+    db.raw.prepare("SELECT verification_state FROM service_case_remedies WHERE remedy_id = 'svc_remedy_0002'").get()?.verification_state,
+    "pending",
+  );
+
+  for (const [serviceCaseId, remedyId] of [
+    ["svc_case_0001", "svc_remedy_0001"],
+    ["svc_case_0002", "svc_remedy_0002"],
+  ]) {
+    await verifyServiceRemedy(appEnv, {
+      tenantId: TENANT,
+      serviceCaseId,
+      remedyId,
+      fieldEvidenceDigest: DIGEST_FIELD,
+      costActualCents: 100,
+      verifiedByUserId: SUPERVISOR,
+      outcome: "verified",
+      now: "2026-08-19T19:30:00.000Z",
+    });
+  }
+  await assert.rejects(recordCustomerServiceDecision(appEnv, {
+    tenantId: TENANT,
+    serviceCaseId: "svc_case_0001",
+    remedyId: "svc_remedy_0002",
+    decision: "accepted",
+    acceptanceRef: "ACCEPT-0002",
+    evidenceDigest: DIGEST_CUSTOMER,
+    actorUserId: OWNER,
+    now: "2026-08-20T09:00:00.000Z",
+  }), /service_case_customer_decision_not_recorded/);
+  assert.equal(
+    db.raw.prepare("SELECT customer_acceptance_state FROM service_case_remedies WHERE remedy_id = 'svc_remedy_0002'").get()?.customer_acceptance_state,
+    "pending",
+  );
+  assert.equal((await getServiceCase(appEnv, {
+    tenantId: TENANT, serviceCaseId: "svc_case_0001",
+  }))?.state, "remedy_verified");
+});
 
 test("a complaint binds customer, property, job, asset, warranty, consent, and a response SLA", async () => {
   const appEnv = env();

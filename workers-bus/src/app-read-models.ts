@@ -34,6 +34,8 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import { parseBody } from "./core.ts";
+import { getCompanyProfile } from "./company-setup-store.ts";
+import { publicCompanyContact } from "./company-profile.ts";
 import {
   listCurrentJobMeasurements,
   type JobMeasurementSummary,
@@ -390,6 +392,8 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
 }
 
 export interface JobReadModel extends ReadModelEnvelope {
+  /** Owner-saved public company contact; never a staff or customer identity. */
+  office_contact: { phone: string | null; email: string | null } | null;
   job: {
     id: string;
     roof_job_id: string | null;
@@ -503,6 +507,27 @@ export interface JobReadModel extends ReadModelEnvelope {
     state: string;
     blocker_reason: string | null;
   }>;
+}
+
+async function officeContactForRead(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{
+  contact: { phone: string | null; email: string | null } | null;
+  updatedAt: string | null;
+  unavailable: boolean;
+}> {
+  try {
+    const profile = await getCompanyProfile(env, tenantId);
+    return {
+      contact: publicCompanyContact(profile),
+      updatedAt: profile.updated_at,
+      unavailable: false,
+    };
+  } catch {
+    // Losing the optional directory read must not hide an assigned work plan.
+    return { contact: null, updatedAt: null, unavailable: true };
+  }
 }
 
 export interface ProofPageReadModel extends ReadModelEnvelope {
@@ -1198,8 +1223,14 @@ export async function buildUniversalWorkPackageReadModel(
   ) {
     allowedActions.push("field.checkin.create");
   }
+  const officeContact = await officeContactForRead(env, auth.session.tenant_id);
   return {
-    ...envelope(auth, [assignment], []),
+    ...envelope(
+      auth,
+      [assignment, { modified: officeContact.updatedAt }],
+      officeContact.unavailable ? ["office_contact.unavailable"] : [],
+    ),
+    office_contact: officeContact.contact,
     work_object: scope,
     assignment: assignmentModel(assignment),
     work_package: projection.work_package,
@@ -1568,7 +1599,7 @@ export async function buildJobReadModel(
   if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const [gateSource, workPackage, measurementRows] = await Promise.all([
+  const [gateSource, workPackage, measurementRows, officeContact] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, [jobName]),
     assignmentRow
       ? nativeFieldWorkPackageForAssignment(
@@ -1586,6 +1617,7 @@ export async function buildJobReadModel(
     listCurrentJobMeasurements(env, auth.session.tenant_id, jobName).catch(
       () => null as JobMeasurementSummary[] | null,
     ),
+    officeContactForRead(env, auth.session.tenant_id),
   ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
@@ -1666,6 +1698,7 @@ export async function buildJobReadModel(
     stale.push("packet.work_package.native_unavailable");
   if (!assignmentRow || !workPackage)
     stale.push("proof_stream.native_scope_unavailable");
+  if (officeContact.unavailable) stale.push("office_contact.unavailable");
   const readEnvelope = envelope(
     auth,
     [
@@ -1677,11 +1710,13 @@ export async function buildJobReadModel(
       ...(customer ? [customer] : []),
       ...(workPackage ? [{ modified: workPackage.modified }] : []),
       ...(measurementRows ?? []).map((row) => ({ modified: row.created_at })),
+      { modified: officeContact.updatedAt },
     ],
     stale,
   );
   return {
     ...readEnvelope,
+    office_contact: officeContact.contact,
     allowed_actions: [
       ...new Set([
         ...(auth.session.role === "production"

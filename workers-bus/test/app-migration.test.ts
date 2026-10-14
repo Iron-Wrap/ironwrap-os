@@ -2265,13 +2265,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // forward-adds `envelopes.release_smoke` so a production release proof's own rows are
     // distinguishable from customer leads; it adds no table, index, or trigger. 0134 adds immutable
     // office lead-intake receipts, 0135 adds the separate manual-observation ledger and heads,
-    // and 0139 adds scoped upload receipts, manifests, and intake replay identity.
+    // 0139 adds scoped upload receipts, manifests, and intake replay identity; 0140 guards atomic
+    // service steps.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 115);
+    assert.equal(migrations.length, 116);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0139_evidence_upload_receipts.sql",
+      "0140_service_case_atomic_steps.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2394,9 +2395,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards. 0135 adds three manual-observation tables, two named indexes, and twelve lineage,
     // head-pointer, retention, and append-only guards. 0139 adds two upload evidence tables,
     // one recovery index outside this test's `idx_%` subset, and seven immutability guards.
+    // 0140 adds an always-empty service batch assertion table and its abort trigger.
     assert.deepEqual(
       { ...counts },
-      { tables: 241, indexes: 349, triggers: 597 },
+      { tables: 242, indexes: 349, triggers: 598 },
     );
     assert.deepEqual(
       (db.prepare(

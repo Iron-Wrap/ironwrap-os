@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
+import { reportSafetyOccurrence } from "../src/safety-lifecycle.ts";
 import {
   authorityCurrentPrecondition,
   recordAuthorityReadback,
@@ -773,6 +774,89 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
   assert.equal(blockedPacket?.document.status, "Blocked");
 });
 
+test("native stop without an explanation blocks the package with an explicit missing reason", async () => {
+  const env = await testEnv();
+  const packet = definition();
+  await issueNativeWorkPackage(env, packet);
+  const input = {
+    kind: "stop_work" as const,
+    workPackageId: packet.workPackageId,
+    workPackageVersion: packet.version,
+    jobId: packet.jobId,
+    assignmentId: packet.assignmentId,
+    actorUser: "crew@example.com",
+    actorRole: "field",
+    deviceActionId: "stop-no-reason-native-1",
+    blockerReason: null,
+    ...scope(),
+  };
+  insertCommandReceipt(env, packet, "stop_work", input.deviceActionId);
+  const stopped = await nativeAction(env, packet, input);
+  assert.deepEqual(await nativeAction(env, packet, input), stopped);
+  const event = env.DB.sqlite
+    .prepare("SELECT payload_json FROM work_package_events WHERE event_id = ?")
+    .get(stopped.eventName) as { payload_json: string };
+  assert.equal(JSON.parse(event.payload_json).blocker_reason, null);
+  const blocked = await env.DB.prepare(
+    "SELECT status FROM work_packages WHERE tenant_id = ? AND work_package_id = ?",
+  )
+    .bind(packet.tenantId, packet.workPackageId)
+    .first<{ status: string }>();
+  assert.equal(blocked?.status, "Blocked");
+
+  const now = "2026-08-20T08:05:00.000Z";
+  const hazard = await reportSafetyOccurrence(env, {
+    occurrenceId: "occ_native_blocked_hazard",
+    tenantId: packet.tenantId,
+    occurrenceKind: "hazard",
+    severity: "high",
+    scope: { type: "work_package", id: packet.workPackageId },
+    reportedByUserId: "appu_crew_native",
+    reportedAt: now,
+    summary: "A new loose scaffold guard was found after the work stopped",
+    rescueRequired: false,
+    evidence: null,
+    capturedOffline: true,
+    deviceActionId: "safety-after-stop-123",
+    now,
+  });
+  assert.equal(hazard.occurrence.scope_type, "work_package");
+  assert.equal(hazard.occurrence.scope_id, packet.workPackageId);
+  const stillBlocked = await env.DB.prepare(
+    "SELECT status FROM work_packages WHERE tenant_id = ? AND work_package_id = ?",
+  )
+    .bind(packet.tenantId, packet.workPackageId)
+    .first<{ status: string }>();
+  assert.equal(stillBlocked?.status, "Blocked");
+
+  const replacement: NativeWorkPackageDefinition = {
+    ...packet,
+    workPackageId: "wp_native_iro195_v2",
+    version: 2,
+    deviceActionId: "issue-after-stop-123",
+    manifestKey: "work-packages/issue-after-stop-123.json",
+    releaseAttemptId: "attempt-after-stop-v2",
+    issuedAt: "2026-08-20T10:00:00.000Z",
+    releasedAt: "2026-08-20T10:00:00.000Z",
+    expiresAt: "2026-08-21T10:00:00.000Z",
+    supersedesId: packet.workPackageId,
+    supersedesVersion: packet.version,
+    correctionReason: "The scaffold guard was replaced",
+  };
+  await assert.rejects(
+    issueNativeWorkPackage(env, replacement),
+    /work_package_stop_release_required/,
+  );
+  assert.equal(
+    env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_packages").get().count,
+    1,
+  );
+  assert.equal(
+    env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_package_supersessions").get().count,
+    0,
+  );
+});
+
 test("native Work Package issuance is atomic and rejects inactive or wrong-role participants", async () => {
   const atomicEnv = await testEnv();
   atomicEnv.DB.sqlite.exec(
@@ -985,6 +1069,62 @@ test("native Work Package supersession is one atomic append-only fact", async ()
         deviceActionId: "issue-native-195-2-conflict",
       }),
     /work_package_definition_conflict/,
+  );
+});
+
+test("a stop between issue preflight and the D1 batch prevents supersession", async () => {
+  const env = await testEnv();
+  const first = definition();
+  await issueNativeWorkPackage(env, first);
+  const replacement: NativeWorkPackageDefinition = {
+    ...first,
+    workPackageId: "wp_native_stop_race_v2",
+    version: 2,
+    deviceActionId: "issue-native-stop-race-v2",
+    manifestKey: "work-packages/issue-native-stop-race-v2.json",
+    releaseAttemptId: "attempt-native-stop-race-v2",
+    issuedAt: "2026-08-20T10:00:00.000Z",
+    releasedAt: "2026-08-20T10:00:00.000Z",
+    expiresAt: "2026-08-21T10:00:00.000Z",
+    supersedesId: first.workPackageId,
+    supersedesVersion: first.version,
+    correctionReason: "The unsafe work sequence was corrected",
+  };
+  const stop = {
+    kind: "stop_work" as const,
+    workPackageId: first.workPackageId,
+    workPackageVersion: first.version,
+    jobId: first.jobId,
+    assignmentId: first.assignmentId,
+    actorUser: "crew@example.com",
+    actorRole: "field",
+    deviceActionId: "stop-during-issue-race",
+    blockerReason: null,
+    ...scope(),
+  };
+  insertCommandReceipt(env, first, "stop_work", stop.deviceActionId);
+  const batch = env.DB.batch.bind(env.DB);
+  env.DB.batch = async (statements: Array<{ run(): unknown }>) => {
+    env.DB.batch = batch;
+    await nativeAction(env, first, stop);
+    return batch(statements);
+  };
+
+  await assert.rejects(
+    issueNativeWorkPackage(env, replacement),
+    /work_package_stop_release_required/,
+  );
+  const prior = env.DB.sqlite
+    .prepare("SELECT status FROM work_packages WHERE work_package_id = ?")
+    .get(first.workPackageId) as { status: string };
+  assert.equal(prior.status, "Blocked");
+  assert.equal(
+    env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_packages").get().count,
+    1,
+  );
+  assert.equal(
+    env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_package_supersessions").get().count,
+    0,
   );
 });
 

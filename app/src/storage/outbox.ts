@@ -35,12 +35,13 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
   fleet_pre_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/pre-trip-inspections$/,
   fleet_post_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/post-trip-inspections$/,
   fleet_defect_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/defects$/,
+  fleet_collision_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/collisions$/,
   // /api/v1/schema-fields/{entityType}/{entityId}/{fieldId}/values — the governed record-value
   // write route (`workers-bus/src/schema-forms-api.ts:65`). The field id is the third segment.
   schema_field_value: /^\/api\/v1\/schema-fields\/[^/?#]+\/[^/?#]+\/[^/?#]+\/values$/,
 };
 const WORK_PACKAGE_ID_MAX_LENGTH = 140;
-const STOP_WORK_REASON_MAX_LENGTH = 1_000;
+const STOP_WORK_REASON_MAX_LENGTH = 4_000;
 const FLEET_ASSET_ID_MAX_LENGTH = 140;
 const FLEET_TEXT_MAX_LENGTH = 1_200;
 const FLEET_INSPECTION_ITEM_LIMIT = 60;
@@ -543,6 +544,7 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   }
   if (fleetInspectionKinds.has(input.kind)) assertFleetInspectionPayload(input.payload);
   if (input.kind === "fleet_defect_report") assertFleetDefectPayload(input.payload);
+  if (input.kind === "fleet_collision_report") assertFleetCollisionPayload(input.payload);
   if (input.kind === "schema_field_value") assertSchemaFieldValuePayload(input.payload);
   if (input.kind === "safety_corrective_evidence") correctiveEvidenceSchema.parse(input.payload);
   for (const attachment of input.attachments ?? []) {
@@ -647,9 +649,7 @@ function assertWorkPackageStopPayload(payload: unknown, typedScope = false): voi
   ];
   const allowedKeys = [...baseKeys, ...(typedScope ? scopeKeys : [])];
   if (
-    (keys.length !== (typedScope ? 7 : 3) && keys.length !== (typedScope ? 8 : 4)) ||
     !("work_package_id" in value) ||
-    !("blocker_reason" in value) ||
     !("work_package_version" in value) ||
     keys.some((key) => !allowedKeys.includes(key)) ||
     (typedScope && scopeKeys.some((key) => !(key in value)))
@@ -657,7 +657,14 @@ function assertWorkPackageStopPayload(payload: unknown, typedScope = false): voi
     throw new Error("Stop Work payload is invalid.");
   }
   assertBoundedText(value.work_package_id, "Work Package ID", WORK_PACKAGE_ID_MAX_LENGTH);
-  assertBoundedText(value.blocker_reason, "Stop Work reason", STOP_WORK_REASON_MAX_LENGTH);
+  if ("blocker_reason" in value) {
+    const reason = value.blocker_reason;
+    if (
+      reason !== null &&
+      (typeof reason !== "string" || reason.length > STOP_WORK_REASON_MAX_LENGTH)
+    )
+      throw new Error("Stop Work reason is too long or invalid.");
+  }
   assertPositiveInteger(value.work_package_version, "Work Package version");
   if ("release_attempt_id" in value)
     assertBoundedText(
@@ -766,6 +773,33 @@ function assertFleetDefectPayload(payload: unknown): void {
   assertBoundedText(value.description, "Defect description", FLEET_TEXT_MAX_LENGTH);
   if (value.asset_inspection_id !== undefined) {
     assertBoundedText(value.asset_inspection_id, "Inspection ID", FLEET_ASSET_ID_MAX_LENGTH);
+  }
+}
+
+/** The collision route's own body (`workers-bus/src/fleet-collision-api.ts`), without photos. */
+function assertFleetCollisionPayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  assertExactKeys(
+    value,
+    ["collision_id", "occurred_at", "severity", "description"],
+    [],
+    "Collision report payload is invalid.",
+  );
+  if (
+    typeof value.collision_id !== "string" ||
+    !/^fc_[A-Za-z0-9._:-]{8,60}$/.test(value.collision_id)
+  ) {
+    throw new PlainError("A collision report needs its own report ID.");
+  }
+  assertUtcTimestamp(value.occurred_at, "Collision time");
+  if (typeof value.severity !== "string" || !fleetDefectSeverities.has(value.severity)) {
+    throw new PlainError("A collision report needs a Minor, Major, or Out of Service severity.");
+  }
+  assertBoundedText(value.description, "What happened", FLEET_TEXT_MAX_LENGTH);
+  // The Worker keeps at least three characters once trimmed; a shorter report saved here would
+  // only be refused after the driver has left.
+  if ((value.description as string).trim().length < 3) {
+    throw new Error("What happened needs at least three characters.");
   }
 }
 

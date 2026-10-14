@@ -525,6 +525,19 @@ normalization function. This lets the owner see exactly which saved contact cust
 `null` means no public contact, while a null phone beside a valid email means the phone will not
 be shown. Defaults never become a public contact.
 
+### Crew office contact
+
+Authenticated `GET /api/v1/jobs/{job}` and the universal work-object read include
+`office_contact: { phone: string | null, email: string | null } | null`. This is the same
+tenant-scoped, owner-saved public contact used by the customer portal and Company details preview.
+It never uses the customer's `packet.contact`, deployment defaults or staff identities. An
+unsaved profile or no valid public contact yields `null`; a profile read failure leaves the work
+plan available with `office_contact: null` and `office_contact.unavailable` in `stale_fields`, so
+the missing contact is not mistaken for an owner choice. The profile update time participates in
+`source_updated_at`. A crew phone may retain a previously read job packet offline, so its UI must
+identify cached contact as last-synced information rather than a live directory lookup. Both
+authenticated read responses, including refusals, use `Cache-Control: private, no-store`.
+
 ### Public instant-estimate activation
 
 Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`

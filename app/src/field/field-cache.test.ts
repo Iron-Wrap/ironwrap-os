@@ -3,8 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthenticatedSession } from "../auth/session";
 import { storeDeviceSecret } from "../auth/device-credential";
 import { resetDatabaseForTests } from "../storage/db";
-import { hasCachedJobPacket, loadJob, prefetchAssignedPackets } from "./field-cache";
-import type { JobResponse, TodayResponse } from "./field-contracts";
+import {
+  hasCachedJobPacket,
+  loadJob,
+  loadOfficeContact,
+  loadToday,
+  loadWorkObject,
+  prefetchAssignedPackets,
+} from "./field-cache";
+import type { JobResponse, TodayResponse, WorkObjectResponse } from "./field-contracts";
 
 const session = {
   version: 1,
@@ -223,5 +230,302 @@ describe("field packet cache", () => {
       vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
     );
     expect(JSON.stringify(cached)).not.toContain("p".repeat(43));
+  });
+
+  it("keeps the office contact of the newest job read for screens that carry none", async () => {
+    const answer = (model: JobResponse) =>
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(model));
+    expect(await loadOfficeContact(session)).toBeNull();
+
+    // An older Worker sends no contact: the phone learns nothing.
+    await loadJob(session, "JOB-A", answer(job("JOB-A")));
+    expect(await loadOfficeContact(session)).toBeNull();
+
+    const office = { phone: "+14035550100", email: "office@example.invalid" };
+    await loadJob(
+      session,
+      "JOB-A",
+      answer({
+        ...job("JOB-A"),
+        office_contact: office,
+        read_model_generated_at: "2026-07-10T11:00:00.000Z",
+      }),
+    );
+    expect(await loadOfficeContact(session)).toEqual({
+      contact: office,
+      synced_at: "2026-07-10T11:00:00.000Z",
+    });
+
+    // A failed profile read says nothing about the contact, so the known one stays.
+    await loadJob(
+      session,
+      "JOB-B",
+      answer({
+        ...job("JOB-B"),
+        office_contact: null,
+        stale_fields: ["office_contact.unavailable"],
+      }),
+    );
+    expect((await loadOfficeContact(session))?.contact).toEqual(office);
+
+    // The owner removed the contact: the phone forgets it.
+    await loadJob(
+      session,
+      "JOB-B",
+      answer({
+        ...job("JOB-B"),
+        office_contact: null,
+        read_model_generated_at: "2026-07-10T12:00:00.000Z",
+      }),
+    );
+    expect((await loadOfficeContact(session))?.contact).toBeNull();
+
+    // A cached packet read offline never writes it.
+    const offlineFetcher = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline"));
+    await loadJob(session, "JOB-A", offlineFetcher);
+    expect((await loadOfficeContact(session))?.contact).toBeNull();
+  });
+
+  it("keeps the contact of the read generated last when reads finish out of order", async () => {
+    const answer = (model: JobResponse) =>
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(model));
+    const newer = { phone: "+14035550199", email: null };
+    const older = { phone: "+14035550100", email: "office@example.invalid" };
+    await loadJob(
+      session,
+      "JOB-A",
+      answer({
+        ...job("JOB-A"),
+        office_contact: newer,
+        read_model_generated_at: "2026-07-10T12:00:00.000Z",
+      }),
+    );
+    await loadJob(
+      session,
+      "JOB-B",
+      answer({
+        ...job("JOB-B"),
+        office_contact: older,
+        read_model_generated_at: "2026-07-10T11:00:00.000Z",
+      }),
+    );
+    expect(await loadOfficeContact(session)).toEqual({
+      contact: newer,
+      synced_at: "2026-07-10T12:00:00.000Z",
+    });
+
+    // A removal reported by an older read does not undo the newer contact either.
+    await loadJob(
+      session,
+      "JOB-B",
+      answer({
+        ...job("JOB-B"),
+        office_contact: null,
+        read_model_generated_at: "2026-07-10T11:30:00.000Z",
+      }),
+    );
+    expect((await loadOfficeContact(session))?.contact).toEqual(newer);
+  });
+
+  it("settles two reads generated at the same instant the same way in either order", async () => {
+    const first = { phone: "+14035550100", email: null };
+    const second = { phone: null, email: "office@example.invalid" };
+    const settle = async (contacts: (typeof first | typeof second)[]) => {
+      await resetDatabaseForTests();
+      for (const office_contact of contacts) {
+        await loadJob(
+          session,
+          "JOB-A",
+          vi.fn<typeof fetch>().mockResolvedValue(
+            Response.json({
+              ...job("JOB-A"),
+              office_contact,
+              read_model_generated_at: "2026-07-10T12:00:00.000Z",
+            }),
+          ),
+        );
+      }
+      return (await loadOfficeContact(session))?.contact;
+    };
+    expect(await settle([first, second])).toEqual(await settle([second, first]));
+  });
+
+  it("keeps a job whose office contact is malformed, with the last good contact", async () => {
+    const office = { phone: "+14035550100", email: "office@example.invalid" };
+    await loadJob(
+      session,
+      "JOB-A",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          ...job("JOB-A"),
+          office_contact: office,
+          read_model_generated_at: "2026-07-10T11:00:00.000Z",
+        }),
+      ),
+    );
+    const model = await loadJob(
+      session,
+      "JOB-B",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          ...job("JOB-B"),
+          office_contact: { phone: "403-555-0100", email: null },
+          read_model_generated_at: "2026-07-10T12:00:00.000Z",
+        }),
+      ),
+    );
+    expect(model.job.id).toBe("JOB-B");
+    expect(model.office_contact).toBeUndefined();
+    expect(model.stale_fields).toEqual([
+      "packet.contact.access_instructions",
+      "office_contact.unavailable",
+    ]);
+    expect(await loadOfficeContact(session)).toEqual({
+      contact: office,
+      synced_at: "2026-07-10T11:00:00.000Z",
+    });
+  });
+
+  it("returns the fresh job when keeping its office contact fails", async () => {
+    await loadJob(
+      session,
+      "JOB-A",
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(job("JOB-A"))),
+    );
+    const put = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey,
+    ) {
+      if ((value as { key?: string }).key?.endsWith(":office-contact")) {
+        throw new DOMException("The phone is out of space.", "QuotaExceededError");
+      }
+      return put.call(this, value, key);
+    });
+
+    const model = await loadJob(
+      session,
+      "JOB-A",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          ...job("JOB-A"),
+          source_updated_at: "2026-07-10T12:00:00.000Z",
+          office_contact: { phone: "+14035550100", email: null },
+        }),
+      ),
+    );
+    expect(model.source_updated_at).toBe("2026-07-10T12:00:00.000Z");
+    expect(model.stale_fields).not.toContain("offline.cached_packet");
+    expect(model.office_contact).toEqual({ phone: "+14035550100", email: null });
+    expect(await loadOfficeContact(session)).toBeNull();
+  });
+});
+
+/** Makes IndexedDB refuse to store any field-cache record whose key ends with `suffix`. */
+function failCachePuts(matches: (key: string) => boolean) {
+  const put = IDBObjectStore.prototype.put;
+  vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (
+    this: IDBObjectStore,
+    value: unknown,
+    key?: IDBValidKey,
+  ) {
+    const recordKey = (value as { key?: string }).key;
+    if (recordKey && matches(recordKey)) {
+      throw new DOMException("The phone is out of space.", "QuotaExceededError");
+    }
+    return put.call(this, value, key);
+  });
+}
+
+function workObject(): WorkObjectResponse {
+  return {
+    version: 1,
+    source_updated_at: "2026-07-10T10:00:00.000Z",
+    read_model_generated_at: "2026-07-10T10:00:00.000Z",
+    stale_fields: [],
+    permissions: ["jobs:read:assigned"],
+    allowed_actions: [],
+    work_object: {
+      workObjectType: "Roof Job",
+      workObjectId: "JOB-A",
+      physicalContextType: "Roof Site",
+      physicalContextId: "SITE-A",
+    },
+    assignment: null,
+    work_package: null,
+  };
+}
+
+describe("a live read this phone cannot keep", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDatabaseForTests();
+  });
+
+  const fresh = "2026-07-10T12:00:00.000Z";
+  const answer = (model: unknown) => vi.fn<typeof fetch>().mockResolvedValue(Response.json(model));
+
+  it("shows the fresh Today list, marked not saved, instead of an older copy or an error", async () => {
+    await loadToday(session, answer(today(["JOB-OLD"])));
+    failCachePuts((key) => key.endsWith(":today"));
+
+    const model = await loadToday(
+      session,
+      answer({ ...today(["JOB-NEW"]), source_updated_at: fresh }),
+    );
+    expect(model.jobs.map((job) => job.id)).toEqual(["JOB-NEW"]);
+    expect(model.stale_fields).toEqual(["offline.not_saved"]);
+  });
+
+  it("shows the fresh job, marked not saved, and still keeps its office contact", async () => {
+    await loadJob(session, "JOB-A", answer(job("JOB-A")));
+    failCachePuts((key) => key.endsWith(":job:JOB-A"));
+    const office = { phone: "+14035550100", email: null };
+
+    const model = await loadJob(
+      session,
+      "JOB-A",
+      answer({ ...job("JOB-A"), source_updated_at: fresh, office_contact: office }),
+    );
+    expect(model.source_updated_at).toBe(fresh);
+    expect(model.stale_fields).toContain("offline.not_saved");
+    expect(model.stale_fields).not.toContain("offline.cached_packet");
+    expect((await loadOfficeContact(session))?.contact).toEqual(office);
+  });
+
+  it("shows the fresh work plan, marked not saved", async () => {
+    failCachePuts((key) => key.includes(":work-object:"));
+    const scope = workObject().work_object;
+
+    const model = await loadWorkObject(
+      session,
+      scope,
+      answer({ ...workObject(), source_updated_at: fresh }),
+    );
+    expect(model.source_updated_at).toBe(fresh);
+    expect(model.stale_fields).toEqual(["offline.not_saved"]);
+  });
+
+  it("does not count a job the phone could not keep as saved for offline use", async () => {
+    failCachePuts((key) => key.endsWith(":job:JOB-B"));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (input) =>
+        Response.json(job(String(input).endsWith("JOB-A") ? "JOB-A" : "JOB-B")),
+      );
+    const onPacket = vi.fn();
+
+    const result = await prefetchAssignedPackets(session, today(["JOB-A", "JOB-B"]), {
+      fetcher,
+      onPacket,
+    });
+    expect(result).toEqual({ "JOB-A": true, "JOB-B": false });
+    expect(onPacket).toHaveBeenCalledWith(
+      "JOB-B",
+      false,
+      expect.objectContaining({ job: expect.objectContaining({ id: "JOB-B" }) }),
+    );
+    expect(await hasCachedJobPacket(session, "JOB-B")).toBe(false);
   });
 });

@@ -18,7 +18,7 @@ class D1 {
   symptomReadBarrier: (() => Promise<void>) | null = null;
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const file of ["0011_app_bff_auth.sql", "0013_field_action_throttles.sql", "0042_external_effect_runtime.sql", "0047_safety_lifecycle.sql", "0056_service_case_lifecycle.sql", "0139_evidence_upload_receipts.sql"]) {
+    for (const file of ["0011_app_bff_auth.sql", "0013_field_action_throttles.sql", "0042_external_effect_runtime.sql", "0047_safety_lifecycle.sql", "0056_service_case_lifecycle.sql", "0139_evidence_upload_receipts.sql", "0140_service_case_atomic_steps.sql"]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     this.raw.exec(`ALTER TABLE app_users ADD COLUMN access_role TEXT;
@@ -52,6 +52,18 @@ class D1 {
         },
       };
     } };
+  }
+  async batch(statements: Array<{ run: () => Promise<unknown> }>): Promise<unknown[]> {
+    this.raw.exec("BEGIN IMMEDIATE");
+    try {
+      const results: unknown[] = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 function fixture() {

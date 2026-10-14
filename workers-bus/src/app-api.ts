@@ -392,7 +392,7 @@ function unauthenticatedAppResponse(
         })
       : privateAppJson(unauthenticatedSessionPayload(appEnv));
   } else {
-    response = appJson({ error: "unauthorized" }, 401);
+    response = privateAppJson({ error: "unauthorized" }, 401);
   }
   response.headers.set("set-cookie", expiredSessionCookie());
   return response;
@@ -1572,12 +1572,12 @@ export async function handleAuthenticatedRoute(
     if (!canReadJobs(auth))
       return privateAppJson({ error: "job_read_required" }, 403);
     const scope = decodeWorkObjectScope(universalWorkObjectMatch);
-    if (!scope) return appJson({ error: "not_found" }, 404);
+    if (!scope) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildUniversalWorkPackageReadModel(env, auth, scope);
-      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+      return model ? privateAppJson(model) : privateAppJson({ error: "not_found" }, 404);
     } catch {
-      return appJson({ error: "upstream_unavailable" }, 502);
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
@@ -1683,12 +1683,12 @@ export async function handleAuthenticatedRoute(
     if (!canReadJobs(auth))
       return privateAppJson({ error: "job_read_required" }, 403);
     const jobName = decodedPathSegment(jobMatch[1]);
-    if (!jobName) return appJson({ error: "not_found" }, 404);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildJobReadModel(env, auth, jobName);
-      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+      return model ? privateAppJson(model) : privateAppJson({ error: "not_found" }, 404);
     } catch {
-      return appJson({ error: "upstream_unavailable" }, 502);
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
   const jobPhaseMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/phase$/);
@@ -2621,9 +2621,11 @@ async function handleOfficeWorkPackageIssueRoute(
     const replay =
       head?.version === input.version && head.workPackageId === workPackageId;
     if (!replay) {
+      if (head?.status === "Blocked")
+        return privateAppJson({ error: "work_package_stop_release_required" }, 409);
       if (
         head &&
-        !["Released", "Acknowledged", "In Progress", "Blocked"].includes(
+        !["Released", "Acknowledged", "In Progress"].includes(
           head.status,
         )
       )
@@ -6756,7 +6758,8 @@ function workPackageOfficeActionError(error: unknown): { error: string } {
     error.message === "work_package_required_worker_missing" ||
     error.message === "work_package_worker_duplicate" ||
     error.message === "work_package_assignment_snapshot_invalid" ||
-    error.message === "work_package_assignment_snapshot_stale"
+    error.message === "work_package_assignment_snapshot_stale" ||
+    error.message === "work_package_stop_release_required"
   ) {
     return { error: code };
   }
@@ -6800,7 +6803,8 @@ function workPackageOfficeActionStatus(error: unknown): number {
     error.message === "work_package_required_worker_missing" ||
     error.message === "work_package_worker_duplicate" ||
     error.message === "work_package_assignment_snapshot_invalid" ||
-    error.message === "work_package_assignment_snapshot_stale"
+    error.message === "work_package_assignment_snapshot_stale" ||
+    error.message === "work_package_stop_release_required"
   ) {
     return 409;
   }

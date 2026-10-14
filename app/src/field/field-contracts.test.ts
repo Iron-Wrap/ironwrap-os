@@ -159,4 +159,35 @@ describe("field response validation", () => {
     if (result.success) throw new Error("Malformed proof was accepted");
     expect(result.error.issues[0]?.path).toEqual(["items", 0, "blocker"]);
   });
+
+  it("reads the saved office contact with the customer portal's rules, and only those", () => {
+    for (const office_contact of [
+      undefined,
+      null,
+      { phone: "+14035550100", email: "office@example.invalid" },
+      { phone: null, email: "first..last@example.invalid" },
+      { phone: "+14035550100", email: null },
+    ]) {
+      expect(
+        contracts.workObjectResponseSchema.safeParse({ ...workObject(), office_contact }).success,
+      ).toBe(true);
+    }
+    // A malformed contact is dropped and marked unavailable; the work plan itself still reads.
+    for (const office_contact of [
+      { phone: "403-555-0100", email: null },
+      { phone: null, email: "not-an-email" },
+      { phone: null, email: null, staff_name: "Pat" },
+      { phone: "+14035550100" },
+      "+14035550100",
+    ]) {
+      const result = contracts.workObjectResponseSchema.safeParse({
+        ...workObject(),
+        office_contact,
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error("A malformed office contact hid the work plan");
+      expect(result.data.office_contact).toBeUndefined();
+      expect(result.data.stale_fields).toContain("office_contact.unavailable");
+    }
+  });
 });

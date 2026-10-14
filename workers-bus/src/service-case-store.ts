@@ -436,7 +436,7 @@ export async function recordServiceTriage(
   input: RecordServiceTriageInput,
 ): Promise<{ triage: ServiceCaseTriageRecord; serviceCase: ServiceCaseRecord }> {
   const current = await requireCase(env, input.tenantId, input.serviceCaseId);
-  await env.DB.prepare(
+  const childWrite = env.DB.prepare(
     `INSERT INTO service_case_triage (
       triage_id, service_case_id, tenant_id, case_version, advisory_source, advisory_category,
       advisory_confidence_bps, final_category, responsibility, authority_kind, decided_by_user_id,
@@ -457,9 +457,9 @@ export async function recordServiceTriage(
     input.evidenceDigest,
     input.now,
     input.now,
-  ).run();
+  );
 
-  const serviceCase = await advanceCase(env, {
+  const serviceCase = await advanceCaseWithChild(env, childWrite, {
     tenantId: input.tenantId,
     serviceCaseId: input.serviceCaseId,
     fromVersion: current.version,
@@ -469,7 +469,7 @@ export async function recordServiceTriage(
     evidenceDigest: input.evidenceDigest,
     actorUserId: input.decidedByUserId,
     now: input.now,
-  });
+  }, current.reopen_count);
   const triage = await env.DB.prepare(
     `SELECT * FROM service_case_triage WHERE triage_id = ? LIMIT 1`,
   ).bind(input.triageId).first<ServiceCaseTriageRecord>();
@@ -503,7 +503,7 @@ export async function recordServiceDiagnosis(
   input: RecordServiceDiagnosisInput,
 ): Promise<{ diagnosis: ServiceCaseDiagnosisRecord; serviceCase: ServiceCaseRecord }> {
   const current = await requireCase(env, input.tenantId, input.serviceCaseId);
-  await env.DB.prepare(
+  const childWrite = env.DB.prepare(
     `INSERT INTO service_case_diagnoses (
       diagnosis_id, service_case_id, tenant_id, case_version, triage_id, root_cause_code,
       corrective_action_code, recurrence_of_case_id, work_package_ref, work_package_version,
@@ -525,9 +525,9 @@ export async function recordServiceDiagnosis(
     input.diagnosedByUserId,
     input.now,
     input.now,
-  ).run();
+  );
 
-  const serviceCase = await advanceCase(env, {
+  const serviceCase = await advanceCaseWithChild(env, childWrite, {
     tenantId: input.tenantId,
     serviceCaseId: input.serviceCaseId,
     fromVersion: current.version,
@@ -537,7 +537,7 @@ export async function recordServiceDiagnosis(
     evidenceDigest: input.evidenceDigest,
     actorUserId: input.diagnosedByUserId,
     now: input.now,
-  });
+  }, current.reopen_count);
   const diagnosis = await env.DB.prepare(
     `SELECT * FROM service_case_diagnoses WHERE diagnosis_id = ? LIMIT 1`,
   ).bind(input.diagnosisId).first<ServiceCaseDiagnosisRecord>();
@@ -562,7 +562,7 @@ export async function issueServiceRemedy(
   input: IssueServiceRemedyInput,
 ): Promise<{ remedy: ServiceCaseRemedyRecord; serviceCase: ServiceCaseRecord }> {
   const current = await requireCase(env, input.tenantId, input.serviceCaseId);
-  await env.DB.prepare(
+  const childWrite = env.DB.prepare(
     `INSERT INTO service_case_remedies (
       remedy_id, service_case_id, tenant_id, case_version, diagnosis_id, scheduled_start_at,
       scheduled_end_at, parts_manifest_digest, field_evidence_digest, verification_state,
@@ -581,9 +581,9 @@ export async function issueServiceRemedy(
     input.partsManifestDigest,
     input.now,
     input.now,
-  ).run();
+  );
 
-  const serviceCase = await advanceCase(env, {
+  const serviceCase = await advanceCaseWithChild(env, childWrite, {
     tenantId: input.tenantId,
     serviceCaseId: input.serviceCaseId,
     fromVersion: current.version,
@@ -593,7 +593,7 @@ export async function issueServiceRemedy(
     evidenceDigest: input.partsManifestDigest,
     actorUserId: input.issuedByUserId,
     now: input.now,
-  });
+  }, current.reopen_count);
   return { remedy: await requireRemedy(env, input.remedyId), serviceCase };
 }
 
@@ -622,11 +622,12 @@ export async function verifyServiceRemedy(
   if (input.outcome === "failed" && !input.failureCode) {
     throw new Error("service_case_remedy_failure_code_required");
   }
-  await env.DB.prepare(
+  const childWrite = env.DB.prepare(
     `UPDATE service_case_remedies
      SET verification_state = ?, field_evidence_digest = ?, verified_at = ?,
          verified_by_user_id = ?, failure_code = ?, cost_actual_cents = ?, updated_at = ?
-     WHERE remedy_id = ? AND tenant_id = ? AND verification_state = 'pending'`,
+     WHERE remedy_id = ? AND tenant_id = ? AND service_case_id = ?
+       AND verification_state = 'pending'`,
   ).bind(
     input.outcome,
     input.fieldEvidenceDigest,
@@ -637,13 +638,10 @@ export async function verifyServiceRemedy(
     input.now,
     input.remedyId,
     input.tenantId,
-  ).run();
+    input.serviceCaseId,
+  );
 
-  const remedy = await requireRemedy(env, input.remedyId);
-  if (remedy.verification_state !== input.outcome) {
-    throw new Error("service_case_remedy_verification_not_recorded");
-  }
-  const serviceCase = await advanceCase(env, {
+  const serviceCase = await advanceCaseWithChild(env, childWrite, {
     tenantId: input.tenantId,
     serviceCaseId: input.serviceCaseId,
     fromVersion: current.version,
@@ -653,8 +651,8 @@ export async function verifyServiceRemedy(
     evidenceDigest: input.fieldEvidenceDigest,
     actorUserId: input.verifiedByUserId,
     now: input.now,
-  });
-  return { remedy, serviceCase };
+  }, current.reopen_count, "service_case_remedy_verification_not_recorded");
+  return { remedy: await requireRemedy(env, input.remedyId), serviceCase };
 }
 
 export interface RecordCustomerServiceDecisionInput {
@@ -685,11 +683,12 @@ export async function recordCustomerServiceDecision(
   if (input.decision === "disputed" && !input.disputeCode) {
     throw new Error("service_case_dispute_code_required");
   }
-  await env.DB.prepare(
+  const childWrite = env.DB.prepare(
     `UPDATE service_case_remedies
      SET customer_acceptance_state = ?, customer_decision_at = ?, customer_acceptance_ref = ?,
          dispute_code = ?, updated_at = ?
-     WHERE remedy_id = ? AND tenant_id = ? AND verification_state = 'verified'
+     WHERE remedy_id = ? AND tenant_id = ? AND service_case_id = ?
+       AND verification_state = 'verified'
        AND customer_acceptance_state = 'pending'`,
   ).bind(
     input.decision,
@@ -699,13 +698,10 @@ export async function recordCustomerServiceDecision(
     input.now,
     input.remedyId,
     input.tenantId,
-  ).run();
+    input.serviceCaseId,
+  );
 
-  const remedy = await requireRemedy(env, input.remedyId);
-  if (remedy.customer_acceptance_state !== input.decision) {
-    throw new Error("service_case_customer_decision_not_recorded");
-  }
-  const serviceCase = await advanceCase(env, {
+  const serviceCase = await advanceCaseWithChild(env, childWrite, {
     tenantId: input.tenantId,
     serviceCaseId: input.serviceCaseId,
     fromVersion: current.version,
@@ -715,8 +711,8 @@ export async function recordCustomerServiceDecision(
     evidenceDigest: input.evidenceDigest,
     actorUserId: input.actorUserId,
     now: input.now,
-  });
-  return { remedy, serviceCase };
+  }, current.reopen_count, "service_case_customer_decision_not_recorded");
+  return { remedy: await requireRemedy(env, input.remedyId), serviceCase };
 }
 
 export interface CloseServiceCaseInput {
@@ -805,22 +801,26 @@ interface AdvanceCaseInput {
  * digest, a closure reason that does not belong to the source state, and any reopen that would
  * drop the closure history.
  *
- * The guard reads the `RETURNING` row, never `meta.changes`. `service_cases` carries the
+ * The standalone transition reads the `RETURNING` row, never `meta.changes`. `service_cases` carries the
  * `service_cases_append_transition_event` AFTER-UPDATE trigger, and D1 counts trigger-written rows
  * in `meta.changes` -- a legal transition reports 2, so a `changes !== 1` guard refuses every
  * transition *after* it has already committed. `RETURNING` yields exactly the rows this statement
- * matched: one row when the version was ours, none when another writer took it.
+ * matched: one row when the version was ours, none when another writer took it. Batched child
+ * transitions use SQLite's changes() in the next statement, which excludes trigger side effects.
  */
-async function advanceCase(env: AppEnv, input: AdvanceCaseInput): Promise<ServiceCaseRecord> {
-  const reopenCount = input.reopenCount
-    ?? (await requireCase(env, input.tenantId, input.serviceCaseId)).reopen_count;
-  const applied = await env.DB.prepare(
+function caseTransitionStatement(
+  env: AppEnv,
+  input: AdvanceCaseInput,
+  reopenCount: number,
+  returning: boolean,
+): ReturnType<AppEnv["DB"]["prepare"]> {
+  return env.DB.prepare(
     `UPDATE service_cases
      SET state = ?, version = version + 1, last_event_type = ?, last_transition_code = ?,
          last_evidence_digest = ?, closure_reason = ?, closed_at = ?, reopen_count = ?,
          last_actor_user_id = ?, updated_at = ?
      WHERE tenant_id = ? AND service_case_id = ? AND version = ?
-     RETURNING version`,
+     ${returning ? "RETURNING version" : ""}`,
   ).bind(
     input.state,
     input.eventType,
@@ -834,7 +834,55 @@ async function advanceCase(env: AppEnv, input: AdvanceCaseInput): Promise<Servic
     input.tenantId,
     input.serviceCaseId,
     input.fromVersion,
-  ).first<{ version: number }>();
+  );
+}
+
+/**
+ * D1 batches are transactions, but a CAS UPDATE that matches zero rows is still a successful SQL
+ * statement. The immediately following guard aborts that transaction when changes() is not one.
+ * For remedy updates, a second guard ensures the pending child row was actually changed. This
+ * keeps the child, case version, and trigger-written event one indivisible business step.
+ */
+async function advanceCaseWithChild(
+  env: AppEnv,
+  childWrite: ReturnType<AppEnv["DB"]["prepare"]>,
+  input: AdvanceCaseInput,
+  reopenCount: number,
+  childConflictCode?: string,
+): Promise<ServiceCaseRecord> {
+  const guard = (kind: "child" | "transition") => env.DB.prepare(
+    `INSERT INTO service_case_batch_guard (kind)
+     SELECT ? WHERE changes() != 1`,
+  ).bind(kind);
+  try {
+    await env.DB.batch([
+      childWrite,
+      ...(childConflictCode ? [guard("child")] : []),
+      caseTransitionStatement(env, input, reopenCount, false),
+      guard("transition"),
+    ]);
+  } catch (error) {
+    if (childConflictCode && String(error).includes("service_case_child_write_conflict")) {
+      throw new Error(childConflictCode);
+    }
+    // Triage has its own direct-write version trigger. If another writer moved the case between
+    // requireCase and this batch, expose the same stable conflict as the case CAS guard.
+    if (String(error).includes("service_case_triage_case_version_mismatch")) {
+      const latest = await requireCase(env, input.tenantId, input.serviceCaseId);
+      if (latest.version !== input.fromVersion) {
+        throw new Error("service_case_transition_conflict");
+      }
+    }
+    throw error;
+  }
+  return requireCase(env, input.tenantId, input.serviceCaseId);
+}
+
+async function advanceCase(env: AppEnv, input: AdvanceCaseInput): Promise<ServiceCaseRecord> {
+  const reopenCount = input.reopenCount
+    ?? (await requireCase(env, input.tenantId, input.serviceCaseId)).reopen_count;
+  const applied = await caseTransitionStatement(env, input, reopenCount, true)
+    .first<{ version: number }>();
   if (!applied) throw new Error("service_case_transition_conflict");
   return requireCase(env, input.tenantId, input.serviceCaseId);
 }

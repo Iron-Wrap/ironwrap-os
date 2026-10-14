@@ -40,17 +40,19 @@ import {
   listDocumentTemplates,
   reviseDocumentTemplate,
   getDocumentGenerationReceipt,
+  getDocumentGenerationAttempt,
+  getLatestDocumentGenerationReceipt,
   type DocumentGenerationReceipt,
   type DocumentTemplateInput,
   type DocumentTemplateRevision,
 } from "./document-templates.ts";
 import {
   generateDocumentToR2,
+  generationIds,
   reconcileDocumentR2,
   type R2DocumentGenerationResult,
 } from "./document-generation-r2.ts";
 import { EffectRuntimeError } from "./effect-runtime.ts";
-import { sha256Hex } from "./newo-hash.ts";
 import { knownEntityType } from "./pipeline-board-store.ts";
 
 const ADMIN_FIELDS = "/api/v1/admin/schema-fields";
@@ -59,6 +61,7 @@ const RECORD_FIELDS = "/api/v1/schema-fields";
 const RECORD_DOCUMENTS = "/api/v1/documents";
 const DOCUMENT_GENERATIONS = "/api/v1/document-generations";
 const MAX_BODY_BYTES = 32 * 1024;
+const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
 
 const ADMIN_FIELD_ROUTE = /^\/api\/v1\/admin\/schema-fields\/([^/]+)$/;
 const ADMIN_FIELD_REVISIONS_ROUTE =
@@ -176,6 +179,31 @@ async function documentGenerationRoot(
   auth: AuthContext,
   now: Date,
 ): Promise<Response> {
+  if (req.method === "GET") {
+    // A recovery read never executes or reconciles an effect. Its identity survives a lost POST
+    // answer and a page reload; the append-only receipt may have advanced since that answer.
+    const key = req.headers.get("idempotency-key") ?? "";
+    if (!/^[A-Za-z0-9._:-]{8,140}$/.test(key))
+      return json({ error: "idempotency_key_required" }, 400);
+    const { attemptId } = await generationIds(auth.session.tenant_id, key);
+    const attempt = await getDocumentGenerationAttempt(
+      env,
+      auth.session.tenant_id,
+      attemptId,
+    );
+    if (!attempt) return json({ error: "not_found" }, 404);
+    const receipt = await getLatestDocumentGenerationReceipt(
+      env,
+      auth.session.tenant_id,
+      attemptId,
+    );
+    if (!receipt) return json({ error: "document_generation_in_flight" }, 409);
+    return json({
+      outcome: receipt.reconciliation_outcome,
+      generation: generationReceiptView(receipt),
+      attachment: null,
+    });
+  }
   if (req.method !== "POST") return json({ error: "not_found" }, 404);
   const mutation = await mutationInput(req, auth);
   if ("response" in mutation) return mutation.response;
@@ -266,6 +294,12 @@ async function documentGenerationObject(
       409,
     );
   const bucket = (env as { RAW?: R2Bucket }).RAW;
+  const expectedProviderId = `r2:documents/v1/${auth.session.tenant_id}/${receipt.generation_attempt_id}/${receipt.output_digest}.html`;
+  if (
+    receipt.provider !== "cloudflare-r2" ||
+    receipt.provider_document_id !== expectedProviderId
+  )
+    return json({ error: "document_generation_readback_mismatch" }, 409);
   if (!bucket || typeof bucket.get !== "function")
     return json({ error: "document_generation_r2_unavailable" }, 503);
   let object: R2ObjectBody | null;
@@ -275,8 +309,47 @@ async function documentGenerationObject(
     return json({ error: "document_generation_r2_unavailable" }, 503);
   }
   if (!object) return json({ error: "document_object_missing" }, 404);
-  const body = await object.text();
-  if ((await sha256Hex(body)) !== receipt.output_digest)
+  // Bound both the provider's declared size and the bytes actually delivered. Do not decode and
+  // re-encode before hashing: the receipt attests bytes, including malformed UTF-8 if tampered.
+  if (
+    !Number.isSafeInteger(object.size) ||
+    object.size < 1 ||
+    object.size > MAX_DOCUMENT_BYTES
+  ) {
+    await object.body.cancel().catch(() => {});
+    return json({ error: "document_object_too_large" }, 413);
+  }
+  const reader = object.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_DOCUMENT_BYTES || length > object.size) {
+        await reader.cancel();
+        return json({ error: "document_object_too_large" }, 413);
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return json({ error: "document_generation_r2_unavailable" }, 503);
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const digest = [
+    ...new Uint8Array(await crypto.subtle.digest("SHA-256", body)),
+  ]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  if (length !== object.size || digest !== receipt.output_digest)
     return json(
       {
         error: "document_generation_readback_mismatch",
@@ -288,12 +361,12 @@ async function documentGenerationObject(
     status: 200,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      "content-disposition": `inline; filename="${receipt.template_id}-v${receipt.template_version}.html"`,
+      "content-disposition": `${new URL(req.url).searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="document-v${receipt.template_version}.html"`,
       "cache-control": "private, no-store",
       "x-document-digest": receipt.output_digest,
       "x-content-type-options": "nosniff",
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'",
+        "sandbox; default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
     },
   });
 }

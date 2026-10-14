@@ -430,6 +430,16 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
     if (!replay) throw new Error("work_package_readback_missing");
     return replay;
   }
+  if (definition.supersedesId && definition.supersedesVersion) {
+    const prior = await packageRow(
+      env,
+      definition.tenantId,
+      definition.supersedesId,
+      definition.supersedesVersion,
+    );
+    if (prior?.status === "Blocked")
+      throw new Error("work_package_stop_release_required");
+  }
   const createdAt = definition.issuedAt;
   const packageInsert = env.DB.prepare(
     `INSERT INTO work_packages
@@ -486,7 +496,14 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
            job_id, assignment_id, work_object_type, work_object_id,
            physical_context_type, physical_context_id, actor_user_id, actor_role,
            correction_reason, manifest_key, occurred_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM work_packages prior
+             WHERE prior.tenant_id = ?
+               AND prior.work_package_id = ?
+               AND prior.version = ?
+               AND prior.status IN ('Released', 'Acknowledged', 'In Progress')
+          )`,
       ).bind(
         supersessionId,
         definition.tenantId,
@@ -508,12 +525,29 @@ export async function issueNativeWorkPackage(env: AppEnv, definition: NativeWork
         definition.manifestKey,
         definition.issuedAt,
         definition.issuedAt,
+        definition.tenantId,
+        definition.supersedesId,
+        definition.supersedesVersion,
       ),
     );
   }
   try {
     await env.DB.batch(statements);
   } catch (error) {
+    if (
+      definition.supersedesId &&
+      definition.supersedesVersion &&
+      String(error).includes("work_package_supersession_required")
+    ) {
+      const prior = await packageRow(
+        env,
+        definition.tenantId,
+        definition.supersedesId,
+        definition.supersedesVersion,
+      );
+      if (prior?.status === "Blocked")
+        throw new Error("work_package_stop_release_required");
+    }
     if (String(error).includes("work_package_assignment_snapshot_stale")) {
       throw new Error("work_package_assignment_snapshot_stale");
     }
@@ -856,7 +890,7 @@ export async function nativeWorkPackageAction(env: AppEnv, input: NativeWorkPack
       occurredAt,
       manifestKey: input.manifestKey ?? null,
       payload: {
-        blocker_reason: input.blockerReason,
+        blocker_reason: input.blockerReason?.trim() || null,
         work_package_id: input.workPackageId,
         work_package_version: input.workPackageVersion,
         ...(input.kind === "stop_work"
@@ -1239,7 +1273,6 @@ function assertActorAuthority(
   }
   if (!worker || (input.actorRole !== "field" && !sameUser(worker.workerRole, input.actorRole))) throw new Error("work_package_actor_not_assigned");
   if (input.kind === "stop_work") {
-    if (!input.blockerReason?.trim()) throw new Error("work_package_blocker_reason_required");
     return worker.workerRole;
   }
   if (input.kind === "acknowledge" && ["Released", "Acknowledged"].includes(row.status)) return worker.workerRole;

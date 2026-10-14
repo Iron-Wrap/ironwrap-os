@@ -262,6 +262,24 @@ The worker must be able to:
 Productivity scoring must never penalize a valid stop, hazard report, injury report, accommodation,
 or legally protected action.
 
+A crew member can stop work without first typing an explanation. An empty stop report keeps the
+reason as not provided in the immutable event; it must never be presented as a crew-stated hazard.
+The crew keeps work stopped while a saved offline report awaits delivery. Once the office receives
+the stop, it must ask what happened and record the follow-up before any independent release.
+The stop request may omit `blocker_reason`, send `null`, or send an empty string. The saved action
+keeps the exact submitted value; the native event records `null` for no explanation. Submitted
+words are never silently cut off: the request and offline outbox accept up to 4,000 characters.
+If the crew needs to report a new hazard after the work package is already Blocked, a new durable
+`report_occurrence` safety action scoped to that work package records it without trying to stop
+the same package twice. The current native stop write records the absence; the office follow-up,
+the second-hazard screen and independent release gate still need verified consumers before this
+workflow is accepted.
+
+A correction reason alone cannot supersede a Blocked work package. Until an independently
+verified stop-release record is available, office reissue returns
+`work_package_stop_release_required` and the package stays Blocked. This is a safe hold, not a
+completed release workflow.
+
 ## Physical completion
 
 A task is not complete because a worker or agent says “done.” Completion requires the task's

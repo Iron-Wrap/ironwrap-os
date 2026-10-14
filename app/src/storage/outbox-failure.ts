@@ -29,11 +29,21 @@ const evidenceNeedsWorkPackageCodes = new Set([
 ]);
 
 /**
+ * Answers after which the office may already hold this item, so neither "not sent" nor a resend
+ * is safe. `fleet_collision_storage_mismatch` is a 502 for a collision ID whose stored record the
+ * Worker cannot read: a retry of the same ID can only meet the same record.
+ */
+const unconfirmedCodes = new Set(["verification_mismatch", "fleet_collision_storage_mismatch"]);
+
+/**
  * Every code above, plus any further code `ironwrap-engineer` publishes for a refusal that no
  * retry can clear. Status classification below covers the rest, so this list only has to carry
  * codes whose status may still understate them.
  */
-const terminalFailureCodes = new Set([...evidenceNeedsWorkPackageCodes]);
+const terminalFailureCodes = new Set([
+  ...evidenceNeedsWorkPackageCodes,
+  "fleet_collision_storage_mismatch",
+]);
 
 export function isTerminalFailureCode(code: string | undefined): boolean {
   return code !== undefined && terminalFailureCodes.has(code);
@@ -50,7 +60,8 @@ export function classifyOutboxFailure(input: {
 }): OutboxFailureClass {
   if (isTerminalFailureCode(input.code)) return "terminal";
   const { status } = input;
-  // No status means the request never reached a server: transport, not a verdict.
+  // No status means no answer arrived: transport, not a verdict. The office may still have
+  // recorded the item, so the same saved item is sent again under its own key.
   if (status === undefined) return "retryable";
   if (status === 409 || status === 412) return "conflict";
   if (status === 408 || status === 429 || status >= 500) return "retryable";
@@ -65,6 +76,12 @@ export interface OutboxFailureGuidance {
   nextStep: string;
   /** False when trying the same item again can only fail the same way. */
   retryable: boolean;
+  /**
+   * True only when the office refused the item before acting on it, so "not sent" is a fact.
+   * A stopped item is otherwise "not confirmed": an answer that could not be verified, a
+   * conflict or a server error may follow work the office already recorded.
+   */
+  notSent: boolean;
 }
 
 /**
@@ -83,6 +100,19 @@ export function outboxFailureGuidance(
       nextStep:
         "Keep this item saved. Ask the office to check both copies before you make a new one.",
       retryable: false,
+      notSent: false,
+    };
+  }
+  // The office answered, but not with this exact item. It may already be recorded, so neither
+  // "not sent" nor a resend is safe: someone has to look at what the office has.
+  if (error && unconfirmedCodes.has(error.code)) {
+    return {
+      reason:
+        "The office answered, but this phone could not confirm the office has this exact item.",
+      nextStep:
+        "Do not save it again. Call the office and ask whether it arrived. It stays on this phone.",
+      retryable: false,
+      notSent: false,
     };
   }
   const failureClass = classifyOutboxFailure({
@@ -94,6 +124,7 @@ export function outboxFailureGuidance(
       reason: "The server could not take this item yet.",
       nextStep: "Try again once you have signal. Nothing was lost.",
       retryable: true,
+      notSent: false,
     };
   }
   if (error && evidenceNeedsWorkPackageCodes.has(error.code)) {
@@ -102,6 +133,7 @@ export function outboxFailureGuidance(
       nextStep:
         "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
       retryable: false,
+      notSent: true,
     };
   }
   return {
@@ -109,5 +141,6 @@ export function outboxFailureGuidance(
     nextStep:
       "Sending it again will not change the answer. Keep it on this phone and tell the office.",
     retryable: false,
+    notSent: true,
   };
 }

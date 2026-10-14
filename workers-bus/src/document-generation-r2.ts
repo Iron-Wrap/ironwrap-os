@@ -259,7 +259,7 @@ function assertGenerationEnabled(env: AppEnv): void {
   assertEffectLedgerReady(env);
 }
 
-async function generationIds(tenantId: string, idempotencyKey: string): Promise<{ attemptId: string; effectId: string }> {
+export async function generationIds(tenantId: string, idempotencyKey: string): Promise<{ attemptId: string; effectId: string }> {
   if (!/^[A-Za-z0-9._:-]{8,140}$/.test(idempotencyKey))
     throw new DocumentTemplatesError("document_generation_idempotency_invalid");
   const digest = await sha256Hex(canonicalJson({ tenant_id: tenantId, idempotency_key: idempotencyKey }));

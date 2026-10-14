@@ -217,7 +217,8 @@ export function isFleetOutboxKind(kind: string): boolean {
   return (
     kind === "fleet_pre_trip_inspection" ||
     kind === "fleet_post_trip_inspection" ||
-    kind === "fleet_defect_report"
+    kind === "fleet_defect_report" ||
+    kind === "fleet_collision_report"
   );
 }
 

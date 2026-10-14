@@ -2,6 +2,7 @@ import {
   correctiveActionResponseSchema,
   correctiveEvidenceSchema,
 } from "../field/safety-contracts";
+import { fleetCollisionResponseSchema } from "../field/fleet-contracts";
 import { z } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
@@ -213,7 +214,8 @@ async function uploadAction(
     action.kind === "inventory_command" ||
     action.kind === "inventory_scan" ||
     action.kind === "schema_field_value" ||
-    action.kind === "safety_corrective_evidence"
+    action.kind === "safety_corrective_evidence" ||
+    action.kind === "fleet_collision_report"
   ) {
     headers.set("Content-Type", "application/json");
     // Inventory routes accept the durable business-intent body directly.
@@ -278,6 +280,36 @@ async function uploadAction(
   }
 
   if (response.ok) {
+    if (action.kind === "fleet_collision_report") {
+      // The route answers a first send and an exact replay alike with the stored record. Only that
+      // record, for this exact report, settles the saved item.
+      const answer = fleetCollisionResponseSchema.safeParse(await safeJson(response));
+      const sent = action.payload as {
+        collision_id: string;
+        occurred_at: string;
+        severity: string;
+        description: string;
+      };
+      const record = answer.success ? answer.data.collision : undefined;
+      if (
+        !record ||
+        record.collision_id !== sent.collision_id ||
+        record.severity !== sent.severity ||
+        record.description !== sent.description.trim() ||
+        Date.parse(String(record.occurred_at)) !== Date.parse(sent.occurred_at)
+      ) {
+        return {
+          ok: false,
+          failure: attentionFailure(
+            "verification_mismatch",
+            "The server answered, but did not confirm this exact collision report. Nothing was discarded.",
+            now,
+            response.status,
+          ),
+        };
+      }
+      return { ok: true, serverRef: record.collision_id };
+    }
     if (action.kind === "safety_corrective_evidence") {
       const responseBody = correctiveActionResponseSchema.safeParse(await safeJson(response));
       const sent = correctiveEvidenceSchema.safeParse(action.payload);

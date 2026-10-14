@@ -195,6 +195,7 @@ function seedEvidence(
     jobId?: string;
     tenant?: string;
     createdAt?: string;
+    capturedAt?: string;
     requirement?: string;
   },
 ): void {
@@ -236,7 +237,7 @@ function seedEvidence(
       `device_${input.key}`,
       jobId,
       jobId,
-      input.createdAt ?? AT,
+      input.capturedAt ?? input.createdAt ?? AT,
     );
   raw
     .prepare(
@@ -440,4 +441,65 @@ test("an unknown job is a 404 and a bad cursor is refused", async () => {
     (await history(db, DONE_JOB, auth("owner"), "not-a-cursor")).status,
     404,
   );
+});
+
+test("pages follow capture chronology even when old offline evidence arrives later", async () => {
+  const db = new SqliteD1();
+  seedJob(db, DONE_JOB, "complete");
+  for (let index = 1; index <= 100; index++) {
+    seedEvidence(db, {
+      key: index.toString(16).padStart(4, "0"),
+      requirement: "Late offline proof",
+      createdAt: "2026-09-15T12:00:00.000Z",
+      capturedAt: "2024-01-01T10:00:00.000Z",
+    });
+  }
+  seedEvidence(db, {
+    key: "ffff",
+    requirement: "Most recent capture",
+    createdAt: "2026-09-14T12:00:00.000Z",
+    capturedAt: "2026-09-14T10:00:00.000Z",
+  });
+  const first = (await (await history(db)).json()) as HistoryModel;
+  assert.equal(first.proof.items[0]?.summary, "Most recent capture");
+  assert.equal(first.proof.items.length, 100);
+  assert.equal(first.proof.next_cursor, "100");
+  const second = (await (
+    await history(db, DONE_JOB, auth("owner"), first.proof.next_cursor)
+  ).json()) as HistoryModel;
+  assert.equal(second.proof.items.length, 1);
+  assert.equal(second.proof.items[0]?.summary, "Late offline proof");
+  assert.equal(second.proof.next_cursor, null);
+  assert.equal(
+    new Set(
+      [...first.proof.items, ...second.proof.items].map((item) => item.id),
+    ).size,
+    101,
+  );
+});
+
+test("equal capture times page by the displayed evidence ID, independently of upload order", async () => {
+  const db = new SqliteD1();
+  seedJob(db, DONE_JOB, "complete");
+  for (let index = 1; index <= 101; index++) {
+    seedEvidence(db, {
+      key: index.toString(16).padStart(4, "0"),
+      createdAt: new Date(Date.parse(AT) + (102 - index) * 1000).toISOString(),
+      capturedAt: AT,
+    });
+  }
+  const first = (await (await history(db)).json()) as HistoryModel;
+  assert.equal(first.proof.next_cursor, "100");
+  const second = (await (
+    await history(db, DONE_JOB, auth("owner"), first.proof.next_cursor)
+  ).json()) as HistoryModel;
+  const ids = [...first.proof.items, ...second.proof.items].map(
+    (item) => item.id,
+  );
+  assert.equal(ids.length, 101);
+  assert.deepEqual(
+    ids,
+    [...ids].sort((a, b) => b.localeCompare(a)),
+  );
+  assert.equal(new Set(ids).size, ids.length);
 });

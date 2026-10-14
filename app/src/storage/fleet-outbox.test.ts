@@ -193,4 +193,105 @@ describe("offline fleet captures", () => {
       }),
     ).rejects.toThrow(/attachments/i);
   });
+
+  describe("a collision report", () => {
+    const report = {
+      collision_id: "fc_offlinecollision0001",
+      occurred_at: "2026-07-11T07:10:00.000Z",
+      severity: "Major",
+      description: "Backed into a pole in the yard.",
+    };
+    const stored = {
+      collision: {
+        ...report,
+        kind: "vehicle_collision",
+        state: "reported",
+        telematics_reference: null,
+        tenant_id: "ironwrap",
+        fleet_asset_id: "asset-truck-1",
+        reported_by: "crew@example.invalid",
+        photo_evidence: [],
+        created_at: "2026-07-11T07:12:00.000Z",
+        updated_at: "2026-07-11T07:12:00.000Z",
+      },
+    };
+    async function saveCollision() {
+      const saved = await saveOutboxAction({
+        ...principal,
+        deviceActionId: "device-collision-0001",
+        kind: "fleet_collision_report",
+        endpoint: "/api/v1/fleet/assets/asset-truck-1/collisions",
+        payload: report,
+      });
+      await queueOutboxAction(saved.deviceActionId, 2_000);
+    }
+    function flush(fetcher: typeof fetch) {
+      return flushOutbox({
+        ...principal,
+        fetcher,
+        csrfToken: "csrf",
+        deviceProof: async () => "device-proof",
+        now: () => 3_000,
+      });
+    }
+
+    it("is kept on the phone with no signal and sends its own body, keyed by its id", async () => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+      await saveCollision();
+      expect(await getOutboxAction("device-collision-0001")).toMatchObject({ state: "queued" });
+
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json(stored, { status: 201 }));
+      expect(await flush(fetcher)).toMatchObject({ processed: 1, verified: 1 });
+
+      const [path, init] = fetcher.mock.calls[0]!;
+      expect(path).toBe("/api/v1/fleet/assets/asset-truck-1/collisions");
+      // The route takes the report itself, not the field-action envelope.
+      expect(JSON.parse(String(init?.body))).toEqual(report);
+      expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("device-collision-0001");
+      expect(await getOutboxAction("device-collision-0001")).toMatchObject({ state: "verified" });
+    });
+
+    it("never settles on an answer about a different report", async () => {
+      await saveCollision();
+      const other = { collision: { ...stored.collision, collision_id: "fc_someoneelse00000001" } };
+      await flush(vi.fn<typeof fetch>().mockResolvedValue(Response.json(other, { status: 201 })));
+      expect(await getOutboxAction("device-collision-0001")).toMatchObject({
+        state: "needs_attention",
+        lastError: { code: "verification_mismatch" },
+      });
+    });
+
+    it("refuses a report without its own id, so a retry can never mint a second one", async () => {
+      await expect(
+        saveOutboxAction({
+          ...principal,
+          kind: "fleet_collision_report",
+          endpoint: "/api/v1/fleet/assets/asset-truck-1/collisions",
+          payload: { ...report, collision_id: "not-an-id" },
+        }),
+      ).rejects.toThrow("A collision report needs its own report ID.");
+      await expect(
+        saveOutboxAction({
+          ...principal,
+          kind: "fleet_collision_report",
+          endpoint: "/api/v1/fleet/assets/asset-truck-1/collisions",
+          payload: { ...report, photo_evidence: [] },
+        }),
+      ).rejects.toThrow("Collision report payload is invalid.");
+    });
+
+    it("refuses a description the office would refuse as too short once trimmed", async () => {
+      await expect(
+        saveOutboxAction({
+          ...principal,
+          kind: "fleet_collision_report",
+          endpoint: "/api/v1/fleet/assets/asset-truck-1/collisions",
+          payload: { ...report, description: "  ok  " },
+        }),
+      ).rejects.toThrow("What happened needs at least three characters.");
+    });
+  });
 });

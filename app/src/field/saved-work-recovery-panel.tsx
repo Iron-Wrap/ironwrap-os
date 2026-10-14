@@ -143,6 +143,7 @@ const actionNames: Record<OutboxAction["kind"], string> = {
   fleet_pre_trip_inspection: "Pre-trip inspection",
   fleet_post_trip_inspection: "Post-trip inspection",
   fleet_defect_report: "Fault report",
+  fleet_collision_report: "Collision report",
   schema_field_value: "Configured field",
 };
 

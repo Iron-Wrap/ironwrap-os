@@ -861,6 +861,44 @@ test("office issue freezes governed assignment authority and exact replay surviv
     error: "work_package_assignment_changed",
   });
 
+  const issuedRow = appEnv.DB.sqlite
+    .prepare("SELECT release_attempt_id FROM work_packages WHERE work_package_id = ?")
+    .get(OFFICE_WORK_PACKAGE_ID) as { release_attempt_id: string };
+  const stopped = await handleWorkPackageAction(
+    fieldWorkPackageActionRequest(
+      { ...definition(), releaseAttemptId: issuedRow.release_attempt_id },
+      "stop_work",
+      "field-stop-before-office-reissue",
+    ),
+    appEnv,
+    auth("field"),
+    "JOB-NATIVE-OFFICE",
+    { name: assignment.assignment_id },
+    "stop_work",
+  );
+  assert.equal(stopped.status, 200, await stopped.clone().text());
+  const reissue = await handleAuthenticatedRoute(
+    request(
+      { ...body, version: 2, correction_reason: "The stop was investigated" },
+      "office-work-package-issue-after-stop",
+    ),
+    appEnv,
+    auth("owner"),
+  );
+  assert.equal(reissue.status, 409);
+  assert.deepEqual(await reissue.json(), {
+    error: "work_package_stop_release_required",
+  });
+  assert.equal(reissue.headers.get("cache-control"), "private, no-store");
+  assert.equal(
+    appEnv.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_packages").get().count,
+    1,
+  );
+  assert.equal(
+    appEnv.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_package_supersessions").get().count,
+    0,
+  );
+
   appEnv.DB.sqlite.exec(
     "DROP TRIGGER operating_job_assignments_append_only_update",
   );

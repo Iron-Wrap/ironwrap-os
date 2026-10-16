@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "orchestrator",
   "suite": "golden",
-  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
   "cases": [
     {
       "id": "orchestrator.golden.001",

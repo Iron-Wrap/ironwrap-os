@@ -254,7 +254,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   for (const [name, expected] of [
     ["REQUIRED_TABLE_COUNT", 242],
     ["REQUIRED_INDEX_COUNT", 358],
-    ["REQUIRED_TRIGGER_COUNT", 598],
+    ["REQUIRED_TRIGGER_COUNT", 600],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -288,7 +288,7 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   assert.doesNotMatch(migration, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
-test("the full schema matches the recovery frontier through 0140", () => {
+test("the full schema matches the recovery frontier through 0143", () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys = ON");
@@ -340,7 +340,7 @@ test("the full schema matches the recovery frontier through 0140", () => {
     // release-smoke column without changing the object inventory. 0134 adds one office intake
     // receipt table, one index, and four guards. 0135 adds three manual measurement history
     // tables, two indexes, and twelve append-only, lineage, and head-pointer guards. 0140 adds
-    // the service batch assertion table and its abort trigger.
+    // the service batch assertion table and its abort trigger; 0143 adds the stop supersession guard.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -348,7 +348,7 @@ test("the full schema matches the recovery frontier through 0140", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 242, indexes: 358, triggers: 598 },
+      { tables: 242, indexes: 358, triggers: 600 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

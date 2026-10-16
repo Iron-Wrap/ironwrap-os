@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 116,
-      "latest": "0140_service_case_atomic_steps.sql"
+      "count": 117,
+      "latest": "0143_work_package_stop_supersession_guard.sql"
     }
   },
   "test_observation_policy": {

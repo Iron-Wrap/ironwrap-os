@@ -772,6 +772,24 @@ test("native Work Package issues, reads, releases, acknowledges, starts, and sto
     packet.assignmentId,
   );
   assert.equal(blockedPacket?.document.status, "Blocked");
+  const startFact = env.DB.sqlite.prepare(
+    `SELECT occurred_at FROM work_package_events
+      WHERE tenant_id = ? AND work_package_id = ? AND work_package_version = ?
+        AND event_kind = 'start_work'`,
+  ).get(packet.tenantId, packet.workPackageId, packet.version) as { occurred_at: string };
+  assert.throws(
+    () => env.DB.sqlite.prepare(
+      `UPDATE work_packages SET status = 'In Progress', updated_at = ?
+        WHERE tenant_id = ? AND work_package_id = ? AND version = ?`,
+    ).run(startFact.occurred_at, packet.tenantId, packet.workPackageId, packet.version),
+    /work_package_stop_release_required/,
+  );
+  assert.equal(
+    env.DB.sqlite.prepare(
+      "SELECT status FROM work_packages WHERE tenant_id = ? AND work_package_id = ? AND version = ?",
+    ).get(packet.tenantId, packet.workPackageId, packet.version)?.status,
+    "Blocked",
+  );
 });
 
 test("native stop without an explanation blocks the package with an explicit missing reason", async () => {
@@ -855,6 +873,48 @@ test("native stop without an explanation blocks the package with an explicit mis
     env.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM work_package_supersessions").get().count,
     0,
   );
+  env.DB.sqlite.exec("BEGIN");
+  try {
+    assert.throws(
+      () =>
+        env.DB.sqlite
+          .prepare(
+            `INSERT INTO work_package_supersessions
+              (supersession_id, tenant_id, device_action_id, command_sha256,
+               prior_work_package_id, prior_work_package_version,
+               replacement_work_package_id, replacement_work_package_version,
+               job_id, assignment_id, work_object_type, work_object_id,
+               physical_context_type, physical_context_id, actor_user_id, actor_role,
+               correction_reason, manifest_key, occurred_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            "wps_direct_after_stop",
+            packet.tenantId,
+            replacement.deviceActionId,
+            "c".repeat(64),
+            packet.workPackageId,
+            packet.version,
+            replacement.workPackageId,
+            replacement.version,
+            packet.jobId,
+            packet.assignmentId,
+            packet.workObjectType,
+            packet.workObjectId,
+            packet.physicalContextType,
+            packet.physicalContextId,
+            "appu_owner_native",
+            "IronWrap Owner",
+            replacement.correctionReason,
+            replacement.manifestKey,
+            replacement.issuedAt,
+            replacement.issuedAt,
+          ),
+      /work_package_stop_release_required/,
+    );
+  } finally {
+    env.DB.sqlite.exec("ROLLBACK");
+  }
 });
 
 test("native Work Package issuance is atomic and rejects inactive or wrong-role participants", async () => {

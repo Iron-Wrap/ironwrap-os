@@ -123,11 +123,11 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
   }
 
   for (const [name, expected] of [
-    // Pinned to the merged migration chain through 0139: per-cron heartbeat, office intake,
-    // and manual measurement history are included in both D1 inventories.
+    // Pinned to the migration chain through 0143: per-cron heartbeat, office intake,
+    // manual measurement history, service atomicity and the stop guard are in both inventories.
     ["REQUIRED_TABLE_COUNT", 242],
     ["REQUIRED_INDEX_COUNT", 358],
-    ["REQUIRED_TRIGGER_COUNT", 598],
+    ["REQUIRED_TRIGGER_COUNT", 600],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

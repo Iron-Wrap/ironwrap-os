@@ -17,8 +17,31 @@ updates:
       patch-and-minor:
         update-types: [patch, minor]
 
+  # The PWA bundle is held to the paired-device Lighthouse budget. react/react-dom 19.3 and
+  # zod 4.6 add about 17 KB gzip to the critical path (LCP +90-250 ms, performance 0.85 < 0.9 on
+  # Dependabot #383), so their minor updates wait for a change that keeps the budget; patches
+  # still arrive. The server packages are not affected and keep every update.
   - package-ecosystem: npm
-    directories: ['**/*']
+    directory: /app
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
+    ignore:
+      - dependency-name: react
+        update-types: ['version-update:semver-minor']
+      - dependency-name: react-dom
+        update-types: ['version-update:semver-minor']
+      - dependency-name: zod
+        update-types: ['version-update:semver-minor']
+    groups:
+      patch-and-minor:
+        update-types: [patch, minor]
+
+  - package-ecosystem: npm
+    directories: ['/agent-host', '/mcp/*', '/release-issuer', '/workers-bus']
     schedule:
       interval: monthly
     commit-message:

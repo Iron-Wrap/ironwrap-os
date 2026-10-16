@@ -1006,6 +1006,7 @@ const AI_TEAM_OWNER_ASKS_FIRST = [
   "tax_snapshot.record",
   "holdback.release",
   "cost_recovery.claim",
+  "supplier_return.request",
   "ad_spend.commit",
   "stock.adjust_count",
   "ncr.disposition",
@@ -1032,6 +1033,9 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "privacy_request.answer",
   "price_book.propose_change",
   "storm_mode.propose",
+  "shop_order.release_hold",
+  "cancellation.release_hold",
+  "ncr.verify_close",
 ];
 // Human-only: never an agent's act, never delegable.
 const AI_TEAM_PEOPLE_ONLY = [
@@ -1048,12 +1052,20 @@ const AI_TEAM_PEOPLE_ONLY = [
   "access.change",
   "payee.unfreeze",
 ];
+// An agent prepares these people-only acts for the person and never performs them.
+const AI_TEAM_PREPARES_PEOPLE_ONLY = ["payee.unfreeze_prepare", "safety_stop.release_prepare"];
+const AI_TEAM_CUSTOMER_DISCLOSURE_REQUIRED = [
+  "customer_message.send",
+  "conversation.answer_live",
+  "portal_link.send",
+  "change_order.send_for_decision",
+  "remedy.offer",
+];
 // Nothing answers a live conversation before the owner turns it on.
 const AI_TEAM_OFF_UNTIL_ENABLED = ["conversation.answer_live"];
 // The reviewed A2 actions with an outside effect: a new one fails here until it is reviewed and listed.
 const AI_TEAM_EXTERNAL_A2 = [
   "conversation.answer_live",
-  "portal_link.revoke",
   "rfq.send",
   "purchase_order.expedite",
   "document.request",
@@ -1062,6 +1074,14 @@ const AI_TEAM_EXTERNAL_A2 = [
 ];
 // Delegation, policy and access change only by owner acts; no agent action may write them.
 const AI_TEAM_OWNER_ONLY_AGGREGATES = new Set(["delegation", "policy", "user_access"]);
+// Closed reason_code vocabularies: each pair shares one list, and the prose table repeats it.
+const AI_TEAM_REASON_CODE_PAIRS = [
+  ["stock.quarantine", "stock.release_quarantine"],
+  ["inbound.quarantine", "inbound.release"],
+  ["crew_date.commit", "crew_slot.hold"],
+];
+const AI_TEAM_REASON_CODE = /^[a-z][a-z0-9_]*$/;
+const AI_TEAM_REASON_TABLE_HEADER = "| Actions | When a reason is required | Reason codes |";
 // The owner's report cadence and the detected-storm watch.
 const AI_TEAM_REQUIRED_WATCHES = [
   ["new_leads", "lead_concierge", "PT15M"],
@@ -1069,6 +1089,9 @@ const AI_TEAM_REQUIRED_WATCHES = [
   ["daily_owner_brief", "orchestrator", "P1D"],
   ["weekly_review", "orchestrator", "P7D"],
   ["storm_events", "market_analyst", null],
+  ["working_alone_checkin_missed", "field_safety", null],
+  ["page_unacknowledged", "field_safety", null],
+  ["page_unacknowledged", "orchestrator", null],
 ];
 const AI_TEAM_ACTION_ID = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 const AI_TEAM_WATCH_ID = /^[a-z][a-z0-9_]*$/;
@@ -1151,6 +1174,20 @@ function validateAiTeamAction(action, actionById) {
   if (action.reviewer_role !== null && action.reviewer_role !== undefined) {
     if (!AI_TEAM_ROLES.has(action.reviewer_role) || !acts) {
       fail(`${where}: reviewer_role must be null or a reviewer role on an A2 or A3 action`);
+    }
+  }
+  // Optional keys, present only on the actions they constrain.
+  if (Object.hasOwn(action, "reason_codes")) {
+    const codes = action.reason_codes;
+    if (!Array.isArray(codes) || codes.length === 0 || new Set(codes).size !== codes.length ||
+      !codes.every((code) => typeof code === "string" && AI_TEAM_REASON_CODE.test(code))) {
+      fail(`${where}: reason_codes must be a non-empty list of distinct snake_case codes`);
+    }
+  }
+  if (Object.hasOwn(action, "never_targets")) {
+    const targets = action.never_targets;
+    if (!Array.isArray(targets) || targets.length === 0 || !targets.every((target) => AI_TEAM_SPECIALISTS.includes(target))) {
+      fail(`${where}: never_targets must be a non-empty list of specialist ids`);
     }
   }
 }
@@ -1236,6 +1273,16 @@ function validateAiTeamContract(contract, content) {
       "sets a hold flag on its own aggregate, specialist_hold",
     ],
     [
+      ["specialist.hold"],
+      (action) => Array.isArray(action.never_targets) && action.never_targets.includes("independent_auditor"),
+      "can never be set on the AI auditor, so never_targets must list independent_auditor",
+    ],
+    [
+      AI_TEAM_PREPARES_PEOPLE_ONLY,
+      (action) => action.autonomy === "A1",
+      "prepares a people-only act and never performs it, so it must be class A1",
+    ],
+    [
       AI_TEAM_OFF_UNTIL_ENABLED,
       (action) => action.default_delegation === "off_until_enabled",
       "nothing answers live before the owner turns it on, so default_delegation must be off_until_enabled",
@@ -1313,6 +1360,9 @@ function validateAiTeamContract(contract, content) {
     if (row.does.startsWith("Always asks first.") !== (action.autonomy === "A3" && action.delegable === false)) {
       fail(`${AI_TEAM_LABEL}: ${id}: prose catalog always-asks-first marker differs from the contract`);
     }
+    if (AI_TEAM_CUSTOMER_DISCLOSURE_REQUIRED.includes(id) && !row.checks.includes("disclosure")) {
+      fail(`${AI_TEAM_LABEL}: ${id}: customer-facing action must keep the disclosure check`);
+    }
     const reviewer = aiTeamReviewerWords(action, reviewerOf);
     if (!(row.reviewer === reviewer || (reviewer.length > 1 && row.reviewer.startsWith(reviewer)))) {
       fail(`${AI_TEAM_LABEL}: ${id}: prose catalog reviewer "${row.reviewer}" does not match contract reviewer "${reviewer}"`);
@@ -1321,6 +1371,45 @@ function validateAiTeamContract(contract, content) {
   for (const id of rows.keys()) {
     if (!actionById.has(id)) fail(`${AI_TEAM_LABEL}: prose catalog row ${id} is not in the contract`);
   }
+
+  for (const pair of AI_TEAM_REASON_CODE_PAIRS) {
+    const [first, second] = pair.map((id) => actionById.get(id));
+    if (!first || !second) {
+      fail(`${AI_TEAM_LABEL}: ${pair.join(" and ")} must both be in the catalog; they share a reason-code vocabulary`);
+    } else if (!Array.isArray(first.reason_codes)) {
+      fail(`${AI_TEAM_LABEL}: ${pair[0]}: reason_codes is required; its reasons come from a closed vocabulary`);
+    } else if (!sameList(second.reason_codes, first.reason_codes)) {
+      fail(`${AI_TEAM_LABEL}: ${pair[1]}: reason_codes must equal ${pair[0]}'s`);
+    }
+  }
+  const reasonTable = parseAiTeamReasonTable(content);
+  for (const [id, action] of actionById) {
+    const listed = reasonTable.get(id);
+    if ((listed || Object.hasOwn(action, "reason_codes")) && !(listed && sameList(listed, action.reason_codes ?? []))) {
+      fail(`${AI_TEAM_LABEL}: ${id}: the reason-code table differs from the contract's reason_codes`);
+    }
+  }
+  for (const id of reasonTable.keys()) {
+    if (!actionById.has(id)) fail(`${AI_TEAM_LABEL}: the reason-code table names ${id}, which is not in the contract`);
+  }
+}
+
+// The reason-code table under "Argument conventions": | `action`, `action` | when | `code`, `code` |.
+function parseAiTeamReasonTable(content) {
+  const rows = new Map();
+  const lines = content.split("\n");
+  const start = lines.indexOf(AI_TEAM_REASON_TABLE_HEADER);
+  if (start === -1) return rows;
+  for (const line of lines.slice(start + 2)) {
+    if (!line.startsWith("|")) break;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    const codes = [...(cells[2] ?? "").matchAll(/`([a-z][a-z0-9_]*)`/g)].map((match) => match[1]);
+    for (const [, id] of (cells[0] ?? "").matchAll(/`([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)`/g)) {
+      if (rows.has(id)) fail(`${AI_TEAM_LABEL}: the reason-code table lists ${id} twice`);
+      rows.set(id, codes);
+    }
+  }
+  return rows;
 }
 
 // Each catalog row: | action | class | starts | does | evidence | checks | reviewer | effect | binds |.
@@ -1338,7 +1427,8 @@ function parseAiTeamCatalog(content) {
     const id = /^`([a-z][a-z0-9_]*\.[a-z][a-z0-9_]*)`$/.exec(cells[0] ?? "")?.[1];
     if (!id || !AI_TEAM_CLASSES.has(cells[1])) continue;
     if (rows.has(id)) fail(`${AI_TEAM_LABEL}: the prose catalog lists ${id} twice`);
-    rows.set(id, { group, autonomy: cells[1], starts: cells[2], does: cells[3] ?? "", reviewer: cells[6] ?? "" });
+    const checks = [...(cells[5] ?? "").matchAll(/`([a-z][a-z0-9_]*)`/g)].map((match) => match[1]);
+    rows.set(id, { group, autonomy: cells[1], starts: cells[2], does: cells[3] ?? "", checks, reviewer: cells[6] ?? "" });
   }
   return rows;
 }

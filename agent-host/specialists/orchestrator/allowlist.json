@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "orchestrator",
-  "catalog_sha256": "369593efb5f69567142dfb0e50b4f7be7d58b28be6439da75627591c034c0395",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
   "actions": [
     {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer an authenticated owner, staff, or crew question, explain a receipt or a pending decision, within the asker's read rights; args: fact_ids"},
     {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a person's request on a canonical object to the owning specialist; args: specialist_id, expected_action, reason_code, <aggregate>_id"},

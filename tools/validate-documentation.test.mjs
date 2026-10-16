@@ -645,3 +645,80 @@ test("documentation gate rejects an unreviewed A2 action with an outside effect"
     /supplier_message\.send: an A2 action with an outside effect must be on the reviewed list/,
   );
 });
+
+test("documentation gate keeps the AI auditor out of a specialist hold's reach", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-hold-target-",
+    (content) => content.replace(', "never_targets": ["independent_auditor"]', ""),
+    /specialist\.hold: can never be set on the AI auditor/,
+  );
+});
+
+test("documentation gate keeps the preparation of a people-only act at A1", () => {
+  for (const action of ["payee.unfreeze_prepare", "safety_stop.release_prepare"]) {
+    rejectsAiTeamEdit(
+      "ironwrap-ai-team-prepare-",
+      (content) => content.replace(
+        new RegExp(`("action_id": "${action.replaceAll(".", "\\.")}", [^\\n]*?"autonomy": )"A1"`),
+        '$1"A2"',
+      ),
+      new RegExp(`${action.replaceAll(".", "\\.")}: prepares a people-only act and never performs it, so it must be class A1`),
+    );
+  }
+});
+
+test("documentation gate keeps a safety-stop release a people-only act", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-release-",
+    (content) => content.replace(
+      /("action_id": "safety_stop\.release", [^\n]*?"autonomy": )"H"/,
+      '$1"A3"',
+    ),
+    /safety_stop\.release: the owner's launch rule requires class H/,
+  );
+});
+
+test("documentation gate keeps missed check-ins and unanswered pages event-triggered", () => {
+  for (const watch of ["working_alone_checkin_missed", "page_unacknowledged"]) {
+    rejectsAiTeamEdit(
+      "ironwrap-ai-team-emergency-watch-",
+      (content) => content.replace(
+        new RegExp(`("watch_id": "${watch}", "owner": "field_safety", )"trigger": "[^"]+"`),
+        '$1"every": "P1D"',
+      ),
+      new RegExp(`watch ${watch} for field_safety must be event-triggered`),
+    );
+  }
+});
+
+test("documentation gate preserves AI disclosure on customer-facing actions", () => {
+  for (const action of ["customer_message.send", "conversation.answer_live", "portal_link.send", "change_order.send_for_decision", "remedy.offer"]) {
+    rejectsAiTeamEdit(
+      "ironwrap-ai-team-disclosure-",
+      (content) => content.replace(
+        new RegExp("^\\| `" + action.replaceAll(".", "\\.") + "`[^\\n]+", "m"),
+        (row) => row.replace(/,? `disclosure`,?/, ""),
+      ),
+      new RegExp(`${action.replaceAll(".", "\\.")}: customer-facing action must keep the disclosure check`),
+    );
+  }
+});
+
+test("documentation gate rejects a reason-code vocabulary that drifted within its pair", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-reason-pair-",
+    (content) => content.replace(
+      /("action_id": "stock\.release_quarantine", [^\n]*?"reason_codes": \[)"damage_in_transit", /,
+      "$1",
+    ),
+    /stock\.release_quarantine: reason_codes must equal stock\.quarantine's/,
+  );
+});
+
+test("documentation gate rejects a reason-code table that drifted from the contract", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-reason-table-",
+    (content) => content.replace("`suspected_fraud` |", "`suspected_fraud`, `lot_misplaced` |"),
+    /stock\.quarantine: the reason-code table differs from the contract's reason_codes/,
+  );
+});

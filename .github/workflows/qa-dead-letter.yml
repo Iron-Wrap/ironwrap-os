@@ -1,0 +1,64 @@
+# Governed dead-letter inspection for qa (docs/OPERATIONS-RUNBOOK.md "Dead-Letter Recovery").
+#
+# An open qa dead letter fails Deploy's drain step (release_qa_queue_not_drained) before the
+# restore drill, so it blocks every later qa proof. The qa admin bearer exists only in the `qa`
+# environment, so inspection runs there: read-only GET /admin/status, /admin/dead-letter and each
+# open envelope; the job summary lists counts, envelope ids, stages, error text and times, never
+# a payload.
+#
+# Replay is deliberately absent. Its approver of record must be a person, and anyone who can
+# dispatch a workflow (including an agent holding the owner's token) could otherwise record that
+# approval; replay returns only with an approval step that code verifies (a required reviewer on
+# a separate environment, not the dispatcher). Dead letters without an envelope id (Newo
+# conflicts) or keyed by a receipt (measurement processing) are not replayable at all.
+name: qa dead-letter inspection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shares Deploy's qa group, so inspection never interleaves with a qa release or its drill.
+concurrency:
+  group: deploy-qa
+  cancel-in-progress: false
+
+env:
+  QA_BASE_URL: https://ironwrap-bus-qa.yellow-rain-7498.workers.dev
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: qa
+    timeout-minutes: 5
+    steps:
+      - name: Inspect open dead letters (read-only)
+        env:
+          ADMIN_TOKEN: ${{ secrets.RELEASE_QA_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_TOKEN" || { echo "release_qa_admin_token_missing" >&2; exit 1; }
+          get() {
+            curl --fail-with-body --silent --show-error --max-time 20 \
+              --header "Authorization: Bearer $ADMIN_TOKEN" "$QA_BASE_URL$1"
+          }
+          get /admin/status >status.json
+          get "/admin/dead-letter?limit=100" >dead.json
+          {
+            echo "## qa operational counts"
+            jq -r '.counts | to_entries[] | "- \(.key): \(.value)"' status.json
+            echo
+            echo "## Open dead letters"
+            echo
+            echo "| envelope | stage | error | at |"
+            echo "|---|---|---|---|"
+            jq -r '.dead_letters[]
+              | "| \(.envelope_id) | \(.stage // "") | \((.error // "") | tostring | gsub("[\\r\\n|]"; " ") | .[0:160]) | \(.ts // "") |"' dead.json
+          } >>"$GITHUB_STEP_SUMMARY"
+          for id in $(jq -r '.dead_letters[] | select(.envelope_id != null) | .envelope_id' dead.json); do
+            [[ "$id" =~ ^[A-Za-z0-9_:.-]{3,128}$ ]] || { echo "unexpected envelope id shape" >&2; exit 1; }
+            get "/admin/envelope/$id" \
+              | jq -r --arg id "$id" '.envelope as $e | "- \($id): status=\($e.status // "missing") source=\($e.source // "") jn_contact=\(if $e.jn_contact_id then "set" else "none" end) jn_job=\(if $e.jn_job_id then "set" else "none" end)"' \
+              >>"$GITHUB_STEP_SUMMARY"
+          done

@@ -241,6 +241,13 @@ marked recovered only after the envelope successfully lands.
 Hermes exposes only targeted replay: `dry_run_replay` then human approval then `request_replay`.
 Bulk replay is intentionally absent from the MCP surface.
 
+For qa, dispatch `.github/workflows/qa-dead-letter.yml` without inputs to inspect counts, open
+rows and envelope states. It performs only reads and does not publish payloads. Replay is absent:
+an agent holding the owner's GitHub token can dispatch a workflow, so dispatcher identity does
+not prove human approval. Use the existing targeted replay procedure with explicit human approval;
+a future replay workflow must verify an independent approval before writing. An open qa dead
+letter still fails Deploy's drain step before the restore drill; inspection does not recover it.
+
 ### Bulk Replay (Exceptional)
 
 Bulk replay may be used only after an incident owner has reviewed the full open set and approved

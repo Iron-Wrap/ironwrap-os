@@ -9,7 +9,7 @@ function assignment(source: string, name: string): string[] {
   return [value, ...appended].join(",").split(",");
 }
 
-test("0073 and 0075 native Work Package authority are included in both recovery inventories", async () => {
+test("native Work Package authority and stop guard are included in both recovery inventories", async () => {
   const migration = [
     await readFile(
       new URL(
@@ -35,6 +35,13 @@ test("0073 and 0075 native Work Package authority are included in both recovery 
     await readFile(
       new URL(
         "../migrations/0131_work_package_action_authority_precondition.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    await readFile(
+      new URL(
+        "../migrations/0143_work_package_stop_supersession_guard.sql",
         import.meta.url,
       ),
       "utf8",
@@ -99,6 +106,8 @@ test("0073 and 0075 native Work Package authority are included in both recovery 
     ["work_packages_assignment_snapshot_guard", "work_packages"],
     ["work_packages_assignment_snapshot_immutable", "work_packages"],
     ["work_package_events_authority_precondition_guard", "work_package_events"],
+    ["work_package_supersessions_blocked_guard", "work_package_supersessions"],
+    ["work_packages_blocked_status_guard", "work_packages"],
   ];
   for (const table of tables) {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));

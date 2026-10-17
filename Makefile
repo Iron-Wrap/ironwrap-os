@@ -55,7 +55,7 @@ validate:
 	node tools/validate-newo-config.mjs
 	node tools/validate-lead-triage-shadow-authority.mjs
 	node tools/validate-documentation.mjs
-	node agent-host/evals/validate.mjs
+	node agent-host/evals/validate.mjs --require-complete
 	node tools/validate-site-config-pins.mjs
 	node tools/validate-rail-credential-isolation.mjs
 	node tools/validate-facet-blank-quote-contract.mjs
@@ -78,6 +78,7 @@ test-tools:
 	  tools/validate-documentation.test.mjs \
 	  agent-host/evals/validate.test.mjs \
 	  agent-host/evals/score.test.mjs \
+	  agent-host/evals/report.test.mjs \
 	  tools/validate-newo-config.test.mjs \
 	  tools/validate-lead-triage-shadow-authority.test.mjs \
 	  tools/validate-tenant-runtime.test.mjs \

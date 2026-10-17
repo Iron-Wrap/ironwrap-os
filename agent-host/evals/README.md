@@ -19,6 +19,8 @@ agent-host/evals/
   action-catastrophes.v1.json  catalog actions whose call is a catastrophe (added at catalog binding)
   judge.md                  instructions for the independent judge model
   score.mjs                 pure deterministic scorer the runner calls
+  qualification.v1.json     staged production-route qualification run (see below)
+  report.mjs                builds the qualification report from scored suites
   validate.mjs              structural validator (no dependencies)
   <specialist_id>/
     golden.v1.json          at least 20 cases
@@ -181,13 +183,16 @@ The replay runner (agent-host runtime) must, for each case and each repetition:
 
 The runtime owns the transcript schema; the shape above is the minimum the scorer reads. A proposed
 send action references its text by `draft_id` in its arguments; the scorer reads text only from
-`drafts`. A transcript with `error` set (provider down, ceiling, invalid output) is a failed
-repetition, never a correct abstention.
+`drafts`. A transcript with `error` set is a failed repetition, never a correct abstention. Under
+a qualification run the runner writes one only for a gateway reason classified `score`
+(`invalid_output`); a `pause` or `stop` reason writes no transcript, and the suite stays
+`incomplete` (see Qualification run).
 
 ## Scoring
 
-Scoring never uses the model that produced the run, nor the author of the cases. When the specialist
-under test runs on Claude (the independent auditor), the judge runs on a different provider. The
+Scoring never uses the model that produced the run, nor the model that wrote the cases (Claude Opus
+5.5 wrote these suites; the default judge is Claude Sonnet 5.5). When the specialist under test runs
+on Claude (the independent auditor), the judge runs on a different provider. The
 runner owns file loading, repetitions, judge calls, and transcript storage; `score.mjs` owns the
 rules and is pure:
 
@@ -270,10 +275,103 @@ the contract.
 `specialist_checks` are extra judge instructions for this specialist, scored inside the matching
 dimension.
 
+## Qualification run
+
+The contract's release bar for specialists (`docs/AI-TEAM-CONTRACT.md`, item 14) is met only on the
+production route. [`qualification.v1.json`](qualification.v1.json) is what the replay runner must
+honour when it runs that qualification; this directory owns the file, the report, and their checks,
+and the runner implements them.
+
+- **Routing.** Every specialist runs on its production gateway route: the playbook's runtime tier in
+  `agent-host/config/gateway.json`. The judge runs on `judge.default`, or on
+  `judge.for_claude_specialists` when the specialist itself runs on Claude, so a judge never shares
+  a provider with the run it scores. Gateway routes are bound to the specialist tiers, so the runner
+  calls the judge through the provider adapters directly and books it on the same ledger instance.
+- **Ledger.** Qualification books on its own ledger: the `eval` key namespace, refused unless the run
+  carries the `eval` tag, never readable by production policy, and one ledger file per stage
+  (`per_stage`) so a window never mixes stages. Judge calls book under `judge_key` and count toward
+  the stage's team ceiling. Production ceilings are untouched. The ledger isolates accounting only:
+  the runs still draw on the same Claude and Codex subscription quota as every other session.
+- **Pacing.** `concurrency` caps parallel calls per provider. A stage starts, and a paused stage
+  resumes, only on the orchestrator's signal (`start_and_resume`), so qualification never competes
+  with build sessions for the shared Claude quota.
+- **Gateway abstentions.** Every `AbstainReason` of the gateway is classified once.
+  - `pause`: rate limit, provider error, call or cost ceiling. The stage pauses and the repetition
+    re-runs on resume.
+  - `stop`: credentials, kill switch, configuration, an unusable ledger, a served model other than
+    the configured one, or the runner's own abort. The run stops.
+  - `score`: only `invalid_output`, which becomes a failed repetition.
+  The same classes apply to judge calls. A judge answer that stays invalid after `judge.max_attempts`
+  scores its repetition 0 under `mergeJudgement`.
+- **Hashes.** A repetition counts only when its `prompt_sha256` and `catalog_sha256` equal the
+  stage's; a resumed stage re-runs any repetition recorded under other hashes.
+- **Stages.** The `pilot` runs the first `cases` golden case ids of each named specialist, in file
+  order, `repetitions` times, together with their judges, covering the routine, hard, and audit
+  routes. Its gate compares the measured gateway cost per run, per tier and per judge provider,
+  with `estimate_usd_per_run` (at most `max_cost_ratio_to_estimate`), and the Claude quota the pilot
+  used with `max_claude_quota_drop_pct`. Above the quota limit the judge family is reviewed before
+  Wave 1. Pilot repetitions count as repetition 1 under the hash rule. Then `wave1`, `wave2`, and
+  `wave3` run every case of their specialists `repetitions` times; `repetitions` equals every
+  rubric's.
+
+The validator checks the stage order, that each wave stage lists exactly the playbooks with that
+`Wave:`, that every `AbstainReason` in `agent-host/src/gateway/types.ts` is classified exactly once
+with `invalid_output` scored, the eval ledger flags, and the judge providers against the gateway.
+
+The runner keeps transcripts, judge outputs, and reports under `output_dir`, which Git ignores.
+`report.mjs` turns each specialist's scored repetitions and usage into the report. A suite is
+scored only when every case holds exactly repetitions 1 to `repetitions`; a missing repetition, a
+repeated or out-of-range index, or an unknown case leaves it `incomplete` with `data_errors`, and
+catastrophes found so far are shown either way.
+
+```json
+{
+  "schema_version": "ironwrap.eval-qualification-report.v1",
+  "run_id": "<run id>",
+  "stage": "wave1",
+  "source": { "main_sha": "<commit>", "catalog_sha256": "<hash>" },
+  "routes": { "routine": { "provider": "codex", "model": "<model>" } },
+  "judge": { "default": { "provider": "claude", "model": "<model>" } },
+  "quota": { "claude": { "used_pct_before": 0, "used_pct_after": 0 }, "codex": { "used_pct_before": 0, "used_pct_after": 0 } },
+  "gate": null,
+  "specialists": [
+    {
+      "specialist_id": "estimator",
+      "wave": 1,
+      "tier": "routine",
+      "model": "<route model>",
+      "judge_model": "<judge model>",
+      "prompt_sha256": "<hash>",
+      "cases": { "golden": 37, "redteam": 16 },
+      "repetitions": 3,
+      "pass_bar": { "...": "copied from rubric.v1.json" },
+      "verdict": "qualified | not_qualified | incomplete | pilot",
+      "result": { "passed": true, "golden_mean": 0.95, "redteam_mean": 1, "catastrophes": [], "failures": [] },
+      "missing_repetitions": 0,
+      "data_errors": [],
+      "catastrophes_so_far": [],
+      "weakest_cases": [ { "case_id": "estimator.golden.012", "suite": "golden", "mean": 0.83, "decisions": [1, 1, 1] } ],
+      "usage": { "runs": 159, "judge_calls": 159, "rejudges": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "wall_time_ms": 0, "cost_usd": 0, "judge_cost_usd": 0, "cache_hit_ratio": null }
+    }
+  ],
+  "totals": { "qualified": 1, "not_qualified": 0, "incomplete": 0, "runs": 159, "...": "summed usage" }
+}
+```
+
+`result` is `evaluateSuite` output, `null` until the suite is complete. `input_tokens` counts every
+prompt token and `cached_input_tokens` the part served from the cache. For the pilot, `gate` holds
+the measured cost per run and ratio for each group, the Claude quota used in percentage points,
+and whether each limit held; an invisible quota is `null` and leaves the call to the orchestrator.
+`renderMarkdown(report)` gives the one-page summary: the gate, one row per specialist against its
+pass bar, then data errors, catastrophes, failures, and weakest cases for every specialist that
+did not qualify. Costs are the gateway's accounting; on subscription sign-ins they measure usage,
+not money billed.
+
 ## Validation
 
-`node agent-host/evals/validate.mjs` (tests: `validate.test.mjs`, `score.test.mjs`) checks every playbook, allowlist, case file, and rubric: required
+`node agent-host/evals/validate.mjs` (tests: `validate.test.mjs`, `score.test.mjs`, `report.test.mjs`) checks every playbook, allowlist, case file, and rubric: required
 headings, catalog membership and autonomy of every action id, case counts and required fields,
 catastrophe ids, red-team coverage, relative times only, and synthetic contact data. It runs
-without the contract catalog only in structural mode and says so. `--require-complete` also fails
-when a roster specialist has no playbook; it becomes part of `make validate` once all sixteen exist.
+without the contract catalog only in structural mode and says so. `--require-complete`, which
+`make validate` passes, also fails when a roster specialist has no playbook. When
+`qualification.v1.json` exists, its stages and judge routing are checked too.

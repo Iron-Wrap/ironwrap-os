@@ -1,14 +1,15 @@
 // The provider gateway: one interface over Claude (Agent SDK) and Codex (Codex SDK).
 //
-// Order of checks for every run: kill switch, registered specialist and tier, provider enabled,
-// provider cooldown, credential present and not already rejected, call and cost ceilings. A failed
-// check is an abstention with a stable reason; the gateway never falls back to another provider
-// or model, so a specialist whose provider is unavailable abstains and its receipt says why.
+// Order of checks for every run: kill switch, registered specialist and tier, a route of another
+// family for work under review, provider enabled, provider cooldown, credential present and not
+// already rejected, call and cost ceilings. A failed check is an abstention with a stable reason;
+// the gateway never falls back to another provider or model, so a specialist whose provider is
+// unavailable abstains and its receipt says why.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { GatewayConfig } from "./config.ts";
-import { UsageLedger } from "./ledger.ts";
+import { AUDITOR, parseQualification, parseRoute, proposerRoutes, type GatewayConfig, type Qualification } from "./config.ts";
+import { UsageLedger, type Limits } from "./ledger.ts";
 import { assertStrictSchema, canonicalJson, providerSchema, sha256, validate } from "./schema.ts";
 import { createClaudeAdapter } from "./claude.ts";
 import { createCodexAdapter } from "./codex.ts";
@@ -22,6 +23,9 @@ import {
   type ProviderAdapter,
   type ProviderErrorKind,
   type ProviderId,
+  type Route,
+  type Scope,
+  type Tier,
   type ToolCall,
   type Usage,
 } from "./types.ts";
@@ -41,7 +45,16 @@ export interface GatewayOptions {
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   random?: () => number;
+  /**
+   * The `ledger` and `judge` blocks of `agent-host/evals/qualification.v1.json`. They make this an
+   * eval gateway: it serves only `scope: "eval"` requests and books them, the judge's included,
+   * in `<state>/gateway-usage-eval.jsonl` under `eval:` keys against the block's ceilings.
+   */
+  qualification?: { ledger: unknown; judge: unknown };
 }
+
+/** A run's route, or why no route may run it. */
+type Resolution = { id: string; route: Route } | { id: null; route: null; refused: string };
 
 export type ProviderStateName = "ready" | "disabled" | "credential_missing" | "auth_failed" | "plan_lacks_model" | "cooldown";
 
@@ -82,6 +95,9 @@ export class ProviderGateway {
   private readonly stateDir: string;
   private readonly env: Env;
   private readonly adapters: Record<ProviderId, ProviderAdapter>;
+  private readonly qualification: Qualification | null;
+  /** Why an audit that names no run under review may not use tiers.audit, or null when it may. */
+  private readonly unreviewedAudit: string | null;
   private readonly ledger: UsageLedger;
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -98,20 +114,34 @@ export class ProviderGateway {
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? abortableSleep;
     this.random = options.random ?? Math.random;
+    this.qualification = options.qualification ? parseQualification(options.qualification, options.config) : null;
+    // Such an audit cannot be checked per run, so tiers.audit serves it only while no proposer
+    // route is on that route's family.
+    const audit = options.config.tiers.audit;
+    const family = options.config.routes[audit].provider;
+    const shared = proposerRoutes(options.config).find((id) => options.config.routes[id].provider === family);
+    this.unreviewedAudit =
+      shared === undefined ? null : `tiers.audit (${audit}) runs on ${family} like proposer route ${shared}; name the run under review`;
     this.adapters = {
       claude: options.adapters?.claude ?? createClaudeAdapter(options.config, options.stateDir, options.env),
       codex: options.adapters?.codex ?? createCodexAdapter(options.config, options.stateDir, options.env),
     };
-    this.ledger = new UsageLedger(options.config.ceilings, join(options.stateDir, "gateway-usage.jsonl"), this.now);
+    // Eval spend gets its own file as well as its own keys, so an eval run never touches the
+    // production books.
+    this.ledger = this.qualification
+      ? new UsageLedger(join(options.stateDir, "gateway-usage-eval.jsonl"), this.qualification.windowHours, this.now)
+      : new UsageLedger(join(options.stateDir, "gateway-usage.jsonl"), options.config.ceilings.windowHours, this.now);
   }
 
   async run(request: GatewayRequest): Promise<GatewayResult> {
     assertStrictSchema(request.outputSchema);
-    if (!Object.hasOwn(this.config.routes, request.tier)) throw new TypeError(`unknown tier ${String(request.tier)}`);
+    if (!Object.hasOwn(this.config.tiers, request.tier)) throw new TypeError(`unknown tier ${String(request.tier)}`);
+    const scope = this.scopeOf(request);
+    const batch = this.batchRoutes(request.tierRoutes);
+    const judge = this.qualification !== null && request.specialist === this.qualification.judgeKey;
+    if (judge && !request.reviewOf) throw new TypeError("a judge request names the run it scores in reviewOf");
     const started = this.now();
-    const route = this.config.routes[request.tier];
-    const adapter = this.adapters[route.provider];
-    const state = this.state[route.provider];
+    const resolved = this.resolve(request, judge, batch);
     let usage: Usage = zeroUsage();
     let costUsd = 0;
     let attempts = 0;
@@ -120,10 +150,12 @@ export class ProviderGateway {
     const base = () => ({
       specialist: request.specialist,
       tier: request.tier,
-      provider: route.provider,
-      model: route.model,
+      routeId: resolved.id,
+      reviewOf: request.reviewOf ? { runId: request.reviewOf.runId, provider: request.reviewOf.provider } : null,
+      provider: resolved.route?.provider ?? null,
+      model: resolved.route?.model ?? null,
       modelsUsed,
-      authMode: adapter.authMode,
+      authMode: resolved.route ? this.adapters[resolved.route.provider].authMode : null,
       attempts,
       usage,
       costUsd,
@@ -142,13 +174,23 @@ export class ProviderGateway {
       detail: redact(detail),
       ...(retryAt === undefined ? {} : { retryAt }),
     });
+    // Waiting out the next backoff is all a provider failure or a wrong served model allows.
+    const afterBackoff = () => this.now() + this.backoff(Math.max(attempts, 1));
 
     if (this.killed()) return abstain("kill_switch", "the agent host kill switch is engaged");
-    const tiers = this.config.specialists[request.specialist];
-    if (!tiers) return abstain("unknown_specialist", `${request.specialist} is not a registered specialist`);
-    if (!tiers.includes(request.tier)) {
-      return abstain("tier_not_allowed", `${request.specialist} may not run on the ${request.tier} tier`);
+    // A judge is no specialist: it scores one run, on the route the run's family dictates.
+    if (!judge) {
+      const specialist = Object.hasOwn(this.config.specialists, request.specialist) ? this.config.specialists[request.specialist] : null;
+      if (!specialist) return abstain("unknown_specialist", `${request.specialist} is not a registered specialist`);
+      if (!specialist.tiers.includes(request.tier)) {
+        return abstain("tier_not_allowed", `${request.specialist} may not run on the ${request.tier} tier`);
+      }
     }
+    if (resolved.route === null) return abstain("no_independent_route", resolved.refused);
+    const route = resolved.route;
+    const adapter = this.adapters[route.provider];
+    const state = this.state[route.provider];
+    const books = this.books(request.specialist, scope, judge);
     if (!this.config.providers[route.provider].enabled) {
       return abstain("provider_disabled", `${route.provider} is disabled in the gateway configuration`);
     }
@@ -166,17 +208,17 @@ export class ProviderGateway {
     // keeps concurrent runs abstaining until the probe answers.
     if (state.rejectedFingerprint === credential.fingerprint) state.rejectedAt = this.now();
     const planGap = this.planGap(route.provider, route.model, credential, true);
-    if (planGap) return abstain("provider_error", planGap);
+    if (planGap) return abstain("provider_error", planGap.detail, planGap.retryAt);
 
     const { maxAttempts, maxDelayMs } = this.config.retry;
     for (;;) {
-      const reserved = this.ledger.reserve(request.specialist, route.provider, route.model);
+      const reserved = this.ledger.reserve(books.key, books.limits, route.provider, route.model);
       if ("refusal" in reserved) {
         const detail =
           reserved.refusal === "ledger_unavailable"
             ? "the usage ledger cannot be written, so no ceiling can be enforced"
-            : `${request.specialist} reached its ${reserved.refusal.replace("_", " ")}`;
-        return abstain(reserved.refusal, detail);
+            : `${books.key} reached its ${reserved.refusal.replace("_", " ")}`;
+        return abstain(reserved.refusal, detail, reserved.retryAt);
       }
       attempts += 1;
       const timeout = new AbortController();
@@ -206,7 +248,7 @@ export class ProviderGateway {
         state.rejectedFingerprint = null;
         state.planRefused.delete(route.model);
         if (modelsUsed.some((used) => !sameModel(used, route.model))) {
-          return abstain("model_mismatch", `${route.provider} answered with ${modelsUsed.join(", ")} instead of ${route.model}`);
+          return abstain("model_mismatch", `${route.provider} answered with ${modelsUsed.join(", ")} instead of ${route.model}`, afterBackoff());
         }
         const errors = validate(request.outputSchema, outcome.output);
         if (errors.length > 0) return abstain("invalid_output", errors.join("; "));
@@ -241,7 +283,7 @@ export class ProviderGateway {
           continue;
         }
         case "transient": {
-          if (attempts >= maxAttempts) return abstain("provider_error", failure.message);
+          if (attempts >= maxAttempts) return abstain("provider_error", failure.message, afterBackoff());
           if (!(await this.pause(backoff, request.signal))) return abstain("aborted", "the run was cancelled");
           continue;
         }
@@ -253,30 +295,115 @@ export class ProviderGateway {
           if (fresh.fingerprint && fresh.fingerprint !== credential.fingerprint && attempts < maxAttempts) {
             credential = fresh;
             const freshGap = this.planGap(route.provider, route.model, credential, true);
-            if (freshGap) return abstain("provider_error", freshGap);
+            if (freshGap) return abstain("provider_error", freshGap.detail, freshGap.retryAt);
             continue;
           }
           state.rejectedFingerprint = credential.fingerprint;
           state.rejectedAt = this.now();
           return abstain("auth_failed", failure.message);
         }
-        case "plan":
+        case "plan": {
           // The call proved the credential is accepted, so an older auth rejection no longer holds.
           // The same sign-in is refused for this model until it changes or one probe per
           // `auth_probe_after_ms` succeeds, which also notices a plan upgraded on the provider side.
           if (state.rejectedFingerprint === credential.fingerprint) state.rejectedFingerprint = null;
-          if (credential.fingerprint) state.planRefused.set(route.model, { fingerprint: credential.fingerprint, at: this.now() });
-          return abstain("provider_error", failure.message);
+          if (!credential.fingerprint) return abstain("provider_error", failure.message);
+          const at = this.now();
+          state.planRefused.set(route.model, { fingerprint: credential.fingerprint, at });
+          return abstain("provider_error", failure.message, at + this.config.retry.authProbeAfterMs);
+        }
         case "budget":
+          // One call outgrew its per-call ceiling: the same run would again, so no retry time.
           return abstain("cost_ceiling", failure.message);
         case "invalid_output":
           return abstain("invalid_output", failure.message);
         case "aborted":
           return abstain("aborted", failure.message);
         default:
-          return abstain("provider_error", failure.message);
+          return abstain("provider_error", failure.message, afterBackoff());
       }
     }
+  }
+
+  /** A request for the wrong books is a programming error, like an unknown tier. */
+  private scopeOf(request: GatewayRequest): Scope {
+    const scope = request.scope ?? "production";
+    if (scope !== "production" && scope !== "shadow" && scope !== "eval") throw new TypeError(`unknown scope ${String(scope)}`);
+    if (this.qualification && scope !== "eval") throw new TypeError(`an eval gateway serves only eval requests, not ${scope}`);
+    if (!this.qualification && scope === "eval") throw new TypeError("an eval request needs an eval gateway (the qualification option)");
+    if (request.tierRoutes !== undefined && scope !== "eval") throw new TypeError("tierRoutes is for eval requests only");
+    return scope;
+  }
+
+  /** An eval batch's routes, held to the same rules as configured routes. */
+  private batchRoutes(tierRoutes: GatewayRequest["tierRoutes"]): Partial<Record<Tier, Route>> {
+    const batch: Partial<Record<Tier, Route>> = {};
+    for (const [tier, raw] of Object.entries(tierRoutes ?? {})) {
+      if (tier !== "routine" && tier !== "hard") throw new TypeError(`tierRoutes.${tier}: only the routine and hard tiers take a batch route`);
+      let route: Route;
+      try {
+        route = parseRoute(raw, `tierRoutes.${tier}`);
+      } catch (error) {
+        throw new TypeError((error as Error).message);
+      }
+      if (route.provider === "codex" && !Object.hasOwn(this.config.pricingUsdPerMTok, route.model)) {
+        throw new TypeError(`tierRoutes.${tier}: codex model ${route.model} has no pricing_usd_per_mtok entry`);
+      }
+      batch[tier] = route;
+    }
+    return batch;
+  }
+
+  /**
+   * Work under review goes to a route of another family than the work's: the judge's route on an
+   * eval gateway, `audit_routes` for the auditor; with none there is no route. An audit naming no
+   * run under review gets no route while a proposer route shares tiers.audit's family. Otherwise an
+   * eval batch route for the tier wins, so a comparison runs every case on the compared model; then
+   * the specialist's route for the expected action, the specialist's own route, and the tier's.
+   */
+  private resolve(request: GatewayRequest, judge: boolean, batch: Partial<Record<Tier, Route>>): Resolution {
+    const review = request.reviewOf;
+    if (review && (judge || request.specialist === AUDITOR)) {
+      let id: string | undefined;
+      let route: Route | undefined;
+      if (this.qualification && judge) {
+        const field = review.provider === "claude" ? "for_claude_proposers" : review.provider === "codex" ? "default" : undefined;
+        if (field) {
+          id = `judge.${field}`;
+          route = this.qualification.judgeRoutes[field];
+        }
+      } else if (Object.hasOwn(this.config.auditRoutes, review.provider)) {
+        id = this.config.auditRoutes[review.provider];
+        route = id === undefined ? undefined : this.config.routes[id];
+      }
+      // Checked per run as well as in the configuration: no route may review its own family's work.
+      if (id === undefined || route === undefined || route.provider === review.provider) {
+        return { id: null, route: null, refused: `no route of another family than ${String(review.provider)} may review run ${String(review.runId)}` };
+      }
+      return { id, route };
+    }
+    if (request.specialist === AUDITOR && !review && this.unreviewedAudit !== null) {
+      return { id: null, route: null, refused: this.unreviewedAudit };
+    }
+    const tierBatch = batch[request.tier];
+    if (tierBatch) return { id: `tier_routes.${request.tier}`, route: tierBatch };
+    const specialist = Object.hasOwn(this.config.specialists, request.specialist) ? this.config.specialists[request.specialist] : undefined;
+    const action =
+      specialist && request.action !== undefined && Object.hasOwn(specialist.actions, request.action) ? specialist.actions[request.action] : undefined;
+    const id = action ?? specialist?.route ?? this.config.tiers[request.tier];
+    return { id, route: this.config.routes[id] };
+  }
+
+  /** The ledger key and ceilings of a run: live, shadow and eval spend never share a ceiling. */
+  private books(specialist: string, scope: Scope, judge: boolean): { key: string; limits: Limits } {
+    const qualification = this.qualification;
+    if (qualification) {
+      return { key: `eval:${specialist}`, limits: { own: judge ? qualification.judge : qualification.specialist, team: qualification.team } };
+    }
+    const ceilings = this.config.ceilings;
+    if (scope === "shadow") return { key: `shadow:${specialist}`, limits: { own: ceilings.shadow.specialist, team: ceilings.shadow.team } };
+    const own = Object.hasOwn(ceilings.specialists, specialist) ? ceilings.specialists[specialist] : ceilings.specialistDefault;
+    return { key: specialist, limits: { own, team: ceilings.team } };
   }
 
   async health(): Promise<GatewayHealth> {
@@ -330,21 +457,35 @@ export class ProviderGateway {
   }
 
   /**
-   * Why this Codex ChatGPT sign-in cannot run the model, or null: its plan already refused the
-   * model, or the plan it claims is not one the configuration says includes the routed models.
+   * Why this Codex ChatGPT sign-in cannot run the model, or null. A model the provider refused for
+   * the sign-in waits for the next probe (`retryAt`); a plan outside the configured plans waits for
+   * a new sign-in, like a rejected credential, so it has no retry time.
    */
-  private planGap(id: ProviderId, model: string, credential: CredentialState, claimProbe = false): string | null {
+  private planGap(
+    id: ProviderId,
+    model: string,
+    credential: CredentialState,
+    claimProbe = false,
+  ): { detail: string; retryAt?: number } | null {
     if (id !== "codex" || this.adapters.codex.authMode !== "chatgpt" || !credential.fingerprint) return null;
     const action = `sign the agent host's ${this.config.providers.codex.codexHomeEnv} in with a ChatGPT plan that includes it`;
+    const probeAfter = this.config.retry.authProbeAfterMs;
     const refused = this.state.codex.planRefused.get(model);
     if (refused?.fingerprint === credential.fingerprint) {
       // Past the probe interval one run may try again; claiming the probe keeps the others out.
-      if (claimProbe && this.now() - refused.at >= this.config.retry.authProbeAfterMs) refused.at = this.now();
-      else return `codex: plan does not include model ${model}; the provider refused it for this sign-in; ${action}`;
+      if (claimProbe && this.now() - refused.at >= probeAfter) refused.at = this.now();
+      else {
+        return {
+          detail: `codex: plan does not include model ${model}; the provider refused it for this sign-in; ${action}`,
+          retryAt: refused.at + probeAfter,
+        };
+      }
     }
     const plans = this.config.providers.codex.chatgptPlans;
     if (credential.plan !== undefined && !plans.includes(credential.plan)) {
-      return `codex: plan does not include model ${model}; the sign-in is on the ${credential.plan} plan, configured plans are ${plans.join(", ")}; ${action}`;
+      return {
+        detail: `codex: plan does not include model ${model}; the sign-in is on the ${credential.plan} plan, configured plans are ${plans.join(", ")}; ${action}`,
+      };
     }
     return null;
   }

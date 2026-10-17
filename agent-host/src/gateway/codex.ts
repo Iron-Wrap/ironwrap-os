@@ -76,7 +76,8 @@ export function createCodexAdapter(
       if (provider.auth === "api_key") await mkdir(home, { recursive: true });
       const key = provider.auth === "api_key" ? apiKey() : null;
       if (provider.auth === "api_key" && !key) throw new ProviderError("auth", "codex: API key is not configured");
-      const price = config.pricingUsdPerMTok[request.model];
+      // Own entries only: a model named like a prototype member (`toString`) has no price.
+      const price = Object.hasOwn(config.pricingUsdPerMTok, request.model) ? config.pricingUsdPerMTok[request.model] : undefined;
       if (!price) throw new ProviderError("fatal", `codex: no price entry for ${request.model}`);
 
       const childEnv: Record<string, string> = { CODEX_HOME: home };

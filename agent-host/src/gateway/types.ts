@@ -5,8 +5,22 @@
 export type ProviderId = "claude" | "codex";
 export type Tier = "routine" | "hard" | "audit";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+/** Which books a run spends from: the live ceilings, the low shadow budget, or an eval gateway's own. */
+export type Scope = "production" | "eval" | "shadow";
 
 export type JsonSchema = { [key: string]: unknown };
+
+export interface Route {
+  provider: ProviderId;
+  model: string;
+  effort: Effort;
+}
+
+/** The run whose work is under review, and the model family (provider) that proposed it. */
+export interface ReviewOf {
+  runId: string;
+  provider: ProviderId;
+}
 
 /** One stdio MCP server exposing the catalog actions a specialist may call. */
 export interface McpStdioServer {
@@ -21,6 +35,17 @@ export interface McpStdioServer {
 export interface GatewayRequest {
   specialist: string;
   tier: Tier;
+  /** The run's single expected action; it selects the specialist's per-action route, if any. */
+  action?: string;
+  /**
+   * The run under review. The independent auditor and an eval judge then run on a route of another
+   * family than `reviewOf.provider`, or abstain (`no_independent_route`).
+   */
+  reviewOf?: ReviewOf;
+  /** Default `production`. An eval gateway takes only `eval`; a production gateway never does. */
+  scope?: Scope;
+  /** Eval only: one batch's route for a proposing tier (the stage-0 model comparison). */
+  tierRoutes?: Partial<Record<"routine" | "hard", Route>>;
   /** Trusted instructions (playbook and contract). */
   system: string;
   /** Context snapshot and signal, already labelled as data. */
@@ -49,6 +74,7 @@ export type AbstainReason =
   | "provider_disabled"
   | "unknown_specialist"
   | "tier_not_allowed"
+  | "no_independent_route"
   | "credential_missing"
   | "auth_failed"
   | "rate_limited"
@@ -63,12 +89,19 @@ export type AbstainReason =
 interface ResultBase {
   specialist: string;
   tier: Tier;
-  provider: ProviderId;
+  /**
+   * The route the run resolved to: a `routes` id, `judge.<field>` or `tier_routes.<tier>` on an
+   * eval gateway. It, `provider`, `model` and `authMode` are null only for `no_independent_route`.
+   */
+  routeId: string | null;
+  /** The run under review, as the request named it. */
+  reviewOf: ReviewOf | null;
+  provider: ProviderId | null;
   /** Configured model for the route. */
-  model: string;
+  model: string | null;
   /** Models the provider reported using; empty when the provider does not report them. */
   modelsUsed: string[];
-  authMode: string;
+  authMode: string | null;
   attempts: number;
   usage: Usage;
   /** Notional cost: provider estimate for Claude, configured price table for Codex. */
@@ -80,7 +113,19 @@ interface ResultBase {
 
 export type GatewayResult =
   | (ResultBase & { status: "ok"; output: unknown })
-  | (ResultBase & { status: "abstained"; reason: AbstainReason; detail: string; retryAt?: number });
+  | (ResultBase & {
+      status: "abstained";
+      reason: AbstainReason;
+      detail: string;
+      /**
+       * Epoch ms before which the same run would abstain again: the cooldown end for
+       * `rate_limited`, the moment the oldest counted reservation leaves the window for a ledger
+       * `call_ceiling` or `cost_ceiling`, the next probe for a model the provider refused for the
+       * sign-in's plan, now plus the attempt's backoff for any other `provider_error` and for
+       * `model_mismatch`. Absent when waiting alone cannot help.
+       */
+      retryAt?: number;
+    });
 
 export type ProviderErrorKind =
   | "rate_limit"

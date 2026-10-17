@@ -1,6 +1,7 @@
 // One signal, one specialist, one coordination run: open the run on the Worker (which builds the
-// context snapshot and the run's tool list), load the specialist, call the gateway with only the
-// tools both the Worker and the allowlist permit, and close the run with the exact outcome. An
+// context snapshot and the run's tool list, and may name the run under review, the expected
+// action and a shadow mode), load the specialist, call the gateway with only the tools both the
+// Worker and the allowlist permit, and close the run with the exact outcome and route. An
 // abstention closes the run too, so every receipt says why nothing happened.
 //
 // Durability: the close body is written to `pending-closes/` before it is sent and removed once
@@ -79,34 +80,49 @@ export async function runSignal(options: RunnerOptions, signal: Signal, abort?: 
     return { status: "recovered", signal_id: signal.signal_id };
   }
 
+  // A Worker that sends any routing field also accepts them back in the close.
+  const routed = ["review_of", "expected_action_id", "mode"].some((field) => Object.hasOwn(run, field));
+  const reviewOf = run.review_of ?? null;
+  const action = run.expected_action_id ?? null;
+  // Unset reads as live. A mode this host does not know is refused, never guessed: it could stand
+  // for any budget.
+  const declared: unknown = run.mode ?? "live";
+  const mode = declared === "live" || declared === "shadow" ? declared : null;
   let body: RunClose;
-  try {
-    const specialist = await loadSpecialist(options.specialistsRoot, signal.specialist_id);
-    const allowlisted = new Set(specialist.allowlist.map((entry) => entry.action_id));
-    const tools = run.tools.filter((tool) => allowlisted.has(tool.action_id));
-    const input = buildRunInput(specialist, run, signal, tools);
-    const result = await options.gateway.run({
-      specialist: specialist.id,
-      tier: specialist.tier,
-      system: input.system,
-      prompt: input.prompt,
-      outputSchema: input.outputSchema,
-      ...(tools.length > 0
-        ? {
-            tools: {
-              server: options.actionServer(
-                run.run_id,
-                tools.map((tool) => tool.action_id),
-              ),
-              allowed: tools.map((tool) => tool.tool_name),
-            },
-          }
-        : {}),
-      ...(abort ? { signal: abort } : {}),
-    });
-    body = closeBody(result);
-  } catch (error) {
-    body = abstainedBody("specialist_unavailable", error instanceof Error ? error.message : String(error));
+  if (mode === null) {
+    body = abstainedBody("unknown_run_mode", `the Worker opened the run in mode ${JSON.stringify(declared).slice(0, 40)}, which this host does not know`);
+  } else {
+    try {
+      const specialist = await loadSpecialist(options.specialistsRoot, signal.specialist_id);
+      const allowlisted = new Set(specialist.allowlist.map((entry) => entry.action_id));
+      const tools = run.tools.filter((tool) => allowlisted.has(tool.action_id));
+      const input = buildRunInput(specialist, run, signal, tools);
+      const result = await options.gateway.run({
+        specialist: specialist.id,
+        tier: specialist.tier,
+        scope: mode === "shadow" ? "shadow" : "production",
+        ...(reviewOf ? { reviewOf: { runId: reviewOf.run_id, provider: reviewOf.provider } } : {}),
+        ...(action ? { action } : {}),
+        system: input.system,
+        prompt: input.prompt,
+        outputSchema: input.outputSchema,
+        ...(tools.length > 0
+          ? {
+              tools: {
+                server: options.actionServer(
+                  run.run_id,
+                  tools.map((tool) => tool.action_id),
+                ),
+                allowed: tools.map((tool) => tool.tool_name),
+              },
+            }
+          : {}),
+        ...(abort ? { signal: abort } : {}),
+      });
+      body = closeBody(result, routed ? mode : null);
+    } catch (error) {
+      body = abstainedBody("specialist_unavailable", error instanceof Error ? error.message : String(error));
+    }
   }
   if (abort?.aborted) throw new HostStopping();
 
@@ -212,19 +228,28 @@ function writeAtomic(file: string, content: string): void {
   renameSync(`${file}.tmp`, file);
 }
 
-function closeBody(result: GatewayResult): RunClose {
+/** `mode` is null for a Worker without the routing fields, which gets the close it knows. */
+function closeBody(result: GatewayResult, mode: "live" | "shadow" | null): RunClose {
+  const { provider, model, authMode, routeId, reviewOf } = result;
   return {
     status: result.status,
     reason: result.status === "abstained" ? result.reason : null,
     detail: result.status === "abstained" ? result.detail : null,
     output: result.status === "ok" ? result.output : null,
-    model: {
-      provider: result.provider,
-      model: result.model,
-      models_used: result.modelsUsed,
-      auth_mode: result.authMode,
-      tier: result.tier,
-    },
+    // No route means no model ran (`no_independent_route`).
+    model:
+      provider === null || model === null || authMode === null || routeId === null
+        ? null
+        : {
+            provider,
+            model,
+            models_used: result.modelsUsed,
+            auth_mode: authMode,
+            tier: result.tier,
+            ...(mode === null
+              ? {}
+              : { route_id: routeId, review_of: reviewOf ? { run_id: reviewOf.runId, provider: reviewOf.provider } : null, mode }),
+          },
     hashes: result.hashes,
     usage: {
       input_tokens: result.usage.inputTokens,

@@ -18,17 +18,49 @@ replay harness remain later slices. `specialists/` and `evals/` are owned by the
 reason. It never throws for a provider failure and never switches provider or model to rescue a
 call: when a provider is unavailable, the specialists routed to it abstain and say why.
 
-Routing lives in [`config/gateway.json`](config/gateway.json):
+Routing lives in [`config/gateway.json`](config/gateway.json) (`ironwrap_agent_gateway_config_v2`).
+`routes` names each provider, model and effort once, and `tiers` maps each runtime tier to a route:
 
-| Tier | Provider | Default model | Used by |
+| Tier | Route | Provider and model | Used by |
 |---|---|---|---|
-| `routine` | Codex | `gpt-6.1-sol` | every proposing specialist |
-| `hard` | Codex | `gpt-6-astra` | the same specialists, for pricing anomalies, fraud and disputes |
-| `audit` | Claude | `claude-opus-5-5` | `independent_auditor` only |
+| `routine` | `codex_sol` | Codex `gpt-6.1-sol` | every proposing specialist |
+| `hard` | `codex_astra` | Codex `gpt-6-astra` | the same specialists, for pricing anomalies, fraud and disputes |
+| `audit` | `claude_opus` | Claude `claude-opus-5-5` | `independent_auditor`, for a run that reviews no other run |
 
-The configuration refuses an audit route on the same provider as a proposer route, and an auditor
-that may also propose, so audit always runs on a different model family. Models, effort, ceilings
-and retry are configuration; dropping the auditor to another Claude model needs no code change.
+A run takes the route of its expected action (`specialists.<id>.actions`), else its specialist's
+(`specialists.<id>.route`), else its tier's. `specialists.<id>.tiers` stays the allowlist, and only
+the auditor may use `audit`; the auditor takes no route of its own.
+
+Audit independence is per run. A run that reviews another names it in `reviewOf` (run id and the
+provider that proposed it), and the auditor then runs on `audit_routes.<that provider>`:
+`claude_opus` for Codex work, `codex_astra` for Claude work. The configuration refuses an audit
+route on the family it audits and needs one for every family a proposer route uses, so a proposer
+may run on Claude. The gateway checks again per run: with no route of another family it abstains
+with `no_independent_route`, before any provider call or ceiling booking and without a fallback.
+An audit that names no run under review uses `tiers.audit` only while no proposer route is on that
+route's family; otherwise it abstains the same way.
+Models, effort, ceilings and retry are configuration; dropping the auditor to another Claude model
+needs no code change.
+
+### Shadow and eval books
+
+`scope` on a request picks the books it spends from:
+
+- `production` (default): the live ceilings.
+- `shadow`: `ceilings.shadow`, a separate low budget under `shadow:<specialist>` ledger keys. Team
+  totals are per namespace, so shadow spend never counts toward the live ceilings, nor live spend
+  toward shadow.
+- `eval`: only on an eval gateway, one constructed with the `ledger` and `judge` blocks of
+  [`evals/qualification.v1.json`](evals/qualification.v1.json) (option `qualification`, validated
+  strictly; the ledger must be `isolated`). It books in `<state>/gateway-usage-eval.jsonl`, never
+  the production file, under `eval:` keys against that block's team, specialist and judge
+  ceilings, and treats a request of any other scope as a programming error; a production gateway
+  refuses `eval` the same way. A judge request names `judge_key` as its specialist and the run it
+  scores in `reviewOf`. It skips the tier allowlist and runs on `judge.default` for Codex work or
+  `judge.for_claude_proposers` for Claude work, abstaining with `no_independent_route` when that
+  route is of the scored run's family. `tierRoutes` replaces a proposing tier's route for one batch
+  (the stage-0 model comparison), ahead of action and specialist routes; the auditor's routing is
+  unchanged. For `per_stage`, the runner gives each stage its own state directory.
 
 ### Credentials
 
@@ -61,8 +93,9 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
 
 ### Ceilings, retry and stop
 
-- Call and cost ceilings per specialist and for the team over a rolling window, kept in the
-  append-only `<state>/gateway-usage.jsonl`. Every attempt is booked at its per-call cost ceiling
+- Call and cost ceilings per specialist and for the team of each namespace (live, shadow, eval) over
+  a rolling window, kept in the append-only `<state>/gateway-usage.jsonl`; records without a
+  namespace prefix are live. Every attempt is booked at its per-call cost ceiling
   before it starts and settled to the actual cost after, so concurrent runs cannot overshoot and a
   crash or restart cannot reset a ceiling. If the file cannot be written, the gateway refuses
   every further run (`ledger_unavailable`). Codex cost is notional, from the configured price
@@ -70,6 +103,14 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
 - Short rate limits and transient failures retry with jittered exponential backoff. A rate limit
   longer than `max_delay_ms` puts the provider into a cooldown in which runs abstain without
   calling it.
+- An abstention carries `retryAt` (epoch ms) when waiting can help: the cooldown end for
+  `rate_limited`; for a ledger `call_ceiling` or `cost_ceiling`, the latest moment at which the
+  oldest reservation counted against each refusing ceiling leaves the window (a call that settles
+  below its reservation can free cost room sooner); the next probe (`auth_probe_after_ms` after
+  the refusal) for a model the provider refused for the sign-in's plan; now plus the attempt's
+  backoff for any other `provider_error` and for `model_mismatch`. `no_independent_route`,
+  `ledger_unavailable`, the stop reasons, a sign-in on a plan outside `chatgpt_plans` and a single
+  call stopped at its per-call cost ceiling (`cost_ceiling` from the provider) carry none.
 - Kill switch: a `KILL` file in the state directory or `AGENT_HOST_KILL=1` stops every run before
   any provider call.
 - Models used: Claude reports them in its result, and any model other than the configured one,
@@ -147,10 +188,10 @@ The host and the action server call only these Worker routes, with
 | Route | Caller | Contract |
 |---|---|---|
 | `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content |
-| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[]}, tools[]}`; 409 when that key's run is already closed |
+| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[]}, tools[]}`, optionally with `review_of: {run_id, provider} \| null`, `expected_action_id: string \| null` and `mode: "live" \| "shadow"` (missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; 409 when that key's run is already closed |
 | `GET /api/v1/agents/runs/:id/tools` | action server | the run's tools: `action_id`, `tool_name`, `autonomy`, `side_effect_class`, `undo`, `description`, strict `args_schema` |
 | `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention |
-| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran |
+| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode` |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
 ### Owner controls and human decisions
@@ -227,8 +268,9 @@ npm ci --prefix agent-host                # with the optional CLI binaries, for 
 npm run smoke --prefix agent-host
 ```
 
-`npm run smoke` makes one tiny structured call per routed tier through the real gateway and prints
-status, provider, model, the models used and cost; a tier fails when its run reports no model used.
+`npm run smoke` makes one tiny structured call per routed tier through the real gateway, plus one
+audit of Codex-proposed work that must run on Claude, and prints status, route, provider, model,
+the models used and cost; a call fails when its run reports no model used.
 It spends a few tokens of the sign-ins and never runs in CI.
 
 ## Production

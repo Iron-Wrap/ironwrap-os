@@ -292,3 +292,14 @@ test("an unreadable session rollout loses the model, never the billed answer", a
   assert.equal(result.costUsd, 0.0228);
   assert.deepEqual(result.output, { decision: "propose", note: null });
 });
+
+test("a model named like a prototype member has no price, so the adapter never runs it", async (t) => {
+  const home = tempDir(t);
+  signedIn(home);
+  const seen = newSeen();
+  const adapter = createCodexAdapter(shippedConfig(), tempDir(t), { CODEX_HOME: home }, factory(turn(), seen));
+  for (const model of ["toString", "constructor", "hasOwnProperty"]) {
+    await assert.rejects(adapter.call(call({ model })), (error: ProviderError) => error.kind === "fatal" && error.message === `codex: no price entry for ${model}`);
+  }
+  assert.equal(seen.codex.length, 0);
+});

@@ -3,15 +3,25 @@
 // counts the call and the per-call cost ceiling, and the settlement record adjusts the cost to the
 // actual figure. A crash between the two leaves the conservative reservation in force. If the file
 // cannot be written, the ledger turns degraded and refuses every further reservation.
+//
+// A ledger key is a specialist id (live) or `<namespace>:<id>` (`shadow:`, `eval:`), and team totals
+// are per namespace, so shadow and eval spend never count toward the live ceilings or each other.
+// Records written before namespaces existed carry bare ids and so stay live.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Ceiling, GatewayConfig, SpecialistCeiling } from "./config.ts";
+import type { Ceiling, SpecialistCeiling } from "./config.ts";
 import type { ProviderId, Usage } from "./types.ts";
+
+export type Namespace = "live" | "shadow" | "eval";
+
+/** A specialist id or the judge key; outside live, prefixed with its namespace. */
+const LEDGER_KEY = /^(?:(?:shadow|eval):)?[a-z][a-z0-9_]{1,63}$/;
 
 export interface UsageRecord {
   at: number;
   reservation: string;
+  /** The ledger key: the specialist id, prefixed with its namespace outside live. */
   specialist: string;
   provider: ProviderId;
   model: string;
@@ -32,22 +42,31 @@ export interface Reservation {
   costUsd: number;
 }
 
+/** The ceilings one reservation is held to: its key's own and its namespace's team ceiling. */
+export interface Limits {
+  own: SpecialistCeiling;
+  team: Ceiling;
+}
+
 export type Refusal = "call_ceiling" | "cost_ceiling" | "ledger_unavailable";
+
+export function namespaceOf(key: string): string {
+  const colon = key.indexOf(":");
+  return colon === -1 ? "live" : key.slice(0, colon);
+}
 
 export class UsageLedger {
   private records: UsageRecord[] = [];
   private degraded = false;
   private sequence = 0;
   private readonly windowMs: number;
-  private readonly ceilings: GatewayConfig["ceilings"];
   private readonly file: string;
   private readonly now: () => number;
 
-  constructor(ceilings: GatewayConfig["ceilings"], file: string, now: () => number) {
-    this.ceilings = ceilings;
+  constructor(file: string, windowHours: number, now: () => number) {
     this.file = file;
     this.now = now;
-    this.windowMs = ceilings.windowHours * 3_600_000;
+    this.windowMs = windowHours * 3_600_000;
     if (!existsSync(file)) {
       mkdirSync(dirname(file), { recursive: true });
       return;
@@ -76,25 +95,36 @@ export class UsageLedger {
     }
   }
 
-  ceilingFor(specialist: string): SpecialistCeiling {
-    return this.ceilings.specialists[specialist] ?? this.ceilings.specialistDefault;
-  }
-
-  /** Books one call at the specialist's per-call cost ceiling, or names the ceiling it would break. */
-  reserve(specialist: string, provider: ProviderId, model: string): { reservation: Reservation } | { refusal: Refusal } {
+  /**
+   * Books one call at the key's per-call cost ceiling, or names the ceiling it would break and
+   * when the oldest reservation counted against it leaves the window.
+   */
+  reserve(
+    key: string,
+    limits: Limits,
+    provider: ProviderId,
+    model: string,
+  ): { reservation: Reservation } | { refusal: Refusal; retryAt?: number } {
     if (this.degraded) return { refusal: "ledger_unavailable" };
     this.prune();
-    const own = this.ceilingFor(specialist);
-    const team = this.totals(() => true);
-    const mine = this.totals((s) => s === specialist);
-    if (mine.calls + 1 > own.calls || team.calls + 1 > this.ceilings.team.calls) return { refusal: "call_ceiling" };
-    const room = Math.min(own.costUsd - mine.costUsd, this.ceilings.team.costUsd - team.costUsd);
-    if (room < own.costUsdPerCall) return { refusal: "cost_ceiling" };
+    const namespace = namespaceOf(key);
+    const ownKey = (candidate: string) => candidate === key;
+    const teamKey = (candidate: string) => namespaceOf(candidate) === namespace;
+    const mine = this.totals(ownKey);
+    const team = this.totals(teamKey);
+    const { own } = limits;
+    const full: Array<(key: string) => boolean> = [];
+    if (mine.calls + 1 > own.calls) full.push(ownKey);
+    if (team.calls + 1 > limits.team.calls) full.push(teamKey);
+    if (full.length > 0) return { refusal: "call_ceiling", ...this.freedAt(full) };
+    if (own.costUsd - mine.costUsd < own.costUsdPerCall) full.push(ownKey);
+    if (limits.team.costUsd - team.costUsd < own.costUsdPerCall) full.push(teamKey);
+    if (full.length > 0) return { refusal: "cost_ceiling", ...this.freedAt(full) };
     const at = this.now();
     const reservation: Reservation = {
       id: `${at}-${process.pid}-${(this.sequence += 1)}`,
       at,
-      specialist,
+      specialist: key,
       provider,
       model,
       costUsd: own.costUsdPerCall,
@@ -102,7 +132,7 @@ export class UsageLedger {
     const booked = this.append({
       at,
       reservation: reservation.id,
-      specialist,
+      specialist: key,
       provider,
       model,
       outcome: "reserved",
@@ -135,15 +165,37 @@ export class UsageLedger {
     return this.degraded;
   }
 
-  snapshot(): { team: Ceiling; specialists: Record<string, Ceiling> } {
+  snapshot(): { teams: Record<Namespace, Ceiling>; specialists: Record<string, Ceiling> } {
     this.prune();
-    const specialists: Record<string, Ceiling> = {};
+    // A Map, so a key such as `constructor` adds up on its own entry, never on a prototype member.
+    const specialists = new Map<string, Ceiling>();
     for (const record of this.records) {
-      const entry = (specialists[record.specialist] ??= { calls: 0, costUsd: 0 });
+      const entry = specialists.get(record.specialist) ?? { calls: 0, costUsd: 0 };
       entry.calls += record.calls;
       entry.costUsd += record.costUsd;
+      specialists.set(record.specialist, entry);
     }
-    return { team: this.totals(() => true), specialists };
+    const team = (namespace: Namespace) => this.totals((key) => namespaceOf(key) === namespace);
+    return { teams: { live: team("live"), shadow: team("shadow"), eval: team("eval") }, specialists: Object.fromEntries(specialists) };
+  }
+
+  /**
+   * The first moment every refusing ceiling has a reservation fewer: each one's oldest counted
+   * reservation has left the window. A settling call can free cost room sooner; nothing counted
+   * means waiting cannot help, so there is no time.
+   */
+  private freedAt(ceilings: Array<(key: string) => boolean>): { retryAt?: number } {
+    let retryAt = 0;
+    for (const match of ceilings) {
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const record of this.records) {
+        if (record.calls === 1 && match(record.specialist)) oldest = Math.min(oldest, record.at);
+      }
+      if (oldest === Number.POSITIVE_INFINITY) return {};
+      // prune() keeps a record while `at >= now - window`, so it is gone one millisecond later.
+      retryAt = Math.max(retryAt, oldest + this.windowMs + 1);
+    }
+    return { retryAt };
   }
 
   private append(record: UsageRecord): boolean {
@@ -158,7 +210,7 @@ export class UsageLedger {
     }
   }
 
-  private totals(match: (specialist: string) => boolean): Ceiling {
+  private totals(match: (key: string) => boolean): Ceiling {
     let calls = 0;
     let costUsd = 0;
     for (const record of this.records) {
@@ -182,6 +234,9 @@ function isRecord(value: unknown): value is UsageRecord {
     record !== null &&
     Number.isFinite(record.at) &&
     typeof record.specialist === "string" &&
+    // A key in a namespace this version does not know would count toward no ceiling at all, and
+    // the gateway never writes anything but a specialist id or judge key in a known namespace.
+    LEDGER_KEY.test(record.specialist) &&
     (record.calls === 0 || record.calls === 1) &&
     Number.isFinite(record.costUsd)
   );

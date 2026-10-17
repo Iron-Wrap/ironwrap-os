@@ -47,7 +47,7 @@ const READY: GatewayHealth = {
   killed: false,
   alerts: [],
   providers: {} as GatewayHealth["providers"],
-  usage: { team: { calls: 0, costUsd: 0 }, specialists: {} },
+  usage: { teams: { live: { calls: 0, costUsd: 0 }, shadow: { calls: 0, costUsd: 0 }, eval: { calls: 0, costUsd: 0 } }, specialists: {} },
 };
 
 test("the specialist loads in the documented order and malformed files fail the load", async (t) => {
@@ -105,6 +105,100 @@ test("a signal becomes one run with only the tools both the Worker and the allow
   assert.deepEqual(close.output, RUN_OUTPUT);
   assert.deepEqual(close.model, { provider: "codex", model: "gpt-6.1-sol", models_used: [], auth_mode: "chatgpt", tier: "routine" });
   assert.equal(close.tool_calls.length, 1);
+});
+
+test("the run under review, the expected action and a shadow mode reach the gateway, and the close records the route", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: { run_id: "run_0000000000", provider: "codex" }, expected_action_id: "lead.qualify", mode: "shadow" }));
+  const { options, requests } = runner(t, worker, async (request) => ({
+    ...okResult(request),
+    routeId: "claude_opus",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    authMode: "oauth",
+  }));
+  await runSignal(options, signal());
+  assert.deepEqual(requests[0].reviewOf, { runId: "run_0000000000", provider: "codex" });
+  assert.equal(requests[0].action, "lead.qualify");
+  assert.equal(requests[0].scope, "shadow");
+  assert.deepEqual(worker.closed[0].body.model, {
+    provider: "claude",
+    model: "claude-opus-5-5",
+    models_used: [],
+    auth_mode: "oauth",
+    tier: "routine",
+    route_id: "claude_opus",
+    review_of: { run_id: "run_0000000000", provider: "codex" },
+    mode: "shadow",
+  });
+});
+
+test("a Worker without the routing fields gets live runs and the close it knows", async (t) => {
+  const worker = fakeWorker();
+  const { options, requests } = runner(t, worker, async (request) => okResult(request));
+  await runSignal(options, signal());
+  assert.equal(requests[0].scope, "production");
+  assert.equal("reviewOf" in requests[0], false);
+  assert.equal("action" in requests[0], false);
+  assert.deepEqual(Object.keys(worker.closed[0].body.model ?? {}), ["provider", "model", "models_used", "auth_mode", "tier"]);
+});
+
+test("a Worker with the routing fields gets live mode and a null review on an ordinary run", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: null, expected_action_id: null }));
+  const { options, requests } = runner(t, worker, async (request) => okResult(request));
+  await runSignal(options, signal());
+  assert.equal(requests[0].scope, "production");
+  assert.equal("reviewOf" in requests[0], false);
+  assert.equal("action" in requests[0], false);
+  const model = worker.closed[0].body.model;
+  assert.deepEqual([model?.route_id, model?.review_of, model?.mode], ["codex_sol", null, "live"]);
+});
+
+test("mode alone marks a routing Worker; live and null read as live", async (t) => {
+  const alone = fakeWorker(openedRun({ mode: "shadow" }));
+  const shadow = runner(t, alone, async (request) => okResult(request));
+  await runSignal(shadow.options, signal());
+  assert.equal(shadow.requests[0].scope, "shadow");
+  const model = alone.closed[0].body.model;
+  assert.deepEqual([model?.route_id, model?.review_of, model?.mode], ["codex_sol", null, "shadow"]);
+  for (const declared of ["live", null]) {
+    const worker = fakeWorker(openedRun({ mode: declared as never }));
+    const live = runner(t, worker, async (request) => okResult(request));
+    await runSignal(live.options, signal());
+    assert.equal(live.requests[0].scope, "production", String(declared));
+    assert.equal(worker.closed[0].body.model?.mode, "live", String(declared));
+  }
+});
+
+test("a mode the host does not know is refused before any model call, never read as live", async (t) => {
+  for (const declared of ["canary", "Shadow", 1, { budget: "live" }]) {
+    const worker = fakeWorker(openedRun({ mode: declared as never }));
+    const { options, requests } = runner(t, worker, async (request) => okResult(request));
+    const outcome = await runSignal(options, signal());
+    const close = worker.closed[0].body;
+    assert.equal(requests.length, 0, JSON.stringify(declared));
+    assert.deepEqual([outcome.status, close.reason, close.model, close.cost_usd], ["abstained", "unknown_run_mode", null, 0], JSON.stringify(declared));
+    assert.ok(close.detail?.includes(JSON.stringify(declared)), close.detail ?? "");
+  }
+});
+
+test("an audit without an independent route closes with its reason and no model", async (t) => {
+  const worker = fakeWorker(openedRun({ review_of: { run_id: "run_0000000000", provider: "claude" }, expected_action_id: null, mode: "live" }));
+  const { options } = runner(t, worker, async (request) => ({
+    ...okResult(request),
+    status: "abstained",
+    reason: "no_independent_route",
+    detail: "no route of another family than claude may review run run_0000000000",
+    routeId: null,
+    provider: null,
+    model: null,
+    authMode: null,
+    attempts: 0,
+    costUsd: 0,
+    toolCalls: [],
+  }) as GatewayResult);
+  assert.equal((await runSignal(options, signal())).status, "abstained");
+  const close = worker.closed[0].body;
+  assert.deepEqual([close.reason, close.model], ["no_independent_route", null]);
 });
 
 test("the same signal always maps to the same run key, so re-delivery cannot double-run", async (t) => {

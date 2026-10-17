@@ -2,7 +2,7 @@
 // else: it reads signals, opens and closes coordination runs, and reports its health. Every
 // decision about an action belongs to the Worker; the host only transports.
 
-import type { JsonSchema } from "../gateway/types.ts";
+import type { JsonSchema, ProviderId } from "../gateway/types.ts";
 
 export type SignalKind = "event" | "watch" | "owner_request" | "handoff";
 
@@ -52,6 +52,13 @@ export interface OpenedRun {
     omitted?: Array<{ fact_id: string; reason: "unreadable" | "too_large" | "limit_reached" }>;
   };
   tools: RunTool[];
+  // Routing fields; a Worker that predates them omits all three, and missing reads as null/live.
+  /** The run whose work this run reviews, and the family that proposed it. */
+  review_of?: { run_id: string; provider: ProviderId } | null;
+  /** The single catalog action the run is expected to take. */
+  expected_action_id?: string | null;
+  /** A shadow run spends the shadow budget, never the live ceilings. */
+  mode?: "live" | "shadow";
 }
 
 export interface RunClose {
@@ -59,8 +66,21 @@ export interface RunClose {
   reason: string | null;
   detail: string | null;
   output: unknown;
-  /** Null when no model ran (the specialist could not load). */
-  model: { provider: string; model: string; models_used: string[]; auth_mode: string; tier: string } | null;
+  /**
+   * Null when no model ran (the specialist could not load, or no route of another family could
+   * review the work). `route_id`, `review_of` and `mode` go only to a Worker that sent the routing
+   * fields: an older one refuses unknown close fields.
+   */
+  model: {
+    provider: string;
+    model: string;
+    models_used: string[];
+    auth_mode: string;
+    tier: string;
+    route_id?: string;
+    review_of?: { run_id: string; provider: string } | null;
+    mode?: "live" | "shadow";
+  } | null;
   hashes: { system: string; prompt: string; schema: string } | null;
   usage: { input_tokens: number; cached_input_tokens: number; output_tokens: number };
   cost_usd: number;

@@ -59,7 +59,8 @@
       "tier_not_allowed",
       "ledger_unavailable",
       "model_mismatch",
-      "aborted"
+      "aborted",
+      "no_independent_route"
     ],
     "score": [
       "invalid_output"

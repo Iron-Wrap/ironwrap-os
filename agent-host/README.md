@@ -72,12 +72,21 @@ by name (`passEnv`), never placed on a command line. Output must match a strict 
   calling it.
 - Kill switch: a `KILL` file in the state directory or `AGENT_HOST_KILL=1` stops every run before
   any provider call.
-- Claude reports the models it used; any model other than the configured one, including the
-  CLI's own refusal fallback, is an abstention (`model_mismatch`). Codex reports none, so its
-  runs are recorded under the configured model.
+- Models used: Claude reports them in its result, and any model other than the configured one,
+  including the CLI's own refusal fallback, is an abstention (`model_mismatch`). Codex's SDK
+  events report none; the gateway records the model the Codex CLI ran the thread's turns with,
+  from its session rollout under `$CODEX_HOME/sessions` (`turn_context.model`). That is the CLI's
+  own record of the model it requested, not a provider confirmation, so `model_mismatch` cannot
+  catch a provider-side substitution, and an unreadable rollout records none (the smoke then fails).
+  `$CODEX_HOME/sessions` keeps every prompt the CLI ran, unpruned, so it holds run data.
+- A Codex ChatGPT sign-in must be on a plan that includes the routed models. `chatgpt_plans` lists
+  those plans; a sign-in whose id token claims another plan abstains without a call
+  (`provider_error`, detail `codex: plan does not include model …`). A model the provider refused
+  for a sign-in is not called again on that sign-in until it changes or, once per
+  `auth_probe_after_ms`, a single probe succeeds.
 - `ProviderGateway.health()` reports per-provider state and alerts: `kill_switch_engaged`,
   `ledger_unavailable`, `<provider>_credential_missing`, `<provider>_auth_failed`,
-  `<provider>_cooldown`, and
+  `<provider>_cooldown`, `codex_plan_lacks_model` (the provider is then not ready), and
   `codex_signin_not_refreshing` when `auth.json` has not refreshed within
   `signin_max_age_hours`.
 
@@ -162,7 +171,8 @@ npm run smoke --prefix agent-host
 ```
 
 `npm run smoke` makes one tiny structured call per routed tier through the real gateway and prints
-status, provider, model and cost. It spends a few tokens of the sign-ins and never runs in CI.
+status, provider, model, the models used and cost; a tier fails when its run reports no model used.
+It spends a few tokens of the sign-ins and never runs in CI.
 
 ## Production
 

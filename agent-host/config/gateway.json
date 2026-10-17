@@ -13,7 +13,8 @@
       "auth": "chatgpt",
       "api_key_env": "CODEX_API_KEY",
       "codex_home_env": "CODEX_HOME",
-      "signin_max_age_hours": 216
+      "signin_max_age_hours": 216,
+      "chatgpt_plans": ["pro"]
     }
   },
   "routes": {

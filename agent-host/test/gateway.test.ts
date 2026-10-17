@@ -387,3 +387,104 @@ test("a ledger record that cannot be counted stops spending after a restart", as
   assert.equal(abstained(await restarted.gateway.run(request())).reason, "ledger_unavailable");
   assert.equal(restarted.codex.calls.length, 0);
 });
+
+test("a plan that does not include the model abstains actionably and keeps the provider not ready until the sign-in changes", async (t) => {
+  const h = harness(t);
+  h.codex.steps.push(new ProviderError("plan", "codex: plan does not include model gpt-6.1-sol; sign the agent host's CODEX_HOME in with a ChatGPT plan that includes it"));
+  const first = abstained(await h.gateway.run(request()));
+  assert.equal(first.reason, "provider_error");
+  assert.match(first.detail, /^codex: plan does not include model gpt-6\.1-sol;/);
+  // The same sign-in is not spent again on the refused model.
+  const second = abstained(await h.gateway.run(request()));
+  assert.match(second.detail, /plan does not include model gpt-6\.1-sol; the provider refused it for this sign-in/);
+  assert.equal(h.codex.calls.length, 1);
+  const health = await h.gateway.health();
+  assert.equal(health.ready, false);
+  assert.equal(health.providers.codex.state, "plan_lacks_model");
+  assert.ok(health.alerts.includes("codex_plan_lacks_model"), JSON.stringify(health.alerts));
+  // A new sign-in (auth.json changed) clears it.
+  h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "pro" };
+  h.codex.steps.push(outcome());
+  assert.equal((await h.gateway.run(request())).status, "ok");
+  assert.equal((await h.gateway.health()).ready, true);
+});
+
+test("a sign-in claiming a plan outside the configured plans is not ready and is not spent", async (t) => {
+  const h = harness(t);
+  h.codex.credentialState = { fingerprint: "codex-credential-1", refreshedAt: h.clock.now, plan: "free" };
+  const health = await h.gateway.health();
+  assert.equal(health.ready, false);
+  assert.equal(health.providers.codex.plan, "free");
+  assert.deepEqual(health.alerts, ["codex_plan_lacks_model"]);
+  const result = abstained(await h.gateway.run(request({ tier: "hard" })));
+  assert.match(result.detail, /^codex: plan does not include model gpt-6-astra; the sign-in is on the free plan, configured plans are pro;/);
+  assert.equal(h.codex.calls.length, 0);
+  // The auditor's Claude route is unaffected.
+  h.claude.steps.push(outcome());
+  assert.equal((await h.gateway.run(request({ specialist: "independent_auditor", tier: "audit" }))).status, "ok");
+});
+
+test("a plan refusal latches only the refused model, and one probe per interval can lift it", async (t) => {
+  const h = harness(t);
+  const refusal = () => new ProviderError("plan", "codex: plan does not include model gpt-6.1-sol; sign the agent host's CODEX_HOME in with a ChatGPT plan that includes it");
+  h.codex.steps.push(refusal());
+  abstained(await h.gateway.run(request()));
+  // The hard tier's model was not refused and still runs on the same sign-in.
+  h.codex.steps.push(outcome());
+  assert.equal((await h.gateway.run(request({ tier: "hard" }))).status, "ok");
+  assert.equal(h.codex.calls.length, 2);
+  // Within the probe interval the refused model is not called again.
+  abstained(await h.gateway.run(request()));
+  assert.equal(h.codex.calls.length, 2);
+  // Past it, exactly one run probes; a plan upgraded on the provider side then answers.
+  h.clock.now += shippedConfig().retry.authProbeAfterMs;
+  h.codex.steps.push(outcome());
+  assert.equal((await h.gateway.run(request())).status, "ok");
+  assert.equal(h.codex.calls.length, 3);
+  const health = await h.gateway.health();
+  assert.equal(health.providers.codex.state, "ready");
+  assert.equal(health.ready, true);
+});
+
+test("a plan refusal after an auth rejection reports the plan, not a dead credential", async (t) => {
+  const h = harness(t);
+  h.codex.steps.push(new ProviderError("auth", "401 unauthorized"));
+  assert.equal(abstained(await h.gateway.run(request())).reason, "auth_failed");
+  h.clock.now += shippedConfig().retry.authProbeAfterMs;
+  h.codex.steps.push(new ProviderError("plan", "codex: plan does not include model gpt-6.1-sol; sign the agent host's CODEX_HOME in with a ChatGPT plan that includes it"));
+  abstained(await h.gateway.run(request()));
+  const next = abstained(await h.gateway.run(request()));
+  assert.equal(next.reason, "provider_error");
+  assert.match(next.detail, /plan does not include model/);
+  assert.equal((await h.gateway.health()).providers.codex.state, "plan_lacks_model");
+});
+
+test("past the probe interval concurrent runs make exactly one probe of a refused model", async (t) => {
+  const h = harness(t);
+  h.codex.steps.push(new ProviderError("plan", "codex: plan does not include model gpt-6.1-sol; sign the agent host's CODEX_HOME in with a ChatGPT plan that includes it"));
+  abstained(await h.gateway.run(request()));
+  h.clock.now += shippedConfig().retry.authProbeAfterMs;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  h.codex.steps.push(async () => {
+    await gate;
+    return outcome();
+  });
+  const runs = [h.gateway.run(request()), h.gateway.run(request()), h.gateway.run(request())];
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  const results = await Promise.all(runs);
+  assert.deepEqual(results.map((result) => result.status).sort(), ["abstained", "abstained", "ok"]);
+  assert.equal(h.codex.calls.length, 2);
+});
+
+test("a credential rotated mid-run onto a plan outside the configured plans is not called", async (t) => {
+  const h = harness(t);
+  h.codex.steps.push(async () => {
+    h.codex.credentialState = { fingerprint: "codex-credential-2", refreshedAt: h.clock.now, plan: "free" };
+    throw new ProviderError("auth", "401 unauthorized");
+  });
+  const result = abstained(await h.gateway.run(request()));
+  assert.match(result.detail, /^codex: plan does not include model gpt-6\.1-sol; the sign-in is on the free plan/);
+  assert.equal(h.codex.calls.length, 1);
+});

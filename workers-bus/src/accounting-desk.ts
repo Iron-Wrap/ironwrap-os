@@ -664,7 +664,8 @@ export interface AccountingComparison {
   /**
    * The normalized fact set the last authenticated read returned, exactly as it was hashed. This
    * is a provider *response* projection, which section 5.2 defines as the comparison artifact -
-   * not a provider request body, which section 6 keeps out of every evidence surface.
+   * not a provider request body, which section 6 keeps out of every evidence surface. Null until
+   * a read exists, and null for a read from another realm, which is not evidence about this intent.
    */
   observed_facts: unknown;
   read_at: string | null;
@@ -680,29 +681,30 @@ export interface AccountingComparison {
  * Manufacturing a wider table by diffing the provider request payload against the provider's
  * response would compare two different vocabularies and report differences that are not
  * disagreements about anything.
+ *
+ * The observation is read in the shape `recordAccountingObservation` stores: `facts_json` is the
+ * bare fact set and the realm is its own column. A read from another realm fails closed - provider
+ * ids are per company, so only the realm row is filled and no other fact is compared.
  */
 function compareFacts(
   intent: AccountingIntentRecord,
-  observation: { facts_json: string; entity_id: string; entity_type: string; read_at: string;
-    source: string; observed_sha256: string; total_amount_cents: number | null;
+  observation: { realm_id: string; facts_json: string; entity_id: string; entity_type: string;
+    read_at: string; source: string; observed_sha256: string; total_amount_cents: number | null;
     balance_cents: number | null } | null,
 ): AccountingComparison {
-  const envelope = observation === null ? null : parseJson(observation.facts_json);
-  const observedFacts = isRecord(envelope) && isRecord(envelope.facts) ? envelope.facts : null;
-  const observedRealm = isRecord(envelope) && typeof envelope.realmId === "string"
-    ? envelope.realmId
-    : null;
+  const comparable =
+    observation !== null && observation.realm_id === intent.realm_id ? observation : null;
+  const stored = comparable === null ? null : parseJson(comparable.facts_json);
+  const observedFacts = isRecord(stored) ? stored : null;
 
   const fields: Array<{ field: string; expected: unknown; observed: unknown; agrees: boolean }> = [
-    row("realm_id", intent.realm_id, observation === null ? null : observedRealm),
-    row("provider_entity_type", intent.provider_entity_type,
-      observation === null ? null : observation.entity_type),
-    row("provider_entity_id", intent.provider_entity_id,
-      observation === null ? null : observation.entity_id),
+    row("realm_id", intent.realm_id, observation?.realm_id ?? null),
+    row("provider_entity_type", intent.provider_entity_type, comparable?.entity_type ?? null),
+    row("provider_entity_id", intent.provider_entity_id, comparable?.entity_id ?? null),
     row("total_amount", intent.total_amount,
-      observation?.total_amount_cents === null || observation === null
+      comparable === null || comparable.total_amount_cents === null
         ? null
-        : decimalOf(observation.total_amount_cents)),
+        : decimalOf(comparable.total_amount_cents)),
     row("currency", intent.currency,
       observedFacts === null ? null : (observedFacts["CurrencyRef.value"] ?? null)),
   ];
@@ -711,8 +713,8 @@ function compareFacts(
     expected_sha256: intent.expected_sha256,
     observed_sha256: observation?.observed_sha256 ?? null,
     verdict_observed_sha256: intent.observed_sha256,
-    hashes_agree: observation !== null
-      && observation.observed_sha256 === intent.expected_sha256,
+    hashes_agree: comparable !== null
+      && comparable.observed_sha256 === intent.expected_sha256,
     awaiting_readback: observation === null,
     fields,
     observed_facts: observedFacts,

@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { REALM, TENANT, fakeIntuit, quickBooksEntity } from "./accounting-fixture.ts";
+import { REALM, TENANT, fakeIntuit, quickBooksEntity, stubAuthPort } from "./accounting-fixture.ts";
 import {
   ACCOUNTANT_ID,
   OWNER_ID,
@@ -53,6 +53,7 @@ import {
   type CompensationPlan,
 } from "../src/accounting-compensation.ts";
 import { recordTaxPolicySnapshot } from "../src/accounting-tax-snapshots.ts";
+import type { AccountingObservationBinding } from "../src/accounting-reobservation.ts";
 
 const PORT_INPUT = {
   actor: DISPATCH_ACTOR,
@@ -414,6 +415,52 @@ test("no office projection carries a tenant id or a provider payload body", asyn
   }
 });
 
+/** The `comparison` block of `GET /api/v1/accounting/intents/{id}`, as these tests read it. */
+interface DeskComparison {
+  hashes_agree: boolean;
+  awaiting_readback: boolean;
+  observed_sha256: string | null;
+  verdict_observed_sha256: string | null;
+  fields: Array<{ field: string; expected: unknown; observed: unknown; agrees: boolean }>;
+  observed_facts: unknown;
+}
+
+/** A second, synthetic QuickBooks company: the one a tenant reconnected to by mistake. */
+const OTHER_REALM = "9876543210000000000";
+
+/** One synthetic invoice's comparison fact set (section 5.2), as a readback of it stores it. */
+function invoiceFacts(entityFile: string): Record<string, unknown> {
+  return normalizeProviderEntity({
+    realmId: REALM,
+    entityType: "Invoice",
+    payload: quickBooksEntity(entityFile, "Invoice"),
+  }).facts;
+}
+
+async function deskComparison(env: AppEnv, intentId: string): Promise<DeskComparison> {
+  const response = await call(
+    env, "accounting", "GET", `/api/v1/accounting/intents/${encodeURIComponent(intentId)}`,
+  );
+  assert.equal(response.status, 200);
+  return response.body.comparison as DeskComparison;
+}
+
+/** The accountant's `reconcile`: a real re-read through the route, against the given provider. */
+async function rereadThroughRoute(
+  env: AppEnv,
+  intentId: string,
+  observation: AccountingObservationBinding,
+): Promise<Record<string, unknown>> {
+  const current = await readAccountingIntent(env, TENANT, intentId);
+  const response = await call(
+    env, "accounting", "POST",
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/reconcile`,
+    { body: { version: current!.version }, deps: { accounting: { observation } } },
+  );
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  return response.body.re_read as Record<string, unknown>;
+}
+
 test("intent detail carries the bound facts, the hash pair, and a field-by-field comparison", async () => {
   const { env } = apiTestEnv();
   const intentId = await postedInvoice(env);
@@ -427,22 +474,77 @@ test("intent detail carries the bound facts, the hash pair, and a field-by-field
   assert.equal(evidence.realm_id, REALM);
   assert.equal(evidence.provider_entity_id, "2001");
 
-  const comparison = response.body.comparison as {
-    hashes_agree: boolean;
-    awaiting_readback: boolean;
-    observed_sha256: string | null;
-    verdict_observed_sha256: string | null;
-    fields: Array<{ field: string; agrees: boolean }>;
-  };
+  const comparison = response.body.comparison as DeskComparison;
   assert.equal(comparison.awaiting_readback, false);
   assert.equal(comparison.hashes_agree, true);
   // The verdict of record stands on the same read, because the readback was judged.
   assert.equal(comparison.verdict_observed_sha256, comparison.observed_sha256);
-  const entityId = comparison.fields.find((field) => field.field === "provider_entity_id");
-  assert.equal(entityId?.agrees, true);
+  // The observed side is the fact set the readback stored, so every bound fact has a value to be
+  // compared with - the realm and the currency as much as the entity and the total.
+  assert.deepEqual(comparison.observed_facts, invoiceFacts("invoice-open.json"));
+  assert.deepEqual(comparison.fields, [
+    { field: "realm_id", expected: REALM, observed: REALM, agrees: true },
+    { field: "provider_entity_type", expected: "Invoice", observed: "Invoice", agrees: true },
+    { field: "provider_entity_id", expected: "2001", observed: "2001", agrees: true },
+    { field: "total_amount", expected: "1260.00", observed: "1260.00", agrees: true },
+    { field: "currency", expected: "CAD", observed: "CAD", agrees: true },
+  ]);
 
   assert.ok((response.body.events as unknown[]).length > 0);
   assert.equal((response.body.tax_bindings as unknown[]).length, 1);
+});
+
+test("a re-read that disagrees names the fact that moved, beside the facts that did not", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await postedInvoice(env);
+  // Somebody edited the posted invoice in QuickBooks: the same entity, now totalling 1310.00.
+  const { fetcher } = fakeIntuit([
+    entityRoute("Invoice", "invoice-drifted-linked.json"),
+    entityRoute("Payment", "payment-full-1260.json"),
+  ]);
+  const reRead = await rereadThroughRoute(env, intentId, { auth: scenarioAuth(), fetcher });
+  assert.equal(reRead.verdict, "mismatch");
+
+  const comparison = await deskComparison(env, intentId);
+  assert.equal(comparison.hashes_agree, false);
+  assert.deepEqual(comparison.observed_facts, invoiceFacts("invoice-drifted-linked.json"));
+  assert.deepEqual(comparison.fields, [
+    { field: "realm_id", expected: REALM, observed: REALM, agrees: true },
+    { field: "provider_entity_type", expected: "Invoice", observed: "Invoice", agrees: true },
+    { field: "provider_entity_id", expected: "2001", observed: "2001", agrees: true },
+    { field: "total_amount", expected: "1260.00", observed: "1310.00", agrees: false },
+    { field: "currency", expected: "CAD", observed: "CAD", agrees: true },
+  ]);
+});
+
+test("a read from another QuickBooks company is a realm conflict, and nothing else is compared", async () => {
+  const { env } = apiTestEnv();
+  const intentId = await postedInvoice(env);
+  // The tenant reconnected a different company file, and it happens to hold an invoice 2001 with
+  // identical figures. Provider ids are per company, so this is not the invoice we posted.
+  const { fetcher } = fakeIntuit([{
+    path: `/v3/company/${OTHER_REALM}/invoice/2001`,
+    body: { Invoice: quickBooksEntity("invoice-open.json", "Invoice") },
+  }]);
+  const reRead = await rereadThroughRoute(env, intentId, {
+    auth: stubAuthPort({ realmId: OTHER_REALM }),
+    fetcher,
+  });
+  assert.equal(reRead.verdict, "identity_conflict");
+
+  const comparison = await deskComparison(env, intentId);
+  assert.equal(comparison.awaiting_readback, false);
+  assert.equal(comparison.hashes_agree, false);
+  // Fail closed: the realm row names both companies, and no fact read from the other one is put
+  // beside ours - least of all the figures that happen to match.
+  assert.equal(comparison.observed_facts, null);
+  assert.deepEqual(comparison.fields, [
+    { field: "realm_id", expected: REALM, observed: OTHER_REALM, agrees: false },
+    { field: "provider_entity_type", expected: "Invoice", observed: null, agrees: false },
+    { field: "provider_entity_id", expected: "2001", observed: null, agrees: false },
+    { field: "total_amount", expected: "1260.00", observed: null, agrees: false },
+    { field: "currency", expected: "CAD", observed: null, agrees: false },
+  ]);
 });
 
 test("an intent id from another tenant reads as not found, never as somebody else's money", async () => {

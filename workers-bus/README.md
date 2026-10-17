@@ -202,6 +202,14 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users/bootstrap` | `Bearer ADMIN_TOKEN` + `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` | one-time bootstrap that creates the first owner only when this tenant has zero app users |
+| GET | `/api/v1/agents/signals?after&limit` | `Bearer AGENT_HOST_TOKEN` | AI team signals after a cursor, for the agent host ([`agent-host`](../agent-host/README.md)); dark (404) while the token is unset |
+| POST | `/api/v1/agents/runs` | `Bearer AGENT_HOST_TOKEN` | open or resume the coordination run for one signal and `host_run_key`; returns the goal, context snapshot and the run's tools; 409 once that run is closed |
+| GET | `/api/v1/agents/runs/:id/tools` | `Bearer AGENT_HOST_TOKEN` | the run's tools: owned, registered catalog actions with strict argument schemas |
+| POST | `/api/v1/agents/runs/:id/steps` | `Bearer AGENT_HOST_TOKEN` | propose one step `{action_id, args, citations, step_key}`; deterministic policy records it as a receipt (done, drafted, asks first, escalated, abstained or denied); a repeated `step_key` answers once |
+| POST | `/api/v1/agents/runs/:id/close` | `Bearer AGENT_HOST_TOKEN` | close the run with its outcome; an abstaining or escalating run always leaves a receipt that names a person |
+| POST | `/api/v1/agents/host/heartbeat` | `Bearer AGENT_HOST_TOKEN` | the host's readiness, alerts and backlog |
+| GET | `/api/v1/agent-team/receipts?view=needs_you\|doing\|done` | owner or ops session | the team's receipts in Now's three lanes |
+| GET | `/api/v1/agent-team/hosts` | owner or ops session | the agent hosts' last heartbeat and alerts |
 | POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist raw/D1 receipt and durable reconciliation work, and optionally project a Pending Frappe record; webhook identity is not posted-accounting truth |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |

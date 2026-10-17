@@ -2266,13 +2266,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // distinguishable from customer leads; it adds no table, index, or trigger. 0134 adds immutable
     // office lead-intake receipts, 0135 adds the separate manual-observation ledger and heads,
     // 0139 adds scoped upload receipts, manifests, and intake replay identity; 0140 guards atomic
-    // service steps. 0143 prevents supersession or status replay from lifting a crew stop.
+    // service steps. 0143 preserves a crew stop across supersession and status replay.
+    // 0200 opens the AI team range (0200-0299) with the coordination run, its
+    // steps, signals and event ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 117);
+    assert.equal(migrations.length, 118);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0143_work_package_stop_supersession_guard.sql",
+      "0200_agent_coordination.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2395,11 +2397,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards. 0135 adds three manual-observation tables, two named indexes, and twelve lineage,
     // head-pointer, retention, and append-only guards. 0139 adds two upload evidence tables,
     // one recovery index outside this test's `idx_%` subset, and seven immutability guards.
-    // 0140 adds an always-empty service batch assertion table and its abort trigger.
-    // 0143 adds two stop guards without a new table or index.
+    // 0140 adds an always-empty service batch assertion table and its abort trigger. 0200 adds
+    // five AI team tables, four named indexes, and sixteen append-only, finality and ledger triggers.
+    // 0143 adds two stop guards without another table or index.
     assert.deepEqual(
       { ...counts },
-      { tables: 242, indexes: 349, triggers: 600 },
+      { tables: 247, indexes: 353, triggers: 620 },
     );
     assert.deepEqual(
       (db.prepare(

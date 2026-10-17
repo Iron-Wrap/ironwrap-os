@@ -378,13 +378,14 @@ test("local sign-ins load from an owner-only file without overriding the environ
   const dir = join(home, ".config", "ironwrap");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "agent-host.env");
-  writeFileSync(file, '# local\nCLAUDE_CODE_OAUTH_TOKEN="synthetic#token"\nAGENT_HOST_POLL_MS=2000\nAGENT_HOST_BATCH_SIZE=7 # small batches\n');
+  writeFileSync(file, '# local\nCLAUDE_CODE_OAUTH_TOKEN="synthetic#token"\nAGENT_HOST_POLL_MS=2000\nAGENT_HOST_BATCH_SIZE=7 # small batches\nAGENT_HOST_ID="host a" # quoted\n');
   chmodSync(file, 0o644);
   assert.throws(() => applyLocalEnv({}, home), /chmod 600/);
   chmodSync(file, 0o600);
   const env: Record<string, string | undefined> = { AGENT_HOST_POLL_MS: "5000" };
   const loaded = applyLocalEnv(env, home);
-  assert.deepEqual(loaded, ["CLAUDE_CODE_OAUTH_TOKEN", "AGENT_HOST_BATCH_SIZE", "CODEX_HOME"]);
+  assert.deepEqual(loaded, ["CLAUDE_CODE_OAUTH_TOKEN", "AGENT_HOST_BATCH_SIZE", "AGENT_HOST_ID", "CODEX_HOME"]);
+  assert.equal(env.AGENT_HOST_ID, "host a");
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "synthetic#token");
   assert.equal(env.AGENT_HOST_BATCH_SIZE, "7");
   assert.equal(env.AGENT_HOST_POLL_MS, "5000", "the environment wins over the file");

@@ -1,3 +1,4 @@
+import { handleAgentTeamAppRoute } from "./agents/api.ts";
 import { handleJobManualMeasurements } from "./job-manual-measurement-api.ts";
 import { OFFICE_LEAD_REQUEST_ID, OfficeIntakeError, parseOfficeCapture, recordOfficeIntake, readOfficeIntakeReceipt, readOfficeLeadFacts, resumeOfficeIntake } from "./office-lead-intake-store.ts";
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
@@ -568,6 +569,9 @@ export async function handleAuthenticatedRoute(
     url.pathname.startsWith("/api/v1/production-schedule-approvals/")
   ) {
     return privateAppJson({ error: "not_found" }, 404);
+  }
+  if (url.pathname.startsWith("/api/v1/agent-team/")) {
+    return await handleAgentTeamAppRoute(req, env, auth);
   }
   if (
     req.method === "POST" &&

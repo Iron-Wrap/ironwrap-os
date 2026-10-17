@@ -76,6 +76,7 @@ export function openedRun(overrides: Partial<OpenedRun> = {}): OpenedRun {
 export const RUN_OUTPUT = {
   decision: "propose",
   escalate_to: null,
+  reason_code: null,
   reason: "New metal re-roof inquiry.",
   receipts: [],
   drafts: [],

@@ -7,8 +7,9 @@ or a provider directly. Every model output is an untrusted proposal under
 coordination loop in [`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md).
 
 This package holds the provider gateway (`src/gateway/`) and the host service (`src/host/`). The
-Worker-side coordination record, shared memory, watch scheduler, and replay harness land in later
-slices. `specialists/` and `evals/` are owned by the specialist track.
+Worker-side coordination record, signal transport, policy decisions and receipts live in
+`workers-bus/src/agents/`. Shared-memory read models, standing-watch scheduling and the release
+replay harness remain later slices. `specialists/` and `evals/` are owned by the specialist track.
 
 ## Provider gateway
 
@@ -116,8 +117,8 @@ routed provider is usable and the Worker answered a recent poll. Both bind to lo
 ### Worker agent API
 
 The host and the action server call only these Worker routes, with
-`Authorization: Bearer <AGENT_HOST_TOKEN>`. The Worker owns every decision; the routes land with
-the Worker-side slice.
+`Authorization: Bearer <AGENT_HOST_TOKEN>`. The Worker owns every decision
+([`workers-bus/src/agents/`](../workers-bus/src/agents/api.ts)).
 
 | Route | Caller | Contract |
 |---|---|---|
@@ -198,6 +199,10 @@ platform binaries (`npm ci`) and a signed-in credential.
 ## Proof state
 
 Locally-validated: `npm test` and `npm run typecheck` in this package, and
-`node --test tools/start-local-runtime.test.mjs` for the local launch. No live provider call has run
-through the gateway yet, and the Worker agent API is not implemented yet. Live proof is Blocked: an
-owner-provisioned `CLAUDE_CODE_OAUTH_TOKEN` and a Codex ChatGPT sign-in, then `npm run smoke`.
+`node --test tools/start-local-runtime.test.mjs` for the local launch. The Worker agent API is source-present and its authenticated host-client integration is tested
+against SQLite with D1 transaction semantics. Unbound actions abstain with `policy_missing`; the
+contract catalog alone does not implement their effects. Shared-memory read models, standing-watch
+scheduling and provider replay remain open. Live proof is blocked on an owner-provisioned Worker
+`AGENT_HOST_TOKEN`, Claude OAuth sign-in and a dedicated Codex ChatGPT sign-in, followed by the
+authenticated runtime journey and `npm run smoke`. No provider or QA activation is established by
+these local checks.

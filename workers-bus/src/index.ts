@@ -5,6 +5,7 @@
 // consumer does the idempotent, retried JN push (pending_jn_push → pushed); a 5-min cron
 // re-drives anything stuck; a daily cron reconciles source vs landed and emits the heartbeat.
 
+import { handleAgentHostApi, type AgentEnv } from "./agents/api.ts";
 import {
   ALLOWED_SOURCES,
   type Source,
@@ -686,6 +687,9 @@ async function routeRequest(
       env as import("./app-types.ts").AppEnv,
     );
   }
+  // AI team host API: the agent-host service token only, never a browser session.
+  if (url.pathname.startsWith("/api/v1/agents/"))
+    return await handleAgentHostApi(req, env as AgentEnv);
   if (url.pathname.startsWith("/api/v1/"))
     return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.

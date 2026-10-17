@@ -121,10 +121,10 @@ asserted by launch-proof and **not** captured in the evidence artifact.
 |---|---|---|
 | Frappe `Lead Envelope` (+ `Roofing Property`, `Roof Job`, production gates) | **Frappe** | `ERPNEXT_ENABLED=true` |
 | `envelopes.erpnext_*` columns; `audit_log` `erpnext_push` | D1 | as above |
-| **JobNimbus contact** — `POST /api1/contacts`, record type `Customer`, status `New`, tagged `ironwrap-bus`, `bus:<envelope>`, `source:website`, `brand:ironwrap`, `queue:residential_sales` | **JobNimbus (live CRM)** | `JOBNIMBUS_ENABLED=true` — **currently true in production** |
+| **JobNimbus contact** — `POST /api1/contacts`, record type `Customer`, status `New`, tagged `ironwrap-bus`, `bus:<envelope>`, `source:website`, `brand:ironwrap`, `queue:residential_sales` | **JobNimbus (live CRM)** | `JOBNIMBUS_ENABLED=true` — **false in production** (JobNimbus is a non-source); the consumer records a terminal `jn_skipped` instead |
 | **JobNimbus job** — `POST /api1/jobs`, record type `Retail`, status `Lead`, related to the contact | **JobNimbus (live CRM)** | as above; fires because the intent is routable |
 | Preceding JobNimbus **reads** — `GET /api1/contacts` and `/api1/jobs` filtered by tag/email/phone | JobNimbus | as above |
-| **Google Drive job folder** + the six `01…06` subfolders under `SHARED_DRIVE_ID_JOBS` | **Google Drive** | fresh JN job number **and** `GOOGLE_SERVICE_ACCOUNT_JSON` + `SHARED_DRIVE_ID_JOBS` set — both true in production |
+| **Google Drive job folder** + the six `01…06` subfolders under `SHARED_DRIVE_ID_JOBS` | **Google Drive** | fresh JN job number **and** `GOOGLE_SERVICE_ACCOUNT_JSON` + `SHARED_DRIVE_ID_JOBS` set — no JN job number exists while `JOBNIMBUS_ENABLED` is false, so this does not fire in production |
 | `audit_log` `jn_push`; `envelopes.status='pushed'` | D1 | |
 | On failure: `dead_letter` row after retry exhaustion, DLQ message on `ironwrap-jn-dlq` | D1 / Queue | |
 

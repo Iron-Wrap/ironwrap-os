@@ -297,7 +297,9 @@
       "FROM_EMAIL": "sales@ironwrapexteriors.com",
       "EFFECT_RUNTIME_ENABLED": "true",
       "PIPELINE_AUTOMATION_ENABLED": "false",
-      "JOBNIMBUS_ENABLED": "true",
+      // JobNimbus is a non-source (expired trial, API 401): every queued push is a terminal
+      // jn_skipped, never a dead letter. JOBNIMBUS_API_KEY carries the inert value.
+      "JOBNIMBUS_ENABLED": "false",
       "OMNIROUTE_URL": "",
       "OPERATING_AUTOMATION_USER": "ironwrap-worker",
       // Tenant pricing for the estimator's computed estimate; empty disables pricing.

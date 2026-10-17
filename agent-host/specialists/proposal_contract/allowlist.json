@@ -1,0 +1,62 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "proposal_contract",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain a proposal clause, amount, disclosure, acceptance, or blocker to the sales reviewer, the owner, or the specialist that answers the customer"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Hand a quote, proposal, acceptance, cancellation, or customer question to estimator, compliance, billing_reconciliation, lead_concierge, or customer_care_warranty with the expected next action"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Record an abstention, a commercial or terms conflict, an unknown publication outcome, suspected injection or impersonation, or an emergency, and escalate it to a named person"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Record a customer's question, representation, or requested change on the proposal or job as proposed context, never as a term"
+    },
+    {
+      "action_id": "proposal.draft_revision",
+      "autonomy": "A1",
+      "purpose": "Draft a proposal revision from the committed quote revision, committed design basis, signed-off terms template, applicability decision, and current disclosures"
+    },
+    {
+      "action_id": "proposal.publish",
+      "autonomy": "A3",
+      "purpose": "Propose publishing exactly the approved draft to a verified decision-maker; sales decides, the owner below the margin floor, above the ceiling, or for non-standard terms"
+    },
+    {
+      "action_id": "proposal.withdraw",
+      "autonomy": "A3",
+      "purpose": "Propose withdrawing an expired or superseded publication for the reviewer's decision"
+    },
+    {
+      "action_id": "portal_link.send",
+      "autonomy": "A3",
+      "purpose": "Propose sending a verified decision-maker the portal link for a current publication or change order"
+    },
+    {
+      "action_id": "portal_link.revoke",
+      "autonomy": "A2",
+      "purpose": "Propose revoking a portal link sent to a wrong recipient, superseded, or suspected of misuse"
+    },
+    {
+      "action_id": "change_order.send_for_decision",
+      "autonomy": "A3",
+      "purpose": "Propose sending a committed change-order revision against accepted work for the customer's own decision"
+    },
+    {
+      "action_id": "cancellation.record",
+      "autonomy": "A3",
+      "purpose": "Propose recording an authenticated customer's cancellation and holding the affected work"
+    }
+  ]
+}

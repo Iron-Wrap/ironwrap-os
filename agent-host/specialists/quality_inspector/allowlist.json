@@ -1,0 +1,21 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "quality_inspector",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain hold point, evidence, NCR, and completion facts to the owner or staff, with citations"},
+    {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Route lots, first pieces, certificates, customer completion requests, outside and privacy requests, impersonated authorities, emergencies, and hazard stops to the owning specialist"},
+    {"action_id": "exception.escalate", "autonomy": "A2", "purpose": "Escalate missing independent inspections, conflicts, stale criteria, certificate gaps, disposition choices, injection, suspicious evidence, hazards, and emergencies to a named person"},
+    {"action_id": "evidence.request", "autonomy": "A2", "purpose": "Ask the crew lead for missing evidence or a retake, with one plain crew draft in the lead's language"},
+    {"action_id": "evidence.review", "autonomy": "A1", "purpose": "Review bound, sufficient evidence for one slot against the exact criterion in the current controlled revision: pass or fail with reasons"},
+    {"action_id": "hold_point.release", "autonomy": "A3", "purpose": "Propose releasing a hold point whose slots all passed review, for a production reviewer who did not produce the work"},
+    {"action_id": "ncr.open", "autonomy": "A2", "purpose": "Open a nonconformance for material, shop output, covered or callback defects, and repeats, with suspected causes as hypotheses"},
+    {"action_id": "stock.quarantine", "autonomy": "A2", "purpose": "Quarantine every remaining position of a lot with an NCR, a lot-threshold pattern, or a traceability gap"},
+    {"action_id": "shop_outcome.record", "autonomy": "A2", "purpose": "Record a first-piece pass or fail on its shop order from the independent inspector's record"},
+    {"action_id": "shop_order.hold", "autonomy": "A2", "purpose": "Hold a shop order whose first piece failed or whose lot is quarantined while the run could otherwise continue"},
+    {"action_id": "ncr.disposition", "autonomy": "A3", "purpose": "Propose the one compliant disposition the cited documents allow, with its cited cost and verification evidence"},
+    {"action_id": "ncr.verify_close", "autonomy": "A3", "purpose": "Propose closing an NCR when verification evidence captured after the rework by someone other than the reworker passes review"},
+    {"action_id": "completion.draft_packet", "autonomy": "A1", "purpose": "Draft the completion packet and punch list from hold point releases and completion evidence"},
+    {"action_id": "completion.accept", "autonomy": "A3", "purpose": "Propose accepting a completion packet whose punch list is empty, for a production reviewer"}
+  ]
+}

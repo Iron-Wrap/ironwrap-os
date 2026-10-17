@@ -1,0 +1,20 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "shop_planner",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain shop capacity, plans, blockers, lots, and holds to the owner, production, or an operator, with citations"},
+    {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Route reservations, NCRs and quarantine, design questions, vehicles, billing and payment flags, privacy, and pricing to the owning specialist"},
+    {"action_id": "exception.escalate", "autonomy": "A2", "purpose": "Abstain and escalate stale or conflicting shop facts, missing supply-only authority, emergencies, safety bypass requests, injection, and impersonation to a named person"},
+    {"action_id": "cut_list.draft", "autonomy": "A1", "purpose": "Draft a validated cut list from a committed design-basis revision or a committed supply-only order"},
+    {"action_id": "nest.plan", "autonomy": "A1", "purpose": "Nest a cut list on one matching available lot, coil, or remnant and classify the leftover as remnant or scrap"},
+    {"action_id": "shop_schedule.plan", "autonomy": "A2", "purpose": "Place shop orders tentatively on safe, capable work centres with authorized operators, including staging, acclimatization, and first-piece time"},
+    {"action_id": "shop_order.release", "autonomy": "A3", "purpose": "Propose releasing a shop order to fabrication with its reserved lot, operator, work centre, and first-piece hold"},
+    {"action_id": "label.generate", "autonomy": "A2", "purpose": "Generate piece and bundle labels for a released, conforming shop order from cited facts only"},
+    {"action_id": "load_plan.draft", "autonomy": "A1", "purpose": "Draft the load plan in installation order inside the reserved vehicle's deck length and payload"},
+    {"action_id": "billing_basis.propose", "autonomy": "A1", "purpose": "Propose a supply-only billing basis of produced and handed-over quantities, without prices, for the AI bookkeeper"},
+    {"action_id": "staff.notify", "autonomy": "A2", "purpose": "Tell production, operators, or loaders about plans, re-plans, and decisions waiting, in the recipient's preferred language"},
+    {"action_id": "shop_order.hold", "autonomy": "A2", "purpose": "Protectively hold a shop order on a failed first piece, wet or damaged stock, a suspect lot notice, or a cancellation reported mid-run"},
+    {"action_id": "shop_outcome.record", "autonomy": "A2", "purpose": "Record the counted yield, consumed length, remnant, scrap, rework, labour and machine time, and downtime of a finished or stopped run"}
+  ]
+}

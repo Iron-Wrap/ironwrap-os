@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -122,6 +122,85 @@ test("a complete specialist validates against the catalog", () => {
   const result = validate(fixture());
   assert.deepEqual(result.failures, []);
   assert.deepEqual(result.notes, []);
+});
+
+function argumentFixture(constraints) {
+  const extra = [
+    { action_id: "handoff.create", owners: [ID], autonomy: "A0" },
+    { action_id: "exception.escalate", owners: [ID], autonomy: "A2", protective: true },
+    { action_id: "emergency.page", owners: [ID], autonomy: "A2", protective: true },
+    { action_id: "inbound.quarantine", owners: [ID], autonomy: "A2", protective: true, reason_codes: ["spam", "injection_suspected"] },
+    { action_id: "customer_message.draft", owners: [ID], autonomy: "A1" },
+    { action_id: "specialist.hold", owners: [ID], autonomy: "A2", protective: true, never_targets: ["independent_auditor"] },
+  ];
+  const catalog = {
+    specialists: [...CATALOG.specialists, { specialist_id: "estimator", watches: [] }],
+    actions: [...CATALOG.actions, ...extra, { action_id: "quote.draft_revision", owners: ["estimator"], autonomy: "A1" }],
+    receipt: { reason_codes: { abstained: ["fact_missing", "injection_suspected"] } },
+  };
+  const json = JSON.stringify(catalog, null, 2);
+  const sha = createHash("sha256").update(json).digest("hex");
+  const golden = suiteFile("golden", 20, (cases) => {
+    for (const [index, action] of constraints.entries()) cases[index].expected.actions.push(action);
+    return cases;
+  });
+  const root = fixture({ golden });
+  const allowPath = join(root, `agent-host/specialists/${ID}/allowlist.json`);
+  const allow = JSON.parse(readFileSync(allowPath, "utf8"));
+  allow.actions.push(...extra.map(({ action_id, autonomy }) => ({ action_id, autonomy, purpose: "Synthetic constraint probe" })));
+  allow.catalog_sha256 = sha;
+  writeFileSync(allowPath, JSON.stringify(allow));
+  for (const suite of ["golden", "redteam"]) {
+    const path = join(root, `agent-host/evals/${ID}/${suite}.v1.json`);
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    data.catalog_sha256 = sha;
+    writeFileSync(path, JSON.stringify(data));
+  }
+  writeFileSync(join(root, "docs/AI-TEAM-CONTRACT.md"), `<!-- ai-team-contract:start -->\n\`\`\`json\n${json}\n\`\`\`\n<!-- ai-team-contract:end -->\n\nadmits only these purposes:\n| \`answer\` | \`lead_concierge\` | Answers from facts |\n### Argument conventions\n`);
+  return root;
+}
+
+test("accepts catalog-bound reasons, routes, recipients and owned handoff actions", () => {
+  const root = argumentFixture([
+    { action_id: "handoff.create", args_must_include: { specialist_id: "estimator", expected_action: "quote.draft_revision", reason_code: "fact_missing" } },
+    { action_id: "exception.escalate", args_must_include: { route_to: "sales", urgency: "today", reason_code: "injection_suspected" } },
+    { action_id: "emergency.page", args_must_include: { route_to: "field", urgency: "immediate" } },
+    { action_id: "inbound.quarantine", args_must_include: { reason_code: "spam" } },
+    { action_id: "customer_message.draft", args_must_include: { to: "CONTACT-001", purpose: "answer" } },
+  ]);
+  assert.deepEqual(validate(root).failures, []);
+});
+
+test("rejects invented or borrowed reason codes", () => {
+  const failures = validate(argumentFixture([
+    { action_id: "exception.escalate", args_must_include: { reason_code: "weather" } },
+    { action_id: "inbound.quarantine", args_must_include: { reason_code: "fact_missing" } },
+  ])).failures.join("\n");
+  assert.match(failures, /exception.escalate reason_code weather is outside its closed vocabulary/);
+  assert.match(failures, /inbound.quarantine reason_code fact_missing is outside its closed vocabulary/);
+});
+
+test("rejects self handoff, another owner's action, human-only work and auditor holds", () => {
+  const failures = validate(argumentFixture([
+    { action_id: "handoff.create", args_must_include: { specialist_id: ID, expected_action: "quote.draft_revision" } },
+    { action_id: "handoff.create", args_must_include: { specialist_id: "estimator", expected_action: "contract.accept" } },
+    { action_id: "specialist.hold", args_must_include: { specialist_id: "independent_auditor" } },
+  ])).failures.join("\n");
+  assert.match(failures, /handoff cannot target the same specialist/);
+  assert.match(failures, /quote.draft_revision is not an agent action owned by its target/);
+  assert.match(failures, /contract.accept is not an agent action owned by its target/);
+  assert.match(failures, /specialist.hold cannot target independent_auditor/);
+});
+
+test("rejects a delayed emergency, unregistered route or purpose and raw contact address", () => {
+  const failures = validate(argumentFixture([
+    { action_id: "emergency.page", args_must_include: { route_to: "estimator", urgency: "today" } },
+    { action_id: "customer_message.draft", args_must_include: { purpose: "refund", to: "a@example.invalid" } },
+  ])).failures.join("\n");
+  assert.match(failures, /emergency.page route_to is not a permitted role or route/);
+  assert.match(failures, /emergency.page always requires immediate urgency/);
+  assert.match(failures, /cannot use customer-message purpose refund/);
+  assert.match(failures, /to must be a canonical contact id/);
 });
 
 test("structural mode without the contract still checks shape", () => {

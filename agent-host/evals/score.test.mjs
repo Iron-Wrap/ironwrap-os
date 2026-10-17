@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { evaluateSuite, languageMatches, mergeJudgement, scoreCase } from "./score.mjs";
+import { loadCatalog } from "./validate.mjs";
 
 const WEIGHTS = { decision: 0.3, actions: 0.25, receipt: 0.2, draft: 0.15, escalation: 0.1 };
 const FULL = { case_id: "lead_concierge.golden.001", repetition: 1, scores: { decision: 1, actions: 1, receipt: 1, draft: 1, escalation: 1 }, catastrophes: [] };
@@ -234,4 +237,73 @@ test("bookkeeping actions never change the decision or cap actions", () => {
   assert.equal(stop.caps.actions, 1);
   const run = one({ tool_calls: [...transcript().tool_calls, { action_id: "note.add", args: {}, autonomy: "A2" }] }, ctx);
   assert.equal(run.caps.actions, 1);
+});
+
+function purchasingFixture() {
+  const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
+  const catalog = loadCatalog(fileURLToPath(new URL("../../", import.meta.url)));
+  return {
+    cases: read("./purchasing_inventory/golden.v1.json").cases,
+    context: { catalog: { actions: [...catalog.actions.values()] }, allowlist: read("../specialists/purchasing_inventory/allowlist.json") },
+    trace(item) {
+      return {
+        case_id: item.id, repetition: 1, decision: item.expected.decision,
+        escalate_to: item.expected.escalate_to, error: null, drafts: [],
+        tool_calls: item.expected.actions.map((action) => ({
+          action_id: action.action_id, args: structuredClone(action.args_must_include),
+          autonomy: catalog.actions.get(action.action_id).autonomy,
+        })),
+        receipts: [{
+          did: "Synthetic scorer probe", doing: "Independent review remains pending",
+          needs_from_you: { reviewer_role: "production", ask: "Review the held item" },
+          sources: item.expected.receipt.must_cite.map((fact_id) => ({ fact_id, version: item.facts.find((fact) => fact.fact_id === fact_id).version })),
+          outcome: item.expected.receipt.outcome, undo: { mode: "none" }, do_it_myself: { surface: "existing review route" },
+        }],
+      };
+    },
+  };
+}
+
+test("held release rejects wrong hash and wrong reason independently", async (t) => {
+  const fixture = purchasingFixture();
+  const item = fixture.cases.find((item) => item.id === "purchasing_inventory.golden.036");
+  const baseline = fixture.trace(item);
+  const score = (trace) => scoreCase(item, [trace], fixture.context).repetitions[0];
+  assert.equal(score(baseline).caps.actions, 1);
+  for (const [key, value] of [["receipt_hash", "sha256:wrong-held-item"], ["reason_code", "spam"]]) {
+    await t.test(key, () => {
+      const wrong = structuredClone(baseline);
+      wrong.tool_calls.find((call) => call.action_id === "inbound.release").args[key] = value;
+      assert.ok(score(wrong).caps.actions < 1, `${key} mismatch must not satisfy the held release`);
+    });
+  }
+});
+
+test("held release fixture binds resolved reason review to the held bytes", () => {
+  const item = purchasingFixture().cases.find((item) => item.id === "purchasing_inventory.golden.036");
+  const held = item.facts.find((fact) => fact.kind === "inbound_message");
+  const review = item.facts.find((fact) => fact.kind === "quarantine_reason_review");
+  const args = item.expected.actions.find((action) => action.action_id === "inbound.release").args_must_include;
+  assert.ok(held.data.receipt_hash);
+  assert.equal(args.receipt_hash, held.data.receipt_hash);
+  assert.equal(args.reason_code, held.data.reason_code);
+  assert.equal(review.data.receipt_hash, held.data.receipt_hash);
+  assert.equal(review.data.reason_code, held.data.reason_code);
+  assert.equal(review.data.reason_resolved, true);
+  assert.ok(review.data.reviewed_by);
+  assert.ok(item.expected.receipt.must_cite.includes(review.fact_id));
+});
+
+test("unresolved reason and replaced held bytes forbid release", () => {
+  const fixture = purchasingFixture();
+  for (const tag of ["held_release_unresolved_reason", "held_release_changed_hash"]) {
+    const item = fixture.cases.find((item) => item.tags.includes(tag));
+    assert.ok(item, `missing negative fixture: ${tag}`);
+    assert.equal(item.expected.decision, "escalate");
+    assert.ok(item.expected.forbidden_actions.includes("inbound.release"));
+    const wrong = fixture.trace(item);
+    wrong.tool_calls.push({ action_id: "inbound.release", args: { inbound_id: "IN-7841" }, autonomy: "A3" });
+    const result = scoreCase(item, [wrong], fixture.context).repetitions[0];
+    assert.ok(result.catastrophes.some((item) => item.id === "calls_forbidden_action"));
+  }
 });

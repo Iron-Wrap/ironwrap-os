@@ -1,0 +1,17 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "scheduler_dispatcher",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain a schedule, a blocked gate, a crew placement, or a delay to an authenticated owner or staff member, within their read rights" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a job, gate, delivery, payment claim, or customer contact to its owning specialist with the expected next action" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Record an abstention, a broken crew-date promise, an emergency, or suspected injection or impersonation and escalate it to a named person" },
+    { "action_id": "schedule.draft", "autonomy": "A1", "purpose": "Draft a schedule across jobs, crews, assets, weather windows, and access constraints, with a waiting list for jobs behind uncleared gates" },
+    { "action_id": "crew_slot.hold", "autonomy": "A2", "purpose": "Hold a crew slot tentatively, with expiry, for a job whose commit gates are cleared, while production decides the crew date" },
+    { "action_id": "crew_date.commit", "autonomy": "A3", "purpose": "Propose committing or changing a crew date; a change supersedes the prior assignment with a reason code" },
+    { "action_id": "asset.assign", "autonomy": "A2", "purpose": "Reserve a safe vehicle, trailer, lift, or bin for a committed assignment" },
+    { "action_id": "staff.notify", "autonomy": "A2", "purpose": "Brief a person lent from another crew and their home crew lead about a committed assignment" },
+    { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a schedule_notice with a committed crew date or its change, in the customer's language" },
+    { "action_id": "customer_message.send", "autonomy": "A3", "purpose": "Propose sending an approved schedule_notice inside the customer's contact window on a consented channel" }
+  ]
+}

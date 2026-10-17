@@ -314,6 +314,15 @@
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
+      "path": "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
+      "class": "developer",
+      "authority": [
+        "docs/AI-NATIVE-ARCHITECTURE.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
       "path": "docs/AI-NATIVE-ARCHITECTURE.md",
       "class": "canonical",
       "authority": []

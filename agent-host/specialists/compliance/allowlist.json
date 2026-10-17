@@ -1,0 +1,72 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "compliance",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain current controlled applicability and issuer evidence without giving legal or professional determinations"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Route active hazards and customer emergencies to the catalog owners that can alert or page"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Route authority gaps, source conflicts, privacy identity issues, fraud and danger to the named responsible person"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Preserve attributed compliance comparisons and human review needs without editing source authority"
+    },
+    {
+      "action_id": "work_package.hold_before_start",
+      "autonomy": "A2",
+      "purpose": "Protectively hold an unstarted package when required current authority fails"
+    },
+    {
+      "action_id": "filing.draft_packet",
+      "autonomy": "A1",
+      "purpose": "Prepare exact evidence and controlled due conditions for the human filer; never submit or give a legal result"
+    },
+    {
+      "action_id": "authority.evaluate",
+      "autonomy": "A0",
+      "purpose": "Compare exact subject, issuer, scope, status and window against the controlled applicability decision"
+    },
+    {
+      "action_id": "gate.block",
+      "autonomy": "A2",
+      "purpose": "Protectively block the affected evidence transition when required authority is missing, stale or conflicting"
+    },
+    {
+      "action_id": "gate.clear",
+      "autonomy": "A3",
+      "purpose": "Propose only the independently reviewed current evidence gate through its ask-first path, never waive or release a stop"
+    },
+    {
+      "action_id": "document.request",
+      "autonomy": "A2",
+      "purpose": "Request the specific missing authority evidence from the verified responsible canonical contact"
+    },
+    {
+      "action_id": "authority.record",
+      "autonomy": "A3",
+      "purpose": "Propose the exact independently verified issuer revision and evidence hash for approval, preserving prior versions"
+    },
+    {
+      "action_id": "privacy_request.answer",
+      "autonomy": "A3",
+      "purpose": "Propose the independently approved bounded privacy response to the verified entitled canonical requester"
+    },
+    {
+      "action_id": "privacy_incident.contain",
+      "autonomy": "A2",
+      "purpose": "Propose only the approved bounded containment scope with evidence and holds preserved; account access remains human"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "market_analyst",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain cited observations, cohort limits and company constraints without making a price or booking commitment"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Route affected quote, cost, capacity, content, privacy and emergency work to its catalog owner"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Surface missing, stale, conflicting, unsafe, suspicious or unavailable analysis inputs to the named human route"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Record attributed analysis notes without editing source facts or issuing instructions"
+    },
+    {
+      "action_id": "market_alert.raise",
+      "autonomy": "A1",
+      "purpose": "Prepare an attributable market observation with source window, comparable basis and limitations"
+    },
+    {
+      "action_id": "storm_watch.open",
+      "autonomy": "A2",
+      "purpose": "Propose a deduplicated regional watch from verified weather and controlled thresholds, not a property diagnosis"
+    },
+    {
+      "action_id": "storm_mode.propose",
+      "autonomy": "A3",
+      "purpose": "Ask the owner to consider the exact regional mode setting without cancelling or booking work"
+    },
+    {
+      "action_id": "market_watch_item.add",
+      "autonomy": "A2",
+      "purpose": "Add an approved public-source monitoring question and recheck condition without collecting personal targets"
+    },
+    {
+      "action_id": "market_review.draft",
+      "autonomy": "A1",
+      "purpose": "Draft the owner review with contrary evidence, sample sizes, attribution limits and actual capacity constraints"
+    }
+  ]
+}

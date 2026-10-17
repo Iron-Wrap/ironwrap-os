@@ -183,6 +183,43 @@ function checkArguments(actionId, args, { id, catalog, fail, label }) {
   }
 }
 
+// These actions create their named output. A fixture need not constrain its allocated id;
+// if it does constrain a literal, the runner allocation must still be model-visible.
+const CREATED_OUTPUT_IDS = new Map([
+  ["market_watch_item.add", new Set(["watch_item_id"])],
+  ["content.draft", new Set(["content_id"])],
+  ["service_case.open", new Set(["service_case_id"])],
+]);
+
+export function checkContextTargets(actionId, args, { signal, facts, catalog, fail, label = actionId }) {
+  const visible = [];
+  const strings = (value) => {
+    if (typeof value === "string") visible.push(value);
+    else if (Array.isArray(value)) value.forEach(strings);
+    else if (value && typeof value === "object") Object.values(value).forEach(strings);
+  };
+  strings(signal);
+  strings(facts);
+  const visit = (value, key = "") => {
+    if (Array.isArray(value)) return value.forEach((item) => visit(item, key));
+    if (value && typeof value === "object") return Object.entries(value).forEach(([key, item]) => visit(item, key));
+    if (typeof value !== "string" || !value || !(key === "to" || key === "sources" || key.endsWith("_id") || key.endsWith("_ids"))) return;
+    // Catalog control ids are supplied by the roster/tool catalog, not business records.
+    if (key === "specialist_id" || key === "action_id") {
+      const known = key === "specialist_id" ? catalog?.specialists : catalog?.actions;
+      if (known && !known.has(value)) fail(`${label}: ${actionId} ${key} ${value} is not in the catalog`);
+      return;
+    }
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const token = new RegExp(`(^|[^A-Za-z0-9_-])${escaped}($|[^A-Za-z0-9_-])`);
+    if (!visible.some((text) => token.test(text))) {
+      const kind = CREATED_OUTPUT_IDS.get(actionId)?.has(key) ? "created output literal" : "target";
+      fail(`${label}: ${actionId} ${kind} ${key} ${JSON.stringify(value)} is not model-visible in signal/facts`);
+    }
+  };
+  visit(args);
+}
+
 function readJson(path, fail) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -373,6 +410,7 @@ function checkCase(item, context) {
       fail(`${label}: args_must_include must be an object`);
     }
     checkArguments(action.action_id, include, { id, catalog, fail, label });
+    checkContextTargets(action.action_id, include, { signal, facts: item.facts, catalog, fail, label });
     const exclude = action.args_must_not_include;
     if (exclude !== undefined && (!Array.isArray(exclude) || exclude.some((key) => typeof key !== "string"))) {
       fail(`${label}: args_must_not_include must be an array of argument names`);

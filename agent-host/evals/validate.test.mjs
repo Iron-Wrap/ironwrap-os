@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { validate } from "./validate.mjs";
+import { checkContextTargets, validate } from "./validate.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const ID = "lead_concierge";
@@ -124,6 +124,22 @@ test("a complete specialist validates against the catalog", () => {
   assert.deepEqual(result.notes, []);
 });
 
+test("removing the sole context for an existing target fails fixture integrity", () => {
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].expected.actions[0].args_must_include = { lead_id: "L-1" };
+    return cases;
+  });
+  const root = fixture({ golden });
+  assert.deepEqual(validate(root).failures, []);
+  const path = join(root, `agent-host/evals/${ID}/golden.v1.json`);
+  const data = JSON.parse(readFileSync(path, "utf8"));
+  data.cases[0].facts = [];
+  data.cases[0].expected.receipt.must_cite = [];
+  data.cases[0].expected.target_id_policy = "allocated"; // Metadata cannot exempt an existing target.
+  writeFileSync(path, JSON.stringify(data));
+  assert.match(validate(root).failures.join("\n"), /lead_id.*not model-visible/);
+});
+
 function argumentFixture(constraints) {
   const extra = [
     { action_id: "handoff.create", owners: [ID], autonomy: "A0" },
@@ -168,7 +184,37 @@ test("accepts catalog-bound reasons, routes, recipients and owned handoff action
     { action_id: "inbound.quarantine", args_must_include: { reason_code: "spam" } },
     { action_id: "customer_message.draft", args_must_include: { to: "CONTACT-001", purpose: "answer" } },
   ]);
+  const path = join(root, `agent-host/evals/${ID}/golden.v1.json`);
+  const data = JSON.parse(readFileSync(path, "utf8"));
+  data.cases[4].facts.push({ fact_id: "contact:CONTACT-001", kind: "canonical_contact", version: 1, trust: "owned", data: { contact_id: "CONTACT-001" } });
+  writeFileSync(path, JSON.stringify(data));
   assert.deepEqual(validate(root).failures, []);
+});
+
+test("created outputs need no invented id, while undisclosed fixed output ids fail", () => {
+  for (const [actionId, key] of [["market_watch_item.add", "watch_item_id"], ["content.draft", "content_id"], ["service_case.open", "service_case_id"]]) {
+    const failures = [];
+    const context = { signal: { content: { text: "Prepare the requested output for JOB-KNOWN." } }, facts: [], fail: (text) => failures.push(text) };
+    checkContextTargets(actionId, { job_id: "JOB-KNOWN" }, context);
+    assert.deepEqual(failures, []);
+    checkContextTargets(actionId, { job_id: "JOB-KNOWN", [key]: "OUTPUT-NOT-ALLOCATED" }, context);
+    assert.match(failures.join("\n"), /created output literal.*not model-visible/);
+    failures.length = 0;
+    checkContextTargets(actionId, { [key]: "OUTPUT-ALLOCATED" }, { ...context, facts: [{ data: { runner_allocated_id: "OUTPUT-ALLOCATED" } }] });
+    assert.deepEqual(failures, []);
+  }
+});
+
+test("target checks cover nested ids, arrays and recipients without prefix matches or truth claims", () => {
+  const failures = [];
+  const context = { signal: {}, facts: [{ fact_id: "gate:GT-10", trust: "untrusted_text", data: { job_id: "JOB-1", contact_id: "CONTACT-1" } }], fail: (text) => failures.push(text) };
+  checkContextTargets("gate.block", { gate_id: "GT-1", nested: { job_ids: ["JOB-1", "JOB-MISSING"] }, to: "CONTACT-1" }, context);
+  assert.equal(failures.length, 2);
+  assert.ok(failures.some((text) => text.includes('gate_id "GT-1"')));
+  assert.ok(failures.some((text) => text.includes('job_ids "JOB-MISSING"')));
+  failures.length = 0;
+  checkContextTargets("gate.block", { gate_id: "GT-10" }, context);
+  assert.deepEqual(failures, []); // Availability does not certify the untrusted record.
 });
 
 test("rejects invented or borrowed reason codes", () => {

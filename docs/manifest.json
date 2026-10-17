@@ -113,6 +113,26 @@
       ]
     },
     {
+      "path": "agent-host/specialists/compliance/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/customer_care_warranty/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
       "path": "agent-host/specialists/estimator/playbook.md",
       "class": "runtime",
       "authority": [
@@ -144,6 +164,26 @@
     },
     {
       "path": "agent-host/specialists/lead_concierge/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/market_analyst/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/marketing_reputation/playbook.md",
       "class": "runtime",
       "authority": [
         "docs/AI-TEAM-CONTRACT.md",

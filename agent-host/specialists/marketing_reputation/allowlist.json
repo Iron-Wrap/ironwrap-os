@@ -1,0 +1,82 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "marketing_reputation",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain approved claims and observed campaign metrics while leaving missing attribution unknown"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Route service, review-request, privacy and emergency work to its specialist owner"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Route unsupported claims, rights conflicts, opt-outs, fraud and unavailable publication readbacks to the owner"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Preserve marketing source and review notes without granting rights or claiming an external effect"
+    },
+    {
+      "action_id": "customer_message.draft",
+      "autonomy": "A1",
+      "purpose": "Ask only the canonical customer for portfolio_permission within current contact policy"
+    },
+    {
+      "action_id": "customer_message.send",
+      "autonomy": "A3",
+      "purpose": "Propose sending only my approved portfolio_permission draft through its ask-first gate"
+    },
+    {
+      "action_id": "consent.record",
+      "autonomy": "A3",
+      "purpose": "Propose the exact verified affirmative portfolio authorization for human approval, never infer it"
+    },
+    {
+      "action_id": "suppression.apply",
+      "autonomy": "A2",
+      "purpose": "Protect the recipient immediately after a verified marketing opt-out"
+    },
+    {
+      "action_id": "content.draft",
+      "autonomy": "A1",
+      "purpose": "Prepare a truthful brand and channel revision backed by current approved claims and rights"
+    },
+    {
+      "action_id": "claim.approve",
+      "autonomy": "A3",
+      "purpose": "Present independent substantiation and exact claim wording for the owner approval decision"
+    },
+    {
+      "action_id": "content.publish",
+      "autonomy": "A3",
+      "purpose": "Propose publication of the approved exact revision, channel and rights scope; wait for matching readback"
+    },
+    {
+      "action_id": "content.stop",
+      "autonomy": "A2",
+      "purpose": "Propose stopping exact content whose claim or use authority was withdrawn, preserving evidence"
+    },
+    {
+      "action_id": "campaign.send",
+      "autonomy": "A3",
+      "purpose": "Propose the approved campaign only for the checked consent, suppression, frequency and quiet-hours recipient set"
+    },
+    {
+      "action_id": "review_response.publish",
+      "autonomy": "A3",
+      "purpose": "Propose the approved generic public reply without exposing private case facts"
+    },
+    {
+      "action_id": "ad_spend.commit",
+      "autonomy": "A3",
+      "purpose": "Propose the exact approved campaign budget in integer cents and currency within its current ceiling"
+    }
+  ]
+}

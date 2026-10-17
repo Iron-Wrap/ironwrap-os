@@ -1,0 +1,127 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "customer_care_warranty",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    {
+      "action_id": "fact.explain",
+      "autonomy": "A0",
+      "purpose": "Explain current entitled job and case facts without deciding diagnosis, coverage, money or acceptance"
+    },
+    {
+      "action_id": "handoff.create",
+      "autonomy": "A0",
+      "purpose": "Route schedule, quality, shop holds and privacy work to its actual catalog owner"
+    },
+    {
+      "action_id": "exception.escalate",
+      "autonomy": "A2",
+      "purpose": "Put emergencies, person requests, verification gaps, complaints, injection and unknown readbacks on the named human path"
+    },
+    {
+      "action_id": "note.add",
+      "autonomy": "A2",
+      "purpose": "Preserve attributed customer reports and next-step notes without certifying them as physical findings"
+    },
+    {
+      "action_id": "inbound.quarantine",
+      "autonomy": "A2",
+      "purpose": "Hold only suspected inbound content with no valid work remaining using its exact closed reason"
+    },
+    {
+      "action_id": "inbound.release",
+      "autonomy": "A3",
+      "purpose": "Propose release of the reviewed exact held receipt and reason through its always-ask-first gate"
+    },
+    {
+      "action_id": "customer_message.draft",
+      "autonomy": "A1",
+      "purpose": "Draft only answer, status_update, review_request or safety_notice from current facts; safety_notice always pages in parallel"
+    },
+    {
+      "action_id": "customer_message.send",
+      "autonomy": "A3",
+      "purpose": "Propose the exact approved own-purpose draft after current recipient, context and suppression checks; never resend unknown delivery"
+    },
+    {
+      "action_id": "followup.pause",
+      "autonomy": "A2",
+      "purpose": "Pause affected bookkeeping follow-ups on opt-out, cancellation or unresolved handling"
+    },
+    {
+      "action_id": "followup.resume",
+      "autonomy": "A2",
+      "purpose": "Resume only from current approved channel/purpose consent with no suppression or provider opt-out"
+    },
+    {
+      "action_id": "consent.record",
+      "autonomy": "A3",
+      "purpose": "Present the verified affirmative choice, channel and purpose as an ask-first record proposal"
+    },
+    {
+      "action_id": "suppression.apply",
+      "autonomy": "A2",
+      "purpose": "Apply verified customer opt-outs protectively before further contact"
+    },
+    {
+      "action_id": "conversation.assign_person",
+      "autonomy": "A2",
+      "purpose": "Protectively route a request for a person or unresolved verification without making the customer repeat the report"
+    },
+    {
+      "action_id": "conversation.answer_live",
+      "autonomy": "A2",
+      "purpose": "Answer an entitled live conversation from current facts, identify AI and offer a person without commitments"
+    },
+    {
+      "action_id": "portal_link.send",
+      "autonomy": "A3",
+      "purpose": "Propose the approved read-only job-scope link to the canonical entitled recipient"
+    },
+    {
+      "action_id": "portal_link.revoke",
+      "autonomy": "A2",
+      "purpose": "Protectively revoke a verified exposed or unauthorized link while preserving its audit trail"
+    },
+    {
+      "action_id": "service_case.open",
+      "autonomy": "A2",
+      "purpose": "Record the attributed service report without accepting liability or diagnosing its cause"
+    },
+    {
+      "action_id": "emergency.page",
+      "autonomy": "A2",
+      "purpose": "Page the on-call human immediately with reported summary/location and explicit null for unknown canonical ids"
+    },
+    {
+      "action_id": "service_case.triage",
+      "autonomy": "A1",
+      "purpose": "Draft symptom-based triage, safe evidence needs and named next owner rather than a warranty decision"
+    },
+    {
+      "action_id": "remedy.offer",
+      "autonomy": "A3",
+      "purpose": "Propose the exact owner-approved non-refund remedy under executed terms and verified diagnosis"
+    },
+    {
+      "action_id": "cost_recovery.claim",
+      "autonomy": "A3",
+      "purpose": "Propose exact documented costs and responsibility evidence for accounting review without posting truth"
+    },
+    {
+      "action_id": "service_case.close",
+      "autonomy": "A3",
+      "purpose": "Propose closure only from named resolution, independent evidence and already-recorded customer decision"
+    },
+    {
+      "action_id": "cancellation.hold",
+      "autonomy": "A2",
+      "purpose": "Protectively hold the affected job on a genuine cancellation request while people decide its effects"
+    },
+    {
+      "action_id": "cancellation.release_hold",
+      "autonomy": "A3",
+      "purpose": "Propose release only of the named cancellation hold from the recorded customer decision, never a safety stop"
+    }
+  ]
+}

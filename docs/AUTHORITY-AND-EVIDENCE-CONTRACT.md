@@ -413,12 +413,15 @@ writes R2 conditionally, verifies readback, and then commits an immutable tenant
 receipt in D1. Domain writes resolve the current authorization and the exact stored bytes again;
 a browser-supplied digest, file name, or R2 pointer cannot stand in for a verified receipt.
 
-Required receipt enforcement is off by default behind `APP_EVIDENCE_RECEIPTS_REQUIRED="true"`.
-Before UI adoption, legacy HTTP evidence fields retain their existing behavior without claiming
-uploaded-file verification or entering the immutable receipt/manifest stores. Receipt IDs always
-resolve actual files in either mode; mixed legacy fields and receipt IDs are refused. Enabling
-the flag follows UI file-selection/upload/receipt adoption and requires the deployment owner's
-normal configuration authority. This source change modifies no deployed configuration.
+Upload and receipt linking are off by default behind `APP_EVIDENCE_UPLOADS_ENABLED="true"`.
+When it is off, the Worker returns `503 evidence_uploads_disabled` before accepting a file or
+linking a receipt, even if a caller supplies an existing receipt ID. Legacy HTTP evidence fields
+retain their existing behavior without claiming uploaded-file verification or entering the
+immutable receipt/manifest stores. A separate `APP_EVIDENCE_RECEIPTS_REQUIRED="true"` flag
+requires receipts instead of legacy inputs; both switches must be true for required receipt
+operation. With uploads enabled, receipt IDs resolve actual files and mixed legacy fields plus
+receipt IDs are refused. Enable either switch only through the deployment owner's normal
+configuration authority after the privacy, UI and recovery gates pass.
 
 R2 success with D1 failure is retained raw evidence only. An exact upload retry can finish the
 original receipt; changed scope or bytes cannot overwrite it. Receipt-based intake also binds an immutable
@@ -426,9 +429,70 @@ normalized request hash to a stable case identity, so a lost-response retry cann
 linked duplicate. Receipt resolution does not replace stock conservation, required approval,
 current safety authority, or independent verification.
 
+The accepted business link also governs reads. Stock, service, and corrective detail responses
+expose linked file metadata only; the private receipt content route rechecks the active tenant
+actor, current role, persisted domain link, R2 metadata, and actual-byte digest before serving an
+attachment. If only the linked-file index is unavailable, the detail read keeps the business
+record and its actions with `evidence_files: []` and `evidence_files_unavailable: true`; the
+content route still reports its actual failure. A healthy empty list carries `false`. An uploaded
+but abandoned receipt grants no read access. A historical digest never
+becomes an uploaded file. Neither a successful upload nor this read path resolves retention,
+legal hold, subject destruction, or abandoned-object cleanup; those A11 controls remain a
+production-enforcement gate.
+
 The executable contract and recovery procedure are in
 [`workers-bus/README.md`](../workers-bus/README.md#file-evidence-contract), implemented by
-`workers-bus/src/evidence-uploads.ts` and migration `0139_evidence_upload_receipts.sql`.
+`workers-bus/src/evidence-uploads.ts` and migrations `0139_evidence_upload_receipts.sql` and
+`0141_evidence_privacy_disposition.sql` plus `0149_evidence_upload_write_claims.sql`.
+Owner-only hold and manual correction commands preserve
+immutable provenance while an independent disposition blocks replay and reads after disposal.
+The manual correction route permits a manifest with no durable domain link, then D1 guards
+prevent later stock, corrective and service attachment. It refuses durable business references.
+For service cases, this includes a persisted last-evidence digest even when no transition event
+was written; a missing event never makes an existing case reference disposable.
+For corrective actions, a persisted upload-manifest digest also counts when the reference list
+uses a legacy format; later inserts and updates cannot revive that digest after disposal.
+Subject-request and approved-retention disposal remain blocked pending validated policy and
+identity proof.
+Cold uploads acquire an exact per-attempt D1 write claim before any RAW await. Disposal cannot
+start, retry or verify while a claim is unsettled; a disposition prevents any later claim.
+Successful writers settle once only after no further PUT is possible. A rejected PUT retains
+an inspectable `unknown` claim; interrupted requests may retain `active`. No elapsed time,
+lease stealing, empty-object read or compensating deletion resolves that uncertainty. The
+owner receives an explicit pending-write refusal and may inspect tenant-scoped claims through
+`GET /api/v1/privacy/evidence-uploads/write-claims`, including attempts with no receipt.
+Holds remain available while writers are pending, and their existing disposal guards still apply.
+Claims and guards are mandatory backup/restore objects. Activation, restore and rollback require
+an approved runtime quiescence procedure covering old unclaimed requests and pending provider
+writes. D1/R2 are separate systems; this source neither proves that quiescence nor grants a way
+to clear an ambiguous claim. A future operator resolution needs its own verified evidence and
+authority contract. Until then, the visible exception fails closed.
+If R2 bytes reappear after verified destruction, the exact owner decision records a pending
+recheck, removes them again, verifies absence and appends immutable detection and re-verification
+events. A failed provider or D1 step remains visible and retryable under that decision. The
+separate privacy R2 bucket stores an exact-decision marker after D1 blocks new manifests and
+before RAW deletion. An older D1
+snapshot with no disposition then quarantines the receipt and blocks retries and reads, including
+after RAW bytes reappear. The marker is outside D1/RAW restore scope and is never deleted by the
+Worker. It keeps only the tenant and receipt locator, receipt digest, R2 key, decision ID and
+an exact-decision digest; the policy must still cover that retained metadata. A conflicting
+decision is rejected before D1 can record it. An exact owner retry may recreate the D1 decision;
+if its original text is lost, the owner can record a separate manual reconciliation bound to
+the marker digest and verify RAW removal without claiming to recover the original reason or
+actor. A failed marker
+write leaves the D1 decision pending without deleting bytes. An owner-only, tenant-scoped
+marker inventory exposes markers missing from a restored D1 receipt inventory, but does not
+reconstruct the receipt or authorize deletion. Privacy bucket outage, generic
+D1 writers, orphan-marker recovery and production restore still need operational recovery
+and release proof; the marker does not authorize production enforcement by itself.
+Legacy safety, authority, commercial, deposit, inventory, marketing, schema-form and external-effect
+reference fields cannot claim the reserved `evidence-upload://` scheme. The Worker trusts an
+uploaded-file reference only when receipt resolution binds its tenant, actor, target, action,
+operation and digest to an immutable manifest.
+Corrective receipt references require their exact tenant, target and digest manifest in D1;
+the legacy request path cannot create that manifest or bypass a disposal decision. The D1
+guard also refuses a direct corrective-action insert with an upload reference and rejects
+padded or recased upload references on update.
 Historical syntactic digests remain historical assertions; this change cannot retroactively grant
 them verified file provenance. Focused deterministic tests establish local storage/domain behavior;
 deployment, authenticated real-device operation, and human acceptance require their own evidence.

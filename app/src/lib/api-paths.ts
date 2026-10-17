@@ -15,6 +15,14 @@ export const API_PATHS = {
   inventoryLookup: "/api/v1/inventory/lookup",
   inventoryScans: "/api/v1/inventory/scans",
   inventoryCommands: "/api/v1/inventory/commands",
+  // One selected file at a time, scoped to the stock, service or safety action it supports.
+  evidenceUploads: "/api/v1/evidence-uploads",
+  // The bytes of one attached file, readable only through the stock, service or safety record
+  // that linked it, and only by someone whose access still matches their sign-in.
+  evidenceContent: (receiptId: string) =>
+    `/api/v1/evidence-uploads/${encodeURIComponent(receiptId)}/content`,
+  inventoryCommand: (commandId: string) =>
+    `/api/v1/inventory/commands/${encodeURIComponent(commandId)}`,
   now: "/api/v1/now",
   operatingIntake: "/api/v1/operating-intake",
   fieldBootstrap: "/api/v1/field/bootstrap",

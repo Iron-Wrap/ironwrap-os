@@ -646,6 +646,14 @@ test("schema evidence references bind scope and provider facts to succeeded effe
       evidence_class: "physical",
     };
     seedObjectReceipt(db.raw, image.definition, imageValue);
+    await expectCode(
+      () => recordSchemaFieldValue(runtime, valueInput(image.definition.field_id, {
+        value: imageValue,
+        evidenceRef: `evidence-upload://evu_${"a".repeat(64)}`,
+        idempotencyKey: "schema-value-upload-ref-forged-0001",
+      }), NOW),
+      "schema_field_evidence_ref_invalid",
+    );
     const stored = await recordSchemaFieldValue(runtime, valueInput(image.definition.field_id, {
       value: imageValue,
       idempotencyKey: "schema-value-image-0001",

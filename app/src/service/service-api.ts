@@ -1,4 +1,5 @@
 import type { AuthenticatedSession } from "../auth/session";
+import { evidenceReceiptIdsField } from "../evidence/evidence-types";
 import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
@@ -24,6 +25,16 @@ import {
 
 // No identifier is minted here. The bus mints the case, triage, diagnosis, remedy, and claim ids
 // and attributes every decision to the authenticated session, so these calls carry facts only.
+// The one exception is the intake's `Idempotency-Key`: it is chosen before any file is uploaded,
+// because each file is scoped to it, and the same key is sent with the request.
+//
+// Every step that needs evidence carries the receipt ids of files uploaded for exactly that step
+// (`evidence_receipt_ids`), and the bus derives what it stores. The case page that still types a
+// digest sends it under the step's own field instead, which the bus accepts while receipts are not
+// required. The bus refuses a digest beside receipt ids, so a step sends one or the other.
+
+/** The receipt ids of the files uploaded for exactly this step. */
+type StepFiles = { evidenceReceiptIds: readonly string[] };
 
 export async function loadServiceCases(
   fetcher: typeof fetch = fetch,
@@ -46,12 +57,21 @@ export async function loadServiceCase(
   });
 }
 
+/**
+ * Opens one service call. Files that show the problem are uploaded first, scoped to `intakeKey`,
+ * which goes up again as this request's `Idempotency-Key`; an intake with a typed digest instead
+ * needs no key.
+ */
 export async function openServiceCase(
   session: AuthenticatedSession,
   input: ServiceCaseIntakeInput,
+  intakeKey?: string,
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceCaseIntakeResponse> {
   const intake = serviceCaseIntakeInputSchema.parse(input);
+  if (intake.evidenceReceiptIds && !intakeKey) {
+    throw new Error("An intake with files needs the key its files were uploaded under.");
+  }
   return await apiRequest({
     path: API_PATHS.serviceCases,
     schema: serviceCaseIntakeResponseSchema,
@@ -65,10 +85,13 @@ export async function openServiceCase(
       symptom_code: intake.symptomCode,
       reported_channel: intake.reportedChannel,
       consent_ref: intake.consentRef,
-      intake_evidence_digest: intake.intakeEvidenceDigest,
       response_sla_minutes: intake.responseSlaMinutes,
+      ...(intake.evidenceReceiptIds
+        ? evidenceReceiptIdsField(intake.evidenceReceiptIds)
+        : { intake_evidence_digest: intake.intakeEvidenceDigest }),
     },
     csrfToken: session.csrf_token,
+    idempotencyKey: intakeKey,
     fetcher,
   });
 }
@@ -82,8 +105,7 @@ export async function recordServiceTriage(
     advisoryConfidenceBps?: number | null;
     finalCategory: string;
     responsibility: string;
-    evidenceDigest: string;
-  },
+  } & (StepFiles | { evidenceDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceTriageResponse> {
   return await apiRequest({
@@ -96,7 +118,9 @@ export async function recordServiceTriage(
       advisory_confidence_bps: input.advisoryConfidenceBps ?? null,
       final_category: input.finalCategory,
       responsibility: input.responsibility,
-      evidence_digest: input.evidenceDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { evidence_digest: input.evidenceDigest }),
     },
     csrfToken: session.csrf_token,
     fetcher,
@@ -112,8 +136,7 @@ export async function recordServiceDiagnosis(
     workPackageRef: string;
     workPackageVersion: number;
     warrantyReserveCents: number;
-    evidenceDigest: string;
-  },
+  } & (StepFiles | { evidenceDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceDiagnosisResponse> {
   return await apiRequest({
@@ -126,7 +149,9 @@ export async function recordServiceDiagnosis(
       work_package_ref: input.workPackageRef,
       work_package_version: input.workPackageVersion,
       warranty_reserve_cents: input.warrantyReserveCents,
-      evidence_digest: input.evidenceDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { evidence_digest: input.evidenceDigest }),
     },
     csrfToken: session.csrf_token,
     fetcher,
@@ -136,7 +161,10 @@ export async function recordServiceDiagnosis(
 export async function issueServiceRemedy(
   session: AuthenticatedSession,
   caseId: string,
-  input: { scheduledStartAt: string; scheduledEndAt: string; partsManifestDigest: string },
+  input: {
+    scheduledStartAt: string;
+    scheduledEndAt: string;
+  } & (StepFiles | { partsManifestDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceRemedyResponse> {
   return await apiRequest({
@@ -146,7 +174,9 @@ export async function issueServiceRemedy(
     body: {
       scheduled_start_at: input.scheduledStartAt,
       scheduled_end_at: input.scheduledEndAt,
-      parts_manifest_digest: input.partsManifestDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { parts_manifest_digest: input.partsManifestDigest }),
     },
     csrfToken: session.csrf_token,
     fetcher,
@@ -159,10 +189,9 @@ export async function verifyServiceRemedy(
   remedyId: string,
   input: {
     outcome: "verified" | "failed";
-    fieldEvidenceDigest: string;
     costActualCents: number;
     failureCode?: string | null;
-  },
+  } & (StepFiles | { fieldEvidenceDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceRemedyResponse> {
   return await apiRequest({
@@ -171,7 +200,9 @@ export async function verifyServiceRemedy(
     method: "POST",
     body: {
       outcome: input.outcome,
-      field_evidence_digest: input.fieldEvidenceDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { field_evidence_digest: input.fieldEvidenceDigest }),
       cost_actual_cents: input.costActualCents,
       failure_code: input.failureCode ?? null,
     },
@@ -188,8 +219,7 @@ export async function recordCustomerServiceDecision(
     decision: "accepted" | "disputed";
     acceptanceRef?: string | null;
     disputeCode?: string | null;
-    evidenceDigest: string;
-  },
+  } & (StepFiles | { evidenceDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceRemedyResponse> {
   return await apiRequest({
@@ -200,7 +230,9 @@ export async function recordCustomerServiceDecision(
       decision: input.decision,
       acceptance_ref: input.acceptanceRef ?? null,
       dispute_code: input.disputeCode ?? null,
-      evidence_digest: input.evidenceDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { evidence_digest: input.evidenceDigest }),
     },
     csrfToken: session.csrf_token,
     fetcher,
@@ -210,7 +242,14 @@ export async function recordCustomerServiceDecision(
 export async function closeServiceCase(
   session: AuthenticatedSession,
   caseId: string,
-  input: { closureReason: string; detailCode?: string | null; evidenceDigest?: string | null },
+  input: {
+    closureReason: string;
+    detailCode?: string | null;
+    /** Files are optional here; with none, no evidence field is sent at all. */
+    evidenceReceiptIds?: readonly string[];
+    /** A typed digest from the case page; never sent beside receipt ids. */
+    evidenceDigest?: string | null;
+  },
   fetcher: typeof fetch = fetch,
 ): Promise<ServiceCaseMutationResponse> {
   return await apiRequest({
@@ -220,7 +259,11 @@ export async function closeServiceCase(
     body: {
       closure_reason: input.closureReason,
       detail_code: input.detailCode ?? null,
-      evidence_digest: input.evidenceDigest ?? null,
+      ...(input.evidenceReceiptIds?.length
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : input.evidenceDigest
+          ? { evidence_digest: input.evidenceDigest }
+          : {}),
     },
     csrfToken: session.csrf_token,
     fetcher,
@@ -251,9 +294,8 @@ export async function openCostRecoveryClaim(
     counterpartyRef: string;
     claimBasisCode: string;
     claimedAmountCents: number;
-    evidenceDigest: string;
     deadlineAt: string;
-  },
+  } & (StepFiles | { evidenceDigest: string }),
   fetcher: typeof fetch = fetch,
 ): Promise<CostRecoveryMutationResponse> {
   return await apiRequest({
@@ -265,7 +307,9 @@ export async function openCostRecoveryClaim(
       counterparty_ref: input.counterpartyRef,
       claim_basis_code: input.claimBasisCode,
       claimed_amount_cents: input.claimedAmountCents,
-      evidence_digest: input.evidenceDigest,
+      ...("evidenceReceiptIds" in input
+        ? evidenceReceiptIdsField(input.evidenceReceiptIds)
+        : { evidence_digest: input.evidenceDigest }),
       deadline_at: input.deadlineAt,
     },
     csrfToken: session.csrf_token,

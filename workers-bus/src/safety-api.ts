@@ -1,6 +1,6 @@
 import { validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
-import { evidenceReceiptsRequired, evidenceUploadFailure, EvidenceUploadError, resolveEvidenceUploads } from "./evidence-uploads.ts";
+import { assertCurrentEvidenceReader, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 import {
   parseSafetyActionRequest,
   processSafetyDeviceAction,
@@ -26,6 +26,7 @@ import {
   submitCorrectiveActionEvidence,
   submitSafetyNotification,
   verifyCorrectiveAction,
+  validEvidenceRefsJson,
   SAFETY_EQUIPMENT_KINDS,
   SAFETY_NOTIFICATION_KINDS,
   SAFETY_SCOPE_TYPES,
@@ -71,6 +72,7 @@ function json(body: unknown, status = 200): Response {
 
 function safetyFailure(error: unknown): Response {
   if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
+  if (isDisposedDomainLinkRefusal(error)) return json({ error: "evidence_disposition_blocks_domain_link" }, 409);
   if (error instanceof SafetyError) {
     return json({ error: error.code, message: error.message }, error.status);
   }
@@ -262,9 +264,13 @@ export async function handleSafetyRoute(
     const actionId = pathPart(correctiveDetail[1] ?? "");
     if (!actionId) return json({ error: "not_found" }, 404);
     try {
-      return json(
-        await safetyCorrectiveActionProjection(env, tenantId, userId, actionId),
-      );
+      await assertCurrentEvidenceReader(env, auth);
+      const projection = await safetyCorrectiveActionProjection(env, tenantId, userId, actionId);
+      const action = projection.corrective_action;
+      const evidence = await evidenceFilesForDetail(() => linkedEvidenceFilesForRefs(env,
+        tenantId, action.evidence_refs_json,
+        { purpose: "corrective_action", targetId: actionId, action: "submit", operationId: "" }));
+      return json({ ...projection, ...evidence });
     } catch (error) {
       return safetyFailure(error);
     }
@@ -547,7 +553,9 @@ export async function handleSafetyRoute(
     const receiptBased = parsed.value.evidence_receipt_ids !== undefined || evidenceReceiptsRequired(env);
     if (receiptBased && !exactKeys(parsed.value, ["evidence_receipt_ids", "detail"])) return json({ error: "evidence_receipts_required" }, 400);
     const legacy = receiptBased ? null : evidenceField(parsed.value);
-    if (!receiptBased && !legacy) return json({ error: "safety_evidence_invalid" }, 400);
+    if (!receiptBased && (!legacy || !validEvidenceRefsJson(legacy.refsJson))) {
+      return json({ error: "safety_evidence_invalid" }, 400);
+    }
     try {
       const evidence = receiptBased ? await resolveEvidenceUploads(env, auth, {
         purpose: "corrective_action", targetId: actionId, action: "submit", operationId: "",
@@ -557,6 +565,7 @@ export async function handleSafetyRoute(
         correctiveActionId: actionId,
         actorUserId: userId,
         evidence,
+        receiptsResolved: receiptBased,
         detail: stringField(parsed.value.detail) ?? "",
         now,
       });

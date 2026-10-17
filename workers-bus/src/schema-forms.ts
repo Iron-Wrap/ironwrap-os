@@ -7,6 +7,7 @@ import { ROLE_PERMISSIONS, type AppEnv, type AppRole } from "./app-types.ts";
 import { entityExists, knownEntityType } from "./pipeline-board-store.ts";
 import { listCurrentOperatingJobAssignments } from "./operating-job-assignment-store.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const SCHEMA_FIELD_TYPES = [
   "text", "integer", "number", "boolean", "date", "datetime", "select",
@@ -1563,7 +1564,7 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], code:
 function nullableRef(value: unknown, code: string): string | null {
   if (value === null || value === undefined || value === "") return null;
   const result = text(value, 1, 280);
-  if (!result || /[\s?#]/.test(result)) fail(code);
+  if (!result || /[\s?#]/.test(result) || isReservedEvidenceUploadReference(result)) fail(code);
   return result;
 }
 

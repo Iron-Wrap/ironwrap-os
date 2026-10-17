@@ -19,7 +19,7 @@
 
 import { sha256Hex, validAppCsrf } from "./app-auth.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
-import { evidenceIdempotencyKey, evidenceReceiptsRequired, evidenceUploadFailure, EvidenceUploadError, resolveEvidenceUploads, type EvidenceScope } from "./evidence-uploads.ts";
+import { assertCurrentEvidenceReader, evidenceFilesForDetail, evidenceIdempotencyKey, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedServiceEvidenceFiles, resolveEvidenceUploads, type EvidenceScope } from "./evidence-uploads.ts";
 import {
   SERVICE_CASE_SEVERITIES,
   SERVICE_CLOSURE_REASONS,
@@ -146,16 +146,18 @@ async function listCases(env: AppEnv, auth: AuthContext, url: URL): Promise<Resp
 
 async function readCase(env: AppEnv, auth: AuthContext, caseId: string): Promise<Response> {
   try {
+    await assertCurrentEvidenceReader(env, auth, ["owner", "ops"]);
     const tenantId = auth.session.tenant_id;
     const record = await getServiceCase(env, { tenantId, serviceCaseId: caseId });
     if (!record) return json({ error: "not_found" }, 404);
-    const [triage, diagnoses, remedies, claims, events, cost] = await Promise.all([
+    const [triage, diagnoses, remedies, claims, events, cost, evidence] = await Promise.all([
       listServiceCaseTriage(env, { tenantId, serviceCaseId: caseId }),
       listServiceCaseDiagnoses(env, { tenantId, serviceCaseId: caseId }),
       listServiceCaseRemedies(env, { tenantId, serviceCaseId: caseId }),
       listCostRecoveryClaims(env, { tenantId, serviceCaseId: caseId }),
       listServiceCaseEvents(env, { tenantId, serviceCaseId: caseId }),
       summarizeServiceCaseCost(env, { tenantId, serviceCaseId: caseId }),
+      evidenceFilesForDetail(() => linkedServiceEvidenceFiles(env, tenantId, caseId)),
     ]);
     return json(
       envelope(auth, {
@@ -166,10 +168,12 @@ async function readCase(env: AppEnv, auth: AuthContext, caseId: string): Promise
         cost_recovery_claims: claims.map(projectClaim),
         events,
         cost: cost,
+        ...evidence,
       }),
     );
-  } catch {
-    return json({ error: "service_case_store_unavailable" }, 502);
+  } catch (error) {
+    return error instanceof EvidenceUploadError ? evidenceUploadFailure(error)
+      : json({ error: "service_case_store_unavailable" }, 502);
   }
 }
 
@@ -861,6 +865,7 @@ function officeRole(auth: AuthContext): boolean {
  */
 function storeError(error: unknown): Response {
   if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
+  if (isDisposedDomainLinkRefusal(error)) return json({ error: "evidence_disposition_blocks_domain_link" }, 409);
   const message = error instanceof Error ? error.message : "service_case_store_unavailable";
   if (message === "service_case_not_found") return json({ error: "not_found" }, 404);
   if (message === "service_case_diagnosis_not_found") return json({ error: "not_found" }, 404);

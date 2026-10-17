@@ -54,6 +54,7 @@ import {
   d1Sql,
   mockD1BackupEnvironment,
   mockD1RestoreEnvironment,
+  evidenceWriteClaimSqlFixture,
   validLiveEnv,
 } from "./production-readiness-test-helpers.mjs";
 
@@ -69,6 +70,26 @@ test("D1 recovery defaults to local cryptographic and SQLite verification withou
   assert.match(run.stdout, /no remote mutation performed/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
+});
+
+test("D1 recovery validates a real full-schema export without clearing an unknown evidence writer", async (t) => {
+  const sqlFixture = await evidenceWriteClaimSqlFixture(t);
+  const mock = await mockD1RestoreEnvironment(t, { sqlFixture });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /no remote mutation performed/);
+  assert.equal(run.stderr, "");
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery refuses missing or broken evidence privacy views before import", async (t) => {
+  for (const option of ["missingEvidencePrivacyView", "brokenEvidencePrivacyView"]) {
+    const mock = await mockD1RestoreEnvironment(t, { [option]: "evidence_upload_disposed_manifests" });
+    const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /missing a working evidence privacy view: evidence_upload_disposed_manifests/);
+    await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+  }
 });
 
 test("D1 recovery refuses an old or unidentifiable SQLite CLI before download or import", async (t) => {

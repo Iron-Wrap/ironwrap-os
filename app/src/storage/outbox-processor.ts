@@ -1,11 +1,16 @@
-import {
-  correctiveActionResponseSchema,
-  correctiveEvidenceSchema,
-} from "../field/safety-contracts";
+import { correctiveActionResponseSchema } from "../field/safety-contracts";
 import { fleetCollisionResponseSchema } from "../field/fleet-contracts";
 import { z } from "zod";
 
 import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
+import { evidenceProblemFor, isEvidenceSubmitCode } from "../evidence/evidence-messages";
+import {
+  evidenceRefFor,
+  evidenceUploadResponseSchema,
+  type EvidenceScope,
+} from "../evidence/evidence-types";
+import { evidenceTransferTimeoutMs } from "../evidence/evidence-upload";
+import { API_PATHS } from "../lib/api-paths";
 
 import { classifyOutboxFailure } from "./outbox-failure";
 import {
@@ -14,6 +19,7 @@ import {
   markOutboxNeedsAttention,
   markOutboxVerified,
   OUTBOX_UPLOAD_HEARTBEAT_MS,
+  recordOutboxEvidenceReceipt,
   recoverResumableOutboxActions,
   renewOutboxUploadLease,
   requeueOutboxAction,
@@ -49,6 +55,9 @@ const schemaFieldValueResponseSchema = z.object({
   value: z.object({ value_revision_id: z.string().min(1) }).passthrough(),
 });
 
+/** A file that has timed out this many attempts in a row is held for the person to retry. */
+const EVIDENCE_SLOW_UPLOAD_ATTEMPTS = 3;
+
 export interface FlushOutboxOptions {
   fetcher?: typeof fetch;
   csrfToken?: string | (() => string | undefined);
@@ -59,6 +68,8 @@ export interface FlushOutboxOptions {
   random?: () => number;
   maxActions?: number;
   signal?: AbortSignal;
+  /** Replaces the wait worked out from each file's size before it is tried again later. */
+  evidenceTimeoutMs?: number;
 }
 
 export interface FlushOutboxResult {
@@ -129,6 +140,8 @@ async function executeFlush(
         deviceProof,
         options.signal,
         now(),
+        action.uploadLeaseId,
+        options.evidenceTimeoutMs,
       );
     } finally {
       stopLeaseHeartbeat();
@@ -199,6 +212,8 @@ async function uploadAction(
   deviceProof: string | undefined,
   signal: AbortSignal | undefined,
   now: number,
+  leaseId?: string,
+  evidenceTimeoutMs?: number,
 ): Promise<
   { ok: true; serverRef?: string; cursor?: string } | { ok: false; failure: UploadFailure }
 > {
@@ -209,6 +224,30 @@ async function uploadAction(
     "X-CSRF-Token": csrfToken,
   });
   if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
+
+  // Files first. The action is only sent once every file it carries has a confirmed receipt, so a
+  // lost response, a retry or a second flush can never submit a file the Worker has not stored.
+  // An item saved before files were uploaded has no files to send first: it goes out exactly as it
+  // was saved (replay-safe under its own ids), and the Worker's own rule decides whether it is
+  // still accepted.
+  let receiptIds: string[] | undefined;
+  if (carriesEvidence(action) && action.evidence) {
+    const uploaded = await uploadQueuedEvidence({
+      action,
+      evidence: action.evidence,
+      blobs,
+      fetcher,
+      csrfToken,
+      deviceProof,
+      signal,
+      now,
+      leaseId,
+      timeoutMs: evidenceTimeoutMs,
+    });
+    if (!uploaded.ok) return uploaded;
+    receiptIds = uploaded.receiptIds;
+  }
+
   let body: BodyInit;
   if (
     action.kind === "inventory_command" ||
@@ -222,7 +261,11 @@ async function uploadAction(
     // Wrapping it in the generic field-action envelope would hide the
     // transition and make replay unverifiable. The record-value route is the
     // same case: its body IS the governed command the server fingerprints.
-    body = JSON.stringify(action.payload);
+    body = JSON.stringify(
+      receiptIds
+        ? { ...(action.payload as Record<string, JsonValue>), evidence_receipt_ids: receiptIds }
+        : action.payload,
+    );
   } else if (action.attachments.length === 0 && action.kind !== "field_checkin") {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify({ device_action_id: action.deviceActionId, payload: action.payload });
@@ -312,16 +355,20 @@ async function uploadAction(
     }
     if (action.kind === "safety_corrective_evidence") {
       const responseBody = correctiveActionResponseSchema.safeParse(await safeJson(response));
-      const sent = correctiveEvidenceSchema.safeParse(action.payload);
       const expectedId = action.endpoint.split("/")[5];
       const record = responseBody.success ? responseBody.data.corrective_action : undefined;
+      // The record must list exactly the files this device confirmed, no more and no fewer (or,
+      // for an item saved before files were uploaded, exactly the reference and digest it sent).
+      const confirmsEvidence = record
+        ? receiptIds
+          ? sameEvidenceRefs(record.evidence_refs_json, receiptIds)
+          : sameSavedReference(record, action.payload)
+        : false;
       if (
         !record ||
-        !sent.success ||
         encodeURIComponent(record.corrective_action_id) !== expectedId ||
         record.evidence_captured_by_user_id !== action.userId ||
-        record.evidence_refs_json !== sent.data.evidence_refs_json ||
-        record.evidence_sha256 !== sent.data.evidence_sha256 ||
+        !confirmsEvidence ||
         record.state === "open"
       ) {
         return {
@@ -376,12 +423,17 @@ async function uploadAction(
 
   const payload = await safeJson(response);
   if (response.status === 401 && deviceProof) await clearDeviceSecret();
-  const message = responseMessage(payload);
-  if (response.status === 409 || response.status === 412) {
+  const refusedCode = responseCode(payload) ?? `http_${response.status}`;
+  // A refused file says so in everyday words; the Worker's code only picks the sentence.
+  const message = isEvidenceSubmitCode(refusedCode)
+    ? evidenceProblemFor({ status: response.status, code: refusedCode }).message
+    : responseMessage(payload);
+  // A file the Worker could not confirm is not the office copy changing underneath this item.
+  if ((response.status === 409 || response.status === 412) && !isEvidenceSubmitCode(refusedCode)) {
     const status = response.status;
     const conflict: OutboxConflict = {
       status,
-      code: responseCode(payload) ?? `http_${status}`,
+      code: refusedCode,
       message: message ?? "The office copy changed. Review both versions before retrying.",
       serverVersion: jsonValue(payload),
       detectedAt: now,
@@ -400,7 +452,7 @@ async function uploadAction(
       },
     };
   }
-  const code = responseCode(payload) ?? `http_${response.status}`;
+  const code = refusedCode;
   // Status decides on its own, except where the code says the refusal is a rule this device
   // cannot satisfy. A constraint violation wrapped in a 5xx would otherwise retry for ever
   // behind a "Waiting" label the crew member reads as "still trying" (ELEC-211).
@@ -428,6 +480,308 @@ async function uploadAction(
       response.status,
     ),
   };
+}
+
+function carriesEvidence(action: OutboxAction): boolean {
+  return action.kind === "inventory_command" || action.kind === "safety_corrective_evidence";
+}
+
+/** The server's list of attached files holds exactly these receipts. Order does not matter. */
+function sameEvidenceRefs(refsJson: string | null, receiptIds: readonly string[]): boolean {
+  if (!refsJson) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(refsJson);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) return false;
+  const stored = parsed.map((entry) =>
+    entry && typeof entry === "object" ? Reflect.get(entry, "ref") : undefined,
+  );
+  const expected = receiptIds.map(evidenceRefFor);
+  return (
+    stored.length === expected.length &&
+    new Set(stored).size === stored.length &&
+    expected.every((ref) => stored.includes(ref))
+  );
+}
+
+/** An item saved before files were uploaded: the read-back must show the reference it carried. */
+function sameSavedReference(
+  record: { evidence_refs_json: string | null; evidence_sha256: string | null },
+  payload: JsonValue,
+): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const sent = payload as Record<string, JsonValue>;
+  return (
+    typeof sent.evidence_refs_json === "string" &&
+    typeof sent.evidence_sha256 === "string" &&
+    record.evidence_refs_json === sent.evidence_refs_json &&
+    record.evidence_sha256 === sent.evidence_sha256
+  );
+}
+
+type QueuedEvidenceOutcome =
+  { ok: true; receiptIds: string[] } | { ok: false; failure: UploadFailure };
+
+/**
+ * Uploads each saved file that has no receipt yet, one at a time, under the key it was given when
+ * it was chosen. Progress is recorded after every file, so a stop halfway resumes where it left
+ * off, and a repeat of a file the Worker already holds returns its original receipt.
+ */
+async function uploadQueuedEvidence(input: {
+  action: OutboxAction;
+  evidence: NonNullable<OutboxAction["evidence"]>;
+  blobs: OutboxBlobRecord[];
+  fetcher: typeof fetch;
+  csrfToken: string;
+  deviceProof: string | undefined;
+  signal: AbortSignal | undefined;
+  now: number;
+  leaseId: string | undefined;
+  /** Replaces the wait worked out from the file's size. */
+  timeoutMs: number | undefined;
+}): Promise<QueuedEvidenceOutcome> {
+  const { action, evidence, now, fetcher } = input;
+  const receiptIds: string[] = [];
+  for (const file of evidence.files) {
+    if (file.receiptId) {
+      receiptIds.push(file.receiptId);
+      continue;
+    }
+    const saved = input.blobs.find((blob) => blob.attachmentId === file.attachmentId);
+    if (!saved) {
+      return {
+        ok: false,
+        failure: attentionFailure(
+          "attachment_missing",
+          `Saved file ${file.fileName} is missing. Keep this item for office review.`,
+          now,
+        ),
+      };
+    }
+    const form = new FormData();
+    form.append("purpose", evidence.scope.purpose);
+    form.append("target_id", evidence.scope.targetId);
+    form.append("action", evidence.scope.action);
+    form.append("operation_id", evidence.scope.operationId);
+    form.append(
+      "file",
+      new File([saved.blob], file.fileName, { type: file.mimeType }),
+      file.fileName,
+    );
+    const headers = new Headers({
+      Accept: "application/json",
+      "Idempotency-Key": file.uploadKey,
+      "X-CSRF-Token": input.csrfToken,
+    });
+    if (input.deviceProof) headers.set("X-IronWrap-Device-Proof", input.deviceProof);
+
+    // A stalled connection must not hold the saved item for ever: after the timeout the file is
+    // tried again later, under the same key. The wait grows with the file; a file that keeps
+    // timing out stops with a plain reason instead of sending up to 8 MB again and again.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        controller.abort("timeout");
+      },
+      input.timeoutMs ?? evidenceTransferTimeoutMs(file.size),
+    );
+    const forwardAbort = () => controller.abort(input.signal?.reason);
+    input.signal?.addEventListener("abort", forwardAbort, { once: true });
+    // The timer and the abort stay armed until the whole answer has been read: a reply whose
+    // headers arrive but whose body stalls must not hold the outbox and its lease for ever.
+    const disarm = () => {
+      clearTimeout(timer);
+      input.signal?.removeEventListener("abort", forwardAbort);
+    };
+    let response: Response;
+    try {
+      // Called on its own, not as `input.fetcher(...)`: a browser's `fetch` refuses to run with
+      // any `this` other than the window ("Illegal invocation").
+      response = await fetcher(API_PATHS.evidenceUploads, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers,
+        body: form,
+        signal: controller.signal,
+      });
+    } catch {
+      disarm();
+      if (timedOut && !input.signal?.aborted) {
+        if (action.attempts >= EVIDENCE_SLOW_UPLOAD_ATTEMPTS) {
+          return {
+            ok: false,
+            failure: attentionFailure(
+              "upload_too_slow",
+              "A file is taking too long to upload on this connection.",
+              now,
+              408,
+            ),
+          };
+        }
+        return {
+          ok: false,
+          failure: {
+            kind: "retry",
+            error: {
+              code: "upload_timeout",
+              message: "The upload is slow. The saved item will try again by itself.",
+              occurredAt: now,
+            },
+          },
+        };
+      }
+      return {
+        ok: false,
+        failure: {
+          kind: "retry",
+          error: {
+            code: input.signal?.aborted ? "upload_cancelled" : "network_error",
+            message: input.signal?.aborted
+              ? "Upload paused. It remains queued on this device."
+              : "Signal dropped. The saved item will retry while the app is open.",
+            occurredAt: now,
+          },
+        },
+      };
+    }
+
+    let payload: unknown;
+    let answerLost = false;
+    try {
+      const text = await response.text();
+      payload = text ? JSON.parse(text) : undefined;
+    } catch {
+      // A body that stalls past the timeout, breaks off, or arrives truncated.
+      answerLost = true;
+    } finally {
+      disarm();
+    }
+
+    if (response.ok && answerLost) {
+      // The file may already be stored. Sending the same bytes under the same key again makes the
+      // Worker answer with the receipt it already holds, so this is a retry, never a new upload.
+      if (input.signal?.aborted) {
+        return {
+          ok: false,
+          failure: {
+            kind: "retry",
+            error: {
+              code: "upload_cancelled",
+              message: "Upload paused. It remains queued on this device.",
+              occurredAt: now,
+            },
+          },
+        };
+      }
+      if (action.attempts >= EVIDENCE_SLOW_UPLOAD_ATTEMPTS) {
+        return {
+          ok: false,
+          failure: attentionFailure(
+            "upload_unconfirmed",
+            "The office did not confirm a file after several tries.",
+            now,
+            response.status,
+          ),
+        };
+      }
+      return {
+        ok: false,
+        failure: {
+          kind: "retry",
+          error: {
+            code: "response_lost",
+            message: "The answer to an upload was lost. The saved item will check again by itself.",
+            status: response.status,
+            occurredAt: now,
+          },
+        },
+      };
+    }
+
+    if (!response.ok) {
+      if (response.status === 401 && input.deviceProof) await clearDeviceSecret();
+      const code = responseCode(payload) ?? `http_${response.status}`;
+      const problem = evidenceProblemFor({ status: response.status, code });
+      if (classifyOutboxFailure({ status: response.status, code }) === "retryable") {
+        return {
+          ok: false,
+          failure: {
+            kind: "retry",
+            error: {
+              code,
+              message:
+                response.status === 429
+                  ? "Too many uploads right now. This saved item will try again by itself."
+                  : "The server is busy. This saved item will retry automatically.",
+              status: response.status,
+              occurredAt: now,
+            },
+            retryAfterMs: retryAfterMilliseconds(response.headers.get("Retry-After"), now),
+          },
+        };
+      }
+      // A refused file is kept, never dropped; the person decides what to do with it.
+      return {
+        ok: false,
+        failure: attentionFailure(code, problem.message, now, response.status),
+      };
+    }
+
+    const confirmed = evidenceUploadResponseSchema.safeParse(payload);
+    const receipt = confirmed.success ? confirmed.data.receipt : undefined;
+    if (!receipt || !receiptMatchesScope(receipt, evidence.scope)) {
+      return {
+        ok: false,
+        failure: attentionFailure(
+          "verification_mismatch",
+          "The server did not confirm this exact file. The saved item remains on this device.",
+          now,
+          response.status,
+        ),
+      };
+    }
+    const recorded = await recordOutboxEvidenceReceipt(
+      action.deviceActionId,
+      file.uploadKey,
+      receipt.receipt_id,
+      now,
+      input.leaseId,
+    );
+    if (!recorded) {
+      // Another tab took this item over. Leave it to them; a repeat upload is harmless.
+      return {
+        ok: false,
+        failure: {
+          kind: "retry",
+          error: {
+            code: "upload_interrupted",
+            message: "Upload was interrupted. It is queued safely for another try.",
+            occurredAt: now,
+          },
+        },
+      };
+    }
+    receiptIds.push(receipt.receipt_id);
+  }
+  return { ok: true, receiptIds };
+}
+
+function receiptMatchesScope(
+  receipt: { purpose: string; target_id: string; action: string; operation_id: string },
+  scope: EvidenceScope,
+): boolean {
+  return (
+    receipt.purpose === scope.purpose &&
+    receipt.target_id === scope.targetId &&
+    receipt.action === scope.action &&
+    receipt.operation_id === scope.operationId
+  );
 }
 
 export function retryDelayMilliseconds(attempts: number, random = Math.random): number {

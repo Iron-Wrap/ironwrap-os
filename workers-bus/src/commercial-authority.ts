@@ -1,6 +1,7 @@
 import type { AppEnv } from "./app-types.ts";
 import type { EffectActorType, EffectAuthority } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const COMMERCIAL_ACTIONS = [
   "lead.triage.record",
@@ -481,7 +482,8 @@ function evidenceRefs(value: readonly CommercialEvidenceRef[]): CommercialEviden
 
 function evidenceRef(value: unknown): value is string {
   return typeof value === "string" && value.length >= 3 && value.length <= 512 &&
-    !/[\s?#]/.test(value) && !value.includes("..") && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value);
+    !/[\s?#]/.test(value) && !value.includes("..") &&
+    !isReservedEvidenceUploadReference(value) && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value);
 }
 
 function boundedCanonicalJson(value: unknown, max: number, code: string): string {

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDatabase, resetDatabaseForTests } from "./db";
 import { getDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
+import { receiptIdFor } from "../evidence/evidence-test-harness";
 import {
   assertTransition,
   claimNextQueuedAction,
@@ -130,8 +131,23 @@ describe("offline outbox", () => {
         authority_ref: "authority-readback-1",
         policy_ref: "policy:inventory-command",
         policy_version: "1",
-        evidence_refs: [
-          { ref: "r2://inventory-evidence/tenant-a/receipt", sha256: "a".repeat(64) },
+      },
+      evidence: {
+        scope: {
+          purpose: "stock",
+          targetId: "lot-1",
+          action: "issue_use",
+          operationId: "inventory-command-1",
+        },
+        files: [
+          {
+            uploadKey: "evidence-key-0001",
+            fileName: "issue.jpg",
+            mimeType: "image/jpeg",
+            size: 12,
+            receiptId: receiptIdFor(1),
+            blob: new Blob([new Uint8Array(12)], { type: "image/jpeg" }),
+          },
         ],
       },
     });
@@ -156,11 +172,18 @@ describe("offline outbox", () => {
     await queueOutboxAction("inventory-scan-action", 2_000);
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
       const actionId = new Headers(init?.headers).get("X-Device-Action-Id");
-      expect(JSON.parse(String(init?.body))).toMatchObject(
+      const sent = JSON.parse(String(init?.body));
+      expect(sent).toMatchObject(
         actionId === "inventory-command-action"
-          ? { command_id: "inventory-command-1", transition: "issue_use" }
+          ? {
+              command_id: "inventory-command-1",
+              transition: "issue_use",
+              evidence_receipt_ids: [receiptIdFor(1)],
+            }
           : { scan_id: "inventory-scan-1", device_action_id: "inventory-scan-action" },
       );
+      // The files travel as confirmed receipts; no typed reference or digest rides along.
+      expect(sent).not.toHaveProperty("evidence_refs");
       return Response.json({ device_action_id: actionId, status: "verified" });
     });
     const result = await flushOutbox({
@@ -1139,8 +1162,87 @@ describe("offline outbox", () => {
     expect(await claimNextQueuedAction(principal, 2_000)).toBeUndefined();
   });
 
+  it.each([
+    ["matches", (refs: string[]) => refs, undefined],
+    [
+      "has an extra file",
+      (refs: string[]) => [...refs, `evidence-upload://${receiptIdFor(99)}`],
+      undefined,
+    ],
+    ["is missing a file", (refs: string[]) => refs.slice(1), undefined],
+    [
+      "lists a different file",
+      (refs: string[]) => [`evidence-upload://${receiptIdFor(98)}`, ...refs.slice(1)],
+      undefined,
+    ],
+    ["was captured by someone else", (refs: string[]) => refs, "another-user"],
+  ])(
+    "reads the corrective evidence back before clearing the outbox (the record %s)",
+    async (label, listRefs, capturedBy) => {
+      const payload = { detail: "Tie-off installed and checked." };
+      const receipts = [receiptIdFor(1), receiptIdFor(2)];
+      const saved = await saveOutboxAction({
+        ...principal,
+        kind: "safety_corrective_evidence",
+        endpoint: "/api/v1/safety/corrective-actions/ca_test/evidence",
+        payload,
+        evidence: {
+          scope: {
+            purpose: "corrective_action",
+            targetId: "ca_test",
+            action: "submit",
+            operationId: "",
+          },
+          files: receipts.map((receiptId, index) => ({
+            uploadKey: `evidence-key-000${index}`,
+            fileName: `fix-${index}.jpg`,
+            mimeType: "image/jpeg",
+            size: 10,
+            receiptId,
+            blob: new Blob([new Uint8Array(10)], { type: "image/jpeg" }),
+          })),
+        },
+      });
+      await queueOutboxAction(saved.deviceActionId);
+      const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          detail: payload.detail,
+          evidence_receipt_ids: receipts,
+        });
+        expect(new Headers(init?.headers).get("Idempotency-Key")).toBe(saved.deviceActionId);
+        const refs = listRefs(receipts.map((id) => `evidence-upload://${id}`));
+        return Response.json({
+          version: 1,
+          corrective_action: {
+            corrective_action_id: "ca_test",
+            occurrence_id: "so_test",
+            version: 4,
+            state: "closed",
+            risk_level: "high",
+            owner_user_id: principal.userId,
+            description: "Install a tie-off.",
+            due_at: "2026-09-01T00:00:00.000Z",
+            evidence_refs_json: JSON.stringify(
+              refs.map((ref) => ({ ref, sha256: "a".repeat(64) })),
+            ),
+            evidence_sha256: "b".repeat(64),
+            evidence_captured_by_user_id: capturedBy ?? principal.userId,
+            evidence_submitted_at: "2026-09-01T00:00:00.000Z",
+            verified_by_user_id: "appu_independent",
+            verified_at: "2026-09-01T01:00:00.000Z",
+            closed_at: "2026-09-01T02:00:00.000Z",
+          },
+        });
+      });
+      await flushOutbox({ ...principal, csrfToken: "csrf", fetcher });
+      const read = await getOutboxAction(saved.deviceActionId);
+      expect(read?.state, label).toBe(label === "matches" ? "verified" : "needs_attention");
+      if (label !== "matches") expect(read?.payload).toEqual(payload);
+    },
+  );
+
   it.each([false, true])(
-    "matches corrective evidence readback before clearing the outbox (mismatch: %s)",
+    "reads a typed corrective reference back before clearing the outbox (mismatch: %s)",
     async (mismatch) => {
       const payload = {
         detail: "Tie-off installed and checked.",

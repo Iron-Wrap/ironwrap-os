@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { evidenceFilesSchema, evidenceFilesUnavailableSchema } from "../evidence/evidence-types";
+
 export const inventoryTransitions = [
   "receive",
   "reserve",
@@ -222,6 +224,20 @@ export const inventoryCommandResponseSchema = z.object({
 
 export type InventoryCommandResponse = z.infer<typeof inventoryCommandResponseSchema>;
 
+/**
+ * `GET /api/v1/inventory/commands/{id}`: one recorded action and the files that were attached to
+ * it. The list is absent from a Worker that does not send it yet, and empty for an action whose
+ * evidence was only ever a digest or that was not applied.
+ */
+export const inventoryCommandDetailResponseSchema = z.object({
+  version: z.literal(1),
+  command: inventoryCommandSchema,
+  evidence_files: evidenceFilesSchema,
+  evidence_files_unavailable: evidenceFilesUnavailableSchema,
+});
+
+export type InventoryCommandDetailResponse = z.infer<typeof inventoryCommandDetailResponseSchema>;
+
 const inventoryScanSchema = z.object({
   scan_id: z.string(),
   tenant_id: z.string(),
@@ -256,6 +272,15 @@ export const inventoryScanResponseSchema = z.object({
 
 export type InventoryScanResponse = z.infer<typeof inventoryScanResponseSchema>;
 
+/**
+ * A stock action as the person composes it. Its evidence files are not part of this: they upload
+ * on their own, scoped to this action's lot, transition and `command_id`, and travel as receipt ids.
+ * The Worker derives the replay fingerprint itself, so none is built here.
+ *
+ * `evidence_refs` and `request_fingerprint_sha256` belong to the stock desk that still types a
+ * digest reference, which the Worker accepts while receipts are not required. An action carries
+ * either those or uploaded files, never both.
+ */
 export interface InventoryCommandInput {
   command_id: string;
   idempotency_key: string;
@@ -264,7 +289,7 @@ export interface InventoryCommandInput {
   authority_ref: string;
   policy_ref: string;
   policy_version: string;
-  evidence_refs: Array<{ ref: string; sha256: string }>;
+  evidence_refs?: Array<{ ref: string; sha256: string }>;
   approval_id?: string | null;
   source_position_id?: string | null;
   target_position_id?: string | null;

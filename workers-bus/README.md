@@ -226,6 +226,13 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/api/v1/document-generations/{receipt_id}` | owner session | reconstruct one browser-safe immutable generation receipt, its durable settled reconciliation outcome, and exact input versions |
 | POST | `/api/v1/document-generations/{generation_attempt_id}/reconcile` | owner session + CSRF + idempotency + enabled generation | perform server-side R2 HEAD reconciliation; no browser-supplied provider evidence or implicit retry |
 | POST | `/api/v1/evidence-uploads` | session + CSRF + Origin + Idempotency-Key; Field requires paired-device proof | bounded file/photo upload, Worker-computed binary SHA256, immutable R2 readback then D1 receipt; see file evidence contract below |
+| GET | `/api/v1/privacy/evidence-uploads[?limit=20&cursor=evu_...]` | current owner session | tenant-scoped receipt metadata inventory, at most 50 per page; private, no-store |
+| GET | `/api/v1/privacy/evidence-uploads/markers[?limit=20&cursor=...]` | current owner session | tenant-scoped independent privacy-marker inventory, including markers absent from a restored D1; at most 50 per page, private, no-store |
+| GET | `/api/v1/privacy/evidence-uploads/{receipt_id}/audit` | current owner session | accepted-business-link and R2 byte-integrity readback for one tenant receipt; private, no-store |
+| POST | `/api/v1/privacy/evidence-uploads/{receipt_id}/holds` | current owner + CSRF | create an idempotent legal hold on one receipt; exact body `{hold_id,reason}` |
+| POST | `/api/v1/privacy/evidence-uploads/{receipt_id}/holds/{hold_id}/release` | current owner + CSRF | release one hold with an audited reason; exact body `{reason}` |
+| POST | `/api/v1/privacy/evidence-uploads/{receipt_id}/destruction` | current owner + CSRF | manually dispose of an unlinked upload with an exact decision and R2 negative readback; see policy limits below |
+| POST | `/api/v1/privacy/evidence-uploads/{receipt_id}/reconciliation` | current owner + CSRF | record a new marker-bound decision after an old D1 restore lost the original decision text; exact retry also re-verifies restored RAW bytes |
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
@@ -255,19 +262,132 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 
 Source-present in `src/evidence-uploads.ts`, `src/inventory-control-api.ts`,
 `src/service-cases.ts`, `src/service-case-store.ts`, and `src/safety-api.ts`; D1 migration
-`0139_evidence_upload_receipts.sql`. Focused local checks are in `test/evidence-uploads.test.ts`,
+`0139_evidence_upload_receipts.sql` and `0141_evidence_privacy_disposition.sql`. Focused local checks are in `test/evidence-uploads.test.ts`,
 `test/inventory-control-api.test.ts`, `test/service-cases-api.test.ts`, and `test/app-auth.test.ts`.
 These checks use synthetic files and controlled D1/R2 adapters; they do not prove deployment,
 provider configuration, real-device operation, or accepted UI behavior.
 
-Receipt enforcement is controlled by `APP_EVIDENCE_RECEIPTS_REQUIRED="true"`, a non-secret rollout
-flag that is off by default. No deployment configuration is changed by this slice. With the flag
-unset or false, existing stock refs and service/corrective typed digests remain accepted under
-their existing rules; they are legacy assertions and never become upload receipts or manifests.
-Legacy stock refs still have their actual binary R2 bytes checked. Confirmed upload receipt IDs
-may be submitted while the flag is off and always receive the full scope/readback verification.
-Mixing legacy evidence fields with receipt IDs is refused in either mode. Enable required receipt
-enforcement only after the UI owner has wired file selection, upload, and receipt submission.
+The owner audit routes inventory receipts without returning file bytes or R2 keys. The list
+returns `{version:1,receipts:[{receipt_id,actor_user_id,purpose,target_id,action,operation_id,file_name,content_type,byte_size,created_at,disposition_state}],next_cursor}`.
+The detail returns `{version:1,receipt_id,purpose,target_id,actor_user_id,file_name,content_type,byte_size,created_at,business_linked,domain_record_linked,disposition_state,active_hold_count,external_marker_present,external_marker_decision_id,restore_recheck_pending,object_status,recent_events}`.
+`business_linked` requires a matching receipt reference and digest in an applied stock command,
+submitted corrective action, or accepted service case transition. A corrective action's persisted
+manifest digest also counts when its reference list is legacy or incomplete. A manifest by itself
+is not a business link. `domain_record_linked` is also true for a rejected stock command or a
+durable service child row or case last-evidence digest without a matching transition event. A
+cleanup decision must not infer
+"abandoned" from `business_linked: false` alone. `object_status` is `verified`, `missing`,
+`mismatch`, or `restore_reappeared` when a destroyed or quarantined receipt has bytes again. A D1 or R2 outage
+returns `502` rather than an absence claim. The detail shows the latest 50 immutable privacy
+events. `restore_recheck_pending` stays true when restored bytes were detected but their removal
+has not settled in D1. It is an operator preview, not a complete event export.
+
+An owner may create and release a receipt-specific hold. The only enabled disposal basis is
+`manual_correction` with `policy_version: "manual-v1"`: the owner must submit exact
+`{decision_id,basis,authority_ref,policy_version,reason,expected_sha256}` and the receipt must
+have no durable business record. A manifest prepared before a failed or abandoned submit may
+remain for audit; the D1 disposition guard checks every durable stock, corrective and service
+link, while domain-write guards prevent that manifest from being consumed after disposal. A
+concurrent domain write and disposition therefore have one winner in D1. The decision is
+persisted before R2 deletion. A provider failure leaves a retryable `failed` disposition; the same decision ID
+may retry after any new hold is released. Only a negative R2 readback marks `destroyed`.
+Upload replay and domain receipt resolution refuse every pending or destroyed disposition,
+including after R2 bytes reappear. The immutable receipt and privacy events remain in D1.
+After a receipt exists, an exact upload replay does not recreate missing R2 bytes; the owner
+audit reports the loss for recovery review instead of allowing a replay to undo disposal.
+Every cold-upload attempt first inserts an exact tenant/actor/receipt/request/RAW-key write
+claim in D1. The claim spans every RAW await and settles once, after that attempt can perform
+no further PUT. D1 refuses disposal insert, retry or verification while any writer is unsettled,
+and refuses a new writer after a disposition exists. This serializes the lifecycle decision;
+it does not make D1 and R2 one transaction. A concurrent owner gets
+`409 evidence_upload_write_pending`, the pending/unknown counts and an inspection link.
+A rejected PUT is an unknown provider outcome, even if a later read is empty. It leaves an
+unsettled `unknown` claim and returns `evidence_upload_write_outcome_unknown`; a terminated
+request may leave `active`. Neither state expires or can be stolen or automatically cleared.
+The current owner can inspect pending attempts, including attempts without a receipt, through
+`GET /api/v1/privacy/evidence-uploads/write-claims?receipt_id={receipt_id}&limit=20&cursor={claim_id}`.
+The receipt filter and cursor are optional; follow `next_cursor` until null. This endpoint is
+read-only and does not authorize settlement. A hold can still be acquired while a writer is
+unsettled; no upload failure performs a compensating delete of possibly held evidence.
+
+Backups and restores must preserve all write claims and their guards, including unresolved
+claims. Before enabling this lifecycle, restoring D1/RAW, or rolling schema/code back, the
+runtime owner must establish an approved, verifiable quiescence procedure covering old
+unclaimed Worker requests and pending provider writes. Disabling a flag, waiting, or observing
+an empty object is not proof that a delayed PUT cannot finish. Do not restore an older D1
+snapshot over active writers or infer that an ambiguous claim can be settled. Provisioning,
+quiescence evidence and any future operator resolution contract remain separate release gates;
+this implementation exposes the exception and provides no claim-clearing operation.
+
+If R2 bytes reappear behind a destroyed receipt, the same owner decision records the detection,
+deletes the bytes again, and settles only after a negative R2 `head` readback. A failed delete or
+D1 settlement leaves a visible pending recheck; the exact decision retry resumes it, even when
+the bytes were already removed. Immutable `reappearance_detected` and
+`destruction_reverified` events keep that correction auditable. A D1 restore that discards the
+disposition itself is blocked by the separate `PRIVACY_LEDGER`
+R2 bucket: D1 first commits a disposition that prevents new manifests; the Worker then
+creates an exact-decision marker before deleting RAW bytes. Every upload retry, receipt
+resolution and owner audit consults the marker. A restored
+D1 with no disposition shows `quarantined` instead of `available`, even if RAW bytes return.
+The owner may replay the exact decision to recreate the D1 disposition and remove the bytes.
+When the old D1 decision text cannot be recovered, the owner may POST
+`/api/v1/privacy/evidence-uploads/{receipt_id}/reconciliation` with
+`{decision_id,marker_decision_id,reason,expected_sha256}`. The marker decision ID names the
+surviving original; the new decision ID and reason record a separate owner correction.
+The new D1 `authority_ref` binds the original marker digest without claiming that the lost
+reason or actor was reconstructed. A hold, manifest or durable business record still refuses
+deletion. The marker is re-read before RAW deletion; a negative RAW `head` settles the new
+decision. An exact retry resumes interrupted work, including re-purging bytes that reappear.
+After reconciliation, repeat the same `/reconciliation` request to re-verify or re-purge;
+`/destruction` cannot replay the lost original decision. A readable but changed or malformed
+marker is a `409 evidence_destruction_conflict`; an unavailable R2 read is a retryable `502`.
+The marker contains a tenant and receipt locator, receipt digest, R2 key, decision ID and
+decision digest. It does not copy the free-text reason, authority reference or actor; its
+remaining metadata still needs an approved retention and access policy. A different decision
+against an old D1 snapshot is refused before it can create a conflicting D1 row. If an older
+snapshot also lacks the receipt, the marker still blocks the same upload key. The owner can
+enumerate the independent ledger through `GET /api/v1/privacy/evidence-uploads/markers`.
+Each row reports `receipt_id`, `marker_decision_id`, `d1_receipt` (`missing`, `matches`, or
+`mismatch`), `d1_disposition_state`, and `raw_object_present`. Follow `next_cursor` until null;
+each page also carries `marker_entries_valid` and `marker_issues`. A malformed or missing
+marker is omitted from trusted `markers`, identified in `marker_issues` by receipt ID when
+available and a SHA-256 fingerprint of its R2 key, and makes `marker_entries_valid` false.
+Do not interpret the valid rows as a clean restore until every page has been read and every issue
+and D1/RAW mismatch is resolved. No raw R2 key is returned. A failed ledger, D1, or RAW read
+still fails the page instead of claiming a clean restore; a damaged marker still blocks receipt
+use and disposal.
+This is a read-only inventory: an orphan marker needs an explicit receipt recovery or approved
+restore procedure before reconciliation can delete restored RAW bytes. A complete, reviewed
+marker inventory remains a production release gate.
+If ledger creation fails, the D1 disposition keeps the receipt blocked until an exact
+retry writes the marker. The Worker never deletes a privacy marker. The normal disposal path
+uses R2's `If-None-Match: *` conditional create, so a competing decision cannot overwrite it.
+A missing or unavailable ledger fails closed before RAW deletion.
+The privacy bucket must be provisioned before deploy, excluded from old D1/RAW restore,
+and included in the privacy owner's metadata-retention and access policy. Generic D1 writers,
+production restore fencing and real-provider restore proof remain release gates.
+
+The route refuses `subject_request` and `approved_retention` until identity proof, owner-approved
+purpose schedules, exceptions, and backup/provider reconciliation exist. There is no automatic
+retention job or global duration. This source-level manual correction path does not finish A11,
+authorize production receipt enforcement, or prove the production restore path. Older D1
+backups, other stores, and agent/browser artifacts still need independent policy and readback.
+
+`APP_EVIDENCE_UPLOADS_ENABLED="true"` permits file uploads and receipt-based domain writes.
+It is false in every checked-in environment. When disabled, both the upload and receipt-resolution
+paths return `503 evidence_uploads_disabled` before writing R2, a manifest, or a business link.
+Existing legacy evidence inputs keep their current validation and never become upload receipts.
+Enable uploads in a named environment only after its privacy controls and recovery path are
+approved; the UI must show a plain unavailable state while the switch is off.
+
+`APP_EVIDENCE_RECEIPTS_REQUIRED="true"` separately requires receipts instead of legacy
+evidence inputs. It remains off by default. Both switches must be true to require and accept
+receipt-based evidence. With only uploads enabled, confirmed receipt IDs may be submitted and
+always receive full scope and byte readback verification. Legacy stock refs still have their
+actual binary R2 bytes checked. Mixing legacy fields with receipt IDs is refused in either mode.
+Legacy safety and authority reference lists cannot claim the reserved `evidence-upload://`
+scheme. A corrective record can name an upload receipt only when the tenant, action, target
+and digest match a resolved manifest; D1 enforces this at the corrective update boundary.
 
 Upload one selected file through `POST /api/v1/evidence-uploads`. The multipart fields are
 `file`, `purpose`, `target_id`, `action`, and `operation_id` (empty for actions whose table entry
@@ -443,6 +563,23 @@ Recovery invariants:
 - A retained file is capture evidence, not independent safety acceptance. The reporter, corrective
   owner, and evidence capturer remain excluded from verifying their own closure. No provider
   credentials or external-effect authority are added; cost-recovery execution stays unconfigured.
+
+Accepted uploads are readable through the domain facts that linked them. The stock command,
+service case, and corrective action detail reads each add top-level `evidence_files`, an array of
+`{receipt_id, file_name, content_type, byte_size}`, and `evidence_files_unavailable: boolean`.
+A healthy empty array has the marker `false`; an attachment-index failure keeps the primary
+business record and allowed actions readable with an empty array and marker `true`. The private
+content route still returns its real failure. Historical digest-only evidence yields a healthy
+empty array; the read model never calls it an uploaded file. Stock files require an applied
+command, service files a case event or cost-recovery claim, and corrective files a submitted
+action. `GET /api/v1/evidence-uploads/{receipt_id}/content` requires a current active user whose
+effective role still matches the session, the tenant's receipt, the permitted domain role, and an
+accepted business link. It rechecks R2 metadata, size and the original-byte hash before returning
+an attachment with `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`.
+Unlinked or cross-tenant receipts return 404, a role change or disallowed role returns 403, and
+missing or altered R2 bytes return 409. A broken D1 linkage is a 502 recovery exception. The
+receipt feature remains off for required enforcement until the separate A11 retention/destruction
+path and UI integration are accepted.
 
 ## PWA auth and tenant boundary
 

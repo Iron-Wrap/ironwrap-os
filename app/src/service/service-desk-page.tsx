@@ -58,7 +58,7 @@ function ServiceDeskContent() {
   const [intakeEvidenceDigest, setIntakeEvidenceDigest] = useState("");
   const [responseSlaMinutes, setResponseSlaMinutes] = useState("1440");
   const [actionError, setActionError] = useState<unknown>();
-  const [outcome, setOutcome] = useState<"opened" | "duplicate">();
+  const [outcome, setOutcome] = useState<"opened" | "duplicate" | "replayed">();
 
   const mutation = useMutation({
     retry: false,

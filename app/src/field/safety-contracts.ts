@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { evidenceFilesSchema, evidenceFilesUnavailableSchema } from "../evidence/evidence-types";
+
 /**
  * Contracts for the global safety rail.
  *
@@ -181,11 +183,23 @@ export const safetyEquipmentResponseSchema = z.lazy(() =>
 
 export type SafetyEquipment = z.infer<typeof safetyEquipmentResponseSchema>["equipment"];
 
+/**
+ * What the person writes when submitting corrective evidence. The files themselves are uploaded
+ * on their own and travel as receipt ids, added when the request is sent, so no digest or typed
+ * reference is built or kept for them.
+ *
+ * The safety desk that still types a digest reference sends it here instead, as the pair
+ * `evidence_sha256` and `evidence_refs_json`, which the Worker accepts while receipts are not
+ * required. Both or neither: half a reference is refused.
+ */
 export const correctiveEvidenceSchema = z.lazy(() =>
   z
     .object({
       detail: z.string().trim().min(3).max(4000),
-      evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      evidence_sha256: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/)
+        .optional(),
       evidence_refs_json: z
         .string()
         .max(20000)
@@ -209,9 +223,13 @@ export const correctiveEvidenceSchema = z.lazy(() =>
           } catch {
             return false;
           }
-        }),
+        })
+        .optional(),
     })
-    .strict(),
+    .strict()
+    .refine(
+      (value) => (value.evidence_sha256 === undefined) === (value.evidence_refs_json === undefined),
+    ),
 );
 export type CorrectiveEvidence = z.infer<typeof correctiveEvidenceSchema>;
 
@@ -246,6 +264,10 @@ export const correctiveActionDetailSchema = z.lazy(() =>
     ...correctiveActionResponseShape(),
     allowed_actions: z.array(z.enum(["submit_evidence", "verify", "reject", "close"])),
     verification_unavailable_reason: z.string().nullable(),
+    // The files submitted as this action's evidence. Absent from a Worker that does not list
+    // them yet, and empty for older evidence that was only ever a digest.
+    evidence_files: evidenceFilesSchema,
+    evidence_files_unavailable: evidenceFilesUnavailableSchema,
   }),
 );
 export type CorrectiveActionDetail = z.infer<typeof correctiveActionDetailSchema>;

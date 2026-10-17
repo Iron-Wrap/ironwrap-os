@@ -53,6 +53,7 @@ import {
   d1TriggerSql,
   d1Sql,
   mockD1BackupEnvironment,
+  evidenceWriteClaimSqlFixture,
   mockD1RestoreEnvironment,
   validLiveEnv,
 } from "./production-readiness-test-helpers.mjs";
@@ -81,6 +82,16 @@ test("D1 backup exports through locked Wrangler, validates SQL, and commits its 
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
 
+test("D1 backup refuses missing or broken evidence privacy views before upload", async (t) => {
+  for (const option of ["missingEvidencePrivacyView", "brokenEvidencePrivacyView"]) {
+    const mock = await mockD1BackupEnvironment(t, { [option]: "evidence_upload_durable_refs" });
+    const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /missing a working evidence privacy view: evidence_upload_durable_refs/);
+    await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+  }
+});
+
 test("D1 backup refuses an old or unidentifiable SQLite CLI before export or upload", async (t) => {
   for (const version of ["3.45.1", "unidentified"]) {
     const mock = await mockD1BackupEnvironment(t);
@@ -94,6 +105,15 @@ printf '%s\\n' '${version}'
     await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
     await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
   }
+});
+
+test("D1 backup preserves a real full-schema export containing an unresolved evidence writer", async (t) => {
+  const sqlFixture = await evidenceWriteClaimSqlFixture(t);
+  const mock = await mockD1BackupEnvironment(t, { sqlFixture });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /exact production D1 export validated, encrypted, committed/);
+  assert.equal(run.stderr, "");
 });
 
 test("D1 backup fails before upload when a required customer-portal table is missing", async (t) => {

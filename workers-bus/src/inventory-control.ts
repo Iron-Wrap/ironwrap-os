@@ -1,5 +1,6 @@
 import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 /**
  * IRO-45 inventory control ledger.
@@ -1341,6 +1342,7 @@ export async function applyInventoryCommand(
   input: ApplyInventoryCommandInput,
 ): Promise<ApplyInventoryCommandResult> {
   validateCommandInput(input);
+  await assertUploadedInventoryEvidence(env, input);
   const idempotencyHash = await sha256Hex(`${input.tenantId}\n${input.idempotencyKey}`);
   const existing = await commandByIdempotency(env, input.tenantId, idempotencyHash);
   if (existing) {
@@ -2460,7 +2462,13 @@ async function eventIdsForCommand(env: AppEnv, commandId: string): Promise<strin
 
 function triggerCode(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const match = message.match(/inventory_[a-z0-9_]+/);
+  // D1 can include the failed inventory_commands SQL before the trigger text.
+  // The privacy refusal must win over that table name so callers never retry
+  // a disposed receipt as an ordinary ledger failure.
+  if (/\bevidence_disposition_blocks_domain_link\b/u.test(message)) {
+    return "evidence_disposition_blocks_domain_link";
+  }
+  const match = message.match(/inventory_[a-z0-9_]+/u);
   return match?.[0] ?? "inventory_ledger_write_failed";
 }
 
@@ -2488,6 +2496,7 @@ function validateCommandInput(input: ApplyInventoryCommandInput): void {
   const seen = new Set<string>();
   for (const move of input.movements) {
     if (!POSITION_ID.test(move.positionId) || !CUSTODY.test(move.jobCustody) ||
+        move.evidenceRefs !== undefined && !validEvidenceRefs(move.evidenceRefs) ||
         !Number.isSafeInteger(move.quantityDelta) ||
         !Number.isSafeInteger(move.reservedDelta ?? 0) ||
         !Number.isSafeInteger(move.quarantinedDelta ?? 0) ||
@@ -2570,6 +2579,33 @@ function validEvidenceRefs(value: unknown): value is readonly EvidenceRef[] {
     return typeof ref === "string" && ref.trim().length >= 3 && ref.trim().length <= 512 &&
       !/[\u0000-\u001f]/.test(ref) && typeof sha256 === "string" && SHA256.test(sha256);
   });
+}
+
+async function assertUploadedInventoryEvidence(env: AppEnv, input: ApplyInventoryCommandInput): Promise<void> {
+  const refs = input.evidenceRefs;
+  const hasUpload = refs.some(({ ref }) => isReservedEvidenceUploadReference(ref));
+  const movementUpload = input.movements.some((move) =>
+    move.evidenceRefs?.some(({ ref }) => isReservedEvidenceUploadReference(ref)));
+  if (!hasUpload && !movementUpload) return;
+  if (!hasUpload || refs.some(({ ref }) => !isReservedEvidenceUploadReference(ref)) ||
+      input.movements.some((move) => move.evidenceRefs !== undefined &&
+        JSON.stringify(move.evidenceRefs) !== JSON.stringify(refs))) {
+    throw new InventoryLedgerError("inventory_evidence_manifest_required");
+  }
+  const lots = new Set(input.movements.map(({ lotId }) => lotId));
+  if (lots.size !== 1) throw new InventoryLedgerError("inventory_evidence_scope_invalid");
+  const manifest = await env.DB.prepare(`SELECT 1 AS present FROM evidence_upload_manifests AS manifest
+      WHERE manifest.tenant_id = ? AND manifest.actor_user_id = ? AND manifest.purpose = 'stock'
+        AND manifest.target_id = ? AND manifest.action = ? AND manifest.operation_id = ?
+        AND manifest.refs_json = ?
+        AND NOT EXISTS (SELECT 1 FROM evidence_upload_dispositions AS disposition,
+          json_each(manifest.refs_json) AS link
+          WHERE disposition.tenant_id = manifest.tenant_id
+            AND json_extract(link.value, '$.ref') = 'evidence-upload://' || disposition.receipt_id)
+      LIMIT 1`)
+    .bind(input.tenantId, input.actorUserId, [...lots][0], input.transition, input.commandId,
+      JSON.stringify(refs)).first<{ present: number }>();
+  if (!manifest) throw new InventoryLedgerError("inventory_evidence_manifest_required");
 }
 
 function boundedText(value: unknown, min: number, max: number): value is string {

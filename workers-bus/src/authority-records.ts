@@ -1,5 +1,6 @@
 import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const AUTHORITY_RECORD_OPERATIONS = [
   "record",
@@ -1425,6 +1426,7 @@ function validEvidenceRefsJson(value: string): boolean {
         return false;
       }
       return ref.trim().length >= 3 && ref.trim().length <= 512 &&
+        !isReservedEvidenceUploadReference(ref) &&
         !/[\u0000-\u001f]/.test(ref);
     });
   } catch {

@@ -1,3 +1,4 @@
+import { evidenceRefusalKind } from "../evidence/evidence-messages";
 import type { OutboxAction, OutboxConflict, OutboxErrorDetail } from "./outbox-types";
 
 /**
@@ -116,6 +117,14 @@ export function outboxFailureGuidance(
     ...(error?.status === undefined ? {} : { status: error.status }),
     ...(error?.code === undefined ? {} : { code: error.code }),
   });
+  if (error?.code === "upload_too_slow") {
+    return {
+      reason: "A file is taking too long to upload on this connection.",
+      nextStep: "Move to a place with better signal, then try again. Nothing was lost.",
+      retryable: true,
+      notSent: false,
+    };
+  }
   if (failureClass === "retryable") {
     return {
       reason: "The server could not take this item yet.",
@@ -133,6 +142,36 @@ export function outboxFailureGuidance(
       notSent: true,
     };
   }
+  if (error?.code === "evidence_actor_role_changed") {
+    return {
+      reason: "Your access changed after you signed in, so files cannot be attached yet.",
+      nextStep: "Sign in again, then open the action and add the files again.",
+      retryable: false,
+      notSent: true,
+    };
+  }
+  const refusal = error ? evidenceRefusalKind(error.code) : undefined;
+  if (refusal === "account") {
+    return {
+      reason: "Your account can't add files for this step.",
+      nextStep: "Ask the owner for help. Nothing was sent.",
+      retryable: false,
+      notSent: true,
+    };
+  }
+  if (refusal === "files") {
+    // The Worker checks the files before it writes anything, so a refusal here means nothing was
+    // recorded: doing the action again with its files is safe, and the one thing to do.
+    return {
+      reason: evidenceRefusalReason(error?.code ?? ""),
+      nextStep:
+        action.kind === "inventory_command"
+          ? "Nothing was recorded. Record the action again on the stock desk and add the files again."
+          : "Nothing was submitted. Open the action and add the files again.",
+      retryable: false,
+      notSent: true,
+    };
+  }
   return {
     reason: "The office refused this saved item.",
     nextStep:
@@ -140,4 +179,32 @@ export function outboxFailureGuidance(
     retryable: false,
     notSent: true,
   };
+}
+
+/** What went wrong with the files on a saved item, without telling anyone to use the picker. */
+function evidenceRefusalReason(code: string): string {
+  switch (code) {
+    case "evidence_receipts_required":
+      return "This step needs a photo or PDF.";
+    case "evidence_receipt_scope_mismatch":
+    case "evidence_receipt_not_found":
+    case "evidence_receipt_mismatch":
+    case "evidence_scope_invalid":
+      return "The files on this saved item don't match this action.";
+    case "evidence_target_not_found":
+      return "We couldn't find what these files belong to.";
+    case "evidence_object_missing":
+    case "evidence_object_mismatch":
+      return "We couldn't confirm that a file was saved.";
+    case "evidence_upload_conflict":
+      return "A file on this saved item was already used for something else.";
+    case "evidence_file_size_invalid":
+    case "payload_too_large":
+    case "evidence_type_unsupported":
+    case "evidence_type_mismatch":
+    case "evidence_file_name_invalid":
+      return "A file on this saved item can't be used.";
+    default:
+      return "We couldn't use the files on this saved item.";
+  }
 }

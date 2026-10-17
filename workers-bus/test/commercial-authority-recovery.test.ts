@@ -255,9 +255,9 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // automation recipient catalog, per-cron heartbeat, durable office intake receipts, and manual
   // measurement history.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 247],
-    ["REQUIRED_INDEX_COUNT", 362],
-    ["REQUIRED_TRIGGER_COUNT", 620],
+    ["REQUIRED_TABLE_COUNT", 251],
+    ["REQUIRED_INDEX_COUNT", 366],
+    ["REQUIRED_TRIGGER_COUNT", 653],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -343,7 +343,7 @@ test("the full schema matches the recovery frontier through 0200", () => {
     // release-smoke column without changing the object inventory. 0134 adds one office intake
     // receipt table, one index, and four guards. 0135 adds three manual measurement history
     // tables, two indexes, and twelve append-only, lineage, and head-pointer guards. 0140 adds
-    // the service batch assertion table and its abort trigger; 0143 adds the stop supersession guard.
+    // the service batch assertion table and its abort trigger; 0143 adds both crew-stop guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -351,7 +351,7 @@ test("the full schema matches the recovery frontier through 0200", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 247, indexes: 362, triggers: 620 },
+      { tables: 251, indexes: 366, triggers: 653 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

@@ -6,6 +6,7 @@ import {
   resolveCommercialAuthority,
 } from "./commercial-authority.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export type CommercialLeadStatus = "triaged" | "qualified" | "disqualified";
 export type CommercialPriority = "low" | "normal" | "high" | "urgent";
@@ -1158,7 +1159,8 @@ function normalizedEvidence(value: readonly CommercialEvidenceRef[]): Commercial
 function evidenceReference(value: unknown, code: string): string {
   if (
     typeof value !== "string" || value.length < 3 || value.length > 512 ||
-    /[\s?#]/.test(value) || value.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)
+    /[\s?#]/.test(value) || value.includes("..") || isReservedEvidenceUploadReference(value) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)
   ) fail(code);
   return value;
 }

@@ -1817,6 +1817,17 @@ test("IRO-208 no-seed native lead-to-deposit reference path is governed and reco
         tenantId: TENANT,
         acceptanceId,
         actorUserId: OWNER_ID,
+        idempotencyKey: "iro208-deposit-reserved-evidence-0001",
+        policyVersion: "policy-v1",
+        evidenceRefs: [`evidence-upload://evu_${"a".repeat(64)}`],
+      }),
+      /commercial_deposit_reconcile_evidence_invalid/,
+    );
+    await assert.rejects(
+      beginCommercialDepositDerivationRequest(h.env, {
+        tenantId: TENANT,
+        acceptanceId,
+        actorUserId: OWNER_ID,
         idempotencyKey: "iro208-deposit-fingerprint-0001",
         policyVersion: "policy-v2",
         evidenceRefs: ["r2://technical-reference/iro208/reconcile.json"],

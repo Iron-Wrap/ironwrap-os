@@ -115,6 +115,26 @@ function request(idempotencyKey = "email:lead-001") {
   };
 }
 
+test("the generic effect ledger cannot claim an upload receipt without a scoped manifest", async () => {
+  const db = new SqliteD1();
+  try {
+    const ref = `evidence-upload://evu_${"a".repeat(64)}`;
+    for (const candidate of [ref, ref.toUpperCase(), ` ${ref} `]) {
+      await assert.rejects(
+        proposeExternalEffect(env(db), {
+          ...request("email:reserved-evidence-001"),
+          evidenceRefs: [candidate],
+        }),
+        (error: unknown) => error instanceof EffectRuntimeError && error.code === "effect_evidence_ref_reserved",
+      );
+    }
+    const rows = db.raw.prepare("SELECT count(*) AS n FROM external_effects").get() as { n: number };
+    assert.equal(rows.n, 0);
+  } finally {
+    db.raw.close();
+  }
+});
+
 async function authorized(appEnv: AppEnv, idempotencyKey = "email:lead-001") {
   const proposed = await proposeExternalEffect(appEnv, request(idempotencyKey));
   return await authorizeExternalEffect(appEnv, proposed.effect_id, AUTHORITY, NOW);

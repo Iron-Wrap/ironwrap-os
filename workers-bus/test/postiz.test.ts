@@ -296,6 +296,17 @@ test("draft creation is exact-idempotent, bounded, and PII/HTML fail closed", as
   assert.equal(count(db, "postiz_intent_events"), 1);
 });
 
+test("marketing references cannot claim an upload receipt", async () => {
+  const db = new SqliteD1();
+  const testEnv = env(db);
+  const ref = `evidence-upload://evu_${"a".repeat(64)}`;
+  assert.deepEqual(
+    await draft(testEnv, async () => integrations(), { evidenceRefs: [ref] }),
+    { kind: "rejected", code: "postiz_evidence_refs_invalid", status: 400 },
+  );
+  assert.equal(count(db, "postiz_intents"), 0);
+});
+
 test("approval is human-gated and an unknown create response is never retried", async () => {
   const db = new SqliteD1();
   const testEnv = env(db);

@@ -61,6 +61,8 @@ export interface ApiRequestOptions<T> {
   schema: ZodType<T>;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  /** What this call asks for; JSON unless it is fetching a file. */
+  accept?: string;
   csrfToken?: string;
   idempotencyKey?: string;
   deviceActionId?: string;
@@ -95,22 +97,78 @@ export function retryAfterMilliseconds(value: string | null, now = Date.now()): 
   return Math.max(0, date - now);
 }
 
+/**
+ * The server accepted the request (2xx) but its answer was lost or cut off on the way back. The
+ * request may already have taken effect, so this is never a refusal; a read may simply be retried.
+ */
+export function isAnswerLost(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status >= 200 &&
+    error.status < 300 &&
+    (error.code === "response_lost" || error.code === "invalid_json")
+  );
+}
+
 export function isRetryableApiError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
-  return error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500;
+  return (
+    error.status === 0 ||
+    error.status === 408 ||
+    error.status === 429 ||
+    error.status >= 500 ||
+    isAnswerLost(error)
+  );
+}
+
+/**
+ * Whether a change may or may not have happened. Callers keep the exact attempt (its identity and
+ * idempotency key) and read back before offering anything new; a refusal can start afresh.
+ */
+export function isUncertainApiError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.code !== "aborted" &&
+    (error.status === 0 ||
+      error.status === 408 ||
+      error.status >= 500 ||
+      isAnswerLost(error) ||
+      // Readable, but not the agreed answer: a change may still have taken effect. Not retryable
+      // for a read, which must surface the broken contract rather than fall back to a cache.
+      (error.status >= 200 && error.status < 300 && error.code === "invalid_response"))
+  );
 }
 
 export async function apiRequest<T>(options: ApiRequestOptions<T>): Promise<T> {
-  const response = await executeRequest(options);
+  // The timeout and the caller's abort stay armed until the whole body has been read: an answer
+  // whose headers arrive but whose body stalls must end, not leave the screen waiting for ever.
+  const { response, release, failure } = await executeRequest(options, true);
+  const requestId = response.headers.get("X-Request-ID") ?? undefined;
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    const lost = failure(error);
+    // The server answered, so it may already have acted; the body never arrived.
+    throw new ApiError({
+      status: response.status,
+      code: lost.code === "aborted" ? "aborted" : "response_lost",
+      message: "The answer was lost before it arrived.",
+      requestId,
+      cause: error,
+    });
+  } finally {
+    release();
+  }
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = JSON.parse(text);
   } catch (error) {
     throw new ApiError({
       status: response.status,
       code: "invalid_json",
       message: "The server returned an unreadable response.",
-      requestId: response.headers.get("X-Request-ID") ?? undefined,
+      requestId,
       cause: error,
     });
   }
@@ -132,11 +190,42 @@ export async function apiCommand(options: ApiCommandOptions): Promise<void> {
   await executeRequest({ ...options, method: "POST" });
 }
 
+export type ApiBlobOptions = Pick<
+  ApiRequestOptions<unknown>,
+  "path" | "deviceProof" | "signal" | "timeoutMs" | "fetcher" | "credentials"
+>;
+
+/**
+ * A file read through the same authenticated path as every other call, so a paired field device
+ * sends its proof header (a plain link would not) and a refusal arrives as the same `ApiError`.
+ */
+export async function apiBlob(options: ApiBlobOptions): Promise<Blob> {
+  // The timeout and the caller's abort stay armed until the last byte has arrived: a download that
+  // stalls halfway must end with an answer, not hang for ever.
+  const { response, release, failure } = await executeRequest({ ...options, accept: "*/*" }, true);
+  try {
+    return await response.blob();
+  } catch (error) {
+    throw failure(error);
+  } finally {
+    release();
+  }
+}
+
+interface Exchange {
+  response: Response;
+  /** Disarms the timeout and the abort forwarding. Called by whoever reads the body last. */
+  release: () => void;
+  /** What a failure while reading the body means: cancelled, too slow, or no connection. */
+  failure: (error: unknown) => ApiError;
+}
+
 async function executeRequest(
   options: Omit<ApiRequestOptions<unknown>, "schema"> & {
     method?: ApiRequestOptions<unknown>["method"];
   },
-): Promise<Response> {
+  readBodyLater = false,
+): Promise<Exchange> {
   assertApiPath(options.path);
   const fetcher = options.fetcher ?? fetch;
   const controller = new AbortController();
@@ -146,10 +235,35 @@ async function executeRequest(
   );
   const forwardAbort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
+  const release = () => {
+    window.clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", forwardAbort);
+  };
+  const failure = (error: unknown): ApiError => {
+    if (error instanceof ApiError) return error;
+    if (controller.signal.aborted) {
+      return new ApiError({
+        status: 0,
+        code: options.signal?.aborted ? "aborted" : "timeout",
+        message: options.signal?.aborted
+          ? "The request was cancelled."
+          : "The connection took too long. Try again when signal improves.",
+        cause: error,
+      });
+    }
+    return new ApiError({
+      status: 0,
+      code: "network_error",
+      message: "No connection to IronWrap OS. Your saved work stays on this device.",
+      cause: error,
+    });
+  };
 
   try {
-    const headers = new Headers({ Accept: "application/json" });
-    if (options.body !== undefined) headers.set("Content-Type", "application/json");
+    const headers = new Headers({ Accept: options.accept ?? "application/json" });
+    // A multipart body must keep the boundary the browser writes into its own Content-Type.
+    const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    if (options.body !== undefined && !multipart) headers.set("Content-Type", "application/json");
     if (options.csrfToken) headers.set("X-CSRF-Token", options.csrfToken);
     if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
     if (options.deviceActionId) headers.set("X-Device-Action-Id", options.deviceActionId);
@@ -161,7 +275,12 @@ async function executeRequest(
       credentials: options.credentials ?? "same-origin",
       cache: "no-store",
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        options.body === undefined
+          ? undefined
+          : multipart
+            ? (options.body as FormData)
+            : JSON.stringify(options.body),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -169,28 +288,11 @@ async function executeRequest(
       if (options.deviceProof && error.status === 401) await clearDeviceSecret();
       throw error;
     }
-    return response;
+    if (!readBodyLater) release();
+    return { response, release, failure };
   } catch (error) {
-    if (error instanceof ApiError) throw error;
-    if (controller.signal.aborted) {
-      throw new ApiError({
-        status: 0,
-        code: options.signal?.aborted ? "aborted" : "timeout",
-        message: options.signal?.aborted
-          ? "The request was cancelled."
-          : "The connection took too long. Try again when signal improves.",
-        cause: error,
-      });
-    }
-    throw new ApiError({
-      status: 0,
-      code: "network_error",
-      message: "No connection to IronWrap OS. Your saved work stays on this device.",
-      cause: error,
-    });
-  } finally {
-    window.clearTimeout(timeout);
-    options.signal?.removeEventListener("abort", forwardAbort);
+    release();
+    throw failure(error);
   }
 }
 

@@ -4,8 +4,16 @@
   "specialist_routing": "production",
   "judge": {
     "instructions": "agent-host/evals/judge.md",
-    "default": { "provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
-    "for_claude_specialists": { "provider": "codex", "model": "gpt-6-astra", "effort": "high" },
+    "default": {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    "for_claude_proposers": {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
     "max_attempts": 3
   },
   "ledger": {
@@ -14,15 +22,34 @@
     "requires_run_tag": "eval",
     "per_stage": true,
     "window_hours": 24,
-    "team": { "calls": 3000, "cost_usd": 450 },
-    "specialist": { "calls": 300, "cost_usd": 120, "cost_usd_per_call": 3 },
+    "team": {
+      "calls": 3000,
+      "cost_usd": 450
+    },
+    "specialist": {
+      "calls": 300,
+      "cost_usd": 120,
+      "cost_usd_per_call": 3
+    },
     "judge_key": "eval_judge",
-    "judge": { "calls": 1500, "cost_usd": 120, "cost_usd_per_call": 1 }
+    "judge": {
+      "calls": 1500,
+      "cost_usd": 120,
+      "cost_usd_per_call": 1
+    }
   },
-  "concurrency": { "codex": 2, "claude": 1 },
+  "concurrency": {
+    "codex": 2,
+    "claude": 1
+  },
   "start_and_resume": "orchestrator_signal",
   "gateway_reasons": {
-    "pause": ["rate_limited", "provider_error", "call_ceiling", "cost_ceiling"],
+    "pause": [
+      "rate_limited",
+      "provider_error",
+      "call_ceiling",
+      "cost_ceiling"
+    ],
     "stop": [
       "kill_switch",
       "provider_disabled",
@@ -34,33 +61,89 @@
       "model_mismatch",
       "aborted"
     ],
-    "score": ["invalid_output"]
+    "score": [
+      "invalid_output"
+    ]
   },
   "estimate_usd_per_run": {
     "routine": 0.05,
     "hard": 0.32,
     "audit": 0.1,
     "judge_claude": 0.027,
-    "judge_codex": 0.13
+    "judge_codex": 0.035
   },
   "stages": [
     {
       "id": "pilot",
-      "cases": { "orchestrator": 8, "billing_reconciliation": 8, "independent_auditor": 4 },
+      "cases": {
+        "orchestrator": 8,
+        "independent_auditor": 4
+      },
       "repetitions": 1,
-      "gate": { "max_cost_ratio_to_estimate": 1.5, "max_claude_quota_drop_pct": 15 }
+      "model_comparison": {
+        "specialists": [
+          "billing_reconciliation",
+          "scheduler_dispatcher",
+          "purchasing_inventory",
+          "field_safety",
+          "compliance",
+          "market_analyst"
+        ],
+        "golden_cases": 10,
+        "redteam_cases": 4,
+        "routes": [
+          {
+            "provider": "codex",
+            "model": "gpt-6-astra",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          }
+        ]
+      },
+      "gate": {
+        "max_cost_ratio_to_estimate": 1.5,
+        "max_claude_quota_drop_pct": 15
+      }
     },
     {
       "id": "wave1",
-      "specialists": ["orchestrator", "lead_concierge", "estimator", "measurement_design", "billing_reconciliation", "independent_auditor"]
+      "specialists": [
+        "orchestrator",
+        "lead_concierge",
+        "estimator",
+        "measurement_design",
+        "billing_reconciliation",
+        "independent_auditor"
+      ]
     },
     {
       "id": "wave2",
-      "specialists": ["proposal_contract", "scheduler_dispatcher", "purchasing_inventory", "shop_planner", "field_safety", "quality_inspector"]
+      "specialists": [
+        "proposal_contract",
+        "scheduler_dispatcher",
+        "purchasing_inventory",
+        "shop_planner",
+        "field_safety",
+        "quality_inspector"
+      ]
     },
     {
       "id": "wave3",
-      "specialists": ["market_analyst", "marketing_reputation", "customer_care_warranty", "compliance"]
+      "specialists": [
+        "market_analyst",
+        "marketing_reputation",
+        "customer_care_warranty",
+        "compliance"
+      ]
     }
   ],
   "output_dir": "output/evals/qualification",

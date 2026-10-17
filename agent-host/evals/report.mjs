@@ -13,6 +13,8 @@ const MAX_LISTED = 10;
 const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
 const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const ratio = (part, whole) => (whole > 0 ? part / whole : null);
+const finite = (value) => (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) && Number.isFinite(Number(value));
+const GATE_USAGE = ["runs", "judge_calls", "cost_usd", "judge_cost_usd"];
 
 function completeness(entry) {
   const want = entry.rubric.repetitions;
@@ -55,7 +57,15 @@ function weakestCases(cases) {
     .slice(0, WEAKEST);
 }
 
-function row(entry, stage) {
+// A routed run is on the production route only when provider, model, and effort all equal the
+// gateway route of its tier; a run without a route is a production run.
+function onProductionRoute(entry, routes) {
+  if (!entry.route) return true;
+  const production = routes?.[entry.tier];
+  return Boolean(production) && ["provider", "model", "effort"].every((key) => entry.route[key] === production[key]);
+}
+
+function row(entry, stage, routes) {
   const usage = Object.fromEntries(USAGE_FIELDS.map((field) => [field, number(entry.usage?.[field])]));
   const { errors, missing } = completeness(entry);
   let verdict = "incomplete";
@@ -69,6 +79,8 @@ function row(entry, stage) {
     specialist_id: entry.specialist_id,
     wave: entry.wave,
     tier: entry.tier,
+    route: entry.route ?? null,
+    production_route: onProductionRoute(entry, routes),
     model: entry.model,
     judge_model: entry.judge_model,
     prompt_sha256: entry.prompt_sha256,
@@ -82,38 +94,138 @@ function row(entry, stage) {
     catastrophes_so_far: catastrophesSoFar(entry.cases),
     weakest_cases: weakestCases(entry.cases),
     usage: { ...usage, cache_hit_ratio: ratio(usage.cached_input_tokens, usage.input_tokens) },
+    usage_complete: GATE_USAGE.every((field) => finite(entry.usage?.[field])),
   };
 }
 
-// Pilot gate: measured gateway cost per run against the configured estimate, per tier and per judge
-// provider, and the Claude subscription quota the pilot consumed (percentage points of the window).
-function pilotGate(rows, config, quota) {
+// Pilot gate: measured gateway cost per run against the configured estimate, per production tier
+// and per judge provider, and the Claude subscription quota the pilot consumed (percentage points of
+// the window). Missing or non-finite usage and implausible quota readings never pass.
+const judgeGroup = (model) => (model?.startsWith("claude") ? "judge_claude" : model?.startsWith("gpt") ? "judge_codex" : "judge_unknown");
+
+// Meter readings are percent of the window used. A reading outside 0..100, a meter that went
+// backwards (a window reset), or no movement over many calls (a stale meter) is not usable.
+const STALE_AFTER_CALLS = 20;
+function quotaUsed(reading, calls = 0) {
+  const before = reading?.used_pct_before;
+  const after = reading?.used_pct_after;
+  if (!finite(before) || !finite(after)) return null;
+  const [from, to] = [Number(before), Number(after)];
+  if (from < 0 || to > 100 || to < from) return null;
+  if (to === from && calls >= STALE_AFTER_CALLS) return null;
+  return to - from;
+}
+
+function pilotGate(rows, config, quota, routes) {
   const estimates = config?.estimate_usd_per_run ?? {};
   const gate = config?.stages?.find((stage) => stage?.id === "pilot")?.gate ?? {};
   const groups = {};
-  const add = (key, cost, runs) => {
-    groups[key] ??= { cost_usd: 0, runs: 0 };
+  const add = (key, cost, runs, complete) => {
+    groups[key] ??= { cost_usd: 0, runs: 0, complete: true };
     groups[key].cost_usd += cost;
     groups[key].runs += runs;
+    groups[key].complete &&= complete;
   };
+  let claudeCalls = routes ? 0 : null;
   for (const entry of rows) {
-    add(entry.tier, entry.usage.cost_usd, entry.usage.runs);
-    add(entry.judge_model?.startsWith("claude") ? "judge_claude" : "judge_codex", entry.usage.judge_cost_usd, entry.usage.judge_calls);
+    if (entry.production_route) add(entry.tier, entry.usage.cost_usd, entry.usage.runs, entry.usage_complete);
+    add(judgeGroup(entry.judge_model), entry.usage.judge_cost_usd, entry.usage.judge_calls, entry.usage_complete);
+    if (claudeCalls === null) continue;
+    if ((entry.route?.provider ?? routes[entry.tier]?.provider) === "claude") claudeCalls += entry.usage.runs;
+    if (judgeGroup(entry.judge_model) === "judge_claude") claudeCalls += entry.usage.judge_calls;
   }
+  // Every estimated group must be measured: a tier the pilot never ran cannot pass.
+  for (const key of Object.keys(estimates)) groups[key] ??= { cost_usd: 0, runs: 0, complete: false };
   const measured = Object.entries(groups).map(([key, group]) => {
-    const perRun = ratio(group.cost_usd, group.runs);
+    const valid = group.complete && group.runs > 0 && group.cost_usd > 0;
+    const perRun = valid ? group.cost_usd / group.runs : null;
     const share = perRun === null || !(estimates[key] > 0) ? null : perRun / estimates[key];
     return { group: key, runs: group.runs, usd_per_run: perRun, estimate_usd_per_run: estimates[key] ?? null, ratio_to_estimate: share };
   });
-  const claudeUsed = quota?.claude ? number(quota.claude.used_pct_after) - number(quota.claude.used_pct_before) : null;
-  const costOk = measured.every((group) => group.ratio_to_estimate !== null && group.ratio_to_estimate <= gate.max_cost_ratio_to_estimate);
-  // An invisible quota leaves the decision to the cost gate and the orchestrator.
+  const claudeUsed = quotaUsed(quota?.claude, claudeCalls ?? 0);
+  const costOk = measured.length > 0 && measured.every((group) => group.ratio_to_estimate !== null && group.ratio_to_estimate <= gate.max_cost_ratio_to_estimate);
   const quotaOk = claudeUsed === null ? null : claudeUsed <= gate.max_claude_quota_drop_pct;
-  return { measured, claude_quota_used_pct: claudeUsed, cost_within_gate: costOk, claude_quota_within_gate: quotaOk, judge_family_review: quotaOk === false, passed: costOk && quotaOk !== false };
+  return {
+    measured,
+    claude_quota_used_pct: claudeUsed,
+    claude_calls: claudeCalls,
+    claude_points_per_call: claudeUsed === null || claudeCalls === null ? null : ratio(claudeUsed, claudeCalls),
+    cost_within_gate: costOk,
+    claude_quota_within_gate: quotaOk,
+    judge_family_review: quotaOk === false,
+    // null: the cost gate held but the quota was not visible, so the orchestrator decides.
+    passed: costOk ? quotaOk : false,
+  };
 }
 
-export function buildQualificationReport({ runId, stage, source, routes, judge, quota = null, config = null, specialists }) {
-  const rows = specialists.map((entry) => row(entry, stage));
+// Pilot model comparison: every run that names its route, per specialist. A route is complete only
+// when it scored exactly the comparison's case ids (the first golden_cases golden and redteam_cases
+// red-team ids) at repetition 1; complete routes rank first, then by catastrophes, mean score, and
+// cost per run. Quota per route is read around each model batch and shared out by gateway cost
+// within the batch, so it is approximate.
+function comparison(pairs, batches, config) {
+  const routed = pairs.filter(({ row: line }) => line.route);
+  if (routed.length === 0) return null;
+  const spec = config?.stages?.find((stage) => stage?.id === "pilot")?.model_comparison ?? {};
+  const batchCost = new Map();
+  for (const { row: line } of routed) {
+    batchCost.set(line.route.model, (batchCost.get(line.route.model) ?? 0) + line.usage.cost_usd + line.usage.judge_cost_usd);
+  }
+  const bySpecialist = new Map();
+  for (const { row: line, entry } of routed) {
+    const want = [
+      ...entry.expectedIds.golden.slice(0, Number.isInteger(spec.golden_cases) ? spec.golden_cases : undefined),
+      ...entry.expectedIds.redteam.slice(0, Number.isInteger(spec.redteam_cases) ? spec.redteam_cases : undefined),
+    ];
+    const scored = new Map();
+    for (const result of entry.cases) {
+      const repetitions = result.repetitions ?? [];
+      if (repetitions.length === 1 && repetitions[0]?.repetition === 1 && finite(repetitions[0]?.score)) scored.set(result.case_id, Number(repetitions[0].score));
+    }
+    const inSet = want.filter((id) => scored.has(id));
+    const complete = inSet.length === want.length && entry.cases.length === want.length;
+    const suiteMean = (suite) => {
+      const values = inSet.filter((id) => entry.expectedIds[suite].includes(id)).map((id) => scored.get(id));
+      return values.length ? mean(values) : null;
+    };
+    const batch = (batches ?? []).find((candidate) => candidate?.model === line.route.model);
+    const share = ratio(line.usage.cost_usd + line.usage.judge_cost_usd, batchCost.get(line.route.model));
+    const quotaShare = (provider) => {
+      const used = quotaUsed(batch?.[provider]);
+      return used === null || share === null ? null : used * share;
+    };
+    const result = {
+      specialist_id: line.specialist_id,
+      provider: line.route.provider,
+      model: line.route.model,
+      effort: line.route.effort ?? null,
+      production_route: line.production_route,
+      judge_model: line.judge_model,
+      complete,
+      cases_scored: inSet.length,
+      cases_expected: want.length,
+      runs: line.usage.runs,
+      mean_score: inSet.length ? mean(inSet.map((id) => scored.get(id))) : null,
+      golden_mean: suiteMean("golden"),
+      redteam_mean: suiteMean("redteam"),
+      catastrophes: line.catastrophes_so_far.length,
+      usd_per_run: line.usage_complete ? ratio(line.usage.cost_usd, line.usage.runs) : null,
+      latency_ms_per_run: ratio(line.usage.wall_time_ms, line.usage.runs),
+      tokens_per_run: ratio(line.usage.input_tokens + line.usage.output_tokens, line.usage.runs),
+      quota_pct: { claude: quotaShare("claude"), codex: quotaShare("codex") },
+    };
+    bySpecialist.set(line.specialist_id, [...(bySpecialist.get(line.specialist_id) ?? []), result]);
+  }
+  const order = (a, b) =>
+    Number(b.complete) - Number(a.complete) ||
+    a.catastrophes - b.catastrophes ||
+    (b.mean_score ?? -1) - (a.mean_score ?? -1) ||
+    (a.usd_per_run ?? Infinity) - (b.usd_per_run ?? Infinity);
+  return [...bySpecialist].map(([specialist, lines]) => ({ specialist_id: specialist, routes: lines.sort(order).map((line, index) => ({ rank: index + 1, ...line })) }));
+}
+
+export function buildQualificationReport({ runId, stage, source, routes, judge, quota = null, batches = null, config = null, specialists }) {
+  const rows = specialists.map((entry) => row(entry, stage, routes));
   const totals = Object.fromEntries(USAGE_FIELDS.map((field) => [field, rows.reduce((sum, entry) => sum + entry.usage[field], 0)]));
   totals.cache_hit_ratio = ratio(totals.cached_input_tokens, totals.input_tokens);
   for (const verdict of ["qualified", "not_qualified", "incomplete"]) totals[verdict] = rows.filter((entry) => entry.verdict === verdict).length;
@@ -125,8 +237,10 @@ export function buildQualificationReport({ runId, stage, source, routes, judge, 
     routes,
     judge,
     quota,
-    gate: stage === "pilot" ? pilotGate(rows, config, quota) : null,
+    gate: stage === "pilot" ? pilotGate(rows, config, quota, routes) : null,
+    comparison: stage === "pilot" ? comparison(rows.map((line, index) => ({ row: line, entry: specialists[index] })), batches, config) : null,
     specialists: rows,
+    batches,
     totals,
   };
 }
@@ -140,16 +254,42 @@ export function renderMarkdown(report) {
     `# Specialist qualification: ${report.stage}`,
     "",
     `Run \`${report.run_id}\` on main \`${report.source?.main_sha ?? "-"}\`, catalog \`${report.source?.catalog_sha256 ?? "-"}\`.`,
-    `Qualified ${totals.qualified}, not qualified ${totals.not_qualified}, incomplete ${totals.incomplete}.`,
+    report.stage === "pilot"
+      ? `Pilot over ${report.specialists.length} specialist route(s); verdicts come from the waves.`
+      : `Qualified ${totals.qualified}, not qualified ${totals.not_qualified}, incomplete ${totals.incomplete}.`,
     `Runs ${totals.runs}, judge calls ${totals.judge_calls}, wall time ${fixed(totals.wall_time_ms / 60000, 1)} min, cache hits ${fixed(totals.cache_hit_ratio, 2)}, cost $${fixed(totals.cost_usd + totals.judge_cost_usd, 2)} (gateway accounting).`,
   ];
   if (report.gate) {
-    lines.push("", `## Pilot gate: ${report.gate.passed ? "passed" : "not passed"}`, "", "| Group | Runs | $/run | Estimate | Ratio |", "|---|---:|---:|---:|---:|");
+    const state = report.gate.passed === null ? "cost held, quota not visible" : report.gate.passed ? "passed" : "not passed";
+    lines.push("", `## Pilot gate: ${state}`, "", "| Group | Runs | $/run | Estimate | Ratio |", "|---|---:|---:|---:|---:|");
     for (const group of report.gate.measured) {
       lines.push(`| ${group.group} | ${group.runs} | ${fixed(group.usd_per_run, 4)} | ${fixed(group.estimate_usd_per_run, 4)} | ${fixed(group.ratio_to_estimate, 2)} |`);
     }
     const used = report.gate.claude_quota_used_pct;
-    lines.push("", `Claude quota used: ${used === null ? "not visible" : `${fixed(used, 1)} points`}.${report.gate.judge_family_review ? " Review the judge family before Wave 1." : ""}`);
+    lines.push(
+      "",
+      `Claude quota used: ${used === null ? "not visible" : `${fixed(used, 1)} points over ${report.gate.claude_calls} Claude calls (${fixed(report.gate.claude_points_per_call, 4)} per call)`}.` +
+        `${report.gate.cost_within_gate ? "" : " Cost is above the gate: re-estimate and re-size the ledger ceilings before Wave 1."}` +
+        `${report.gate.judge_family_review ? " Review the judge family before Wave 1." : ""}`,
+    );
+  }
+  if (report.comparison) {
+    lines.push(
+      "",
+      "## Model comparison",
+      "",
+      "| Specialist | Rank | Model | Effort | Judge | Cases | Golden mean | Red-team mean | Catastrophes | $/run | Latency s/run | Claude pts | Codex pts |",
+      "|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    );
+    for (const group of report.comparison) {
+      for (const line of group.routes) {
+        lines.push(
+          `| ${group.specialist_id} | ${line.rank} | ${line.model} | ${line.effort ?? "-"} | ${line.judge_model} | ${line.cases_scored}/${line.cases_expected}${line.complete ? "" : line.cases_scored === line.cases_expected ? " incomplete, extra cases" : " incomplete"} | ` +
+            `${fixed(line.golden_mean)} | ${fixed(line.redteam_mean)} | ${line.catastrophes} | ${fixed(line.usd_per_run, 4)} | ` +
+            `${fixed(line.latency_ms_per_run === null ? null : line.latency_ms_per_run / 1000, 1)} | ${fixed(line.quota_pct.claude, 2)} | ${fixed(line.quota_pct.codex, 2)} |`,
+        );
+      }
+    }
   }
   lines.push(
     "",

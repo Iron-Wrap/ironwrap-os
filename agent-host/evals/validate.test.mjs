@@ -426,14 +426,21 @@ function withQualification(root, overrides = {}, { gateway = true } = {}) {
   if (gateway) {
     writeFileSync(
       join(root, "agent-host/config/gateway.json"),
-      JSON.stringify({ providers: { claude: {}, codex: {} }, routes: { routine: { provider: "codex" }, audit: { provider: "claude" } } }),
+      JSON.stringify({
+        providers: { claude: {}, codex: {} },
+        routes: { routine: { provider: "codex", model: "gpt-x", effort: "medium" }, audit: { provider: "claude" } },
+        pricing_usd_per_mtok: { a: {}, "gpt-x": {} },
+      }),
     );
   }
   const config = {
     schema_version: "ironwrap.eval-qualification.v1",
     repetitions: 3,
-    judge: { default: { provider: "claude", model: "j" }, for_claude_specialists: { provider: "codex", model: "k" } },
-    ledger: { isolated: true, namespace: "eval", requires_run_tag: "eval" },
+    judge: { default: { provider: "claude", model: "j" }, for_claude_proposers: { provider: "codex", model: "k" } },
+    ledger: { isolated: true, namespace: "eval", requires_run_tag: "eval", per_stage: true },
+    concurrency: { codex: 2, claude: 1 },
+    start_and_resume: "orchestrator_signal",
+    estimate_usd_per_run: { routine: 0.05, judge_claude: 0.027, judge_codex: 0.035 },
     gateway_reasons: { pause: ["rate_limited"], stop: ["auth_failed"], score: ["invalid_output"] },
     stages: [
       { id: "pilot", cases: { [ID]: 2 }, repetitions: 1, gate: { max_cost_ratio_to_estimate: 1.5, max_claude_quota_drop_pct: 15 } },
@@ -466,6 +473,7 @@ test("qualification config: every AbstainReason classified once, invalid_output 
     [
       `${ID} rubric repetitions 3 differ from 4`,
       "ledger must be isolated, in the eval namespace, and require the eval run tag",
+      "ledger.per_stage must be true so a window never mixes stages",
       "gateway_reasons.retry is not one of pause, stop, score",
       "gateway reason rate_limited is in both retry and pause",
       "gateway_reasons.score must be a list",
@@ -481,7 +489,7 @@ test("qualification config: pilot first, waves in order with exactly their playb
   assert.deepEqual(
     qualificationFailures(
       withQualification(fixture(), {
-        judge: { default: { provider: "codex", model: "j" }, for_claude_specialists: { provider: "gemini", model: "k" } },
+        judge: { default: { provider: "codex", model: "j" }, for_claude_proposers: { provider: "gemini", model: "k" } },
         stages: [null, { id: "wave01", specialists: [ID] }, { id: "wave2", specialists: ["nobody"] }],
       }),
     ),
@@ -491,11 +499,78 @@ test("qualification config: pilot first, waves in order with exactly their playb
       "wave2 names unknown specialist nobody",
       "wave2 must list exactly the Wave 2 playbooks: none",
       `${ID} is in no wave stage`,
-      "judge.for_claude_specialists needs a gateway provider (claude, codex) and a model",
+      "judge.for_claude_proposers needs a gateway provider (claude, codex) and a model",
       `${ID} runs on codex; its judge must run on another provider`,
+      "the pilot does not cover the routine route",
     ],
   );
   const missingGateway = qualificationFailures(withQualification(fixture(), {}, { gateway: false }));
   assert.equal(missingGateway.length, 1);
   assert.match(missingGateway[0], /ENOENT/);
+});
+
+test("qualification config: orchestrator conditions are pinned and the model comparison is checked", () => {
+  const pilot = (extra) => ({ id: "pilot", cases: { [ID]: 2 }, repetitions: 1, gate: { max_cost_ratio_to_estimate: 1.5, max_claude_quota_drop_pct: 15 }, ...extra });
+  assert.deepEqual(
+    qualificationFailures(
+      withQualification(fixture(), {
+        repetitions: "3",
+        ledger: { isolated: true, namespace: "eval", requires_run_tag: "eval", per_stage: false },
+        concurrency: { codex: 2, claude: 8 },
+        start_and_resume: "whenever",
+        stages: [
+          pilot({
+            cases: { [ID]: 99999 },
+            model_comparison: {
+              specialists: [ID, ID],
+              golden_cases: 21,
+              redteam_cases: 4,
+              routes: [{ provider: "codex", model: "a", effort: "high" }, { provider: "claude", model: "b", effort: "turbo" }],
+            },
+          }),
+          { id: "wave1", specialists: [ID] },
+        ],
+      }),
+    ),
+    [
+      "repetitions must be an integer of at least 3",
+      "ledger.per_stage must be true so a window never mixes stages",
+      "concurrency.claude must be 1: the Claude quota is shared with build sessions",
+      "start_and_resume must be orchestrator_signal",
+      `pilot case count for ${ID} must be 1 to 20`,
+      "pilot.model_comparison.specialists must be a non-empty list without repeats",
+      "pilot.model_comparison.golden_cases must be 1 to 20",
+      "pilot.model_comparison.routes[1] needs a gateway provider, a model, and an effort (low, medium, high, xhigh, max)",
+    ],
+  );
+  const comparisonOnly = qualificationFailures(
+    withQualification(fixture(), {
+      judge: { default: { provider: "claude", model: "j" }, for_claude_proposers: { provider: "claude", model: "k" } },
+      stages: [
+        pilot({
+          cases: {},
+          model_comparison: {
+            specialists: [ID],
+            golden_cases: 10,
+            redteam_cases: 4,
+            routes: [
+              { provider: "codex", model: "gpt-x", effort: "high" },
+              { provider: "claude", model: "opus", effort: "high" },
+              { provider: "codex", model: "unpriced", effort: "medium" },
+            ],
+          },
+        }),
+        { id: "wave1", specialists: [ID] },
+      ],
+      estimate_usd_per_run: { routine: 0.05, judge_claude: 0 },
+    }),
+  );
+  assert.deepEqual(comparisonOnly, [
+    "pilot.cases must name at least one specialist and its case count",
+    "pilot.model_comparison.routes[1] runs on claude; its judge must run on another provider",
+    "pilot.model_comparison.routes[2]: unpriced has no pricing_usd_per_mtok entry in gateway.json",
+    "estimate_usd_per_run.judge_claude must be a positive number",
+    "estimate_usd_per_run.judge_codex must be a positive number",
+    "the pilot does not cover the routine route",
+  ]);
 });

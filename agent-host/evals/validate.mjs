@@ -528,10 +528,13 @@ function checkRubric(dir, id, fail) {
   }
 }
 
-// qualification.v1.json: the pilot, then wave1..waveN in order, each listing exactly the playbooks
-// of its wave; repetitions equal to every rubric's; an isolated eval ledger; a judge on a provider
-// other than the specialist's route; and every gateway AbstainReason classified exactly once.
+// qualification.v1.json: the pilot (covering every production tier, and an optional model
+// comparison), then wave1..waveN in order, each listing exactly the playbooks of its wave;
+// repetitions equal to every rubric's; an isolated, per-stage eval ledger; one Claude call at a time,
+// started and resumed by the orchestrator; a judge from another family than every route it scores;
+// and every gateway AbstainReason classified exactly once.
 const REASON_KINDS = ["pause", "stop", "score"];
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 function abstainReasons(root) {
@@ -557,18 +560,31 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
     if (!existsSync(playbookPath)) continue;
     const text = readFileSync(playbookPath, "utf8");
     const rubric = readJson(join(root, "agent-host/evals", id, "rubric.v1.json"), () => {});
-    meta.set(id, { wave: /^Wave: (\d+)$/m.exec(text)?.[1], tier: /^Runtime tier: (\w+)$/m.exec(text)?.[1], repetitions: rubric?.repetitions });
+    const count = (suite) => readJson(join(root, "agent-host/evals", id, `${suite}.v1.json`), () => {})?.cases?.length ?? 0;
+    meta.set(id, {
+      wave: /^Wave: (\d+)$/m.exec(text)?.[1],
+      tier: /^Runtime tier: (\w+)$/m.exec(text)?.[1],
+      repetitions: rubric?.repetitions,
+      golden: count("golden"),
+      redteam: count("redteam"),
+    });
   }
   const repetitions = config.repetitions;
   if (!Number.isInteger(repetitions) || repetitions < 3) bad("repetitions must be an integer of at least 3");
-  for (const [id, entry] of meta) {
-    if (entry.repetitions !== repetitions) bad(`${id} rubric repetitions ${entry.repetitions} differ from ${repetitions}`);
+  else {
+    for (const [id, entry] of meta) {
+      if (entry.repetitions !== repetitions) bad(`${id} rubric repetitions ${entry.repetitions} differ from ${repetitions}`);
+    }
   }
 
   const ledger = isObject(config.ledger) ? config.ledger : {};
   if (ledger.isolated !== true || ledger.namespace !== "eval" || ledger.requires_run_tag !== "eval") {
     bad("ledger must be isolated, in the eval namespace, and require the eval run tag");
   }
+  if (ledger.per_stage !== true) bad("ledger.per_stage must be true so a window never mixes stages");
+  if (config.concurrency?.claude !== 1) bad("concurrency.claude must be 1: the Claude quota is shared with build sessions");
+  if (!(Number.isInteger(config.concurrency?.codex) && config.concurrency.codex >= 1)) bad("concurrency.codex must be a positive integer");
+  if (config.start_and_resume !== "orchestrator_signal") bad("start_and_resume must be orchestrator_signal");
 
   const kinds = config.gateway_reasons;
   const seen = new Map();
@@ -603,12 +619,27 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
     if (cases.length === 0) bad("pilot.cases must name at least one specialist and its case count");
     for (const [id, count] of cases) {
       if (!meta.has(id)) bad(`pilot names unknown specialist ${id}`);
-      if (!Number.isInteger(count) || count < 1) bad(`pilot case count for ${id} must be a positive integer`);
+      else if (!Number.isInteger(count) || count < 1 || count > meta.get(id).golden) bad(`pilot case count for ${id} must be 1 to ${meta.get(id).golden}`);
     }
     if (!Number.isInteger(pilot.repetitions) || pilot.repetitions < 1 || pilot.repetitions > repetitions) bad(`pilot repetitions must be 1 to ${repetitions}`);
     const gate = isObject(pilot.gate) ? pilot.gate : {};
     if (!(gate.max_cost_ratio_to_estimate >= 1)) bad("pilot.gate.max_cost_ratio_to_estimate must be at least 1");
     if (!(gate.max_claude_quota_drop_pct > 0 && gate.max_claude_quota_drop_pct <= 100)) bad("pilot.gate.max_claude_quota_drop_pct must be above 0 and at most 100");
+  }
+  const comparison = isObject(pilot) && pilot.model_comparison !== undefined ? pilot.model_comparison : null;
+  if (comparison !== null && !isObject(comparison)) bad("pilot.model_comparison must be an object");
+  const compared = isObject(comparison) && Array.isArray(comparison.specialists) ? comparison.specialists : [];
+  const compareRoutes = isObject(comparison) && Array.isArray(comparison.routes) ? comparison.routes : [];
+  if (isObject(comparison)) {
+    if (compared.length === 0 || new Set(compared).size !== compared.length) bad("pilot.model_comparison.specialists must be a non-empty list without repeats");
+    const known = compared.filter((id) => meta.has(id));
+    for (const id of compared) if (!meta.has(id)) bad(`pilot.model_comparison names unknown specialist ${id}`);
+    for (const suite of ["golden", "redteam"]) {
+      const value = comparison[`${suite}_cases`];
+      const most = Math.min(...known.map((id) => meta.get(id)[suite]));
+      if (!Number.isInteger(value) || value < (suite === "golden" ? 1 : 0) || value > most) bad(`pilot.model_comparison.${suite}_cases must be ${suite === "golden" ? 1 : 0} to ${most}`);
+    }
+    if (compareRoutes.length < 2) bad("pilot.model_comparison.routes must list at least two routes");
   }
   const staged = new Set();
   waves.forEach((stage, index) => {
@@ -631,20 +662,46 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
   if (!isObject(gateway)) return;
   const providers = Object.keys(isObject(gateway.providers) ? gateway.providers : {});
   const judges = isObject(config.judge) ? config.judge : {};
-  for (const key of ["default", "for_claude_specialists"]) {
+  for (const key of ["default", "for_claude_proposers"]) {
     const judge = judges[key];
     if (!isObject(judge) || !providers.includes(judge.provider) || typeof judge.model !== "string") {
       bad(`judge.${key} needs a gateway provider (${providers.join(", ")}) and a model`);
     }
   }
+  const judgeFor = (provider) => (provider === "claude" ? judges.for_claude_proposers : judges.default);
   for (const [id, entry] of meta) {
     const provider = gateway.routes?.[entry.tier]?.provider;
     if (!provider) {
       bad(`no gateway route for ${id} (tier ${entry.tier})`);
       continue;
     }
-    const judge = provider === "claude" ? judges.for_claude_specialists : judges.default;
-    if (judge?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
+    if (judgeFor(provider)?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
+  }
+  const prices = isObject(gateway.pricing_usd_per_mtok) ? gateway.pricing_usd_per_mtok : {};
+  compareRoutes.forEach((route, index) => {
+    if (!isObject(route) || !providers.includes(route.provider) || typeof route.model !== "string" || !EFFORTS.includes(route.effort)) {
+      bad(`pilot.model_comparison.routes[${index}] needs a gateway provider, a model, and an effort (${EFFORTS.join(", ")})`);
+      return;
+    }
+    if (judgeFor(route.provider)?.provider === route.provider) bad(`pilot.model_comparison.routes[${index}] runs on ${route.provider}; its judge must run on another provider`);
+    // The Codex adapter refuses a model without a price entry.
+    if (route.provider === "codex" && !isObject(prices[route.model])) bad(`pilot.model_comparison.routes[${index}]: ${route.model} has no pricing_usd_per_mtok entry in gateway.json`);
+  });
+  const tiers = new Set([...meta.values()].map((entry) => entry.tier));
+  const estimates = isObject(config.estimate_usd_per_run) ? config.estimate_usd_per_run : {};
+  for (const key of [...tiers, "judge_claude", "judge_codex"]) {
+    if (!(typeof estimates[key] === "number" && estimates[key] > 0)) bad(`estimate_usd_per_run.${key} must be a positive number`);
+  }
+  // The pilot's cost gate needs every production tier: through its cases, or through a comparison
+  // route equal to that tier's gateway route.
+  const covered = new Set(Object.keys(isObject(pilot) && isObject(pilot.cases) ? pilot.cases : {}).filter((id) => meta.has(id)).map((id) => meta.get(id).tier));
+  for (const id of compared.filter((candidate) => meta.has(candidate))) {
+    const route = gateway.routes?.[meta.get(id).tier];
+    const same = (candidate) => ["provider", "model", "effort"].every((key) => candidate?.[key] === route?.[key]);
+    if (compareRoutes.some(same)) covered.add(meta.get(id).tier);
+  }
+  for (const tier of tiers) {
+    if (!covered.has(tier)) bad(`the pilot does not cover the ${tier} route`);
   }
 }
 

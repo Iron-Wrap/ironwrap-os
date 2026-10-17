@@ -119,3 +119,96 @@ test("pilot gate compares measured cost per run with the estimate and checks the
   assert.deepEqual([quotaHeavy.gate.passed, quotaHeavy.gate.judge_family_review], [false, true]);
   assert.match(renderMarkdown(quotaHeavy), /Review the judge family before Wave 1\./);
 });
+
+test("pilot gate fails on absent usage, an empty pilot, or an implausible quota reading", () => {
+  const config = {
+    estimate_usd_per_run: { routine: 0.05, judge_claude: 0.027 },
+    stages: [{ id: "pilot", gate: { max_cost_ratio_to_estimate: 1.5, max_claude_quota_drop_pct: 15 } }],
+  };
+  const build = (usage, quota) => {
+    const entry = suite("orchestrator");
+    entry.usage = usage;
+    return buildQualificationReport({ runId: "p1", stage: "pilot", config, quota, specialists: [entry] }).gate;
+  };
+  const good = { runs: 8, judge_calls: 8, cost_usd: 0.48, judge_cost_usd: 0.2 };
+  for (const cost of [undefined, Number.NaN, "n/a", null]) assert.equal(build({ ...good, cost_usd: cost }, null).passed, false);
+  assert.equal(buildQualificationReport({ runId: "p1", stage: "pilot", config, specialists: [] }).gate.passed, false);
+  for (const claude of [{}, { used_pct_before: 20, used_pct_after: null }, { used_pct_before: 90, used_pct_after: 5 }]) {
+    const gate = build(good, { claude });
+    assert.deepEqual([gate.claude_quota_used_pct, gate.passed], [null, null]);
+  }
+  const unknownJudge = suite("orchestrator");
+  unknownJudge.judge_model = undefined;
+  unknownJudge.usage = good;
+  assert.equal(buildQualificationReport({ runId: "p1", stage: "pilot", config, specialists: [unknownJudge] }).gate.passed, false);
+});
+
+test("model comparison ranks complete routes first, then by catastrophes, score, and cost", () => {
+  const config = { stages: [{ id: "pilot", model_comparison: { golden_cases: 10, redteam_cases: 4 } }] };
+  const routes = { hard: { provider: "codex", model: "gpt-6-astra", effort: "high" } };
+  const routed = (model, provider, { score = 1, cost = 1, catastrophe = false, scoredCases = 14, effort = "high" } = {}) => {
+    const entry = suite("billing_reconciliation", { reps: 1 });
+    entry.tier = "hard";
+    entry.route = { provider, model, effort };
+    entry.judge_model = provider === "claude" ? "gpt-6.1-sol" : "claude-sonnet-5-5";
+    const want = [...entry.expectedIds.golden.slice(0, 10), ...entry.expectedIds.redteam.slice(0, 4)];
+    entry.cases = entry.cases.filter((result) => want.slice(0, scoredCases).includes(result.case_id));
+    for (const result of entry.cases) result.repetitions[0].score = score;
+    if (catastrophe) entry.cases[0].repetitions[0].catastrophes = [{ id: "changes_payee_details" }];
+    entry.usage = { runs: 14, judge_calls: 14, cost_usd: cost, judge_cost_usd: 0, wall_time_ms: 14 * 20000, input_tokens: 3000, output_tokens: 600 };
+    return entry;
+  };
+  const report = buildQualificationReport({
+    runId: "p1",
+    stage: "pilot",
+    config,
+    routes,
+    batches: [{ model: "gpt-6-astra", codex: { used_pct_before: 10, used_pct_after: 14 } }],
+    specialists: [
+      routed("gpt-6-astra", "codex", { score: 0.95, cost: 9 }),
+      routed("claude-opus-5-5", "claude", { score: 0.97, cost: 3, catastrophe: true }),
+      routed("gpt-6.1-sol", "codex", { score: 0.95, cost: 2 }),
+      routed("gpt-6.1-sol", "codex", { score: 1, cost: 1, scoredCases: 3, effort: "low" }),
+    ],
+  });
+  const [group] = report.comparison;
+  assert.deepEqual(
+    group.routes.map((line) => [line.rank, line.model, line.effort, line.complete, line.cases_scored, line.catastrophes, line.production_route]),
+    [
+      [1, "gpt-6.1-sol", "high", true, 14, 0, false],
+      [2, "gpt-6-astra", "high", true, 14, 0, true],
+      [3, "claude-opus-5-5", "high", true, 14, 1, false],
+      [4, "gpt-6.1-sol", "low", false, 3, 0, false],
+    ],
+  );
+  assert.deepEqual([group.routes[0].golden_mean, group.routes[0].redteam_mean], [0.95, 0.95]);
+  assert.deepEqual(group.routes[1].quota_pct, { claude: null, codex: 4 });
+  assert.equal(group.routes[0].latency_ms_per_run, 20000);
+  const markdown = renderMarkdown(report);
+  assert.match(markdown, /\| billing_reconciliation \| 1 \| gpt-6\.1-sol \| high \| claude-sonnet-5-5 \| 14\/14 \| 0\.950 \| 0\.950 \| 0 \| 0\.1429 \| 20\.0 \| - \| - \|/);
+  assert.match(markdown, /\| 4 \| gpt-6\.1-sol \| low \| claude-sonnet-5-5 \| 3\/14 incomplete \|/);
+  assert.match(markdown, /Pilot over 4 specialist route\(s\)/);
+});
+
+test("pilot gate needs every estimated group measured and a plausible, moving quota meter", () => {
+  const config = {
+    estimate_usd_per_run: { routine: 0.05, hard: 0.32, judge_claude: 0.027 },
+    stages: [{ id: "pilot", gate: { max_cost_ratio_to_estimate: 1.5, max_claude_quota_drop_pct: 15 } }],
+  };
+  const entry = suite("orchestrator");
+  entry.usage = { runs: 8, judge_calls: 8, cost_usd: 0.48, judge_cost_usd: 0.2 };
+  const gate = buildQualificationReport({ runId: "p1", stage: "pilot", config, specialists: [entry] }).gate;
+  assert.equal(gate.passed, false);
+  assert.deepEqual(gate.measured.find((group) => group.group === "hard"), { group: "hard", runs: 0, usd_per_run: null, estimate_usd_per_run: 0.32, ratio_to_estimate: null });
+  const routes = { routine: { provider: "codex", model: "sol", effort: "medium" } };
+  const cheap = { ...config, estimate_usd_per_run: { routine: 0.05, judge_claude: 0.027 } };
+  const quota = (claude) => buildQualificationReport({ runId: "p1", stage: "pilot", config: cheap, routes, quota: { claude }, specialists: [entry] }).gate;
+  for (const claude of [{ used_pct_before: 5, used_pct_after: 999 }, { used_pct_before: -10, used_pct_after: -5 }, { used_pct_before: [], used_pct_after: " " }]) {
+    assert.equal(quota(claude).claude_quota_used_pct, null);
+  }
+  const busy = suite("orchestrator");
+  busy.usage = { runs: 8, judge_calls: 30, cost_usd: 0.48, judge_cost_usd: 0.75 };
+  const stale = buildQualificationReport({ runId: "p1", stage: "pilot", config: cheap, routes, quota: { claude: { used_pct_before: 38, used_pct_after: 38 } }, specialists: [busy] }).gate;
+  assert.deepEqual([stale.claude_calls, stale.claude_quota_used_pct, stale.passed], [30, null, null]);
+  assert.equal(buildQualificationReport({ runId: "p1", stage: "pilot", config: cheap, quota: { claude: { used_pct_before: 1, used_pct_after: 2 } }, specialists: [entry] }).gate.claude_points_per_call, null);
+});

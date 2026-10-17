@@ -284,12 +284,14 @@ and the runner implements them.
 
 - **Routing.** Every specialist runs on its production gateway route: the playbook's runtime tier in
   `agent-host/config/gateway.json`. The judge runs on `judge.default`, or on
-  `judge.for_claude_specialists` when the specialist itself runs on Claude, so a judge never shares
-  a provider with the run it scores. Gateway routes are bound to the specialist tiers, so the runner
-  calls the judge through the provider adapters directly and books it on the same ledger instance.
+  `judge.for_claude_proposers` when the run it scores was proposed on Claude, so a judge is always
+  from another model family than the run it scores; the rule is per run. Gateway routes are bound to
+  the specialist tiers, so the runner calls the judge through the provider adapters directly, books
+  it on the same ledger instance, and repeats the gateway's served-model (`modelsUsed`) check.
 - **Ledger.** Qualification books on its own ledger: the `eval` key namespace, refused unless the run
   carries the `eval` tag, never readable by production policy, and one ledger file per stage
-  (`per_stage`) so a window never mixes stages. Judge calls book under `judge_key` and count toward
+  (`per_stage`) so a window never mixes stages. The namespace and the run tag are gateway
+  requirements the runtime does not implement yet. Judge calls book under `judge_key` and count toward
   the stage's team ceiling. Production ceilings are untouched. The ledger isolates accounting only:
   the runs still draw on the same Claude and Codex subscription quota as every other session.
 - **Pacing.** `concurrency` caps parallel calls per provider. A stage starts, and a paused stage
@@ -301,25 +303,52 @@ and the runner implements them.
   - `stop`: credentials, kill switch, configuration, an unusable ledger, a served model other than
     the configured one, or the runner's own abort. The run stops.
   - `score`: only `invalid_output`, which becomes a failed repetition.
+  The gateway reports a ledger refusal and a single run over its per-call cost cap with the same
+  `cost_ceiling`, so both pause: a suite that keeps overrunning reads `incomplete`, never
+  `qualified`, and each resume spends up to the cap on it again until the two are told apart.
   The same classes apply to judge calls. A judge answer that stays invalid after `judge.max_attempts`
   scores its repetition 0 under `mergeJudgement`.
 - **Hashes.** A repetition counts only when its `prompt_sha256` and `catalog_sha256` equal the
   stage's; a resumed stage re-runs any repetition recorded under other hashes.
 - **Stages.** The `pilot` runs the first `cases` golden case ids of each named specialist, in file
-  order, `repetitions` times, together with their judges, covering the routine, hard, and audit
-  routes. Its gate compares the measured gateway cost per run, per tier and per judge provider,
-  with `estimate_usd_per_run` (at most `max_cost_ratio_to_estimate`), and the Claude quota the pilot
-  used with `max_claude_quota_drop_pct`. Above the quota limit the judge family is reviewed before
-  Wave 1. Pilot repetitions count as repetition 1 under the hash rule. Then `wave1`, `wave2`, and
-  `wave3` run every case of their specialists `repetitions` times; `repetitions` equals every
-  rubric's.
+  order, `repetitions` times, together with their judges.
+  - `model_comparison` runs each listed specialist's first `golden_cases` golden and first
+    `redteam_cases` red-team case ids on every route in `routes`, one model batch at a time, with
+    the Claude and Codex usage meters read before and after each batch. A comparison run uses a
+    run configuration whose route for that tier is the compared model and which carries no audit
+    route. `parseGatewayConfig` rejects such a configuration (it requires an audit route on another
+    provider than the hard route), so the runner builds it in code: an open gateway requirement.
+  - A route is complete only when it scored exactly those case ids at repetition 1. The report
+    ranks each specialist's complete routes first, then by catastrophes, mean score, and cost per
+    run, and shows the golden and red-team means apart; the orchestrator picks the production route
+    from it. Judges differ by family per run (Sonnet scores GPT runs, GPT-6.1 Sol scores Claude
+    runs), so a score gap between families also carries a judge difference.
+  - Between its cases and the comparison routes equal to production routes, the pilot covers every
+    production tier. Its gate compares the measured gateway cost per run, per production tier and
+    per judge provider, with `estimate_usd_per_run` (at most `max_cost_ratio_to_estimate`), and the
+    Claude quota the pilot used with `max_claude_quota_drop_pct`. A group in `estimate_usd_per_run`
+    that the pilot did not measure, or measured without complete usage, never passes. Above
+    the cost limit the plan is re-estimated and the ledger ceilings re-sized before Wave 1; above
+    the quota limit the judge family is reviewed. The quota limit applies to the pilot; the report
+    gives the points per Claude call to project each wave.
+  - Pilot repetitions on production routes count as repetition 1 under the hash rule. Then
+    `wave1`, `wave2`, and `wave3` run every case of their specialists `repetitions` times;
+    `repetitions` equals every rubric's.
 
 The validator checks the stage order, that each wave stage lists exactly the playbooks with that
 `Wave:`, that every `AbstainReason` in `agent-host/src/gateway/types.ts` is classified exactly once
-with `invalid_output` scored, the eval ledger flags, and the judge providers against the gateway.
+with `invalid_output` scored, the eval ledger flags, Claude concurrency 1, the orchestrator's start
+signal, pilot case counts and tier coverage, the comparison routes, and that every judge is from
+another family than the routes it scores.
 
 The runner keeps transcripts, judge outputs, and reports under `output_dir`, which Git ignores.
-`report.mjs` turns each specialist's scored repetitions and usage into the report. A suite is
+`report.mjs` turns each specialist's scored repetitions and usage into the report. The runner
+passes, per specialist run, `specialist_id`, `wave`, `tier`, `model`, `judge_model`,
+`prompt_sha256`, the parsed `rubric`, `expectedIds`, the scored `cases`, `usage` (the fields in the
+example below), and for a comparison run its `route` (`provider`, `model`, `effort`); for the
+report it passes the gateway `routes`, the `config`, and for the pilot the `quota` and per-model
+`batches` meter readings. A run is on its production route only when its route equals the
+gateway route of its tier, effort included. A suite is
 scored only when every case holds exactly repetitions 1 to `repetitions`; a missing repetition, a
 repeated or out-of-range index, or an unknown case leaves it `incomplete` with `data_errors`, and
 catastrophes found so far are shown either way.
@@ -330,7 +359,7 @@ catastrophes found so far are shown either way.
   "run_id": "<run id>",
   "stage": "wave1",
   "source": { "main_sha": "<commit>", "catalog_sha256": "<hash>" },
-  "routes": { "routine": { "provider": "codex", "model": "<model>" } },
+  "routes": { "routine": { "provider": "codex", "model": "<model>", "effort": "medium" } },
   "judge": { "default": { "provider": "claude", "model": "<model>" } },
   "quota": { "claude": { "used_pct_before": 0, "used_pct_after": 0 }, "codex": { "used_pct_before": 0, "used_pct_after": 0 } },
   "gate": null,
@@ -339,6 +368,8 @@ catastrophes found so far are shown either way.
       "specialist_id": "estimator",
       "wave": 1,
       "tier": "routine",
+      "route": null,
+      "production_route": true,
       "model": "<route model>",
       "judge_model": "<judge model>",
       "prompt_sha256": "<hash>",
@@ -351,21 +382,33 @@ catastrophes found so far are shown either way.
       "data_errors": [],
       "catastrophes_so_far": [],
       "weakest_cases": [ { "case_id": "estimator.golden.012", "suite": "golden", "mean": 0.83, "decisions": [1, 1, 1] } ],
-      "usage": { "runs": 159, "judge_calls": 159, "rejudges": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "wall_time_ms": 0, "cost_usd": 0, "judge_cost_usd": 0, "cache_hit_ratio": null }
+      "usage": { "runs": 159, "judge_calls": 159, "rejudges": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "wall_time_ms": 0, "cost_usd": 0, "judge_cost_usd": 0, "cache_hit_ratio": null },
+      "usage_complete": true
     }
   ],
+  "comparison": null,
+  "batches": null,
   "totals": { "qualified": 1, "not_qualified": 0, "incomplete": 0, "runs": 159, "...": "summed usage" }
 }
 ```
 
 `result` is `evaluateSuite` output, `null` until the suite is complete. `input_tokens` counts every
-prompt token and `cached_input_tokens` the part served from the cache. For the pilot, `gate` holds
-the measured cost per run and ratio for each group, the Claude quota used in percentage points,
-and whether each limit held; an invisible quota is `null` and leaves the call to the orchestrator.
-`renderMarkdown(report)` gives the one-page summary: the gate, one row per specialist against its
-pass bar, then data errors, catastrophes, failures, and weakest cases for every specialist that
-did not qualify. Costs are the gateway's accounting; on subscription sign-ins they measure usage,
-not money billed.
+prompt token and `cached_input_tokens` the part served from the cache.
+
+For the pilot, `comparison` lists each compared specialist's routes with rank, completeness
+(`cases_scored` of `cases_expected`), mean, golden and red-team means, catastrophes, cost and
+latency per run, tokens per run, and an approximate share of each batch's quota (`batches` holds the
+meter readings, `{ "model", "claude": { "used_pct_before", "used_pct_after" }, "codex": { ... } }`).
+A meter reading outside 0 to 100, one that went backwards, or one that did not move over many
+calls is treated as not visible. `gate` holds the measured cost per run and ratio for
+each group, the Claude quota used in percentage points and per Claude call, and whether each limit
+held. `passed` is `false` when cost data is missing or above the limit, and `null` when the cost
+held but the quota was not visible or not plausible, which leaves the call to the orchestrator.
+
+`renderMarkdown(report)` gives the one-page summary: the gate, the model comparison, one row per
+specialist against its pass bar, then data errors, catastrophes, failures, and weakest cases for
+every specialist that did not qualify. Costs are the gateway's accounting; on subscription sign-ins
+they measure usage, not money billed.
 
 ## Validation
 
@@ -374,4 +417,5 @@ headings, catalog membership and autonomy of every action id, case counts and re
 catastrophe ids, red-team coverage, relative times only, and synthetic contact data. It runs
 without the contract catalog only in structural mode and says so. `--require-complete`, which
 `make validate` passes, also fails when a roster specialist has no playbook. When
-`qualification.v1.json` exists, its stages and judge routing are checked too.
+`qualification.v1.json` is required too, and its stages, ledger, pacing, and judge routing are
+checked.

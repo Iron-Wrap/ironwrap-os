@@ -2,7 +2,7 @@
 
 Status: binding repository policy
 Owner: IronWrap OS product owner
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 Review trigger: architecture, authority, legal, deployment, or operating-model change
 
 ## Purpose
@@ -74,6 +74,12 @@ admission test below it — see "Proof classes never merge."
   reproduces the pass is named.
   - Refuses: "should pass," a manual read-through, a check that passed on a different commit, or a
     check run once historically and never re-verified on the cited commit.
+  - Refuses: a check whose result depends on the machine that ran it rather than on the code —
+    available CPU, load, display, or timing. A pass on one class of hardware and a failure on
+    another, in either direction, means the check is not deterministic; a repeat count does not make
+    it so. Such a check earns Source-present for the code it exercises, and the claim must name the
+    environment that produced the pass wherever the label is used. Fix the check or record the
+    lower class.
 - **Configured**: names one environment (dev, staging, or a named reference tenant) where the required
   non-secret values and secret identities are bound, and the artifact is deployed to it.
   - Refuses: values that exist only in `.env.example` or documentation; "will be configured"; a claim

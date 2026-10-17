@@ -34,7 +34,7 @@ permissions:
   pull-requests: read
 
 env:
-  WORKER_VERSION: 4.149.0
+  WORKER_VERSION: 4.150.0
   RELEASE_REPOSITORY: ${{ github.repository }}
   RELEASE_SOURCE_COMMIT: ${{ github.sha }}
   RELEASE_RULESET_ID: 20652124

@@ -36,8 +36,10 @@ updates:
         update-types: ['version-update:semver-minor']
       - dependency-name: zod
         update-types: ['version-update:semver-minor']
+    # Group names must differ between npm entries: Dependabot merged two same-named groups into
+    # one cross-directory PR (#406) and applied neither entry's ignore list to it.
     groups:
-      patch-and-minor:
+      app-patch-and-minor:
         update-types: [patch, minor]
 
   - package-ecosystem: npm
@@ -49,7 +51,7 @@ updates:
       prefix-development: chore
       include: scope
     groups:
-      patch-and-minor:
+      server-patch-and-minor:
         update-types: [patch, minor]
 
   - package-ecosystem: pip

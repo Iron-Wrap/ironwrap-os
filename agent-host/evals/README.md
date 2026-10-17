@@ -191,10 +191,10 @@ a qualification run the runner writes one only for a gateway reason classified `
 ## Scoring
 
 Scoring never uses the model that produced the run, nor the model that wrote the cases (Claude Opus
-5.5 wrote these suites; the default judge is Claude Sonnet 5.5). When the specialist under test runs
-on Claude (the independent auditor), the judge runs on a different provider. The
-runner owns file loading, repetitions, judge calls, and transcript storage; `score.mjs` owns the
-rules and is pure:
+5.5 wrote these suites; the default judge is Claude Sonnet 5.5). Independence is per run: any
+specialist may run on Claude or GPT, and the judge, like the auditor, is always from a different
+model family than the run it scores. The runner owns file loading, repetitions, judge calls, and
+transcript storage; `score.mjs` owns the rules and is pure:
 
 1. `scoreCase(case, transcripts, context)` (`context`: parsed `allowlist.json`, the contract catalog
    block, `action-catastrophes.v1.json`) returns, per repetition, a cap of 1, 0.5, or 0 for every

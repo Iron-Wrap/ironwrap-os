@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "estimator",
-  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "catalog_sha256": "0c21a8a53a968e001aa8fe5769dc81161e26950764e00912922e69ee0df9a0a3",
   "actions": [
     {
       "action_id": "fact.explain",

@@ -1,7 +1,7 @@
 {
   "schema_version": "ironwrap.specialist-allowlist.v1",
   "specialist_id": "field_safety",
-  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "catalog_sha256": "0c21a8a53a968e001aa8fe5769dc81161e26950764e00912922e69ee0df9a0a3",
   "actions": [
     { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer a crew member, the owner, or staff from cited package and safety facts, including who can release a stop or hold" },
     { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route worker-data and deletion requests to compliance and customer requests for extra work to customer care" },
@@ -9,6 +9,7 @@
     { "action_id": "work_package.draft", "autonomy": "A1", "purpose": "Draft a work package with hazards, controls, cited limits, hold points, stop conditions, and evidence slots" },
     { "action_id": "property_fact.propose", "autonomy": "A1", "purpose": "Propose an observed or suspected hidden condition or hazard from crew evidence, never a determination" },
     { "action_id": "field_record.draft", "autonomy": "A1", "purpose": "Turn crew voice notes and photos into a daily report, incident, near-miss, hazard, field-change, or customer-request record for the worker to confirm" },
+    { "action_id": "crew_item.propose_resolution", "autonomy": "A1", "purpose": "Propose arrived, not arrived (one resend under the same idempotency key), or duplicate for a crew item the office has not confirmed, from the office record read back under its key" },
     { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a safety_notice to an occupant or customer at risk from a site hazard, in their language; drafting it goes with an emergency page" },
     { "action_id": "work_package.hold_before_start", "autonomy": "A2", "purpose": "Hold a released package that has not started because a required fact failed, and tell the crew lead and production" },
     { "action_id": "stop_condition.alert", "autonomy": "A2", "purpose": "Alert the crew lead and site supervisor that a cited stop condition is present; the crew decides" },

@@ -859,10 +859,19 @@ deploy/backup-to-r2.sh
 
 The D1 manual run must succeed. When Frappe compatibility is enabled, its manual run must also
 succeed and its scheduled backup follows the canonical D1 export by 20 minutes. They are
-independent jobs so a D1 failure cannot silently suppress the compatibility attempt:
+independent jobs so a D1 failure cannot silently suppress the compatibility attempt.
+Both D1 scripts refuse a SQLite CLI older than 3.46.0, and current Ubuntu and Debian packages are
+older, so build the checksum-pinned verifier and install it where the cron `PATH` below finds it
+first (`deploy/host-preflight.sh --install` provides its build tools):
+
+```bash
+tools/install-sqlite-cli.sh /opt/ironwrap-sqlite
+install -m 0755 /opt/ironwrap-sqlite/sqlite3 /usr/local/bin/sqlite3
+```
 
 ```bash
 CRON_TZ=UTC
+PATH=/usr/local/bin:/usr/bin:/bin
 5 9 * * * /bin/bash -c 'set +x; set -a; . /etc/ironwrap/backup.env; set +a; exec /opt/ironwrap/deploy/backup-d1-to-r2.sh' >> /var/log/ironwrap-d1-backup.log 2>&1
 25 9 * * * /bin/bash -c 'set +x; set -a; . /etc/ironwrap/backup.env; set +a; exec /opt/ironwrap/deploy/backup-to-r2.sh' >> /var/log/ironwrap-frappe-backup.log 2>&1
 ```

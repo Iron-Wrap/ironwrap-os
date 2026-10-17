@@ -5,6 +5,7 @@
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
 import { DEFAULT_CEILINGS, evaluateStep, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type SnapshotFact } from "./policy.ts";
+import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -59,10 +60,13 @@ export interface RunRow {
   tool_manifest_json: string;
   state: "open" | "closed";
   result: string | null;
+  close_json: string | null;
   attempt: number;
   attempt_started_at: string;
   started_at: string;
   correlation_id: string;
+  catalog_version: string;
+  policy_version: string;
 }
 
 export interface StepRow {
@@ -198,7 +202,7 @@ export function toolsFor(specialistId: string): RunTool[] {
   const tools: RunTool[] = [];
   for (const action of catalogActionsOwnedBy(specialistId)) {
     const entry = registryEntry(action.action_id);
-    if (!entry || action.autonomy === "H" || action.human_only) continue;
+    if (!entry || entry.binding.kind === "unavailable" || action.autonomy === "H" || action.human_only) continue;
     tools.push({
       action_id: action.action_id,
       tool_name: toolName(action.action_id),
@@ -247,10 +251,13 @@ export async function openRun(
     tool_manifest_json: canonicalJson(tools),
     state: "open",
     result: null,
+    close_json: null,
     attempt: 1,
     attempt_started_at: now,
     started_at: now,
     correlation_id: signal.parent_run_id ?? signal.signal_id,
+    catalog_version: CATALOG_VERSION,
+    policy_version: `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`,
   };
   const inserted = await db
     .prepare(
@@ -358,11 +365,23 @@ export interface ProposeInput {
  * Records one proposed step with its policy decision. A repeated step_key returns the step it
  * named, and only for the same proposal; concurrent proposals each get their own sequence number.
  */
-export async function proposeStep(db: AgentDb, tenantId: string, run: RunRow, input: ProposeInput, nowMs: number): Promise<StepRow | StoreError> {
+export async function proposeStep(
+  db: AgentDb,
+  tenantId: string,
+  run: RunRow,
+  input: ProposeInput,
+  nowMs: number,
+  notify: Notify | null = null,
+): Promise<StepRow | StoreError> {
   const argsJson = canonicalJson(input.args ?? null);
   const argsSha = await sha256Hex(argsJson);
   const prior = await stepByKey(db, run.run_id, input.step_key);
-  if (prior) return await replayStep(db, tenantId, run, prior, input, argsSha);
+  if (prior) {
+    const replay = await replayStep(db, tenantId, run, prior, input, argsSha);
+    if ("error" in replay) return replay;
+    await executeStep(db, tenantId, run, replay, new Date(nowMs).toISOString(), notify);
+    return (await stepByKey(db, run.run_id, input.step_key)) ?? replay;
+  }
   const count = await db
     .prepare("SELECT COUNT(*) AS steps FROM agent_run_steps WHERE run_id = ?")
     .bind(run.run_id)
@@ -372,52 +391,145 @@ export async function proposeStep(db: AgentDb, tenantId: string, run: RunRow, in
   // Facts in the snapshot are signals (immutable) until the shared-memory read models land; a
   // cited fact this Worker cannot read again is unverifiable, never assumed current.
   const currentVersions = new Map(
-    input.citations.map((citation) => [citation.fact_id, snapshot.get(citation.fact_id)?.kind === "signal" ? 1 : null] as const),
+    input.citations.map(
+      (citation) => [citation.fact_id, snapshot.get(citation.fact_id)?.kind === "signal" ? 1 : null] as const,
+    ),
   );
   let handoff: { depth: number; samePair: number } | null = null;
   if (input.action_id === "handoff.create") handoff = await handoffLimits(db, tenantId, run, input.args);
 
-  const decision = evaluateStep({
+  const control = await specialistControl(db, tenantId, run.specialist_id);
+  const delegation = await currentDelegation(db, tenantId, run.specialist_id, input.action_id);
+  const ceilingMet =
+    delegation?.setting === "within_limits"
+      ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
+      : false;
+  let decision = evaluateStep({
     specialistId: run.specialist_id,
-    specialistState: "active",
+    specialistState: specialistState(control),
     actionId: input.action_id,
     args: input.args,
     citations: input.citations,
     snapshot,
     currentVersions,
-    delegation: null,
+    delegation,
+    withinCeiling: ceilingMet,
     stepsOnRun: Number(count?.steps ?? 0),
     runStartedAt: Date.parse(run.started_at),
     now: nowMs,
     handoff,
   });
+  // A run cannot acquire tools or policy authority introduced after its immutable manifest.
+  if (
+    decision.result !== "deny" &&
+    (run.catalog_version !== CATALOG_VERSION ||
+      run.policy_version !== `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}` ||
+      !runTools(run).some((tool) => tool.action_id === input.action_id))
+  ) {
+    decision = {
+      ...decision,
+      result: "deny",
+      outcome: "abstained",
+      reason_codes: ["policy_missing"],
+      permit_kind: "none",
+      delegation_id: null,
+      reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
+    };
+  }
   const now = new Date(nowMs).toISOString();
   const person = decision.reviewer_role ? await namedPerson(db, tenantId, decision.reviewer_role) : null;
+  const protective = catalogAction(input.action_id)?.protective === true;
+  const delegatedCeiling = !protective && decision.delegation_id ? delegation?.ceiling : null;
+  const windowMs = {
+    hour: 3_600_000,
+    day: 86_400_000,
+    week: 604_800_000,
+  } as const;
+  const admission: AdmissionSnapshot | null =
+    decision.result === "deny"
+      ? null
+      : {
+          guardControls: !protective,
+          controlRevision: control.revision,
+          delegationId: delegation?.delegation_id ?? null,
+          delegatedPermitId: decision.delegation_id,
+          windowSince: delegatedCeiling ? new Date(nowMs - windowMs[delegatedCeiling.count.per]).toISOString() : null,
+          windowMax: delegatedCeiling?.count.max ?? null,
+        };
   try {
     // An admitted step counts against the run's step ceiling inside the insert itself, so parallel
     // proposals cannot jointly pass it; a step that loses that race is recorded as abstained.
     const ceiling = decision.result === "deny" ? null : DEFAULT_CEILINGS.stepsPerRun;
     const stepId = `step_${crypto.randomUUID()}`;
-    const insert = stepInsert(db, tenantId, run, input, argsJson, argsSha, decision, person, now, ceiling, stepId);
+    const insert = stepInsert(
+      db,
+      tenantId,
+      run,
+      input,
+      argsJson,
+      argsSha,
+      decision,
+      person,
+      now,
+      ceiling,
+      stepId,
+      admission,
+    );
     if (input.action_id === "handoff.create" && decision.outcome === "succeeded") {
       // The count reservation, receipt and canonical signal commit together. A failed delivery
       // rolls back the receipt and its audit event; an exact retry can start the same proposal.
-      await db.batch([insert, await handoffSignalInsert(db, tenantId, run, input.args as HandoffArgs,
-        input.step_key, handoff!.depth, now, stepId)]);
+      await db.batch([
+        insert,
+        await handoffSignalInsert(
+          db,
+          tenantId,
+          run,
+          input.args as HandoffArgs,
+          input.step_key,
+          handoff!.depth,
+          now,
+          stepId,
+        ),
+      ]);
     } else await insert.run();
     if (ceiling !== null && !(await stepByKey(db, run.run_id, input.step_key))) {
       const reviewer = catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner";
+      const latestControl = admission?.guardControls
+        ? await specialistControl(db, tenantId, run.specialist_id)
+        : control;
+      const latestDelegation = admission?.guardControls
+        ? await currentDelegation(db, tenantId, run.specialist_id, input.action_id)
+        : delegation;
+      const superseded =
+        admission?.guardControls &&
+        (latestControl.revision !== control.revision ||
+          latestDelegation?.delegation_id !== delegation?.delegation_id ||
+          latestDelegation?.setting !== delegation?.setting ||
+          latestDelegation?.fallback !== delegation?.fallback);
+      // A proposal overtaken by a committed owner control fails `superseded` (contract reason codes):
+      // the owner's own change decided it, so no person is handed a task. A ceiling loser abstains.
       const capped: PolicyDecision = {
         ...decision,
         result: "deny",
-        outcome: "abstained",
-        reason_codes: ["ceiling_reached"],
-        checks: [...decision.checks, { check: "budget", passed: false }],
+        outcome: superseded ? "failed" : "abstained",
+        reason_codes: [superseded ? "superseded" : "ceiling_reached"],
+        checks: [...decision.checks, { check: superseded ? "delegation" : "budget", passed: false }],
         permit_kind: "none",
         delegation_id: null,
-        reviewer_role: reviewer,
+        reviewer_role: superseded ? null : reviewer,
       };
-      await stepInsert(db, tenantId, run, input, argsJson, argsSha, capped, await namedPerson(db, tenantId, reviewer), now, null).run();
+      await stepInsert(
+        db,
+        tenantId,
+        run,
+        input,
+        argsJson,
+        argsSha,
+        capped,
+        superseded ? null : await namedPerson(db, tenantId, reviewer),
+        now,
+        null,
+      ).run();
     }
   } catch (error) {
     if (String(error).includes("agent_run_closed")) return { error: "run_closed", status: 409 };
@@ -425,7 +537,10 @@ export async function proposeStep(db: AgentDb, tenantId: string, run: RunRow, in
   }
   const step = await stepByKey(db, run.run_id, input.step_key);
   if (!step) return { error: "step_unavailable", status: 503 };
-  return await replayStep(db, tenantId, run, step, input, argsSha);
+  const replay = await replayStep(db, tenantId, run, step, input, argsSha);
+  if ("error" in replay) return replay;
+  await executeStep(db, tenantId, run, step, now, notify);
+  return (await stepByKey(db, run.run_id, input.step_key)) ?? step;
 }
 
 async function stepByKey(db: AgentDb, runId: string, stepKey: string): Promise<StepRow | null> {
@@ -461,6 +576,15 @@ export async function namedPerson(db: AgentDb, tenantId: string, reviewerRole: s
   return null;
 }
 
+interface AdmissionSnapshot {
+  guardControls: boolean;
+  controlRevision: number;
+  delegationId: string | null;
+  delegatedPermitId: string | null;
+  windowSince: string | null;
+  windowMax: number | null;
+}
+
 function stepInsert(
   db: AgentDb,
   tenantId: string,
@@ -473,6 +597,7 @@ function stepInsert(
   now: string,
   ceiling: number | null = null,
   stepId = `step_${crypto.randomUUID()}`,
+  admission: AdmissionSnapshot | null = null,
 ): BoundStatement {
   const action = catalogAction(input.action_id);
   const context = runContext(run);
@@ -488,10 +613,20 @@ function stepInsert(
     checks: decision.checks,
     reason_codes: decision.reason_codes,
   });
-  const permit = canonicalJson({ kind: decision.permit_kind, permit_id: null, approval_id: null, approved_by: null, delegation_id: decision.delegation_id });
-  const ask = decision.reviewer_role ? (decision.result === "needs_approval" ? "approve_or_decline" : "acknowledge_and_act") : null;
-  // The sequence number and the ceiling are read inside the insert, so concurrent proposals never
-  // share a number or jointly pass the ceiling. Scalar subqueries, not HAVING without GROUP BY,
+  const permit = canonicalJson({
+    kind: decision.permit_kind,
+    permit_id: null,
+    approval_id: null,
+    approved_by: null,
+    delegation_id: decision.delegation_id,
+  });
+  const ask = decision.reviewer_role
+    ? decision.result === "needs_approval"
+      ? "approve_or_decline"
+      : "acknowledge_and_act"
+    : null;
+  // Sequence, budgets and the policy/control/delegation snapshot are checked in the insert.
+  // A committed pause, hold or revoke cannot leave a permit from the earlier policy read. Scalar subqueries, not HAVING without GROUP BY,
   // which older SQLite builds reject.
   return db
     .prepare(
@@ -505,7 +640,17 @@ function stepInsert(
          AND (? IS NULL OR (SELECT COUNT(*) FROM agent_run_steps WHERE run_id = ?) < ?)
          AND (? = 0 OR (SELECT COUNT(*) FROM agent_signals WHERE tenant_id = ? AND kind = 'handoff'
            AND specialist_id = ? AND subject_aggregate = ? AND subject_id = ?
-           AND json_extract(content_json, '$.from_specialist_id') = ?) < ?)`,
+           AND json_extract(content_json, '$.from_specialist_id') = ?) < ?)
+         AND (? = 0 OR EXISTS (SELECT 1 FROM agent_runs WHERE run_id=? AND catalog_version=? AND policy_version=?))
+         AND (? = 0 OR (SELECT COALESCE(MAX(revision),0) FROM agent_specialist_controls
+           WHERE tenant_id=? AND specialist_id=?) = ?)
+         AND (? = 0 OR (SELECT setting_id FROM agent_delegation_settings WHERE tenant_id=?
+           AND specialist_id=? AND action_id=? ORDER BY revision DESC LIMIT 1) IS ?)
+         AND (? IS NULL OR (SELECT COUNT(*) FROM agent_run_steps WHERE tenant_id=? AND specialist_id=?
+           AND action_id=? AND created_at>=? AND json_extract(permit_json,'$.kind')='within_limits') < ?)
+         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM agent_run_steps WHERE tenant_id=?
+           AND json_extract(permit_json,'$.delegation_id')=?
+           AND (outcome='unknown' OR reason_code IN ('readback_mismatch','done_by_person'))))`,
     )
     .bind(
       stepId,
@@ -526,8 +671,15 @@ function stepInsert(
       decision.reviewer_role,
       personId,
       ask,
-      canonicalJson({ mode: action?.undo ?? "none", action_id: null, available: false }),
-      canonicalJson({ surface: null, context: { run_id: run.run_id, action_id: input.action_id } }),
+      canonicalJson({
+        mode: action?.undo ?? "none",
+        action_id: null,
+        available: false,
+      }),
+      canonicalJson({
+        surface: null,
+        context: { run_id: run.run_id, action_id: input.action_id },
+      }),
       now,
       decision.outcome === null ? null : now,
       run.run_id,
@@ -542,6 +694,28 @@ function stepInsert(
       (input.args as Partial<HandoffArgs> | null)?.object?.id ?? "",
       run.specialist_id,
       DEFAULT_CEILINGS.sameHandoff,
+      admission ? 1 : 0,
+      run.run_id,
+      CATALOG_VERSION,
+      `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`,
+      admission?.guardControls ? 1 : 0,
+      tenantId,
+      run.specialist_id,
+      admission?.controlRevision ?? 0,
+      admission?.guardControls ? 1 : 0,
+      tenantId,
+      run.specialist_id,
+      input.action_id,
+      admission?.delegationId ?? null,
+      admission?.windowMax ?? null,
+      tenantId,
+      run.specialist_id,
+      input.action_id,
+      admission?.windowSince ?? null,
+      admission?.windowMax ?? null,
+      admission?.delegatedPermitId ?? null,
+      tenantId,
+      admission?.delegatedPermitId ?? null,
     );
 }
 
@@ -756,6 +930,9 @@ export async function closeRun(
     result = decision === "abstain" ? "abstained" : decision === "escalate" ? "escalated" : "completed";
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
   }
+  // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
+  // closes, but its drafts are withheld from the record, counted and never kept.
+  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(body) : body;
   // The abstention receipt and the close commit together, receipt first, so a closed run never
   // lacks the receipt that names a person and no step lands after the close.
   const statements: BoundStatement[] = [];
@@ -763,7 +940,7 @@ export async function closeRun(
   statements.push(
     db
       .prepare("UPDATE agent_runs SET state = 'closed', result = ?, close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
-      .bind(result, canonicalJson(body), now, run.run_id),
+      .bind(result, canonicalJson(recorded), now, run.run_id),
   );
   try {
     const results = await db.batch(statements);
@@ -773,6 +950,14 @@ export async function closeRun(
     return { error: "run_closed", status: 409 };
   }
   return { result };
+}
+
+/** A close as recorded for a paused specialist: drafts removed and counted. Unchanged without drafts. */
+export function withheldClose(body: unknown): unknown {
+  const close = body as { output?: { drafts?: unknown[] } | null };
+  const drafts = close?.output?.drafts;
+  if (!Array.isArray(drafts) || drafts.length === 0) return body;
+  return { ...close, output: { ...close.output, drafts: [] }, withheld: { drafts: drafts.length, reason: "specialist_paused" } };
 }
 
 /** Whether the run already holds a step that hands it to a named person. */

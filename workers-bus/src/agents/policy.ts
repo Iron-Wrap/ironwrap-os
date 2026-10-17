@@ -6,12 +6,12 @@
 // arguments, citations (present, in the snapshot at the cited version, current, fresh), handoff
 // limits, then class and delegation.
 
-import { catalogAction, catalogSpecialist, type Autonomy, type CatalogAction, type Delegation } from "./catalog.ts";
+import { catalogAction, catalogSpecialist, type Autonomy, type CatalogAction } from "./catalog.ts";
 import { registryEntry, type RegistryEntry } from "./registry.ts";
 import { validate } from "./schema.ts";
 
 export const STEP_POLICY_ID = "ironwrap.agent_step_policy";
-export const STEP_POLICY_VERSION = "1";
+export const STEP_POLICY_VERSION = "2";
 
 export interface SnapshotFact {
   fact_id: string;
@@ -26,9 +26,10 @@ export interface Citation {
   version: number;
 }
 
+/** The owner's current setting for one specialist and action; `off` turns an action off. */
 export interface DelegationSetting {
   delegation_id: string;
-  setting: Delegation;
+  setting: "asks_first" | "within_limits" | "off";
 }
 
 export interface StepCeilings {
@@ -40,9 +41,15 @@ export interface StepCeilings {
 
 export const DEFAULT_CEILINGS: StepCeilings = { stepsPerRun: 12, wallTimeMs: 10 * 60_000, handoffDepth: 4, sameHandoff: 2 };
 
+/** Pause and auditor hold are independent; one must never mask the other's restriction. */
+export interface SpecialistState {
+  readonly paused: boolean;
+  readonly held: boolean;
+}
+
 export interface StepInput {
   specialistId: string;
-  specialistState: "active" | "paused" | "held";
+  specialistState: SpecialistState;
   actionId: string;
   args: unknown;
   citations: Citation[];
@@ -50,6 +57,8 @@ export interface StepInput {
   /** Current versions read again just before the decision; null when the fact cannot be read. */
   currentVersions: Map<string, number | null>;
   delegation: DelegationSetting | null;
+  /** Whether the step stays inside the within-limits setting's ceiling (count, amount, recipients). */
+  withinCeiling?: boolean;
   stepsOnRun: number;
   runStartedAt: number;
   now: number;
@@ -109,6 +118,7 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   const args = input.args as Record<string, unknown>;
   if (action.reason_codes && !action.reason_codes.includes(args.reason_code as string)) return stop("abstained", "action_unregistered", "schema");
   if (action.never_targets?.includes(args.specialist_id as string)) return stop("failed", "policy_denied", "scope");
+  if (entry.binding.kind === "unavailable") return stop("abstained", "policy_missing", "schema");
   pass("schema");
 
   if (action.requires_citations && input.citations.length === 0) return stop("abstained", "citation_unverifiable", "cited");
@@ -145,26 +155,45 @@ export function evaluateStep(input: StepInput): PolicyDecision {
     reviewer_role: reviewerRole,
   });
 
+  const reviewer = input.actionId === "exception.escalate" ? args.route_to as string : reviewerFor(action, input.specialistId);
+  const setting = effectiveDelegation(action, input);
+  // A hold adds review; it never turns an explicitly revoked action back on.
+  if (!action.protective && setting === "off") return stop("failed", "policy_denied", "delegation");
+  // Pause stops drafting even when a simultaneous hold would otherwise ask for review.
+  if (!action.protective && input.specialistState.paused && action.autonomy === "A1")
+    return stop("failed", "policy_denied", "delegation");
+  // Every other non-protective action asks first under either independent restriction.
+  if (!action.protective && (input.specialistState.paused || input.specialistState.held))
+    return allowed("asks_first", null, reviewer);
   if (action.autonomy === "A0") return allowed("none", "succeeded", null);
   if (action.autonomy === "A1") return allowed("draft", "succeeded", null);
 
-  const reviewer = reviewerFor(action, input.specialistId);
   // Protective steps never wait for approval, and keep running while a specialist is paused. Until
   // their machine path is proven they stay open for the named person to act on, never asks first.
-  if (action.protective) return allowed("within_limits", null, entry.machinePermitProven ? null : reviewer);
+  if (action.protective) return allowed("within_limits", null, entry.binding.kind === "exception" || !entry.machinePermitProven ? reviewer : null);
 
-  const setting = effectiveDelegation(action, input);
-  if (setting === "off_until_enabled") return stop("failed", "policy_denied", "delegation");
   pass("delegation");
-  if (setting === "within_limits" && entry.machinePermitProven) return allowed("within_limits", null, null);
+  // A step above the setting's ceiling asks first; so does any step before the path is proven.
+  if (setting === "within_limits" && entry.machinePermitProven && input.withinCeiling === true) {
+    pass("amount_ceiling");
+    return allowed("within_limits", null, null);
+  }
   return allowed("asks_first", null, reviewer);
 }
 
-/** The setting in force: pausing or a hold asks first, a non-delegable action always asks first. */
-export function effectiveDelegation(action: CatalogAction, input: Pick<StepInput, "delegation" | "specialistState">): Delegation {
-  if (!action.delegable) return "asks_first";
-  if (input.specialistState !== "active") return "asks_first";
-  return input.delegation?.setting ?? action.default_delegation ?? "asks_first";
+/**
+ * The setting in force. A non-delegable action, and any action of a paused or held specialist,
+ * asks first; an action that starts off stays off until the owner turns it on.
+ */
+export function effectiveDelegation(
+  action: CatalogAction,
+  input: Pick<StepInput, "delegation" | "specialistState">,
+): "asks_first" | "within_limits" | "off" {
+  const owner = input.delegation?.setting ?? null;
+  if (owner === "off" || (owner === null && action.default_delegation === "off_until_enabled")) return "off";
+  if (!action.delegable || input.specialistState.paused || input.specialistState.held) return "asks_first";
+  if (owner) return owner;
+  return action.default_delegation === "within_limits" ? "within_limits" : "asks_first";
 }
 
 function reviewerFor(action: CatalogAction | null, specialistId: string): string {

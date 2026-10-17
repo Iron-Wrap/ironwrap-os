@@ -138,6 +138,48 @@ The host and the action server call only these Worker routes, with
 | `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
+### Owner controls and human decisions
+
+People use their authenticated app session on `/api/v1/agent-team/`; the host bearer cannot enter
+that surface. Reviewers see only the receipts and exact proposals assigned to them; owner/ops retain
+the team receipt queue. Every mutation requires CSRF and an `Idempotency-Key`. The Worker rechecks the live
+session and role inside its atomic write, so revocation or a role change after authentication fails
+closed. Delegation and pause/hold controls require an owner sign-in no older than five minutes;
+request fields cannot claim that sign-in or a person's approval.
+
+| Route | Behavior |
+|---|---|
+| `GET /api/v1/agent-team/specialists/:id` | Current controls, delegation revisions, bounded settings and decision history |
+| `POST /api/v1/agent-team/specialists/:id/delegation` | Owner-only setting or revocation, exact expected revision and required ceiling |
+| `POST /api/v1/agent-team/specialists/:id/control` | Owner pause/resume or hold clearance, exact expected revision |
+| `GET /api/v1/agent-team/steps/:id` | Owner or named reviewer reads the exact arguments, version, hash and receipt |
+| `POST /api/v1/agent-team/steps/:id/decision` | Current reviewer role or owner approves, declines or takes over the exact step version and argument hash |
+| `GET /api/v1/agent-team/exceptions` | Owner/ops queue with the assigned person and acknowledgement state |
+| `POST /api/v1/agent-team/exceptions/:id/acknowledge` | The assigned person, reviewer role or owner acknowledges the exception |
+
+Pause and auditor hold remain independent. Either makes non-protective actions ask first; pause
+also stops drafting. An off or revoked action stays off. Protective exceptions and holds remain
+available under these controls.
+
+An auditor hold executes with an owned-store readback and cannot target the auditor. Its replay
+cannot reapply a hold after the owner cleared it. Clearing restores no old delegation: each action
+stays asks first until the owner confirms it again. Revocation, pause and a hold cancel unexecuted
+delegated permits. Policy/catalog changes and unknown or mismatched delegated readbacks also fall
+back to asks first. No H action is registered as an agent tool.
+
+Human decisions are records of a person's choice, never proof that an unbound adapter executed.
+Approving the current receipt-only `note.add` stops with `policy_missing`, no tool or readback
+success, and a named person still takes over. Business adapters and effect-specific evaluation
+remain open. Emergency paging has a strict canonical argument schema, allowing explicit null
+unknown job/contact IDs, but remains unavailable until its provider readback path is implemented.
+It is absent from active run tools. The owned exception queue does not claim a page was delivered.
+
+Host OAuth-failure and stale-sign-in alerts open one immediate exception for a named owner. A
+person acknowledges it; a continuing alert opens another exception after that acknowledgement.
+A vacant reviewer assignment stays null and visible; the Worker never invents a person.
+No credential renewal or provider switch is performed by the Worker. A replayed run close repairs
+its exception queue entry without adding another run or receipt.
+
 Only a refusal of the request's own content (400, 410, 413, 422) is permanent: that signal goes to
 `<state>/rejected-signals.jsonl` with its payload, or that close to `<state>/rejected-closes/`.
 Every other failure (401, 403, 404, 429, 5xx, a non-JSON page) is retried, so a rotated token or a

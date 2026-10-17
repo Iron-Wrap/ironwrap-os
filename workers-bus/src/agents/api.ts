@@ -2,9 +2,27 @@
 //
 // `/api/v1/agents/*` serves the agent host and its per-run action server. It accepts only the
 // AGENT_HOST_TOKEN bearer, never a browser session, and stays dark (404) while that secret is
-// unset. `/api/v1/agent-team/*` serves people through the app session (owner and ops): the
-// receipt lanes and the hosts' health. No route here lets an agent change its own delegation.
+// unset. `/api/v1/agent-team/*` serves people through their app session: owner/ops queues
+// and exact proposals scoped to the named reviewer. No route here lets an agent change its own delegation.
 
+import { validAppCsrf } from "../app-auth.ts";
+import { canonicalJson } from "./schema.ts";
+import { CATALOG } from "./catalog.ts";
+import {
+  setDelegation,
+  delegationOverview,
+  changeSpecialistControl,
+  decideStep,
+  stepForDecision,
+  listExceptions,
+  acknowledgeException,
+  escalateHostAlerts,
+  escalateRunAbstention,
+  STEP_UP_MAX_AGE_MS,
+  type HumanPrincipal,
+  type SetDelegationInput,
+  type StepDecision,
+} from "./control.ts";
 import { operatingTenantId } from "../core.ts";
 import type { AuthContext } from "../app-types.ts";
 import { listHostHealth, listReceipts, receiptOf, type ReceiptView } from "./receipts.ts";
@@ -19,7 +37,7 @@ import {
   runContext,
   runTools,
   type AgentDb,
-} from "./store.ts";
+ withheldClose } from "./store.ts";
 
 export interface AgentEnv {
   DB: unknown;
@@ -91,8 +109,17 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if (operation === "close" && req.method === "POST") {
       const body = await readJson(req);
       if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
+      if (run.state === "closed") {
+        // An exact retry matches the close as received, or as recorded with a paused specialist's
+        // drafts withheld, so the retry still reaches the abstention escalation below.
+        if (run.close_json !== canonicalJson(body) && run.close_json !== canonicalJson(withheldClose(body)))
+          return reply({error: "run_closed"}, 409);
+        await escalateRunAbstention(db, tenantId, run, iso(), null);
+        return reply({run_id: run.run_id, terminal: run.result});
+      }
       const closed = await closeRun(db, tenantId, run, body, RUN_OUTPUT_SCHEMA, iso());
       if ("error" in closed) return reply({ error: closed.error }, closed.status);
+      await escalateRunAbstention(db, tenantId, run, iso(), null);
       return reply({ run_id: run.run_id, terminal: closed.result });
     }
     return reply({ error: "method_not_allowed" }, 405);
@@ -103,26 +130,156 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
     const recorded = await recordHeartbeat(db, tenantId, body, iso());
     if ("error" in recorded) return reply({ error: recorded.error }, recorded.status);
+    const heartbeat = body as {host_id: string; alerts: string[]};
+    await escalateHostAlerts(db, tenantId, heartbeat.host_id, heartbeat.alerts, iso(), null);
     return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
   }
   return reply({ error: "not_found" }, 404);
 }
 
-/** Owner and ops read the team's receipts and the hosts' health through their app session. */
-export async function handleAgentTeamAppRoute(req: Request, env: AgentEnv, auth: AuthContext): Promise<Response> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops") return reply({ error: "forbidden" }, 403);
-  if (req.method !== "GET") return reply({ error: "method_not_allowed" }, 405);
+/** People use their authenticated app session; the host bearer never reaches these writes. */
+export async function handleAgentTeamAppRoute(
+  req: Request,
+  env: AgentEnv,
+  auth: AuthContext,
+  clock = () => Date.now(),
+): Promise<Response> {
   const db = env.DB as AgentDb;
   const url = new URL(req.url);
-  if (url.pathname === "/api/v1/agent-team/receipts") {
-    const view = (url.searchParams.get("view") ?? "needs_you") as ReceiptView;
-    const limit = Number(url.searchParams.get("limit") ?? "50");
-    if (!["needs_you", "doing", "done"].includes(view) || !Number.isInteger(limit) || limit < 1 || limit > 200) {
-      return reply({ error: "invalid_query" }, 400);
+  const tenantId = auth.session.tenant_id;
+  const actor: HumanPrincipal = {
+    user_id: auth.session.user_id,
+    role: auth.session.role,
+    session_hash: auth.session.session_hash,
+  };
+  const now = new Date(clock()).toISOString();
+  if (req.method === "GET") {
+    const detail = url.pathname.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)$/);
+    if (detail) {
+      const step = await stepForDecision(db, tenantId, detail[1]);
+      if (!step) return reply({error: "step_not_found"}, 404);
+      if (actor.role !== "owner" && actor.role !== step.needs_reviewer_role && !(actor.role === "ops" && actor.user_id === step.needs_person_id))
+        return reply({error: "forbidden"}, 403);
+      return reply({step_id: step.step_id, version: step.version, args_sha256: step.args_sha256,
+        args: JSON.parse(step.args_json), receipt: receiptOf(step)});
     }
-    return reply({ view, receipts: await listReceipts(db, auth.session.tenant_id, view, limit) });
+    if (url.pathname === "/api/v1/agent-team/receipts") {
+      const view = (url.searchParams.get("view") ?? "needs_you") as ReceiptView;
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      if (!["needs_you", "doing", "done"].includes(view) || !Number.isInteger(limit) || limit < 1 || limit > 200)
+        return reply({ error: "invalid_query" }, 400);
+      return reply({
+        view,
+        receipts: await listReceipts(db, tenantId, view, limit, actor.role === "owner" || actor.role === "ops" ? null : actor),
+      });
+    }
+    if (actor.role !== "owner" && actor.role !== "ops") return reply({error: "forbidden"}, 403);
+    if (url.pathname === "/api/v1/agent-team/hosts") return reply({ hosts: await listHostHealth(db, tenantId) });
+    if (url.pathname === "/api/v1/agent-team/specialists")
+      return reply({
+        specialists: CATALOG.specialists.map(({ specialist_id, display_name }) => ({
+          specialist_id,
+          display_name,
+        })),
+      });
+    const specialist = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)$/);
+    if (specialist) {
+      const overview = await delegationOverview(db, tenantId, specialist[1]);
+      return overview ? reply(overview) : reply({ error: "unknown_specialist" }, 404);
+    }
+    if (url.pathname === "/api/v1/agent-team/exceptions") {
+      const open = url.searchParams.get("open") ?? "true";
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      if (!["true", "false"].includes(open) || !Number.isInteger(limit) || limit < 1 || limit > 200)
+        return reply({ error: "invalid_query" }, 400);
+      return reply({
+        exceptions: await listExceptions(db, tenantId, open === "true", limit),
+      });
+    }
+    return reply({ error: "not_found" }, 404);
   }
-  if (url.pathname === "/api/v1/agent-team/hosts") return reply({ hosts: await listHostHealth(db, auth.session.tenant_id) });
+  if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
+  if (!validAppCsrf(req, auth)) return reply({ error: "csrf_failed" }, 403);
+  const body = await readJson(req);
+  if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
+  const idempotency = req.headers.get("idempotency-key") ?? "";
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotency)) return reply({ error: "idempotency_key_required" }, 400);
+  const control = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)\/(delegation|control)$/);
+  if (control) {
+    if (actor.role !== "owner") return reply({ error: "owner_role_required" }, 403);
+    const created = Date.parse(auth.session.session_created_at);
+    if (!Number.isFinite(created) || created > clock() || clock() - created > STEP_UP_MAX_AGE_MS)
+      return reply({ error: "fresh_owner_session_required" }, 403);
+    if (control[2] === "delegation") {
+      if (
+        !isRecord(body) ||
+        !exactKeys(body, ["action_id", "setting", "ceiling", "reason", "expected_revision"]) ||
+        typeof body.action_id !== "string" ||
+        !["asks_first", "within_limits", "off"].includes(body.setting as string) ||
+        typeof body.reason !== "string"
+      )
+        return reply({ error: "invalid_body" }, 400);
+      const result = await setDelegation(
+        db,
+        tenantId,
+        { ...body, specialist_id: control[1] } as unknown as SetDelegationInput,
+        actor,
+        idempotency,
+        now,
+      );
+      return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+    }
+    if (
+      !isRecord(body) ||
+      !exactKeys(body, ["paused", "clear_hold", "reason", "expected_revision"]) ||
+      typeof body.paused !== "boolean" ||
+      typeof body.clear_hold !== "boolean" ||
+      typeof body.reason !== "string"
+    )
+      return reply({ error: "invalid_body" }, 400);
+    const result = await changeSpecialistControl(
+      db,
+      tenantId,
+      control[1],
+      { paused: body.paused, clear_hold: body.clear_hold },
+      actor,
+      body.reason,
+      now,
+      idempotency,
+      body.expected_revision as number,
+    );
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
+  const decision = url.pathname.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)\/decision$/);
+  if (decision) {
+    if (
+      !isRecord(body) ||
+      !exactKeys(body, ["decision", "expected_version", "expected_args_sha256"]) ||
+      !["approve", "decline", "do_it_myself"].includes(body.decision as string) ||
+      !Number.isSafeInteger(body.expected_version) ||
+      typeof body.expected_args_sha256 !== "string" ||
+      !STEP_KEY.test(body.expected_args_sha256)
+    )
+      return reply({ error: "invalid_body" }, 400);
+    const result = await decideStep(
+      db,
+      tenantId,
+      decision[1],
+      body.decision as StepDecision,
+      body.expected_version as number,
+      body.expected_args_sha256,
+      actor,
+      idempotency,
+      now,
+    );
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
+  const acknowledgement = url.pathname.match(/^\/api\/v1\/agent-team\/exceptions\/([A-Za-z0-9._:-]+)\/acknowledge$/);
+  if (acknowledgement) {
+    if (!isRecord(body) || !exactKeys(body, [])) return reply({ error: "invalid_body" }, 400);
+    const result = await acknowledgeException(db, tenantId, acknowledgement[1], actor, now);
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
   return reply({ error: "not_found" }, 404);
 }
 

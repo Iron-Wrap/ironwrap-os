@@ -4,6 +4,7 @@ import test from "node:test";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "../src/agents/catalog.ts";
 import { CATALOG_JSON, CATALOG_SHA256 } from "../src/agents/contract-catalog.ts";
 import { evaluateStep, type StepInput } from "../src/agents/policy.ts";
+import { specialistState } from "../src/agents/control.ts";
 import { REGISTRY, type RegistryEntry } from "../src/agents/registry.ts";
 import { ABSTAIN_REASON_CODES, RUN_OUTPUT_SCHEMA } from "../src/agents/run-output.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
@@ -53,7 +54,7 @@ const ANY_ARGS: RegistryEntry = {
 function input(overrides: Partial<StepInput> = {}): StepInput {
   return {
     specialistId: "lead_concierge",
-    specialistState: "active",
+    specialistState: { paused: false, held: false },
     actionId: "fact.explain",
     args: { object: null, explanation: "The inquiry asks for a metal re-roof." },
     citations: [{ fact_id: "signal/sig_1", version: 1 }],
@@ -114,9 +115,20 @@ test("unregistered actions, unknown fields and missing citations abstain; scope 
 test("protective steps never ask first, even while the specialist is paused", () => {
   const escalate = {
     actionId: "exception.escalate",
-    args: { reason_code: "fact_missing", object: null, summary: "No address on the inquiry.", urgency: "today" },
+    args: {
+      reason_code: "fact_missing",
+      object: null,
+      summary: "No address on the inquiry.",
+      urgency: "today",
+      route_to: "sales",
+    },
   };
-  for (const specialistState of ["active", "paused", "held"] as const) {
+  for (const specialistState of [
+    { paused: false, held: false },
+    { paused: true, held: false },
+    { paused: false, held: true },
+    { paused: true, held: true },
+  ]) {
     const decision = evaluateStep(input({ ...escalate, specialistState }));
     assert.equal(decision.result, "allow");
     assert.equal(decision.permit_kind, "within_limits");
@@ -130,10 +142,10 @@ test("within limits needs a proven machine path; until then, and while paused, t
   const note = { actionId: "note.add", args: { object: { aggregate: "lead", id: "L-1", version: 1 }, text: "Prefers calls after 5." } };
   assert.equal(evaluateStep(input(note)).permit_kind, "asks_first");
   const proven = registry({ "note.add": { ...(REGISTRY["note.add"] as RegistryEntry), machinePermitProven: true } });
-  const within = evaluateStep(input({ ...note, registry: proven }));
+  const within = evaluateStep(input({ ...note, registry: proven, withinCeiling: true }));
   assert.equal(within.permit_kind, "within_limits");
   assert.equal(within.result, "allow");
-  const paused = evaluateStep(input({ ...note, registry: proven, specialistState: "paused" }));
+  const paused = evaluateStep(input({ ...note, registry: proven, specialistState: {paused:true,held:false} }));
   assert.equal(paused.permit_kind, "asks_first");
   assert.equal(paused.result, "needs_approval");
   assert.equal(paused.outcome, null);
@@ -194,4 +206,44 @@ test("the followup contract keeps closed machine reasons, auditor protection and
   assert.deepEqual(evaluateStep(input({ specialistId: "independent_auditor", actionId: "specialist.hold", args: { specialist_id: "independent_auditor" }, registry: registry({ "specialist.hold": holdEntry }) })).reason_codes, ["policy_denied"]);
   // Contract metadata alone cannot stand in for an implemented protective effect.
   assert.deepEqual(evaluateStep(input({ specialistId: "proposal_contract", actionId: "portal_link.revoke", args: {} })).reason_codes, ["policy_missing"]);
+});
+
+
+test("independent pause and hold flags compose before class shortcuts", () => {
+  const a1 = CATALOG.actions.find((action) => action.autonomy === "A1" && action.owners.includes("lead_concierge"))!;
+  assert.ok(a1);
+  // This registered-arguments seam proves A1 class precedence, not an operational draft adapter.
+  const draftRegistry = registry({ [a1.action_id]: ANY_ARGS });
+  for (const paused of [false, true])
+    for (const held of [false, true]) {
+      const state = specialistState({ paused, held, revision: 0 });
+    assert.deepEqual(state, { paused, held });
+      const read = evaluateStep(input({ specialistState: state }));
+      assert.equal(read.result, paused || held ? "needs_approval" : "allow", `read paused=${paused} held=${held}`);
+      assert.equal(read.permit_kind, paused || held ? "asks_first" : "none");
+      const draft = evaluateStep(
+        input({
+          specialistState: state,
+          actionId: a1.action_id,
+          args: { note: "Synthetic draft fixture" },
+          registry: draftRegistry,
+        }),
+      );
+      assert.equal(
+        draft.result,
+        paused ? "deny" : held ? "needs_approval" : "allow",
+        `draft paused=${paused} held=${held}`,
+      );
+      assert.equal(draft.permit_kind, paused ? "none" : held ? "asks_first" : "draft");
+      const off = evaluateStep(
+        input({
+          specialistState: state,
+          actionId: "note.add",
+          args: { object: { aggregate: "lead", id: "L-1", version: 1 }, text: "Synthetic revoked note" },
+          delegation: { delegation_id: "synthetic-off", setting: "off" },
+        }),
+      );
+      assert.equal(off.result, "deny");
+      assert.equal(off.permit_kind, "none");
+    }
 });

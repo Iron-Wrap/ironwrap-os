@@ -61,18 +61,20 @@ export function receiptOf(step: StepRow): Receipt {
 export type ReceiptView = "needs_you" | "doing" | "done";
 
 /** Now's three lanes: steps waiting on a person, steps in progress, and closed steps. */
-export async function listReceipts(db: AgentDb, tenantId: string, view: ReceiptView, limit: number) {
+export async function listReceipts(db: AgentDb, tenantId: string, view: ReceiptView, limit: number, reviewer: {user_id: string; role: string} | null = null) {
   const where =
     view === "needs_you"
       ? "(outcome IS NULL OR outcome = 'abstained') AND needs_reviewer_role IS NOT NULL"
       : view === "doing"
         ? "outcome IS NULL AND needs_reviewer_role IS NULL"
         : "outcome IS NOT NULL";
+  const assigned = reviewer ? " AND needs_reviewer_role = ?" : "";
+  const values = reviewer ? [tenantId, reviewer.role, limit] : [tenantId, limit];
   const rows = await db
-    .prepare(`SELECT * FROM agent_run_steps WHERE tenant_id = ? AND ${where} ORDER BY created_at DESC, step_seq DESC LIMIT ?`)
-    .bind(tenantId, limit)
+    .prepare(`SELECT * FROM agent_run_steps WHERE tenant_id = ? AND ${where}${assigned} ORDER BY created_at DESC, step_seq DESC LIMIT ?`)
+    .bind(...values)
     .all<StepRow>();
-  return rows.results.map((row) => ({ step_id: row.step_id, created_at: row.created_at, receipt: receiptOf(row) }));
+  return rows.results.map((row) => ({ step_id: row.step_id, version: row.version, args_sha256: row.args_sha256, created_at: row.created_at, receipt: receiptOf(row) }));
 }
 
 export async function listHostHealth(db: AgentDb, tenantId: string) {

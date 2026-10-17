@@ -41,6 +41,7 @@ class SqliteD1 {
           "utf8",
         ),
       );
+      this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
       `INSERT INTO app_users (user_id, tenant_id, email_normalized, display_name, role, active, created_by, created_at, updated_at)
@@ -283,7 +284,8 @@ test("closing records the result; an abstention always leaves a receipt that nam
   const ok = (await call("POST", "/api/v1/agents/runs", { signal_id: done, specialist_id: "lead_concierge", host_run_key: "o".repeat(40) })).body;
   assert.equal((await call("POST", `/api/v1/agents/runs/${ok.run_id}/close`, close({ output: { ...OUTPUT, extra: 1 } }))).status, 422);
   assert.deepEqual((await call("POST", `/api/v1/agents/runs/${ok.run_id}/close`, close())).body, { run_id: ok.run_id, terminal: "completed" });
-  assert.equal((await call("POST", `/api/v1/agents/runs/${ok.run_id}/close`, close())).status, 409);
+  assert.equal((await call("POST", `/api/v1/agents/runs/${ok.run_id}/close`, close())).status, 200);
+  assert.equal((await call("POST", `/api/v1/agents/runs/${ok.run_id}/close`, close({duration_ms: 1300}))).status, 409);
   assert.equal((await call("POST", `/api/v1/agents/runs/${ok.run_id}/steps`, explain(`signal/${done}`))).status, 409);
 
   const down = await signal(db, { dedupe_key: "lead-intake:L-2", subject: { aggregate: "lead", id: "L-2" } });

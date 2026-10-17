@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 120,
-      "latest": "0200_agent_coordination.sql"
+      "count": 121,
+      "latest": "0201_agent_delegation.sql"
     }
   },
   "test_observation_policy": {
@@ -213,15 +213,17 @@ Current source tracing distinguishes implemented modules from reachable producti
 - measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
   `lead_follow_up_draft` pilot.
 - AI team coordination is Locally-validated, Partial (`workers-bus/src/agents/`,
-  `test/agents-policy.test.ts`, `test/agents-api.test.ts`; `agent-host/`, `cd agent-host && npm
-  test`). The Worker carries the contract catalog byte for byte, records each run as an append-only
-  `coordination_run` with its context snapshot and tool manifest, and decides every proposed step
-  by deterministic policy: an unregistered action or argument, a missing, unknown or stale
-  citation, or a ceiling abstains, and people-only actions are refused. Steps that need a person
-  wait as receipts; the owner's delegation settings, decisions on those steps, permits and every
-  action's execution binding are not built yet, so no agent step has an effect. The agent host
-  runs specialists through a provider gateway over Claude and Codex sign-ins. No live provider
-  call, deployment or reference run has happened.
+  `test/agents-policy.test.ts`, `test/agents-api.test.ts`, `test/agents-control.test.ts`;
+  `agent-host/`, `cd agent-host && npm test`). The Worker carries the contract catalog byte for
+  byte, records each run as an append-only `coordination_run` with its context snapshot and tool
+  manifest, and decides every proposed step by deterministic policy: an unregistered action or
+  argument, a missing, unknown or stale citation, or a ceiling abstains, and people-only actions
+  are refused. The owner sets or revokes delegation, pauses a specialist or clears an auditor hold
+  from a fresh app session; a reviewer decides a waiting step's exact version. Only the protective
+  exception and hold bindings execute, against owned records with readback; an approved step with
+  no effect binding records the decision and abstains, so no agent step has a business effect.
+  The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
+  live provider call, deployment or reference run has happened.
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

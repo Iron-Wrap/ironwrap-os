@@ -8,14 +8,20 @@
 // plus an ISO 4217 code, BCP 47 language tags, `<aggregate>_id` ids, a `reason_code` from a closed
 // vocabulary, and recipients as `to`, a canonical contact id.
 
-import { CATALOG } from "./catalog.ts";
+import { CATALOG, catalogAction } from "./catalog.ts";
 import type { JsonSchema } from "./schema.ts";
 
 export type Binding =
   /** Recorded on the run only: A0 and A1 output, which has no effect. */
   | { kind: "record" }
   /** Creates a handoff signal for another specialist (`handoff.create`). */
-  | { kind: "handoff" };
+  | { kind: "handoff" }
+  /** Opens an exception for a named person and notifies them (`exception.escalate`). */
+  | { kind: "exception" }
+  /** Sets a specialist's hold flag (`specialist.hold`). */
+  | { kind: "specialist_hold" }
+  /** Strict arguments are known; the provider effect and readback are not implemented. */
+  | { kind: "unavailable" };
 
 export interface RegistryEntry {
   args: JsonSchema;
@@ -33,8 +39,15 @@ const NOT_YET_REGISTERED = null;
 const SPECIALIST_IDS = CATALOG.specialists.map((specialist) => specialist.specialist_id);
 const ABSTAIN_CODES = CATALOG.receipt.reason_codes.abstained;
 
-const text = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
-const nullable = (schema: JsonSchema) => ({ ...schema, type: [schema.type as string, "null"] });
+const text = (maxLength: number) => ({
+  type: "string",
+  minLength: 1,
+  maxLength,
+});
+const nullable = (schema: JsonSchema) => ({
+  ...schema,
+  type: [schema.type as string, "null"],
+});
 const objectRef = {
   type: "object",
   additionalProperties: false,
@@ -66,7 +79,10 @@ const HANDOFF_CREATE: RegistryEntry = {
       to_specialist_id: { type: "string", enum: SPECIALIST_IDS },
       object: objectRef,
       reason: text(600),
-      expected_action_id: { type: "string", enum: CATALOG.actions.map((action) => action.action_id) },
+      expected_action_id: {
+        type: "string",
+        enum: CATALOG.actions.map((action) => action.action_id),
+      },
     },
   },
   binding: { kind: "handoff" },
@@ -77,15 +93,59 @@ const EXCEPTION_ESCALATE: RegistryEntry = {
   args: {
     type: "object",
     additionalProperties: false,
-    required: ["reason_code", "object", "summary", "urgency"],
+    required: ["reason_code", "object", "summary", "urgency", "route_to"],
     properties: {
       reason_code: { type: "string", enum: ABSTAIN_CODES },
+      route_to: {
+        type: "string",
+        enum: [...new Set(CATALOG.specialists.map((specialist) => specialist.reviewer_role))],
+      },
       object: nullable(objectRef),
       summary: text(600),
       urgency: { type: "string", enum: ["immediate", "today", "brief"] },
     },
   },
-  binding: { kind: "record" },
+  // Owned-store write with readback: the exception row, read back by id (test/agents-control.test.ts).
+  binding: { kind: "exception" },
+  machinePermitProven: true,
+};
+
+const SPECIALIST_HOLD: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["specialist_id", "reason"],
+    properties: {
+      // Never the AI auditor (contract "Delegation", rule 7); the database refuses it too.
+      specialist_id: {
+        type: "string",
+        enum: SPECIALIST_IDS.filter((id) => !catalogAction("specialist.hold")?.never_targets?.includes(id)),
+      },
+      reason: text(600),
+    },
+  },
+  binding: { kind: "specialist_hold" },
+  machinePermitProven: true,
+};
+
+const EMERGENCY_PAGE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["route_to", "urgency", "summary", "location", "job_id", "contact_id"],
+    properties: {
+      route_to: {
+        type: "string",
+        enum: [...new Set(CATALOG.specialists.map((specialist) => specialist.reviewer_role))],
+      },
+      urgency: { type: "string", const: "immediate" },
+      summary: text(600),
+      location: text(600),
+      job_id: nullable(text(200)),
+      contact_id: nullable(text(200)),
+    },
+  },
+  binding: { kind: "unavailable" },
   machinePermitProven: false,
 };
 
@@ -241,7 +301,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "privacy_incident.contain": NOT_YET_REGISTERED,
   "access.change": NOT_YET_REGISTERED,
   "service_case.open": NOT_YET_REGISTERED,
-  "emergency.page": NOT_YET_REGISTERED,
+  "emergency.page": EMERGENCY_PAGE,
   "service_case.triage": NOT_YET_REGISTERED,
   "remedy.offer": NOT_YET_REGISTERED,
   "cost_recovery.claim": NOT_YET_REGISTERED,
@@ -255,7 +315,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "ad_spend.commit": NOT_YET_REGISTERED,
   "run.verify": NOT_YET_REGISTERED,
   "finding.raise": NOT_YET_REGISTERED,
-  "specialist.hold": NOT_YET_REGISTERED,
+  "specialist.hold": SPECIALIST_HOLD,
   "finding.close": NOT_YET_REGISTERED,
 };
 

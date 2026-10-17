@@ -40,6 +40,7 @@ and the pipeline board.
 | `GET /admin/crm-import/runs/<id>` | The stored report for one run. |
 | `GET /admin/crm-import/adapters` | The adapter and pipeline catalogue, before anyone uploads a file. |
 | `tools/crm-import.mjs` | Reads the file, calls the Worker, prints the report a human reviews. Refuses non-local targets. |
+| `tools/ghl-api-to-crm-import.mjs` | Offline: converts a GoHighLevel API pull (opportunities, contacts, pipelines; raw bodies or bridge envelopes) into the `ghl` adapter's row file, one row per opportunity with the stage name resolved. Closed deals (status abandoned or lost, or an Abandoned/Lost stage) go to a separate file, because the lead lifecycle has no closed-lost state yet. Prints counts only. |
 | `tools/seed-env.mjs` | Drives this surface with the shipped synthetic JobNimbus fixture to seed a non-production environment (`docs/OPERATIONS-RUNBOOK.md`). Synthetic rows only; refuses the production Worker name, route hostname, workers.dev hostname and D1 id committed in `workers-bus/wrangler.jsonc`, plus any non-loopback `--base-url` - a remote target is allowed only when `workers-bus/wrangler.jsonc` declares it as a non-production environment, which today is `qa` alone, unlike `tools/crm-import.mjs`'s local-only refusal below. |
 
 All `/admin/` paths are bearer-gated on `ADMIN_TOKEN` by the Worker router.
@@ -86,9 +87,11 @@ stage rows and this module only records the key it placed a card under.
 | Contract signed, Signed, Sold, Won, Closed won | `contract_signed` | direct |
 | Deposit, Deposit received/paid | `contract_signed` | **capped** |
 | Materials in prod(uction), In production, Materials ordered | `contract_signed` | **capped** |
+| Materials ready, Job start booked, Job started, Job complete, Job signed off | `contract_signed` | **capped** |
 | anything else, or blank | `new_lead` | **unmapped**, reported per label |
 
-**Why those two cap.** `Deposit` asserts money received; QuickBooks remains posted accounting truth
+**Why those cap.** The post-contract job stages assert scheduling, installation and sign-off, which
+need real job-phase and acceptance evidence; a migration never fabricates it. `Deposit` asserts money received; QuickBooks remains posted accounting truth
 and an export carries no payment record. `Materials in prod` asserts production started, which needs
 real `operating_production_gates` rows - exactly the reason `JOBNIMBUS-MIGRATION-MAP.md` caps
 JobNimbus `In Production` and `Closed`. `Contract signed` itself imports directly, matching that

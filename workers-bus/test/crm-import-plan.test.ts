@@ -95,6 +95,12 @@ test("stage map: direct placements, capping with a reason, unmapped fallback", (
   assert.equal(unknown.verdict, "unmapped_default");
   assert.equal(unknown.stageKey, "new_lead");
   assert.equal(placeStage(SEEDED_SALES_PIPELINE, null).verdict, "unmapped_default");
+  for (const stage of ["Materials ready", "Job start booked", "Job started", "Job complete", "Job signed off"]) {
+    const placement = placeStage(SEEDED_SALES_PIPELINE, stage);
+    assert.equal(placement.stageKey, "contract_signed");
+    assert.equal(placement.verdict, "capped");
+    assert.equal(placement.cappedFrom, stage);
+  }
 });
 
 test("value only fits a stage that could hold an estimate", () => {

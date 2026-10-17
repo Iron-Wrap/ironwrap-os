@@ -71,6 +71,7 @@ validate:
 test-tools:
 	node --test \
 	  tools/make-audit.test.mjs \
+	  tools/ghl-api-to-crm-import.test.mjs \
 	  tools/d1-migrations-splitter.test.mjs \
 	  tools/validate-site-config-pins.test.mjs \
 	  tools/validate-rail-credential-isolation.test.mjs \

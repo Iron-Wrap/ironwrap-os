@@ -674,9 +674,9 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
     );
     // Pinned to the merged migration chain through 0139, including per-cron heartbeat,
     // durable office intake receipts, and manual measurement history.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=242/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=358/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=600/);
+    assert.match(contract, /REQUIRED_TABLE_COUNT=247/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=362/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=620/);
   }
 });
 

@@ -27,8 +27,9 @@ export function applyLocalEnv(env: Record<string, string | undefined>, home = ho
       if (!match || line.trimStart().startsWith("#")) continue;
       const [, name, raw] = match;
       if (env[name] !== undefined && env[name] !== "") continue;
-      // A quoted value is taken as is; an unquoted one ends at a whitespace-preceded `#` comment.
-      const quoted = /^(["'])(.*)\1$/.exec(raw);
+      // A quoted value is taken as is; an unquoted one ends at a whitespace-preceded `#` comment,
+      // and so does anything after a closing quote.
+      const quoted = /^(["'])(.*)\1(?:\s+#.*)?$/.exec(raw);
       env[name] = quoted ? quoted[2] : raw.replace(/\s+#.*$/, "");
       loaded.push(name);
     }

@@ -9,6 +9,8 @@ interface Env {
   INGEST_TOKEN: string;
   ADMIN_TOKEN: string;
   EFFECT_RUNTIME_TOKEN: string;
+  /** The AI team host's bearer for /api/v1/agents/*; unset keeps that surface dark. */
+  AGENT_HOST_TOKEN: string;
   NEWO_WEBHOOK_TOKEN: string;
   NEWO_API_KEY: string;
   NEWO_BOOKING_TOKEN: string;
@@ -70,6 +72,7 @@ declare namespace Cloudflare {
     INGEST_TOKEN: string;
     ADMIN_TOKEN: string;
     EFFECT_RUNTIME_TOKEN: string;
+    AGENT_HOST_TOKEN: string;
     NEWO_WEBHOOK_TOKEN: string;
     NEWO_API_KEY: string;
     NEWO_BOOKING_TOKEN: string;

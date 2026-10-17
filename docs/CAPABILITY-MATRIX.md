@@ -43,10 +43,10 @@ door for the whole file.
 
 | Area | Current state | Next gate |
 |---|---|---|
-| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and all 116 Worker migrations apply to an isolated local D1 state. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
+| Core technical design | Locally-validated. One-writer-per-fact transitions, the versioned transition envelope, and the effect/reconciliation kernel pass focused checks on this checkout (`workers-bus/test/transition-kernel.test.ts`, `effect-runtime.test.ts`, `operating-core.test.ts`, `store.test.ts`, `core.test.ts`), and all 117 Worker migrations apply to an isolated local D1 state. "Strong" was a judgement about the design, not a proof class; the design is validated in the repository and nowhere else. | keep one authority per fact and remove remaining compatibility dependencies |
 | Lead/job/field foundation | Locally-validated, Partial. Acceptance-driven lead conversion, customer activation, and a read-only derived phase route pass focused checks (`workers-bus/test/d1-native-operating-intake.test.ts`, `native-lead-queue.test.ts`, `operating-core.test.ts`, `work-package-actions.test.ts`, `field-actions-d1.test.ts`; `app/e2e/now-work-list.spec.ts`, `field-pwa.spec.ts`). Multi-worker offline packages, full evidence-slot enforcement, and a real-device reference drill are Target — every check above runs headless. | continue orthogonal lifecycle coverage and real reference proof |
 | Safety/evidence/accounting controls | Locally-validated. Stop-work, occurrence, corrective-action, evidence, and accounting-reconciliation controls pass focused checks (`workers-bus/test/safety-lifecycle.test.ts`, `operational-safety.test.ts`, the 22 `accounting-*.test.ts` files, `effect-runtime.test.ts`). "Unusually strong in source" described the code, not a class: no deployed provider, device, failure, or recovery proof exists anywhere. | deployed provider/device/failure and recovery proof |
-| Repository/migration coherence | Locally-validated, Partial. 116 Worker migrations apply cleanly to an isolated local D1 state, the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
+| Repository/migration coherence | Locally-validated, Partial. 117 Worker migrations apply cleanly to an isolated local D1 state, the DocType contract validator pins 79 DocTypes, and `node tools/validate-documentation.mjs` passes on this checkout. "Mixed" described completeness, not proof: duplicate brokers and the Frappe wheel are not retired and migration ranges and cutovers are not yet governed, so that half stays Target. | retire duplicate brokers/Frappe wheel and govern migration ranges/cutovers |
 | Configured capability | Target, Blocked: no named environment binds flags, secrets, and deployment jointly. This is the area the two admission facts are about, so it cannot be qualified upward: `IRONWRAP-OS-PRODUCT-TEAM-SPEC.md` §9.3's verified flag audit found no capability with flags, secrets, and deployment jointly bound, and the `Deploy` workflow has failed closed at its release-admission gate on every commit since 2026-08-30. The readiness evaluator itself is locally validated (`workers-bus/test/capability-readiness.test.ts`, `readiness-probe.test.ts`, `node tools/production-readiness.mjs contract`), but an evaluator that can report configuration is a different claim from a capability that is configured. "Partial" claimed completeness against zero configured capabilities. | minimum-provider readiness profiles with readback and proof TTLs |
 | End-to-end commercial closure | Locally-validated, Partial, Blocked: provider/tax configuration and QuickBooks keys. Native quote/publication routes and the acceptance-created deposit derivation queue pass focused checks (`workers-bus/test/commercial-proposal-api.test.ts`, `customer-contract-acceptance.test.ts`, `iro208-commercial-reference.test.ts`, the `accounting-*.test.ts` family). No no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout has been executed. | no-seed route through provider mapping, tax policy, accounting readback, gate clearance, and closeout |
 | Production/customer proof | Target. No artifact has been admitted to any environment: the `Deploy` workflow has failed closed at its release-admission gate on `b4ae5643`, `991f0e46`, `3da7ee2b`, `9b51b01a`, `2a213dd1`, and `63a28e43`, with build, staging drill, and promotion skipped each time. `customer_validated` remains false. "Not established" was already honest; this restates it as the class that names it. | controlled production reference journey; real-customer validation remains a separate later gate |
@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 117,
-      "latest": "0143_work_package_stop_supersession_guard.sql"
+      "count": 118,
+      "latest": "0200_agent_coordination.sql"
     }
   },
   "test_observation_policy": {
@@ -211,8 +211,17 @@ Current source tracing distinguishes implemented modules from reachable producti
   each fix is proven to fail without it. Repository tests only; the durable draft, decision and
   governed send that consume it are a separate slice.
 - measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
-  `lead_follow_up_draft` pilot. No resident context -> plan -> policy -> permit -> action ->
-  readback -> reconciliation coordinator exists.
+  `lead_follow_up_draft` pilot.
+- AI team coordination is Locally-validated, Partial (`workers-bus/src/agents/`,
+  `test/agents-policy.test.ts`, `test/agents-api.test.ts`; `agent-host/`, `cd agent-host && npm
+  test`). The Worker carries the contract catalog byte for byte, records each run as an append-only
+  `coordination_run` with its context snapshot and tool manifest, and decides every proposed step
+  by deterministic policy: an unregistered action or argument, a missing, unknown or stale
+  citation, or a ceiling abstains, and people-only actions are refused. Steps that need a person
+  wait as receipts; the owner's delegation settings, decisions on those steps, permits and every
+  action's execution binding are not built yet, so no agent step has an effect. The agent host
+  runs specialists through a provider gateway over Claude and Codex sign-ins. No live provider
+  call, deployment or reference run has happened.
 
 The control kernel is therefore stronger than the reachable commercial chain. Close the missing
 deterministic transitions before expanding AI autonomy.

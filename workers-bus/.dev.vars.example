@@ -60,6 +60,11 @@ AUTHORITY_RECORD_EXECUTOR_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 # deploy/local/keys/ and writes it here, so a local approved write is not a 401.
 EFFECT_RUNTIME_TOKEN=""
 
+# Bearer token for the AI team host API (/api/v1/agents/*, src/agents/api.ts). The agent host
+# presents it as AGENT_HOST_WORKER_TOKEN; start-local-runtime.sh reads it from this file. Empty
+# keeps the agent API dark (404).
+AGENT_HOST_TOKEN="dev-agent-host-token-change-me"
+
 # Independent, false-by-default stage-change automation feature flag.
 # PIPELINE_AUTOMATION_ENABLED="false"
 

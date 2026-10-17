@@ -7,6 +7,9 @@ set -euo pipefail
 # from the archive after that published checksum matched:
 # https://www.sqlite.org/download.html
 install_dir="${1:?supply an isolated SQLite CLI installation directory}"
+for tool in curl sha256sum unzip cc; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "error: $tool is required to build the SQLite CLI" >&2; exit 1; }
+done
 mkdir -p "$install_dir"
 archive="$install_dir/sqlite-source.zip"
 curl --fail --silent --show-error --location --max-time 60 \

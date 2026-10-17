@@ -59,7 +59,7 @@ if [[ "$MODE" == "install" ]]; then
   fi
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  packages=(age ca-certificates curl docker.io git jq nodejs openssl rclone sqlite3 tar)
+  packages=(age ca-certificates curl docker.io gcc git jq libc6-dev nodejs openssl rclone sqlite3 tar unzip)
   if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
     packages+=(docker-compose-v2)
   elif apt-cache show docker-compose-plugin >/dev/null 2>&1; then
@@ -167,7 +167,7 @@ done
 # overflows older fixed parser stacks); Ubuntu 22.04/24.04 and Debian 12 ship older ones, so
 # build the checksum-pinned verifier with tools/install-sqlite-cli.sh and put it first on PATH.
 if command -v sqlite3 >/dev/null 2>&1; then
-  sqlite_version="$(sqlite3 --version 2>/dev/null | awk 'NR == 1 {print $1; exit}')"
+  sqlite_version="$({ sqlite3 --version 2>/dev/null || true; } | awk 'NR == 1 {print $1; exit}')"
   if [[ "$sqlite_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_at_least "$sqlite_version" "3.46.0"; then pass "SQLite CLI is 3.46.0 or newer"; else fail "SQLite CLI is older than 3.46.0; install the pinned verifier with tools/install-sqlite-cli.sh"; fi
 fi
 if command -v node >/dev/null 2>&1; then

@@ -21,6 +21,10 @@ agent-host/evals/
   score.mjs                 pure deterministic scorer the runner calls
   qualification.v1.json     staged production-route qualification run (see below)
   report.mjs                builds the qualification report from scored suites
+  history.v1.json           history evaluation on IronWrap's own records (see below)
+  history-build.mjs         builds point-in-time, pseudonymised history cases from an export
+  history.mjs               deterministic, aggregate-only history metrics and bars
+  privacy.mjs               pseudonymiser, free-text scrubber, and the prompt guard
   validate.mjs              structural validator (no dependencies)
   <specialist_id>/
     golden.v1.json          at least 20 cases
@@ -410,6 +414,106 @@ specialist against its pass bar, then data errors, catastrophes, failures, and w
 every specialist that did not qualify. Costs are the gateway's accounting; on subscription sign-ins
 they measure usage, not money billed.
 
+## History evaluation
+
+Golden and red-team cases are synthetic. The history evaluation adds a third score: specialists
+are replayed on IronWrap's own past records, and their proposals are compared with what actually
+happened. [`history.v1.json`](history.v1.json) defines it. Real records never enter Git. The runner
+reads them only from git-ignored exports under `output/history/<source>/` and keeps cases, outcomes,
+and reports under `output/evals/history`. Transcripts are deleted after scoring
+(`keep_transcripts` stays false). The validator fails on any record file (`.ndjson`, `.jsonl`, `.csv`,
+`.tsv`, archives, spreadsheets, databases) or link under `agent-host/evals/`.
+
+**Privacy before the prompt.** Business facts may reach the model; personal identifiers may not.
+- Every field the spec names under `identifiers` becomes a stable, letters-only token keyed by a
+  salt from `salt_env`; the mapping stays under `output/`. The dictionary covers the whole export:
+  every contact, the names on jobs and notes (`related`, `primary`), staff, companies, and street
+  lines and postal codes.
+- Address fields are removed. What remains is a municipality from `privacy.municipalities` (any
+  other place is `other`) and a province code.
+- Free text is normalised (accents, apostrophes, dashes) and scrubbed of every dictionary value,
+  in any case, possessive, or plural form (a one-word name only where it stands capitalised, so
+  "will" and "green" survive), and of detectable patterns: email, phone, postal code, urban and
+  rural addresses in any case, Alberta land descriptions, coordinates, calendar dates, and long
+  account numbers. Then every remaining word must be ordinary, or the text is dropped and counted
+  (`kept_text` and `dropped_text` give the share kept):
+  - a lower-case word must be in the base list (`privacy-words.mjs`) or used lower case in at
+    least `vocabulary_min_records` records of the same export; name parts, words ever seen after a
+    greeting, an introduction, or "from", "with", "per", "tell", and words capitalised mid-sentence
+    twice or more never qualify;
+  - a capitalised or upper-case word must be an acronym, a token, a safe place, or in the base
+    list and not a name. Given-name homonyms (Grace, Bill) never count, except "Will" and "May"
+    starting a sentence as verbs and months next to a date word or a number. Surname homonyms
+    (Green, Price, Wood) count only starting a sentence and not before what a person does
+    ("Price confirmed", "Wood is coming").
+  - Safe places are the listed municipalities that share no word with any name in the export, so a
+    customer called Brooks or Hanna Manning is scrubbed, never read as the town.
+  A name outside the export ("my husband bob") therefore drops the text instead of passing it.
+  Residual risk: a surname homonym at the start of a sentence before an ordinary verb ("Green
+  needs a quote") still passes.
+- Source values are mapped to `source_categories`; the raw value is never copied. Fields under
+  `never_copied` (names, current statuses, tags, values, stages, custom fields) never reach a case.
+- `createGuard(originals, places, municipalities)` finds every original identifier with the
+  scrubber's matching (any case and apostrophe; a one-word value only where it stands capitalised;
+  safe places removed first, and a JSON `"municipality"` whose value is on the list) and every
+  pattern in a text. A text field that fails it is dropped and counted; a
+  case that still fails it stops the build. The runner must run the guard on every assembled prompt
+  and send nothing that fails.
+
+**Point in time.** A case holds only what was recorded by its decision time, with times as ISO 8601
+offsets from it; outcomes (`truths`) stay apart and never enter a prompt.
+- Leads are decided at the end of their intake window. A description last written after that is
+  left out, and contacts that already had a job, or whose type is excluded, are not leads.
+- Durations are decided `decision_lead_days` before the start, only for finished jobs whose dates
+  were entered at least a day ahead. The truth is working days (Monday to Friday by Alberta dates,
+  both ends included; a time at exactly UTC midnight is a stored date; statutory holidays count as
+  working days), the unit of `planned_days`; JobNimbus start and end are scheduled dates, so
+  it measures planning, not a crew time sheet. The scope is the job description, which has no edit
+  history: when the job changed after the decision, a description that reports an outcome (took,
+  finished, done, paid, update) is left out and counted. A later edit that states the duration in
+  other words remains a known residual risk.
+- GoHighLevel keeps only the current status and the time of the last status change: won within the
+  conversion horizon is a conversion, lost or abandoned is not, open past the horizon is not, and
+  open within it is too recent to use. `won_after_horizon` and `open_past_horizon` count the labels
+  the horizon decides. Custom fields carry current state without timestamps, so only the ids listed
+  in `intake_custom_fields` are copied, as scrubbed text, and a value that reports an outcome is
+  dropped and counted.
+
+**Scoring.** Deterministic; no judge model sees history. `history.mjs` computes the metrics raw and
+applies the bars to the raw values, then publishes aggregates only:
+- shares with their Wilson 95% interval, unless the count or its complement is between 1 and 4;
+- a distribution's mean from 5 records, its quartiles from 10, and its 10th and 90th percentiles
+  from 20;
+- nothing under 5 records (`{ n, suppressed: true }`).
+A bar over fewer than 5 records is `insufficient`, and AUC and top-decile lift need 5 converted and
+5 other leads; lift depends on the base rate, so it compares runs on the same sample only. A bar's
+published `value` is null whenever its metric is not published. `aggregateViolations`
+rejects any other key, string, list, or number too large to be a metric, and any small group or
+cell (read from `count`, or from `rate` times `n`), and `historyScore` and the qualification report both
+refuse a history section that fails it.
+
+**Specialists.**
+- `lead_concierge` (awaiting the GoHighLevel intake field ids, and the JobNimbus export): GoHighLevel
+  opportunities become ready once `intake_custom_fields` names the fields a lead fills in; without
+  them a case would hold only a source and a municipality. Its
+  triage (`qualified`, `nurture`, `disqualified`, `spam`) is scored against conversion: AUC, the
+  share of converted leads marked qualified, and the share dropped. Samples take converted and other
+  leads half and half.
+- `scheduler_dispatcher` (awaiting the JobNimbus export): `schedule.draft` `planned_days` against
+  the scheduled days.
+- `estimator` (awaiting estimates, measurements, and job costs): price error against the quoted and
+  accepted totals, margin error, and prices below actual cost, with the person's own quotes below
+  cost as the baseline.
+- `billing_reconciliation` (awaiting QuickBooks): precision, recall, exact amounts, cross-customer
+  applications (a payer the records show paying that customer, such as an insurer, is legitimate),
+  and invented applications.
+
+**Bars.** Each bar names a metric path with `min` or `max`, and `min_n` when the metric needs that
+many records to be read. A gating bar that is missed fails qualification; without gating bars the
+score is `advisory`. Advisory bars become gating only after the owner reviews the first measured
+distribution. Contract item 14 does not yet name the history score, so the orchestrator records it
+there before the first gated run.
+
 ## Validation
 
 `node agent-host/evals/validate.mjs` (tests: `validate.test.mjs`, `score.test.mjs`, `report.test.mjs`) checks every playbook, allowlist, case file, and rubric: required
@@ -418,4 +522,7 @@ catastrophe ids, red-team coverage, relative times only, and synthetic contact d
 without the contract catalog only in structural mode and says so. `--require-complete`, which
 `make validate` passes, also fails when a roster specialist has no playbook. When
 `qualification.v1.json` is required too, and its stages, ledger, pacing, and judge routing are
-checked.
+checked. `history.v1.json`, when present, is checked for output-only sources, the salt variable and
+`keep_transcripts`, privacy coverage, the place list, builder parameters (a status pattern may not
+repeat a quantified group), intake fields on a ready GoHighLevel source, and bars over metrics that
+exist.

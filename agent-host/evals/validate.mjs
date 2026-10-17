@@ -3,9 +3,14 @@
 // Contract format: agent-host/specialists/README.md and agent-host/evals/README.md.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { buildDurationCases, buildGhlLeadCases, buildLeadCases, durationOutcome, leadOutcome } from "./history-build.mjs";
+import { MIN_BUCKET, metricKinds, validMetricPath } from "./history.mjs";
+
+const metricNames = (id) => (metricKinds(id) ? Object.keys(metricKinds(id)) : null);
 
 const CONTRACT_PATH = "docs/AI-TEAM-CONTRACT.md";
 const CATALOG_START = "<!-- ai-team-contract:start -->";
@@ -231,8 +236,9 @@ function readJson(path, fail) {
 
 function directories(path) {
   if (!existsSync(path)) return [];
-  return readdirSync(path)
-    .filter((name) => statSync(join(path, name)).isDirectory())
+  return readdirSync(path, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
     .sort();
 }
 
@@ -705,6 +711,123 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
   }
 }
 
+// history.v1.json: the history evaluation reads real records only from git-ignored output/, keeps
+// the minimum group size, names every personal field to pseudonymise, gives each source the
+// parameters its builder needs, and gives each specialist bars over metrics that exist. Record data
+// and links never live in the repository.
+const HISTORY_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields", "awaiting_schema", "awaiting_quickbooks"]);
+const SOURCE_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields"]);
+const HISTORY_OUTCOMES = { lead_concierge: "leadOutcome", scheduler_dispatcher: "durationOutcome" };
+const HISTORY_BUILDERS = {
+  lead_concierge: { ghl: "buildGhlLeadCases", jobnimbus: "buildLeadCases" },
+  scheduler_dispatcher: { jobnimbus: "buildDurationCases" },
+};
+const HISTORY_CODE = { buildLeadCases, buildGhlLeadCases, buildDurationCases, leadOutcome, durationOutcome };
+const BUILDER_PARAMS = {
+  buildLeadCases: { numbers: ["intake_window_minutes", "conversion_horizon_days", "min_outcome_age_days"], lists: ["won_statuses", "excluded_record_types"], pattern: "status_change_pattern" },
+  buildGhlLeadCases: { numbers: ["intake_window_minutes", "conversion_horizon_days"], lists: ["intake_custom_fields"] },
+  buildDurationCases: { numbers: ["decision_lead_days"], lists: ["completed_statuses"] },
+};
+const PRIVACY_MINIMUM = {
+  contact: {
+    identifiers: ["jnid", "display_name", "first_name", "last_name", "email", "mobile_phone", "home_phone", "phone", "sales_rep", "sales_rep_name", "created_by_name"],
+    address: ["address_line1", "zip", "geo"],
+    free_text: ["description"],
+  },
+  job: { identifiers: ["jnid", "sales_rep", "sales_rep_name"], address: ["address_line1", "zip", "geo"], free_text: ["description"] },
+  activity: { identifiers: ["created_by", "created_by_name"], address: [], free_text: ["note"] },
+  ghl_contact: { identifiers: ["id", "contactName", "firstName", "lastName", "email", "phone"], address: ["address1", "postalCode"], free_text: [] },
+  ghl_opportunity: { identifiers: ["id", "contactId", "contact.name", "contact.email", "contact.phone"], address: [], free_text: [] },
+};
+const NEVER_COPIED_MINIMUM = ["name", "related", "primary", "status_name", "approved_estimate_total", "date_end", "monetaryValue", "customFields"];
+// A group holding a quantifier or alternatives, itself repeated: "(a+)+" and "(x|xx)+" backtrack
+// without end on a long note.
+const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}|](?:[^()\\]|\\.)*\)[+*{]/;
+const RECORD_FILE = /\.(?:ndjson|jsonl|csv|tsv|gz|zip|xlsx?|parquet|sqlite3?|db)$/i;
+
+function checkHistory(root, fail) {
+  const evalsDir = join(root, "agent-host/evals");
+  const walk = (dir) =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) return [[path, "links are not allowed under agent-host/evals"]];
+      if (stat.isDirectory()) return walk(path);
+      return RECORD_FILE.test(name) ? [[path, "record data does not belong in the repository; history cases live under output/"]] : [];
+    });
+  for (const [path, message] of walk(evalsDir)) fail(`${path}: ${message}`);
+  const path = join(evalsDir, "history.v1.json");
+  if (!existsSync(path)) return;
+  const config = readJson(path, fail);
+  if (!isObject(config)) return;
+  const bad = (message) => fail(`${path}: ${message}`);
+  if (config.schema_version !== "ironwrap.eval-history.v1") bad("wrong schema_version");
+  for (const key of ["jobnimbus_export", "ghl_export", "quickbooks_export", "output_dir"]) {
+    const value = config.source?.[key];
+    if (typeof value !== "string" || !posix.normalize(value).startsWith("output/") || value.split("/").includes("..")) bad(`source.${key} must be under output/, which Git ignores`);
+  }
+  if (typeof config.source?.salt_env !== "string" || !/^[A-Z][A-Z0-9_]{2,}$/.test(config.source.salt_env)) bad("source.salt_env must name an environment variable");
+  if (config.source?.keep_transcripts !== false) bad("source.keep_transcripts must be false");
+  if (!(Number.isInteger(config.repetitions) && config.repetitions >= 1)) bad("repetitions must be a positive integer");
+  const privacy = isObject(config.privacy) ? config.privacy : {};
+  if (privacy.min_bucket !== MIN_BUCKET) bad(`privacy.min_bucket must be ${MIN_BUCKET}`);
+  if (!(Number.isInteger(privacy.vocabulary_min_records) && privacy.vocabulary_min_records >= 10)) bad("privacy.vocabulary_min_records must be an integer of at least 10");
+  const placeName = (name) => typeof name === "string" && name.length <= 40 && /^\p{L}[\p{L}.' -]*$/u.test(name);
+  if (!Array.isArray(privacy.municipalities) || privacy.municipalities.length === 0 || !privacy.municipalities.every(placeName)) bad("privacy.municipalities must list place names (letters, spaces, dots, apostrophes, dashes)");
+  for (const [record, minimum] of Object.entries(PRIVACY_MINIMUM)) {
+    const block = privacy[record];
+    if (!isObject(block) || !isObject(block.identifiers) || !Array.isArray(block.address) || !Array.isArray(block.free_text)) {
+      bad(`privacy.${record} needs identifiers, address, and free_text`);
+      continue;
+    }
+    for (const field of minimum.identifiers) if (!Object.hasOwn(block.identifiers, field)) bad(`privacy.${record}.identifiers must include ${field}`);
+    for (const key of ["address", "free_text"]) for (const field of minimum[key]) if (!block[key].includes(field)) bad(`privacy.${record}.${key} must include ${field}`);
+  }
+  const neverCopied = Array.isArray(privacy.never_copied) ? privacy.never_copied : [];
+  for (const field of NEVER_COPIED_MINIMUM) if (!neverCopied.includes(field)) bad(`privacy.never_copied must include ${field}`);
+  for (const [id, spec] of Object.entries(isObject(config.specialists) ? config.specialists : {})) {
+    if (!ROSTER.includes(id)) bad(`${id} is not a roster specialist`);
+    if (!HISTORY_STATUSES.has(spec?.status)) bad(`${id}.status must be one of ${[...HISTORY_STATUSES].join(", ")}`);
+    if (!(Number.isInteger(spec?.sample) && spec.sample >= MIN_BUCKET)) bad(`${id}.sample must be an integer of at least ${MIN_BUCKET}`);
+    if (spec?.outcome !== undefined && spec.outcome !== HISTORY_OUTCOMES[id]) bad(`${id}.outcome must be ${HISTORY_OUTCOMES[id] ?? "absent"}`);
+    const sources = isObject(spec?.sources) ? Object.entries(spec.sources) : [];
+    if (spec?.status === "ready" && !sources.some(([, source]) => source?.status === "ready")) bad(`${id} is ready but has no ready source`);
+    if (spec?.status === "ready" && !HISTORY_CODE[spec.outcome]) bad(`${id} is ready but names no outcome`);
+    for (const [name, source] of sources) {
+      const where = `${id}.sources.${name}`;
+      if (!SOURCE_STATUSES.has(source?.status)) bad(`${where}.status must be one of ${[...SOURCE_STATUSES].join(", ")}`);
+      if (source?.builder !== HISTORY_BUILDERS[id]?.[name]) bad(`${where}.builder must be ${HISTORY_BUILDERS[id]?.[name] ?? "a known builder"}`);
+      const params = BUILDER_PARAMS[source?.builder];
+      if (!params) continue;
+      for (const key of params.numbers) if (!(Number.isInteger(source[key]) && source[key] >= 0)) bad(`${where}.${key} must be a non-negative integer`);
+      for (const key of params.lists) if (!Array.isArray(source[key])) bad(`${where}.${key} must be a list`);
+      if (params.pattern) {
+        try {
+          new RegExp(source[params.pattern], "i");
+          if (NESTED_QUANTIFIER.test(source[params.pattern])) bad(`${where}.${params.pattern} repeats a quantified group`);
+        } catch {
+          bad(`${where}.${params.pattern} is not a valid pattern`);
+        }
+      }
+      if (source.builder === "buildGhlLeadCases" && source.status === "ready" && !(Array.isArray(source.intake_custom_fields) && source.intake_custom_fields.length > 0)) bad(`${where} is ready but lists no intake_custom_fields`);
+      if (source.builder === "buildLeadCases" && !(source.min_outcome_age_days >= source.conversion_horizon_days)) bad(`${where}.min_outcome_age_days must cover conversion_horizon_days`);
+      if (source.builder === "buildLeadCases" && Array.isArray(source.won_statuses) && source.won_statuses.length === 0) bad(`${where}.won_statuses must not be empty`);
+    }
+    if (id === "lead_concierge" && (!Array.isArray(spec?.disqualify_reasons) || !isObject(spec?.source_categories))) bad(`${id} needs disqualify_reasons and source_categories`);
+    if (!metricNames(id)) bad(`${id} has no history metrics`);
+    const bars = Array.isArray(spec?.bars) ? spec.bars : [];
+    if (bars.length === 0) bad(`${id} needs at least one bar`);
+    bars.forEach((bar, index) => {
+      const where = `${id}.bars[${index}]`;
+      if (metricNames(id) && !validMetricPath(id, bar?.metric)) bad(`${where} reads unknown metric ${bar?.metric}`);
+      if (typeof bar?.gating !== "boolean") bad(`${where}.gating must be true or false`);
+      if (typeof bar?.min !== "number" && typeof bar?.max !== "number") bad(`${where} needs min or max`);
+      if (typeof bar?.min === "number" && typeof bar?.max === "number" && bar.min > bar.max) bad(`${where} has min above max`);
+      if (bar?.min_n !== undefined && !(Number.isInteger(bar.min_n) && bar.min_n >= MIN_BUCKET)) bad(`${where}.min_n must be an integer of at least ${MIN_BUCKET}`);
+    });
+  }
+}
+
 export function validate(root, { requireComplete = false } = {}) {
   const failures = [];
   const notes = [];
@@ -758,6 +881,7 @@ export function validate(root, { requireComplete = false } = {}) {
     if (!specialistIds.includes(id)) fail(`agent-host/evals/${id}: no matching specialist playbook`);
   }
   checkQualification(root, specialistsDir, specialistIds, requireComplete, fail);
+  checkHistory(root, fail);
   if (catalog) {
     const missing = [...catalog.specialists.keys()].filter((id) => !specialistIds.includes(id));
     if (missing.length > 0) {

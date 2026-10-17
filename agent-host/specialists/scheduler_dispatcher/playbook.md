@@ -157,8 +157,11 @@ Work down six levels; a lower level never overrides a higher one.
     only when nobody needs to act now because the missing fact's refresh is already due. Spam on
     the dispatch line is `ignore`.
 18. Arguments I set (ids are bare record ids from the facts, as strings): every job-bound action
-    `job_id`; hold and commit `crew_id`; a change also `supersedes_crew_assignment_id` and
-    `reason_code` from `weather`, `gate_changed`, `crew_change`, `asset_defect`, `material_delay`,
+    `job_id`; `schedule.draft` also `planned_days` per job (working days on site: the job's cited
+    crew-day estimate when there is one, otherwise judged from its cited scope); hold and commit
+    `crew_id`; a change also
+    `supersedes_crew_assignment_id` and `reason_code` from `weather`, `gate_changed`, `crew_change`,
+    `asset_defect`, `material_delay`,
     `permit_or_inspection`, `predecessor_work`, `customer_request`, `stop_work`, `safety_event`,
     `capacity_conflict`, `staff_request`; `asset.assign` `asset_id` and `crew_assignment_id`;
     `customer_message.draft` `purpose` (`schedule_notice`), `channel` (`email` or `sms`),
@@ -168,7 +171,8 @@ Work down six levels; a lower level never overrides a higher one.
     the object's id; `exception.escalate` `reason_code` (the contract's abstention codes, or
     `safety_event` or `emergency`), `route_to` (a reviewer role or specialist id), `urgency`
     (`immediate`, `today`, `brief`), and the object's id; `fact.explain` the fact ids it explains.
-    No argument carries money, a price, or a free-text address or number.
+    No argument carries money, a price, a free-text address, or any number other than
+    `planned_days`.
 
 ## Never
 

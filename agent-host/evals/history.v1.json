@@ -1,0 +1,518 @@
+{
+  "schema_version": "ironwrap.eval-history.v1",
+  "source": {
+    "jobnimbus_export": "output/history/jobnimbus",
+    "ghl_export": "output/history/ghl",
+    "quickbooks_export": "output/history/quickbooks",
+    "output_dir": "output/evals/history",
+    "salt_env": "IRONWRAP_HISTORY_SALT",
+    "keep_transcripts": false
+  },
+  "repetitions": 1,
+  "privacy": {
+    "min_bucket": 5,
+    "vocabulary_min_records": 20,
+    "municipalities": [
+      "Edmonton",
+      "Calgary",
+      "Red Deer",
+      "Lethbridge",
+      "St. Albert",
+      "Medicine Hat",
+      "Grande Prairie",
+      "Airdrie",
+      "Spruce Grove",
+      "Leduc",
+      "Fort Saskatchewan",
+      "Okotoks",
+      "Cochrane",
+      "Lloydminster",
+      "Camrose",
+      "Chestermere",
+      "Beaumont",
+      "Stony Plain",
+      "Wetaskiwin",
+      "Sylvan Lake",
+      "Lacombe",
+      "Cold Lake",
+      "Brooks",
+      "Strathmore",
+      "High River",
+      "Canmore",
+      "Morinville",
+      "Blackfalds",
+      "Whitecourt",
+      "Olds",
+      "Hinton",
+      "Taber",
+      "Coaldale",
+      "Edson",
+      "Ponoka",
+      "Bonnyville",
+      "Devon",
+      "Gibbons",
+      "Redcliff",
+      "Rocky Mountain House",
+      "Drumheller",
+      "Innisfail",
+      "Banff",
+      "Vegreville",
+      "Slave Lake",
+      "Athabasca",
+      "Peace River",
+      "Wainwright",
+      "Westlock",
+      "Barrhead",
+      "Didsbury",
+      "Carstairs",
+      "Crossfield",
+      "Bon Accord",
+      "Legal",
+      "Redwater",
+      "Bruderheim",
+      "Lamont",
+      "Tofield",
+      "Millet",
+      "Calmar",
+      "Thorsby",
+      "Drayton Valley",
+      "Mayerthorpe",
+      "Onoway",
+      "Stettler",
+      "Three Hills",
+      "Fort McMurray",
+      "Sherwood Park",
+      "Nisku",
+      "Acheson",
+      "Ardrossan",
+      "Langdon",
+      "Bragg Creek",
+      "Springbank",
+      "Penhold",
+      "Bowden",
+      "Sundre",
+      "Rimbey",
+      "Bentley",
+      "Eckville",
+      "Delburne",
+      "Trochu",
+      "Hanna",
+      "Provost",
+      "Castor",
+      "Killam",
+      "Sedgewick",
+      "Viking",
+      "Two Hills",
+      "Vermilion",
+      "Mundare",
+      "St. Paul",
+      "Elk Point",
+      "Smoky Lake",
+      "Boyle",
+      "Lac La Biche",
+      "Swan Hills",
+      "Fox Creek",
+      "Valleyview",
+      "Sexsmith",
+      "Beaverlodge",
+      "Spirit River",
+      "Fairview",
+      "Grimshaw",
+      "Manning",
+      "High Level",
+      "High Prairie",
+      "Falher",
+      "Wembley",
+      "Grande Cache",
+      "Jasper",
+      "Pincher Creek",
+      "Claresholm",
+      "Fort Macleod",
+      "Cardston",
+      "Raymond",
+      "Magrath",
+      "Picture Butte",
+      "Vauxhall",
+      "Bow Island",
+      "Black Diamond",
+      "Turner Valley",
+      "Diamond Valley",
+      "Irricana",
+      "Beiseker",
+      "Strathcona County",
+      "Parkland County",
+      "Sturgeon County",
+      "Leduc County",
+      "Rocky View County",
+      "Foothills County",
+      "Mountain View County",
+      "Red Deer County",
+      "Lac Ste. Anne County",
+      "Wood Buffalo"
+    ],
+    "contact": {
+      "identifiers": {
+        "jnid": "contact",
+        "external_id": "contact",
+        "display_name": "person",
+        "first_name": "person",
+        "last_name": "person",
+        "company": "company",
+        "email": "email",
+        "mobile_phone": "phone",
+        "home_phone": "phone",
+        "work_phone": "phone",
+        "phone": "phone",
+        "sales_rep": "email",
+        "sales_rep_name": "person",
+        "created_by_name": "person"
+      },
+      "address": [
+        "address_line1",
+        "address_line2",
+        "zip",
+        "geo",
+        "country_name"
+      ],
+      "free_text": [
+        "description"
+      ]
+    },
+    "job": {
+      "identifiers": {
+        "jnid": "job",
+        "external_id": "contact",
+        "sales_rep": "email",
+        "sales_rep_name": "person"
+      },
+      "address": [
+        "address_line1",
+        "address_line2",
+        "zip",
+        "geo",
+        "country_name"
+      ],
+      "free_text": [
+        "description"
+      ]
+    },
+    "activity": {
+      "identifiers": {
+        "jnid": "activity",
+        "created_by": "email",
+        "created_by_name": "person"
+      },
+      "address": [],
+      "free_text": [
+        "note"
+      ]
+    },
+    "ghl_contact": {
+      "identifiers": {
+        "id": "contact",
+        "contactName": "person",
+        "firstName": "person",
+        "lastName": "person",
+        "firstNameRaw": "person",
+        "lastNameRaw": "person",
+        "companyName": "company",
+        "businessId": "company",
+        "email": "email",
+        "additionalEmails": "email",
+        "phone": "phone",
+        "website": "company",
+        "assignedTo": "person",
+        "followers": "person"
+      },
+      "address": [
+        "address1",
+        "postalCode",
+        "country"
+      ],
+      "free_text": []
+    },
+    "ghl_opportunity": {
+      "identifiers": {
+        "id": "contact",
+        "contactId": "contact",
+        "contact.id": "contact",
+        "contact.name": "person",
+        "contact.companyName": "company",
+        "contact.email": "email",
+        "contact.phone": "phone",
+        "assignedTo": "person",
+        "followers": "person"
+      },
+      "address": [],
+      "free_text": []
+    },
+    "never_copied": [
+      "name",
+      "related",
+      "primary",
+      "status",
+      "status_name",
+      "tags",
+      "approved_estimate_total",
+      "approved_invoice_total",
+      "date_end",
+      "date_updated",
+      "is_active",
+      "is_archived",
+      "cf_*",
+      "monetaryValue",
+      "pipelineStageId",
+      "customFields",
+      "relations",
+      "contact.tags",
+      "contact.score",
+      "effectiveProbability",
+      "lostReasonId",
+      "profilePhoto"
+    ]
+  },
+  "specialists": {
+    "lead_concierge": {
+      "status": "awaiting_fields",
+      "outcome": "leadOutcome",
+      "sample": 300,
+      "stratify": "converted",
+      "disqualify_reasons": [
+        "out_of_scope",
+        "out_of_area",
+        "declined"
+      ],
+      "source_categories": {
+        "website": [
+          "website",
+          "web",
+          "form",
+          "online"
+        ],
+        "phone": [
+          "phone",
+          "call"
+        ],
+        "google": [
+          "google",
+          "gbp",
+          "adwords"
+        ],
+        "facebook": [
+          "facebook",
+          "meta",
+          "instagram"
+        ],
+        "referral": [
+          "referral",
+          "word of mouth",
+          "friend",
+          "neighbour",
+          "neighbor"
+        ],
+        "repeat": [
+          "repeat",
+          "existing",
+          "past customer"
+        ],
+        "directory": [
+          "homestars",
+          "kijiji",
+          "yelp",
+          "houzz"
+        ],
+        "advertising": [
+          "ad",
+          "flyer",
+          "sign",
+          "radio",
+          "mail"
+        ]
+      },
+      "sources": {
+        "ghl": {
+          "status": "awaiting_fields",
+          "builder": "buildGhlLeadCases",
+          "intake_window_minutes": 15,
+          "conversion_horizon_days": 120,
+          "intake_custom_fields": []
+        },
+        "jobnimbus": {
+          "status": "awaiting_export",
+          "builder": "buildLeadCases",
+          "intake_window_minutes": 15,
+          "conversion_horizon_days": 365,
+          "min_outcome_age_days": 365,
+          "status_change_pattern": "^(?:job )?status changed (?:from .+? )?to (.+?)$",
+          "won_statuses": [
+            "signed",
+            "sold",
+            "won",
+            "closed won",
+            "scheduled",
+            "in progress",
+            "in production",
+            "work in progress",
+            "completed",
+            "complete",
+            "job completed",
+            "invoiced",
+            "paid"
+          ],
+          "excluded_record_types": [
+            "supplier",
+            "vendor",
+            "subcontractor",
+            "sub",
+            "employee",
+            "adjuster",
+            "insurance"
+          ]
+        }
+      },
+      "bars": [
+        {
+          "metric": "converted_dropped.rate",
+          "max": 0.02,
+          "min_n": 100,
+          "gating": true
+        },
+        {
+          "metric": "auc",
+          "min": 0.7,
+          "gating": false
+        },
+        {
+          "metric": "converted_marked_qualified.rate",
+          "min": 0.8,
+          "gating": false
+        },
+        {
+          "metric": "abstention.rate",
+          "max": 0.15,
+          "gating": false
+        }
+      ]
+    },
+    "scheduler_dispatcher": {
+      "status": "awaiting_export",
+      "outcome": "durationOutcome",
+      "sample": 150,
+      "sources": {
+        "jobnimbus": {
+          "status": "awaiting_export",
+          "builder": "buildDurationCases",
+          "decision_lead_days": 7,
+          "completed_statuses": [
+            "completed",
+            "complete",
+            "job completed",
+            "invoiced",
+            "paid"
+          ]
+        }
+      },
+      "bars": [
+        {
+          "metric": "abs_error_pct.p50",
+          "max": 25,
+          "gating": false
+        },
+        {
+          "metric": "abs_error_pct.p90",
+          "max": 60,
+          "gating": false
+        },
+        {
+          "metric": "error_pct.p50",
+          "min": -10,
+          "max": 10,
+          "gating": false
+        },
+        {
+          "metric": "abstention.rate",
+          "max": 0.2,
+          "gating": false
+        }
+      ]
+    },
+    "estimator": {
+      "status": "awaiting_schema",
+      "needs": [
+        "estimate rows with totals, versions, and creation times",
+        "measurement values per job",
+        "actual job cost per job, for the margin and below-cost metrics"
+      ],
+      "sample": 150,
+      "bars": [
+        {
+          "metric": "abs_error_vs_quoted_pct.p50",
+          "max": 10,
+          "gating": false
+        },
+        {
+          "metric": "abs_error_vs_quoted_pct.p90",
+          "max": 25,
+          "gating": false
+        },
+        {
+          "metric": "error_vs_quoted_pct.p50",
+          "min": -5,
+          "max": 5,
+          "gating": false
+        },
+        {
+          "metric": "margin_error_points.p50",
+          "min": -5,
+          "max": 5,
+          "gating": false
+        },
+        {
+          "metric": "below_actual_cost.rate",
+          "max": 0.05,
+          "gating": false
+        },
+        {
+          "metric": "abstention.rate",
+          "max": 0.2,
+          "gating": false
+        }
+      ]
+    },
+    "billing_reconciliation": {
+      "status": "awaiting_quickbooks",
+      "needs": [
+        "QuickBooks payments and deposits with their applications to invoices",
+        "QuickBooks invoices with customer, amount, and creation time"
+      ],
+      "sample": 150,
+      "bars": [
+        {
+          "metric": "cross_customer.rate",
+          "max": 0,
+          "gating": true
+        },
+        {
+          "metric": "false_application.rate",
+          "max": 0.01,
+          "gating": true
+        },
+        {
+          "metric": "exact_amount.rate",
+          "min": 0.99,
+          "gating": true
+        },
+        {
+          "metric": "precision",
+          "min": 0.98,
+          "gating": false
+        },
+        {
+          "metric": "recall",
+          "min": 0.9,
+          "gating": false
+        }
+      ]
+    }
+  }
+}

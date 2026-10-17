@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -573,4 +573,62 @@ test("qualification config: orchestrator conditions are pinned and the model com
     "estimate_usd_per_run.judge_codex must be a positive number",
     "the pilot does not cover the routine route",
   ]);
+});
+
+test("history config: output-only sources, privacy coverage, builder parameters, valid bars; no record files or links in evals", () => {
+  const root = fixture();
+  const real = JSON.parse(readFileSync(join(here, "history.v1.json"), "utf8"));
+  const write = (config) => writeFileSync(join(root, "agent-host/evals/history.v1.json"), JSON.stringify(config));
+  write(real);
+  assert.deepEqual(validate(root).failures, []);
+  const broken = structuredClone(real);
+  broken.source.output_dir = "output/../agent-host/evals/history";
+  broken.source.salt_env = "salt";
+  broken.source.keep_transcripts = true;
+  broken.privacy.min_bucket = 3;
+  broken.privacy.vocabulary_min_records = 3;
+  broken.privacy.municipalities.push("12 Sample Crescent SW");
+  delete broken.privacy.contact.identifiers.email;
+  delete broken.privacy.job.identifiers.sales_rep_name;
+  broken.privacy.never_copied = broken.privacy.never_copied.filter((field) => field !== "monetaryValue");
+  const lead = broken.specialists.lead_concierge;
+  lead.sources.ghl.builder = "buildLeadCases";
+  lead.sources.jobnimbus.status_change_pattern = "^(a+)+$";
+  lead.sources.jobnimbus.min_outcome_age_days = 30;
+  lead.bars = [{ metric: "abs_error_pct.p5O", min: 0.9, max: 0.1, gating: "yes", min_n: 2 }];
+  broken.specialists.painter = { status: "someday", sample: 10, bars: [] };
+  write(broken);
+  writeFileSync(join(root, "agent-host/evals", ID, "history.CSV"), "x\n");
+  symlinkSync(join(root, "nowhere"), join(root, "agent-host/evals/dangling"));
+  assert.deepEqual(
+    validate(root).failures.map((failure) => failure.replace(/^.*?(history\.v1\.json|history\.CSV|dangling): /, "")),
+    [
+      "links are not allowed under agent-host/evals",
+      "record data does not belong in the repository; history cases live under output/",
+      "source.output_dir must be under output/, which Git ignores",
+      "source.salt_env must name an environment variable",
+      "source.keep_transcripts must be false",
+      "privacy.min_bucket must be 5",
+      "privacy.vocabulary_min_records must be an integer of at least 10",
+      "privacy.municipalities must list place names (letters, spaces, dots, apostrophes, dashes)",
+      "privacy.contact.identifiers must include email",
+      "privacy.job.identifiers must include sales_rep_name",
+      "privacy.never_copied must include monetaryValue",
+      "lead_concierge.sources.ghl.builder must be buildGhlLeadCases",
+      "lead_concierge.sources.ghl.min_outcome_age_days must be a non-negative integer",
+      "lead_concierge.sources.ghl.won_statuses must be a list",
+      "lead_concierge.sources.ghl.excluded_record_types must be a list",
+      "lead_concierge.sources.ghl.min_outcome_age_days must cover conversion_horizon_days",
+      "lead_concierge.sources.jobnimbus.status_change_pattern repeats a quantified group",
+      "lead_concierge.sources.jobnimbus.min_outcome_age_days must cover conversion_horizon_days",
+      "lead_concierge.bars[0] reads unknown metric abs_error_pct.p5O",
+      "lead_concierge.bars[0].gating must be true or false",
+      "lead_concierge.bars[0] has min above max",
+      "lead_concierge.bars[0].min_n must be an integer of at least 5",
+      "painter is not a roster specialist",
+      "painter.status must be one of ready, awaiting_export, awaiting_fields, awaiting_schema, awaiting_quickbooks",
+      "painter has no history metrics",
+      "painter needs at least one bar",
+    ],
+  );
 });

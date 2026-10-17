@@ -27,7 +27,14 @@ class SqliteD1 {
       ? readdirSync(new URL("../migrations/", import.meta.url))
           .filter((file) => /^\d+.*\.sql$/.test(file))
           .sort()
-      : ["0011_app_bff_auth.sql", "0200_agent_coordination.sql", "0201_agent_delegation.sql"];
+      : [
+          "0001_init.sql",
+          "0011_app_bff_auth.sql",
+          "0090_operating_core.sql",
+          "0200_agent_coordination.sql",
+          "0201_agent_delegation.sql",
+          "0202_agent_fact_versions.sql",
+        ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
         this.raw.exec("ALTER TABLE app_users ADD COLUMN access_role TEXT");

@@ -42,7 +42,15 @@ export interface RunTool {
 export interface OpenedRun {
   run_id: string;
   goal: string;
-  context: { snapshot_hash: string; facts: Fact[] };
+  /**
+   * Facts with their values, read now. A resumed run's fact that changed since it opened carries
+   * `data: null` and `current: false`; `omitted` names facts that belong but could not be included.
+   */
+  context: {
+    snapshot_hash: string;
+    facts: Array<Fact & { current?: false }>;
+    omitted?: Array<{ fact_id: string; reason: "unreadable" | "too_large" | "limit_reached" }>;
+  };
   tools: RunTool[];
 }
 

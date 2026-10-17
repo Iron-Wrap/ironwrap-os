@@ -34,7 +34,6 @@ import {
   openRun,
   proposeStep,
   recordHeartbeat,
-  runContext,
   runTools,
   type AgentDb,
  withheldClose } from "./store.ts";
@@ -79,8 +78,8 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     }
     const opened = await openRun(db, tenantId, { signal_id, specialist_id, host_run_key }, iso());
     if ("error" in opened) return reply({ error: opened.error }, opened.status);
-    const { run, resumed } = opened;
-    return reply({ run_id: run.run_id, goal: run.goal, resumed, context: runContext(run), tools: runTools(run) }, resumed ? 200 : 201);
+    const { run, resumed, context } = opened;
+    return reply({ run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run) }, resumed ? 200 : 201);
   }
 
   const runMatch = path.match(/^\/api\/v1\/agents\/runs\/([^/]+)\/(tools|steps|close)$/);

@@ -2269,13 +2269,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // service steps. 0141 separates legal holds, disposition and audit events from immutable
     // upload provenance. 0143 preserves a crew stop across supersession and status replay.
     // 0149 adds durable evidence write claims. 0200 opens the AI team range (0200-0299) with
-    // the coordination run, its steps, signals and event ledger.
+    // the coordination run, its steps, signals and event ledger; 0201 adds owner controls and
+    // 0202 the fact-version ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 121);
+    assert.equal(migrations.length, 122);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0201_agent_delegation.sql",
+      "0202_agent_fact_versions.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2404,10 +2405,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0149 adds one write-claim table, one named index outside the subset, and five guards.
     // 0200 adds five AI team tables, four named indexes, and sixteen append-only, finality
     // and ledger triggers. 0201 adds five control/decision/exception tables, two named indexes
-    // and sixteen guards.
+    // and sixteen guards. 0202 adds the fact-version ledger table and three append-only/sequence
+    // guards, no index.
     assert.deepEqual(
       { ...counts },
-      { tables: 256, indexes: 355, triggers: 669 },
+      { tables: 257, indexes: 355, triggers: 672 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

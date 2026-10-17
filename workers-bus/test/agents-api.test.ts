@@ -42,6 +42,9 @@ class SqliteD1 {
         ),
       );
       this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
+      // The operating core that shared-memory subjects resolve against, and the fact-version ledger.
+      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql"])
+        this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
       `INSERT INTO app_users (user_id, tenant_id, email_normalized, display_name, role, active, created_by, created_at, updated_at)

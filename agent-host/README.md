@@ -111,6 +111,21 @@ every tool call there becomes a proposed step that the Worker decides. The run i
 the exact outcome; an abstention (provider down, ceiling, invalid output, unloadable specialist)
 closes the run too, with its reason.
 
+The context snapshot starts with the signal (`signal/<id>`, untrusted text) and then holds the
+signal's subject and the canonical objects it links to, read by the Worker's shared-memory read
+models (`workers-bus/src/agents/read-models.ts`) through the same readers as the role screens and
+only as far as the specialist's reviewer role may read them: a role that may read part of an object
+gets one fact per part, such as `job/<id>#/facts/commercial/quote`. Each fact carries `{fact_id,
+kind, version, hash, trust, observed_at, fresh_until, data}`; its version comes from the Worker's
+append-only fact-version ledger, so it moves whenever the value does. An object that belongs in the
+snapshot but cannot be read or does not fit is named in `context.omitted` with its reason. A step
+may cite a fact or one field of it (`job/<id>#/facts/production/gates/0`); the Worker reads every
+cited fact again before deciding, and a changed fact abstains `fact_stale`, an unreadable one
+`citation_unverifiable`. The run row keeps only each fact's id, version and hash, never its value:
+a resumed run reads the values again, and a fact that changed meanwhile comes back with `data:
+null` and `current: false`. Contact values, payee details, provider payloads and free-text notes
+stay out of facts; names and references typed at intake are kept as identity fields.
+
 `GET /health` always answers with the full state and alerts; `GET /ready` answers 503 until every
 routed provider is usable and the Worker answered a recent poll. Both bind to loopback.
 

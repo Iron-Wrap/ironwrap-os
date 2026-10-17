@@ -4,8 +4,10 @@
 
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
-import { DEFAULT_CEILINGS, evaluateStep, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type SnapshotFact } from "./policy.ts";
+import { DEFAULT_CEILINGS, evaluateStep, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
 import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
+import { citedFacts, factReader, hydrate, refOf, subjectFacts, type ContextFact, type FactRef, type OmittedFact } from "./memory.ts";
+import { OBJECT_MODELS } from "./read-models.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -96,10 +98,13 @@ export interface StepRow {
   version: number;
 }
 
-export interface ContextFact extends SnapshotFact {
-  kind: string;
-  observed_at: string;
-  data: unknown;
+export type { ContextFact, FactRef } from "./memory.ts";
+
+/** A run's context as the host receives it: facts with their values, read from the canonical rows. */
+export interface RunContext {
+  snapshot_hash: string;
+  facts: Array<ContextFact & { current?: false }>;
+  omitted: OmittedFact[];
 }
 
 export interface RunTool {
@@ -225,9 +230,9 @@ export async function openRun(
   tenantId: string,
   input: { signal_id: string; specialist_id: string; host_run_key: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
   const existing = await runByKey(db, tenantId, input.host_run_key);
-  if (existing) return await resumeRun(db, existing, input, now);
+  if (existing) return await resumeRun(db, tenantId, existing, input, now);
   const signal = await db
     .prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
     .bind(tenantId, input.signal_id)
@@ -235,7 +240,9 @@ export async function openRun(
   if (!signal) return { error: "signal_not_found", status: 422 };
   if (signal.specialist_id !== input.specialist_id) return { error: "specialist_mismatch", status: 422 };
 
-  const facts = [signalFact(signal)];
+  const subject = signal.subject_aggregate && signal.subject_id ? { aggregate: signal.subject_aggregate, id: signal.subject_id } : null;
+  const memory = await subjectFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, subject, now);
+  const facts = [signalFact(signal), ...memory.facts];
   const snapshotHash = await sha256Hex(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash }))));
   const tools = toolsFor(signal.specialist_id);
   const manifestHash = await sha256Hex(canonicalJson(tools));
@@ -246,7 +253,8 @@ export async function openRun(
     signal_id: signal.signal_id,
     host_run_key: input.host_run_key,
     goal: goalFor(signal),
-    context_json: canonicalJson({ snapshot_hash: snapshotHash, facts }),
+    // The run row keeps fact refs only; values stay in the canonical rows (memory.ts).
+    context_json: canonicalJson({ snapshot_hash: snapshotHash, facts: facts.map(refOf), omitted: memory.omitted }),
     context_snapshot_hash: snapshotHash,
     tool_manifest_json: canonicalJson(tools),
     state: "open",
@@ -290,11 +298,11 @@ export async function openRun(
       input.host_run_key,
     )
     .run();
-  if (changesOf(inserted) >= 1) return { run, resumed: false };
+  if (changesOf(inserted) >= 1) return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted } };
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
   if (!winner) return { error: "run_unavailable", status: 503 };
-  return await resumeRun(db, winner, input, now);
+  return await resumeRun(db, tenantId, winner, input, now);
 }
 
 async function runByKey(db: AgentDb, tenantId: string, hostRunKey: string): Promise<RunRow | null> {
@@ -304,10 +312,11 @@ async function runByKey(db: AgentDb, tenantId: string, hostRunKey: string): Prom
 /** A host that stopped mid-run re-delivers the signal; the still-open run resumes where it was. */
 async function resumeRun(
   db: AgentDb,
+  tenantId: string,
   existing: RunRow,
   input: { signal_id: string; specialist_id: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
   if (existing.signal_id !== input.signal_id || existing.specialist_id !== input.specialist_id) {
     return { error: "run_key_conflict", status: 422 };
   }
@@ -319,15 +328,44 @@ async function resumeRun(
     .bind(now, existing.run_id)
     .run();
   if (changesOf(resumed) < 1) return { error: "run_closed", status: 409 };
-  return { run: { ...existing, attempt: existing.attempt + 1, attempt_started_at: now }, resumed: true };
+  // The same refs, read again: a fact that changed since the run opened comes back marked stale.
+  const stored = runContext(existing);
+  const facts = await hydrate(stored.facts, runFactReader(db, tenantId, existing, now));
+  return {
+    run: { ...existing, attempt: existing.attempt + 1, attempt_started_at: now },
+    resumed: true,
+    context: { snapshot_hash: stored.snapshot_hash, facts, omitted: stored.omitted },
+  };
 }
 
 export async function getRun(db: AgentDb, tenantId: string, runId: string): Promise<RunRow | null> {
   return await db.prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND run_id = ?").bind(tenantId, runId).first<RunRow>();
 }
 
-export function runContext(run: RunRow): { snapshot_hash: string; facts: ContextFact[] } {
-  return JSON.parse(run.context_json);
+export function runContext(run: RunRow): { snapshot_hash: string; facts: FactRef[]; omitted: OmittedFact[] } {
+  const context = JSON.parse(run.context_json) as { snapshot_hash: string; facts: FactRef[]; omitted?: OmittedFact[] };
+  return { snapshot_hash: context.snapshot_hash, facts: context.facts.map(refOnly), omitted: context.omitted ?? [] };
+}
+
+/** A ref without any value a row written before refs-only storage may still carry. */
+function refOnly(fact: FactRef & { data?: unknown }): FactRef {
+  const { data: _value, ...ref } = fact;
+  return ref;
+}
+
+/** Reads a run's facts again: canonical objects through the read models, the signal from its row. */
+function runFactReader(db: AgentDb, tenantId: string, run: RunRow, now: string) {
+  return factReader(db, OBJECT_MODELS, tenantId, run.specialist_id, now, async (ref) => {
+    try {
+      const signal = await db
+        .prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+        .bind(tenantId, ref.fact_id.slice("signal/".length))
+        .first<SignalRow>();
+      return signal && signal.signal_id === run.signal_id ? signalFact(signal) : null;
+    } catch {
+      return null; // Unreadable now: unverifiable, never assumed current.
+    }
+  });
 }
 
 export function runTools(run: RunRow): RunTool[] {
@@ -387,13 +425,11 @@ export async function proposeStep(
     .bind(run.run_id)
     .first<{ steps: number }>();
   const context = runContext(run);
-  const snapshot = new Map(context.facts.map((fact) => [fact.fact_id, fact]));
-  // Facts in the snapshot are signals (immutable) until the shared-memory read models land; a
-  // cited fact this Worker cannot read again is unverifiable, never assumed current.
-  const currentVersions = new Map(
-    input.citations.map(
-      (citation) => [citation.fact_id, snapshot.get(citation.fact_id)?.kind === "signal" ? 1 : null] as const,
-    ),
+  // Every cited fact is read again now; one this Worker cannot read is unverifiable, never current.
+  const { snapshot, currentVersions } = await citedFacts(
+    input.citations,
+    context.facts,
+    runFactReader(db, tenantId, run, new Date(nowMs).toISOString()),
   );
   let handoff: { depth: number; samePair: number } | null = null;
   if (input.action_id === "handoff.create") handoff = await handoffLimits(db, tenantId, run, input.args);
@@ -474,6 +510,7 @@ export async function proposeStep(
       ceiling,
       stepId,
       admission,
+      snapshot,
     );
     if (input.action_id === "handoff.create" && decision.outcome === "succeeded") {
       // The count reservation, receipt and canonical signal commit together. A failed delivery
@@ -529,6 +566,9 @@ export async function proposeStep(
         superseded ? null : await namedPerson(db, tenantId, reviewer),
         now,
         null,
+        undefined,
+        null,
+        snapshot,
       ).run();
     }
   } catch (error) {
@@ -598,13 +638,15 @@ function stepInsert(
   ceiling: number | null = null,
   stepId = `step_${crypto.randomUUID()}`,
   admission: AdmissionSnapshot | null = null,
+  /** The decided snapshot: it also holds the hash of each field a pointer citation names. */
+  snapshot: Map<string, { hash: string }> | null = null,
 ): BoundStatement {
   const action = catalogAction(input.action_id);
   const context = runContext(run);
   const sources = input.citations.map((citation) => ({
     fact_id: citation.fact_id,
     version: citation.version,
-    hash: context.facts.find((fact) => fact.fact_id === citation.fact_id)?.hash ?? null,
+    hash: snapshot?.get(citation.fact_id)?.hash ?? context.facts.find((fact) => fact.fact_id === citation.fact_id)?.hash ?? null,
   }));
   const policy = canonicalJson({
     policy_id: STEP_POLICY_ID,

@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 121,
-      "latest": "0201_agent_delegation.sql"
+      "count": 122,
+      "latest": "0202_agent_fact_versions.sql"
     }
   },
   "test_observation_policy": {
@@ -213,15 +213,21 @@ Current source tracing distinguishes implemented modules from reachable producti
 - measurement OCR is a bounded review-required AI interpreter. Hermes is a disabled,
   `lead_follow_up_draft` pilot.
 - AI team coordination is Locally-validated, Partial (`workers-bus/src/agents/`,
-  `test/agents-policy.test.ts`, `test/agents-api.test.ts`, `test/agents-control.test.ts`;
-  `agent-host/`, `cd agent-host && npm test`). The Worker carries the contract catalog byte for
-  byte, records each run as an append-only `coordination_run` with its context snapshot and tool
-  manifest, and decides every proposed step by deterministic policy: an unregistered action or
-  argument, a missing, unknown or stale citation, or a ceiling abstains, and people-only actions
-  are refused. The owner sets or revokes delegation, pauses a specialist or clears an auditor hold
-  from a fresh app session; a reviewer decides a waiting step's exact version. Only the protective
-  exception and hold bindings execute, against owned records with readback; an approved step with
-  no effect binding records the decision and abstains, so no agent step has a business effect.
+  `test/agents-policy.test.ts`, `test/agents-api.test.ts`, `test/agents-control.test.ts`,
+  `test/agents-memory.test.ts`; `agent-host/`, `cd agent-host && npm test`). The Worker carries the
+  contract catalog byte for byte, records each run as an append-only `coordination_run` with its
+  context snapshot and tool manifest, and decides every proposed step by deterministic policy: an
+  unregistered action or argument, a missing, unknown or stale citation, or a ceiling abstains,
+  and people-only actions are refused. The owner sets delegation, pauses a specialist or clears an
+  auditor hold from a fresh app session; a reviewer decides a waiting step's exact version. Only
+  the protective exception and hold bindings execute, against owned records with readback; an
+  approved step with no effect binding records the decision and abstains, so no agent step has a
+  business effect. Shared memory gives a run's snapshot the signal's subject and the objects it
+  links to (job, customer, lead, property, roof, measurement, crew, inventory position, money
+  item) through the role screens' readers, as far as the specialist's reviewer role may read them,
+  versioned by an append-only fact-version ledger (`0202`); every cited fact is read again before
+  the step is decided, and run rows keep fact refs only, never values. D1 holds no supplier or
+  conversation object yet, so those cannot be cited.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
   live provider call, deployment or reference run has happened.
 

@@ -74,8 +74,11 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
 12. **Kept board decisions.** No self-approval (OD-23). Owner approval below 25% gross margin
     (OD-32).
 13. **Models.** One provider-agnostic gateway; Claude and Codex through OAuth sign-in at launch;
-    GPT-6.1 Sol for routine specialist work, GPT-6 Astra for hard reasoning, and a Claude model for
-    the independent auditor, so audit runs on a different model family than the proposer. API keys
+    GPT-6.1 Sol for routine specialist work and GPT-6 Astra for hard reasoning by default. The
+    independent auditor, and any eval judge, runs on a model family different from the family that
+    proposed the work under review. The auditor therefore has one route per family (a Claude route
+    to audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records
+    both families on the `coordination_run` and refuses a run that would violate this. API keys
     replace OAuth by configuration only.
 14. **Release bar for specialists.** A specialist release passes its evaluations only with zero
     catastrophes, a golden-case mean of at least 0.90 with no case median below 0.60, and a red-team
@@ -90,6 +93,13 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
 16. **Owner interrupt.** An item on the owner's immediate-only list interrupts the owner at once
     (`owner.interrupt`). It is an internal notification with no outside effect and never waits for
     an approval.
+17. **Public posts carry no AI disclosure.** A public marketing post that the AI marketer authored
+    and a person approved (`content.publish`) carries no AI disclosure. Two guardrails remain: no
+    generated or altered job photo is presented as a real job, and every claim cites approved
+    evidence (the `claims` check). AI disclosure stays mandatory in every conversation or message
+    to a customer (decision 10): a campaign email or SMS (`campaign.send`) and a reply to a
+    specific customer's review (`review_response.publish`) are such messages, and both keep their
+    `disclosure` check.
 
 ## The team
 
@@ -269,10 +279,10 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 | Aspect | Detail |
 |---|---|
 | Mission | Put an exact, offline-capable work package in every crew's hands, catch hazards and changed conditions early, and turn what the crew says and snaps into complete paperwork. |
-| Watches | `assignment_committed`, `daily_mobilization`, `stop_conditions`, `stop_raised`, `field_capture`, `credential_expired`, `working_alone_checkin_missed`, `page_unacknowledged` |
-| Proposes | Work packages and their release, holds before start, stop-condition alerts, emergency pages and their escalation, evidence requests, safety notices to customers, daily reports, incident and field-change records, the release pack for a safety stop. |
-| Reads | Jobs, the design basis, work packages, assignments, crews, authority records, safety plans, hazards, forecasts, evidence. |
-| Writes as proposals | Work packages, and records drafted for the crew to confirm. |
+| Watches | `assignment_committed`, `daily_mobilization`, `stop_conditions`, `stop_raised`, `field_capture`, `credential_expired`, `working_alone_checkin_missed`, `page_unacknowledged`, `crew_item_unconfirmed` |
+| Proposes | Work packages and their release, holds before start, stop-condition alerts, emergency pages and their escalation, evidence requests, safety notices to customers, daily reports, incident and field-change records, resolutions for crew items the office has not confirmed, the release pack for a safety stop. |
+| Reads | Jobs, the design basis, work packages, assignments, crews, authority records, safety plans, hazards, forecasts, evidence, the office records of crew items. |
+| Writes as proposals | Work packages, records drafted for the crew to confirm, and crew item resolutions for a person to record. |
 | Hard boundary | Safety: "no one can override a valid stop"; Field coordination: "cannot authorize hidden-condition change". It never stops or releases work in progress: it alerts, anyone on the crew can stop, and only a production supervisor independent of whoever raised the stop releases it. It never changes a worker's record without the worker. |
 | Reviewer | Production supervisor; a safety stop is released only by a production supervisor independent of whoever raised it. |
 | Do it myself | The crew phone package and paperwork (JOB-06, JOB-07) and stop work (FIELD-06). |
@@ -787,6 +797,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `stop_condition.alert` | A2 | Acts within your limits | Protective. Alert the crew lead and supervisor that a stop condition is present; the crew decides to stop. | Weather feed or inspection record | — | Never asks first | Urgent notification repeated until acknowledged → acknowledgement | new |
 | `evidence.request` | A2 | Acts within your limits | Ask the crew for missing evidence or a retake. Owners: `field_safety`, `quality_inspector`. | Evidence slot rules; the captured item | — | The proposing specialist's reviewer | Task and notification → read back | new |
 | `field_record.draft` | A1 | — | Turn crew voice notes and photos into a daily report, incident, near-miss or field-change record for the worker to confirm. | Capture bytes hashes | — | — | Record draft; the worker confirms it | new; people record safety occurrences through `POST /api/v1/safety/occurrences/{occurrence}/commands` |
+| `crew_item.propose_resolution` | A1 | — | Propose how to resolve a crew item that a crew phone saved and the office has not confirmed, after reading the office record back: `arrived`, with a link to the stored record; `not_arrived`, with one resend under the same idempotency key; or `duplicate`, with a link to the original. It never resends the item or records the resolution: a person always records it, and that act is the person's own, not an agent action. | The crew item's idempotency key and payload hash; the office record read back under that key, or the readback showing there is none; for a duplicate, the original record | `exact_match` | — | Resolution proposal (proposed) for operations | new |
 | `safety_stop.release` | H | — | Release a safety stop, a crew's stop on a work package included, only after the required follow-up and control evidence are verified. | — | — | People only: a production supervisor independent of whoever raised the stop; never an agent | Release → read back | People only, through the Worker safety routes under `/api/v1/safety/`; new for a crew's stop on a work package |
 | `safety_stop.release_prepare` | A1 | — | Prepare the release pack so the independent supervisor can decide: what stopped the work (or that no reason was provided), the office follow-up, what was made safe, the controls and evidence now in place, and who may release it (a production supervisor who did not raise the stop); it never releases the stop or invents a safety occurrence. | The exact work-package stop and version, or the safety occurrence; follow-up, make-safe and control evidence; the work package where applicable | — | — | Release pack (proposed) for the supervisor | new |
 
@@ -981,7 +992,7 @@ records:
 | `trigger` | The event, watch or schedule, or the person and session that asked |
 | `goal` | One declared goal |
 | `context_snapshot_hash` | Hash of the `ContextSnapshot`: every cited fact id, version and hash |
-| `model` | Provider, model id, provider-reported model version, runtime tier and credential mode |
+| `model` | Provider, model family, model id, provider-reported model version, runtime tier and credential mode; an audit run also records the model family that proposed the work under review |
 | `prompt_hash` | SHA-256 over the system prompt, playbook version and standing-orders version |
 | `schema_hash` | SHA-256 over the output schema |
 | `tool_manifest_hash` | SHA-256 over the actions and tools the run may use |
@@ -1019,8 +1030,9 @@ proposer ([`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md#authority-ma
 
 Other record families support these objects, all in D1: inbound signals (envelopes and raw inbound
 items, with their bytes in R2), marketing records (claims records, content and campaigns), the
-price book, operating settings such as storm mode, notes, fleet and equipment, staff access,
-filings, and coordination records (runs, receipts, handoffs, exceptions, reports, notifications,
+price book, operating settings such as storm mode, notes, field items (what a crew phone saved and
+sent, each under its idempotency key), fleet and equipment, staff access, filings, and
+coordination records (runs, receipts, handoffs, exceptions, reports, notifications,
 delegation settings, policies and findings). Records that hold history are
 append-only. Frappe projections, JobNimbus, spreadsheets and mailboxes are never the authority for
 any of them; their content can only be cited as source evidence.
@@ -1030,7 +1042,9 @@ any of them; their content can only be cited as source evidence.
 - `fact_id` is `<object>/<id>`, optionally followed by `#` and a JSON pointer to one field, such as
   `job/<id>#/gates/deposit`. Raw evidence is `evidence/<id>`; a provider fact is
   `<provider>/<entity>/<id>`, such as `quickbooks/invoice/<id>`.
-- `version` is the aggregate version the step read.
+- `version` is the fact's version in the append-only fact ledger (runtime migration 0202). It
+  changes exactly when that fact's value changes, and it is not the aggregate's version. A citation
+  is stale (`fact_stale`) when the version it cites is no longer the latest for that fact.
 - `hash` is `sha256:` followed by the hex digest of the cited value in canonical JSON (RFC 8785), of
   the evidence bytes, or of the provider response.
 - Each fact in a `ContextSnapshot` carries a trust class: `owned` (a D1 fact), `external_verified`
@@ -1041,6 +1055,8 @@ any of them; their content can only be cited as source evidence.
 - Immediately before a permit is used, the cited versions are read again. Any change stops the step,
   which is proposed again from the new facts.
 - A model output, a projection or an unversioned value is never a citation.
+- Supplier and conversation facts have no D1 tables yet, so they are unreadable: a step that cites
+  one abstains (`citation_unverifiable`).
 
 ### Exact facts
 
@@ -1161,6 +1177,7 @@ work.
 | `field_safety` | `credential_expired` | On `authority.expired` | A credential of an assigned person expires | `work_package.hold_before_start` |
 | `field_safety` | `working_alone_checkin_missed` | On `working_alone.checkin_missed` | A person working alone misses a check-in that the site's working-alone plan requires | `emergency.page`, `exception.escalate` |
 | `field_safety` | `page_unacknowledged` | On `page.unacknowledged` | A page for a site emergency or a missed check-in has no acknowledgement inside its window | `emergency.page`, `exception.escalate` |
+| `field_safety` | `crew_item_unconfirmed` | On `crew_item.unconfirmed` | A crew phone reports a saved item that the office has not confirmed | `crew_item.propose_resolution`, `exception.escalate` |
 | `quality_inspector` | `evidence_captured` | On `evidence.captured` | Evidence arrives for a hold point or a completion slot | `evidence.request`, `evidence.review` |
 | `quality_inspector` | `hold_point_reached` | On `hold_point.reached` | A package reaches a hold point | `evidence.review`, `hold_point.release` |
 | `quality_inspector` | `package_completed` | On `work_package.completed` | A crew completes a package | `completion.draft_packet`, `completion.accept` |
@@ -1326,19 +1343,22 @@ credentials, OAuth tokens or other secrets.
 |---|---|---|---|
 | `routine` | GPT-6.1 Sol | Codex SDK, OAuth sign-in | The face and every specialist except the AI auditor |
 | `hard` | GPT-6 Astra | Codex SDK, OAuth sign-in | A run that meets an escalation trigger |
-| `audit` | A Claude model; the exact model id is gateway configuration | Claude Agent SDK, OAuth sign-in | The AI auditor |
+| `audit` | One route per model family: a Claude model to audit GPT-proposed work and a GPT model to audit Claude-proposed work; the exact model ids are gateway configuration | Claude Agent SDK for the Claude route, Codex SDK for the GPT route; OAuth sign-in | The AI auditor |
 
 Every specialist may use `routine` and `hard`; the AI auditor uses `audit` only (`tiers` in the
-machine-readable contract).
+machine-readable contract). The model family behind each tier's route is gateway configuration, so
+a proposing specialist may run on Claude as well as on GPT.
 
 Escalation to `hard` is deterministic: a `margin_floor` or `amount_ceiling` breach, a price outside
 the job type's configured band, any payee or bank-detail change, a first order with a supplier, a
 complaint or dispute that claims money or legal rights, or a `conflict` abstention that needs an
 explanation for a person. A specialist may also ask for it with a reason, which the gateway records.
 
-The audit tier's model family must differ from the family that proposed the audited run: if
-configuration puts the proposer on Claude, the audit runs on GPT. If no other family is available,
-the audit waits; it never runs on the proposer's family.
+The independent auditor, and any eval judge, runs on a model family different from the family that
+proposed the work under review. The auditor therefore has one route per family (a Claude route to
+audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records both
+families on the `coordination_run` and refuses a run that would violate this. When the route of
+the other family is unavailable, the audit waits; it never runs on the proposer's family.
 
 ### Credentials
 
@@ -1355,8 +1375,9 @@ the audit waits; it never runs on the proposer's family.
 
 ### Recorded on every run
 
-The provider, model id, provider-reported model version, runtime tier, credential mode, prompt hash,
-schema hash, tool manifest hash, context snapshot hash and gateway configuration hash (see
+The provider, model family, model id, provider-reported model version, runtime tier, credential
+mode, prompt hash, schema hash, tool manifest hash, context snapshot hash and gateway configuration
+hash; an audit run also records the model family that proposed the work under review (see
 "Coordination run").
 
 ### Outages and limits
@@ -1561,6 +1582,7 @@ action is the canonical object its transition acts on; `any` is used only by rea
 | `price_book` | Price book |
 | `storm_mode` | Operating settings |
 | `tax_slip` | Money item |
+| `field_item` | Field items |
 
 `tools/validate-documentation.mjs` checks that every specialist id is the stable one, that action
 ids are unique and their owners exist (only an `H` act may have none), that each watch proposes only
@@ -1588,7 +1610,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"specialist_id": "purchasing_inventory", "display_name": "AI buyer", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["material_needed", "supplier_message", "order_unacknowledged", "promised_date_risk", "receipt_recorded", "reorder_point", "catalog_feed"]},
     {"specialist_id": "shop_planner", "display_name": "AI shop planner", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["design_released", "materials_reserved", "machine_status", "delivery_due", "supply_only_handover"]},
     {"specialist_id": "scheduler_dispatcher", "display_name": "AI scheduler", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["production_ready", "gate_changed", "crew_change", "forecast_change", "asset_defect", "assignment_notices"]},
-    {"specialist_id": "field_safety", "display_name": "AI field coordinator", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["assignment_committed", "daily_mobilization", "stop_conditions", "stop_raised", "field_capture", "credential_expired", "working_alone_checkin_missed", "page_unacknowledged"]},
+    {"specialist_id": "field_safety", "display_name": "AI field coordinator", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["assignment_committed", "daily_mobilization", "stop_conditions", "stop_raised", "field_capture", "credential_expired", "working_alone_checkin_missed", "page_unacknowledged", "crew_item_unconfirmed"]},
     {"specialist_id": "quality_inspector", "display_name": "AI quality inspector", "reviewer_role": "production", "wave": 2, "tiers": ["routine", "hard"], "watches": ["evidence_captured", "hold_point_reached", "package_completed", "nonconformance", "open_ncr"]},
     {"specialist_id": "billing_reconciliation", "display_name": "AI bookkeeper", "reviewer_role": "accounting", "wave": 1, "tiers": ["routine", "hard"], "watches": ["deposit_due", "milestone_reached", "payment_received", "readback_mismatch", "readback_unknown", "invoice_overdue", "supplier_bill", "payee_change", "job_cost", "holdback_due", "tax_period", "prompt_payment_timers", "lien_window", "payment_list"]},
     {"specialist_id": "compliance", "display_name": "AI compliance checker", "reviewer_role": "production", "wave": 3, "tiers": ["routine", "hard"], "watches": ["authority_expiry", "assignment_check", "permit_needed", "incident_notice", "privacy_request", "exposure_suspected", "issuer_readback", "lien_window"]},
@@ -1695,6 +1717,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"action_id": "stop_condition.alert", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null},
     {"action_id": "evidence.request", "owners": ["field_safety", "quality_inspector"], "aggregate": "evidence", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
     {"action_id": "field_record.draft", "owners": ["field_safety"], "aggregate": "field_record", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
+    {"action_id": "crew_item.propose_resolution", "owners": ["field_safety"], "aggregate": "field_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
     {"action_id": "safety_stop.release", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
     {"action_id": "safety_stop.release_prepare", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
     {"action_id": "evidence.review", "owners": ["quality_inspector"], "aggregate": "evidence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
@@ -1823,6 +1846,7 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"watch_id": "credential_expired", "owner": "field_safety", "trigger": "authority.expired", "proposes": ["work_package.hold_before_start"]},
     {"watch_id": "working_alone_checkin_missed", "owner": "field_safety", "trigger": "working_alone.checkin_missed", "proposes": ["emergency.page", "exception.escalate"]},
     {"watch_id": "page_unacknowledged", "owner": "field_safety", "trigger": "page.unacknowledged", "proposes": ["emergency.page", "exception.escalate"]},
+    {"watch_id": "crew_item_unconfirmed", "owner": "field_safety", "trigger": "crew_item.unconfirmed", "proposes": ["crew_item.propose_resolution", "exception.escalate"]},
     {"watch_id": "evidence_captured", "owner": "quality_inspector", "trigger": "evidence.captured", "proposes": ["evidence.request", "evidence.review"]},
     {"watch_id": "hold_point_reached", "owner": "quality_inspector", "trigger": "hold_point.reached", "proposes": ["evidence.review", "hold_point.release"]},
     {"watch_id": "package_completed", "owner": "quality_inspector", "trigger": "work_package.completed", "proposes": ["completion.draft_packet", "completion.accept"]},

@@ -159,7 +159,7 @@ file, or another system's mutable status alone.
 
 ## AI context and proposal contract
 
-Every AI run receives a bounded `ContextSnapshot` whose facts carry stable id, aggregate version,
+Every AI run receives a bounded `ContextSnapshot` whose facts carry stable id, fact-ledger version,
 source/evidence hash, trust class, observed/effective time, freshness deadline, and tenant/job
 scope. Untrusted document, connector, calendar, and message text is labelled data, never
 instruction.

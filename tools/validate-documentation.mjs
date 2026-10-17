@@ -956,6 +956,7 @@ const AI_TEAM_AGGREGATES = new Set([
   "storm_mode",
   "tax_slip",
   "specialist_hold",
+  "field_item",
 ]);
 const AI_TEAM_RECEIPT_FIELDS = [
   "specialist_id",
@@ -1305,7 +1306,9 @@ function validateAiTeamContract(contract, content) {
     }
     if (!AI_TEAM_ROLES.has(specialist?.reviewer_role)) fail(`${where}: reviewer_role is not a reviewer role`);
     if (![1, 2, 3].includes(specialist?.wave)) fail(`${where}: wave must be 1, 2 or 3`);
-    // The auditor runs on a different model family from the proposers it audits.
+    // The auditor only audits, and no proposer uses the audit tier. The family behind each tier is
+    // gateway configuration; per run, the auditor uses a family other than the one that proposed
+    // the work under review.
     const tiers = id === "independent_auditor" ? ["audit"] : ["routine", "hard"];
     if (!sameList(specialist?.tiers, tiers)) fail(`${where}: tiers must be ${tiers.join(", ")}`);
     if (!Array.isArray(specialist?.watches) || specialist.watches.length === 0 ||

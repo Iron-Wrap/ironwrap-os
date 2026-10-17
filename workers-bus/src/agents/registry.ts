@@ -204,6 +204,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "stop_condition.alert": NOT_YET_REGISTERED,
   "evidence.request": NOT_YET_REGISTERED,
   "field_record.draft": NOT_YET_REGISTERED,
+  "crew_item.propose_resolution": NOT_YET_REGISTERED,
   "safety_stop.release": NOT_YET_REGISTERED,
   "evidence.review": NOT_YET_REGISTERED,
   "hold_point.release": NOT_YET_REGISTERED,

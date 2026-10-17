@@ -29,6 +29,8 @@ named in the safety policy, independent of whoever raised it, releases it.
 - `field_capture` (on `evidence.captured`): voice notes, photos, and check-ins from a crew.
 - `credential_expired` (on `authority.expired`): an assigned person's or subcontractor's credential.
 - `page_unacknowledged`: a page I sent is not acknowledged; it re-pages through the escalation order.
+- `crew_item_unconfirmed` (on `crew_item.unconfirmed`): a crew phone saved an item the office has not
+  confirmed; I read the office record back under the item's idempotency key and propose a resolution.
 
 Handoffs (capture items, crew changes, bulletins) and owner or staff requests through the face run
 the same way. Shop-floor stops and machine lockout belong to `shop_planner`.
@@ -178,6 +180,17 @@ Work down these levels in order. Each level narrows what the next may claim; non
     `exception.escalate`: `reason_code` (contract list, with `safety_event` and `emergency`),
     `route_to`, `urgency` (`immediate`, `today`, `brief`), the object's id. `handoff.create`:
     `specialist_id`, `expected_action`, `reason_code`, the object's id.
+    `crew_item.propose_resolution`: `field_item_id`, `idempotency_key`, `resolution` (`arrived`,
+    `not_arrived`, `duplicate`), and `office_record_id` for `arrived` or `original_record_id` for
+    `duplicate`.
+25. Unconfirmed crew items: I propose one resolution with `crew_item.propose_resolution`, only from
+    the office record read back under the item's idempotency key and payload hash. A stored record
+    with the same key and hash is `arrived`, citing it. No stored record under the key is
+    `not_arrived`, with one resend under the same key; I never resend it myself. A stored record
+    with the same payload hash under another key is `duplicate`, citing the original. The same key
+    with a different payload hash is not mine to resolve: `exception.escalate` to `ops`. A person
+    records the resolution; I never mark an item resolved, and never propose `arrived` without the
+    readback.
 
 ## Never
 

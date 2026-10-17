@@ -425,10 +425,16 @@ and reports under `output/evals/history`. Transcripts are deleted after scoring
 `.tsv`, archives, spreadsheets, databases) or link under `agent-host/evals/`.
 
 **Privacy before the prompt.** Business facts may reach the model; personal identifiers may not.
-- Every field the spec names under `identifiers` becomes a stable, letters-only token keyed by a
-  salt from `salt_env`; the mapping stays under `output/`. The dictionary covers the whole export:
-  every contact, the names on jobs and notes (`related`, `primary`), staff, companies, and street
-  lines and postal codes.
+- Every export field is classified per record type (`contact`, `job`, `activity`, `payment`,
+  `invoice`, `ghl_contact`, `ghl_opportunity`): `identifiers`, `address`, `free_text`, `linked`
+  (records carrying a person's `name`), `named` (a record name such as "Morgan Fixture - Metal
+  Roof"), `reviewed` (business facts, never personal), or the shared `never_copied` list ("prefix*"
+  covers a prefix). A builder refuses an export with any other field and names the fields, never
+  their values, so a new personal field (a date of birth, a spouse) never passes unseen.
+- Every identifier becomes a stable, letters-only token keyed by a salt from `salt_env`; the
+  mapping stays under `output/`. The dictionary covers the whole export: every contact, the names
+  on linked records and in record names (parts made only of listed words, such as "Metal Roof",
+  are not names), staff, companies, and street lines and postal codes.
 - Address fields are removed. What remains is a municipality from `privacy.municipalities` (any
   other place is `other`) and a province code.
 - Free text is normalised (accents, apostrophes, dashes) and scrubbed of every dictionary value,
@@ -438,27 +444,33 @@ and reports under `output/evals/history`. Transcripts are deleted after scoring
   account numbers. Then every remaining word must be ordinary, or the text is dropped and counted
   (`kept_text` and `dropped_text` give the share kept):
   - a lower-case word must be in the base list (`privacy-words.mjs`) or used lower case in at
-    least `vocabulary_min_records` records of the same export; name parts, words ever seen after a
-    greeting, an introduction, or "from", "with", "per", "tell", and words capitalised mid-sentence
-    twice or more never qualify;
-  - a capitalised or upper-case word must be an acronym, a token, a safe place, or in the base
-    list and not a name. Given-name homonyms (Grace, Bill) never count, except "Will" and "May"
-    starting a sentence as verbs and months next to a date word or a number. Surname homonyms
-    (Green, Price, Wood) count only starting a sentence and not before what a person does
-    ("Price confirmed", "Wood is coming").
-  - Safe places are the listed municipalities that share no word with any name in the export, so a
-    customer called Brooks or Hanna Manning is scrubbed, never read as the town.
+    least `vocabulary_min_records` records of the same export. Name parts, words ever seen after a
+    greeting or an introduction, words seen after "from", "with", "per", or "tell" in more than
+    one use in ten, and words capitalised mid-sentence twice or more never qualify.
+  - In the middle of a sentence a capitalised word counts only if it is a weekday, a month, a
+    brand, or Alberta. Starting a sentence it must be in the base list and not a name: given-name
+    homonyms (Grace, Bill) count only as "Will" or "May" before an ordinary verb, surname homonyms
+    (Green, Price) not before what a person does ("Price confirmed", "Wood is coming"), and any
+    other word not before a person's verb unless it is a role or a pronoun ("Customer called", not
+    "Gold called"). A sentence in capitals needs acronyms or listed non-name words throughout.
+  - A listed municipality counts as a place only in place context: after a preposition or an
+    address placeholder, before ", AB" or "Alberta", or as a county; never before a person's verb,
+    after a title or an introduction, or next to another place. Only municipalities that share no
+    word with a name in the export qualify, so a customer called Brooks or Hanna Manning is
+    scrubbed, and a stranger called Jasper ("spoke with Jasper") drops the text.
   A name outside the export ("my husband bob") therefore drops the text instead of passing it.
   Residual risk: a surname homonym at the start of a sentence before an ordinary verb ("Green
   needs a quote") still passes.
 - Source values are mapped to `source_categories`; the raw value is never copied. Fields under
-  `never_copied` (names, current statuses, tags, values, stages, custom fields) never reach a case.
-- `createGuard(originals, places, municipalities)` finds every original identifier with the
-  scrubber's matching (any case and apostrophe; a one-word value only where it stands capitalised;
-  safe places removed first, and a JSON `"municipality"` whose value is on the list) and every
-  pattern in a text. A text field that fails it is dropped and counted; a
-  case that still fails it stops the build. The runner must run the guard on every assembled prompt
-  and send nothing that fails.
+  `never_copied` (current statuses, tags, values, stages, custom fields, card and transaction
+  numbers) never reach a case. Text a builder writes itself is lower case, so it cannot read as a
+  capitalised name.
+- `createGuard(originals, places, fixed)` finds every original identifier with the scrubber's
+  matching (any case and apostrophe; a one-word value only where it stands capitalised; safe
+  places removed first, and a JSON pair whose key is in `fixed`, such as `municipality` and
+  `province`, when its value is on that closed list) and every pattern in a text. A text field
+  that fails it is dropped and counted; a case that still fails it stops the build. The runner
+  must run the guard on every assembled prompt and send nothing that fails.
 
 **Point in time.** A case holds only what was recorded by its decision time, with times as ISO 8601
 offsets from it; outcomes (`truths`) stay apart and never enter a prompt.
@@ -523,6 +535,6 @@ without the contract catalog only in structural mode and says so. `--require-com
 `make validate` passes, also fails when a roster specialist has no playbook. When
 `qualification.v1.json` is required too, and its stages, ledger, pacing, and judge routing are
 checked. `history.v1.json`, when present, is checked for output-only sources, the salt variable and
-`keep_transcripts`, privacy coverage, the place list, builder parameters (a status pattern may not
+`keep_transcripts`, privacy coverage (no reviewed field may also be personal), the place list, builder parameters (a status pattern may not
 repeat a quantified group), intake fields on a ready GoHighLevel source, and bars over metrics that
 exist.

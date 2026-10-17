@@ -118,6 +118,34 @@ test("reliability: every word must be ordinary, in any case; trade notes, places
   }
 });
 
+test("towns count as places only in place context; a town name acting as a person is a name", () => {
+  const towns = placesPattern(["Brooks", "Raymond", "Hanna", "Manning", "Jasper", "Devon", "Cochrane", "Strathcona County", "Red Deer"]);
+  for (const kept of ["Roof replacement in Brooks.", "Job near Cochrane, AB", "Metal roof, Strathcona County.", "Crew from Red Deer.", "at [street_address] devon"]) {
+    assert.equal(looksReliable(kept, towns), true, kept);
+  }
+  for (const dropped of [
+    "Brooks asked for a quote.",
+    "Raymond called about the roof.",
+    "Hanna Manning wants a quote.",
+    "spoke with Jasper",
+    "Devon from next door wants a quote",
+    "Cochrane said ok",
+    "Quote for Mr. Brooks",
+    "Met Hanna Manning in Red Deer.",
+  ]) {
+    assert.equal(looksReliable(dropped, towns), false, dropped);
+  }
+});
+
+test("capitalised words: mid-sentence only weekdays, months, brands; before a person's verb only roles", () => {
+  for (const kept of ["Customer called back.", "Kenroc called about the delivery.", "Quote confirmed for Friday.", "Order from Vicwest on Monday.", "I will call in March.", "2 Metal panels"]) {
+    assert.equal(looksReliable(kept), true, kept);
+  }
+  for (const dropped of ["Gold called back", "Tan wants a quote", "Silver said ok", "Neighbour Gold said ok", "North called back", "called the Johnsons", "Metal Roof Quote Request"]) {
+    assert.equal(looksReliable(dropped), false, dropped);
+  }
+});
+
 test("vocabulary: words used lower case across many records count, except name parts, slotted words, and capitalised ones", () => {
   const texts = [
     ...Array.from({ length: 25 }, () => "sarking boards over the shop, called dave"),
@@ -125,9 +153,12 @@ test("vocabulary: words used lower case across many records count, except name p
     ...Array.from({ length: 12 }, () => "then Mike drops it"),
     ...Array.from({ length: 25 }, () => "sent to fixture, then fixture review"),
     ...Array.from({ length: 25 }, () => "flashing per lisa"),
+    ...Array.from({ length: 28 }, () => "leak over the kitchen"),
+    ...Array.from({ length: 2 }, () => "started with kitchen leak"),
   ];
   const vocabulary = buildVocabulary(texts, { names: ["Morgan Fixture"], minRecords: 20 });
   assert.equal(vocabulary.has("sarking"), true);
+  assert.equal(vocabulary.has("kitchen"), true, "an occasional object of 'with' is still a word");
   for (const word of ["dave", "mike", "fixture", "lisa"]) assert.equal(vocabulary.has(word), false, word);
   assert.equal(looksReliable("sarking boards lifting", null, vocabulary), true);
   assert.equal(looksReliable("Sarking boards lifting", null, vocabulary), false, "capitalised words must be listed");
@@ -157,8 +188,9 @@ test("places: a town that shares a word with an export name is not protected, so
     assert.match(scrubbed.text, /^person-[a-p]{10} asked for a quote\.$/, text);
   }
   assert.equal(scrubText("Roof near Red Deer.", known, places).reliable, true);
-  const guard = createGuard(pz.originals(), places, municipalities);
-  assert.deepEqual(guard(JSON.stringify({ location: { municipality: "St. Albert" }, note: "metal roof" })), [], "a location from the list is not a name");
+  const guard = createGuard([...pz.originals(), { kind: "person", value: "Ab" }], places, { municipality: municipalities, province: ["AB"] });
+  assert.deepEqual(guard(JSON.stringify({ location: { municipality: "St. Albert", province: "AB" }, note: "metal roof" })), [], "a location from the lists is not a name");
+  assert.equal(guard(JSON.stringify({ note: "AB called" })).length, 1, "outside its key the same value still counts");
   assert.equal(guard("Albert asked for a quote").length, 1);
 });
 

@@ -590,6 +590,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
   broken.privacy.municipalities.push("12 Sample Crescent SW");
   delete broken.privacy.contact.identifiers.email;
   delete broken.privacy.job.identifiers.sales_rep_name;
+  broken.privacy.job.reviewed.push("description");
   broken.privacy.never_copied = broken.privacy.never_copied.filter((field) => field !== "monetaryValue");
   const lead = broken.specialists.lead_concierge;
   lead.sources.ghl.builder = "buildLeadCases";
@@ -613,6 +614,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
       "privacy.municipalities must list place names (letters, spaces, dots, apostrophes, dashes)",
       "privacy.contact.identifiers must include email",
       "privacy.job.identifiers must include sales_rep_name",
+      "privacy.job.reviewed lists description, which is personal",
       "privacy.never_copied must include monetaryValue",
       "lead_concierge.sources.ghl.builder must be buildGhlLeadCases",
       "lead_concierge.sources.ghl.min_outcome_age_days must be a non-negative integer",

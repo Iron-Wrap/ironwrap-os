@@ -7,7 +7,7 @@
 // Nothing here reads output/ or writes anywhere: the runner passes parsed rows in and stores the
 // result under output/evals/history.
 
-import { buildVocabulary, createGuard, createScrubber, normaliseText, placesPattern, pseudonymizeRecord, safePlaces } from "./privacy.mjs";
+import { buildVocabulary, createGuard, createScrubber, normaliseText, placesPattern, pseudonymizeRecord, safePlaces, unclassifiedFields } from "./privacy.mjs";
 import { BASE_WORDS } from "./privacy-words.mjs";
 
 const DAY = 86400;
@@ -53,6 +53,15 @@ function createDictionary(privacy, pseudonymizer) {
     }
     // An address line has a number and a word; a country or a geo object is not one.
     for (const field of block.address) if (typeof row[field] === "string" && /\d/.test(row[field]) && /\p{L}{2}/u.test(row[field])) add("address", row[field]);
+    // Linked records carry the names of the people they point to.
+    for (const field of block.linked) for (const link of [row[field]].flat()) if (link && typeof link === "object") add("person", link.name);
+    // A record name ("Morgan Fixture - Metal Roof") holds a person's name; its parts made only of
+    // listed words ("Metal Roof") do not.
+    for (const field of block.named) {
+      for (const part of String(row[field] ?? "").split(/\s+[-|:/]\s+|[()]/)) {
+        if ((normaliseText(part).toLowerCase().match(/\p{L}+/gu) ?? []).some((word) => !BASE_WORDS.has(word))) add("person", part.trim());
+      }
+    }
   };
   // Free text keeps only the places no export name shares a word with; a case's location still
   // uses the full list.
@@ -60,24 +69,27 @@ function createDictionary(privacy, pseudonymizer) {
     const names = known.filter((entry) => entry.kind === "person" || entry.kind === "company").map((entry) => entry.value);
     const places = placesPattern(safePlaces(privacy.municipalities, names));
     const vocabulary = buildVocabulary(texts, { names, minRecords: privacy.vocabulary_min_records });
-    return { places, scrub: createScrubber(known, { places, vocabulary }), guard: createGuard(pseudonymizer.originals(), places, privacy.municipalities) };
+    return { places, scrub: createScrubber(known, { places, vocabulary }), guard: createGuard(pseudonymizer.originals(), places, { municipality: privacy.municipalities, province: [...PROVINCES] }) };
   };
   return { add, fields, compile };
 }
 
 const textsOf = (rows, block) => rows.flatMap((row) => block.free_text.map((field) => row[field]));
 
+/** Refuses an export that holds a field the spec does not classify; names the fields, never values. */
+export function assertClassified(rows, block, privacy, label) {
+  const unknown = unclassifiedFields(rows, block, privacy.never_copied);
+  if (unknown.length > 0) throw new Error(`history export ${label} has fields the spec does not classify: ${unknown.join(", ")}`);
+}
+
 function dictionary({ contacts = [], jobs = [], activities = [] }, privacy, pseudonymizer) {
-  const { add, fields, compile } = createDictionary(privacy, pseudonymizer);
+  assertClassified(contacts, privacy.contact, privacy, "contacts");
+  assertClassified(jobs, privacy.job, privacy, "jobs");
+  assertClassified(activities, privacy.activity, privacy, "activities");
+  const { fields, compile } = createDictionary(privacy, pseudonymizer);
   for (const contact of contacts) fields(contact, privacy.contact);
-  for (const job of jobs) {
-    fields(job, privacy.job);
-    for (const link of [...(job.related ?? []), job.primary].filter(Boolean)) add("person", link.name);
-  }
-  for (const activity of activities) {
-    fields(activity, privacy.activity);
-    for (const link of activity.related ?? []) add("person", link?.name);
-  }
+  for (const job of jobs) fields(job, privacy.job);
+  for (const activity of activities) fields(activity, privacy.activity);
   return compile([...textsOf(contacts, privacy.contact), ...textsOf(jobs, privacy.job), ...textsOf(activities, privacy.activity)]);
 }
 
@@ -187,7 +199,7 @@ export function buildLeadCases(exportRows, spec, pseudonymizer) {
     cases.push({
       id,
       specialist_id: "lead_concierge",
-      signal: { kind: "watch", source: "history", watch_id: "new_inbound", at: "PT0M", content: { text: record.description || `New inquiry (source: ${source ?? "unknown"}).` } },
+      signal: { kind: "watch", source: "history", watch_id: "new_inbound", at: "PT0M", content: { text: record.description || `new inquiry (source: ${source ?? "unknown"})` } },
       facts: [
         {
           fact_id: `lead:${record.jnid}`,
@@ -233,21 +245,16 @@ const seconds = (iso) => {
  */
 export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, spec, pseudonymizer) {
   const now = exportTime(exportedAt);
-  const { add, fields, compile } = createDictionary(spec.privacy, pseudonymizer);
+  const { fields, compile } = createDictionary(spec.privacy, pseudonymizer);
   const intake = new Set(spec.intake_custom_fields);
   const intakeValues = (opportunity) =>
     (Array.isArray(opportunity.customFields) ? opportunity.customFields : [])
       .filter((field) => intake.has(field?.id) && typeof field.fieldValueString === "string" && field.fieldValueString.trim())
       .map((field) => field.fieldValueString);
+  assertClassified(contacts, spec.privacy.ghl_contact, spec.privacy, "GoHighLevel contacts");
+  assertClassified(opportunities, spec.privacy.ghl_opportunity, spec.privacy, "GoHighLevel opportunities");
   for (const contact of contacts) fields(contact, spec.privacy.ghl_contact);
-  for (const opportunity of opportunities) {
-    fields(opportunity, spec.privacy.ghl_opportunity);
-    // The opportunity name usually carries the contact's name; parts made only of listed words
-    // ("Metal Roof") are not names.
-    for (const part of String(opportunity.name ?? "").split(/\s+[-|:/]\s+|[()]/)) {
-      if ((normaliseText(part).toLowerCase().match(/\p{L}+/gu) ?? []).some((word) => !BASE_WORDS.has(word))) add("person", part.trim());
-    }
-  }
+  for (const opportunity of opportunities) fields(opportunity, spec.privacy.ghl_opportunity);
   const { scrub, guard } = compile(opportunities.flatMap(intakeValues));
   const municipalities = new Map(spec.privacy.municipalities.map((name) => [lower(name), name]));
   const byContact = new Map(contacts.map((contact) => [contact.id, contact]));
@@ -289,7 +296,7 @@ export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, 
     cases.push({
       id,
       specialist_id: "lead_concierge",
-      signal: { kind: "watch", source: "history", watch_id: "new_inbound", at: "PT0M", content: { text: notes[0] ?? `New inquiry (source: ${source ?? "unknown"}).` } },
+      signal: { kind: "watch", source: "history", watch_id: "new_inbound", at: "PT0M", content: { text: notes[0] ?? `new inquiry (source: ${source ?? "unknown"})` } },
       facts: [
         {
           fact_id: `lead:${leadId}`,
@@ -386,7 +393,7 @@ export function buildDurationCases(exportRows, spec, pseudonymizer) {
     cases.push({
       id,
       specialist_id: "scheduler_dispatcher",
-      signal: { kind: "handoff", source: "history", at: "PT0M", content: { text: `Draft the schedule for job ${record.jnid}, starting ${relative(job.date_start, at)} from now.` } },
+      signal: { kind: "handoff", source: "history", at: "PT0M", content: { text: `draft the schedule for job ${record.jnid}, starting ${relative(job.date_start, at)} from now` } },
       facts: [
         {
           fact_id: `job:${record.jnid}`,

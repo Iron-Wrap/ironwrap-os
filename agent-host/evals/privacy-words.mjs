@@ -121,6 +121,8 @@ duro-last ideal bp emco dynasty cambridge timberline landmark duration
 alberta canada city town county rural acreage country province street road avenue address addresses postal code
 lot block plan legal land
 will would wouldn't via also
+replacement replacements installation installations kitchen bathroom bedroom room rooms ceiling ceilings stairs
+interior exterior inside outside renovation renovations upgrade upgrades
 `),
 );
 
@@ -162,6 +164,42 @@ export const PERSON_AUXILIARIES = new Set(words("is was will would has had can c
 export const PERSON_ACTIONS = new Set(
   words("call calling text texting email emailing come coming be here home away back out pay paying send sending sign signing confirm going gone available"),
 );
+
+// Verbs only a person does: after any capitalised word that is not a role or a pronoun, they make
+// it a name ("Gold called back", "Tan wants a quote").
+export const STRONG_PERSON_VERBS = new Set(
+  words("called calling phoned texted emailed messaged said says asked asks replied responded agreed declined mentioned told tells wants wanted"),
+);
+// Who may do those things without being a name: pronouns, roles, and suppliers.
+export const PERSON_SUBJECTS = new Set(
+  words(`
+i we they he she you it someone somebody nobody everyone everybody customer customers client clients homeowner
+homeowners owner owners tenant tenants landlord landlords manager managers office crew crews foreman installer
+installers supplier suppliers vendor vendors adjuster adjusters insurance insurer insurers company companies rep reps
+sales salesperson inspector inspectors contractor contractors builder builders team staff estimator dispatcher
+wife husband son daughter mom dad mother father brother sister neighbour neighbours neighbor neighbors family partner
+spouse caller callers lead leads
+`),
+);
+
+// Platforms and suppliers written capitalised anywhere in a sentence.
+export const BRAND_WORDS = new Set(
+  words(`
+galvalume vicwest westman kenroc gaf iko certainteed malarkey tyvek sika soprema duro-last emco dynasty cambridge
+timberline landmark google facebook instagram kijiji homestars yelp houzz
+`),
+);
+
+// Capitalised words that are ordinary in the middle of a sentence; any other capitalised word
+// there counts as a name.
+export const MID_SENTENCE_WORDS = new Set([
+  ...BRAND_WORDS,
+  ...words(`
+i i'm i've i'll i'd alberta canada monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thur
+thurs fri sat sun january february march july september october november december jan feb mar apr jun jul aug sep
+sept oct nov dec
+`),
+]);
 
 // Month and season names that are also given names: capitalised, they count as dates only next
 // to a date word or a number ("in June", "June 5").

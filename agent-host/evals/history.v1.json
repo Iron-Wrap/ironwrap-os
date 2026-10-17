@@ -154,17 +154,21 @@
       "identifiers": {
         "jnid": "contact",
         "external_id": "contact",
+        "customer": "contact",
         "display_name": "person",
         "first_name": "person",
         "last_name": "person",
         "company": "company",
+        "website": "company",
         "email": "email",
         "mobile_phone": "phone",
         "home_phone": "phone",
         "work_phone": "phone",
         "phone": "phone",
+        "fax_number": "phone",
         "sales_rep": "email",
         "sales_rep_name": "person",
+        "created_by": "contact",
         "created_by_name": "person"
       },
       "address": [
@@ -172,28 +176,104 @@
         "address_line2",
         "zip",
         "geo",
-        "country_name"
+        "country_name",
+        "city",
+        "state_text"
       ],
       "free_text": [
         "description"
+      ],
+      "linked": [
+        "related",
+        "owners",
+        "subcontractors"
+      ],
+      "named": [],
+      "reviewed": [
+        "actual_time",
+        "all_day",
+        "all_day_end_date",
+        "all_day_start_date",
+        "attachment_count",
+        "class_id",
+        "class_name",
+        "color",
+        "color_shade",
+        "date_created",
+        "date_start",
+        "date_status_change",
+        "disable_auto_text",
+        "estimated_time",
+        "is_closed",
+        "is_lead",
+        "is_shadow",
+        "is_sub_contractor",
+        "is_user",
+        "location",
+        "record_type",
+        "record_type_name",
+        "source",
+        "source_name",
+        "task_count",
+        "type"
       ]
     },
     "job": {
       "identifiers": {
         "jnid": "job",
         "external_id": "contact",
+        "customer": "contact",
         "sales_rep": "email",
-        "sales_rep_name": "person"
+        "sales_rep_name": "person",
+        "created_by": "contact",
+        "created_by_name": "person",
+        "parent_home_phone": "phone",
+        "parent_mobile_phone": "phone",
+        "parent_work_phone": "phone",
+        "parent_fax_number": "phone"
       },
       "address": [
         "address_line1",
         "address_line2",
         "zip",
         "geo",
-        "country_name"
+        "country_name",
+        "city",
+        "state_text"
       ],
       "free_text": [
         "description"
+      ],
+      "linked": [
+        "related",
+        "primary",
+        "owners",
+        "subcontractors"
+      ],
+      "named": [
+        "name"
+      ],
+      "reviewed": [
+        "actual_time",
+        "all_day",
+        "all_day_end_date",
+        "all_day_start_date",
+        "attachment_count",
+        "class_id",
+        "class_name",
+        "date_created",
+        "date_start",
+        "date_status_change",
+        "estimated_time",
+        "is_closed",
+        "is_lead",
+        "location",
+        "record_type",
+        "record_type_name",
+        "source",
+        "source_name",
+        "task_count",
+        "type"
       ]
     },
     "activity": {
@@ -205,6 +285,92 @@
       "address": [],
       "free_text": [
         "note"
+      ],
+      "linked": [
+        "related"
+      ],
+      "named": [],
+      "reviewed": [
+        "date_created",
+        "is_status_change"
+      ]
+    },
+    "payment": {
+      "identifiers": {
+        "jnid": "payment",
+        "external_record_id": "payment",
+        "customer": "contact",
+        "sales_rep": "email",
+        "sales_rep_name": "person",
+        "created_by": "contact",
+        "created_by_name": "person"
+      },
+      "address": [],
+      "free_text": [],
+      "linked": [
+        "related",
+        "primary",
+        "owners"
+      ],
+      "named": [],
+      "reviewed": [
+        "credit",
+        "date_created",
+        "date_payment",
+        "estimates",
+        "invoices",
+        "is_active",
+        "is_archived",
+        "location",
+        "method_id",
+        "refunded_amount",
+        "surcharge",
+        "total",
+        "type"
+      ]
+    },
+    "invoice": {
+      "identifiers": {
+        "jnid": "invoice",
+        "external_id": "invoice",
+        "guid": "invoice",
+        "customer": "contact",
+        "sales_rep": "email",
+        "sales_rep_name": "person",
+        "created_by": "contact",
+        "created_by_name": "person"
+      },
+      "address": [],
+      "free_text": [
+        "note",
+        "internal_note"
+      ],
+      "linked": [
+        "related",
+        "owners"
+      ],
+      "named": [],
+      "reviewed": [
+        "class_id",
+        "class_name",
+        "cost",
+        "date_created",
+        "date_due",
+        "date_invoice",
+        "date_status_change",
+        "first_payment_date",
+        "is_active",
+        "is_archived",
+        "location",
+        "margin",
+        "number",
+        "payments",
+        "recid",
+        "subtotal",
+        "tax",
+        "total",
+        "type",
+        "version"
       ]
     },
     "ghl_contact": {
@@ -227,9 +393,23 @@
       "address": [
         "address1",
         "postalCode",
-        "country"
+        "country",
+        "city",
+        "state"
       ],
-      "free_text": []
+      "free_text": [],
+      "linked": [],
+      "named": [],
+      "reviewed": [
+        "attributions",
+        "customFields",
+        "dateAdded",
+        "locationId",
+        "source",
+        "startAfter",
+        "timezone",
+        "type"
+      ]
     },
     "ghl_opportunity": {
       "identifiers": {
@@ -244,7 +424,23 @@
         "followers": "person"
       },
       "address": [],
-      "free_text": []
+      "free_text": [],
+      "linked": [],
+      "named": [
+        "name"
+      ],
+      "reviewed": [
+        "attributions",
+        "createdAt",
+        "indexVersion",
+        "lastStageChangeAt",
+        "lastStatusChangeAt",
+        "locationId",
+        "pipelineId",
+        "sort",
+        "source",
+        "updatedAt"
+      ]
     },
     "never_copied": [
       "name",
@@ -253,8 +449,6 @@
       "status",
       "status_name",
       "tags",
-      "approved_estimate_total",
-      "approved_invoice_total",
       "date_end",
       "date_updated",
       "is_active",
@@ -268,7 +462,56 @@
       "contact.score",
       "effectiveProbability",
       "lostReasonId",
-      "profilePhoto"
+      "profilePhoto",
+      "approved_*",
+      "last_*",
+      "parent_approved_*",
+      "parent_last_*",
+      "image_id",
+      "open_edge_id",
+      "merged",
+      "number",
+      "recid",
+      "misc",
+      "rules",
+      "fieldassists",
+      "sunlightEvents",
+      "sunlightStatusAndId",
+      "stage_dates_overrides",
+      "stage_dates_overrides_on",
+      "New Build",
+      "Services interested",
+      "Gated Community",
+      "Gutters",
+      "Roof Type",
+      "Roofing Color",
+      "Roofing Steel Supplier",
+      "card",
+      "chargeback_id",
+      "refund_id",
+      "transaction_id",
+      "reference",
+      "PaymentSource",
+      "globalPayPayment",
+      "wepay_payment_status",
+      "created_by_processor",
+      "items",
+      "sections",
+      "attachment_id",
+      "duplicate_from_id",
+      "template_id",
+      "terms",
+      "supplier",
+      "esigned",
+      "date_paid_in_full",
+      "total_paid",
+      "due",
+      "dateOfBirth",
+      "dnd",
+      "dndSettings",
+      "dateUpdated",
+      "pipelineStageUId",
+      "forecastProbability"
     ]
   },
   "specialists": {

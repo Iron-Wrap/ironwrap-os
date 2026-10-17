@@ -176,6 +176,19 @@ test("GoHighLevel leads: won, abandoned, and open past the horizon; open and rec
   assert.match(built.cases[0].facts[0].data.intake_notes[0], /^person-[a-p]{10} wants a metal roof quote\.$/, "a name-free opportunity name is not a person");
 });
 
+test("an export field the spec does not classify stops the build, named but never shown", () => {
+  const pz = createPseudonymizer("synthetic-salt-history-0004");
+  const spec = specFor("lead_concierge", "jobnimbus");
+  assert.throws(
+    () => buildLeadCases({ contacts: [contact("01", { spouse_name: "Jordan Fixture" })], jobs: [], activities: [], exportedAt: NOW }, spec, pz),
+    (error) => error.message.endsWith("history export contacts has fields the spec does not classify: spouse_name") && !error.message.includes("Jordan"),
+  );
+  const ghl = { ...specFor("lead_concierge", "ghl"), intake_custom_fields: ["intake"] };
+  const opportunity = { id: "ghl-opp-1", status: "lost", createdAt: new Date((NOW - 200 * DAY) * 1000).toISOString(), contact: { id: "ghl-c-1", name: "Taylor Example", nickname: "Tay" } };
+  assert.throws(() => buildGhlLeadCases({ opportunities: [opportunity], contacts: [], exportedAt: NOW }, ghl, pz), /GoHighLevel opportunities has fields the spec does not classify: contact\.nickname$/);
+  assert.throws(() => buildGhlLeadCases({ opportunities: [], contacts: [{ id: "ghl-c-2", dateOfBirth: "x", spouse: "y" }], exportedAt: NOW }, ghl, pz), /GoHighLevel contacts has fields the spec does not classify: spouse$/);
+});
+
 test("sampling is deterministic and stratified; outcomes come only from proposed tool calls", () => {
   const cases = Array.from({ length: 10 }, (_, i) => ({ id: `history.lead_concierge.contact-${String.fromCharCode(97 + i).repeat(10)}` }));
   const truths = cases.map((entry, i) => ({ case_id: entry.id, converted: i < 2 }));

@@ -50,6 +50,10 @@ test("configuration that would weaken the gateway is refused", () => {
     ["a per-call ceiling above the window ceiling", (v) => (v.ceilings.specialist_default.cost_usd_per_call = 99), /exceeds cost_usd/],
     ["an unknown effort", (v) => (v.routes.routine.effort = "ultra"), /effort level/],
     ["a wrong schema id", (v) => (v.schema = "v0"), /schema must be/],
+    ["no ChatGPT plan", (v) => (v.providers.codex.chatgpt_plans = []), /chatgpt_plans must list at least one plan/],
+    ["a malformed ChatGPT plan", (v) => (v.providers.codex.chatgpt_plans = ["Pro Plan"]), /chatgpt_plans must hold plan names/],
+    ["a repeated ChatGPT plan", (v) => (v.providers.codex.chatgpt_plans = ["pro", "pro"]), /chatgpt_plans must not repeat/],
+    ["no ChatGPT plan list", (v) => delete v.providers.codex.chatgpt_plans, /chatgpt_plans is required/],
   ];
   for (const [name, mutate, message] of cases) {
     const value = raw();

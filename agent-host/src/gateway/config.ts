@@ -37,6 +37,8 @@ export interface GatewayConfig {
       apiKeyEnv: string;
       codexHomeEnv: string;
       signinMaxAgeHours: number;
+      /** ChatGPT plans that include every routed Codex model; another signed-in plan is not ready. */
+      chatgptPlans: string[];
     };
   };
   routes: Record<Tier, Route>;
@@ -85,7 +87,7 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
   const claude = object(providers.claude, "$.providers.claude");
   exactKeys(claude, ["enabled", "auth", "oauth_token_env", "api_key_env", "executable_path"], "$.providers.claude");
   const codex = object(providers.codex, "$.providers.codex");
-  exactKeys(codex, ["enabled", "auth", "api_key_env", "codex_home_env", "signin_max_age_hours"], "$.providers.codex");
+  exactKeys(codex, ["enabled", "auth", "api_key_env", "codex_home_env", "signin_max_age_hours", "chatgpt_plans"], "$.providers.codex");
 
   const config: GatewayConfig = {
     providers: {
@@ -103,6 +105,7 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
         apiKeyEnv: envName(codex.api_key_env, "$.providers.codex.api_key_env"),
         codexHomeEnv: envName(codex.codex_home_env, "$.providers.codex.codex_home_env"),
         signinMaxAgeHours: positive(codex.signin_max_age_hours, "$.providers.codex.signin_max_age_hours"),
+        chatgptPlans: plans(codex.chatgpt_plans, "$.providers.codex.chatgpt_plans"),
       },
     },
     routes: parseRoutes(root.routes),
@@ -251,6 +254,14 @@ function envName(value: unknown, path: string): string {
   const name = text(value, path);
   if (!ENV_NAME.test(name)) fail(path, "must be an environment variable name, never a value");
   return name;
+}
+
+function plans(value: unknown, path: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) fail(path, "must list at least one plan");
+  const list = value as unknown[];
+  for (const plan of list) if (typeof plan !== "string" || !/^[a-z][a-z0-9_]{1,30}$/.test(plan)) fail(path, "must hold plan names such as pro");
+  if (new Set(list).size !== list.length) fail(path, "must not repeat a plan");
+  return list as string[];
 }
 
 function bool(value: unknown, path: string): boolean {

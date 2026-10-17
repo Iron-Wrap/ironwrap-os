@@ -89,6 +89,8 @@ export type ProviderErrorKind =
   | "budget"
   | "invalid_output"
   | "aborted"
+  /** The signed-in subscription does not include the requested model. */
+  | "plan"
   | "fatal";
 
 export class ProviderError extends Error {
@@ -136,6 +138,8 @@ export interface CredentialState {
   fingerprint: string | null;
   /** Codex ChatGPT sign-in only: when the CLI last refreshed auth.json, in epoch ms. */
   refreshedAt?: number;
+  /** Codex ChatGPT sign-in only: the subscription plan the sign-in claims, such as `pro`. */
+  plan?: string;
 }
 
 export interface ProviderAdapter {
@@ -151,6 +155,8 @@ export function zeroUsage(): Usage {
 
 /** Last resort for errors that arrive only as text (a crashed subprocess, a network failure). */
 export function classifyText(text: string): ProviderErrorKind {
+  // Codex's exact refusal of a model for the ChatGPT sign-in's plan; nothing looser.
+  if (/model is not supported when using codex with a chatgpt account/i.test(text)) return "plan";
   if (/\b429\b|rate.?limit|too many requests|usage limit/i.test(text)) return "rate_limit";
   if (/\b40[13]\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in again|token (?:expired|invalid|revoked)|refresh token/i.test(text)) {
     return "auth";

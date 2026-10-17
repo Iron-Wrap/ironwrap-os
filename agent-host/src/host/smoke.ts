@@ -39,7 +39,8 @@ const runs: GatewayRequest[] = [
 let failed = 0;
 for (const request of runs) {
   const result = await gateway.run(request);
-  const ok = result.status === "ok" && (result.output as { echo?: string }).echo === "ironwrap-smoke";
+  // A run must record the model it ran with (contract "Recorded on every run"); none is a failure.
+  const ok = result.status === "ok" && (result.output as { echo?: string }).echo === "ironwrap-smoke" && result.modelsUsed.length > 0;
   if (!ok) failed += 1;
   console.log(
     JSON.stringify({

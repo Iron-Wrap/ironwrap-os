@@ -16,6 +16,7 @@ import {
   ProviderError,
   zeroUsage,
   type AbstainReason,
+  type CredentialState,
   type GatewayRequest,
   type GatewayResult,
   type ProviderAdapter,
@@ -42,7 +43,7 @@ export interface GatewayOptions {
   random?: () => number;
 }
 
-export type ProviderStateName = "ready" | "disabled" | "credential_missing" | "auth_failed" | "cooldown";
+export type ProviderStateName = "ready" | "disabled" | "credential_missing" | "auth_failed" | "plan_lacks_model" | "cooldown";
 
 export interface ProviderHealth {
   enabled: boolean;
@@ -51,6 +52,8 @@ export interface ProviderHealth {
   credentialPresent: boolean;
   signinRefreshedAt: number | null;
   signinStale: boolean;
+  /** The subscription plan a Codex ChatGPT sign-in claims; null when it claims none. */
+  plan: string | null;
   cooldownUntil: number | null;
   lastSuccessAt: number | null;
   lastErrorKind: ProviderErrorKind | null;
@@ -68,6 +71,8 @@ interface ProviderState {
   cooldownUntil: number;
   rejectedFingerprint: string | null;
   rejectedAt: number;
+  /** Routed models the provider refused for the sign-in's plan: the credential and when. */
+  planRefused: Map<string, { fingerprint: string; at: number }>;
   lastSuccessAt: number | null;
   lastErrorKind: ProviderErrorKind | null;
 }
@@ -160,6 +165,8 @@ export class ProviderGateway {
     // Past the probe interval the rejected credential gets exactly one probe: claiming it here
     // keeps concurrent runs abstaining until the probe answers.
     if (state.rejectedFingerprint === credential.fingerprint) state.rejectedAt = this.now();
+    const planGap = this.planGap(route.provider, route.model, credential, true);
+    if (planGap) return abstain("provider_error", planGap);
 
     const { maxAttempts, maxDelayMs } = this.config.retry;
     for (;;) {
@@ -197,6 +204,7 @@ export class ProviderGateway {
         settled = true;
         state.lastSuccessAt = this.now();
         state.rejectedFingerprint = null;
+        state.planRefused.delete(route.model);
         if (modelsUsed.some((used) => !sameModel(used, route.model))) {
           return abstain("model_mismatch", `${route.provider} answered with ${modelsUsed.join(", ")} instead of ${route.model}`);
         }
@@ -244,12 +252,21 @@ export class ProviderGateway {
           const fresh = await adapter.credential();
           if (fresh.fingerprint && fresh.fingerprint !== credential.fingerprint && attempts < maxAttempts) {
             credential = fresh;
+            const freshGap = this.planGap(route.provider, route.model, credential, true);
+            if (freshGap) return abstain("provider_error", freshGap);
             continue;
           }
           state.rejectedFingerprint = credential.fingerprint;
           state.rejectedAt = this.now();
           return abstain("auth_failed", failure.message);
         }
+        case "plan":
+          // The call proved the credential is accepted, so an older auth rejection no longer holds.
+          // The same sign-in is refused for this model until it changes or one probe per
+          // `auth_probe_after_ms` succeeds, which also notices a plan upgraded on the provider side.
+          if (state.rejectedFingerprint === credential.fingerprint) state.rejectedFingerprint = null;
+          if (credential.fingerprint) state.planRefused.set(route.model, { fingerprint: credential.fingerprint, at: this.now() });
+          return abstain("provider_error", failure.message);
         case "budget":
           return abstain("cost_ceiling", failure.message);
         case "invalid_output":
@@ -282,6 +299,7 @@ export class ProviderGateway {
       if (!enabled) name = "disabled";
       else if (!credential.fingerprint) name = "credential_missing";
       else if (state.rejectedFingerprint === credential.fingerprint) name = "auth_failed";
+      else if (this.routedModels(id).some((model) => this.planGap(id, model, credential))) name = "plan_lacks_model";
       else if (state.cooldownUntil > this.now()) name = "cooldown";
       if (name !== "ready" && name !== "disabled") alerts.push(`${id}_${name}`);
       if (signinStale) alerts.push(`${id}_signin_not_refreshing`);
@@ -292,6 +310,7 @@ export class ProviderGateway {
         credentialPresent: credential.fingerprint !== null,
         signinRefreshedAt: refreshedAt,
         signinStale,
+        plan: credential.plan ?? null,
         cooldownUntil: state.cooldownUntil > this.now() ? state.cooldownUntil : null,
         lastSuccessAt: state.lastSuccessAt,
         lastErrorKind: state.lastErrorKind,
@@ -302,6 +321,32 @@ export class ProviderGateway {
     const routed = new Set(Object.values(this.config.routes).map((route) => route.provider));
     const ready = !killed && !degraded && [...routed].every((id) => providers[id].state === "ready");
     return { ready, killed, alerts, providers, usage: this.ledger.snapshot() };
+  }
+
+  private routedModels(id: ProviderId): string[] {
+    return Object.values(this.config.routes)
+      .filter((route) => route.provider === id)
+      .map((route) => route.model);
+  }
+
+  /**
+   * Why this Codex ChatGPT sign-in cannot run the model, or null: its plan already refused the
+   * model, or the plan it claims is not one the configuration says includes the routed models.
+   */
+  private planGap(id: ProviderId, model: string, credential: CredentialState, claimProbe = false): string | null {
+    if (id !== "codex" || this.adapters.codex.authMode !== "chatgpt" || !credential.fingerprint) return null;
+    const action = `sign the agent host's ${this.config.providers.codex.codexHomeEnv} in with a ChatGPT plan that includes it`;
+    const refused = this.state.codex.planRefused.get(model);
+    if (refused?.fingerprint === credential.fingerprint) {
+      // Past the probe interval one run may try again; claiming the probe keeps the others out.
+      if (claimProbe && this.now() - refused.at >= this.config.retry.authProbeAfterMs) refused.at = this.now();
+      else return `codex: plan does not include model ${model}; the provider refused it for this sign-in; ${action}`;
+    }
+    const plans = this.config.providers.codex.chatgptPlans;
+    if (credential.plan !== undefined && !plans.includes(credential.plan)) {
+      return `codex: plan does not include model ${model}; the sign-in is on the ${credential.plan} plan, configured plans are ${plans.join(", ")}; ${action}`;
+    }
+    return null;
   }
 
   private stillRejected(state: ProviderState, fingerprint: string | null): boolean {
@@ -339,7 +384,7 @@ function sameModel(used: string, configured: string): boolean {
 }
 
 function freshState(): ProviderState {
-  return { cooldownUntil: 0, rejectedFingerprint: null, rejectedAt: 0, lastSuccessAt: null, lastErrorKind: null };
+  return { cooldownUntil: 0, rejectedFingerprint: null, rejectedAt: 0, planRefused: new Map(), lastSuccessAt: null, lastErrorKind: null };
 }
 
 function addUsage(a: Usage, b: Usage): Usage {

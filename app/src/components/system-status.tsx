@@ -311,7 +311,7 @@ function StatusPill({
 
 /**
  * The crew phone's sync state, always shown, glyph and words together: nothing waiting, how many
- * items wait on the phone, sending, offline, or what needs a check. "All sent" is said only when
+ * items wait on the phone, sending, offline, or what needs a check. "Nothing to send" is said only when
  * the outbox holds nothing unsent; the server's verification is what empties it.
  */
 function CrewSyncState({
@@ -386,7 +386,7 @@ function CrewSyncState({
                 ? ["Sign-in paused", waiting > 0 ? `${waiting} on phone` : undefined]
                 : state === "waiting"
                   ? [`${waiting} to send`, undefined]
-                  : ["All sent", undefined];
+                  : ["Nothing to send", undefined];
 
   return (
     <p

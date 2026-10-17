@@ -177,7 +177,10 @@ describe("TodayPage", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(hasCachedJobPacket).mockResolvedValue(true);
-    vi.mocked(prefetchAssignedPackets).mockResolvedValue({});
+    vi.mocked(prefetchAssignedPackets).mockImplementation(async (_session, model, options) => {
+      for (const job of model.jobs) options?.onPacket?.(job.id, true);
+      return Object.fromEntries(model.jobs.map((job) => [job.id, true]));
+    });
     vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
   });
@@ -233,7 +236,10 @@ describe("TodayPage", () => {
     expect(await screen.findByRole("heading", { name: "Today's work" })).toBeVisible();
     expect(screen.getByText("1 check blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
-    expect(screen.getByText(/\d+ of \d+ saved on this phone\./i)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
+    expect(
+      screen.getByText(/This run sheet and 2 job plans are saved on this phone/),
+    ).toBeVisible();
     expect(screen.getByRole("link", { name: "Check what blocks work" })).toHaveAttribute(
       "href",
       "/jobs/JOB-BLOCKED",
@@ -243,7 +249,7 @@ describe("TodayPage", () => {
       "/jobs/JOB-NEXT",
     );
     expect(screen.getAllByText(/10:00/).length).toBeGreaterThan(0);
-    expect(screen.queryByText("Ready offline")).not.toBeInTheDocument();
+
     expect(screen.queryByText("Needs download")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Start work/i })).not.toBeInTheDocument();
   });
@@ -257,6 +263,21 @@ describe("TodayPage", () => {
     expect(cacheToday).toHaveBeenCalledWith(fieldSession, bootstrapToday);
   });
 
+  it("warns when the fresh bootstrap run sheet could not be kept on this phone", async () => {
+    const user = userEvent.setup();
+    vi.mocked(cacheToday).mockRejectedValueOnce(
+      new DOMException("Storage full", "QuotaExceededError"),
+    );
+    renderToday(todayModel(), todayModel());
+
+    expect(await screen.findByRole("heading", { name: "Not ready offline" })).toBeVisible();
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.queryByText("Some details may be old")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Try saving again" }));
+    expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
+    expect(loadToday).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps availability in checking state until the local packet probe resolves", async () => {
     let resolvePacket: ((value: boolean) => void) | undefined;
     vi.mocked(hasCachedJobPacket).mockImplementation(
@@ -267,10 +288,10 @@ describe("TodayPage", () => {
     );
     renderToday(todayModel({ jobs: [todayModel().jobs[0]!] }));
 
-    expect(await screen.findByText("Checking saved job plans")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Saving for offline use" })).toBeVisible();
     expect(screen.queryByText("Job plan not saved")).not.toBeInTheDocument();
     resolvePacket?.(false);
-    expect(await screen.findByText("Saving job plans")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Saving for offline use" })).toBeVisible();
   });
 
   it("exposes a retry only after a failed online packet save", async () => {

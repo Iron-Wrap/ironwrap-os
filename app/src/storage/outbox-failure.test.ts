@@ -89,6 +89,7 @@ describe("crew guidance for a stopped item", () => {
 
   it("never says not sent, nor offers a resend, when the office answered with something else", () => {
     // A 2xx whose body did not verify: the office may already have recorded the item.
+    expect(classifyOutboxFailure({ status: 201, code: "verification_mismatch" })).toBe("terminal");
     expect(
       outboxFailureGuidance(
         checkIn({

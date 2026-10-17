@@ -150,6 +150,86 @@ test.describe("Check-in refusals on the crew phone", () => {
     });
   });
 
+  test("keeps an unconfirmed office answer for review without claiming sent or sending again", async ({
+    page,
+  }, testInfo) => {
+    await routeJobWithoutWorkPackage(page);
+    let sends = 0;
+    await page.route("**/api/v1/jobs/JOB-ACCEPTANCE/check-ins", async (route) => {
+      sends += 1;
+      const response = await route.fetch();
+      const answer = await response.json();
+      answer.device_action_id = "different-saved-item";
+      await route.fulfill({ response, json: answer });
+    });
+    await page.goto("/check-in/JOB-ACCEPTANCE");
+    await page.getByRole("button", { name: "Continue to review" }).click();
+    await page.getByRole("button", { name: "Report a blocker" }).click();
+    await page.getByLabel("What must happen next?").fill("The office needs to check the delivery.");
+    await page.getByRole("button", { name: "Save on device" }).click();
+
+    const receipt = page.getByTestId("checkin-saved");
+    await expect(receipt.getByText("Needs a check", { exact: true })).toBeVisible();
+    await expect(receipt).toContainText("could not confirm the office has this exact item");
+    await expect(receipt).toContainText(
+      "Do not save it again. Call the office and ask whether it arrived.",
+    );
+    await expect(receipt.getByText("Sent", { exact: true })).toHaveCount(0);
+    await expect(receipt).not.toContainText(/not sent|did not send/i);
+    await expect(receipt).toContainText("Saved on this phone");
+    await expect(receipt).toContainText("This check-in is not confirmed.");
+    await receipt
+      .getByRole("alert")
+      .evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await testInfo.attach("unconfirmed-checkin-phone.png", {
+      body: await page.screenshot({ path: testInfo.outputPath("unconfirmed-checkin-phone.png") }),
+      contentType: "image/png",
+    });
+
+    await page.goto("/today");
+    await page.reload();
+    const savedWork = page.locator("#saved-work");
+    await expect(savedWork).toContainText("could not confirm the office has this exact item");
+    await expect(savedWork.getByRole("button", { name: "Try again" })).toHaveCount(0);
+    await expect(savedWork.getByText("Sent", { exact: true })).toHaveCount(0);
+    expect(sends).toBe(1);
+    const keptAction = await page.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("ironwrap-os");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise<{ state: string; lastError?: { code: string } }[]>(
+          (resolve, reject) => {
+            const request = database
+              .transaction("outbox_actions")
+              .objectStore("outbox_actions")
+              .getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          },
+        );
+      } finally {
+        database.close();
+      }
+    });
+    expect(keptAction).toMatchObject([
+      { state: "needs_attention", lastError: { code: "verification_mismatch" } },
+    ]);
+    await savedWork
+      .getByText(
+        "The office answered, but this phone could not confirm the office has this exact item.",
+      )
+      .evaluate((element) => element.scrollIntoView({ block: "center" }));
+    await testInfo.attach("unconfirmed-saved-work-phone.png", {
+      body: await page.screenshot({
+        path: testInfo.outputPath("unconfirmed-saved-work-phone.png"),
+      }),
+      contentType: "image/png",
+    });
+  });
+
   test("opens the camera from the job in one app action and keeps the sent receipt across readback", async ({
     page,
   }, testInfo) => {

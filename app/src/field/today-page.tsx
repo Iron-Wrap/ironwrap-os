@@ -1,19 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  AlertTriangle,
-  ChevronRight,
-  CircleDashed,
-  ClipboardCheck,
-  PackageCheck,
-} from "lucide-react";
+import { AlertTriangle, ChevronRight, CircleDashed, PackageCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useInitialToday, useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
-import type { TodayResponse } from "./field-contracts";
+import { NOT_SAVED_ON_DEVICE, type TodayResponse } from "./field-contracts";
 import {
   formatFieldDay,
   formatFieldSchedule,
@@ -24,6 +18,7 @@ import {
 import { messageForLoad } from "../lib/plain-error";
 import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
+import { OfflineReadiness } from "./offline-readiness";
 
 type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
 type TodayJob = TodayResponse["jobs"][number];
@@ -37,6 +32,7 @@ export function TodayPage() {
     {},
   );
   const [packetRefreshCycle, setPacketRefreshCycle] = useState(0);
+  const [bootstrapSaving, setBootstrapSaving] = useState(Boolean(initialToday));
   const query = useQuery({
     queryKey: ["today", session.tenant.id, session.user.id],
     queryFn: () => loadToday(session),
@@ -51,10 +47,27 @@ export function TodayPage() {
 
   useEffect(() => {
     if (!initialToday) return;
-    void cacheToday(session, initialToday).catch((error: unknown) => {
-      console.error("Could not cache the initial Field Companion run sheet", error);
-    });
-  }, [initialToday, session]);
+    let active = true;
+    void cacheToday(session, initialToday)
+      .catch(() => {
+        queryClient.setQueryData<TodayResponse>(
+          ["today", session.tenant.id, session.user.id],
+          (current) =>
+            current === initialToday
+              ? {
+                  ...current,
+                  stale_fields: [...new Set([...current.stale_fields, NOT_SAVED_ON_DEVICE])],
+                }
+              : current,
+        );
+      })
+      .finally(() => {
+        if (active) setBootstrapSaving(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [initialToday, queryClient, session]);
 
   useEffect(() => {
     const retryPacketPreparation = () => {
@@ -88,7 +101,7 @@ export function TodayPage() {
           ...Object.fromEntries(
             cached.map(([jobId, exists]) => [
               jobId,
-              exists ? "saved" : online ? "saving" : "not_saved",
+              online ? "saving" : exists ? "saved" : "not_saved",
             ]),
           ),
         }));
@@ -136,6 +149,10 @@ export function TodayPage() {
   const savedPacketCount = today.jobs.filter((job) => availabilityFor(job) === "saved").length;
   const hasCheckingPackets = today.jobs.some((job) => availabilityFor(job) === "checking");
   const hasSavingPackets = today.jobs.some((job) => availabilityFor(job) === "saving");
+  const runSheetNotSaved = today.stale_fields.includes(NOT_SAVED_ON_DEVICE);
+  const savingOffline =
+    bootstrapSaving || query.isFetching || hasCheckingPackets || hasSavingPackets;
+  const readyOffline = !runSheetNotSaved && savedPacketCount === today.jobs.length;
   const fieldCaptureAllowed =
     session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
   const dataLimits = today.stale_fields.filter((field) => field !== "offline.cached_packet");
@@ -150,18 +167,27 @@ export function TodayPage() {
         generatedAt={today.read_model_generated_at}
         dateOptions={dateOptions}
       />
+      <OfflineReadiness
+        ready={readyOffline}
+        saving={savingOffline}
+        savedDetail={
+          today.jobs.length > 0
+            ? `This run sheet and ${savedPacketCount} job ${savedPacketCount === 1 ? "plan are" : "plans are"} saved on this phone. Open each plan and check its work and safety steps before you start.`
+            : "This run sheet is saved on this phone."
+        }
+        missingDetail={
+          runSheetNotSaved
+            ? "This run sheet is not saved on this phone."
+            : "Some job plans are not saved on this phone."
+        }
+        onRetry={() => {
+          if (runSheetNotSaved) void query.refetch();
+          else setPacketRefreshCycle((cycle) => cycle + 1);
+        }}
+      />
       {session.user.role === "field" ? <SavedWorkRecoveryPanel session={session} /> : null}
       {offline ? <OfflineScheduleNotice date={today.date} dateOptions={dateOptions} /> : null}
       {dataLimits.length > 0 ? <TodayDataLimits fields={dataLimits} /> : null}
-      {today.jobs.length > 0 ? (
-        <PacketAvailabilityPanel
-          jobCount={today.jobs.length}
-          savedCount={savedPacketCount}
-          checking={hasCheckingPackets}
-          saving={hasSavingPackets}
-          offline={offline}
-        />
-      ) : null}
       {assignmentCount === 0 ? (
         <EmptyState
           title={
@@ -260,10 +286,8 @@ function TodayDispatchHeader({
           >
             {offline ? (
               <AlertTriangle className="size-[1.125rem] text-warning" aria-hidden="true" />
-            ) : (
-              <ClipboardCheck className="size-[1.125rem] text-accent" aria-hidden="true" />
-            )}
-            <span>{offline ? "Saved copy" : "Up to date"}</span>
+            ) : null}
+            <span>{offline ? "Saved copy" : "Office update"}</span>
           </div>
           <p className="text-xs leading-5 text-muted">
             {offline ? "Saved" : "Generated"} {formatFieldTimestamp(generatedAt, dateOptions)}
@@ -296,87 +320,23 @@ function OfflineScheduleNotice({
 }
 
 function TodayDataLimits({ fields }: { fields: string[] }) {
-  const names = plainFieldNames(fields);
+  const staleFields = fields.filter((field) => field !== NOT_SAVED_ON_DEVICE);
+  const names = plainFieldNames(staleFields);
   return (
-    <details className="border border-border bg-surface-raised">
-      <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
-        Some details may be old
-      </summary>
-      <div className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        {names.length
-          ? `Check the job again before you use these details: ${names.join(", ")}.`
-          : "Check the job again before you rely on its details."}
-      </div>
-    </details>
-  );
-}
-
-function PacketAvailabilityPanel({
-  jobCount,
-  savedCount,
-  checking,
-  saving,
-  offline,
-}: {
-  jobCount: number;
-  savedCount: number;
-  checking: boolean;
-  saving: boolean;
-  offline: boolean;
-}) {
-  const state = checking
-    ? {
-        Icon: CircleDashed,
-        label: "Checking saved job plans",
-        detail: "This phone is checking what it can open with no signal.",
-        surfaceClassName: "border-border bg-surface-raised",
-        iconClassName: "text-info",
-      }
-    : saving
-      ? {
-          Icon: CircleDashed,
-          label: "Saving job plans",
-          detail: "Keep the app open while the last job plans save to this phone.",
-          surfaceClassName: "border-warning/30 bg-surface-raised",
-          iconClassName: "text-warning",
-        }
-      : savedCount === jobCount
-        ? {
-            Icon: PackageCheck,
-            label: "Job plans saved on this phone",
-            detail: "Open each job and check its work and safety steps before you start.",
-            surfaceClassName: "border-ok/25 bg-surface-raised",
-            iconClassName: "text-ok",
-          }
-        : {
-            Icon: AlertTriangle,
-            label: offline
-              ? "Some job plans are not on this phone"
-              : "Some job plans still need to save",
-            detail: offline
-              ? "Go online and save them before you leave for those sites."
-              : "Keep the app open. It will try again when the phone is online.",
-            surfaceClassName: "border-warning/30 bg-surface-raised",
-            iconClassName: "text-warning",
-          };
-  const StateIcon = state.Icon;
-  return (
-    <section className={`border px-4 py-3 ${state.surfaceClassName}`} aria-label="Saved job plans">
-      <div className="flex items-start gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-md bg-surface-muted">
-          <StateIcon className={`size-[1.125rem] ${state.iconClassName}`} aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1 sm:flex sm:items-start sm:justify-between sm:gap-6">
-          <div>
-            <p className="font-bold text-foreground">{state.label}</p>
-            <p className="mt-0.5 text-sm leading-5 text-muted">{state.detail}</p>
+    <>
+      {staleFields.length > 0 ? (
+        <details className="border border-border bg-surface-raised">
+          <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
+            Some details may be old
+          </summary>
+          <div className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
+            {names.length
+              ? `Check the job again before you use these details: ${names.join(", ")}.`
+              : "Check the job again before you rely on its details."}
           </div>
-          <p className="mt-2 shrink-0 text-sm font-bold text-foreground sm:mt-0">
-            {savedCount} of {jobCount} saved on this phone.
-          </p>
-        </div>
-      </div>
-    </section>
+        </details>
+      ) : null}
+    </>
   );
 }
 

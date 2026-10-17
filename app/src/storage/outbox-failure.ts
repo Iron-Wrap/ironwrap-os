@@ -40,10 +40,7 @@ const unconfirmedCodes = new Set(["verification_mismatch", "fleet_collision_stor
  * retry can clear. Status classification below covers the rest, so this list only has to carry
  * codes whose status may still understate them.
  */
-const terminalFailureCodes = new Set([
-  ...evidenceNeedsWorkPackageCodes,
-  "fleet_collision_storage_mismatch",
-]);
+const terminalFailureCodes = new Set([...evidenceNeedsWorkPackageCodes, ...unconfirmedCodes]);
 
 export function isTerminalFailureCode(code: string | undefined): boolean {
   return code !== undefined && terminalFailureCodes.has(code);

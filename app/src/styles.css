@@ -1412,11 +1412,7 @@ a.ref-tag:focus-visible {
   padding-bottom: calc(var(--crew-tabs-h) + 11rem + env(safe-area-inset-bottom));
 }
 
-.crew-main:has(.field-capture-dock) {
-  padding-bottom: calc(var(--crew-tabs-h) + 6rem + env(safe-area-inset-bottom));
-}
-
-.crew :is(.field-action-bar, .field-capture-dock) {
+.crew .field-action-bar {
   position: fixed;
   z-index: 25;
   inset-inline: 1rem;
@@ -1425,10 +1421,6 @@ a.ref-tag:focus-visible {
   margin-inline: auto;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-floating);
-}
-
-.crew .field-capture-dock {
-  --ui-control-size: 4rem;
 }
 
 .crew-tabs {

@@ -730,16 +730,26 @@ const BUILDER_PARAMS = {
 };
 const PRIVACY_MINIMUM = {
   contact: {
-    identifiers: ["jnid", "display_name", "first_name", "last_name", "email", "mobile_phone", "home_phone", "phone", "sales_rep", "sales_rep_name", "created_by_name"],
+    identifiers: ["jnid", "display_name", "first_name", "last_name", "email", "mobile_phone", "home_phone", "phone", "fax_number", "website", "sales_rep", "sales_rep_name", "created_by_name"],
     address: ["address_line1", "zip", "geo"],
     free_text: ["description"],
+    linked: ["related"],
   },
-  job: { identifiers: ["jnid", "sales_rep", "sales_rep_name"], address: ["address_line1", "zip", "geo"], free_text: ["description"] },
-  activity: { identifiers: ["created_by", "created_by_name"], address: [], free_text: ["note"] },
+  job: {
+    identifiers: ["jnid", "sales_rep", "sales_rep_name", "created_by_name", "parent_home_phone", "parent_mobile_phone", "parent_work_phone"],
+    address: ["address_line1", "zip", "geo"],
+    free_text: ["description"],
+    linked: ["related", "primary"],
+    named: ["name"],
+  },
+  activity: { identifiers: ["created_by", "created_by_name"], address: [], free_text: ["note"], linked: ["related"] },
+  payment: { identifiers: ["jnid", "customer", "created_by_name", "sales_rep_name"], address: [], free_text: [], linked: ["related", "primary"] },
+  invoice: { identifiers: ["jnid", "customer", "created_by_name", "sales_rep_name"], address: [], free_text: ["note", "internal_note"], linked: ["related"] },
   ghl_contact: { identifiers: ["id", "contactName", "firstName", "lastName", "email", "phone"], address: ["address1", "postalCode"], free_text: [] },
-  ghl_opportunity: { identifiers: ["id", "contactId", "contact.name", "contact.email", "contact.phone"], address: [], free_text: [] },
+  ghl_opportunity: { identifiers: ["id", "contactId", "contact.name", "contact.email", "contact.phone"], address: [], free_text: [], named: ["name"] },
 };
-const NEVER_COPIED_MINIMUM = ["name", "related", "primary", "status_name", "approved_estimate_total", "date_end", "monetaryValue", "customFields"];
+const PRIVACY_CLASSES = ["address", "free_text", "linked", "named", "reviewed"];
+const NEVER_COPIED_MINIMUM = ["name", "related", "primary", "status_name", "approved_*", "date_end", "monetaryValue", "customFields", "dateOfBirth", "card", "transaction_id"];
 // A group holding a quantifier or alternatives, itself repeated: "(a+)+" and "(x|xx)+" backtrack
 // without end on a long note.
 const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}|](?:[^()\\]|\\.)*\)[+*{]/;
@@ -776,12 +786,15 @@ function checkHistory(root, fail) {
   if (!Array.isArray(privacy.municipalities) || privacy.municipalities.length === 0 || !privacy.municipalities.every(placeName)) bad("privacy.municipalities must list place names (letters, spaces, dots, apostrophes, dashes)");
   for (const [record, minimum] of Object.entries(PRIVACY_MINIMUM)) {
     const block = privacy[record];
-    if (!isObject(block) || !isObject(block.identifiers) || !Array.isArray(block.address) || !Array.isArray(block.free_text)) {
-      bad(`privacy.${record} needs identifiers, address, and free_text`);
+    if (!isObject(block) || !isObject(block.identifiers) || !PRIVACY_CLASSES.every((key) => Array.isArray(block[key]))) {
+      bad(`privacy.${record} needs identifiers, ${PRIVACY_CLASSES.join(", ")}`);
       continue;
     }
     for (const field of minimum.identifiers) if (!Object.hasOwn(block.identifiers, field)) bad(`privacy.${record}.identifiers must include ${field}`);
-    for (const key of ["address", "free_text"]) for (const field of minimum[key]) if (!block[key].includes(field)) bad(`privacy.${record}.${key} must include ${field}`);
+    for (const key of PRIVACY_CLASSES) for (const field of minimum[key] ?? []) if (!block[key].includes(field)) bad(`privacy.${record}.${key} must include ${field}`);
+    // A reviewed field is copied as a business fact, so it may not also be personal.
+    const personal = new Set([...Object.keys(block.identifiers), ...block.address, ...block.free_text, ...block.linked, ...block.named]);
+    for (const field of block.reviewed) if (personal.has(field)) bad(`privacy.${record}.reviewed lists ${field}, which is personal`);
   }
   const neverCopied = Array.isArray(privacy.never_copied) ? privacy.never_copied : [];
   for (const field of NEVER_COPIED_MINIMUM) if (!neverCopied.includes(field)) bad(`privacy.never_copied must include ${field}`);

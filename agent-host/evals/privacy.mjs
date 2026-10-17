@@ -9,7 +9,21 @@
 
 import { createHmac } from "node:crypto";
 
-import { ACRONYMS, BASE_WORDS, DATE_CUES, DATE_HOMONYMS, NAME_HOMONYMS, PERSON_ACTIONS, PERSON_AUXILIARIES, PERSON_VERBS, SURNAME_HOMONYMS } from "./privacy-words.mjs";
+import {
+  ACRONYMS,
+  BASE_WORDS,
+  BRAND_WORDS,
+  DATE_CUES,
+  DATE_HOMONYMS,
+  MID_SENTENCE_WORDS,
+  NAME_HOMONYMS,
+  PERSON_ACTIONS,
+  PERSON_AUXILIARIES,
+  PERSON_SUBJECTS,
+  PERSON_VERBS,
+  STRONG_PERSON_VERBS,
+  SURNAME_HOMONYMS,
+} from "./privacy-words.mjs";
 
 // Matching runs on normalised text: NFKD with diacritics removed, one apostrophe, one dash.
 export function normaliseText(value) {
@@ -96,7 +110,7 @@ export function createPseudonymizer(salt) {
   };
 }
 
-export const TOKEN = /\b(?:person|contact|company|email|phone|job|activity|address)-[a-p]{10}\b/g;
+export const TOKEN = /\b(?:person|contact|company|email|phone|job|activity|address|payment|invoice)-[a-p]{10}\b/g;
 const PLACEHOLDER = new RegExp(`\\[(?:${Object.keys(PATTERNS).join("|")})\\]`, "g");
 const BRANDS = /\bOwens\s+Corning\b/gi;
 
@@ -127,8 +141,10 @@ const INTRODUCTIONS =
   "hi|hello|hey|dear|thanks|thank you|regards|cheers|sincerely|my name is|this is|i am|i'm|spoke (?:to|with)|talked (?:to|with)|met with|called|texted|emailed|asked for|left (?:a )?(?:vm|voicemail|message) for";
 const slot = (cues) => new RegExp(`\\b(?:${cues})\\b[,!:]?\\s+(\\p{L}[\\p{L}'-]*)`, "giu");
 const NAME_SLOT = slot(INTRODUCTIONS);
-// Wider slots for the export's vocabulary: a word ever seen after one of these is not learned.
-const VOCABULARY_SLOT = slot(`${INTRODUCTIONS}|from|with|per|via|ask|asked|tell|told`);
+// Weaker slots for the export's vocabulary: a word seen after these in more than one use in ten is
+// not learned ("per lisa", "ask mike"), while "with kitchen leak" now and then is.
+const OBJECT_SLOT = slot("from|with|per|via|ask|asked|tell|told");
+const OBJECT_SHARE = 0.1;
 
 const ordinary = (key, vocabulary) => BASE_WORDS.has(key) || Boolean(vocabulary?.has(key));
 function ordinaryLower(key, vocabulary) {
@@ -145,41 +161,90 @@ function ordinaryCapitalised(key) {
 // A capitalised word followed by what a person does: "Green said", "Price confirmed", "Wood is coming".
 const actsAsPerson = (next, after) => PERSON_VERBS.has(wordKey(next)) || (PERSON_AUXILIARIES.has(wordKey(next)) && PERSON_ACTIONS.has(wordKey(after)));
 
+// A listed place counts as a place only where the text says so: after a preposition or an address
+// placeholder, before ", AB" or "Alberta", or as a county. Before a person's verb, after a title or
+// an introduction, or next to another place ("Hanna Manning") it is a name, and stays in the text
+// for the word check.
+const PLACE_BEFORE = /(?:\b(?:in|near|from|to|of|at|around|outside|by|into|toward|towards|across|serving)|\],?)\s+$/i;
+const PLACE_AFTER = /^,?\s+(?:AB|Alberta)\b/;
+const TITLE_BEFORE = /\b(?:mr|mrs|ms|miss|dr)\.?\s+$/i;
+const INTRODUCED = new RegExp(`\\b(?:${INTRODUCTIONS})\\b[,!:]?\\s+$`, "i");
+function stripPlaces(text, places) {
+  const found = [...text.matchAll(fresh(places))].map((match) => ({ start: match.index, end: match.index + match[0].length, name: match[0] }));
+  let out = text;
+  for (let i = found.length - 1; i >= 0; i -= 1) {
+    const { start, end, name } = found[i];
+    const before = text.slice(Math.max(0, start - 40), start);
+    const after = text.slice(end, end + 40);
+    const nextWords = after.match(/^\s+(\p{L}[\p{L}'-]*)(?:\s+(\p{L}[\p{L}'-]*))?/u) ?? [];
+    const adjacent = (found[i - 1] && /^\s+$/.test(text.slice(found[i - 1].end, start))) || (found[i + 1] && /^\s+$/.test(text.slice(end, found[i + 1].start)));
+    const person = adjacent || TITLE_BEFORE.test(before) || INTRODUCED.test(before) || STRONG_PERSON_VERBS.has(wordKey(nextWords[1] ?? "")) || actsAsPerson(nextWords[1] ?? "", nextWords[2] ?? "");
+    const place = /\bcounty$/i.test(name) || PLACE_BEFORE.test(before) || PLACE_AFTER.test(after);
+    if (place && !person) out = out.slice(0, start) + " " + out.slice(end);
+  }
+  return out;
+}
+
+const PIECE = new RegExp(`${TOKEN.source}|${PLACEHOLDER.source}|${WORD.source}`, "gu");
+
 /**
- * True when the text has at least one word and every word is ordinary once tokens, placeholders,
- * and safe places are removed. A lower-case word must be listed (`BASE_WORDS`) or in `vocabulary`
- * (built from the export by `buildVocabulary`). A capitalised or upper-case word must be an
- * acronym, or listed and not a name: a given-name homonym never counts, except "Will" and "May"
- * starting a sentence as verbs and month and season names next to a date word or a number; a
- * surname homonym counts only starting a sentence and not before what a person does. A greeting or
- * introduction followed by a word that is not listed fails it too.
+ * True when the text has at least one word and every word is ordinary once brands and places in
+ * place context (`stripPlaces`, over safe places) are removed; tokens and placeholders are skipped.
+ * - A lower-case word must be listed (`BASE_WORDS`) or in `vocabulary` (built from the export by
+ *   `buildVocabulary`).
+ * - An acronym always counts.
+ * - In the middle of a sentence a capitalised word counts only if it is a weekday, a month, a
+ *   brand, or Alberta; a month or season that is also a name needs a date word before it or a
+ *   number after it.
+ * - In a sentence written in capitals, each word must be an acronym or listed and not a name.
+ * - Starting a sentence, a capitalised word must be listed and not a name: a given-name homonym
+ *   counts only as "Will" or "May" before an ordinary verb; a surname homonym only when not
+ *   followed by what a person does; any other word not before a person's verb unless it is a role
+ *   or a pronoun ("Customer called", not "Gold called").
+ * A greeting or introduction followed by a word that is not listed fails it too.
  */
 export function looksReliable(text, places = null, vocabulary = null) {
-  let stripped = normaliseText(text).replace(fresh(TOKEN), " ").replace(fresh(PLACEHOLDER), " ").replace(fresh(BRANDS), " ");
-  if (places) stripped = stripped.replace(fresh(places), " ");
-  if (!/\p{L}/u.test(stripped)) return false;
+  let stripped = normaliseText(text).replace(fresh(BRANDS), " ");
+  if (places) stripped = stripPlaces(stripped, places);
+  if (!/\p{L}/u.test(stripped.replace(fresh(TOKEN), " ").replace(fresh(PLACEHOLDER), " "))) return false;
+  const skipped = (piece) => fresh(TOKEN).test(piece) || fresh(PLACEHOLDER).test(piece);
   for (const sentence of sentences(stripped)) {
-    const tokens = sentence.match(WORD) ?? [];
-    for (let index = 0; index < tokens.length; index += 1) {
-      const word = tokens[index];
-      if (/^\d/.test(word)) continue;
+    const pieces = sentence.match(PIECE) ?? [];
+    // A sentence in capitals: each word must be an acronym or a listed word that is not a name.
+    const shouted = !/\p{Ll}/u.test(sentence.replace(fresh(TOKEN), " ").replace(fresh(PLACEHOLDER), " "));
+    for (let index = 0; index < pieces.length; index += 1) {
+      const word = pieces[index];
+      if (/^\d/.test(word) || skipped(word)) continue;
       const key = wordKey(word);
+      if (shouted && !isLower(word)) {
+        if (ACRONYMS.has(word.replace(/'S$/, "")) || ordinaryCapitalised(key)) continue;
+        return false;
+      }
       if (isLower(word)) {
         if (!ordinaryLower(key, vocabulary)) return false;
         continue;
       }
-      if (ACRONYMS.has(word.replace(/'s$/i, "")) || ordinaryCapitalised(key)) continue;
-      const next = tokens[index + 1] ?? "";
-      const after = tokens[index + 2] ?? "";
-      const previous = tokens[index - 1] ?? "";
+      if (ACRONYMS.has(word.replace(/'s$/i, ""))) continue;
+      const next = pieces[index + 1] ?? "";
+      const after = pieces[index + 2] ?? "";
+      const previous = pieces[index - 1] ?? "";
       if (DATE_HOMONYMS.has(key) && (DATE_CUES.has(wordKey(previous)) || /^\d/.test(next))) continue;
-      if (index === 0 && !actsAsPerson(next, after)) {
+      if (!pieces.slice(0, index).every((piece) => /^\d/.test(piece))) {
+        if (MID_SENTENCE_WORDS.has(key)) continue;
+        return false;
+      }
+      if (NAME_HOMONYMS.has(key) || SURNAME_HOMONYMS.has(key)) {
+        if (actsAsPerson(next, after)) return false;
         if ((key === "will" || key === "may") && next && isLower(next) && ordinaryLower(wordKey(next), vocabulary)) continue;
         if (SURNAME_HOMONYMS.has(key) && BASE_WORDS.has(key)) continue;
+        return false;
       }
+      if (STRONG_PERSON_VERBS.has(wordKey(next)) && !PERSON_SUBJECTS.has(key) && !BRAND_WORDS.has(key)) return false;
+      if (ordinaryCapitalised(key) || BRAND_WORDS.has(key)) continue;
       return false;
     }
     for (const match of sentence.matchAll(fresh(NAME_SLOT))) {
+      if (skipped(match[1])) continue;
       const key = wordKey(match[1]);
       if (!BASE_WORDS.has(key) || NAME_HOMONYMS.has(key)) return false;
     }
@@ -189,20 +254,22 @@ export function looksReliable(text, places = null, vocabulary = null) {
 
 /**
  * Words used lower case in at least `minRecords` of the texts, for `looksReliable`. Left out: every
- * part of a known name, any word ever seen after a greeting, an introduction, or a word such as
- * "from", "with", or "tell", and any word written capitalised mid-sentence twice or more, or in more
- * than one use in twenty.
+ * part of a known name, any word ever seen after a greeting or an introduction, any word seen after
+ * "from", "with", "per", or "tell" in more than one use in ten, and any word written capitalised
+ * mid-sentence twice or more, or in more than one use in twenty.
  */
 export function buildVocabulary(texts, { names = [], minRecords = 20 } = {}) {
   const excluded = new Set(names.flatMap((name) => (normaliseText(name).match(WORD) ?? []).map(wordKey)));
   const records = new Map();
   const lower = new Map();
   const capitalised = new Map();
+  const objects = new Map();
   const bump = (map, key) => map.set(key, (map.get(key) ?? 0) + 1);
   for (const text of texts) {
     if (typeof text !== "string" || text === "") continue;
     const clean = normaliseText(text);
-    for (const match of clean.matchAll(fresh(VOCABULARY_SLOT))) excluded.add(wordKey(match[1]));
+    for (const match of clean.matchAll(fresh(NAME_SLOT))) excluded.add(wordKey(match[1]));
+    for (const match of clean.matchAll(fresh(OBJECT_SLOT))) bump(objects, wordKey(match[1]));
     const seen = new Set();
     for (const sentence of sentences(clean)) {
       (sentence.match(WORD) ?? []).forEach((word, index) => {
@@ -220,7 +287,8 @@ export function buildVocabulary(texts, { names = [], minRecords = 20 } = {}) {
     [...records]
       .filter(([key, count]) => {
         const upper = capitalised.get(key) ?? 0;
-        return count >= minRecords && key.length >= 2 && !excluded.has(key) && upper < 2 && upper * 20 <= lower.get(key);
+        const uses = lower.get(key);
+        return count >= minRecords && key.length >= 2 && !excluded.has(key) && upper < 2 && upper * 20 <= uses && (objects.get(key) ?? 0) <= uses * OBJECT_SHARE;
       })
       .map(([key]) => key),
   );
@@ -319,16 +387,16 @@ export function scrubText(text, known = [], places = null, vocabulary = null) {
 /**
  * The guard, compiled once over the originals: a function returning every original identifier and
  * every detectable pattern found in a prompt, with the same matching as the scrubber. Safe places
- * (`safePlaces`) are removed first, and so is a JSON `"municipality"` whose value is one of
- * `municipalities`: a case's location comes from the fixed list, so "St. Albert" there is not the
- * name Albert.
+ * (`safePlaces`) are removed first, and so is a JSON pair whose key is in `fixed` and whose value
+ * is on that key's closed list ({ municipality: [...], province: [...] }): a case's location comes
+ * from those lists, so "St. Albert" or "AB" there is not the name Albert or Ab.
  */
-export function createGuard(originals, places = null, municipalities = []) {
+export function createGuard(originals, places = null, fixed = {}) {
   const match = createMatcher(originals);
-  const listed = new Set(municipalities.map((name) => normaliseText(name)));
+  const lists = new Map(Object.entries(fixed).map(([key, values]) => [key, new Set(values.map((value) => normaliseText(value)))]));
   return (prompt) => {
     let text = normaliseText(prompt)
-      .replace(/"municipality"\s*:\s*"([^"\\]*)"/g, (pair, value) => (listed.has(value) ? " " : pair))
+      .replace(/"([a-z_]+)"\s*:\s*"([^"\\]*)"/g, (pair, key, value) => (lists.get(key)?.has(value) ? " " : pair))
       .replace(fresh(TOKEN), " ");
     if (places) text = text.replace(fresh(places), " ");
     const found = match(text).map(({ kind }) => ({ kind, reason: "mapped value" }));
@@ -338,8 +406,35 @@ export function createGuard(originals, places = null, municipalities = []) {
 }
 
 /** One-off form of the guard. */
-export function promptViolations(prompt, originals, places = null, municipalities = []) {
-  return createGuard(originals, places, municipalities)(prompt);
+export function promptViolations(prompt, originals, places = null, fixed = {}) {
+  return createGuard(originals, places, fixed)(prompt);
+}
+
+/**
+ * Every field in `rows` that the block does not classify: not an identifier, address, free text,
+ * linked record, name, or reviewed field, and not under `never_copied` ("prefix*" covers a prefix).
+ * A nested object is walked where the block names one of its fields ("contact.name"). Builders
+ * refuse an export with any such field, so a new personal field never passes unseen.
+ */
+export function unclassifiedFields(rows, block, neverCopied = []) {
+  const classified = new Set([
+    ...Object.keys(block.identifiers ?? {}),
+    ...["address", "free_text", "linked", "named", "reviewed"].flatMap((key) => block[key] ?? []),
+    ...neverCopied.filter((field) => !field.endsWith("*")),
+  ]);
+  const prefixes = neverCopied.filter((field) => field.endsWith("*")).map((field) => field.slice(0, -1));
+  const parents = new Set([...classified].filter((field) => field.includes(".")).map((field) => field.split(".")[0]));
+  const found = new Set();
+  const visit = (row, prefix) => {
+    for (const [key, value] of Object.entries(row ?? {})) {
+      const path = `${prefix}${key}`;
+      if (classified.has(path) || prefixes.some((start) => path.startsWith(start))) continue;
+      if (!prefix && parents.has(key) && (value === null || (typeof value === "object" && !Array.isArray(value)))) visit(value, `${key}.`);
+      else found.add(path);
+    }
+  };
+  for (const row of rows) visit(row, "");
+  return [...found].sort();
 }
 
 /**

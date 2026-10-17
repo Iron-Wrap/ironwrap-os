@@ -106,6 +106,15 @@ export const SEEDED_SALES_PIPELINE: StagePlacementMap = {
         "Production stages require real production-gate evidence, which a migration must never "
         + "fabricate. The card is placed on Contract signed with the true source stage recorded.",
     },
+    {
+      match: ["materials ready", "job start booked", "job started", "job complete", "job signed off"],
+      stageKey: "contract_signed",
+      verdict: "capped",
+      reason:
+        "Scheduling, installation and sign-off stages require real job-phase and acceptance evidence, "
+        + "which a migration must never fabricate. The card is placed on Contract signed with the "
+        + "true source stage recorded.",
+    },
   ],
   fallbackStageKey: "new_lead",
 };

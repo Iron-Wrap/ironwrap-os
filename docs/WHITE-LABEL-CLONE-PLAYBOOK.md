@@ -338,6 +338,11 @@ recovery boundaries.
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
 - [ ] All 118 D1 migrations through `0200_agent_coordination.sql` applied to the tenant database.
+- [ ] Backup/restore host uses SQLite CLI 3.46.0 or newer. Older fixed parser stacks cannot parse
+  the existing 0117 authority lifecycle guard; both scripts refuse them before export/download.
+  CI builds checksum-pinned SQLite 3.54.1 for these full-schema proofs. This verifier is separate
+  from the pinned Wrangler/workerd D1 engine; do not remove or simplify guards to fit an old CLI.
+  SQLite documents the parser change in its [3.46 release notes](https://www.sqlite.org/releaselog/3_46_0.html).
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

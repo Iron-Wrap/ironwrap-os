@@ -81,6 +81,21 @@ test("D1 backup exports through locked Wrangler, validates SQL, and commits its 
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
 
+test("D1 backup refuses an old or unidentifiable SQLite CLI before export or upload", async (t) => {
+  for (const version of ["3.45.1", "unidentified"]) {
+    const mock = await mockD1BackupEnvironment(t);
+    await writeExecutable(path.join(mock.root, "bin", "sqlite3"), `#!/usr/bin/env bash
+[[ "\${1:-}" == '--version' ]] || exit 91
+printf '%s\\n' '${version}'
+`);
+    const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /requires SQLite CLI 3\.46\.0 or newer for complete schema validation/);
+    await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+    await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+  }
+});
+
 test("D1 backup fails before upload when a required customer-portal table is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTable: "customer_portal_links" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });

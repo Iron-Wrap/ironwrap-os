@@ -122,10 +122,11 @@ jobs:
 
   contracts:
     runs-on: ubuntu-latest
-    # Measured 9m08s-10m41s (630/641/548 s) on revision 3's three green runs
-    # 36741028416 / 36742421682 / 36743805624 - the spec's original 10 was too
-    # tight a margin for the new critical path (IRO-267 step 10's own prediction).
-    timeout-minutes: 15
+    # Measured 10m21s-11m23s on main before the pinned SQLite CLI; the D1 backup,
+    # recovery and drill proofs spawn sqlite3 about 1.4k times per run and took
+    # about 37% longer with it (run 39030414970 hit the old 15-minute cap at
+    # ~14m57s with every test passing), so the cap leaves room for runner noise.
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,6 +144,9 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+
+      - name: Install pinned SQLite CLI for complete recovery proofs
+        run: make ci-sqlite
 
       - name: make check-contracts
         run: make check-contracts

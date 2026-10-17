@@ -16,7 +16,7 @@ FRAPPE_VENV := tmp/frappe-venv
 
 .PHONY: check check-contracts check-pwa check-worker deps validate test-tools mcp agent-host app \
   worker worker-contract worker-tests worker-shard frappe audit static evidence \
-  evidence-receipt e2e e2e-suite secret-scan seed
+  evidence-receipt e2e e2e-suite secret-scan seed ci-sqlite
 
 check: validate test-tools mcp agent-host app worker frappe audit static evidence
 
@@ -27,6 +27,12 @@ check: validate test-tools mcp agent-host app worker frappe audit static evidenc
 check-contracts: validate test-tools mcp agent-host frappe audit static
 check-pwa: app
 check-worker: worker
+
+# Ubuntu's older CLI cannot parse the unchanged 0117 guard. Keep every schema
+# object in recovery proofs and install a checksum-pinned verification engine.
+ci-sqlite:
+	bash tools/install-sqlite-cli.sh "$(abspath $(OUT))/sqlite"
+	printf '%s\n' "$(abspath $(OUT))/sqlite" >> "$${GITHUB_PATH:?CI requires GITHUB_PATH}"
 
 # npm ci only when a lockfile changes; npm writes node_modules/.package-lock.json.
 %/node_modules/.package-lock.json: %/package-lock.json

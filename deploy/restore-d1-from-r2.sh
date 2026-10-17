@@ -410,6 +410,11 @@ for command_name in age flock mktemp node rclone sha256sum sqlite3 stat tar; do
     exit 1
   fi
 done
+sqlite_cli_version="$(sqlite3 --version | awk 'NR==1 {print $1; exit}')" || sqlite_cli_version=unavailable
+if ! node -e 'const m=/^(\d+)\.(\d+)\.(\d+)$/.exec(process.argv[1]); if(!m || +m[1]<3 || (+m[1]===3 && +m[2]<46)) process.exit(1)' "$sqlite_cli_version"; then
+  echo "error: D1 restore requires SQLite CLI 3.46.0 or newer for complete schema validation (found: $sqlite_cli_version)" >&2
+  exit 1
+fi
 
 if [[ "$mode" == "remote" ]]; then
   if [[ ! -x "$WRANGLER" || ! -f "$LOCK_FILE" ]]; then

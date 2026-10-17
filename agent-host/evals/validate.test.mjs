@@ -418,3 +418,84 @@ test("escalate with an own required action is propose unless it is an emergency"
   const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures.join("\n");
   assert.match(failures, /golden\.001: escalate with own required action\(s\) lead\.qualify is propose/);
 });
+
+function withQualification(root, overrides = {}, { gateway = true } = {}) {
+  mkdirSync(join(root, "agent-host/config"), { recursive: true });
+  mkdirSync(join(root, "agent-host/src/gateway"), { recursive: true });
+  writeFileSync(join(root, "agent-host/src/gateway/types.ts"), 'export type AbstainReason =\n  | "rate_limited"\n  | "auth_failed"\n  | "invalid_output";\n');
+  if (gateway) {
+    writeFileSync(
+      join(root, "agent-host/config/gateway.json"),
+      JSON.stringify({ providers: { claude: {}, codex: {} }, routes: { routine: { provider: "codex" }, audit: { provider: "claude" } } }),
+    );
+  }
+  const config = {
+    schema_version: "ironwrap.eval-qualification.v1",
+    repetitions: 3,
+    judge: { default: { provider: "claude", model: "j" }, for_claude_specialists: { provider: "codex", model: "k" } },
+    ledger: { isolated: true, namespace: "eval", requires_run_tag: "eval" },
+    gateway_reasons: { pause: ["rate_limited"], stop: ["auth_failed"], score: ["invalid_output"] },
+    stages: [
+      { id: "pilot", cases: { [ID]: 2 }, repetitions: 1, gate: { max_cost_ratio_to_estimate: 1.5, max_claude_quota_drop_pct: 15 } },
+      { id: "wave1", specialists: [ID] },
+    ],
+    ...overrides,
+  };
+  writeFileSync(join(root, "agent-host/evals/qualification.v1.json"), JSON.stringify(config));
+  return root;
+}
+
+const qualificationFailures = (root, options) =>
+  validate(root, options).failures.map((failure) => failure.replace(/^.*(qualification\.v1\.json|gateway\.json): /, ""));
+
+test("qualification config: a valid config passes; it is required only when the roster must be complete", () => {
+  assert.deepEqual(validate(withQualification(fixture())).failures, []);
+  assert.deepEqual(validate(fixture()).failures, []);
+  assert.ok(validate(fixture(), { requireComplete: true }).failures.some((failure) => failure.endsWith("qualification.v1.json: missing")));
+});
+
+test("qualification config: every AbstainReason classified once, invalid_output scored, isolated eval ledger", () => {
+  assert.deepEqual(
+    qualificationFailures(
+      withQualification(fixture(), {
+        repetitions: 4,
+        ledger: { isolated: true, namespace: "prod" },
+        gateway_reasons: { retry: ["rate_limited"], pause: ["rate_limited", "made_up"], score: "invalid_output" },
+      }),
+    ),
+    [
+      `${ID} rubric repetitions 3 differ from 4`,
+      "ledger must be isolated, in the eval namespace, and require the eval run tag",
+      "gateway_reasons.retry is not one of pause, stop, score",
+      "gateway reason rate_limited is in both retry and pause",
+      "gateway_reasons.score must be a list",
+      "invalid_output must be scored",
+      "gateway reason auth_failed is not classified",
+      "gateway reason invalid_output is not classified",
+      "gateway reason made_up is not an AbstainReason",
+    ],
+  );
+});
+
+test("qualification config: pilot first, waves in order with exactly their playbooks, judge on another provider", () => {
+  assert.deepEqual(
+    qualificationFailures(
+      withQualification(fixture(), {
+        judge: { default: { provider: "codex", model: "j" }, for_claude_specialists: { provider: "gemini", model: "k" } },
+        stages: [null, { id: "wave01", specialists: [ID] }, { id: "wave2", specialists: ["nobody"] }],
+      }),
+    ),
+    [
+      "the first stage must be the pilot",
+      "stage 2 must be wave1",
+      "wave2 names unknown specialist nobody",
+      "wave2 must list exactly the Wave 2 playbooks: none",
+      `${ID} is in no wave stage`,
+      "judge.for_claude_specialists needs a gateway provider (claude, codex) and a model",
+      `${ID} runs on codex; its judge must run on another provider`,
+    ],
+  );
+  const missingGateway = qualificationFailures(withQualification(fixture(), {}, { gateway: false }));
+  assert.equal(missingGateway.length, 1);
+  assert.match(missingGateway[0], /ENOENT/);
+});

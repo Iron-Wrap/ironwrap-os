@@ -528,6 +528,126 @@ function checkRubric(dir, id, fail) {
   }
 }
 
+// qualification.v1.json: the pilot, then wave1..waveN in order, each listing exactly the playbooks
+// of its wave; repetitions equal to every rubric's; an isolated eval ledger; a judge on a provider
+// other than the specialist's route; and every gateway AbstainReason classified exactly once.
+const REASON_KINDS = ["pause", "stop", "score"];
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function abstainReasons(root) {
+  const path = join(root, "agent-host/src/gateway/types.ts");
+  if (!existsSync(path)) return null;
+  const body = /export type AbstainReason =([^;]+);/.exec(readFileSync(path, "utf8"))?.[1];
+  return body ? [...body.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]) : null;
+}
+
+function checkQualification(root, specialistsDir, specialistIds, requireComplete, fail) {
+  const path = join(root, "agent-host/evals/qualification.v1.json");
+  if (!existsSync(path)) {
+    if (requireComplete) fail(`${path}: missing`);
+    return;
+  }
+  const config = readJson(path, fail);
+  if (!isObject(config)) return;
+  const bad = (message) => fail(`${path}: ${message}`);
+  if (config.schema_version !== "ironwrap.eval-qualification.v1") bad("wrong schema_version");
+  const meta = new Map();
+  for (const id of specialistIds) {
+    const playbookPath = join(specialistsDir, id, "playbook.md");
+    if (!existsSync(playbookPath)) continue;
+    const text = readFileSync(playbookPath, "utf8");
+    const rubric = readJson(join(root, "agent-host/evals", id, "rubric.v1.json"), () => {});
+    meta.set(id, { wave: /^Wave: (\d+)$/m.exec(text)?.[1], tier: /^Runtime tier: (\w+)$/m.exec(text)?.[1], repetitions: rubric?.repetitions });
+  }
+  const repetitions = config.repetitions;
+  if (!Number.isInteger(repetitions) || repetitions < 3) bad("repetitions must be an integer of at least 3");
+  for (const [id, entry] of meta) {
+    if (entry.repetitions !== repetitions) bad(`${id} rubric repetitions ${entry.repetitions} differ from ${repetitions}`);
+  }
+
+  const ledger = isObject(config.ledger) ? config.ledger : {};
+  if (ledger.isolated !== true || ledger.namespace !== "eval" || ledger.requires_run_tag !== "eval") {
+    bad("ledger must be isolated, in the eval namespace, and require the eval run tag");
+  }
+
+  const kinds = config.gateway_reasons;
+  const seen = new Map();
+  if (!isObject(kinds)) bad("gateway_reasons must map pause, stop, and score to reason lists");
+  else {
+    for (const [kind, reasons] of Object.entries(kinds)) {
+      if (!REASON_KINDS.includes(kind)) bad(`gateway_reasons.${kind} is not one of ${REASON_KINDS.join(", ")}`);
+      if (!Array.isArray(reasons)) {
+        bad(`gateway_reasons.${kind} must be a list`);
+        continue;
+      }
+      for (const reason of reasons) {
+        if (seen.has(reason)) bad(`gateway reason ${reason} is in both ${seen.get(reason)} and ${kind}`);
+        seen.set(reason, kind);
+      }
+    }
+    if (seen.get("invalid_output") !== "score") bad("invalid_output must be scored");
+    const known = abstainReasons(root);
+    if (!known) bad("cannot read AbstainReason from agent-host/src/gateway/types.ts");
+    else {
+      for (const reason of known) if (!seen.has(reason)) bad(`gateway reason ${reason} is not classified`);
+      for (const reason of seen.keys()) if (!known.includes(reason)) bad(`gateway reason ${reason} is not an AbstainReason`);
+    }
+  }
+
+  const stages = Array.isArray(config.stages) ? config.stages : [];
+  if (!Array.isArray(config.stages)) bad("stages must be a list");
+  const [pilot, ...waves] = stages;
+  if (!isObject(pilot) || pilot.id !== "pilot") bad("the first stage must be the pilot");
+  else {
+    const cases = isObject(pilot.cases) ? Object.entries(pilot.cases) : [];
+    if (cases.length === 0) bad("pilot.cases must name at least one specialist and its case count");
+    for (const [id, count] of cases) {
+      if (!meta.has(id)) bad(`pilot names unknown specialist ${id}`);
+      if (!Number.isInteger(count) || count < 1) bad(`pilot case count for ${id} must be a positive integer`);
+    }
+    if (!Number.isInteger(pilot.repetitions) || pilot.repetitions < 1 || pilot.repetitions > repetitions) bad(`pilot repetitions must be 1 to ${repetitions}`);
+    const gate = isObject(pilot.gate) ? pilot.gate : {};
+    if (!(gate.max_cost_ratio_to_estimate >= 1)) bad("pilot.gate.max_cost_ratio_to_estimate must be at least 1");
+    if (!(gate.max_claude_quota_drop_pct > 0 && gate.max_claude_quota_drop_pct <= 100)) bad("pilot.gate.max_claude_quota_drop_pct must be above 0 and at most 100");
+  }
+  const staged = new Set();
+  waves.forEach((stage, index) => {
+    const wave = String(index + 1);
+    if (!isObject(stage) || stage.id !== `wave${wave}`) {
+      bad(`stage ${index + 2} must be wave${wave}`);
+      return;
+    }
+    const list = Array.isArray(stage.specialists) ? stage.specialists : [];
+    for (const id of list) {
+      if (!meta.has(id)) bad(`${stage.id} names unknown specialist ${id}`);
+      staged.add(id);
+    }
+    const want = [...meta].filter(([, entry]) => entry.wave === wave).map(([id]) => id).sort();
+    if ([...list].sort().join() !== want.join()) bad(`${stage.id} must list exactly the Wave ${wave} playbooks: ${want.join(", ") || "none"}`);
+  });
+  for (const id of meta.keys()) if (!staged.has(id)) bad(`${id} is in no wave stage`);
+
+  const gateway = readJson(join(root, "agent-host/config/gateway.json"), fail);
+  if (!isObject(gateway)) return;
+  const providers = Object.keys(isObject(gateway.providers) ? gateway.providers : {});
+  const judges = isObject(config.judge) ? config.judge : {};
+  for (const key of ["default", "for_claude_specialists"]) {
+    const judge = judges[key];
+    if (!isObject(judge) || !providers.includes(judge.provider) || typeof judge.model !== "string") {
+      bad(`judge.${key} needs a gateway provider (${providers.join(", ")}) and a model`);
+    }
+  }
+  for (const [id, entry] of meta) {
+    const provider = gateway.routes?.[entry.tier]?.provider;
+    if (!provider) {
+      bad(`no gateway route for ${id} (tier ${entry.tier})`);
+      continue;
+    }
+    const judge = provider === "claude" ? judges.for_claude_specialists : judges.default;
+    if (judge?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
+  }
+}
+
 export function validate(root, { requireComplete = false } = {}) {
   const failures = [];
   const notes = [];
@@ -580,6 +700,7 @@ export function validate(root, { requireComplete = false } = {}) {
   for (const id of evalIds) {
     if (!specialistIds.includes(id)) fail(`agent-host/evals/${id}: no matching specialist playbook`);
   }
+  checkQualification(root, specialistsDir, specialistIds, requireComplete, fail);
   if (catalog) {
     const missing = [...catalog.specialists.keys()].filter((id) => !specialistIds.includes(id));
     if (missing.length > 0) {

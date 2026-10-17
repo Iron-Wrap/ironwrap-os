@@ -263,7 +263,7 @@ export function handoffSteps({ tenantId, config }) {
   return [
     `set account_id to the TENANT's Cloudflare account (absent on purpose; never inherit IronWrap's)`,
     `wrangler d1 create ${config.d1_databases[0].database_name} and paste database_id (currently ${UNPROVISIONED_DATABASE_ID})`,
-    `wrangler r2 bucket create ${config.r2_buckets[0].bucket_name}`,
+    ...config.r2_buckets.map((bucket) => `wrangler r2 bucket create ${bucket.bucket_name}`),
     ...config.queues.producers.map((producer) => `wrangler queues create ${producer.queue}`),
     ...config.queues.consumers
       .map((consumer) => consumer.dead_letter_queue)

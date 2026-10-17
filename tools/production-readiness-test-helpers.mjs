@@ -1187,6 +1187,8 @@ export function d1Sql({
   missingTable = "",
   missingIndex = "",
   missingTrigger = "",
+  missingEvidencePrivacyView = "",
+  brokenEvidencePrivacyView = "",
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
   weakMeasurementTrigger = "",
@@ -1202,15 +1204,57 @@ export function d1Sql({
     !HERMES_D1_INDEXES.has(name) && name !== missingIndex && table !== missingTable
   );
   const genericTriggers = triggers.filter(([name]) => !HERMES_D1_TRIGGERS.has(name));
-  return `BEGIN TRANSACTION;\n${genericTables.map(d1GenericTableSql).join("\n")}\n${nullActiveAccessRole ? "UPDATE app_users SET access_role = NULL WHERE active = 1;\n" : ""}${hermesMigrationSql({ missingTrigger })}\n${HERMES_D1_SEED_SQL}\n${indexes.map(([name, table]) => d1IndexSql(name, table)).join("\n")}\n${genericTriggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakMeasurementTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger, weakAccessRoleTrigger })).join("\n")}\nCOMMIT;\n`;
+  // Synthetic views exercise the backup/restore view boundary. The real join
+  // semantics are covered by migration tests against the full D1 schema.
+  const evidencePrivacyViews = [
+    ["evidence_upload_durable_refs", "evidence_upload_receipts", "ref"],
+    ["evidence_upload_disposed_manifests", "evidence_upload_manifests", "sha256"],
+  ].filter(([name]) => name !== missingEvidencePrivacyView).map(([name, table, value]) =>
+    `CREATE VIEW ${name} AS SELECT id AS tenant_id, id AS ${value} FROM ${name === brokenEvidencePrivacyView ? "missing_evidence_source" : table} WHERE 0;`
+  );
+  return `BEGIN TRANSACTION;\n${genericTables.map(d1GenericTableSql).join("\n")}\n${nullActiveAccessRole ? "UPDATE app_users SET access_role = NULL WHERE active = 1;\n" : ""}${hermesMigrationSql({ missingTrigger })}\n${HERMES_D1_SEED_SQL}\n${indexes.map(([name, table]) => d1IndexSql(name, table)).join("\n")}\n${evidencePrivacyViews.join("\n")}\n${genericTriggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakMeasurementTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger, weakAccessRoleTrigger })).join("\n")}\nCOMMIT;\n`;
+}
+
+/** Actual migration/schema/data export, including an unresolved provider write. */
+export async function evidenceWriteClaimSqlFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-claim-schema-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations");
+  const files = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
+  const migrations = await Promise.all(files.map((name) => readFile(path.join(directory, name), "utf8")));
+  const database = path.join(root, "source.sqlite3");
+  const receiptId = `evu_${"a".repeat(64)}`;
+  const seed = `
+INSERT INTO app_users
+  (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active, created_by, created_at, updated_at)
+  VALUES ('appu_claim_synthetic_1', 'ironwrap', 'claim-owner@example.invalid', 'Synthetic claim owner',
+    'owner', 'owner', 'claim-owner@example.invalid', 1, 'seed', 'synthetic-start', 'synthetic-start');
+INSERT INTO evidence_upload_write_claims
+  (claim_id, tenant_id, receipt_id, actor_user_id, request_sha256, r2_key, started_at, last_transition_at, state)
+  VALUES ('ewc_00000000-0000-4000-8000-000000000001', 'ironwrap', '${receiptId}', 'appu_claim_synthetic_1',
+    '${"b".repeat(64)}', 'evidence/v1/${"a".repeat(64)}.bin', 'synthetic-start', 'synthetic-start', 'active');
+UPDATE evidence_upload_write_claims SET state = 'unknown', failure_code = 'raw_put_outcome_unknown',
+  last_transition_at = 'synthetic-unknown';`;
+  const create = spawnSync("sqlite3", ["-bail", database], {
+    input: `PRAGMA foreign_keys = ON;\n${migrations.join("\n")}\n${seed}`, encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(create.status, 0, create.stderr);
+  const dump = spawnSync("sqlite3", [database, ".dump"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  assert.equal(dump.status, 0, dump.stderr);
+  assert.match(dump.stdout, /raw_put_outcome_unknown/);
+  return dump.stdout;
 }
 
 export async function mockD1BackupEnvironment(t, {
+  sqlFixture = null,
   failCopy = false,
   signalCopy = false,
   missingTable = "",
   missingIndex = "",
   missingTrigger = "",
+  missingEvidencePrivacyView = "",
+  brokenEvidencePrivacyView = "",
   weakReceiptTrigger = "",
   weakMeasurementTrigger = "",
   weakApprovalTrigger = "",
@@ -1265,10 +1309,12 @@ exit 0
 `);
 
   const fixtureSql = path.join(state, "fixture.sql");
-  await writeFile(fixtureSql, d1Sql({
+  await writeFile(fixtureSql, sqlFixture ?? d1Sql({
     missingTable,
     missingIndex,
     missingTrigger,
+    missingEvidencePrivacyView,
+    brokenEvidencePrivacyView,
     weakReceiptTrigger,
     weakMeasurementTrigger,
     weakApprovalTrigger,
@@ -1305,9 +1351,11 @@ exit 0
 }
 
 export async function mockD1RestoreEnvironment(t, {
+  sqlFixture = null,
   badChecksum = false,
   targetObject = "",
   preflightResponseMode = "normal",
+  privacyViewResponseMode = "normal",
   signalDownload = false,
   missingTable = "",
   rowMismatch = false,
@@ -1324,6 +1372,8 @@ export async function mockD1RestoreEnvironment(t, {
   governedTransitionTriggerSemanticsMismatch = false,
   missingTrigger = "",
   missingIndex = "",
+  missingEvidencePrivacyView = "",
+  brokenEvidencePrivacyView = "",
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
   weakMeasurementTrigger = "",
@@ -1365,10 +1415,12 @@ export async function mockD1RestoreEnvironment(t, {
   const stamp = "20260710T120000Z";
   const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
   const sqlPath = path.join(packageDir, sqlFile);
-  await writeFile(sqlPath, d1Sql({
+  await writeFile(sqlPath, sqlFixture ?? d1Sql({
     missingTable,
     missingIndex,
     missingTrigger,
+    missingEvidencePrivacyView,
+    brokenEvidencePrivacyView,
     weakReceiptTrigger,
     wrongTimingReceiptTrigger,
     weakMeasurementTrigger,
@@ -1602,6 +1654,12 @@ if (( json == 1 )); then
       results="$(sqlite3 -json "$MOCK_TARGET_DATABASE" "$command")"
       printf '[{"results":%s,"success":true,"meta":{"changes":0,"changed_db":false}}]\\n' "$results"
     fi
+  elif [[ "$command" == *" AS durable_view"* ]]; then
+    if [[ "$MOCK_PRIVACY_VIEW_RESPONSE_MODE" == 'missing' ]]; then
+      printf '[{"results":[{"durable_view":0,"disposed_view":1,"durable_query":0,"disposed_query":0}],"success":true,"meta":{"changes":0,"changed_db":false}}]\\n'
+    else
+      printf '[{"results":[{"durable_view":1,"disposed_view":1,"durable_query":0,"disposed_query":0}],"success":true,"meta":{"changes":0,"changed_db":false}}]\\n'
+    fi
   elif [[ "$command" == *" AS table_name, COUNT(*) AS row_count FROM "* ]]; then
     IFS="'" read -r _ table_name _ <<< "$command"
     result_table="$table_name"
@@ -1685,6 +1743,7 @@ esac
       MOCK_REMOTE: remote,
       MOCK_TARGET_DATABASE: targetDatabase,
       MOCK_PREFLIGHT_RESPONSE_MODE: preflightResponseMode,
+      MOCK_PRIVACY_VIEW_RESPONSE_MODE: privacyViewResponseMode,
       MOCK_SIGNAL_DOWNLOAD: signalDownload ? "1" : "0",
       MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
       MOCK_INDEX_MISMATCH: indexMismatch ? "1" : "0",

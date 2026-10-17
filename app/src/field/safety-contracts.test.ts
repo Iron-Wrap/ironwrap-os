@@ -93,24 +93,88 @@ describe("safety contracts", () => {
     expect(result.error.issues[0]?.path).toEqual(["assigned_equipment", 0, "status"]);
   });
 
-  it("keeps corrective evidence strict about keys, digests and evidence references", () => {
-    const evidence = {
-      detail: "Guardrail replaced and photographed",
-      evidence_sha256: sha,
-      evidence_refs_json: JSON.stringify([{ ref: "r2://synthetic/photo.jpg", sha256: sha }]),
-    };
+  it("keeps corrective evidence to what the person writes, or a whole typed reference", () => {
+    const evidence = { detail: "Guardrail replaced and photographed" };
     expect(contracts.correctiveEvidenceSchema.parse(evidence)).toEqual(evidence);
     expect(contracts.correctiveEvidenceSchema.safeParse({ ...evidence, extra: true }).success).toBe(
       false,
     );
+    // The files travel as receipt ids added when the request is sent, never inside it. The safety
+    // desk that still types a reference sends its digest and references together; half of that
+    // pair is refused here instead of reaching the Worker.
+    const refs = JSON.stringify([{ ref: "r2://synthetic/photo.jpg", sha256: sha }]);
+    const typed = { ...evidence, evidence_sha256: sha, evidence_refs_json: refs };
+    expect(contracts.correctiveEvidenceSchema.parse(typed)).toEqual(typed);
+    for (const partial of [
+      { evidence_sha256: sha },
+      { evidence_refs_json: refs },
+      { evidence_receipt_ids: ["evu_" + "a".repeat(64)] },
+    ]) {
+      expect(
+        contracts.correctiveEvidenceSchema.safeParse({ ...evidence, ...partial }).success,
+      ).toBe(false);
+    }
+    for (const broken of [
+      { ...typed, evidence_sha256: "not-a-digest" },
+      { ...typed, evidence_refs_json: "[]" },
+    ]) {
+      expect(contracts.correctiveEvidenceSchema.safeParse(broken).success).toBe(false);
+    }
+    expect(contracts.correctiveEvidenceSchema.safeParse({ detail: "  no " }).success).toBe(false);
+  });
+
+  it("reads evidence_files on the corrective action detail as optional, with strictly shaped items", () => {
+    const detail = {
+      version: 1,
+      corrective_action: correctiveAction,
+      allowed_actions: ["submit_evidence"],
+      verification_unavailable_reason: null,
+    };
+    const file = {
+      receipt_id: `evu_${"a".repeat(64)}`,
+      file_name: "tie-off.jpg",
+      content_type: "image/jpeg",
+      byte_size: 2048,
+    };
+    // Present, absent and empty all read; an absent list is not turned into an empty one.
     expect(
-      contracts.correctiveEvidenceSchema.safeParse({ ...evidence, evidence_refs_json: "[]" })
-        .success,
-    ).toBe(false);
+      contracts.correctiveActionDetailSchema.parse({ ...detail, evidence_files: [file] })
+        .evidence_files,
+    ).toEqual([file]);
+    // Exactly as a healthy #362 read sends it: the list beside its marker.
     expect(
-      contracts.correctiveEvidenceSchema.safeParse({ ...evidence, evidence_sha256: "not-a-digest" })
-        .success,
-    ).toBe(false);
+      contracts.correctiveActionDetailSchema.parse({
+        ...detail,
+        evidence_files: [file],
+        evidence_files_unavailable: false,
+      }),
+    ).toMatchObject({ evidence_files: [file], evidence_files_unavailable: false });
+    expect(contracts.correctiveActionDetailSchema.parse(detail).evidence_files).toBeUndefined();
+    expect(
+      contracts.correctiveActionDetailSchema.parse({
+        ...detail,
+        evidence_files: [],
+        evidence_files_unavailable: true,
+      }).evidence_files_unavailable,
+    ).toBe(true);
+    expect(
+      contracts.correctiveActionDetailSchema.parse({ ...detail, evidence_files: [] })
+        .evidence_files,
+    ).toEqual([]);
+    // An item that is not exactly a file refuses the whole read rather than showing half of it.
+    for (const bad of [
+      { ...file, receipt_id: "a".repeat(64) },
+      { ...file, extra: true },
+      { ...file, content_type: "text/html" },
+      { ...file, byte_size: 0 },
+      { ...file, file_name: "" },
+      "tie-off.jpg",
+    ]) {
+      expect(
+        contracts.correctiveActionDetailSchema.safeParse({ ...detail, evidence_files: [bad] })
+          .success,
+      ).toBe(false);
+    }
   });
 
   it("keeps the corrective action detail a superset of the plain response", () => {

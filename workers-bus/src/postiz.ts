@@ -2,6 +2,7 @@ import { sha256Hex } from "./app-auth.ts";
 import { canonicalJson } from "./newo-hash.ts";
 import { assertEffectLedgerReady, EffectRuntimeError, runExternalEffect } from "./effect-runtime.ts";
 import type { AppEnv } from "./app-types.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const POSTIZ_EXPECTED_VERSION = "v2.23.0" as const;
 export const POSTIZ_PROVIDERS = ["facebook", "linkedin-page", "gmb"] as const;
@@ -1623,7 +1624,7 @@ function validCitation(value: unknown): value is PostizCitation {
 function validOpaqueRef(value: unknown): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= 300 &&
     /^[A-Za-z0-9][A-Za-z0-9:_./-]*$/.test(value) && !value.includes("..") &&
-    !containsLikelyPii(value);
+    !isReservedEvidenceUploadReference(value) && !containsLikelyPii(value);
 }
 
 function boundedPlainText(value: unknown, min: number, max: number): value is string {

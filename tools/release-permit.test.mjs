@@ -1403,6 +1403,7 @@ test("environment config digests include distinct environment and secret-name co
   assert.ok(qa.secret_names.includes("POSTIZ_API_KEY"));
   assert.match(qa.secret_inventory_digest, /^[0-9a-f]{64}$/);
   assert.ok(qa.binding_manifest.some((entry) => entry.name === "RAW" && entry.type === "r2_bucket" && entry.resource_name === "ironwrap-bus-qa-raw"));
+  assert.ok(qa.binding_manifest.some((entry) => entry.name === "PRIVACY_LEDGER" && entry.type === "r2_bucket" && entry.resource_name === "ironwrap-bus-qa-privacy"));
   // IRO-268: workers-bus/wrangler.jsonc groups every non-secret var into a CFG_* JSON binding, so
   // the real binding manifest carries "json" entries here, not "plain_text" ones.
   assert.ok(qa.binding_manifest.some((entry) => entry.type === "json" && entry.name.startsWith("CFG_") && /^[0-9a-f]{64}$/.test(entry.value_digest)));

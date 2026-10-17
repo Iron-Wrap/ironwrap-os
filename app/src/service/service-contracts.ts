@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import {
+  EVIDENCE_MAX_FILES,
+  evidenceFilesSchema,
+  evidenceFilesUnavailableSchema,
+  evidenceReceiptIdSchema,
+} from "../evidence/evidence-types";
+
 // The app contract for the service lifecycle BFF (`/api/v1/service-cases`). Every field the office
 // acts on is validated here, so a drifted server response fails loudly at the boundary rather than
 // rendering a callback whose state the app misread.
@@ -231,12 +238,17 @@ export const serviceCaseDetailResponseSchema = envelope
     cost_recovery_claims: z.array(costRecoveryClaimSchema),
     events: z.array(serviceCaseEventSchema),
     cost: serviceCaseCostSchema,
+    // The files saved with this call's steps. Absent from a Worker that does not list them yet,
+    // and empty for older evidence that was only ever a digest.
+    evidence_files: evidenceFilesSchema,
+    evidence_files_unavailable: evidenceFilesUnavailableSchema,
   })
   .strict();
 
 export const serviceCaseIntakeResponseSchema = envelope
   .extend({
-    result: z.enum(["opened", "duplicate"]),
+    // `replayed`: the same save, sent again, answered with the case it already made.
+    result: z.enum(["opened", "duplicate", "replayed"]),
     service_case: serviceCaseSchema,
     original_case: serviceCaseSchema.nullable(),
   })
@@ -265,9 +277,16 @@ export const costRecoveryMutationResponseSchema = envelope
   })
   .strict();
 
+/** The files a step carries: the confirmed receipts of one to four uploaded photos or PDFs. */
+export const serviceEvidenceReceiptIds = z
+  .array(evidenceReceiptIdSchema)
+  .min(1)
+  .max(EVIDENCE_MAX_FILES);
+
 /**
  * The intake a human fills in. The response window is a declared number of minutes; the bus
- * derives the due timestamp from it, so the form never sends one.
+ * derives the due timestamp from it, so the form never sends one. The files that show the problem
+ * are uploaded first and travel as receipt ids.
  */
 export const serviceCaseIntakeInputSchema = z
   .object({
@@ -279,7 +298,10 @@ export const serviceCaseIntakeInputSchema = z
     symptomCode: boundedText(3, 80).regex(/^[a-z0-9_]+$/),
     reportedChannel: z.enum(serviceReportedChannels),
     consentRef: boundedText(3, 140),
-    intakeEvidenceDigest: digest,
+    // The files that show the problem, uploaded under the intake's own key; or the digest the
+    // desk still types, which the bus accepts while receipts are not required. Exactly one.
+    evidenceReceiptIds: serviceEvidenceReceiptIds.optional(),
+    intakeEvidenceDigest: digest.optional(),
     responseSlaMinutes: z
       .number()
       .int()
@@ -288,6 +310,13 @@ export const serviceCaseIntakeInputSchema = z
   })
   .strict()
   .superRefine((input, context) => {
+    if ((input.evidenceReceiptIds === undefined) === (input.intakeEvidenceDigest === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["evidenceReceiptIds"],
+        message: "intake_evidence_required",
+      });
+    }
     if (
       input.severity === "emergency" &&
       input.responseSlaMinutes > EMERGENCY_RESPONSE_SLA_CEILING_MINUTES

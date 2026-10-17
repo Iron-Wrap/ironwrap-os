@@ -298,6 +298,30 @@ test("an identical retry replays the same command and never doubles stock", asyn
   });
 });
 
+test("a direct inventory command cannot claim an upload receipt without its scoped manifest", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  await assert.rejects(
+    applyInventoryCommand(appEnv, command({
+      commandId: "cmd_reserved_evidence_0001",
+      transition: "receive",
+      evidenceRefs: [{ ref: `evidence-upload://evu_${"a".repeat(64)}`, sha256: "a".repeat(64) }],
+      movements: [{
+        positionId: POS_A,
+        itemId: ITEM_PANEL,
+        lotId: LOT_ONE,
+        binId: BIN_A,
+        uomId: UOM_EACH,
+        jobCustody: SHARED_CUSTODY,
+        quantityDelta: 1,
+        valueDelta: 500,
+      }],
+    })),
+    (error: unknown) => error instanceof InventoryLedgerError && error.code === "inventory_evidence_manifest_required",
+  );
+  assert.equal((db.raw.prepare("SELECT count(*) AS n FROM inventory_commands").get() as { n: number }).n, 0);
+});
+
 test("the same idempotency key with a different request is a conflict, not an apply", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);

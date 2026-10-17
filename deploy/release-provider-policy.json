@@ -34,7 +34,8 @@
         }
       ],
       "r2_buckets": [
-        { "binding": "RAW", "bucket_name": "ironwrap-bus-qa-raw" }
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-qa-raw" },
+        { "binding": "PRIVACY_LEDGER", "bucket_name": "ironwrap-bus-qa-privacy" }
       ],
       "queue_producers": [
         { "binding": "JN_QUEUE", "queue": "ironwrap-qa-jn-push" },
@@ -125,7 +126,8 @@
         }
       ],
       "r2_buckets": [
-        { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" },
+        { "binding": "PRIVACY_LEDGER", "bucket_name": "ironwrap-bus-privacy" }
       ],
       "queue_producers": [
         { "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" },

@@ -1,5 +1,6 @@
 import { sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 /**
  * Owned safety spine: individually issued equipment, physical safety
@@ -1111,6 +1112,7 @@ export async function submitSafetyNotification(
   env: AppEnv,
   input: SubmitSafetyNotificationInput,
 ): Promise<SafetyNotificationRecord> {
+  assertEvidence(input.evidence);
   const actor = await safetyActor(env, input.tenantId, input.actorUserId);
   requireRole(
     actor,
@@ -1254,6 +1256,7 @@ export interface SubmitCorrectiveEvidenceInput {
   correctiveActionId: string;
   actorUserId: string;
   evidence: SafetyEvidence;
+  receiptsResolved?: boolean;
   detail: string;
   now: string;
 }
@@ -1293,7 +1296,7 @@ export async function submitCorrectiveActionEvidence(
   }
   if (
     !SHA256.test(input.evidence.sha256) ||
-    !validEvidenceRefsJson(input.evidence.refsJson)
+    !validEvidenceRefsJson(input.evidence.refsJson, input.receiptsResolved === true)
   ) {
     throw new SafetyError(
       "safety_evidence_invalid",
@@ -2295,7 +2298,7 @@ function assertEvidence(evidence: SafetyEvidence | null): void {
   }
 }
 
-function validEvidenceRefsJson(value: string): boolean {
+export function validEvidenceRefsJson(value: string, allowUploadedReceipts = false): boolean {
   if (typeof value !== "string" || value.length < 2 || value.length > 20_000)
     return false;
   try {
@@ -2316,6 +2319,9 @@ function validEvidenceRefsJson(value: string): boolean {
       return (
         ref.trim().length >= 3 &&
         ref.trim().length <= 512 &&
+        (isReservedEvidenceUploadReference(ref)
+          ? allowUploadedReceipts && /^evidence-upload:\/\/evu_[0-9a-f]{64}$/.test(ref)
+          : true) &&
         !/[\u0000-\u001f]/.test(ref)
       );
     });

@@ -99,11 +99,11 @@ test("0084 native measurement authority is complete in backup and restore contra
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    // Pinned to the merged migration chain through 0139: per-cron heartbeat, office intake,
+    // Pinned through 0200: privacy, crew-stop guards, durable writer claims and the AI team tables
     // and manual measurement history are included in both D1 inventories.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 247);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 362);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 620);
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 251);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 366);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 653);
   }
 
   for (const [name, table] of INDEXES) {

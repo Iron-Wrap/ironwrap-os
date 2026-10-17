@@ -39,6 +39,7 @@ test("the shipped wrangler config clones onto a tenant with no reference left to
   assert.equal(config.name, "northline-metal-bus");
   assert.equal(config.d1_databases[0].database_name, "northline-metal-bus");
   assert.equal(config.r2_buckets[0].bucket_name, "northline-metal-bus-raw");
+  assert.equal(config.r2_buckets[1].bucket_name, "northline-metal-bus-privacy");
   assert.ok(config.queues.producers.every((producer) => producer.queue.startsWith("northline-metal-")));
   assert.ok(config.queues.consumers.every((consumer) => consumer.queue.startsWith("northline-metal-")));
   assert.ok(
@@ -87,6 +88,7 @@ test("nothing an owner must provision is invented", () => {
   assert.equal(vars.FACET_V2_ROUTES_JSON, "[]");
   assert.ok(handoff.some((step) => step.includes("wrangler d1 create northline-metal-bus")));
   assert.ok(handoff.some((step) => step.includes("wrangler r2 bucket create northline-metal-bus-raw")));
+  assert.ok(handoff.some((step) => step.includes("wrangler r2 bucket create northline-metal-bus-privacy")));
   assert.ok(handoff.some((step) => step.includes("account_id")));
 });
 

@@ -1,3 +1,5 @@
+import type { EvidenceScope } from "../evidence/evidence-types";
+
 export const outboxStates = [
   "saved_locally",
   "queued",
@@ -51,6 +53,43 @@ export interface OutboxAttachment {
   lastModified?: number;
 }
 
+/**
+ * Evidence files an action carries. Each file's upload key and bytes are kept until the Worker has
+ * confirmed the whole action, so a refused action still has its files on the phone; the action
+ * itself is sent only after every file has a receipt. A JSON outbox must never stand in a file
+ * name or a digest for an uploaded file.
+ */
+export interface OutboxEvidenceFile {
+  /** One key per file, kept across every retry so a lost response never makes a second file. */
+  uploadKey: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  /** The bytes wait in `outbox_blobs` under it, until the action is confirmed. */
+  attachmentId?: string;
+  /** Set once the Worker confirmed the file; the upload is then never repeated. */
+  receiptId?: string;
+}
+
+export interface OutboxEvidence {
+  scope: EvidenceScope;
+  files: OutboxEvidenceFile[];
+}
+
+export interface OutboxEvidenceInput {
+  scope: EvidenceScope;
+  files: Array<{
+    uploadKey: string;
+    fileName: string;
+    mimeType: string;
+    size: number;
+    /** Already confirmed by the Worker, so only the action itself still has to be sent. */
+    receiptId?: string;
+    /** Always kept, with or without a receipt, until the action is confirmed. */
+    blob: Blob;
+  }>;
+}
+
 export interface OutboxErrorDetail {
   code: string;
   message: string;
@@ -81,6 +120,8 @@ export interface OutboxAction {
   method: OutboxMethod;
   payload: JsonValue;
   attachments: OutboxAttachment[];
+  /** Files to upload first, for the kinds that carry evidence (stock actions, corrective evidence). */
+  evidence?: OutboxEvidence;
   state: OutboxState;
   attempts: number;
   nextAttemptAt: number;
@@ -118,6 +159,7 @@ export interface SaveOutboxActionInput {
   method?: OutboxMethod;
   payload: JsonValue;
   attachments?: OutboxAttachmentInput[];
+  evidence?: OutboxEvidenceInput;
 }
 
 export interface OutboxSummary {

@@ -6,6 +6,7 @@
 // missing or conflicting prerequisite is recorded as a retryable blocker, never guessed through.
 
 import type { AppEnv } from "./app-types.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 import {
   deriveAccountingIntent,
   readAccountingIntent,
@@ -866,7 +867,8 @@ function normalizedReconcileEvidenceRefs(value: readonly string[]): string[] {
     const normalized = entry.trim();
     if (
       normalized.length < 3 || normalized.length > 512 || /[\s?#]/.test(normalized) ||
-      normalized.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(normalized)
+      normalized.includes("..") || isReservedEvidenceUploadReference(normalized) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(normalized)
     ) throw new Error("commercial_deposit_reconcile_evidence_invalid");
     return normalized;
   }).sort();

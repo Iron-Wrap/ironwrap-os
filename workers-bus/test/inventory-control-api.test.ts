@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { handleInventoryRoute as inventoryRoute } from "../src/inventory-control-api.ts";
 import { INVENTORY_TRANSITIONS } from "../src/inventory-control.ts";
-import { EVIDENCE_BYTES, EvidenceR2, uploadedEvidence } from "./evidence-upload-fixture.ts";
+import { EVIDENCE_BYTES, EvidenceR2, PrivacyLedgerR2, uploadedEvidence } from "./evidence-upload-fixture.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -49,6 +49,8 @@ const USERS: Record<AppRole, string> = {
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
+  beforeBatch: (() => void) | null = null;
+  batchErrorPrefix: string | null = null;
 
   constructor(options: { authorityState?: AuthorityState } = {}) {
     this.raw.exec("PRAGMA foreign_keys = ON");
@@ -186,6 +188,7 @@ class SqliteD1 {
   }
 
   async batch(statements: SqliteStatement[]): Promise<unknown[]> {
+    this.beforeBatch?.();
     this.raw.exec("BEGIN IMMEDIATE");
     try {
       const result = statements.map((statement) => statement.execute());
@@ -193,6 +196,9 @@ class SqliteD1 {
       return result;
     } catch (error) {
       this.raw.exec("ROLLBACK");
+      if (this.batchErrorPrefix) {
+        throw new Error(`${this.batchErrorPrefix} ${error instanceof Error ? error.message : String(error)}`);
+      }
       throw error;
     }
   }
@@ -231,6 +237,8 @@ function env(db: SqliteD1): AppEnv {
   return {
     DB: db as never,
     RAW: new EvidenceR2() as never,
+    PRIVACY_LEDGER: new PrivacyLedgerR2() as never,
+    APP_EVIDENCE_UPLOADS_ENABLED: "true",
     APP_EVIDENCE_RECEIPTS_REQUIRED: "true",
   } as AppEnv;
 }
@@ -1060,6 +1068,41 @@ test("stock missing or tampered receipt files and wrong command scopes cannot st
     if (failure === "wrong_lot") command.lot_id = "lot_other_0001";
     const refused = await inventoryRoute(request("POST", "/api/v1/inventory/commands", command), appEnv, actor);
     assert.ok([403,404,409].includes(refused!.status));
+    assert.deepEqual(ledgerCounts(db), { commands: 0, events: 0, positions: 0 });
+  }
+});
+
+test("a disposal after stock evidence resolves returns its stable refusal from the real D1 trigger", async () => {
+  for (const batchErrorPrefix of [null, "D1_ERROR: inventory_commands:"]) {
+    const db = new SqliteD1();
+    db.batchErrorPrefix = batchErrorPrefix;
+    const appEnv = env(db);
+    const actor = auth("ops");
+    const commandId = "cmd_disposal_race_01";
+    const receiptId = await uploadedEvidence(appEnv, actor, {
+      purpose: "stock", targetId: LOT_ONE, action: "receive", operationId: commandId,
+    });
+    const { evidence_refs: _legacy, ...command } = receivePayload(commandId, 5);
+    command.evidence_receipt_ids = [receiptId];
+
+    db.beforeBatch = () => {
+      db.beforeBatch = null;
+      db.raw.prepare(`INSERT INTO evidence_upload_dispositions
+      (receipt_id, tenant_id, decision_id, basis, authority_ref, policy_version,
+       reason, requested_by, requested_at, last_actor_user_id, last_transition_at, state)
+      VALUES (?, ?, ?, 'manual_correction', ?, 'manual-v1', ?, ?, ?, ?, ?, 'destroying')`)
+        .run(receiptId, TENANT, "decision_stock_race_01", "privacy-case-stock-race",
+          "Approved disposal before stock attachment", USERS.owner, NOW, USERS.owner, NOW);
+    };
+
+    const response = await inventoryRoute(
+      request("POST", "/api/v1/inventory/commands", command),
+      appEnv,
+      actor,
+    );
+    assert.equal(response?.status, 409);
+    assert.equal((await response?.json() as { error: string }).error,
+      "evidence_disposition_blocks_domain_link");
     assert.deepEqual(ledgerCounts(db), { commands: 0, events: 0, positions: 0 });
   }
 });

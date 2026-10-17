@@ -30,6 +30,7 @@ import {
   safetyPanelProjection,
   SafetyError,
   submitCorrectiveActionEvidence,
+  validEvidenceRefsJson,
   submitSafetyNotification,
   verifyCorrectiveAction,
 } from "../src/safety-lifecycle.ts";
@@ -45,6 +46,17 @@ import {
 const TENANT = "ironwrap";
 const NOW = "2026-08-17T12:00:00.000Z";
 const LATER = "2026-08-17T13:00:00.000Z";
+
+test("only canonical resolved upload refs may enter the receipt-enabled safety path", () => {
+  const digest = "a".repeat(64);
+  const canonical = `evidence-upload://evu_${digest}`;
+  const refs = (ref: string) => JSON.stringify([{ ref, sha256: digest }]);
+  assert.equal(validEvidenceRefsJson(refs(canonical)), false);
+  assert.equal(validEvidenceRefsJson(refs(canonical), true), true);
+  for (const alias of [` ${canonical}`, canonical.toUpperCase(), `evidence-upload://EVU_${digest}`]) {
+    assert.equal(validEvidenceRefsJson(refs(alias), true), false);
+  }
+});
 
 const USERS = {
   crew: {
@@ -1141,6 +1153,19 @@ test("an occurrence cannot close over an unresolved notification or open action"
     await rejectionCode(() => advance("closed")),
     "safety_notification_outstanding",
   );
+  for (const ref of [
+    `evidence-upload://evu_${"a".repeat(64)}`,
+    ` EVIDENCE-UPLOAD://evu_${"a".repeat(64)}`,
+  ]) {
+    assert.equal(await rejectionCode(() => submitSafetyNotification(app, {
+      tenantId: TENANT,
+      notificationId: "sn_wcb_alberta_0001",
+      actorUserId: USERS.owner.id,
+      externalReference: "WCB-2026-0001",
+      evidence: { refsJson: JSON.stringify([{ ref, sha256: "a".repeat(64) }]), sha256: "a".repeat(64) },
+      now: NOW,
+    })), "safety_evidence_invalid");
+  }
   await submitSafetyNotification(app, {
     tenantId: TENANT,
     notificationId: "sn_wcb_alberta_0001",

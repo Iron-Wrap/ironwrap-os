@@ -672,11 +672,11 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
       contract,
       /estimator_evidence_revisions_immutable_update=estimator_evidence_revisions/,
     );
-    // Pinned to the merged migration chain through 0139, including per-cron heartbeat,
+    // Pinned through 0200, including privacy, crew-stop guards, durable writer claims and the AI team tables,
     // durable office intake receipts, and manual measurement history.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=247/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=362/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=620/);
+    assert.match(contract, /REQUIRED_TABLE_COUNT=251/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=366/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=653/);
   }
 });
 

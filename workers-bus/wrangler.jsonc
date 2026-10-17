@@ -39,9 +39,11 @@
     }
   ],
 
-  // Raw inbound bodies (stored FIRST, before any processing). wrangler r2 bucket create ironwrap-bus-raw
+  // Raw inbound bodies and a separate privacy ledger. Never restore the privacy bucket from
+  // an older RAW or D1 snapshot; its receipt markers are the anti-rollback boundary.
   "r2_buckets": [
-    { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
+    { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" },
+    { "binding": "PRIVACY_LEDGER", "bucket_name": "ironwrap-bus-privacy" }
   ],
 
   // JobNimbus bridge plus the independently retried Newo-to-owned-core pipeline. Create with:
@@ -127,6 +129,7 @@
       // secret of at least 32 characters. Magic-link email goes through Gmail in production
       // (the dev_outbox capture is localhost-only).
       "APP_BFF_ENABLED": "true",
+      "APP_EVIDENCE_UPLOADS_ENABLED": "false",
       "APP_HERMES_DESKTOP_ENABLED": "false",
       "APP_CUSTOMER_PORTAL_ENABLED": "true",
       "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
@@ -329,7 +332,8 @@
         }
       ],
       "r2_buckets": [
-        { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" },
+        { "binding": "PRIVACY_LEDGER", "bucket_name": "ironwrap-bus-privacy" }
       ],
       "queues": {
         "producers": [
@@ -359,6 +363,7 @@
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
+          "APP_EVIDENCE_UPLOADS_ENABLED": "false",
           "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "true",
@@ -535,7 +540,8 @@
         }
       ],
       "r2_buckets": [
-        { "binding": "RAW", "bucket_name": "ironwrap-bus-qa-raw" }
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-qa-raw" },
+        { "binding": "PRIVACY_LEDGER", "bucket_name": "ironwrap-bus-qa-privacy" }
       ],
       "queues": {
         "producers": [
@@ -575,6 +581,7 @@
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
+          "APP_EVIDENCE_UPLOADS_ENABLED": "false",
           "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "false",
           "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",

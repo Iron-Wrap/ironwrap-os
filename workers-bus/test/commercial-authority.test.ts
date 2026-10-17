@@ -671,6 +671,40 @@ function proposalRequest(): RecordCommercialProposalInput {
   };
 }
 
+test("commercial authority, quote and proposal reject unscoped upload receipt references", async () => {
+  const ref = `evidence-upload://evu_${"a".repeat(64)}`;
+  const evidence = [{ ref, sha256: "a".repeat(64) }];
+  await assert.rejects(
+    prepareCommercialQuote({ ...quoteRequest(), evidence }),
+    errorCode("commercial_evidence_invalid"),
+  );
+  await assert.rejects(
+    prepareCommercialProposal({ ...proposalRequest(), contentRef: ref }),
+    errorCode("commercial_proposal_content_ref_invalid"),
+  );
+  const db = new SqliteD1();
+  try {
+    await assert.rejects(
+      admitCommercialPermit(commercialEnv(db), {
+        tenantId: TENANT,
+        actor: { type: "agent", id: "sales-orchestrator" },
+        action: "lead.triage.record",
+        aggregate: { type: "lead", id: LEAD_ID, version: 1 },
+        command: buildLeadTriageCommand(leadRequest()),
+        facts: { source: "native-operating-core" },
+        factsObservedAt: NOW.toISOString(),
+        evidence,
+        idempotencyKey: "permit:reserved-evidence:0001",
+        expiresAt: at(10).toISOString(),
+      }, NOW),
+      errorCode("commercial_evidence_invalid"),
+    );
+    assert.equal((db.raw.prepare("SELECT count(*) AS n FROM commercial_authority_permits").get() as { n: number }).n, 0);
+  } finally {
+    db.close();
+  }
+});
+
 function publicationRequest(): RecordCommercialPublicationInput {
   return {
     tenantId: TENANT,

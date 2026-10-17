@@ -733,6 +733,17 @@ test("readback action references cannot cross tenant or authority identity", asy
   );
 });
 
+test("authority readbacks cannot claim a reserved upload receipt as legacy evidence", async () => {
+  const db = new SqliteD1();
+  await assert.rejects(
+    recordAuthorityReadback(env(db), readbackInput({
+      evidenceRefsJson: JSON.stringify([{ ref: `evidence-upload://evu_${"a".repeat(64)}`,
+        sha256: EVIDENCE_SHA256 }]),
+    })),
+    /authority_record_readback_input_invalid/,
+  );
+});
+
 test("PWA authority routes derive tenant and actor, enforce CSRF, and expose readbacks", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);

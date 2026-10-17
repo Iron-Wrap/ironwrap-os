@@ -182,7 +182,9 @@ import { parseAuthorityRequirements } from "./authority-records.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
-import { handleEvidenceUpload } from "./evidence-uploads.ts";
+import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uploads.ts";
+import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
+import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import { handleProductionGateClearance } from "./production-gate-clearance.ts";
 import {
@@ -754,6 +756,16 @@ export async function handleAuthenticatedRoute(
     if (authorityResponse) return authorityResponse;
   }
   if (url.pathname === "/api/v1/evidence-uploads") return await handleEvidenceUpload(req, env, auth);
+  if (url.pathname.startsWith("/api/v1/privacy/evidence-uploads")) {
+    const dispositionResponse = await handlePrivacyEvidenceDispositionRoute(req, env, auth);
+    if (dispositionResponse) return dispositionResponse;
+    const privacyResponse = await handlePrivacyEvidenceAuditRoute(req, env, auth);
+    if (privacyResponse) return privacyResponse;
+  }
+  const evidenceContent = url.pathname.match(/^\/api\/v1\/evidence-uploads\/([^/]+)\/content$/);
+  if (evidenceContent) return req.method === "GET"
+    ? await handleEvidenceContentRead(env, auth, evidenceContent[1] ?? "")
+    : privateAppJson({ error: "not_found" }, 404);
   // The safety rail is intentionally reachable by every authenticated role,
   // including a field worker with no current assignment. Authority, separation
   // of duties, and rights are enforced inside the store, not by this router.

@@ -1,5 +1,6 @@
 import { getDeviceSecret } from "../auth/device-credential";
 import { isOfflineSession, type AuthenticatedSession } from "../auth/session";
+import type { EvidenceSubmission } from "../evidence/evidence-uploads";
 import { cacheFieldModel, getCachedFieldModel } from "../field/field-cache";
 import {
   correctiveActionDetailSchema,
@@ -13,8 +14,10 @@ import {
   getOutboxAction,
   listOutboxActionsByKind,
   queueOutboxAction,
+  retryOutboxAction,
   saveOutboxAction,
 } from "../storage/outbox";
+import { outboxFailureGuidance } from "../storage/outbox-failure";
 import { flushOutbox } from "../storage/outbox-processor";
 
 const actionPath = (id: string) => `/api/v1/safety/corrective-actions/${encodeURIComponent(id)}`;
@@ -50,10 +53,17 @@ export async function listQueuedCorrectiveEvidence(session: AuthenticatedSession
   return queued.filter((action) => action.endpoint === endpoint);
 }
 
+/**
+ * Saves what was fixed together with the files that show it, then sends it if there is signal.
+ * The files are uploaded first, under the keys they were given, and the submission only goes up
+ * with their confirmed receipts; with no signal everything waits on the device in the outbox.
+ * A submission that carries a typed digest reference instead has no files to save.
+ */
 export async function queueCorrectiveEvidence(
   session: AuthenticatedSession,
   id: string,
   input: CorrectiveEvidence,
+  evidence?: EvidenceSubmission,
 ) {
   const saved = await saveOutboxAction({
     tenantId: session.tenant.id,
@@ -61,6 +71,7 @@ export async function queueCorrectiveEvidence(
     kind: "safety_corrective_evidence",
     endpoint: `${actionPath(id)}/evidence`,
     payload: correctiveEvidenceSchema.parse(input),
+    ...(evidence ? { evidence } : {}),
   });
   await queueOutboxAction(saved.deviceActionId);
   if (navigator.onLine && !isOfflineSession(session)) {
@@ -76,7 +87,32 @@ export async function queueCorrectiveEvidence(
     throw new PlainError(
       "The saved evidence could not be found on this device. Check Saved work before trying again.",
     );
-  return { deviceActionId: record.deviceActionId, state: record.state };
+  const guidance = record.state === "needs_attention" ? outboxFailureGuidance(record) : undefined;
+  return {
+    deviceActionId: record.deviceActionId,
+    state: record.state,
+    ...(evidence ? { fileCount: evidence.files.length } : {}),
+    ...(guidance ? { guidance } : {}),
+  };
+}
+
+/**
+ * Sends a stopped submission again, the same saved item with the same files and keys, for a stop
+ * that waiting out can clear (a slow link, a busy store). It never makes a copy.
+ */
+export async function retryQueuedCorrectiveEvidence(
+  session: AuthenticatedSession,
+  deviceActionId: string,
+) {
+  await retryOutboxAction(deviceActionId);
+  if (navigator.onLine && !isOfflineSession(session)) {
+    await flushOutbox({
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      csrfToken: session.csrf_token,
+      deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+    });
+  }
 }
 
 export function decideCorrectiveAction(

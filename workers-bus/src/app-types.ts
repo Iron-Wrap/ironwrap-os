@@ -22,6 +22,9 @@ export interface WorkObjectScope {
 
 export type AppEnv = Env & {
   APP_BFF_ENABLED?: string;
+  // A separate rollout switch for writing upload receipts and linking them to
+  // domain records. Unset/false leaves the legacy evidence paths available.
+  APP_EVIDENCE_UPLOADS_ENABLED?: string;
   // Enable only after file-selection callers submit scoped upload receipts. Unset/false
   // retains the legacy evidence inputs without asserting verified upload provenance.
   APP_EVIDENCE_RECEIPTS_REQUIRED?: string;

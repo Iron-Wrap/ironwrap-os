@@ -26,7 +26,7 @@ import {
 } from "./authority-records.ts";
 import { canonicalJson } from "./newo-hash.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
-import { binarySha256, evidenceReceiptsRequired, resolveEvidenceUploads, evidenceUploadFailure, EvidenceUploadError } from "./evidence-uploads.ts";
+import { assertCurrentEvidenceReader, binarySha256, evidenceFilesForDetail, evidenceReceiptsRequired, EvidenceUploadError, evidenceUploadFailure, isDisposedDomainLinkRefusal, linkedEvidenceFilesForRefs, resolveEvidenceUploads } from "./evidence-uploads.ts";
 
 /**
  * Inventory routes.
@@ -197,6 +197,7 @@ function optionalConditionStatus(
 /** A ledger refusal is a 409: the request was well-formed but the state refuses it. */
 function ledgerErrorResponse(error: unknown): Response {
   if (error instanceof EvidenceUploadError) return evidenceUploadFailure(error);
+  if (isDisposedDomainLinkRefusal(error)) return json({ error: "evidence_disposition_blocks_domain_link" }, 409);
   if (error instanceof InventoryLedgerError) {
     return json({ error: error.code }, error.code.endsWith("_input_invalid") ? 400 : 409);
   }
@@ -496,8 +497,15 @@ export async function handleInventoryRoute(
       const commandId = pathPart(commandDetail[1] ?? "");
       if (!commandId) return json({ error: "not_found" }, 404);
       try {
+        await assertCurrentEvidenceReader(env, auth, [...READ_ROLES]);
         const command = await getInventoryCommand(env, auth.session.tenant_id, commandId);
-        return command ? json({ version: 1, command }) : json({ error: "not_found" }, 404);
+        if (!command) return json({ error: "not_found" }, 404);
+        const evidence = command.status === "applied"
+          ? await evidenceFilesForDetail(() => linkedEvidenceFilesForRefs(env,
+            auth.session.tenant_id, command.evidence_refs_json,
+            { purpose: "stock", action: command.transition, operationId: command.command_id }))
+          : { evidence_files: [], evidence_files_unavailable: false };
+        return json({ version: 1, command, ...evidence });
       } catch (error) {
         return ledgerErrorResponse(error);
       }

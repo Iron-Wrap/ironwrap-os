@@ -70,12 +70,12 @@ test("remote D1 drill uses exact generated target config and verifies restored t
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /exact confirmed non-production drill database/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
   assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
   assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
   const readOperations = operations.filter((line) => line.includes(" --json"));
   const importOperations = operations.filter((line) => line.includes(" --file "));
-  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
+  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
   assert.equal(readOperations.every((line) => line.includes(" --command ") && !line.includes(" --file ")), true);
   assert.equal(importOperations.length, 1);
   assert.equal(importOperations[0].includes(" --json"), false);
@@ -83,7 +83,7 @@ test("remote D1 drill uses exact generated target config and verifies restored t
     .trim()
     .split("\n")
     .map(Number);
-  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
+  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
   assert.equal(commandLengths.every((length) => Number.isSafeInteger(length) && length <= 16_384), true);
   assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
   const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
@@ -93,6 +93,18 @@ test("remote D1 drill uses exact generated target config and verifies restored t
     database_name: mock.env.D1_RESTORE_TARGET_DATABASE_NAME,
     database_id: mock.env.D1_RESTORE_TARGET_DATABASE_ID,
   }]);
+});
+
+test("remote D1 drill refuses an imported database without the evidence privacy views", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { privacyViewResponseMode: "missing" });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /remote D1 restore is missing a working evidence privacy view/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.some((line) => line.includes(" AS table_name, COUNT(*) AS row_count FROM ")), false);
 });
 
 test("remote D1 drill rejects reused backup, restore, or R2 authority before download", async (t) => {
@@ -179,6 +191,7 @@ test("remote D1 drill rejects Wrangler progress and bulk response shapes before 
   }
 });
 
+// Post-import failures include the privacy-view verification before row/index/trigger checks.
 test("remote D1 drill fails when any restored production-table row count differs", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { rowMismatch: true });
   mock.env.D1_RESTORE_MODE = "remote";
@@ -188,7 +201,7 @@ test("remote D1 drill fails when any restored production-table row count differs
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /table row counts differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
 });
 
 test("remote D1 drill rejects missing, duplicate, and error table-count results", async (t) => {
@@ -202,7 +215,7 @@ test("remote D1 drill rejects missing, duplicate, and error table-count results"
       assert.notEqual(run.status, 0);
       assert.match(run.stderr, /table row counts differ/);
       const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
       assert.equal(operations.at(-1).includes(" --command "), true);
       assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
     });
@@ -218,7 +231,7 @@ test("remote D1 drill fails when named invariant-trigger inventory differs", asy
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });
 
 test("remote D1 drill fails when named index inventory differs", async (t) => {
@@ -230,7 +243,7 @@ test("remote D1 drill fails when named index inventory differs", async (t) => {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /index inventory or immutable index semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects a non-unique Hermes accepted-handoff index", async (t) => {
@@ -242,7 +255,7 @@ test("remote D1 drill rejects a non-unique Hermes accepted-handoff index", async
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /index inventory or immutable index semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects a measurement identity index without tenant scope", async (t) => {
@@ -254,7 +267,7 @@ test("remote D1 drill rejects a measurement identity index without tenant scope"
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /index inventory or immutable index semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects missing, duplicate, and error trigger results", async (t) => {
@@ -268,7 +281,7 @@ test("remote D1 drill rejects missing, duplicate, and error trigger results", as
       assert.notEqual(run.status, 0);
       assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
       const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
       assert.equal(operations.at(-1).includes(" --command "), true);
       assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
     });
@@ -284,7 +297,7 @@ test("remote D1 drill rejects receipt triggers without immutable update/delete s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });
 
 test("remote D1 drill rejects measurement-delta triggers without append-only semantics", async (t) => {
@@ -296,7 +309,7 @@ test("remote D1 drill rejects measurement-delta triggers without append-only sem
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });
 
 test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
@@ -308,7 +321,7 @@ test("remote D1 drill rejects quote-revision ledger triggers without immutable s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });
 
 test("remote D1 drill rejects production-schedule ledger triggers without immutable semantics", async (t) => {
@@ -320,7 +333,7 @@ test("remote D1 drill rejects production-schedule ledger triggers without immuta
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });
 
 test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
@@ -332,5 +345,5 @@ test("remote D1 drill rejects governed-transition outbox event triggers without 
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 4);
 });

@@ -10,7 +10,7 @@ import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
-import { EvidenceR2 } from "./evidence-upload-fixture.ts";
+import { EvidenceR2, PrivacyLedgerR2 } from "./evidence-upload-fixture.ts";
 import type { EvidenceScope } from "../src/evidence-uploads.ts";
 
 const TENANT = "ironwrap";
@@ -79,11 +79,19 @@ class SqliteD1 {
     for (const migration of [
       "0011_app_bff_auth.sql",
       "0042_external_effect_runtime.sql",
+      "0047_safety_lifecycle.sql",
       "0056_service_case_lifecycle.sql",
       "0062_external_effect_insert_replace_guards.sql",
       "0139_evidence_upload_receipts.sql",
       "0140_service_case_atomic_steps.sql",
+      "0141_evidence_privacy_disposition.sql",
+      "0149_evidence_upload_write_claims.sql",
     ]) {
+      // The privacy migration guards inventory links as well as service links.
+      // This route fixture uses a compact inventory table in place of 0067.
+      if (migration === "0141_evidence_privacy_disposition.sql") {
+        this.raw.exec("CREATE TABLE inventory_commands (tenant_id TEXT, evidence_refs_json TEXT)");
+      }
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
     this.raw.exec(`ALTER TABLE app_users ADD COLUMN access_role TEXT;
@@ -153,7 +161,9 @@ function env(db = new SqliteD1()): AppEnv {
   return {
     DB: db as never,
     RAW: new EvidenceR2() as never,
+    PRIVACY_LEDGER: new PrivacyLedgerR2() as never,
     APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_EVIDENCE_UPLOADS_ENABLED: "true",
     APP_EVIDENCE_RECEIPTS_REQUIRED: "true",
   } as AppEnv;
 }
@@ -869,4 +879,26 @@ test("a genuine store fault is still answered as a server fault, not as a refuse
   const broken = await call(appEnv, "ops", "GET", `/api/v1/service-cases/${id}`);
   assert.equal(broken.status, 502);
   assert.equal(broken.body.error, "service_case_store_unavailable");
+});
+
+test("a disposition that wins after receipt resolution is a definitive conflict", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const opened = await call(appEnv, "ops", "POST", "/api/v1/service-cases", intakeBody());
+  const id = caseId(opened.body);
+  db.onPrepare = (sql) => {
+    if (!sql.includes("INSERT INTO service_case_triage")) return;
+    throw new Error("D1_ERROR: evidence_disposition_blocks_domain_link: SQLITE_CONSTRAINT " +
+      "(extended: SQLITE_CONSTRAINT_TRIGGER)");
+  };
+  const refused = await call(appEnv, "ops", "POST", `/api/v1/service-cases/${id}/triage`, {
+    advisory_source: "none", final_category: "workmanship",
+    responsibility: "ironwrap_workmanship", evidence_digest: DIGEST_TRIAGE,
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "evidence_disposition_blocks_domain_link");
+  db.onPrepare = null;
+  const detail = await call(appEnv, "ops", "GET", `/api/v1/service-cases/${id}`);
+  assert.equal((detail.body.service_case as Record<string, unknown>).state, "intake");
+  assert.deepEqual((detail.body.events as { event_type: string }[]).map((event) => event.event_type), ["case_opened"]);
 });

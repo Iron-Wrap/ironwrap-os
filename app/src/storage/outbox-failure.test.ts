@@ -49,6 +49,18 @@ describe("outbox failure classification", () => {
 });
 
 describe("crew guidance for a stopped item", () => {
+  it.each([
+    ["upload_too_slow", undefined, false],
+    ["evidence_actor_role_changed", 403, true],
+    ["evidence_actor_inactive", 403, true],
+    ["evidence_receipt_scope_mismatch", 400, true],
+  ] as const)("keeps the send outcome explicit for %s", (code, status, notSent) => {
+    const guidance = outboxFailureGuidance(
+      checkIn({ code, message: code, occurredAt: 1_000, ...(status ? { status } : {}) }),
+    );
+    expect(guidance.notSent).toBe(notSent);
+  });
+
   it("names the missing work plan and a next step the crew member can take", () => {
     const guidance = outboxFailureGuidance(
       checkIn({
@@ -158,6 +170,110 @@ describe("crew guidance for a stopped item", () => {
     ).toMatchObject({
       reason: "The office copy changed after this item was saved.",
       retryable: false,
+      notSent: false,
+    });
+  });
+});
+
+describe("what a saved item says when the Worker refuses its files", () => {
+  const stopped = (
+    kind: OutboxAction["kind"],
+    code: string,
+    status: number,
+  ): Pick<OutboxAction, "kind" | "lastError" | "conflict"> => ({
+    kind,
+    lastError: { code, message: "The picker's own sentence.", status, occurredAt: 1_000 },
+  });
+
+  const filesCodes: Array<[number, string, string]> = [
+    [
+      403,
+      "evidence_receipt_scope_mismatch",
+      "The files on this saved item don't match this action.",
+    ],
+    [404, "evidence_receipt_not_found", "The files on this saved item don't match this action."],
+    [400, "evidence_scope_invalid", "The files on this saved item don't match this action."],
+    [400, "evidence_receipts_required", "This step needs a photo or PDF."],
+    [404, "evidence_target_not_found", "We couldn't find what these files belong to."],
+    [409, "evidence_object_missing", "We couldn't confirm that a file was saved."],
+    [409, "evidence_object_mismatch", "We couldn't confirm that a file was saved."],
+    [
+      409,
+      "evidence_upload_conflict",
+      "A file on this saved item was already used for something else.",
+    ],
+    [413, "evidence_file_size_invalid", "A file on this saved item can't be used."],
+    [415, "evidence_type_mismatch", "A file on this saved item can't be used."],
+    [400, "evidence_file_name_invalid", "A file on this saved item can't be used."],
+    [400, "evidence_idempotency_key_required", "We couldn't use the files on this saved item."],
+  ];
+
+  it.each(filesCodes)(
+    "gives a stock action one step, and no picker button, for %i %s",
+    (status, code, reason) => {
+      expect(outboxFailureGuidance(stopped("inventory_command", code, status))).toEqual({
+        reason,
+        nextStep:
+          "Nothing was recorded. Record the action again on the stock desk and add the files again.",
+        retryable: false,
+        notSent: true,
+      });
+    },
+  );
+
+  it.each(filesCodes)(
+    "gives corrective evidence one step, and no picker button, for %i %s",
+    (status, code, reason) => {
+      expect(outboxFailureGuidance(stopped("safety_corrective_evidence", code, status))).toEqual({
+        reason,
+        nextStep: "Nothing was submitted. Open the action and add the files again.",
+        retryable: false,
+        notSent: true,
+      });
+    },
+  );
+
+  it("never mixes the picker's wording or the generic 'tell the office' with it", () => {
+    for (const [status, code] of filesCodes) {
+      const { reason, nextStep } = outboxFailureGuidance(
+        stopped("safety_corrective_evidence", code, status),
+      );
+      const text = `${reason} ${nextStep}`;
+      expect(text, code).not.toMatch(
+        /Remove it|Remove the|Choose another|Try again|tell the office/,
+      );
+      expect(text, code).not.toMatch(/evidence_|receipt|sha|digest|hash|\bR2\b|evu_/i);
+    }
+  });
+
+  it("sends an account problem to the owner, not to the picker", () => {
+    for (const code of ["evidence_actor_inactive", "inventory_write_role_required"]) {
+      expect(outboxFailureGuidance(stopped("inventory_command", code, 403))).toEqual({
+        reason: "Your account can't add files for this step.",
+        nextStep: "Ask the owner for help. Nothing was sent.",
+        retryable: false,
+        notSent: true,
+      });
+    }
+  });
+
+  it("keeps the sign-in step for a changed role", () => {
+    expect(
+      outboxFailureGuidance(stopped("inventory_command", "evidence_actor_role_changed", 403)),
+    ).toMatchObject({
+      nextStep: "Sign in again, then open the action and add the files again.",
+      retryable: false,
+      notSent: true,
+    });
+  });
+
+  it("calls a file that keeps timing out slow, and lets the person try again", () => {
+    expect(
+      outboxFailureGuidance(stopped("safety_corrective_evidence", "upload_too_slow", 408)),
+    ).toEqual({
+      reason: "A file is taking too long to upload on this connection.",
+      nextStep: "Move to a place with better signal, then try again. Nothing was lost.",
+      retryable: true,
       notSent: false,
     });
   });

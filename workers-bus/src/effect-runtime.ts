@@ -1,5 +1,6 @@
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { isReservedEvidenceUploadReference } from "./evidence-upload-reference.ts";
 
 export const EXTERNAL_EFFECT_STATES = [
   "proposed", "authorized", "executing", "reconciling", "succeeded",
@@ -175,6 +176,12 @@ export class EffectRuntimeError extends Error {
   }
 }
 
+function assertNoUploadEvidenceRefs(refs: readonly string[] | undefined): void {
+  if (refs?.some(isReservedEvidenceUploadReference)) {
+    throw new EffectRuntimeError("effect_evidence_ref_reserved");
+  }
+}
+
 export function effectLedgerAvailable(env: unknown): boolean {
   const db = (env as { DB?: { prepare?: (sql: string) => { bind?: (...args: unknown[]) => unknown } } })?.DB;
   if (typeof db?.prepare !== "function") return false;
@@ -266,6 +273,7 @@ export async function runExternalEffect<T = unknown>(
   executor: ReplayableEffectExecutor<T>,
   now = new Date(),
 ): Promise<EffectExecutionResult<T>> {
+  assertNoUploadEvidenceRefs(input.evidenceRefs);
   const computedRequestHash = await sha256Hex(canonicalJson(input.request));
   if (input.requestHash !== undefined && input.requestHash !== computedRequestHash) {
     throw new EffectRuntimeError("effect_request_hash_mismatch");
@@ -316,6 +324,7 @@ export async function proposeExternalEffect(
   env: AppEnv,
   input: ExternalEffectRequest,
 ): Promise<ExternalEffectRecord> {
+  assertNoUploadEvidenceRefs(input.evidenceRefs);
   const now = input.now ?? new Date().toISOString();
   const computedRequestHash = await sha256Hex(canonicalJson(input.request));
   if (input.requestHash !== undefined && input.requestHash !== computedRequestHash) {

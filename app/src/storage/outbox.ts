@@ -1,3 +1,10 @@
+import {
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_MAX_FILES,
+  evidenceMimeTypes,
+  evidenceReceiptIdSchema,
+  isUploadKey,
+} from "../evidence/evidence-types";
 import { correctiveEvidenceSchema } from "../field/safety-contracts";
 import { PlainError } from "../lib/plain-error";
 import { getDatabase } from "./db";
@@ -10,6 +17,8 @@ import type {
   OutboxBlobRecord,
   OutboxConflict,
   OutboxErrorDetail,
+  OutboxEvidenceFile,
+  OutboxEvidenceInput,
   OutboxState,
   OutboxVerification,
   SaveOutboxActionInput,
@@ -115,6 +124,15 @@ export async function saveOutboxAction(
       ...(attachment.lastModified === undefined ? {} : { lastModified: attachment.lastModified }),
     };
   });
+  // Evidence bytes ride in the same blob store, one record per file, until the action is confirmed.
+  const evidenceFiles: OutboxEvidenceFile[] = (input.evidence?.files ?? []).map((file) => ({
+    uploadKey: file.uploadKey,
+    fileName: file.fileName,
+    mimeType: file.mimeType,
+    size: file.size,
+    attachmentId: clock.randomId(),
+    ...(file.receiptId ? { receiptId: file.receiptId } : {}),
+  }));
   const action: OutboxAction = {
     deviceActionId,
     tenantId: input.tenantId.trim(),
@@ -124,6 +142,9 @@ export async function saveOutboxAction(
     method: input.method ?? "POST",
     payload: structuredClone(input.payload),
     attachments,
+    ...(input.evidence
+      ? { evidence: { scope: { ...input.evidence.scope }, files: evidenceFiles } }
+      : {}),
     state: "saved_locally",
     attempts: 0,
     nextAttemptAt: now,
@@ -144,9 +165,50 @@ export async function saveOutboxAction(
       blob: attachment.blob,
     });
   }
+  for (const [index, file] of (input.evidence?.files ?? []).entries()) {
+    const attachmentId = evidenceFiles[index]?.attachmentId;
+    if (!attachmentId) throw new Error("Evidence file metadata could not be created.");
+    await transaction.objectStore("outbox_blobs").add({
+      blobKey: `${deviceActionId}:${attachmentId}`,
+      deviceActionId,
+      attachmentId,
+      blob: file.blob,
+    });
+  }
   await transaction.done;
   notifyOutboxChanged();
   return action;
+}
+
+/**
+ * Queues one saved action only while it is still the action the caller expects and still only
+ * saved here, checked and changed in one transaction so no other tab can move it in between. An
+ * action already further along, or stopped, comes back as it stands and is never moved: a stopped
+ * action returns to the queue only through `retryOutboxAction`. `none`: nothing is saved under this
+ * id; `other`: what is saved there is not the expected action, and it is left alone.
+ */
+export async function queueSavedOutboxActionIf(
+  deviceActionId: string,
+  isExpected: (action: OutboxAction) => boolean,
+  now = Date.now(),
+): Promise<{ found: "none" } | { found: "other" } | { found: "expected"; action: OutboxAction }> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readwrite");
+  const store = transaction.objectStore("outbox_actions");
+  const action = await store.get(deviceActionId);
+  if (!action || !isExpected(action)) {
+    await transaction.done;
+    return action ? { found: "other" } : { found: "none" };
+  }
+  if (action.state !== "saved_locally") {
+    await transaction.done;
+    return { found: "expected", action };
+  }
+  const queued: OutboxAction = { ...action, state: "queued", nextAttemptAt: now, updatedAt: now };
+  await store.put(queued);
+  await transaction.done;
+  notifyOutboxChanged();
+  return { found: "expected", action: queued };
 }
 
 export async function queueOutboxAction(
@@ -403,6 +465,52 @@ export async function markOutboxVerified(
   return updated;
 }
 
+/**
+ * Remembers that one evidence file is confirmed, so a stop halfway through never uploads it again.
+ * Its bytes stay until the action itself is confirmed: if the Worker then refuses the action, the
+ * files are still on the phone.
+ */
+export async function recordOutboxEvidenceReceipt(
+  deviceActionId: string,
+  uploadKey: string,
+  receiptId: string,
+  now = Date.now(),
+  expectedUploadLeaseId?: string,
+): Promise<OutboxAction | undefined> {
+  const database = await getDatabase();
+  const transaction = database.transaction(["outbox_actions", "outbox_blobs"], "readwrite");
+  const actions = transaction.objectStore("outbox_actions");
+  const action = await actions.get(deviceActionId);
+  const file = action?.evidence?.files.find((candidate) => candidate.uploadKey === uploadKey);
+  if (
+    !action?.evidence ||
+    !file ||
+    (expectedUploadLeaseId !== undefined &&
+      (action.state !== "uploading" || action.uploadLeaseId !== expectedUploadLeaseId))
+  ) {
+    await transaction.done;
+    return undefined;
+  }
+  if (file.receiptId) {
+    await transaction.done;
+    return action;
+  }
+  const updated: OutboxAction = {
+    ...action,
+    evidence: {
+      ...action.evidence,
+      files: action.evidence.files.map((candidate) =>
+        candidate === file ? { ...candidate, receiptId } : candidate,
+      ),
+    },
+    updatedAt: now,
+  };
+  await actions.put(updated);
+  await transaction.done;
+  notifyOutboxChanged();
+  return updated;
+}
+
 export async function markOutboxNeedsAttention(
   deviceActionId: string,
   detail: { error: OutboxErrorDetail; conflict?: OutboxConflict },
@@ -533,6 +641,7 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
     // create a second, unverifiable evidence path.
     throw new Error("Only field check-ins can include attachments.");
   }
+  assertEvidenceInput(input);
   if (input.kind === "work_package_acknowledgement") {
     assertWorkPackageAcknowledgementPayload(
       input.payload,
@@ -551,6 +660,101 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
     if (!attachment.fileName.trim()) throw new PlainError("Every attachment needs a file name.");
   }
   assertNoSessionSecrets(input.payload);
+}
+
+const EVIDENCE_KINDS: Partial<Record<OutboxActionKind, "stock" | "corrective_action">> = {
+  inventory_command: "stock",
+  safety_corrective_evidence: "corrective_action",
+};
+// eslint-disable-next-line no-control-regex -- the Worker refuses these characters in a file name.
+const UNSAFE_FILE_NAME = /[\u0000-\u001f/\\]/;
+
+/**
+ * Evidence-bearing actions must say which files they carry and what those files are scoped to,
+ * and nothing else may. The scope is checked against the request it will travel with, so a saved
+ * file can never be sent for a different stock command or corrective action.
+ *
+ * The stock and safety desks that still type a digest reference save it inside the request
+ * instead (`evidence_refs`, or `evidence_sha256` with `evidence_refs_json`), which the Worker
+ * accepts while receipts are not required. An action carries one or the other, never both, and
+ * never neither.
+ */
+function assertEvidenceInput(input: SaveOutboxActionInput): void {
+  const purpose = EVIDENCE_KINDS[input.kind];
+  const evidence = input.evidence;
+  if (!purpose) {
+    if (evidence) throw new Error("This action cannot carry evidence files.");
+    return;
+  }
+  const request = objectPayload(input.payload);
+  const typedReference =
+    purpose === "stock"
+      ? "evidence_refs" in request
+      : "evidence_sha256" in request || "evidence_refs_json" in request;
+  if (!evidence) {
+    if (!typedReference) {
+      throw new Error("This action needs its evidence files to be saved with it.");
+    }
+    return;
+  }
+  if (typedReference || "evidence_receipt_ids" in request) {
+    throw new Error("This action carries its files separately, not inside the saved request.");
+  }
+  assertEvidenceDescriptor(evidence, purpose);
+  if (purpose === "corrective_action") {
+    const actionId = input.endpoint.split("/")[5];
+    if (
+      evidence.scope.action !== "submit" ||
+      evidence.scope.operationId !== "" ||
+      !actionId ||
+      evidence.scope.targetId !== decodeURIComponent(actionId)
+    ) {
+      throw new Error("The saved files do not belong to this corrective action.");
+    }
+    return;
+  }
+  if (
+    typeof request.command_id !== "string" ||
+    evidence.scope.operationId !== request.command_id ||
+    evidence.scope.action !== request.transition
+  ) {
+    throw new Error("The saved files do not belong to this stock action.");
+  }
+}
+
+function assertEvidenceDescriptor(
+  evidence: OutboxEvidenceInput,
+  purpose: "stock" | "corrective_action",
+): void {
+  if (evidence.scope.purpose !== purpose || !evidence.scope.targetId.trim()) {
+    throw new Error("The saved files are missing what they belong to.");
+  }
+  const { files } = evidence;
+  if (files.length < 1 || files.length > EVIDENCE_MAX_FILES) {
+    throw new Error(`Keep between 1 and ${EVIDENCE_MAX_FILES} files.`);
+  }
+  const keys = new Set<string>();
+  for (const file of files) {
+    if (
+      !isUploadKey(file.uploadKey) ||
+      keys.has(file.uploadKey) ||
+      !file.fileName.trim() ||
+      file.fileName.length > 180 ||
+      UNSAFE_FILE_NAME.test(file.fileName) ||
+      !(evidenceMimeTypes as readonly string[]).includes(file.mimeType) ||
+      !Number.isInteger(file.size) ||
+      file.size < 1 ||
+      file.size > EVIDENCE_MAX_BYTES ||
+      !file.blob ||
+      (file.receiptId !== undefined && !evidenceReceiptIdSchema.safeParse(file.receiptId).success)
+    ) {
+      throw new Error("A saved file is not valid. Choose it again.");
+    }
+    if (file.blob.size !== file.size) {
+      throw new Error("A saved file changed while it was being saved. Choose it again.");
+    }
+    keys.add(file.uploadKey);
+  }
 }
 
 /**

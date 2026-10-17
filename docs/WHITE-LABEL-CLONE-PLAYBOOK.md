@@ -18,7 +18,7 @@ the cloneable shape is proven with isolation, export, restore, and negative cros
 | Frappe (IronWrap OS) | One plain Frappe site (never install the erpnext app) | `frappe-apps/ironwrap_roofing` installed per site |
 | Hermes | One Hermes profile (own memory, skills, MCP allowlist) | MCP env vars below |
 | Cloudflare | One Worker + D1 + R2 + queues + secrets set | `workers-bus/wrangler.jsonc` |
-| Storage | One Drive namespace (Shared Drives) + one R2 bucket | `SHARED_DRIVE_ID_*` vars, `RAW` binding |
+| Storage | One Drive namespace (Shared Drives) + raw and privacy R2 buckets | `SHARED_DRIVE_ID_*` vars, `RAW` and `PRIVACY_LEDGER` bindings |
 | Accounting | One QuickBooks connection (own realm, verifier, and bounded Frappe issuer) | `QB_EXPECTED_REALM_ID`, `QB_WEBHOOK_TOKEN`, and tenant-only issuer credentials |
 | Brand | One brand/template pack + tenant config | `config/tenants/<tenant>.json` |
 
@@ -108,7 +108,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 1. `name`: `<tenant>-bus` (new Worker, new URL).
 2. `d1_databases[0]`: `wrangler d1 create <tenant>-bus`, paste the new `database_id`,
    keep `migrations_dir: migrations`.
-3. `r2_buckets[0]`: `wrangler r2 bucket create <tenant>-bus-raw`.
+3. `r2_buckets`: create both `<tenant>-bus-raw` (`RAW`) and `<tenant>-bus-privacy`
+   (`PRIVACY_LEDGER`). Keep the privacy bucket outside D1/raw restore and lifecycle
+   replacement. Provision both before deploying a Worker that requires the ledger.
 4. `queues`: `wrangler queues create <tenant>-jn-push` and `wrangler queues create <tenant>-jn-dlq`;
    update producer, consumer, and `dead_letter_queue` names.
 5. `vars`: tenant's own `OWNER_ALERT_EMAIL`, `BACKUP_ALERT_EMAIL`, `FROM_EMAIL`,
@@ -254,8 +256,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
 1. Create the tenant's own Shared Drives (Jobs / Restricted / Archive pattern).
 2. Grant the tenant's service account access; set the three `SHARED_DRIVE_ID_*` vars.
-3. The R2 bucket from step 2.3 is the tenant's raw-payload namespace; nothing writes to
-   another tenant's bucket.
+3. The raw R2 bucket from step 2.3 is the tenant's payload namespace. The separate
+   privacy bucket holds sticky evidence disposition markers. Never include it in an
+   older D1/raw restore or a bulk replacement; nothing writes to another tenant's bucket.
 
 ### 5. QuickBooks connection
 
@@ -312,7 +315,8 @@ counts it as a pass. Any `FAIL` exits non-zero.
 3. Data plane: `wrangler d1 execute <tenant>-bus --remote --command "SELECT COUNT(*) FROM envelopes"`
    shows only the demo tenant's rows; the IronWrap database count is unchanged by demo traffic.
 4. R2: demo raw payloads land only in `<tenant>-bus-raw`; spot-check the IronWrap bucket
-   for the same timestamps.
+   for the same timestamps. A manual evidence disposition creates a marker only in
+   `<tenant>-bus-privacy`; verify that the IronWrap privacy bucket is unchanged.
 5. Frappe site: the demo lead exists only on the tenant site. Search **every doctype the app
    ships**, not just `Lead Envelope` — the ingest fan-out writes the same contact into several
    (`Roofing Customer.email` among them), so a single-doctype search reports zero hits while a
@@ -332,12 +336,16 @@ A second demo company runs with separate brand, configuration, data, tools, evid
 recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
-- [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
+- [ ] Tenant Worker deployed with its own D1, raw R2 and privacy R2 buckets, queues,
+  crons, and secrets; `GET /health` returns ok.
 - [ ] Governed stage automation is either left disabled, or has `PIPELINE_AUTOMATION_ENABLED=true`
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 118 D1 migrations through `0200_agent_coordination.sql` applied to the tenant database.
+- [ ] All 120 D1 migrations through `0200_agent_coordination.sql` applied to the tenant database.
+- [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
+  unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
+  an older snapshot, elapsed time or empty RAW read does not authorize clearing them.
 - [ ] Backup/restore host uses SQLite CLI 3.46.0 or newer. Older fixed parser stacks cannot parse
   the existing 0117 authority lifecycle guard; both scripts refuse them before export/download.
   CI builds checksum-pinned SQLite 3.54.1 for these full-schema proofs. This verifier is separate

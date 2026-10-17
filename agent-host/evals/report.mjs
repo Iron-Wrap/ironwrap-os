@@ -4,6 +4,7 @@
 // A suite is scored only when every case holds exactly repetitions 1..N; anything else is
 // `incomplete` (a paused stage or a data error), never `qualified` or `not_qualified`.
 
+import { aggregateViolations } from "./history.mjs";
 import { evaluateSuite } from "./score.mjs";
 
 const USAGE_FIELDS = ["runs", "judge_calls", "rejudges", "input_tokens", "cached_input_tokens", "output_tokens", "wall_time_ms", "cost_usd", "judge_cost_usd"];
@@ -63,6 +64,18 @@ function onProductionRoute(entry, routes) {
   if (!entry.route) return true;
   const production = routes?.[entry.tier];
   return Boolean(production) && ["provider", "model", "effort"].every((key) => entry.route[key] === production[key]);
+}
+
+// A specialist's history score (history.mjs) sits beside golden and red-team. Only a gating history
+// bar that was missed changes the verdict; advisory bars and missing history never do.
+function withHistory(line, history) {
+  if (!history) return { ...line, history: null };
+  const violations = aggregateViolations(history, line.specialist_id);
+  if (violations.length > 0) throw new Error(`history for ${line.specialist_id} is not aggregate-only: ${violations.join("; ")}`);
+  const missed = (history.bars ?? []).filter((bar) => bar.gating && bar.status === "missed");
+  if (line.verdict !== "qualified" || missed.length === 0) return { ...line, history };
+  const failures = missed.map((bar) => `history: ${bar.metric} missed its bar (${bar.min ?? "-"}..${bar.max ?? "-"})`);
+  return { ...line, history, verdict: "not_qualified", result: { ...line.result, passed: false, failures: [...line.result.failures, ...failures] } };
 }
 
 function row(entry, stage, routes) {
@@ -224,8 +237,8 @@ function comparison(pairs, batches, config) {
   return [...bySpecialist].map(([specialist, lines]) => ({ specialist_id: specialist, routes: lines.sort(order).map((line, index) => ({ rank: index + 1, ...line })) }));
 }
 
-export function buildQualificationReport({ runId, stage, source, routes, judge, quota = null, batches = null, config = null, specialists }) {
-  const rows = specialists.map((entry) => row(entry, stage, routes));
+export function buildQualificationReport({ runId, stage, source, routes, judge, quota = null, batches = null, config = null, history = {}, specialists }) {
+  const rows = specialists.map((entry) => withHistory(row(entry, stage, routes), history?.[entry.specialist_id]));
   const totals = Object.fromEntries(USAGE_FIELDS.map((field) => [field, rows.reduce((sum, entry) => sum + entry.usage[field], 0)]));
   totals.cache_hit_ratio = ratio(totals.cached_input_tokens, totals.input_tokens);
   for (const verdict of ["qualified", "not_qualified", "incomplete"]) totals[verdict] = rows.filter((entry) => entry.verdict === verdict).length;
@@ -293,14 +306,14 @@ export function renderMarkdown(report) {
   }
   lines.push(
     "",
-    "| Wave | Specialist | Model | Judge | Cases g/r | Golden mean | Red-team mean | Catastrophes | Verdict | Cost $ |",
-    "|---:|---|---|---|---:|---:|---:|---:|---|---:|",
+    "| Wave | Specialist | Model | Judge | Cases g/r | Golden mean | Red-team mean | Catastrophes | History | Verdict | Cost $ |",
+    "|---:|---|---|---|---:|---:|---:|---:|---|---|---:|",
   );
   for (const entry of report.specialists) {
     lines.push(
       `| ${entry.wave} | ${entry.specialist_id} | ${entry.model} | ${entry.judge_model} | ${entry.cases.golden}/${entry.cases.redteam} | ` +
         `${fixed(entry.result?.golden_mean)} (${entry.pass_bar.golden_mean}) | ${fixed(entry.result?.redteam_mean)} (${entry.pass_bar.redteam_mean}) | ` +
-        `${entry.catastrophes_so_far.length} | ${entry.verdict} | ${fixed(entry.usage.cost_usd + entry.usage.judge_cost_usd, 2)} |`,
+        `${entry.catastrophes_so_far.length} | ${entry.history?.verdict ?? "-"} | ${entry.verdict} | ${fixed(entry.usage.cost_usd + entry.usage.judge_cost_usd, 2)} |`,
     );
   }
   for (const entry of report.specialists.filter((candidate) => !["qualified", "pilot"].includes(candidate.verdict))) {

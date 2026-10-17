@@ -80,6 +80,9 @@ test-tools:
 	  agent-host/evals/validate.test.mjs \
 	  agent-host/evals/score.test.mjs \
 	  agent-host/evals/report.test.mjs \
+	  agent-host/evals/privacy.test.mjs \
+	  agent-host/evals/history.test.mjs \
+	  agent-host/evals/history-build.test.mjs \
 	  tools/validate-newo-config.test.mjs \
 	  tools/validate-lead-triage-shadow-authority.test.mjs \
 	  tools/validate-tenant-runtime.test.mjs \

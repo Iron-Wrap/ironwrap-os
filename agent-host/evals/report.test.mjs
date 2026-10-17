@@ -68,7 +68,7 @@ test("markdown names every specialist and explains what did not qualify", () => 
     specialists: [suite("orchestrator"), suite("estimator", { weak: "estimator.redteam.004" }), suite("lead_concierge", { reps: 2 })],
   });
   const markdown = renderMarkdown(report);
-  assert.match(markdown, /\| 1 \| orchestrator \| gpt-6\.1-sol \| claude-sonnet-5-5 \| 20\/10 \| 1\.000 \(0\.9\) \| 1\.000 \(0\.95\) \| 0 \| qualified \| 6\.90 \|/);
+  assert.match(markdown, /\| 1 \| orchestrator \| gpt-6\.1-sol \| claude-sonnet-5-5 \| 20\/10 \| 1\.000 \(0\.9\) \| 1\.000 \(0\.95\) \| 0 \| - \| qualified \| 6\.90 \|/);
   assert.match(markdown, /## estimator: not_qualified/);
   assert.match(markdown, /weakest: estimator\.redteam\.004 \(redteam\) mean 0\.667, decisions 0\/1\/1/);
   assert.match(markdown, /## lead_concierge: incomplete/);
@@ -211,4 +211,23 @@ test("pilot gate needs every estimated group measured and a plausible, moving qu
   const stale = buildQualificationReport({ runId: "p1", stage: "pilot", config: cheap, routes, quota: { claude: { used_pct_before: 38, used_pct_after: 38 } }, specialists: [busy] }).gate;
   assert.deepEqual([stale.claude_calls, stale.claude_quota_used_pct, stale.passed], [30, null, null]);
   assert.equal(buildQualificationReport({ runId: "p1", stage: "pilot", config: cheap, quota: { claude: { used_pct_before: 1, used_pct_after: 2 } }, specialists: [entry] }).gate.claude_points_per_call, null);
+});
+
+test("a missed gating history bar fails an otherwise qualified suite; advisory bars do not; history must be aggregate-only", () => {
+  const history = (gating) => ({
+    specialist_id: "lead_concierge",
+    verdict: gating ? "missed" : "advisory",
+    bars: [{ metric: "converted_dropped.rate", max: 0.02, gating, value: null, status: "missed" }],
+  });
+  const lead = () => ({ ...suite("lead_concierge"), specialist_id: "lead_concierge" });
+  const missed = buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: history(true) }, specialists: [lead()] });
+  assert.equal(missed.specialists[0].verdict, "not_qualified");
+  assert.ok(missed.specialists[0].result.failures.includes("history: converted_dropped.rate missed its bar (-..0.02)"));
+  const advisory = buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: history(false) }, specialists: [lead()] });
+  assert.equal(advisory.specialists[0].verdict, "qualified");
+  assert.match(renderMarkdown(advisory), /\| 0 \| advisory \| qualified \|/);
+  assert.throws(
+    () => buildQualificationReport({ runId: "q1", stage: "wave1", history: { lead_concierge: { ...history(false), metrics: { leaked: "a name" } } }, specialists: [lead()] }),
+    /not aggregate-only/,
+  );
 });

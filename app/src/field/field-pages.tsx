@@ -30,7 +30,13 @@ import { flushOutbox } from "../storage/outbox-processor";
 import { outboxFailureGuidance } from "../storage/outbox-failure";
 import type { JsonValue, OutboxAction } from "../storage/outbox-types";
 import { loadJob, loadWorkObject, loadProofPage } from "./field-cache";
-import type { JobResponse, ProofStreamItem, WorkObjectResponse } from "./field-contracts";
+import { OfflineReadiness } from "./offline-readiness";
+import {
+  NOT_SAVED_ON_DEVICE,
+  type JobResponse,
+  type ProofStreamItem,
+  type WorkObjectResponse,
+} from "./field-contracts";
 import {
   formatFieldSchedule,
   formatFieldTimestamp,
@@ -206,6 +212,8 @@ export function JobPage() {
       model={query.data}
       offline={query.data.stale_fields.includes("offline.cached_packet")}
       onPhotosCaptured={(photos) => setQuickCapture({ jobId, photos })}
+      savingOffline={query.isFetching}
+      onRetryOffline={() => void query.refetch()}
     />
   );
 }
@@ -348,10 +356,14 @@ function JobSurface({
   model,
   offline,
   onPhotosCaptured,
+  savingOffline,
+  onRetryOffline,
 }: {
   model: JobResponse;
   offline: boolean;
   onPhotosCaptured: (photos: File[]) => void;
+  savingOffline: boolean;
+  onRetryOffline: () => void;
 }) {
   const session = useSession();
   const [quickPhotoError, setQuickPhotoError] = useState<string | null>(null);
@@ -412,6 +424,13 @@ function JobSurface({
             </Link>
           )}
         </Button>
+        <OfflineReadiness
+          ready={!model.stale_fields.includes(NOT_SAVED_ON_DEVICE)}
+          saving={savingOffline}
+          savedDetail="This job plan is saved on this phone. Work and safety checks still apply."
+          missingDetail="This job plan is not saved on this phone."
+          onRetry={onRetryOffline}
+        />
         <JobPacketHeader model={model} offline={offline} dateOptions={dateOptions} />
         {offline ? (
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
@@ -539,7 +558,7 @@ function JobPacketHeader({
           </h1>
         </div>
         <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
-          {offline ? "Saved copy" : "Up to date"}
+          {offline ? "Saved copy" : "Office update"}
         </p>
       </div>
       <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
@@ -583,19 +602,24 @@ function JobOfflineNotice({
 }
 
 function JobDataLimits({ fields }: { fields: string[] }) {
-  const names = plainFieldNames(fields);
+  const staleFields = fields.filter((field) => field !== NOT_SAVED_ON_DEVICE);
+  const names = plainFieldNames(staleFields);
   return (
-    <details className="border border-border bg-surface-raised">
-      <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
-        Some job details may be old
-      </summary>
-      <p className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
-        {names.length
-          ? `Check the job again before you use these details: ${names.join(", ")}.`
-          : "Check the job again before you rely on its details."}{" "}
-        This screen cannot clear a work check.
-      </p>
-    </details>
+    <>
+      {staleFields.length > 0 ? (
+        <details className="border border-border bg-surface-raised">
+          <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
+            Some job details may be old
+          </summary>
+          <p className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
+            {names.length
+              ? `Check the job again before you use these details: ${names.join(", ")}.`
+              : "Check the job again before you rely on its details."}{" "}
+            This screen cannot clear a work check.
+          </p>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -1123,7 +1147,7 @@ function WorkPackagePanel({
                       : "border border-warning/35 bg-warning-soft p-3"
                   }
                 >
-                  <p className="font-bold">
+                  <p className="font-bold [overflow-wrap:anywhere]">
                     {worker.worker_user} · {worker.worker_role}
                     {worker.required ? " · required" : " · optional"}
                   </p>
@@ -1611,7 +1635,7 @@ function CaptureProofPanel({
           </p>
         </div>
         {onPhotosSelected ? (
-          <label className="field-capture-dock environment-control flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-center text-base font-bold text-primary-foreground focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
+          <label className="environment-control flex min-h-16 cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-center text-base font-bold text-primary-foreground focus-within:outline focus-within:outline-3 focus-within:outline-focus focus-within:outline-offset-3">
             <Camera aria-hidden="true" className="size-5" />
             Take photo
             <input
@@ -2907,7 +2931,9 @@ function CheckInSaved({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-muted">
-            {action.state === "needs_attention" ? "Saved here, not sent" : "Saved on this phone"}
+            {action.state === "needs_attention" && guidance.notSent
+              ? "Saved here, not sent"
+              : "Saved on this phone"}
           </p>
           <h2 ref={headingRef} tabIndex={-1} className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             {action.state === "needs_attention" ? "Check-in needs a check" : "Check-in saved"}
@@ -2917,7 +2943,9 @@ function CheckInSaved({
       </div>
       {action.state === "needs_attention" ? (
         <div className="mt-4 space-y-2 border-2 border-danger/45 bg-danger-soft p-4" role="alert">
-          <p className="font-bold text-danger">This check-in did not send.</p>
+          <p className="font-bold text-danger">
+            {guidance.notSent ? "This check-in did not send." : "This check-in is not confirmed."}
+          </p>
           <p className="leading-7">{guidance.reason}</p>
           <p className="leading-7 font-bold">{guidance.nextStep}</p>
         </div>

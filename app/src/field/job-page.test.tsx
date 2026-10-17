@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -442,6 +442,23 @@ describe("JobPage", () => {
 
   afterEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
+  });
+
+  it("retries an unsaved job update and confirms offline readiness only after it saves", async () => {
+    const user = userEvent.setup();
+    renderJob(jobModel({ stale_fields: ["offline.not_saved"] }));
+
+    expect(await screen.findByRole("heading", { name: "Not ready offline" })).toBeVisible();
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+    expect(screen.queryByText("Some job details may be old")).not.toBeInTheDocument();
+    vi.mocked(loadJob).mockResolvedValueOnce(jobModel());
+    await user.click(screen.getByRole("button", { name: "Try saving again" }));
+
+    expect(await screen.findByRole("heading", { name: "Ready offline" })).toBeVisible();
+    expect(loadJob).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("Take photo for this job").closest("label")).not.toHaveClass(
+      "field-capture-dock",
+    );
   });
 
   it("renders a typed Shop Order packet as an actionable field surface", async () => {
@@ -1376,36 +1393,56 @@ describe("Start work after a lost answer", () => {
 
   it("waits while the office is still working on the same request, then resends it unchanged", async () => {
     const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const user = userEvent.setup();
-    vi.mocked(apiCommand)
-      .mockRejectedValueOnce(
-        new ApiError({
-          status: 503,
-          code: "action_in_progress",
-          message: "Service Unavailable",
-          retryAfterMs: 50,
-        }),
-      )
-      .mockResolvedValue(undefined);
-    renderJob(startableWorkPackageModel());
+    const realSetTimeout = window.setTimeout.bind(window);
+    let sendAfterWait: (() => void) | undefined;
+    // Control only Retry-After. Device storage and user interactions keep their real clocks,
+    // while a busy test runner cannot consume the warning before we inspect it.
+    const retryClock = vi
+      .spyOn(window, "setTimeout")
+      .mockImplementation((handler, delay, ...args) => {
+        if (delay === 50 && typeof handler === "function") {
+          sendAfterWait = () => handler(...args);
+          return 0;
+        }
+        return realSetTimeout(handler, delay, ...args);
+      });
+    try {
+      const user = userEvent.setup();
+      vi.mocked(apiCommand)
+        .mockRejectedValueOnce(
+          new ApiError({
+            status: 503,
+            code: "action_in_progress",
+            message: "Service Unavailable",
+            retryAfterMs: 50,
+          }),
+        )
+        .mockResolvedValue(undefined);
+      renderJob(startableWorkPackageModel());
 
-    await user.click(await screen.findByRole("button", { name: "Start work" }));
-    expect(
-      await screen.findByText(
-        "The office is still working on this. This phone sends the same request again in a second.",
-      ),
-    ).toBeVisible();
+      await user.click(await screen.findByRole("button", { name: "Start work" }));
+      expect(
+        await screen.findByText(
+          "The office is still working on this. This phone sends the same request again in a second.",
+        ),
+      ).toBeVisible();
+      expect(apiCommand).toHaveBeenCalledTimes(1);
+      expect(sendAfterWait).toBeDefined();
 
-    // No press needed: after Retry-After the same request goes again.
-    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
-    const [first, second] = sent();
-    expect(second?.deviceActionId).toBe(first?.deviceActionId);
-    expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
-    expect(second?.body).toEqual(first?.body);
-    await waitFor(() =>
-      expect(screen.queryByText(/still working on this/)).not.toBeInTheDocument(),
-    );
-    quiet.mockRestore();
+      // No press needed: release Retry-After only after checking the visible waiting state.
+      await act(async () => sendAfterWait?.());
+      await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(2));
+      const [first, second] = sent();
+      expect(second?.deviceActionId).toBe(first?.deviceActionId);
+      expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
+      expect(second?.body).toEqual(first?.body);
+      await waitFor(() =>
+        expect(screen.queryByText(/still working on this/)).not.toBeInTheDocument(),
+      );
+    } finally {
+      retryClock.mockRestore();
+      quiet.mockRestore();
+    }
   });
 
   it("sends one request for a double tap", async () => {

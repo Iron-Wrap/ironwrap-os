@@ -7,10 +7,17 @@ test.describe("Field Companion PWA acceptance", () => {
   test("keeps the full crew name, Sun mode, and thumb actions usable on narrow phones", async ({
     page,
   }) => {
+    const workerUser = "field.acceptance.with.a.long.unbroken.identifier@example.invalid";
     await page.route("**/api/v1/field/bootstrap", async (route) => {
       const response = await route.fetch();
       const model = await response.json();
       if (model.session?.user) model.session.user.display_name = "Sam Kennedy Long Example Name";
+      await route.fulfill({ response, json: model });
+    });
+    await page.route("**/api/v1/jobs/JOB-ACCEPTANCE", async (route) => {
+      const response = await route.fetch();
+      const model = await response.json();
+      model.packet.work_package.acknowledgement.workers[0].worker_user = workerUser;
       await route.fulfill({ response, json: model });
     });
     await seedPairedFieldDevice(page);
@@ -37,11 +44,32 @@ test.describe("Field Companion PWA acceptance", () => {
     await page.reload();
     await expect(page.locator(".crew")).toHaveAttribute("data-environment", "field-sun");
     await page.goto("/jobs/JOB-ACCEPTANCE");
-    const camera = page.locator(".field-capture-dock");
+    const worker = page.getByText(`${workerUser} · field · required`, { exact: true });
+    await expect(worker).toBeVisible();
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      expect(await worker.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+    }
+    const camera = page.getByLabel("Take photo for this job").locator("..");
+    await camera.scrollIntoViewIfNeeded();
     const cameraBox = (await camera.boundingBox())!;
     const tabsBox = (await page.locator(".crew-tabs").boundingBox())!;
     expect(cameraBox.height).toBeGreaterThanOrEqual(48);
+    expect(cameraBox.width).toBeGreaterThanOrEqual(48);
     expect(cameraBox.y + cameraBox.height).toBeLessThan(tabsBox.y);
+    expect(
+      await camera.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+        );
+      }),
+    ).toBe(true);
     await page.goto("/check-in/JOB-ACCEPTANCE");
     await expect(page.getByRole("heading", { name: "Capture what you see" })).toBeFocused();
     for (const width of [320, 390]) {
@@ -56,6 +84,139 @@ test.describe("Field Companion PWA acceptance", () => {
       expect(actionBox.y + actionBox.height).toBeLessThan(tabsBox.y);
     }
   });
+
+  for (const width of [320, 390]) {
+    test(`recovers unsaved updates through a real save and offline reload at ${width}px`, async ({
+      context,
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 844 });
+      await seedPairedFieldDevice(page);
+      await page.evaluate(() => sessionStorage.setItem("acceptance-cache-failure", "on"));
+      await page.addInitScript(() => {
+        const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (this: IDBObjectStore, value, key) {
+          if (
+            this.name === "field_cache" &&
+            sessionStorage.getItem("acceptance-cache-failure") === "on"
+          ) {
+            throw new DOMException("Synthetic cache quota failure", "QuotaExceededError");
+          }
+          return key === undefined ? put.call(this, value) : put.call(this, value, key);
+        };
+      });
+      const readiness = page.getByRole("status", { name: "Offline readiness" });
+      const saveAgain = page.getByRole("button", { name: "Try saving again" });
+      const capture = async (name: string) => {
+        await testInfo.attach(`${name}-${width}px.png`, {
+          body: await page.screenshot({ path: testInfo.outputPath(`${name}-${width}px.png`) }),
+          contentType: "image/png",
+        });
+      };
+      const cachedReads = () =>
+        page.evaluate(async () => {
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open("ironwrap-os");
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          try {
+            return await new Promise<
+              Array<{ key: string; updatedAt: number; value: { stale_fields: string[] } }>
+            >((resolve, reject) => {
+              const request = database
+                .transaction("field_cache")
+                .objectStore("field_cache")
+                .getAll();
+              request.onsuccess = () => resolve(request.result);
+              request.onerror = () => reject(request.error);
+            });
+          } finally {
+            database.close();
+          }
+        });
+      await page.reload();
+      await expect(readiness.getByRole("heading", { name: "Not ready offline" })).toBeVisible();
+      await expect(readiness).toContainText("This run sheet is not saved on this phone.");
+      await expect(page.getByText("All sent", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Up to date", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Some details may be old", { exact: true })).toHaveCount(0);
+      expect(await cachedReads()).toHaveLength(0);
+      await saveAgain.click({ trial: true });
+      await capture("today-not-saved");
+
+      await page.evaluate(() => sessionStorage.removeItem("acceptance-cache-failure"));
+      const todayRead = page.waitForResponse("**/api/v1/today");
+      await saveAgain.click();
+      expect((await todayRead).status()).toBe(200);
+      await expect(
+        readiness.getByRole("heading", { name: "Ready offline", exact: true }),
+      ).toBeVisible();
+      await expect(saveAgain).toHaveCount(0);
+      const saved = await cachedReads();
+      expect(saved.find((entry) => entry.key.endsWith(":today"))).toBeTruthy();
+      const jobBefore = saved.find((entry) => entry.key.endsWith(":job:JOB-ACCEPTANCE"));
+      expect(jobBefore).toBeTruthy();
+      await capture("today-ready");
+
+      await page.evaluate(() => sessionStorage.setItem("acceptance-cache-failure", "on"));
+      await page.goto("/jobs/JOB-ACCEPTANCE");
+      await expect(readiness.getByRole("heading", { name: "Not ready offline" })).toBeVisible();
+      await expect(readiness).toContainText("This job plan is not saved on this phone.");
+      await expect(page.getByText("Up to date", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Some job details may be old", { exact: true })).toHaveCount(0);
+      await expect(page.locator(".field-capture-dock")).toHaveCount(0);
+      await saveAgain.click({ trial: true });
+      await capture("job-not-saved");
+      const jobLayout = await page.evaluate(() => ({
+        width: document.documentElement.scrollWidth,
+        overflowing: [...document.querySelectorAll("body *")]
+          .filter((element) => element.getBoundingClientRect().right > innerWidth)
+          .slice(0, 12)
+          .map((element) => ({
+            tag: element.tagName,
+            classes: element.getAttribute("class"),
+            text: element.textContent?.slice(0, 100),
+            width: element.getBoundingClientRect().width,
+          })),
+      }));
+      expect(jobLayout.width, JSON.stringify(jobLayout)).toBeLessThanOrEqual(width);
+
+      await page.evaluate(() => sessionStorage.removeItem("acceptance-cache-failure"));
+      const jobRead = page.waitForResponse("**/api/v1/jobs/JOB-ACCEPTANCE");
+      await saveAgain.click();
+      expect((await jobRead).status()).toBe(200);
+      await expect(
+        readiness.getByRole("heading", { name: "Ready offline", exact: true }),
+      ).toBeVisible();
+      const keptJob = (await cachedReads()).find((entry) =>
+        entry.key.endsWith(":job:JOB-ACCEPTANCE"),
+      );
+      expect(keptJob?.updatedAt).toBeGreaterThan(jobBefore!.updatedAt);
+      expect(keptJob?.value.stale_fields).not.toContain("offline.not_saved");
+      await capture("job-ready");
+
+      await page.evaluate(async () => await navigator.serviceWorker.ready);
+      await context.setOffline(true);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(
+        readiness.getByRole("heading", { name: "Ready offline", exact: true }),
+      ).toBeVisible();
+      await expect(page.getByText("Saved copy", { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: "123 Acceptance Avenue, Calgary, AB" }),
+      ).toBeVisible();
+      await capture("job-offline-reload");
+      await page.goto("/today", { waitUntil: "domcontentloaded" });
+      await expect(
+        readiness.getByRole("heading", { name: "Ready offline", exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
+      await expect(page.getByText("Saved copy", { exact: true })).toBeVisible();
+      await capture("today-offline-reload");
+      await context.setOffline(false);
+    });
+  }
 
   for (const width of [320, 412, 576]) {
     test(`keeps the run sheet in place when installation becomes available at ${width}px`, async ({
@@ -75,7 +236,7 @@ test.describe("Field Companion PWA acceptance", () => {
       });
       await page.reload();
       await expect(page.getByRole("heading", { name: "Today's work" })).toBeVisible();
-      await expect(page.getByRole("status", { name: "Sync: All sent" })).toBeVisible();
+      await expect(page.getByRole("status", { name: "Sync: Nothing to send" })).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
       await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
       const before = await page.locator("#main-content").boundingBox();

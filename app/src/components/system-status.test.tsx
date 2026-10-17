@@ -94,7 +94,7 @@ describe("crew sync truth", () => {
   it.each([
     ["checking", 0, 0, "Checking saved work"],
     ["error", 0, 0, "Check saved work"],
-    ["ready", 0, 0, "All sent"],
+    ["ready", 0, 0, "Nothing to send"],
     ["ready", 1, 1, "Sending 1"],
     ["ready", 3, 1, "Sending 3"],
     ["ready", 2, 0, "2 to send"],
@@ -109,7 +109,7 @@ describe("crew sync truth", () => {
         </SessionProvider>,
       );
       expect(screen.getByRole("status", { name: `Sync: ${label}` })).toBeVisible();
-      if (readState !== "ready") expect(screen.queryByText("All sent")).toBeNull();
+      if (readState !== "ready") expect(screen.queryByText("Nothing to send")).toBeNull();
     },
   );
 });
@@ -165,7 +165,7 @@ describe("crew storage status from first render", () => {
       </SessionProvider>,
     );
     expect(screen.getByText(/did not lock storage/).closest('[role="status"]')).toBe(region);
-    expect(screen.getByRole("status", { name: "Sync: All sent" })).toBeVisible();
+    expect(screen.getByRole("status", { name: "Sync: Nothing to send" })).toBeVisible();
   });
 
   it.each([true, false, null])(

@@ -125,11 +125,62 @@ export function loadCatalog(root) {
   const value = JSON.parse(json);
   const roster = value.specialists ?? value.roster ?? [];
   const actions = value.actions ?? value.catalog ?? value.action_catalog ?? [];
+  const purposesText = content.split("admits only these purposes:")[1]?.split("### Argument conventions")[0] ?? "";
+  const messagePurposes = new Map(
+    [...purposesText.matchAll(/^\| `([a-z_]+)` \| ([^|]+) \|/gm)].map((match) => [
+      match[1],
+      [...match[2].matchAll(/`([a-z_]+)`/g)].map((owner) => owner[1]),
+    ]),
+  );
   return {
     sha256: createHash("sha256").update(json).digest("hex"),
     specialists: new Map(roster.map((entry) => [entry.specialist_id, entry])),
     actions: new Map(actions.map((entry) => [entry.action_id, entry])),
+    reasonCodes: new Set(Object.values(value.receipt?.reason_codes ?? {}).flat()),
+    messagePurposes,
   };
+}
+
+function checkArguments(actionId, args, { id, catalog, fail, label }) {
+  if (!catalog || !args || typeof args !== "object" || Array.isArray(args)) return;
+  const action = catalog.actions.get(actionId);
+  const reasonCodes = action?.reason_codes ??
+    (["exception.escalate", "handoff.create"].includes(actionId) ? [...catalog.reasonCodes] : null);
+  if (args.reason_code !== undefined && reasonCodes && !reasonCodes.includes(args.reason_code)) {
+    fail(`${label}: ${actionId} reason_code ${args.reason_code} is outside its closed vocabulary`);
+  }
+  if (actionId === "handoff.create") {
+    if (args.specialist_id === id) fail(`${label}: handoff cannot target the same specialist`);
+    if (args.specialist_id !== undefined && !catalog.specialists.has(args.specialist_id)) {
+      fail(`${label}: handoff target ${args.specialist_id} is not in the roster`);
+    }
+    if (args.expected_action !== undefined) {
+      const next = catalog.actions.get(args.expected_action);
+      if (!next || next.human_only || next.autonomy === "H" ||
+          (args.specialist_id !== undefined && !(next.owners ?? []).includes(args.specialist_id))) {
+        fail(`${label}: handoff expected_action ${args.expected_action} is not an agent action owned by its target`);
+      }
+    }
+  }
+  if ((action?.never_targets ?? []).includes(args.specialist_id)) {
+    fail(`${label}: ${actionId} cannot target ${args.specialist_id}`);
+  }
+  if (actionId === "exception.escalate" || actionId === "emergency.page") {
+    const routes = actionId === "emergency.page" ? FIXED_ROUTES : new Set([...catalog.specialists.keys(), ...FIXED_ROUTES]);
+    if (args.route_to !== undefined && !routes.has(args.route_to)) fail(`${label}: ${actionId} route_to is not a permitted role or route`);
+    if (args.urgency !== undefined && !["immediate", "today", "brief"].includes(args.urgency)) fail(`${label}: ${actionId} urgency is invalid`);
+    if (actionId === "emergency.page" && args.urgency !== undefined && args.urgency !== "immediate") {
+      fail(`${label}: emergency.page always requires immediate urgency`);
+    }
+  }
+  if (["customer_message.draft", "customer_message.send"].includes(actionId) && args.purpose !== undefined && catalog.messagePurposes.size > 0) {
+    if (!(catalog.messagePurposes.get(args.purpose) ?? []).includes(id)) {
+      fail(`${label}: ${id} cannot use customer-message purpose ${args.purpose}`);
+    }
+  }
+  if (typeof args.to === "string" && /@|https?:\/\/|^[+\d(][\d ()-]{8,}$/.test(args.to)) {
+    fail(`${label}: to must be a canonical contact id, never an address or number`);
+  }
 }
 
 function readJson(path, fail) {
@@ -321,6 +372,7 @@ function checkCase(item, context) {
     if (include !== undefined && (include === null || typeof include !== "object" || Array.isArray(include))) {
       fail(`${label}: args_must_include must be an object`);
     }
+    checkArguments(action.action_id, include, { id, catalog, fail, label });
     const exclude = action.args_must_not_include;
     if (exclude !== undefined && (!Array.isArray(exclude) || exclude.some((key) => typeof key !== "string"))) {
       fail(`${label}: args_must_not_include must be an array of argument names`);

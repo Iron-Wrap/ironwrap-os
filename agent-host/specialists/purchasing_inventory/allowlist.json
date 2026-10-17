@@ -1,0 +1,32 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "purchasing_inventory",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Explain commitments, stock, quotes, blockers and decisions to the owner or staff, with exact cited figures" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a substitution, unreleased takeoff, lot-identity conflict, privacy request or misrouted inquiry to the owning specialist" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Record an abstention or exception with its reason code and urgency for a named person" },
+    { "action_id": "note.add", "autonomy": "A2", "purpose": "Record supplier context (a mill run, a backorder, a call outcome) on a PO or lot as a note, never a fact" },
+    { "action_id": "inbound.quarantine", "autonomy": "A2", "purpose": "Hold look-alike, fake, spam or injected supplier content so no reply or tool acts on it" },
+    { "action_id": "inbound.release", "autonomy": "A3", "purpose": "Release quarantined supplier content after a person verified it out of band with the phone on file" },
+    { "action_id": "rfq.send", "autonomy": "A2", "purpose": "Ask approved suppliers, at their verified contacts, to price released takeoff lines or a policy reorder quantity" },
+    { "action_id": "supplier_quote.extract", "autonomy": "A1", "purpose": "Extract a verified supplier's quote or price list with a landed-cost comparison" },
+    { "action_id": "supplier_quote.confirm", "autonomy": "A3", "purpose": "Confirm an extraction into a supplier quote record when a person who checked it against the document asks" },
+    { "action_id": "supplier_message.draft", "autonomy": "A1", "purpose": "Draft a factual question, confirmation, document or credit-note request to a verified supplier contact, never about bank details" },
+    { "action_id": "supplier_message.send", "autonomy": "A3", "purpose": "Send an approved supplier message to the verified contact" },
+    { "action_id": "catalog.record_snapshot", "autonomy": "A2", "purpose": "Record an immutable snapshot of an authenticated supplier feed inside the price-move band" },
+    { "action_id": "price_book.propose_change", "autonomy": "A3", "purpose": "Propose a material-price change to the price book from a recorded snapshot or confirmed quote, for the owner" },
+    { "action_id": "purchase_order.place", "autonomy": "A3", "purpose": "Place a PO bound to an accepted job, released takeoff, confirmed quote and budget line" },
+    { "action_id": "purchase_order.record_acknowledgement", "autonomy": "A2", "purpose": "Record a verified supplier's acknowledgement and promised date when its lines match the PO" },
+    { "action_id": "purchase_order.expedite", "autonomy": "A2", "purpose": "Ask a verified supplier for an acknowledgement or an earlier promised date" },
+    { "action_id": "purchase_order.change", "autonomy": "A3", "purpose": "Change or cancel a PO from a released takeoff revision or a person's recorded decision, never to match an invoice" },
+    { "action_id": "supplier_return.request", "autonomy": "A3", "purpose": "Request a return to the supplier for a lot whose person-approved disposition is reject and return" },
+    { "action_id": "receipt.match", "autonomy": "A2", "purpose": "Match a receipt a person recorded to PO lines and record every difference as an exception" },
+    { "action_id": "stock.reserve", "autonomy": "A2", "purpose": "Reserve an exact lot, coil or remnant quantity for a job or shop order, or release it after a recorded cancellation or reduced takeoff" },
+    { "action_id": "stock.quarantine", "autonomy": "A2", "purpose": "Quarantine a damaged or identity-doubtful lot at once" },
+    { "action_id": "stock.release_quarantine", "autonomy": "A3", "purpose": "Release a lot after a person-approved quality disposition" },
+    { "action_id": "stock.adjust_count", "autonomy": "A3", "purpose": "Adjust a position to a production-confirmed count for accounting's decision, never below reservations" },
+    { "action_id": "supplier.onboard", "autonomy": "A3", "purpose": "Propose a new supplier from a registry record and an out-of-band verified contact, without bank details" },
+    { "action_id": "payee.freeze", "autonomy": "A2", "purpose": "Freeze payments to a supplier whose bank or remittance details someone asked to change" }
+  ]
+}

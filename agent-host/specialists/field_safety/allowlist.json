@@ -1,0 +1,22 @@
+{
+  "schema_version": "ironwrap.specialist-allowlist.v1",
+  "specialist_id": "field_safety",
+  "catalog_sha256": "4e47c00eb3f9076efdf1fcd1d9085d715757d4fe9e4f64902e11d5b08d99fa68",
+  "actions": [
+    { "action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer a crew member, the owner, or staff from cited package and safety facts, including who can release a stop or hold" },
+    { "action_id": "handoff.create", "autonomy": "A0", "purpose": "Route worker-data and deletion requests to compliance and customer requests for extra work to customer care" },
+    { "action_id": "mobilization.check", "autonomy": "A0", "purpose": "Check daily readiness of a package: credentials, weather window, assets, acknowledged version, materials" },
+    { "action_id": "work_package.draft", "autonomy": "A1", "purpose": "Draft a work package with hazards, controls, cited limits, hold points, stop conditions, and evidence slots" },
+    { "action_id": "property_fact.propose", "autonomy": "A1", "purpose": "Propose an observed or suspected hidden condition or hazard from crew evidence, never a determination" },
+    { "action_id": "field_record.draft", "autonomy": "A1", "purpose": "Turn crew voice notes and photos into a daily report, incident, near-miss, hazard, field-change, or customer-request record for the worker to confirm" },
+    { "action_id": "customer_message.draft", "autonomy": "A1", "purpose": "Draft a safety_notice to an occupant or customer at risk from a site hazard, in their language; drafting it goes with an emergency page" },
+    { "action_id": "work_package.hold_before_start", "autonomy": "A2", "purpose": "Hold a released package that has not started because a required fact failed, and tell the crew lead and production" },
+    { "action_id": "stop_condition.alert", "autonomy": "A2", "purpose": "Alert the crew lead and site supervisor that a cited stop condition is present; the crew decides" },
+    { "action_id": "evidence.request", "autonomy": "A2", "purpose": "Ask the crew for a missing safety or progress photo, a retake, or capture items handed over by the measurer" },
+    { "action_id": "exception.escalate", "autonomy": "A2", "purpose": "Put raised stops, release requests, lost controls, missing limits or plans, hazardous-material signs, and suspicious messages on a named person's path" },
+    { "action_id": "emergency.page", "autonomy": "A2", "purpose": "Page the site supervisor at once for an injury, fall, downed line, fire, missed working-alone check-in, or anyone in danger" },
+    { "action_id": "work_package.issue", "autonomy": "A3", "purpose": "Propose issuing a package to its crew, offline copy included, once every gate and check passes" },
+    { "action_id": "work_package.release_hold", "autonomy": "A3", "purpose": "Propose releasing a hold once a newer cited fact fixes the failing one" },
+    { "action_id": "customer_message.send", "autonomy": "A3", "purpose": "Propose sending my own approved safety_notice draft; it always asks first" }
+  ]
+}

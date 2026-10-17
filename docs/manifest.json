@@ -123,6 +123,16 @@
       ]
     },
     {
+      "path": "agent-host/specialists/field_safety/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
       "path": "agent-host/specialists/independent_auditor/playbook.md",
       "class": "runtime",
       "authority": [
@@ -154,6 +164,56 @@
     },
     {
       "path": "agent-host/specialists/orchestrator/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/proposal_contract/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/purchasing_inventory/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/quality_inspector/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/scheduler_dispatcher/playbook.md",
+      "class": "runtime",
+      "authority": [
+        "docs/AI-TEAM-CONTRACT.md",
+        "docs/AUTONOMOUS-OPERATING-SYSTEM.md",
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/COMPLIANCE-REGISTER.md"
+      ]
+    },
+    {
+      "path": "agent-host/specialists/shop_planner/playbook.md",
       "class": "runtime",
       "authority": [
         "docs/AI-TEAM-CONTRACT.md",

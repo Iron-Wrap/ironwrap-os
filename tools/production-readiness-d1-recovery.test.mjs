@@ -71,6 +71,21 @@ test("D1 recovery defaults to local cryptographic and SQLite verification withou
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
 });
 
+test("D1 recovery refuses an old or unidentifiable SQLite CLI before download or import", async (t) => {
+  for (const version of ["3.45.1", "unidentified"]) {
+    const mock = await mockD1RestoreEnvironment(t);
+    await writeExecutable(path.join(mock.root, "bin", "sqlite3"), `#!/usr/bin/env bash
+[[ "\${1:-}" == '--version' ]] || exit 91
+printf '%s\\n' '${version}'
+`);
+    const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /requires SQLite CLI 3\.46\.0 or newer for complete schema validation/);
+    await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+    await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+  }
+});
+
 test("D1 recovery rejects an export missing a required invariant trigger", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_update" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });

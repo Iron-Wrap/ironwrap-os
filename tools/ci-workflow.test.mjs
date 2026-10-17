@@ -452,6 +452,7 @@ test("every run: step in ci.yml is a make invocation, or on an explicit allowlis
 });
 
 const EXPECTED_MAKE_INVOCATIONS = [
+  "make ci-sqlite",
   "make check-contracts",
   "make check-pwa",
   "make worker-shard SHARD=${{ matrix.shard }}/${{ env.WORKER_SHARDS }}",

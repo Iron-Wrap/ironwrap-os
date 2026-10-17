@@ -163,6 +163,13 @@ for command_name in age cloudflared curl docker git jq node openssl rclone sha25
   if command -v "$command_name" >/dev/null 2>&1; then pass "$command_name available"; else fail "$command_name unavailable"; fi
 done
 
+# The D1 backup and restore scripts refuse a SQLite CLI older than 3.46.0 (the full schema
+# overflows older fixed parser stacks); Ubuntu 22.04/24.04 and Debian 12 ship older ones, so
+# build the checksum-pinned verifier with tools/install-sqlite-cli.sh and put it first on PATH.
+if command -v sqlite3 >/dev/null 2>&1; then
+  sqlite_version="$(sqlite3 --version 2>/dev/null | awk 'NR == 1 {print $1; exit}')"
+  if [[ "$sqlite_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_at_least "$sqlite_version" "3.46.0"; then pass "SQLite CLI is 3.46.0 or newer"; else fail "SQLite CLI is older than 3.46.0; install the pinned verifier with tools/install-sqlite-cli.sh"; fi
+fi
 if command -v node >/dev/null 2>&1; then
   node_version="$(node -p 'process.versions.node' 2>/dev/null || printf '0.0.0')"
   if version_at_least "$node_version" "$NODE_VERSION_MINIMUM"; then pass "Node.js meets the runtime lock"; else fail "Node.js is below the runtime lock"; fi

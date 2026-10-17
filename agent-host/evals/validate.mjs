@@ -676,7 +676,7 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
   }
   const judgeFor = (provider) => (provider === "claude" ? judges.for_claude_proposers : judges.default);
   for (const [id, entry] of meta) {
-    const provider = gateway.routes?.[entry.tier]?.provider;
+    const provider = gateway.routes?.[gateway.tiers?.[entry.tier] ?? entry.tier]?.provider;
     if (!provider) {
       bad(`no gateway route for ${id} (tier ${entry.tier})`);
       continue;
@@ -702,7 +702,7 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
   // route equal to that tier's gateway route.
   const covered = new Set(Object.keys(isObject(pilot) && isObject(pilot.cases) ? pilot.cases : {}).filter((id) => meta.has(id)).map((id) => meta.get(id).tier));
   for (const id of compared.filter((candidate) => meta.has(candidate))) {
-    const route = gateway.routes?.[meta.get(id).tier];
+    const route = gateway.routes?.[gateway.tiers?.[meta.get(id).tier] ?? meta.get(id).tier];
     const same = (candidate) => ["provider", "model", "effort"].every((key) => candidate?.[key] === route?.[key]);
     if (compareRoutes.some(same)) covered.add(meta.get(id).tier);
   }

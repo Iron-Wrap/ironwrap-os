@@ -73,3 +73,28 @@ export function fakeAdapter(id: ProviderId, steps: Step[] = [], authMode = id ==
   };
   return adapter;
 }
+
+export const QUALIFICATION_PATH = new URL("../evals/qualification.v1.json", import.meta.url).pathname;
+
+/** A qualification block shaped like `evals/qualification.v1.json`, with synthetic numbers. */
+export function qualification() {
+  return {
+    ledger: {
+      isolated: true,
+      namespace: "eval",
+      requires_run_tag: "eval",
+      per_stage: true,
+      window_hours: 24,
+      team: { calls: 3000, cost_usd: 450 },
+      specialist: { calls: 300, cost_usd: 120, cost_usd_per_call: 3 },
+      judge_key: "eval_judge",
+      judge: { calls: 1500, cost_usd: 120, cost_usd_per_call: 1 },
+    },
+    judge: {
+      instructions: "agent-host/evals/judge.md",
+      default: { provider: "claude", model: "claude-sonnet-5-5", effort: "medium" },
+      for_claude_proposers: { provider: "codex", model: "gpt-6.1-sol", effort: "high" },
+      max_attempts: 3,
+    },
+  };
+}

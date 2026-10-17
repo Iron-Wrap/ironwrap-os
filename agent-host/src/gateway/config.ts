@@ -3,15 +3,9 @@
 // nothing else. The file never holds a secret value.
 
 import { readFileSync } from "node:fs";
-import type { Effort, ProviderId, Tier } from "./types.ts";
+import type { Effort, ProviderId, Route, Tier } from "./types.ts";
 
-export const GATEWAY_CONFIG_SCHEMA = "ironwrap_agent_gateway_config_v1";
-
-export interface Route {
-  provider: ProviderId;
-  model: string;
-  effort: Effort;
-}
+export const GATEWAY_CONFIG_SCHEMA = "ironwrap_agent_gateway_config_v2";
 
 export interface Ceiling {
   calls: number;
@@ -20,6 +14,14 @@ export interface Ceiling {
 
 export interface SpecialistCeiling extends Ceiling {
   costUsdPerCall: number;
+}
+
+export interface SpecialistRouting {
+  tiers: Tier[];
+  /** A route id used instead of the tier's route for every run; null keeps the tier's. */
+  route: string | null;
+  /** Route ids by expected catalog action; a match wins over `route`. */
+  actions: Record<string, string>;
 }
 
 export interface GatewayConfig {
@@ -41,27 +43,49 @@ export interface GatewayConfig {
       chatgptPlans: string[];
     };
   };
-  routes: Record<Tier, Route>;
+  routes: Record<string, Route>;
+  /** Route id per tier; `audit` serves an auditor run that reviews no other run. */
+  tiers: Record<Tier, string>;
+  /** Route id that audits work proposed on each family; always a route of another family. */
+  auditRoutes: Partial<Record<ProviderId, string>>;
   pricingUsdPerMTok: Record<string, { input: number; cachedInput: number; output: number }>;
   ceilings: {
     windowHours: number;
     team: Ceiling;
     specialistDefault: SpecialistCeiling;
     specialists: Record<string, SpecialistCeiling>;
+    /** Shadow runs spend only this budget, and never count toward the live ceilings. */
+    shadow: { team: Ceiling; specialist: SpecialistCeiling };
   };
   /** `authProbeAfterMs`: how long a rejected credential is left alone before one probe call. */
   retry: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; authProbeAfterMs: number };
   timeoutMs: number;
   maxTurns: number;
-  specialists: Record<string, Tier[]>;
+  specialists: Record<string, SpecialistRouting>;
+}
+
+/** The isolated eval books of a qualification run (`agent-host/evals/qualification.v1.json`). */
+export interface Qualification {
+  windowHours: number;
+  team: Ceiling;
+  /** Every specialist's ceiling under `eval:<specialist>`. */
+  specialist: SpecialistCeiling;
+  /** Judge calls book under `eval:<judgeKey>`, which is no registered specialist. */
+  judgeKey: string;
+  judge: SpecialistCeiling;
+  /** `judge.default` scores Codex-proposed runs, `judge.for_claude_proposers` Claude-proposed ones. */
+  judgeRoutes: { default: Route; for_claude_proposers: Route };
 }
 
 const TIERS: Tier[] = ["routine", "hard", "audit"];
+const PROVIDERS: ProviderId[] = ["claude", "codex"];
 export const AUDITOR = "independent_auditor";
 const EFFORTS = new Set<Effort>(["low", "medium", "high", "xhigh", "max"]);
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SPECIALIST_ID = /^[a-z][a-z0-9_]{1,63}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const ROUTE_ID = /^[a-z][a-z0-9_]{1,40}$/;
+const ACTION_ID = /^[a-z][a-z_]*\.[a-z][a-z_]*$/;
 
 export function loadGatewayConfig(path: string): GatewayConfig {
   return parseGatewayConfig(JSON.parse(readFileSync(path, "utf8")));
@@ -73,6 +97,8 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
     "schema",
     "providers",
     "routes",
+    "tiers",
+    "audit_routes",
     "pricing_usd_per_mtok",
     "ceilings",
     "retry",
@@ -89,6 +115,7 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
   const codex = object(providers.codex, "$.providers.codex");
   exactKeys(codex, ["enabled", "auth", "api_key_env", "codex_home_env", "signin_max_age_hours", "chatgpt_plans"], "$.providers.codex");
 
+  const routes = parseRoutes(root.routes);
   const config: GatewayConfig = {
     providers: {
       claude: {
@@ -108,18 +135,21 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
         chatgptPlans: plans(codex.chatgpt_plans, "$.providers.codex.chatgpt_plans"),
       },
     },
-    routes: parseRoutes(root.routes),
+    routes,
+    tiers: parseTiers(root.tiers, routes),
+    auditRoutes: parseAuditRoutes(root.audit_routes, routes),
     pricingUsdPerMTok: {},
     ceilings: parseCeilings(root.ceilings),
     retry: parseRetry(root.retry),
     timeoutMs: positive(root.timeout_ms, "$.timeout_ms"),
     maxTurns: positive(root.max_turns, "$.max_turns"),
-    specialists: parseSpecialists(root.specialists),
+    specialists: parseSpecialists(root.specialists, routes),
   };
 
   const pricing = object(root.pricing_usd_per_mtok, "$.pricing_usd_per_mtok");
   for (const [model, value] of Object.entries(pricing)) {
     const path = `$.pricing_usd_per_mtok.${model}`;
+    if (!MODEL_ID.test(model)) fail(path, "is not a model id");
     const price = object(value, path);
     exactKeys(price, ["input", "cached_input", "output"], path);
     config.pricingUsdPerMTok[model] = {
@@ -128,61 +158,150 @@ export function parseGatewayConfig(raw: unknown): GatewayConfig {
       output: nonNegative(price.output, `${path}.output`),
     };
   }
-
-  // The independent auditor must run on a different model family than every proposer.
-  for (const tier of ["routine", "hard"] as const) {
-    if (config.routes.audit.provider === config.routes[tier].provider) {
-      fail("$.routes.audit.provider", `must differ from the ${tier} provider`);
+  for (const [id, route] of Object.entries(config.routes)) {
+    if (route.provider === "codex" && !Object.hasOwn(config.pricingUsdPerMTok, route.model)) {
+      fail(`$.routes.${id}.model`, "codex models need a pricing_usd_per_mtok entry for cost ceilings");
     }
   }
-  for (const tier of TIERS) {
-    const route = config.routes[tier];
-    if (route.provider === "codex" && !config.pricingUsdPerMTok[route.model]) {
-      fail(`$.routes.${tier}.model`, "codex models need a pricing_usd_per_mtok entry for cost ceilings");
-    }
+  // Independence is per run: work proposed on a family is audited on that family's audit route,
+  // so every family a proposer can run on needs one.
+  for (const id of proposerRoutes(config)) {
+    const family = config.routes[id].provider;
+    if (!Object.hasOwn(config.auditRoutes, family)) fail(`$.audit_routes.${family}`, `is required: route ${id} proposes on ${family}`);
   }
   for (const id of Object.keys(config.ceilings.specialists)) {
-    if (!config.specialists[id]) fail(`$.ceilings.specialists.${id}`, "is not a registered specialist");
+    if (!Object.hasOwn(config.specialists, id)) fail(`$.ceilings.specialists.${id}`, "is not a registered specialist");
   }
   return config;
 }
 
-function parseRoutes(raw: unknown): Record<Tier, Route> {
+/** Every route a proposing run can take: the routine and hard tiers', and each proposer's own and action routes. */
+export function proposerRoutes(config: GatewayConfig): string[] {
+  const ids = [config.tiers.routine, config.tiers.hard];
+  for (const [id, specialist] of Object.entries(config.specialists)) {
+    if (id === AUDITOR) continue;
+    if (specialist.route !== null) ids.push(specialist.route);
+    ids.push(...Object.values(specialist.actions));
+  }
+  return ids;
+}
+
+/**
+ * Parses the `ledger` and `judge` blocks of the qualification config for an eval gateway. The
+ * eval books must be isolated and tagged, and a Codex judge needs a price like any Codex route.
+ */
+export function parseQualification(raw: { ledger: unknown; judge: unknown }, config: GatewayConfig): Qualification {
+  const ledgerPath = "qualification.ledger";
+  const ledger = object(raw.ledger, ledgerPath);
+  exactKeys(ledger, ["isolated", "namespace", "requires_run_tag", "per_stage", "window_hours", "team", "specialist", "judge_key", "judge"], ledgerPath);
+  if (ledger.isolated !== true) fail(`${ledgerPath}.isolated`, "must be true: eval spend never shares the production books");
+  if (ledger.namespace !== "eval") fail(`${ledgerPath}.namespace`, "must be eval");
+  if (ledger.requires_run_tag !== "eval") fail(`${ledgerPath}.requires_run_tag`, "must be eval");
+  bool(ledger.per_stage, `${ledgerPath}.per_stage`);
+  const judgeKey = text(ledger.judge_key, `${ledgerPath}.judge_key`);
+  if (!SPECIALIST_ID.test(judgeKey)) fail(`${ledgerPath}.judge_key`, "is not a ledger key");
+  if (Object.hasOwn(config.specialists, judgeKey)) fail(`${ledgerPath}.judge_key`, "must not be a registered specialist");
+
+  const judgePath = "qualification.judge";
+  const judge = object(raw.judge, judgePath);
+  exactKeys(judge, ["instructions", "default", "for_claude_proposers", "max_attempts"], judgePath);
+  text(judge.instructions, `${judgePath}.instructions`);
+  positive(judge.max_attempts, `${judgePath}.max_attempts`);
+  const judgeRoutes = {
+    default: parseRoute(judge.default, `${judgePath}.default`),
+    for_claude_proposers: parseRoute(judge.for_claude_proposers, `${judgePath}.for_claude_proposers`),
+  };
+  for (const [field, route] of Object.entries(judgeRoutes)) {
+    if (route.provider === "codex" && !Object.hasOwn(config.pricingUsdPerMTok, route.model)) {
+      fail(`${judgePath}.${field}.model`, "codex models need a pricing_usd_per_mtok entry for cost ceilings");
+    }
+  }
+  return {
+    windowHours: positive(ledger.window_hours, `${ledgerPath}.window_hours`),
+    team: teamCeiling(ledger.team, `${ledgerPath}.team`),
+    specialist: specialistCeiling(ledger.specialist, `${ledgerPath}.specialist`),
+    judgeKey,
+    judge: specialistCeiling(ledger.judge, `${ledgerPath}.judge`),
+    judgeRoutes,
+  };
+}
+
+export function parseRoute(raw: unknown, path: string): Route {
+  const route = object(raw, path);
+  exactKeys(route, ["provider", "model", "effort"], path);
+  const model = text(route.model, `${path}.model`);
+  if (!MODEL_ID.test(model)) fail(`${path}.model`, "is not a model id");
+  const effort = text(route.effort, `${path}.effort`) as Effort;
+  if (!EFFORTS.has(effort)) fail(`${path}.effort`, "is not an effort level");
+  return { provider: oneOf(route.provider, PROVIDERS, `${path}.provider`), model, effort };
+}
+
+function parseRoutes(raw: unknown): Record<string, Route> {
   const routes = object(raw, "$.routes");
-  exactKeys(routes, TIERS, "$.routes");
-  const result = {} as Record<Tier, Route>;
-  for (const tier of TIERS) {
-    const path = `$.routes.${tier}`;
-    const route = object(routes[tier], path);
-    exactKeys(route, ["provider", "model", "effort"], path);
-    const model = text(route.model, `${path}.model`);
-    if (!MODEL_ID.test(model)) fail(`${path}.model`, "is not a model id");
-    const effort = text(route.effort, `${path}.effort`) as Effort;
-    if (!EFFORTS.has(effort)) fail(`${path}.effort`, "is not an effort level");
-    result[tier] = {
-      provider: oneOf(route.provider, ["claude", "codex"] as const, `${path}.provider`),
-      model,
-      effort,
-    };
+  const result: Record<string, Route> = {};
+  for (const [id, value] of Object.entries(routes)) {
+    if (!ROUTE_ID.test(id)) fail(`$.routes.${id}`, "is not a route id");
+    result[id] = parseRoute(value, `$.routes.${id}`);
+  }
+  return result;
+}
+
+function routeRef(value: unknown, routes: Record<string, Route>, path: string): string {
+  const id = text(value, path);
+  if (!Object.hasOwn(routes, id)) fail(path, `names no route in $.routes`);
+  return id;
+}
+
+function parseTiers(raw: unknown, routes: Record<string, Route>): Record<Tier, string> {
+  const tiers = object(raw, "$.tiers");
+  exactKeys(tiers, TIERS, "$.tiers");
+  return {
+    routine: routeRef(tiers.routine, routes, "$.tiers.routine"),
+    hard: routeRef(tiers.hard, routes, "$.tiers.hard"),
+    audit: routeRef(tiers.audit, routes, "$.tiers.audit"),
+  };
+}
+
+function parseAuditRoutes(raw: unknown, routes: Record<string, Route>): Partial<Record<ProviderId, string>> {
+  const auditRoutes = object(raw, "$.audit_routes");
+  const result: Partial<Record<ProviderId, string>> = {};
+  for (const [family, value] of Object.entries(auditRoutes)) {
+    const path = `$.audit_routes.${family}`;
+    if (!PROVIDERS.includes(family as ProviderId)) fail(path, `is not a model family (${PROVIDERS.join(", ")})`);
+    const id = routeRef(value, routes, path);
+    if (routes[id].provider === family) fail(path, `must name a route of another family than ${family}`);
+    result[family as ProviderId] = id;
   }
   return result;
 }
 
 function parseCeilings(raw: unknown): GatewayConfig["ceilings"] {
   const ceilings = object(raw, "$.ceilings");
-  exactKeys(ceilings, ["window_hours", "team", "specialist_default", "specialists"], "$.ceilings");
+  exactKeys(ceilings, ["window_hours", "team", "specialist_default", "specialists", "shadow"], "$.ceilings");
   const specialists: Record<string, SpecialistCeiling> = {};
   for (const [id, value] of Object.entries(object(ceilings.specialists, "$.ceilings.specialists"))) {
+    // Checked before the key is stored: a `__proto__` key would replace the record's prototype.
+    if (!SPECIALIST_ID.test(id)) fail(`$.ceilings.specialists.${id}`, "is not a specialist id");
     specialists[id] = specialistCeiling(value, `$.ceilings.specialists.${id}`);
   }
-  const team = object(ceilings.team, "$.ceilings.team");
-  exactKeys(team, ["calls", "cost_usd"], "$.ceilings.team");
+  const shadow = object(ceilings.shadow, "$.ceilings.shadow");
+  exactKeys(shadow, ["team", "specialist"], "$.ceilings.shadow");
   return {
     windowHours: positive(ceilings.window_hours, "$.ceilings.window_hours"),
-    team: { calls: positive(team.calls, "$.ceilings.team.calls"), costUsd: positive(team.cost_usd, "$.ceilings.team.cost_usd") },
+    team: teamCeiling(ceilings.team, "$.ceilings.team"),
     specialistDefault: specialistCeiling(ceilings.specialist_default, "$.ceilings.specialist_default"),
     specialists,
+    shadow: {
+      team: teamCeiling(shadow.team, "$.ceilings.shadow.team"),
+      specialist: specialistCeiling(shadow.specialist, "$.ceilings.shadow.specialist"),
+    },
   };
+}
+
+function teamCeiling(raw: unknown, path: string): Ceiling {
+  const team = object(raw, path);
+  exactKeys(team, ["calls", "cost_usd"], path);
+  return { calls: positive(team.calls, `${path}.calls`), costUsd: positive(team.cost_usd, `${path}.cost_usd`) };
 }
 
 function specialistCeiling(raw: unknown, path: string): SpecialistCeiling {
@@ -210,22 +329,34 @@ function parseRetry(raw: unknown): GatewayConfig["retry"] {
   return parsed;
 }
 
-function parseSpecialists(raw: unknown): Record<string, Tier[]> {
+function parseSpecialists(raw: unknown, routes: Record<string, Route>): Record<string, SpecialistRouting> {
   const specialists = object(raw, "$.specialists");
-  const result: Record<string, Tier[]> = {};
-  for (const [id, tiers] of Object.entries(specialists)) {
+  const result: Record<string, SpecialistRouting> = {};
+  for (const [id, value] of Object.entries(specialists)) {
     const path = `$.specialists.${id}`;
     if (!SPECIALIST_ID.test(id)) fail(path, "is not a specialist id");
-    if (!Array.isArray(tiers) || tiers.length === 0) fail(path, "must list at least one tier");
-    const parsed = tiers.map((tier, index) => oneOf(tier, TIERS, `${path}[${index}]`));
-    if (new Set(parsed).size !== parsed.length) fail(path, "lists a tier twice");
-    // The auditor runs only on the audit tier, and nobody else does, so audit and proposal never
-    // share a model family.
+    const entry = object(value, path);
+    exactKeys(entry, ["tiers", "route", "actions"], path);
+    const tiers = entry.tiers;
+    if (!Array.isArray(tiers) || tiers.length === 0) fail(`${path}.tiers`, "must list at least one tier");
+    const parsed = (tiers as unknown[]).map((tier, index) => oneOf(tier, TIERS, `${path}.tiers[${index}]`));
+    if (new Set(parsed).size !== parsed.length) fail(`${path}.tiers`, "lists a tier twice");
+    // The auditor runs only on the audit tier, and nobody else does, so an audit is always an
+    // auditor run and its route is picked per run by the work under review.
     if (id === AUDITOR && (parsed.length !== 1 || parsed[0] !== "audit")) {
-      fail(path, "the independent auditor must use exactly the audit tier");
+      fail(`${path}.tiers`, "the independent auditor must use exactly the audit tier");
     }
-    if (id !== AUDITOR && parsed.includes("audit")) fail(path, "only the independent auditor may use the audit tier");
-    result[id] = parsed;
+    if (id !== AUDITOR && parsed.includes("audit")) fail(`${path}.tiers`, "only the independent auditor may use the audit tier");
+    const route = entry.route === null ? null : routeRef(entry.route, routes, `${path}.route`);
+    const actions: Record<string, string> = {};
+    for (const [action, ref] of Object.entries(object(entry.actions, `${path}.actions`))) {
+      if (!ACTION_ID.test(action)) fail(`${path}.actions.${action}`, "is not an action id");
+      actions[action] = routeRef(ref, routes, `${path}.actions.${action}`);
+    }
+    if (id === AUDITOR && (route !== null || Object.keys(actions).length > 0)) {
+      fail(path, "the independent auditor is routed by tiers.audit and audit_routes only");
+    }
+    result[id] = { tiers: parsed, route, actions };
   }
   if (!result[AUDITOR]) fail(`$.specialists.${AUDITOR}`, "is required");
   return result;

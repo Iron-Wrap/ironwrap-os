@@ -89,6 +89,8 @@ export function okResult(request: GatewayRequest, output: unknown = RUN_OUTPUT):
     output,
     specialist: request.specialist,
     tier: request.tier,
+    routeId: "codex_sol",
+    reviewOf: request.reviewOf ?? null,
     provider: "codex",
     model: "gpt-6.1-sol",
     modelsUsed: [],

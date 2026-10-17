@@ -294,8 +294,9 @@ and the runner implements them.
   it on the same ledger instance, and repeats the gateway's served-model (`modelsUsed`) check.
 - **Ledger.** Qualification books on its own ledger: the `eval` key namespace, refused unless the run
   carries the `eval` tag, never readable by production policy, and one ledger file per stage
-  (`per_stage`) so a window never mixes stages. The namespace and the run tag are gateway
-  requirements the runtime does not implement yet. Judge calls book under `judge_key` and count toward
+  (`per_stage`) so a window never mixes stages. The gateway implements the namespace and the run tag:
+  an eval gateway (`qualification` option) books `eval:` keys in `gateway-usage-eval.jsonl` and refuses
+  untagged runs, and the runner gives each stage its own state directory. Judge calls book under `judge_key` and count toward
   the stage's team ceiling. Production ceilings are untouched. The ledger isolates accounting only:
   the runs still draw on the same Claude and Codex subscription quota as every other session.
 - **Pacing.** `concurrency` caps parallel calls per provider. A stage starts, and a paused stage
@@ -320,8 +321,8 @@ and the runner implements them.
     `redteam_cases` red-team case ids on every route in `routes`, one model batch at a time, with
     the Claude and Codex usage meters read before and after each batch. A comparison run uses a
     run configuration whose route for that tier is the compared model and which carries no audit
-    route. `parseGatewayConfig` rejects such a configuration (it requires an audit route on another
-    provider than the hard route), so the runner builds it in code: an open gateway requirement.
+    route. The eval gateway takes that as a per-batch run configuration (`tierRoutes`), and a
+    comparison batch simply runs no audit.
   - A route is complete only when it scored exactly those case ids at repetition 1. The report
     ranks each specialist's complete routes first, then by catastrophes, mean score, and cost per
     run, and shows the golden and red-team means apart; the orchestrator picks the production route

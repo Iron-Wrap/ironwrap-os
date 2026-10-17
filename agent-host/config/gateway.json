@@ -1,5 +1,5 @@
 {
-  "schema": "ironwrap_agent_gateway_config_v1",
+  "schema": "ironwrap_agent_gateway_config_v2",
   "providers": {
     "claude": {
       "enabled": true,
@@ -18,10 +18,12 @@
     }
   },
   "routes": {
-    "routine": { "provider": "codex", "model": "gpt-6.1-sol", "effort": "medium" },
-    "hard": { "provider": "codex", "model": "gpt-6-astra", "effort": "high" },
-    "audit": { "provider": "claude", "model": "claude-opus-5-5", "effort": "high" }
+    "codex_sol": { "provider": "codex", "model": "gpt-6.1-sol", "effort": "medium" },
+    "codex_astra": { "provider": "codex", "model": "gpt-6-astra", "effort": "high" },
+    "claude_opus": { "provider": "claude", "model": "claude-opus-5-5", "effort": "high" }
   },
+  "tiers": { "routine": "codex_sol", "hard": "codex_astra", "audit": "claude_opus" },
+  "audit_routes": { "codex": "claude_opus", "claude": "codex_astra" },
   "pricing_usd_per_mtok": {
     "gpt-6.1-sol": { "input": 2, "cached_input": 0.2, "output": 10 },
     "gpt-6-astra": { "input": 10, "cached_input": 1, "output": 50 }
@@ -34,27 +36,31 @@
       "orchestrator": { "calls": 1000, "cost_usd": 60, "cost_usd_per_call": 3 },
       "lead_concierge": { "calls": 600, "cost_usd": 40, "cost_usd_per_call": 3 },
       "independent_auditor": { "calls": 800, "cost_usd": 60, "cost_usd_per_call": 3 }
+    },
+    "shadow": {
+      "team": { "calls": 300, "cost_usd": 15 },
+      "specialist": { "calls": 60, "cost_usd": 3, "cost_usd_per_call": 0.5 }
     }
   },
   "retry": { "max_attempts": 3, "base_delay_ms": 2000, "max_delay_ms": 60000, "auth_probe_after_ms": 900000 },
   "timeout_ms": 240000,
   "max_turns": 16,
   "specialists": {
-    "orchestrator": ["routine", "hard"],
-    "market_analyst": ["routine", "hard"],
-    "lead_concierge": ["routine", "hard"],
-    "estimator": ["routine", "hard"],
-    "measurement_design": ["routine", "hard"],
-    "proposal_contract": ["routine", "hard"],
-    "purchasing_inventory": ["routine", "hard"],
-    "shop_planner": ["routine", "hard"],
-    "scheduler_dispatcher": ["routine", "hard"],
-    "field_safety": ["routine", "hard"],
-    "quality_inspector": ["routine", "hard"],
-    "billing_reconciliation": ["routine", "hard"],
-    "compliance": ["routine", "hard"],
-    "customer_care_warranty": ["routine", "hard"],
-    "marketing_reputation": ["routine", "hard"],
-    "independent_auditor": ["audit"]
+    "orchestrator": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "market_analyst": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "lead_concierge": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "estimator": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "measurement_design": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "proposal_contract": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "purchasing_inventory": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "shop_planner": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "scheduler_dispatcher": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "field_safety": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "quality_inspector": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "billing_reconciliation": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "compliance": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "customer_care_warranty": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "marketing_reputation": { "tiers": ["routine", "hard"], "route": null, "actions": {} },
+    "independent_auditor": { "tiers": ["audit"], "route": null, "actions": {} }
   }
 }

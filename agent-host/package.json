@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node src/host/main.ts",
     "smoke": "node src/host/smoke.ts",
+    "qualify": "node src/replay/cli.ts qualify",
+    "replay": "node src/replay/cli.ts replay",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

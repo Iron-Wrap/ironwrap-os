@@ -3196,10 +3196,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_console",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "IW-24182: the aerial report didn't give hip lengths. Use the architect's plans for the hips and mark them measured so the estimator can price it today."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [
@@ -3474,10 +3480,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_console",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "IW-24196 Larkspur bungalow: customer wants SL-16 with snow guards. Rafters are 2x6 at 24 inches. Confirm the framing is fine for snow load with the guards so I can sign the proposal."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [

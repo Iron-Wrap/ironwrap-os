@@ -28,6 +28,23 @@ const PLAYBOOK_HEADINGS = [
   "Receipt",
 ];
 const SIGNAL_KINDS = new Set(["event", "watch", "owner_request", "handoff"]);
+// The app roles a person's ask or press names (the Worker writes the role, never the user).
+const APP_ROLES = new Set(["owner", "ops", "sales", "production", "accounting", "field"]);
+// Signal actors by type: the role they carry, their ref, and whether the OS authenticated them.
+const ACTOR_TYPES = new Map([
+  ["owner", { roles: new Set(["owner"]), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["staff", { roles: new Set([...APP_ROLES].filter((role) => role !== "owner")), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  // A crew member signed in to the crew app: on an ask, or on an event the crew app writes.
+  ["worker", { roles: new Set(["field"]), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["customer", { roles: new Set([null]), ref: /^customer:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["external", { roles: new Set([null]), ref: /^channel:(?:email|sms|web|voice)$/, authenticated: false }],
+]);
+function validActor(actor) {
+  if (!actor || typeof actor !== "object" || Array.isArray(actor)) return false;
+  const rule = ACTOR_TYPES.get(actor.type);
+  const keys = Object.keys(actor).sort().join(",");
+  return Boolean(rule) && keys === "authenticated,ref,role,type" && rule.roles.has(actor.role) && rule.ref.test(actor.ref ?? "") && actor.authenticated === rule.authenticated;
+}
 const TRUST = new Set(["owned", "external_verified", "external_unverified", "untrusted_text"]);
 const DECISIONS = new Set(["propose", "abstain", "escalate", "ignore"]);
 const OUTCOMES = new Set(["succeeded", "failed", "unknown", "abstained"]);
@@ -416,6 +433,27 @@ function checkCase(item, context) {
   }
   if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
     fail(`${label}: signal.content needs text or request`);
+  }
+  // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
+  // firings and specialist handoffs. Only an external sender is unauthenticated.
+  const actor = signal.actor ?? null;
+  if (actor !== null && !validActor(actor)) {
+    fail(`${label}: signal.actor must be { type, role, ref, authenticated } as the Worker writes it (${[...ACTOR_TYPES.keys()].join(", ")})`);
+  }
+  if (["watch", "handoff"].includes(signal.kind) && actor !== null) fail(`${label}: a ${signal.kind} signal has no actor; its source says who`);
+  // A person's ask goes to the face (`ask`) and a press on a view action to the action's owning
+  // specialist (`request`). Both name the signed-in person; crew can ask but cannot press.
+  if (signal.kind === "owner_request") {
+    if (signal.source === "ask" && id !== "orchestrator") fail(`${label}: an ask goes to the orchestrator; a press to ${id} has source "request"`);
+    if (!["ask", "request"].includes(signal.source)) fail(`${label}: an owner_request has source "ask" or "request"`);
+    const requesters = signal.source === "ask" ? ["owner", "staff", "worker"] : ["owner", "staff"];
+    if (!requesters.includes(actor?.type) || (signal.source === "request" && actor.role === "field")) {
+      const named = requesters.length > 2 ? `${requesters.slice(0, -1).join(", ")}, or ${requesters.at(-1)}` : requesters.join(" or ");
+      fail(`${label}: an owner_request ${signal.source} names its requester as an ${named} actor${signal.source === "request" ? " that may press view actions (not field)" : ""}`);
+    }
+    if (actor && !actor.ref?.startsWith("person:")) fail(`${label}: an owner_request names the signed-in person (ref person:<id>)`);
+  } else if (["ask", "request"].includes(signal.source)) {
+    fail(`${label}: source "${signal.source}" belongs to an owner_request`);
   }
   if (item.clock !== undefined) {
     const clock = item.clock;

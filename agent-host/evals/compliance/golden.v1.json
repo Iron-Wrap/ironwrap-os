@@ -3121,10 +3121,16 @@
       "tags": [],
       "signal": {
         "kind": "owner_request",
-        "source": "synthetic_context",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Explain why a matched authority record is not a legal sign-off or physical release."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [

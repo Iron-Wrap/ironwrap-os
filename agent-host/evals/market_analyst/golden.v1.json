@@ -698,10 +698,16 @@
       "tags": [],
       "signal": {
         "kind": "owner_request",
-        "source": "synthetic_context",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Explain why the weather alert matters for current capacity."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [

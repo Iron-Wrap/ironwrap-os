@@ -4142,9 +4142,10 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -4463,9 +4464,10 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -5331,14 +5333,9 @@
       "signal": {
         "kind": "handoff",
         "source": "orchestrator",
-        "actor": {
-          "type": "crew",
-          "ref": "worker:W-701",
-          "authenticated": true
-        },
         "at": "PT0M",
         "content": {
-          "text": "Ya subí las fotos de la contrapunta de la chimenea y del tubo de ventilación. ¿Puedes liberar el punto de control 4?"
+          "text": "Ya subí las fotos de la contrapunta de la chimenea y del tubo de ventilación. ¿Puedes liberar el punto de control 4?\nRelayed by the face from a crew-phone ask by person:W-701."
         }
       },
       "facts": [
@@ -5470,7 +5467,7 @@
           }
         },
         {
-          "fact_id": "worker:W-701",
+          "fact_id": "person:W-701",
           "kind": "worker",
           "version": 3,
           "trust": "owned",
@@ -5528,7 +5525,7 @@
             "work_package:WP-5210",
             "evidence:EV-65010",
             "evidence:EV-65011",
-            "worker:W-701"
+            "person:W-701"
           ],
           "needs_from_you": "none"
         },

@@ -3591,10 +3591,16 @@
       "tags": [],
       "signal": {
         "kind": "owner_request",
-        "source": "synthetic_context",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Explain what the current report establishes without deciding cause or warranty."
+        },
+        "actor": {
+          "type": "staff",
+          "role": "ops",
+          "ref": "person:P-133",
+          "authenticated": true
         }
       },
       "facts": [
@@ -3612,6 +3618,19 @@
             "cause_verified": false,
             "coverage_decided": false,
             "reported_by": "verified customer"
+          }
+        },
+        {
+          "fact_id": "person:P-133",
+          "kind": "person_role",
+          "version": 1,
+          "trust": "owned",
+          "observed_at": "-P30D",
+          "fresh_until": "P30D",
+          "data": {
+            "name": "Priya Natarajan",
+            "role": "ops",
+            "preferred_language": "en"
           }
         }
       ],

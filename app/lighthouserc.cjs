@@ -52,21 +52,12 @@ const assertions = {
   "total-blocking-time": ["error", { maxNumericValue: 250, aggregationMethod: "median-run" }],
 };
 
-// Resolved on access, not at load. `@playwright/test` is the Playwright *runner*, and
-// importing it opens a connection to a test server that is not there when anything other
-// than Playwright loads this file — harmless, but it dumps an ECONNREFUSED stack into the
-// unit-test output that reads like a real failure. Only the code that actually launches a
-// browser needs the path.
-function resolveChromePath() {
-  if (process.env.LHCI_CHROME_PATH) return process.env.LHCI_CHROME_PATH;
-  return require("@playwright/test").chromium.executablePath();
-}
-
 /**
  * One measurement profile per serving protocol. Everything a verdict depends on — the run
  * count, the emulated device/CPU/network throttle and every threshold — is shared by
  * construction, so the only difference an A/B between two profiles can measure is the
- * protocol itself.
+ * protocol itself. The measuring browser is shared the same way: one Chrome for Testing
+ * build, pinned in scripts/chrome-for-testing.json (see scripts/lighthouse-chrome.mjs).
  */
 function profileFor(protocol) {
   const scheme = schemes[protocol];
@@ -78,9 +69,6 @@ function profileFor(protocol) {
     protocol,
     url: `${baseUrl}/today`,
     numberOfRuns,
-    get chromePath() {
-      return resolveChromePath();
-    },
     settings,
     assertions,
     runnerNormalization,

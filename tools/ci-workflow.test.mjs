@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { cacheDir, pin, PIN_PATH } from "../app/scripts/lighthouse-chrome.mjs";
+import { ciScope } from "./ci-scope.mjs";
 
 // Pins the shape of .github/workflows/ci.yml (IRO-267): nothing pinned it before
 // this split, unlike tools/deploy-workflow.test.mjs for deploy.yml.
@@ -586,4 +590,52 @@ test("the static-plus-matrix job count stays at or under 100 - tools/release-pro
     totalJobCount <= 100,
     `${totalJobCount} jobs exceeds the unpaged actions/runs/<id>/jobs?per_page=100 the release path reads`,
   );
+});
+
+// The paired-device budget is a regression gate, so the browser it reads the bundle with must
+// hold still: one exact Chrome for Testing build, pinned in app/scripts/chrome-for-testing.json
+// and nowhere else. It used to be Playwright's Chromium, which moves with every
+// @playwright/test minor (#412: Chrome 149 to 156 put main below the budget on an unchanged
+// bundle).
+test("the paired-device Lighthouse leg measures with the pinned Chrome for Testing build, not Playwright's Chromium", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  assert.equal(PIN_PATH, "app/scripts/chrome-for-testing.json");
+  assert.equal(pin.browser, "chrome");
+  assert.match(pin.buildId, /^\d+\.\d+\.\d+\.\d+$/, "an exact build, never a channel or milestone");
+
+  const job = section(workflow, "paired-device-lighthouse");
+  assert.doesNotMatch(job, /playwright install/);
+  const commands = runCommands(job);
+  const install = commands.indexOf("node app/scripts/lighthouse-chrome.mjs");
+  const measure = commands.indexOf("npm run test:lighthouse --prefix app");
+  assert.ok(install >= 0, "the job must install the pinned build");
+  assert.ok(measure > install, "the pinned build must be installed before the measurement");
+
+  // Cached under the pin alone, in the directory lighthouse-chrome.mjs installs into.
+  const cachePath = job.match(/^ {10}path: (~\/\.cache\/chrome-for-testing)$/m);
+  assert.ok(cachePath, "the pinned build must be cached");
+  assert.equal(cachePath[1].replace(/^~/, homedir()), cacheDir);
+  assert.match(
+    job,
+    /^ {10}key: \$\{\{ runner\.os \}\}-chrome-for-testing-\$\{\{ hashFiles\('app\/scripts\/chrome-for-testing\.json'\) \}\}$/m,
+  );
+
+  // The install step hands the measurement its executable through GITHUB_ENV; no workflow
+  // value may point the measurement at a different one.
+  assert.doesNotMatch(workflow, /LHCI_CHROME_PATH:/);
+});
+
+test("a change to the browser pin alone still runs the paired-device Lighthouse leg", () => {
+  const scope = ciScope({ event: "pull_request", changedFiles: [PIN_PATH] });
+  assert.equal(scope.app, true);
+  assert.equal(SCOPED_JOBS["paired-device-lighthouse"], "app");
+});
+
+test("the Lighthouse harness A/B measures with the same pinned build and reruns when the pin moves", async () => {
+  const ab = await readFile(new URL("lighthouse-harness-ab.yml", workflowsDirUrl), "utf8");
+  assert.doesNotMatch(ab, /playwright install/);
+  assert.match(ab, /^ {8}run: node app\/scripts\/lighthouse-chrome\.mjs$/m);
+  for (const path of [PIN_PATH, "app/scripts/lighthouse-chrome.mjs"]) {
+    assert.ok(ab.includes(`\n      - ${path}\n`), `lighthouse-harness-ab.yml must rerun when ${path} changes`);
+  }
 });

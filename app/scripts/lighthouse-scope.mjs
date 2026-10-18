@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { PIN_PATH } from "./lighthouse-chrome.mjs";
+
 /**
  * The paired-device budget is a product rule, but the reading it is asserted against is a
  * timing measurement taken on a shared runner, and `total-blocking-time` is the one audit
@@ -26,11 +28,13 @@ import { fileURLToPath } from "node:url";
  *
  * This decides whether there is anything new to measure. The built artifact and the harness
  * that measures it are both functions of the `app/` tree — sources, `public/`, the Vite and
- * TypeScript configuration, `package-lock.json`, `lighthouserc.cjs` and `scripts/` all live
- * there — and of this workflow file, which pins the Node and Chromium the reading is taken
- * with. When neither changed against the commit the head is being compared to, the previous
- * commit already carries a verdict for these exact bytes and this job has no new question to
- * ask.
+ * TypeScript configuration, `package-lock.json`, `lighthouserc.cjs`, `scripts/` and the Chrome
+ * for Testing build pinned in `scripts/chrome-for-testing.json` all live there — and of this
+ * workflow file, which pins the Node the reading is taken with and installs that browser. The
+ * browser pin is also compared on its own, so a job that measures because the browser moved
+ * says so: a new browser moves the reading without one byte of the bundle changing. When
+ * nothing changed against the commit the head is being compared to, the previous commit
+ * already carries a verdict for these exact bytes and this job has no new question to ask.
  *
  * What this deliberately does NOT do is skip a commit that touches `app/`. Every change to
  * the PWA is still measured, once, on the commit that makes it.
@@ -38,6 +42,9 @@ import { fileURLToPath } from "node:url";
 export function measurementScope({ head, base }) {
   const differences = [];
   if (head.appTree !== base.appTree) differences.push("app/");
+  if (head.browser !== base.browser) {
+    differences.push(`the browser pin (${base.browser ?? "unset"} -> ${head.browser ?? "unset"})`);
+  }
   if (head.workflowBlob !== base.workflowBlob) differences.push(".github/workflows/ci.yml");
 
   if (differences.length === 0) {
@@ -73,7 +80,23 @@ export function readTreeState(ref, { git = gitShow } = {}) {
   return {
     appTree: git(["rev-parse", `${ref}:app`]),
     workflowBlob: git(["rev-parse", `${ref}:.github/workflows/ci.yml`]),
+    browser: readBrowserPin(ref, git),
   };
+}
+
+// `null` when the ref has no readable pin, as on the commits before it existed. Against a
+// readable pin on the other side that is a difference, so the job measures rather than skips.
+function readBrowserPin(ref, git) {
+  // ls-tree prints nothing for a path the ref lacks; `git show` would log a "fatal:" line.
+  // --full-tree reads the path from the repository root, as `<ref>:<path>` does, whatever
+  // directory this runs from.
+  if (!git(["ls-tree", "--full-tree", "--name-only", ref, "--", PIN_PATH])) return null;
+  try {
+    const { browser, buildId } = JSON.parse(git(["show", `${ref}:${PIN_PATH}`]));
+    return `${browser}@${buildId}`;
+  } catch {
+    return null;
+  }
 }
 
 function gitShow(args) {

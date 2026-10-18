@@ -12,11 +12,13 @@ import {
   SESSION_TTL_SECONDS,
   type AppEnv,
   type AppDeviceRecord,
+  type AppRole,
   type AppTenantPublic,
   type AppUserRecord,
   type AuthContext,
   type AuthRequestContext,
   type ProvisionAppUserInput,
+  appUserIdentities,
   permissionsForRole,
 } from "./app-types.ts";
 
@@ -722,6 +724,37 @@ export async function logoutAppSession(req: Request, env: AppEnv, auth: AuthCont
 
 export function validAppCsrf(req: Request, auth: AuthContext): boolean {
   return constantTimeEqual(req.headers.get("x-csrf-token") ?? "", auth.csrfToken);
+}
+
+export interface PersonSession {
+  userId: string;
+  role: AppRole;
+  identities: string[];
+}
+
+/**
+ * The caller is a person only when the request carries the cookie session a sign-in created: a
+ * well-formed token whose keyed hash is this session's hash, the CSRF token derived from that same
+ * token, and a live session row for the same user. A desktop connector, an agent host, a service
+ * token or the effect runtime never holds one. The role is the user's role right now. People-only
+ * writes (a crew stop release, a failed Newo handoff resolution) admit nothing else.
+ */
+export async function personCookieSession(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<PersonSession | null> {
+  const token = auth.rawSessionToken;
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  if ((await sessionHashFor(env, token)) !== auth.session.session_hash) return null;
+  if ((await csrfTokenFor(env, token)) !== auth.csrfToken) return null;
+  const live = await authStore.findActiveSession(
+    env,
+    auth.session.session_hash,
+    auth.session.tenant_id,
+    new Date().toISOString(),
+  );
+  if (!live || live.user_id !== auth.session.user_id) return null;
+  return { userId: live.user_id, role: live.role, identities: appUserIdentities(live) };
 }
 
 export function expiredSessionCookie(): string {

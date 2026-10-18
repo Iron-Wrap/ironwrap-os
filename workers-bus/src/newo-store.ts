@@ -490,6 +490,28 @@ export async function countOpenNewoDeadLetters(env: Env): Promise<number> {
   return Number(row?.count ?? 0);
 }
 
+/**
+ * The tenant whose people resolve this deployment's failed Newo handoffs. A Newo session carries
+ * no tenant of its own: one deployment serves one tenant and the app session is bound to it, so
+ * only that tenant's resolutions retire a failed handoff.
+ */
+export function newoTenantId(env: Env): string {
+  return (env.APP_TENANT_ID ?? "ironwrap").trim();
+}
+
+/**
+ * A failed handoff stays open until a person of this deployment's tenant records how it ended
+ * (migration 0151). There is no lookback window: an old failure nobody resolved is still open.
+ * The reconcile count and the operations list share this one predicate; bind `newoTenantId` to
+ * its placeholder.
+ */
+export const UNRESOLVED_FAILED_HANDOFF = `handoff_status = 'failed'
+         AND NOT EXISTS (
+           SELECT 1 FROM newo_handoff_resolutions resolution
+            WHERE resolution.tenant_id = ? AND resolution.session_id = newo_sessions.session_id
+         )`;
+
+/** `failed_handoffs` counts only the failed handoffs no person has resolved. */
 export async function newoOperationalCounts(env: Env): Promise<{
   sessions: number;
   pending_sync: number;
@@ -510,12 +532,12 @@ export async function newoOperationalCounts(env: Env): Promise<{
        (SELECT COUNT(*) FROM newo_event_receipts WHERE status IN ('failed','dead')) AS failed_events,
        (SELECT COUNT(*) FROM newo_sessions WHERE missing_report_detected_at IS NOT NULL
           AND report_received_at IS NULL) AS missing_reports,
-       (SELECT COUNT(*) FROM newo_sessions WHERE handoff_status = 'failed') AS failed_handoffs,
+       (SELECT COUNT(*) FROM newo_sessions WHERE ${UNRESOLVED_FAILED_HANDOFF}) AS failed_handoffs,
        (SELECT COUNT(*) FROM newo_sessions WHERE booking_status = 'requested') AS pending_bookings,
        (SELECT COUNT(*) FROM newo_control_actions WHERE status = 'failed') AS control_failures,
        (SELECT MAX(last_seen_at) FROM newo_event_receipts) AS last_event_at,
        (SELECT MAX(report_received_at) FROM newo_sessions) AS last_report_at`,
-  ).first<Record<string, unknown>>();
+  ).bind(newoTenantId(env)).first<Record<string, unknown>>();
   return {
     sessions: Number(row?.sessions ?? 0),
     pending_sync: Number(row?.pending_sync ?? 0),

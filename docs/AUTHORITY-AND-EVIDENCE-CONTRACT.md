@@ -648,6 +648,26 @@ does.
   stay on the call-the-office path. A crew write that exists but is not settled cannot be answered
   either way.
 
+### Failed Newo handoffs
+
+A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller who asked for a person
+and was not put through. It stays open until a person records how it ended; there is no lookback
+window, because a window would retire a failure nobody decided.
+
+- `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
+  records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with
+  `resolved_by` (the person's user id), their role and `resolved_at`. `GET` on the same path returns
+  the handoff and its resolution.
+- People-only: a person's own cookie session in the owner or ops role, read from the live session
+  (`newo_handoff_resolution_person_required`, `newo_handoff_resolution_role_required`). Agents,
+  automations, connectors, service tokens, the effect runtime and MCP actors are refused.
+- `newo_handoff_resolutions` (migration `0151`) is append-only and tenant-scoped with at most one
+  resolution per failed handoff. D1 re-checks that the session is failed and that the resolver is an
+  active owner or ops user holding that role; an exact replay returns the stored record and a
+  changed intent conflicts (`newo_handoff_resolution_replay_conflict`, `newo_handoff_already_resolved`).
+- The Newo reconcile count (`failed_handoffs`) and the operations exception list count only failed
+  handoffs with no resolution, through one shared predicate.
+
 ## Customer-facing behavior
 
 Agents must:

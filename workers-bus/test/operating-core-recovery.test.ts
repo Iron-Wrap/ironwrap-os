@@ -127,9 +127,9 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
     // and the AI team
     // coordination tables, append-only events, owner controls, human decisions, named
     // exceptions, the fact-version ledger and the shadow/agreement records and watch firings are included in both D1 inventories.
-    ["REQUIRED_TABLE_COUNT", 273],
+    ["REQUIRED_TABLE_COUNT", 274],
     ["REQUIRED_INDEX_COUNT", 385],
-    ["REQUIRED_TRIGGER_COUNT", 740],
+    ["REQUIRED_TRIGGER_COUNT", 744],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

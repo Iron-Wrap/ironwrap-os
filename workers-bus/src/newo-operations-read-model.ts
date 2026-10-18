@@ -3,6 +3,8 @@ import {
   countOpenNewoDeadLetters,
   getLatestNewoReconciliationRun,
   newoOperationalCounts,
+  newoTenantId,
+  UNRESOLVED_FAILED_HANDOFF,
   type NewoReconciliationRun,
 } from "./newo-store.ts";
 
@@ -107,6 +109,7 @@ export interface NewoOperationsReadModel {
     failed_sync: number;
     failed_events: number;
     missing_reports: number;
+    /** Failed handoffs no person has resolved; each one keeps the model in `attention`. */
     failed_handoffs: number;
     pending_bookings: number;
     control_failures: number;
@@ -274,15 +277,17 @@ async function listSessions(
     missing_report: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
       WHERE missing_report_detected_at IS NOT NULL AND report_received_at IS NULL
       ORDER BY missing_report_detected_at ASC LIMIT ?`,
+    // Only failed handoffs no person has resolved; a resolution, never age, takes one off the list.
     failed_handoff: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
-      WHERE handoff_status = 'failed' ORDER BY updated_at DESC LIMIT ?`,
+      WHERE ${UNRESOLVED_FAILED_HANDOFF} ORDER BY updated_at DESC LIMIT ?`,
     pending_booking: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
       WHERE booking_status = 'requested' ORDER BY updated_at ASC LIMIT ?`,
     sync_failure: `SELECT ${SESSION_COLUMNS} FROM newo_sessions
       WHERE sync_status IN ('failed','dead') ORDER BY updated_at ASC LIMIT ?`,
   } satisfies Record<typeof kind, string>;
+  const args = kind === "failed_handoff" ? [newoTenantId(env), limit] : [limit];
   const result = await env.DB.prepare(statements[kind])
-    .bind(limit)
+    .bind(...args)
     .all<NewoOperationsSession>();
   return (result.results ?? []).map(normalizeSession);
 }

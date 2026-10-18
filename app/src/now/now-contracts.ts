@@ -118,6 +118,9 @@ const refreshActionSchema = z
   })
   .strict();
 
+/** The one title the Worker gives every final-invoice card (`now-read-model.ts` quickBooksCard). */
+const QUICKBOOKS_FINAL_INVOICE_TITLE = "Final invoice needs a check";
+
 export const nowActionSchema = z.discriminatedUnion("kind", [
   navigateActionSchema,
   refreshActionSchema,
@@ -180,7 +183,7 @@ const quickBooksNowCardSchema = z
     }
     if (
       card.id !== `qbo-final-invoice:${decodedIntentId}` ||
-      card.title !== `Final invoice ${card.invoice_state.replaceAll("_", " ")}` ||
+      card.title !== QUICKBOOKS_FINAL_INVOICE_TITLE ||
       card.detail !== `${card.currency} ${card.final_balance}` ||
       card.citations.some((citation) => citation.href !== card.action.href)
     ) {

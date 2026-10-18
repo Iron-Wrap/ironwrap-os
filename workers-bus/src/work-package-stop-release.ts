@@ -95,7 +95,7 @@ interface StopEvent {
   payload_json: string;
 }
 
-interface PersonSession {
+export interface PersonSession {
   userId: string;
   role: AppRole;
   identities: string[];
@@ -294,7 +294,10 @@ async function recordStopRelease(
  * token, and a live session row for the same user. A desktop connector, an agent host, a service
  * token or the effect runtime never holds one. The role is the user's role right now.
  */
-async function personSession(env: AppEnv, auth: AuthContext): Promise<PersonSession | null> {
+export async function personSession(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<PersonSession | null> {
   const token = auth.rawSessionToken;
   if (!SESSION_TOKEN.test(token)) return null;
   if ((await sessionHashFor(env, token)) !== auth.session.session_hash) return null;

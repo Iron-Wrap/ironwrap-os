@@ -1,9 +1,114 @@
 # System v2 generated-view templates
 
+## IRW-R8d · owner decisions (read this first; this section wins)
+
+The owner's review-meeting decisions (IRW-R8d, `output/figma-v2/COPY-AUDIT-BRIEF.md`) revise IRW-R8b and parts of
+IRW-R8. Where any later section of this file disagrees with this section, this section wins. Superseded rules stay
+where they are, each marked "IRW-R8d"; nothing was deleted. The audit behind these rules is
+`output/figma-v2/copy-audit/REPORT.md` (PD-32 and G-07; conflicts I-01, I-02, I-09, I-28, K-13, K-15; violations
+V-10, V-29).
+
+**What IRW-R8d reverses**
+
+| Was (IRW-R8b, IRW-R8) | Now (IRW-R8d) | Marked in |
+|---|---|---|
+| Generated views are the home of work: everything that is not a fixed surface is a generated or saved view, including Sales, Board, Production, Money desk, Inventory and People | Every workflow has a complete manual path on drawn, gated surfaces. Generated views answer ad-hoc questions only | intro, 1 (saved views), 9, 10 (incl. `job_record`), 13 (link surface `manual`) |
+| Manual screens are "legacy" or "Reference (IRW-R8b) · Do it myself" slots and are not gated | Manual screens are the primary surfaces and are gated as screens | 4.7; 8.3 and 8.6 example links; 13 (link surface `manual`); SAMPLE-DATA "Do it myself screens" |
+| "Agents own the routine work" and "every screen keeps a 'Do it myself' path" (FigJam 206:11822, 206:11594) | People do the work; the AI only automates it, inline on the same screen, with Edit | 4.3, 4.6, 5.3, 8.2 (agent lane receipt bullet, AI unavailable), 10, 11 (gate lessons), ZL-4, 14.1 items 11 and 13; 3, 8.2 and 13 (`AI/Proposed value` variant names); SAMPLE-DATA "Receipt buttons", "Holding a visit slot", Template board "AI unavailable" |
+| Every Asks first and People only decision happens on Decisions (HOME-04, HOME-05) | Decisions happen on the work screen. Decisions is the queue for what an operation-set rule sends to another person | 2 rule 4, 5.2 (Asks first), 5.3, 5.4, 8.2 (agent lane receipt bullet, example 2 empty hint), 8.3, 8.6, 9, 14.1 items 4, 10, 11 and 12; SAMPLE-DATA "Decision shapes additions" |
+| Job titles and departments act as roles ("Only Accounting and the owner see money") | Six roles; Staff is every employee; permissions are operation sets | 4.6, 8.2 (No access, example 2), 14.1 item 4; rule 7 (4.4, 6.4, 8.5, 14.1 item 13, points 14 and 15); SAMPLE-DATA "Tenant and people", "Tom Lachance's title", "Flow recast conflicts" (3) |
+
+**What stays.** The template contract is still the shape of every Ask IronWrap answer: the spec document, the
+component kinds, the renderer rules, provenance, "Proposed is not fact", the two signals, the zero-learning rules
+ZL-1 to ZL-20 (ZL-4 as amended by rule 4 below) and the states in 4.6. A generated view still never draws a decision
+component and never approves, accepts, releases, waives or signs. The launch rule (5.2) stands: every action with an
+outside effect asks first. People only stays people only: customer acceptance, releasing a safety stop, waiving a
+gate, refunds and write-offs, legal sign-offs. Anyone on a crew can stop work. OD-23 (no self-approval) and OD-32 (the
+Owner approves below a 25% gross margin) stand. Personal saved views ("Keep this view", 14.1 item 9) stay as an extra.
+
+**Rules**
+
+1. **Manual surfaces are primary and gated.** Every workflow has a complete manual path on drawn surfaces that pass
+   the zero-training gate and work with every AI specialist off. The walkthrough pages (01 Caller, 02 Lead and Sales,
+   03 Customer) and the screens they open are those surfaces. A destination a workflow needs (Calls, Callbacks, the
+   Sales list, the calendar, the Work queue, the lead and job records) is a drawn surface, never a saved view. Which
+   lists exist (separate Calls and Callbacks lists, with the Work queue as the entry inbox) is the working answer
+   until MD-06 is answered. Production, Operations and Marketing are manifests only for now; their surfaces are drawn
+   when their flows are.
+2. **Generated views answer ad-hoc questions only.** Ask IronWrap and its views are an addition. A view may link to a
+   drawn surface; it is never the only way to do a job and never stands in for a drawn list or record. A tenant saved
+   view may stay only where no workflow depends on it (Margin watch, for example).
+3. **Decisions happen on the work screen.** A person accepts, edits, approves or declines on the screen where the work
+   is. The audit records who changed what, when and why, with the original recording or source, and adds no user
+   steps. Decisions (HOME-04) is a queue only for items an operation-set rule sends to someone else. The working list
+   until MD-01 and MD-03 are answered: an amount above the person's limit, an item the person prepared (OD-23, "not
+   your own item"), a price below the OD-32 floor, and People only steps that need a set holder (releasing a work
+   stop, a refund). Each row opens the item's own work
+   screen, or its drawn decision detail where one exists (the work-stop release with its passkey step). Nothing goes
+   to Decisions only because an AI proposed it. An `A3` request from a view lands as a proposal on the work screen of
+   the thing it is about, and its consequence line says so.
+4. **"Do it myself" becomes Edit.** The AI's work appears inline on the work screen as a Proposed value or a draft,
+   with Accept and Edit, and Discard for a draft. There is no separate manual screen to escape to. In a view or on a
+   receipt, the control that was "Do it myself" reads "Edit {object}" ("Edit the reply") and opens the work screen
+   with the proposal in place; the line under the buttons follows one standard (Track E Z1 r8d: "reverts nothing" failed as jargon): "Edit {object}: {what it opens}. It does not undo anything." ("Edit the reply: opens the lead with the call notes filled in. It does not undo anything."); where the product does something next, a per-card "after" clause follows ("Your fix goes into this draft. Dana Whitford still decides."); Discard says what it removes ("Discarding removes this draft only; the last quote stays."); Accept names its object ("Accept the quote"). A link from a view to a whole drawn surface names that surface ("See the job
+   record"), with no "myself". Undo and "Stop {the watch}" are unchanged. "Accept" and "Edit", with "Discard" for a
+   draft, is a written Track B lead ruling (LIBRARY-WAVE item 27), in line with REPORT PD-17 and section 10 delta 3;
+   it departs from REPORT K-08, which says "Accept and Change".
+5. **AI specialists never act inside flows.** A flow step's actor and handler is a person in one of the six roles, or
+   System only when no person acts. An AI specialist is never a step's actor, handler or owner. Its work shows inside
+   a person's step as Proposed values or drafts with their provenance line ("Proposed by AI estimator from …"), and
+   the step works the same with the AI off. The AI holding a slot, booking a visit or calling a customer back is a
+   branch, never the happy path (brief decision 4; K-15, I-28).
+6. **Denial wording names the operation set.** A place or action the viewer may not use says which operation set it
+   needs, any limit, and who holds that set: 'Money on this job needs the "Sees money and margins" set. Dana Whitford
+   has it.' Never a job title, a department or a role ("Only Accounting and the owner …", "Your role doesn't include
+   it"). Set names follow MD-01 (the name above is a working name). Whether such a place is hidden or shown locked
+   with "Ask {holder}" follows MD-02 (f).
+7. **People carry a role, not a title.** The roles are Owner, Admin, Staff, Customer, Lead and Caller. Production,
+   Estimator, Accounting, Sales and crew lead describe someone's work and are never a role or a permission. What a
+   person may approve comes from their operation sets (MD-01). The chips each sample person carries are G-08's.
+   Where older text says "a crew lead has no office screens" (4.4 crew phone row; 14.1 item 13, point 15), "crew
+   lead" describes a screen scope, not a permission. Older text that says "money rights" (6.4, 8.5, 14.1 item 13,
+   point 14) means the set that shows money (rule 6).
+8. **Weekday plus time, never a calendar date,** in sample screens: every Figma frame, the walkthrough and the
+   click-through, the prototype and the Playwright fixtures. "Today 10:31", "Yesterday 15:12", "Mon 16:05"; a visit
+   window "Thu 09:00–11:00". Further away, as builder wording until MD-14 is answered: "last Fri", "next Tue", or a
+   count ("valid for 30 days", "10 days ago"). The tenant's short date format in 6.5 is for live records only. MD-14
+   asks the owner to confirm weekday plus time on sample screens; builders apply it now (REPORT 9.1). Counting the
+   prototype and the Playwright fixtures as sample screens is builder wording too, until MD-14 is answered.
+9. **Alberta time.** Every time is Alberta time. Alberta (America/Edmonton) is permanent UTC-6 under tzdata 2026c.
+   Text a person reads says "Alberta time" or shows no zone, and never shows a zone abbreviation ("MST", "MDT" or any
+   other).
+10. **Payment on completion (OD-01) until MD-13 is answered.** Until a prepaid-contracting licence and a
+    lawyer-approved contract template exist, private-dwelling work takes no deposit. Every payment line reads
+    "Payment on completion", and acceptance says "Accepting does not take a payment." No new frame or example shows a
+    deposit invoice, a deposit percentage or a deposit amount. The deposit invoices in this file's examples (IW-1038
+    CAD 3,150.00 and the other SAMPLE-DATA deposits) are IRW-R8b AI-team story facts: they stay as the record of the
+    template board and are not copied into new frames. When MD-13 brings the licence, the template and the OD-22
+    percentages, payment lines follow OD-22's milestones by type of work.
+
+**Design decisions D4 to D7** (FigJam 107:8676, recorded here for G-07). They apply to every flow frame, drawn surface
+and generated view.
+
+| Decision | What it says | What it means on a frame or view | Cited on, as each item lands |
+|---|---|---|---|
+| D4 | Role navigation stays scoped; the next action is explicit; version and responsible person are visible | Navigation is scoped to the six roles and, inside Staff, by operation set; no department rails. Every queue item and record shows a named person or, until MD-06 is answered, "Nobody yet". Every step names its next action. A consequential action shows the version it acts on | PD-37; PD-03, PD-04, PD-06; MD-06 |
+| D5 | Rows before tiles; one primary action per context | Lists are rows (an email-style inbox), not tiles. One filled primary per screen or view (4.3, ZL-3) | PD-06, PD-03 |
+| D6 | Website requests are routed by type of work: installation → property and scope; supply or fabrication → profile, quantity, dimensions, finish, pickup or delivery; repair → concern, location, urgency, contact; commercial → organization, scope, documents, dates, role. A receipt confirms an enquiry only, never a booking, an order or a quote acceptance | The web form asks per type of work. The repair route asks one yes/no urgency question. The receipt and every reply to it never say "booked" | PD-22, PD-25; MD-11, MD-16a |
+| D7 | Every public claim stays hidden until the Owner approves it; no financing claim (OD-14); emergency means next business day, with no 24/7 promise. Business confirmation is pending: the owner still validates service coverage, financing terms, warranty wording, emergency response, the privacy policy and publication copy | No frame, script or AI answer promises 24/7 help, an on-call person or a visit time. Danger gets "call 911". A claim shown to the public cites owner-approved evidence | PD-20, PD-25; MD-10 confirms D7 |
+
+**Owner decisions these rules wait on:** MD-01 (set names and contents, rules 3, 6 and 7), MD-02 (hidden or locked,
+rule 6), MD-03 (second-person checks in the Decisions working list, rule 3), MD-06 (named owner or "Nobody yet", and
+which lists exist, rule 1 and D4), MD-10 (D7), MD-13 (payment lines, rule 10), MD-14 (confirms rule 8).
+
+---
+
 Track T of the Track B design work, under owner decision IRW-R8b (hybrid UI). Fixed surfaces are drawn in Figma
 and gated as screens. Everything else is a generated view: Ask IronWrap answers a request with a view spec, and the
 renderer draws it from System v2 components using one of six templates. This file is the template contract for
 the renderer thread (Track E), the ask API (Track A), the template Figma board and the template gate.
+**IRW-R8d:** "everything else is a generated view" is superseded: every workflow has drawn, gated manual surfaces,
+and generated views answer ad-hoc questions only (IRW-R8d rules 1 and 2).
 
 Precedence. The AI team contract (`output/figma-v2/ai-kit/contract.json`, `ironwrap_ai_team_contract_v1`) wins on
 actions, delegation and receipt fields. `AI-PRIMITIVES.md` wins on words and AI components. `TOKENS.md` wins on
@@ -12,6 +117,7 @@ The spec document shape is Track E's `ironwrap_view_spec_v1` (proposal agreed by
 field or a component kind the proposal does not have yet, it is marked **needed** and listed in section 13.
 
 Contents
+0. IRW-R8d · owner decisions (read this first; at the top of this file)
 1. What a generated view is
 2. The spec document
 3. Component kinds
@@ -58,7 +164,9 @@ Where views open and how they live:
   breadcrumb names where the person came from.
 - **Saved views.** Navigation destinations that are not fixed surfaces (Sales, Board, Production, Money desk,
   Inventory, People, Work stops, Margin watch) are view specs saved in tenant configuration. A saved spec is not
-  regenerated by the AI on each visit; only its read models are fetched again.
+  regenerated by the AI on each visit; only its read models are fetched again. **IRW-R8d: superseded.** A
+  destination a workflow needs (Sales, Calls, Callbacks, the calendar, the Work queue, records) is a drawn, gated
+  surface; a saved view stays only where no workflow depends on it, such as Margin watch (IRW-R8d rules 1 and 2).
 - **No AI needed to draw.** Rendering a spec needs only the read models. When the AI service is down, every saved or
   already open view keeps working; only new specs and new proposals stop (section 4.6, AI unavailable).
 
@@ -112,7 +220,9 @@ Rules this file relies on (Track E's validator rules, plus the template rules of
 4. **Catalog actions only.** `actions[].action_id` is an `A1` or `A2` action of the contract, or an `A3` action
    offered as a request ("Prepare … for your approval"), which creates a proposal on Decisions. Never `H`. No
    component approves, declines, accepts, releases, waives or signs. Decisions are reached only through links to
-   fixed surfaces (section 5).
+   fixed surfaces (section 5). **IRW-R8d:** the proposal lands on the work screen of the thing it is about, and
+   Decisions lists it only when an operation-set rule sends it to someone else (IRW-R8d rule 3). The rest of this
+   rule stays.
 5. **No density, theme, colour, icon names, style, HTML or routes.** The shell decides density and theme. The
    renderer decides every colour from the state a read model returns.
 6. **Limits.** 64 KB, depth 6, 120 components, 8 data entries, 6 actions, 3 view-level links (Track E). Row links
@@ -148,7 +258,7 @@ to System v2 or Board 6 components; components that do not exist yet are marked 
 | `receipt_rows` | `heading` W or null; `receipts` B | `AI/Receipt row`, `AI/Receipt row · Phone` | Track E |
 | `agent_lane` | `heading` W; `receipts` B; `primary` | `AI/Receipt` (decision shown as a link), `AI/Receipt · Phone`, `AI/Proposed value` Block | kind **needed**; `AI/Receipt · Embedded` variant **needed** |
 | `decision_links` | `heading` W or null; `decisions` B; `primary` | `List row` with `Signal chip` and `AI/Delegation` | kind **needed** |
-| `fact_rows` | `heading` W; `facts` B; `primary` | `Fact row` (+ `AI/Proposed value` Field without Accept/Change, `AI/Source chip`) | kind **needed**; component **needed** |
+| `fact_rows` | `heading` W; `facts` B; `primary` | `Fact row` (+ `AI/Proposed value` Field without Accept and Edit (IRW-R8d; was "without Accept/Change"), `AI/Source chip`) | kind **needed**; component **needed** |
 | `approvals` | `heading` W; `approvals` B | `Approval row` | kind **needed**; component **needed** |
 | `alert` | `finding` B; `action` index into `actions` or null | `AI/Alert` | Track E |
 | `proposed_value` | `proposal` B | `AI/Proposed value` Block | Track E |
@@ -219,6 +329,11 @@ are newest first. The renderer never re-sorts except through a filter.
 - **The "Do it myself" line.** Wherever "Do it myself" renders (the partner, a receipt, an AI-unavailable notice), a
   line under the buttons starts with the bold label "Do it myself:" and says what it opens ("Do it myself: opens the
   lead with the call notes filled in; reverts nothing"; AI-PRIMITIVES copy table).
+- **IRW-R8d: the two bullets above are superseded in part.** The partner that was "Do it myself" reads "Edit
+  {object}" ("Edit the reply") and opens the work screen with the proposal in place; the line under the buttons
+  reads "Edit {object}: {what it opens}. It does not undo anything." ("reverts nothing" failed Track E's Z1 r8d),
+  with an "after" clause where the product acts next, Discard saying what it removes and Accept naming its object
+  (IRW-R8d rule 4).
 - No primary is valid. Then the status line ends with "Nothing here waits for you" (renderer words, shown only
   when no bound item has `needs_viewer` true).
 
@@ -267,8 +382,13 @@ Each template section lists only its differences from this table.
 | Stale | A provider read-back is older than the read model's `fresh_for` | The scope line says "QuickBooks last read today 08:10: not checked lately"; values from it keep their value and gain the line "From QuickBooks today 08:10"; links to decisions that depend on it stay, actions on it are not offered | "Check QuickBooks again" (fetches again; the read model asks the provider) |
 | Offline | No network | The last drawn copy with "Saved 10:40. You are offline." Actions are replaced by one line; live parts that cannot be known say so ("Who is working now is not known while you are offline") | "Nothing to do: this updates when you are back online" |
 | After an action | The person pressed an action | The button shows Busy at the same size; then the row or card becomes the `AI/Receipt row` the runtime returns (Working on it "Waiting for QuickBooks to confirm", or Done for you) | the receipt's own |
-| No access | The viewer's role cannot read a data entry | The component is replaced by one line: "Only Accounting and the owner see money on this job." No zero, no blank | none needed |
+| No access | The viewer's operation sets do not cover a data entry (IRW-R8d; was "the viewer's role") | The component is replaced by one line that names the set and who holds it: 'Money on this job needs the "Sees money and margins" set. Dana Whitford has it.' (IRW-R8d rule 6; set name per MD-01). Superseded: "Only Accounting and the owner see money on this job." No zero, no blank | none needed; "Ask {holder}" if MD-02 (f) chooses a locked place |
 | Not found | The heading entity does not exist | "This job is not in your records." | "Search work" |
+
+**IRW-R8d** on the rows above. "Error, whole view" and "AI unavailable": the manual surface is the drawn work screen,
+which keeps working with the AI off, so the one next step is the link that names it ("See the job record") or "Edit
+{object}" for a held step, never "Do it myself" (IRW-R8d rules 1 and 4; 14.1 item 11 is marked the same way). Times
+in every state follow IRW-R8d rules 8 and 9.
 
 ### 4.7 Manual surfaces ("Do it myself" for a whole view)
 
@@ -280,6 +400,12 @@ Each template section lists only its differences from this table.
 | `report` | the report's table without the AI parts (legacy MONEY-12 cost/variance) | "See the cost table myself" |
 | `timeline` | the job history list | "See the job history myself" |
 | `schedule` | the Production plan board (legacy) | "Plan crews myself" |
+
+**IRW-R8d: this table is superseded in part.** These manual surfaces are the primary, gated surfaces, not "legacy" or
+"Do it myself" paths, and the walkthrough's drawn screens replace them where they exist (the Sales list, the lead
+record, the calendar). The link from a view keeps its target and names the surface, with no "myself": "Search work",
+"See the job record", "Compare suppliers", "See the cost table", "See the job history", "See the Production plan"
+(IRW-R8d rules 1 and 4). Production's surfaces stay manifest rows until their flows are drawn.
 
 ---
 
@@ -316,6 +442,10 @@ auditor, launch rule or proof-first rule (contract delegation rules 7 and 10) �
 | Practice only | `shadow` (the owner's setting, never a start state) | Nothing is sent or changed; the person does the real work as before | none in a generated view (the setting lives in Settings › AI team) | A "Practice run" receipt beside what the person did, never under Done for you or in Decisions; a hold or a pause stops practice runs and keeps the setting |
 | Paused / Paused here | setting / state | Nothing new starts; items already waiting stay | none | — |
 
+**IRW-R8d** on the Asks first row: "creates one on Decisions" is superseded. The request creates the proposal on the
+work screen of the thing it is about; Decisions lists it only when an operation-set rule sends it to someone else
+(IRW-R8d rule 3).
+
 **Launch rule.** At launch every action with an outside effect asks first. The renderer refuses a spec that offers
 an action whose contract `side_effect_class` is `money`, `legal`, `safety`, `external_irreversible` or
 `external_reversible` as anything but a request "Prepare … for your approval", and it never draws a Done for you
@@ -344,6 +474,11 @@ for such a step before a person approved it.
 - Row links come from read-model fields (`decision_link`, `receipt_link`, `record_link`, or `next_link`: the
   decision link when the row needs the viewer, else the record link), so a list of 25 rows can link 25 decisions
   without passing the 3 view-level links.
+- **IRW-R8d: superseded in part.** A decision link opens the work screen where the decision is made (the lead, the
+  proposal, the booking), or the drawn decision detail where one exists (the work-stop release with its passkey
+  step). Decisions (HOME-04) is the queue only for what an operation-set rule sends to someone else (IRW-R8d rule
+  3). Links still start with "Review", because the view itself still decides nothing. "Do it myself" on the receipt
+  reads "Edit {object}" (IRW-R8d rule 4).
 
 ### 5.4 Actions
 
@@ -352,7 +487,9 @@ for such a step before a person approved it.
   returns for that action ("Send the task to Tom Lachance", 8.4), because names are facts (section 2, rule 3).
 - `target` is a binding to the id the action acts on. A row action binds with `*` and is drawn on each row.
 - The consequence line comes from the runtime's action words for that action, never from the spec: "Creates a
-  proposal on Decisions. Nothing leaves IronWrap." for every `A3` request.
+  proposal on Decisions. Nothing leaves IronWrap." for every `A3` request. **IRW-R8d:** the line names the work
+  screen the proposal lands on instead of Decisions ("Creates a proposal on the lead. Nothing leaves IronWrap."),
+  unless an operation-set rule sends it to someone else (IRW-R8d rule 3).
 - Every press returns a receipt; the renderer draws it in place of the button (4.6, After an action).
 
 ---
@@ -407,7 +544,11 @@ The renderer computes totals; read models may also return totals with the same r
 - Codes appear only after their plain label: "Job IW-1038", "Quote V4", "Coil PMS-2231"; only the code is mono.
 - Times come as instants and the renderer formats them with the day: office "Today 10:31", "Yesterday 15:12",
   "Mon 16:05"; crew phone and customer "7:12 a.m.". Within the last 6 days a weekday name; older, the tenant's short
-  date format. The brief keeps "Brief made 6:50 a.m.".
+  date format. The brief keeps "Brief made 6:50 a.m.". **IRW-R8d:** the short date format is for live records only;
+  sample screens never show a calendar date ("last Fri", "next Tue", "10 days ago"; IRW-R8d rule 8).
+- **Alberta time (IRW-R8d rule 9).** Times are Alberta time (America/Edmonton, permanent UTC-6 under tzdata 2026c).
+  Text a person reads never shows a zone abbreviation ("MST", "MDT" or any other). Where a zone must be named, the
+  words are "Alberta time"; otherwise no zone is shown.
 - Money is Geist with tabular figures ("CAD 12,600.00"), as on every reference frame (open question 1).
 
 ---
@@ -422,7 +563,7 @@ on the Figma examples and the QA build.
 | ZL-1 | Z2 words: no banned term in any literal (work package, disposition, derived phase, outbox, idempotency, effect, capability, principal, receipt hash, digest, SHA, envelope, payload, tenant, grant; also Assistant, agent, HELM, the class codes A0 to A3 and H); AI names only as contract display names | V |
 | ZL-2 | Outcome and delegation words only from AI-PRIMITIVES (Done for you, Working on it, Needs you, Held, Undone by, Proposed; the delegation words of 5.2) | R |
 | ZL-3 | At most one filled primary per view | V, R |
-| ZL-4 | Every control label is verb plus object; none starts with Open, Go, Submit; decision links start with Review; receipt links read "See receipt for {object}"; every "Do it myself" has its "Do it myself:" line saying what it opens | V (literal), R (bound) |
+| ZL-4 | Every control label is verb plus object; none starts with Open, Go, Submit; decision links start with Review; receipt links read "See receipt for {object}"; every "Do it myself" has its "Do it myself:" line saying what it opens. **IRW-R8d:** "Do it myself" is superseded by "Edit {object}", which keeps a line saying what it opens (IRW-R8d rule 4) | V (literal), R (bound) |
 | ZL-5 | Codes only after a plain label, code in mono | R |
 | ZL-6 | No digits, currency signs or URLs in literals; every number is bound | V |
 | ZL-7 | Counts in headings and status lines are bound counts of the rows shown; a heading count equals the rows its component draws (with "Showing {n} of {m}" when cut) | V (bound), R |
@@ -589,9 +730,12 @@ track, and is anything costing us?"
   Chu before every crew visit" · "From AI customer care's reply to Linda Chu"). In a generated view the receipt's
   decision is a link ("Review the work stop", "Review reply", "Review payment match"), never an approve button;
   "See receipt for {object}" opens the fixed receipt ("What the AI did") with Do it myself and, on Done for you
-  only, Undo (5.3). With `primary`, the first card's decision link is the view's primary.
+  only, Undo (5.3). With `primary`, the first card's decision link is the view's primary. **IRW-R8d:** on the
+  receipt, "Do it myself" reads "Edit {object}" (IRW-R8d rule 4), and a decision link opens the work screen where
+  the decision is made (IRW-R8d rule 3).
 - `fact_rows` ("The roof"): label; value; provenance line (read by whom, checked by a person or not); source chips;
-  a proposal drawn as `AI/Proposed value` Field without Accept and Change, with the reason and the decision link
+  a proposal drawn as `AI/Proposed value` Field without Accept and Edit (IRW-R8d; was "without Accept and Change"),
+  with the reason and the decision link
   ("Review the pitch").
 - `timeline`: people and AI specialists mixed, newest first, each AI item with "See receipt for {object}"; 10 then
   "Show older events".
@@ -627,9 +771,12 @@ decisions, no `table` of money.
 | AI unavailable | Facts, money and timeline draw from read models; the lane's waiting receipts show Held "its AI service is not answering" and "Do it myself" with its "Do it myself:" line on the receipt (no Undo on Held); no new proposals |
 | Stale | Money cells and rows from QuickBooks say "From QuickBooks today 08:10"; the scope line "QuickBooks last read today 08:10: not checked lately" with "Check QuickBooks again" |
 | Offline | Saved copy, "Saved 10:40. You are offline."; decision links stay visible but open the decision in read-only with "Approvals wait until you are back online" |
-| No access | A role without money rights sees "Only Accounting and the owner see money on this job." in place of the money table and the money cell |
+| No access | A viewer without the set that shows money sees the IRW-R8d rule 6 line in place of the money table and the money cell: 'Money on this job needs the "Sees money and margins" set. Dana Whitford has it.' (set name per MD-01). Superseded (IRW-R8d): "A role without money rights sees 'Only Accounting and the owner see money on this job.'" |
 | Not found | "This job is not in your records." with "Search work" |
 | Merged or duplicate record | When the read model returns a proposed merge (K. Harlow into Kara Harlow), it is a proposal with its decision link; the record never merges in place |
+
+**IRW-R8d** on the AI unavailable row: "Do it myself" with its "Do it myself:" line is superseded by "Edit {object}",
+which opens the drawn work screen and keeps a line saying what it opens (IRW-R8d rule 4).
 
 **Actions and links.** Record decisions are links (lane, fact rows, side decision links). Record actions are `A1`
 or `A2` of the record's specialists (for example `quote.draft_revision` "Draft gutter work into a new quote",
@@ -793,11 +940,18 @@ What the renderer draws (canonical sample, matches JOB-14 with the r2 fixes):
 | Side: contact, links | 402 Aspen Hollow NW · Linda Chu · 780-555-0153 · Crew: Sam Keewatin and Dev Sandhu · "See property record" · "See all decisions" |
 | Phone | Cells stacked; lane rows "Correction drafted for the work stop" … "Review the work stop ›" (People only, Needs you), "Reply to Linda Chu" … "Review reply ›", "Payment from Linda Chu to apply, CAD 3,150.00" … "Review payment match ›", "Drafting the deck repair change order" … Working on it; `Action bar`: "Review the work stop" (Held fill) |
 
+**IRW-R8d** on example 1. The deposit invoice lines (CAD 3,150.00, the 75% final payment) are IRW-R8b AI-team story
+facts; they stay as the template board's record and are not copied into new frames, which follow OD-01's payment on
+completion until MD-13 is answered (IRW-R8d rule 10).
+
 **Example 2: property and roof record, 1180 Tamarack Bend** (Priya Nand, Estimator on the Sales desk, office, Updated 10:40). Priya is the
 person who accepts measurement values for job IW-1044 (SAMPLE-DATA UF-06), so the pitch decision is hers; for Dana
 Whitford the same spec draws the pitch as "waits for Priya Nand" in ink and has no primary (open question 4).
 Priya Nand (Estimator, Sales desk) also approves quote V4 (UF-06, UF-39): on the owner's views the V4 card is ink
-"Waiting on Priya Nand" (6.4).
+"Waiting on Priya Nand" (6.4). **IRW-R8d:** "Estimator" and "Sales desk" are not roles. Priya Nand is Staff; she
+decides the pitch and quote V4 because she holds the set the decision needs and did not prepare it (OD-23), and her
+chips follow G-08 (IRW-R8d rules 6 and 7). The example's facts stay. The empty hint's "See all decisions on
+Decisions." stays: Decisions is still the queue for what set rules send to someone else (IRW-R8d rule 3).
 
 ```json
 {
@@ -989,6 +1143,9 @@ step from `empty_hint`. Stale supplier quote: its column says "Quote from Mon: n
 **Actions and links.** The decision is a link (`decision_links` or a row link) to the proposal on Decisions. When
 no proposal exists yet, an `A3` request may be offered ("Prepare the Westman Steel order for your approval",
 `purchase_order.place`), which creates the AI buyer's proposal on Decisions.
+**IRW-R8d:** the two Decisions targets above are superseded. The decision link opens the purchase order's own work
+screen, the request creates the proposal there, and Decisions lists it only when an operation-set rule sends it to
+someone else (IRW-R8d rule 3).
 
 **Example: "Westman or Vicwest for Helen Park's panels?"** (owner Dana Whitford, office, Updated 10:40)
 
@@ -1111,6 +1268,9 @@ What the renderer draws:
 | Sources | "Westman Steel quote WS-2291", "Vicwest quote" |
 | Decision row | AI buyer, Today 06:35, Asks first, Needs you: "Purchase order to Westman Steel, CAD 1,694.00" · primary `Button` You "Review purchase order" (decision; "Place purchase order" lives there with "Placing it sends the order to Westman Steel once.") |
 | Side | Needed for: Job IW-1041 · Helen Park, 9 Willow Row · Fri · 0 sheets · Cannot start: material shortage; "Before tax. Landed cost is the price plus freight."; "Compare suppliers myself" |
+
+**IRW-R8d** on this example: the link label "Compare suppliers myself" (in the spec and the Side row) is superseded
+by "Compare suppliers", which names the surface with no "myself" (IRW-R8d rule 4; 4.7 note).
 
 ### 8.4 `report` (report or analysis)
 
@@ -1444,6 +1604,8 @@ offline."
 request `crew_date.commit` "Prepare a start date for your approval" (the AI scheduler drafts it with
 `schedule.draft` and the proposal appears on Decisions). `crew_slot.hold` (A2, Acts within your limits) runs by
 itself and shows only after the fact.
+**IRW-R8d:** "the proposal appears on Decisions" is superseded. The proposal appears on the job's own work screen,
+and Decisions lists it only when an operation-set rule sends it to someone else (IRW-R8d rule 3).
 
 **Example: "Where are the crews this week?"** (owner Dana Whitford, office, Wednesday, Updated 10:40)
 
@@ -1557,6 +1719,11 @@ What the renderer draws:
 | Side: Capacity | Next free repair crew day: Mon (AI scheduler capacity check) |
 | Phone | Day tabs Wed · Thu · Fri · Sat; blocks as rows; `Action bar`: "Review the work stop" |
 
+**IRW-R8d** on this example. The consequence line "Creates a proposal on Decisions. Nothing leaves IronWrap." is
+superseded by the 5.4 wording, which names the work screen: "Creates a proposal on the job. Nothing leaves
+IronWrap." (the proposal is for Paul Moreau's job). The link label "Plan crews myself" in the spec is superseded by
+"See the Production plan" (IRW-R8d rules 3 and 4; 4.7 note).
+
 ---
 
 ## 9. What is never generated
@@ -1579,6 +1746,14 @@ controls.
 Also never generated: the safety report sheet ("Report a safety problem"), the Stop work control, any control that
 changes a delegation setting, pauses the team or a specialist, or turns on an "Off until you turn it on" action.
 
+**IRW-R8d** on this section. Every manual work surface is now fixed as well: the walkthrough's screens (Calls,
+Callbacks, the Sales list, the lead record, booking and the calendar, measurements, proposal, contract, the
+customer's project page, the Work queue) are drawn and gated, and a spec can only link to them (IRW-R8d rule 1). The
+Decisions row's "every … decision happens here" is superseded: decisions happen on the work screen, and Decisions is
+the queue for what an operation-set rule sends to someone else (IRW-R8d rule 3). The AI brief on Now (HOME-01) shows
+only when the AI is on; where each role starts is PD-37's. The receipts row keeps Undo and the record; "Do it
+myself" reads "Edit {object}" (IRW-R8d rule 4).
+
 ## 10. How a generated view hands off to a fixed surface
 
 | From the view | Link surface | Opens | Back |
@@ -1593,6 +1768,14 @@ changes a delegation setting, pauses the team or a specialist, or turns on an "O
 | "Do it myself" for the whole view | `manual` + surface id (**needed**) | The manual screen (4.7) | Back |
 | An "Off until you turn it on" action | `settings_ai_team` (**needed**) | Settings › AI team, the specialist's page (owner only) | Back |
 | "See what needs you" | `now` | Now | Back |
+
+**IRW-R8d** on this table. A Needs you or People only item opens the work screen where it is decided, or its drawn
+decision detail where one exists; "See all decisions" opens the queue of items that set rules send to someone else.
+On the receipt row, "Do it myself" reads "Edit {object}" (IRW-R8d rule 4).
+The "Do it myself for the whole view" row is superseded: the `manual` link opens the drawn work surface and names it
+("See the job record"), because that surface is the primary path, not a way out (IRW-R8d rules 1, 3 and 4). The
+drawn job record stays: "until the job record is generated everywhere" (here and in 5.3) no longer applies, and a
+generated `record` answers a question about a job without replacing the drawn record (IRW-R8d rule 2).
 
 ---
 
@@ -1638,6 +1821,9 @@ now examples for these templates. What the gates (r1, r1b, r1c, r1e, r2, r2c, r2
 | Identical link names ("See all", "See receipt", "Do it myself") for screen readers | r2 fix 12 | 5.3 accessible names |
 | Phone tab names that differ from desktop ("Leads", "Jobs") and a bare "Safety" chip | r1b fix 5, fix 14; r2s fix 7 | shell (LIBRARY-WAVE 8, 10) |
 | A decision buried at the bottom of a long page | r1b fix 11 (held payments in Found) | 4.2 one ordering rule |
+
+**IRW-R8d** on these lessons. They are records of what the gates found and stay as they are. The two lessons about
+"Do it myself" now apply to "Edit {object}": it names its object and has a distinct accessible name (IRW-R8d rule 4).
 
 ---
 
@@ -1687,7 +1873,7 @@ provider read-back times that feed the scope line (4.1).
 | `Approval row` | `record` | Thing, approved chip, who and when, what they saw, "See what she saw" |
 | `AI/Receipt · Embedded` (variant) | `record` | The receipt with its decision as a link (primary or outlined), "See receipt for {object}" |
 | `AI/Delegation` "Paused here" (variant) | all | The here-state chip |
-| `AI/Proposed value` Field without Accept and Change (variant) | `record` | Proposal with its decision link |
+| `AI/Proposed value` Field without Accept and Edit (variant; IRW-R8d, was "without Accept and Change") | `record` | Proposal with its decision link |
 | `Skeleton` variants | all | Summary cell, fact row, table row, comparison column, schedule block |
 | `Signal chip` kind "Not in yet" | `record` | The RES-08 "Where it stands" step state (clock glyph) |
 
@@ -1704,7 +1890,8 @@ provider read-back times that feed the scope line (4.1).
 
 **Link surfaces** (in addition to `decisions`, `decision`, `now`, `receipt`, `job_record`): `view` (a generated
 record or saved view by entity or saved id), `manual` (the Do it myself screen of a view), `settings_ai_team` (owner
-only).
+only). **IRW-R8d:** `manual` now opens the drawn work surface, the primary path, not a "Do it myself" screen
+(IRW-R8d rules 1 and 4).
 
 ## 14. Open questions
 
@@ -1749,7 +1936,9 @@ only).
    button.
 4. The proposed pitch is decided through `measurement.accept_version` (A3, Asks first, owner AI measurer; contract
    reviewer Sales): the view says "Sales decides" (Priya Nand) and the owner can see it; it sits in Priya's Decisions,
-   not in the owner's 15.
+   not in the owner's 15. **IRW-R8d:** "Sales decides" is superseded; the view names the person and the set
+   ("Priya Nand decides"). The pitch is accepted on the drawn measurement screen, not on Decisions; the generated
+   record still only links to it (IRW-R8d rules 3, 6 and 7).
 5. "Verify the renewal" follows the contract: `authority.record` is Always asks first (A3, not delegable). Decision
    links read "Review the renewal".
 6. Shop tablet: out of scope for templates v1; shop screens stay fixed until a shop template set exists.
@@ -1774,7 +1963,14 @@ only).
     - A retry of failed import items: `import.retry_failed` (A3, Asks first; items already imported are adopted, not
       duplicated), in the HOME-05 "onboarding: launch decision and import conflict" decision.
     - While the AI is not answering, a view offers "Do it myself" only; never `staff.notify` or any other AI team
-      action (section 4 "AI unavailable" row).
+      action (section 4 "AI unavailable" row). **IRW-R8d:** "Do it myself" is superseded; the view offers only the
+      link to the drawn work screen ("See the job record") or "Edit {object}" for a held step, and still never an AI
+      team action (IRW-R8d rule 4; 4.6 note).
+    - **IRW-R8d** on items 10 and 11 (and `lead_fact.confirm` in item 12): an access change and a settings apply
+      stay in the Decisions queue, because a set holder other than the person who prepared them decides (People
+      only); a crew item's resolution, an import retry and the confirmation of lead facts land on their own work
+      screens (the crew item, the import, the lead), and reach Decisions only when a set rule sends them to someone
+      else (IRW-R8d rule 3; the queue contents are a working list until MD-01 and MD-03).
 12. Orchestrator contract ruling (contract f3, catalog 162 actions): physical acceptance is People only.
     `completion.accept` and `hold_point.release` are People only (H) and not delegable; the AI prepares the evidence
     packet and flags photo problems at capture, and accepting a photo is part of the person's acceptance, never a
@@ -1818,7 +2014,9 @@ only).
     - Receipt buttons (AI-PRIMITIVES copy table, Track E gate evidence): Undo only on Done for you, with its own
       line; a standing watch has "Stop {the watch}" with "Stopping ends {what it does}. You can ask IronWrap to start
       it again." in place of Undo; every "Do it myself" has a line under the buttons that starts with the bold label
-      "Do it myself:" and says what it opens (4.3, 4.6, 5.2, 5.3, ZL-4, 8.2, 10).
+      "Do it myself:" and says what it opens (4.3, 4.6, 5.2, 5.3, ZL-4, 8.2, 10). **IRW-R8d:** the "Do it myself"
+      part is superseded by "Edit {object}", which keeps a line saying what it opens; the Undo and "Stop {the
+      watch}" parts stay (IRW-R8d rule 4).
     - Lead follow-ups: a control label that names a person or a version binds that part from the read model ("Send
       the task to {person}", "Review quote {version}"); the literal part has no digits. A receipt link names the step
       in the same words as its timeline row ("See receipt for drafting the correction"): one name per step (ZL-8).

@@ -27,6 +27,9 @@ export function relative(at, decisionAt) {
 }
 
 const lower = (value) => normaliseText(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+const fold = (value) => lower(value).replace(/[^\p{L}\p{N}]+/gu, "");
+const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw"]);
+const MIN_GROUP = 5;
 const linkedIds = (row) => (row.related ?? []).map((link) => link?.id).filter(Boolean);
 
 function exportTime(exportedAt) {
@@ -53,8 +56,14 @@ function createDictionary(privacy, pseudonymizer) {
     }
     // An address line has a number and a word; a country or a geo object is not one.
     for (const field of block.address) if (typeof row[field] === "string" && /\d/.test(row[field]) && /\p{L}{2}/u.test(row[field])) add("address", row[field]);
-    // Linked records carry the names of the people they point to.
-    for (const field of block.linked) for (const link of [row[field]].flat()) if (link && typeof link === "object") add("person", link.name);
+    // Linked records carry the names and emails of the people they point to.
+    for (const field of block.linked) {
+      for (const link of [row[field]].flat()) {
+        if (!link || typeof link !== "object") continue;
+        add("person", link.name);
+        add("email", link.email);
+      }
+    }
     // A record name ("Morgan Fixture - Metal Roof") holds a person's name; its parts made only of
     // listed words ("Metal Roof") do not.
     for (const field of block.named) {
@@ -64,12 +73,12 @@ function createDictionary(privacy, pseudonymizer) {
     }
   };
   // Free text keeps only the places no export name shares a word with; a case's location still
-  // uses the full list.
-  const compile = (texts) => {
+  // uses the full list. `fixed` adds closed lists of values a case may hold under a key.
+  const compile = (texts, fixed = {}) => {
     const names = known.filter((entry) => entry.kind === "person" || entry.kind === "company").map((entry) => entry.value);
     const places = placesPattern(safePlaces(privacy.municipalities, names));
     const vocabulary = buildVocabulary(texts, { names, minRecords: privacy.vocabulary_min_records });
-    return { places, scrub: createScrubber(known, { places, vocabulary }), guard: createGuard(pseudonymizer.originals(), places, { municipality: privacy.municipalities, province: [...PROVINCES] }) };
+    return { places, scrub: createScrubber(known, { places, vocabulary }), guard: createGuard(pseudonymizer.originals(), places, { municipality: privacy.municipalities, province: [...PROVINCES], ...fixed }) };
   };
   return { add, fields, compile };
 }
@@ -237,30 +246,68 @@ const seconds = (iso) => {
  * Lead concierge from GoHighLevel: one case per opportunity, decided at the end of its intake
  * window. GHL keeps only the current status and the time of the last status change, so the truth
  * is: won (converted, days to the last status change), lost or abandoned (not converted), and open
- * past the conversion horizon (not converted); open within it is too recent. Custom fields carry
- * current state without timestamps, so only those the spec lists as intake fields are copied, as
- * scrubbed text, and a value that reports an outcome is dropped. Opportunity names, values, stages,
- * tags, files, and contact details never are. `won_after_horizon` and `open_past_horizon` count the
- * labels the horizon decides, so the horizon's effect can be read.
+ * past the conversion horizon (not converted); open within it is too recent. Intake facts come from
+ * the contact's custom fields that `intake_fields` names by field key, read through `customFields`
+ * (the field definitions export: id, fieldKey, options, eval_use):
+ * - `option`: the value if it is one of the field's options (any case), otherwise "other". Every
+ *   option must be ordinary words or places and match no export name, unless `reviewed_options`
+ *   lists it; otherwise the build stops, naming the field and a count.
+ * - `text`: free text, scrubbed and kept only if reliable; one that reports an outcome is dropped.
+ * - `source`: mapped to a source category.
+ * A field whose definition is missing or marked excluded stops the build. Custom fields carry
+ * current state without timestamps, so fields that change after intake (call attempts, old
+ * statuses, stage dates) are never intake fields, and a field filled more often for converted than
+ * for other leads by over `fill_gap_max` stops the build as a likely later entry; `fill_gap` records
+ * every field's difference.
+ * `won_after_horizon` and `open_past_horizon` count the labels the horizon decides.
  */
-export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, spec, pseudonymizer) {
+export function buildGhlLeadCases({ opportunities, contacts = [], customFields = [], exportedAt }, spec, pseudonymizer) {
   const now = exportTime(exportedAt);
+  const definitions = new Map(customFields.map((field) => [field.fieldKey, field]));
+  const intake = Object.entries(spec.intake_fields).map(([key, kind]) => {
+    const definition = definitions.get(key);
+    if (!definition || String(definition.eval_use ?? "").startsWith("excluded")) throw new Error(`GoHighLevel intake field ${key} is missing from the definitions or excluded`);
+    return { name: key.replace(/^contact\./, ""), id: definition.id, kind, options: new Map((definition.options ?? []).map((option) => [fold(option), option])) };
+  });
+  const valuesOf = (contact) => new Map((Array.isArray(contact.customFields) ? contact.customFields : []).map((entry) => [entry?.id, entry?.value]));
   const { fields, compile } = createDictionary(spec.privacy, pseudonymizer);
-  const intake = new Set(spec.intake_custom_fields);
-  const intakeValues = (opportunity) =>
-    (Array.isArray(opportunity.customFields) ? opportunity.customFields : [])
-      .filter((field) => intake.has(field?.id) && typeof field.fieldValueString === "string" && field.fieldValueString.trim())
-      .map((field) => field.fieldValueString);
   assertClassified(contacts, spec.privacy.ghl_contact, spec.privacy, "GoHighLevel contacts");
   assertClassified(opportunities, spec.privacy.ghl_opportunity, spec.privacy, "GoHighLevel opportunities");
   for (const contact of contacts) fields(contact, spec.privacy.ghl_contact);
   for (const opportunity of opportunities) fields(opportunity, spec.privacy.ghl_opportunity);
-  const { scrub, guard } = compile(opportunities.flatMap(intakeValues));
+  const freeText = contacts.flatMap((contact) => intake.filter((field) => field.kind === "text").map((field) => valuesOf(contact).get(field.id)));
+  // Options come from the definitions' closed lists. Each must be ordinary words or places and
+  // match no export name before the guard reads it as a closed-list value.
+  const names = createGuard(pseudonymizer.originals());
+  const placeWords = new Set(spec.privacy.municipalities.flatMap((name) => lower(name).match(/\p{L}+/gu) ?? []));
+  const ordinaryOption = (option) => (lower(option).match(/\p{L}+/gu) ?? []).every((word) => BASE_WORDS.has(word) || placeWords.has(word) || DIRECTIONS.has(word)) && names(option).length === 0;
+  for (const field of intake.filter((entry) => entry.kind === "option")) {
+    const reviewed = new Set(spec.reviewed_options?.[`contact.${field.name}`] ?? []);
+    const unreviewed = [...field.options.values()].filter((option) => !reviewed.has(option) && !ordinaryOption(option)).length;
+    if (unreviewed > 0) throw new Error(`GoHighLevel intake field contact.${field.name} has ${unreviewed} options that are not ordinary words or match an export name; review them in reviewed_options`);
+  }
+  const options = Object.fromEntries(intake.filter((field) => field.kind === "option").map((field) => [field.name, [...field.options.values(), "other"]]));
+  const { scrub, guard } = compile(freeText, options);
   const municipalities = new Map(spec.privacy.municipalities.map((name) => [lower(name), name]));
   const byContact = new Map(contacts.map((contact) => [contact.id, contact]));
-  const counts = { opportunities: opportunities.length, without_date: 0, too_recent: 0, won_after_horizon: 0, open_past_horizon: 0, outcome_text: 0, kept_text: 0, dropped_text: 0 };
+  const counts = { opportunities: opportunities.length, without_date: 0, too_recent: 0, won_after_horizon: 0, open_past_horizon: 0, outside_options: 0, outcome_text: 0, kept_text: 0, dropped_text: 0 };
+  const cleanText = (value) => {
+    if (OUTCOME.test(normaliseText(value))) {
+      counts.outcome_text += 1;
+      return null;
+    }
+    const scrubbed = scrub(value);
+    if (scrubbed.reliable && guard(scrubbed.text).length === 0) {
+      counts.kept_text += 1;
+      return scrubbed.text;
+    }
+    counts.dropped_text += 1;
+    return null;
+  };
   const cases = [];
   const truths = [];
+  // Which intake fields each case had, for the fill-gap check (a source field leaves no fact).
+  const present = new Map();
   for (const opportunity of opportunities) {
     const created = seconds(opportunity.createdAt);
     if (created === null) {
@@ -275,24 +322,27 @@ export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, 
     }
     const at = created + spec.intake_window_minutes * 60;
     const contact = byContact.get(opportunity.contactId) ?? {};
-    const notes = intakeValues(opportunity)
-      .map((value) => {
-        if (OUTCOME.test(normaliseText(value))) {
-          counts.outcome_text += 1;
-          return null;
-        }
-        const scrubbed = scrub(value);
-        if (scrubbed.reliable && guard(scrubbed.text).length === 0) {
-          counts.kept_text += 1;
-          return scrubbed.text;
-        }
-        counts.dropped_text += 1;
-        return null;
-      })
-      .filter(Boolean);
-    const source = sourceCategory({ source_name: opportunity.source || contact.source || opportunity.attributions?.[0]?.utmSessionSource }, spec.source_categories);
+    const values = valuesOf(contact);
+    const facts = {};
+    const notes = [];
+    const filled = new Set();
+    let source = sourceCategory({ source_name: opportunity.source || contact.source || opportunity.attributions?.[0]?.utmSessionSource }, spec.source_categories);
+    for (const field of intake) {
+      const value = values.get(field.id);
+      if (typeof value !== "string" || value.trim() === "") continue;
+      filled.add(field.name);
+      if (field.kind === "option") {
+        facts[field.name] = field.options.get(fold(value)) ?? "other";
+        if (!field.options.has(fold(value))) counts.outside_options += 1;
+      } else if (field.kind === "source") source = sourceCategory({ source_name: value }, spec.source_categories) ?? source;
+      else {
+        const text = cleanText(value);
+        if (text) notes.push(text);
+      }
+    }
     const leadId = pseudonymizer.token("contact", opportunity.id);
     const id = `history.lead_concierge.${leadId}`;
+    present.set(id, filled);
     cases.push({
       id,
       specialist_id: "lead_concierge",
@@ -311,6 +361,7 @@ export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, 
               municipality: contact.city ? municipalities.get(lower(contact.city)) ?? "other" : null,
               province: PROVINCES.has(String(contact.state ?? "").trim().toUpperCase()) ? String(contact.state).trim().toUpperCase() : null,
             },
+            intake: facts,
             intake_notes: notes,
           },
         },
@@ -321,6 +372,113 @@ export function buildGhlLeadCases({ opportunities, contacts = [], exportedAt }, 
     if (status === "won" && !won) counts.won_after_horizon += 1;
     if (status === "open") counts.open_past_horizon += 1;
     truths.push({ case_id: id, converted: won, days_to_convert: won ? Math.max(0, changed - created) / DAY : null });
+  }
+  finish(cases, guard);
+  // A field filled far more often for converted leads was likely entered during the sale. The
+  // reverse (filled less often) is recorded: it usually means the field joined the form later.
+  const converted = new Set(truths.filter((truth) => truth.converted).map((truth) => truth.case_id));
+  const groups = [cases.filter((entry) => converted.has(entry.id)), cases.filter((entry) => !converted.has(entry.id))];
+  counts.fill_gap = {};
+  for (const field of intake) {
+    if (groups.some((group) => group.length < MIN_GROUP)) break;
+    const [rateConverted, rateOther] = groups.map((group) => group.filter((entry) => present.get(entry.id).has(field.name)).length / group.length);
+    counts.fill_gap[field.name] = Math.round((rateConverted - rateOther) * 100) / 100;
+    if (rateConverted - rateOther > spec.fill_gap_max) {
+      throw new Error(`GoHighLevel intake field contact.${field.name} is filled for ${Math.round(rateConverted * 100)}% of converted and ${Math.round(rateOther * 100)}% of other leads; it may be entered after intake`);
+    }
+  }
+  return { cases, truths, counts };
+}
+
+const cents = (amount) => (typeof amount === "number" && Number.isFinite(amount) ? Math.round(amount * 100) : null);
+const active = (row) => row && row.is_active !== false;
+
+/**
+ * Billing reconciliation from JobNimbus: one case per active payment, decided when it was recorded,
+ * in the production fact shapes: the payment as a `bank_feed_line` (amount, the customer it was
+ * recorded against) and each candidate invoice as an `accounting_observation` (customer, total, and
+ * the balance earlier payments left), all ids tokenised and nothing else of either record. The
+ * candidates are the invoices open at that time, the payer's first, then the most recent, at most
+ * `candidate_invoices_max`. The truth is how the payment was actually applied; a payment applied
+ * to an invoice the case cannot show (inactive now, created later, or beyond the cap) is skipped and
+ * counted. JobNimbus has few payments, so the billing bars read "insufficient" until `min_n`
+ * applications exist.
+ */
+export function buildPaymentCases({ payments, invoices, exportedAt }, spec, pseudonymizer) {
+  exportTime(exportedAt);
+  assertClassified(payments, spec.privacy.payment, spec.privacy, "payments");
+  assertClassified(invoices, spec.privacy.invoice, spec.privacy, "invoices");
+  const { fields, compile } = createDictionary(spec.privacy, pseudonymizer);
+  for (const row of payments) fields(row, spec.privacy.payment);
+  for (const row of invoices) fields(row, spec.privacy.invoice);
+  const { guard } = compile([]);
+  const token = (kind, value) => pseudonymizer.token(kind, value);
+  const dollars = (amount) => (amount / 100).toFixed(2);
+  const applications = payments.filter(active).flatMap((payment) =>
+    (Array.isArray(payment.invoices) ? payment.invoices : []).filter(active).map((application) => ({ payment: payment.jnid, invoice: application.invoice_id, at: application.date_created ?? payment.date_created, cents: cents(application.amount) })),
+  );
+  const counts = { payments: payments.length, inactive: 0, without_amount: 0, no_open_invoice: 0, truth_outside_candidates: 0 };
+  const cases = [];
+  const truths = [];
+  for (const payment of payments) {
+    if (!active(payment)) {
+      counts.inactive += 1;
+      continue;
+    }
+    const amount = cents(payment.total);
+    const at = payment.date_created;
+    if (!(amount > 0) || !(at > 0)) {
+      counts.without_amount += 1;
+      continue;
+    }
+    const open = invoices
+      .filter((invoice) => active(invoice) && invoice.date_created <= at)
+      .map((invoice) => {
+        const paid = applications.filter((row) => row.invoice === invoice.jnid && row.payment !== payment.jnid && row.at < at).reduce((sum, row) => sum + (row.cents ?? 0), 0);
+        return { invoice, balance: (cents(invoice.total) ?? 0) - paid };
+      })
+      .filter(({ balance }) => balance > 0)
+      .sort((a, b) => (b.invoice.customer === payment.customer) - (a.invoice.customer === payment.customer) || b.invoice.date_created - a.invoice.date_created)
+      .slice(0, spec.candidate_invoices_max);
+    if (open.length === 0) {
+      counts.no_open_invoice += 1;
+      continue;
+    }
+    const own = applications.filter((row) => row.payment === payment.jnid);
+    if (own.some((row) => !open.some(({ invoice }) => invoice.jnid === row.invoice))) {
+      counts.truth_outside_candidates += 1;
+      continue;
+    }
+    const paymentId = token("payment", payment.jnid);
+    const payer = token("contact", payment.customer);
+    const id = `history.billing_reconciliation.${paymentId}`;
+    cases.push({
+      id,
+      specialist_id: "billing_reconciliation",
+      signal: { kind: "watch", source: "history", watch_id: "payment_received", at: "PT0M", content: { text: `payment ${paymentId} received` } },
+      facts: [
+        { fact_id: `bank_line:${paymentId}`, kind: "bank_feed_line", version: 1, trust: "external_verified", observed_at: "PT0M", data: { bank_line_id: paymentId, direction: "deposit", amount: dollars(amount), sender_customer_id: payer } },
+        ...open.map(({ invoice, balance }) => {
+          const invoiceId = token("invoice", invoice.jnid);
+          return {
+            fact_id: `qbo_invoice:${invoiceId}`,
+            kind: "accounting_observation",
+            version: 1,
+            trust: "external_verified",
+            observed_at: relative(invoice.date_created, at),
+            data: { entity_type: "Invoice", doc_number: invoiceId, customer_id: token("contact", invoice.customer), total_amount: dollars(cents(invoice.total) ?? 0), balance: dollars(balance), issued_offset: relative(invoice.date_invoice || invoice.date_created, at) },
+          };
+        }),
+      ],
+    });
+    const customers = Object.fromEntries(open.map(({ invoice }) => [token("invoice", invoice.jnid), token("contact", invoice.customer)]));
+    truths.push({
+      case_id: id,
+      payment: paymentId,
+      payment_customer: payer,
+      invoice_customers: customers,
+      applications: own.map((row) => ({ payment: paymentId, invoice: token("invoice", row.invoice), amount_cents: row.cents, payment_customer: payer, invoice_customer: customers[token("invoice", row.invoice)] ?? null })),
+    });
   }
   finish(cases, guard);
   return { cases, truths, counts };
@@ -443,4 +601,22 @@ export function durationOutcome(toolCalls) {
   const draft = (Array.isArray(toolCalls) ? toolCalls : []).find((call) => call?.action_id === "schedule.draft");
   const days = Number(draft?.args?.planned_days);
   return Number.isFinite(days) && days > 0 ? { predicted_days: days } : { abstained: true };
+}
+
+/**
+ * Billing: the applications a run proposed, as rows for `billingMetrics`. Each
+ * `reconciliation.resolve` is one application; the customers come from the case's truth, so an
+ * invoice the case never showed has no customer and counts as cross-customer.
+ */
+export function billingOutcome(toolCalls, truth = {}) {
+  const proposed = (Array.isArray(toolCalls) ? toolCalls : [])
+    .filter((call) => call?.action_id === "reconciliation.resolve")
+    .map((call) => ({
+      payment: call.args?.bank_line_id ?? null,
+      invoice: call.args?.invoice_id ?? null,
+      amount_cents: Number(call.args?.amount_cents),
+      payment_customer: truth.payment_customer,
+      invoice_customer: truth.invoice_customers?.[call.args?.invoice_id] ?? null,
+    }));
+  return proposed.length > 0 ? { proposed } : { proposed, abstained: true };
 }

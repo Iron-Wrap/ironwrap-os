@@ -463,10 +463,27 @@
       "effectiveProbability",
       "lostReasonId",
       "profilePhoto",
-      "approved_*",
-      "last_*",
-      "parent_approved_*",
-      "parent_last_*",
+      "approved_estimate_total",
+      "approved_invoice_due",
+      "approved_invoice_total",
+      "last_budget_gross_margin",
+      "last_budget_gross_profit",
+      "last_budget_revenue",
+      "last_estimate",
+      "last_estimate_date_created",
+      "last_estimate_date_estimate",
+      "last_estimate_jnid",
+      "last_estimate_number",
+      "last_invoice",
+      "last_invoice_date_created",
+      "last_invoice_date_invoice",
+      "last_invoice_jnid",
+      "last_invoice_number",
+      "parent_approved_estimate_total",
+      "parent_approved_invoice_due",
+      "parent_approved_invoice_total",
+      "parent_last_estimate",
+      "parent_last_invoice",
       "image_id",
       "open_edge_id",
       "merged",
@@ -516,7 +533,7 @@
   },
   "specialists": {
     "lead_concierge": {
-      "status": "awaiting_fields",
+      "status": "ready",
       "outcome": "leadOutcome",
       "sample": 300,
       "stratify": "converted",
@@ -574,11 +591,24 @@
       },
       "sources": {
         "ghl": {
-          "status": "awaiting_fields",
+          "status": "ready",
           "builder": "buildGhlLeadCases",
           "intake_window_minutes": 15,
           "conversion_horizon_days": 120,
-          "intake_custom_fields": []
+          "intake_fields": {
+            "contact.service_type_radio": "option",
+            "contact.region": "option",
+            "contact.adis_organic": "option",
+            "contact.referral": "option",
+            "contact.jobsource": "source",
+            "contact.type_of_build": "text"
+          },
+          "reviewed_options": {
+            "contact.service_type_radio": [
+              "Metal Roofing"
+            ]
+          },
+          "fill_gap_max": 0.2
         },
         "jobnimbus": {
           "status": "awaiting_export",
@@ -638,12 +668,12 @@
       ]
     },
     "scheduler_dispatcher": {
-      "status": "awaiting_export",
+      "status": "no_source",
       "outcome": "durationOutcome",
       "sample": 150,
       "sources": {
         "jobnimbus": {
-          "status": "awaiting_export",
+          "status": "no_source",
           "builder": "buildDurationCases",
           "decision_lead_days": 7,
           "completed_statuses": [
@@ -723,27 +753,37 @@
       ]
     },
     "billing_reconciliation": {
-      "status": "awaiting_quickbooks",
-      "needs": [
-        "QuickBooks payments and deposits with their applications to invoices",
-        "QuickBooks invoices with customer, amount, and creation time"
-      ],
+      "status": "ready",
+      "outcome": "billingOutcome",
       "sample": 150,
+      "needs": [
+        "QuickBooks payments and deposits with their applications to invoices, for a sample large enough to gate"
+      ],
+      "sources": {
+        "jobnimbus": {
+          "status": "ready",
+          "builder": "buildPaymentCases",
+          "candidate_invoices_max": 30
+        }
+      },
       "bars": [
         {
           "metric": "cross_customer.rate",
           "max": 0,
-          "gating": true
+          "gating": true,
+          "min_n": 30
         },
         {
           "metric": "false_application.rate",
           "max": 0.01,
-          "gating": true
+          "gating": true,
+          "min_n": 30
         },
         {
           "metric": "exact_amount.rate",
           "min": 0.99,
-          "gating": true
+          "gating": true,
+          "min_n": 30
         },
         {
           "metric": "precision",

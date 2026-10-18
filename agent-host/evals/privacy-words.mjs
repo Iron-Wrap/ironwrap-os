@@ -123,6 +123,7 @@ lot block plan legal land
 will would wouldn't via also
 replacement replacements installation installations kitchen bathroom bedroom room rooms ceiling ceilings stairs
 interior exterior inside outside renovation renovations upgrade upgrades
+true false inspection inspections based base located location live lives living moved km kms kilometres kilometers mi miles
 `),
 );
 
@@ -164,6 +165,26 @@ export const PERSON_AUXILIARIES = new Set(words("is was will would has had can c
 export const PERSON_ACTIONS = new Set(
   words("call calling text texting email emailing come coming be here home away back out pay paying send sending sign signing confirm going gone available"),
 );
+
+// Colours, qualities, and directions that are also surnames or given names (Gold, Tan, Short,
+// West). Weather and season words stay ordinary ("Hail damage", "Spring inspection"); the verb and
+// possessive rules still catch them as names. With the homonym lists they make the name-like words: one of
+// these capitalised counts as a word only before what it describes ("White fascia", "North side").
+export const NAME_LIKE_WORDS = new Set(
+  words("gold silver tan short long little young best north south east west ridge"),
+);
+// Ordinary words that are also names, read as names only in the possessive ("Winter's roof").
+export const POSSESSIVE_NAMES = new Set(words("hail storm snow rain frost winter spring fall summer autumn light fine fair"));
+export const DESCRIBED_NOUNS = new Set(
+  words(`
+fascia soffit soffits metal steel panel panels shingle shingles roof roofs roofing trim trims siding eaves eavestrough
+eavestroughs gutter gutters downspout downspouts flashing seam seams colour color colours colors finish paint door doors
+window windows cap caps side sides elevation elevations wall walls face slope slopes end corner facing exterior
+membrane deck decking tile tiles board boards vinyl stucco brick stone wood cedar shake shakes garage house shed
+`),
+);
+// Words skipped when looking for the verb after a name-like word ("Gold just called").
+export const ADVERBS = new Set(words("also just then still never always already again later now soon only even not finally really"));
 
 // Verbs only a person does: after any capitalised word that is not a role or a pronoun, they make
 // it a name ("Gold called back", "Tan wants a quote").

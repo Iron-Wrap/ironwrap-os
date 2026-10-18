@@ -11,16 +11,20 @@ import { createHmac } from "node:crypto";
 
 import {
   ACRONYMS,
+  ADVERBS,
   BASE_WORDS,
   BRAND_WORDS,
+  DESCRIBED_NOUNS,
   DATE_CUES,
   DATE_HOMONYMS,
   MID_SENTENCE_WORDS,
   NAME_HOMONYMS,
+  NAME_LIKE_WORDS,
   PERSON_ACTIONS,
   PERSON_AUXILIARIES,
   PERSON_SUBJECTS,
   PERSON_VERBS,
+  POSSESSIVE_NAMES,
   STRONG_PERSON_VERBS,
   SURNAME_HOMONYMS,
 } from "./privacy-words.mjs";
@@ -130,7 +134,8 @@ export function placesPattern(places = []) {
   return names.length ? new RegExp(`(?<![\\p{L}])(?:${names.sort((a, b) => b.length - a.length).join("|")})(?![\\p{L}])`, "giu") : null;
 }
 
-const sentences = (text) => text.split(/(?<=[.!?:;\n])\s+/);
+// Sentences end at punctuation, a label's colon, or any line break.
+const sentences = (text) => text.split(/(?<=[.!?:;])\s+|\s*\n\s*/);
 const WORD = /(?<![\p{L}\p{N}])\p{L}[\p{L}'-]*|\d+/gu;
 const wordKey = (word) => word.toLowerCase().replace(/'s?$/, "");
 const isLower = (word) => word === word.toLowerCase();
@@ -161,11 +166,16 @@ function ordinaryCapitalised(key) {
 // A capitalised word followed by what a person does: "Green said", "Price confirmed", "Wood is coming".
 const actsAsPerson = (next, after) => PERSON_VERBS.has(wordKey(next)) || (PERSON_AUXILIARIES.has(wordKey(next)) && PERSON_ACTIONS.has(wordKey(after)));
 
-// A listed place counts as a place only where the text says so: after a preposition or an address
-// placeholder, before ", AB" or "Alberta", or as a county. Before a person's verb, after a title or
-// an introduction, or next to another place ("Hanna Manning") it is a name, and stays in the text
-// for the word check.
-const PLACE_BEFORE = /(?:\b(?:in|near|from|to|of|at|around|outside|by|into|toward|towards|across|serving)|\],?)\s+$/i;
+const NAME_LIKE = new Set([...NAME_HOMONYMS, ...SURNAME_HOMONYMS, ...NAME_LIKE_WORDS]);
+
+// A listed place counts as a place only where the text says so: after a place preposition ("in",
+// "near", "based from"), a distance or direction ("20 km from", "north of"), or an address placeholder, before
+// ", AB" or "Alberta", or as a county. After a word for a message ("call from", "email to"), before
+// a person's verb, after a title or an introduction, or next to another place ("Hanna Manning") it
+// is a name, and stays in the text for the word check.
+const PLACE_BEFORE =
+  /(?:\b(?:in|near|around|outside|serving|within|toward|towards|across|into)|\b(?:moved|based|located|live|lives|living|coming|driving)\s+from|\b\d+\s*(?:km|kms|kilometres|kilometers|mi|miles|minutes|mins|hours|hrs)\s+(?:from|of|to|outside)|\b(?:north|south|east|west|northeast|northwest|southeast|southwest)\s+of|\],?)\s+$/i;
+const MESSAGE_BEFORE = /\b(?:call|calls|called|voicemail|vm|email|emails|emailed|text|texts|texted|message|messages|referral|referred|note|letter|cheque|payment|left)\b(?:\s+\p{L}+)?\s+(?:in|near|from|to|by|of|at|for|with)\s+$/iu;
 const PLACE_AFTER = /^,?\s+(?:AB|Alberta)\b/;
 const TITLE_BEFORE = /\b(?:mr|mrs|ms|miss|dr)\.?\s+$/i;
 const INTRODUCED = new RegExp(`\\b(?:${INTRODUCTIONS})\\b[,!:]?\\s+$`, "i");
@@ -178,7 +188,8 @@ function stripPlaces(text, places) {
     const after = text.slice(end, end + 40);
     const nextWords = after.match(/^\s+(\p{L}[\p{L}'-]*)(?:\s+(\p{L}[\p{L}'-]*))?/u) ?? [];
     const adjacent = (found[i - 1] && /^\s+$/.test(text.slice(found[i - 1].end, start))) || (found[i + 1] && /^\s+$/.test(text.slice(end, found[i + 1].start)));
-    const person = adjacent || TITLE_BEFORE.test(before) || INTRODUCED.test(before) || STRONG_PERSON_VERBS.has(wordKey(nextWords[1] ?? "")) || actsAsPerson(nextWords[1] ?? "", nextWords[2] ?? "");
+    const person =
+      adjacent || TITLE_BEFORE.test(before) || INTRODUCED.test(before) || MESSAGE_BEFORE.test(before) || STRONG_PERSON_VERBS.has(wordKey(nextWords[1] ?? "")) || actsAsPerson(nextWords[1] ?? "", nextWords[2] ?? "");
     const place = /\bcounty$/i.test(name) || PLACE_BEFORE.test(before) || PLACE_AFTER.test(after);
     if (place && !person) out = out.slice(0, start) + " " + out.slice(end);
   }
@@ -192,55 +203,68 @@ const PIECE = new RegExp(`${TOKEN.source}|${PLACEHOLDER.source}|${WORD.source}`,
  * place context (`stripPlaces`, over safe places) are removed; tokens and placeholders are skipped.
  * - A lower-case word must be listed (`BASE_WORDS`) or in `vocabulary` (built from the export by
  *   `buildVocabulary`).
- * - An acronym always counts.
+ * - An acronym always counts. A month or season that is also a name counts after a date word or
+ *   before a number.
  * - In the middle of a sentence a capitalised word counts only if it is a weekday, a month, a
- *   brand, or Alberta; a month or season that is also a name needs a date word before it or a
- *   number after it.
- * - In a sentence written in capitals, each word must be an acronym or listed and not a name.
- * - Starting a sentence, a capitalised word must be listed and not a name: a given-name homonym
- *   counts only as "Will" or "May" before an ordinary verb; a surname homonym only when not
- *   followed by what a person does; any other word not before a person's verb unless it is a role
- *   or a pronoun ("Customer called", not "Gold called").
+ *   brand, or Alberta.
+ * - Starting a sentence (or a line, or after a label; and any word in a sentence written in
+ *   capitals), a capitalised word is a name in its possessive form ("Gold's roof", "Winter's
+ *   roof") or before a person's verb ("Gold just called", "Wood is coming"), unless it is a role,
+ *   a pronoun, or a brand. A name-like word (a given-name or surname homonym, or a colour,
+ *   quality, or direction that is also a name) counts only before what it describes ("White
+ *   fascia", "North side"), or as "Will" or "May" before an ordinary verb. Any other capitalised
+ *   word must be listed.
  * A greeting or introduction followed by a word that is not listed fails it too.
  */
+// Longer text is dropped unread: a note is short, and the word check stays linear.
+const MAX_TEXT = 5000;
+
 export function looksReliable(text, places = null, vocabulary = null) {
+  if (String(text).length > MAX_TEXT) return false;
   let stripped = normaliseText(text).replace(fresh(BRANDS), " ");
   if (places) stripped = stripPlaces(stripped, places);
   if (!/\p{L}/u.test(stripped.replace(fresh(TOKEN), " ").replace(fresh(PLACEHOLDER), " "))) return false;
   const skipped = (piece) => fresh(TOKEN).test(piece) || fresh(PLACEHOLDER).test(piece);
   for (const sentence of sentences(stripped)) {
     const pieces = sentence.match(PIECE) ?? [];
-    // A sentence in capitals: each word must be an acronym or a listed word that is not a name.
     const shouted = !/\p{Ll}/u.test(sentence.replace(fresh(TOKEN), " ").replace(fresh(PLACEHOLDER), " "));
     for (let index = 0; index < pieces.length; index += 1) {
       const word = pieces[index];
       if (/^\d/.test(word) || skipped(word)) continue;
       const key = wordKey(word);
-      if (shouted && !isLower(word)) {
-        if (ACRONYMS.has(word.replace(/'S$/, "")) || ordinaryCapitalised(key)) continue;
-        return false;
-      }
       if (isLower(word)) {
         if (!ordinaryLower(key, vocabulary)) return false;
         continue;
       }
       if (ACRONYMS.has(word.replace(/'s$/i, ""))) continue;
-      const next = pieces[index + 1] ?? "";
-      const after = pieces[index + 2] ?? "";
       const previous = pieces[index - 1] ?? "";
-      if (DATE_HOMONYMS.has(key) && (DATE_CUES.has(wordKey(previous)) || /^\d/.test(next))) continue;
-      if (!pieces.slice(0, index).every((piece) => /^\d/.test(piece))) {
+      if (DATE_HOMONYMS.has(key) && (DATE_CUES.has(wordKey(previous)) || /^\d/.test(pieces[index + 1] ?? ""))) continue;
+      const atStart = shouted || pieces.slice(0, index).every((piece) => /^\d/.test(piece));
+      if (!atStart) {
         if (MID_SENTENCE_WORDS.has(key)) continue;
         return false;
       }
-      if (NAME_HOMONYMS.has(key) || SURNAME_HOMONYMS.has(key)) {
-        if (actsAsPerson(next, after)) return false;
-        if ((key === "will" || key === "may") && next && isLower(next) && ordinaryLower(wordKey(next), vocabulary)) continue;
-        if (SURNAME_HOMONYMS.has(key) && BASE_WORDS.has(key)) continue;
+      // The next word, and the next two that are not adverbs, read lazily.
+      let next = "";
+      const verbs = [];
+      for (let ahead = index + 1; ahead < pieces.length && verbs.length < 2; ahead += 1) {
+        const piece = pieces[ahead];
+        if (/^\d/.test(piece) || skipped(piece)) continue;
+        if (!next) next = wordKey(piece);
+        if (!ADVERBS.has(wordKey(piece))) verbs.push(piece);
+      }
+      const [verb = "", after = ""] = verbs;
+      const role = PERSON_SUBJECTS.has(key) || BRAND_WORDS.has(key);
+      // "Gold's roof" is a name; "That's" and "Roof's" are listed words.
+      const possessive = /'s$/i.test(word) && (!BASE_WORDS.has(key) || NAME_LIKE.has(key) || POSSESSIVE_NAMES.has(key));
+      if (!role && (possessive || STRONG_PERSON_VERBS.has(wordKey(verb)))) return false;
+      if (NAME_LIKE.has(key)) {
+        if (actsAsPerson(verb, after)) return false;
+        if ((key === "will" || key === "may") && next && !NAME_LIKE.has(next) && ordinaryLower(next, vocabulary)) continue;
+        if (DESCRIBED_NOUNS.has(next)) continue;
         return false;
       }
-      if (STRONG_PERSON_VERBS.has(wordKey(next)) && !PERSON_SUBJECTS.has(key) && !BRAND_WORDS.has(key)) return false;
-      if (ordinaryCapitalised(key) || BRAND_WORDS.has(key)) continue;
+      if (ordinaryCapitalised(key) || role) continue;
       return false;
     }
     for (const match of sentence.matchAll(fresh(NAME_SLOT))) {
@@ -266,7 +290,7 @@ export function buildVocabulary(texts, { names = [], minRecords = 20 } = {}) {
   const objects = new Map();
   const bump = (map, key) => map.set(key, (map.get(key) ?? 0) + 1);
   for (const text of texts) {
-    if (typeof text !== "string" || text === "") continue;
+    if (typeof text !== "string" || text === "" || text.length > MAX_TEXT) continue;
     const clean = normaliseText(text);
     for (const match of clean.matchAll(fresh(NAME_SLOT))) excluded.add(wordKey(match[1]));
     for (const match of clean.matchAll(fresh(OBJECT_SLOT))) bump(objects, wordKey(match[1]));
@@ -410,11 +434,16 @@ export function promptViolations(prompt, originals, places = null, fixed = {}) {
   return createGuard(originals, places, fixed)(prompt);
 }
 
+// The fields a linked record may carry ("related", "primary", "owners"): the name and email join
+// the dictionary; any other field is unclassified.
+const LINK_FIELDS = new Set(["id", "name", "type", "number", "email", "subject"]);
+
 /**
  * Every field in `rows` that the block does not classify: not an identifier, address, free text,
  * linked record, name, or reviewed field, and not under `never_copied` ("prefix*" covers a prefix).
- * A nested object is walked where the block names one of its fields ("contact.name"). Builders
- * refuse an export with any such field, so a new personal field never passes unseen.
+ * A nested object is walked where the block names one of its fields ("contact.name"), and every
+ * linked record's fields must be `LINK_FIELDS` ("related[].secret" otherwise). Builders refuse an
+ * export with any such field, so a new personal field never passes unseen.
  */
 export function unclassifiedFields(rows, block, neverCopied = []) {
   const classified = new Set([
@@ -425,6 +454,9 @@ export function unclassifiedFields(rows, block, neverCopied = []) {
   const prefixes = neverCopied.filter((field) => field.endsWith("*")).map((field) => field.slice(0, -1));
   const parents = new Set([...classified].filter((field) => field.includes(".")).map((field) => field.split(".")[0]));
   const found = new Set();
+  for (const field of block.linked ?? []) {
+    for (const row of rows) for (const link of [row?.[field]].flat()) if (link && typeof link === "object") for (const key of Object.keys(link)) if (!LINK_FIELDS.has(key)) found.add(`${field}[].${key}`);
+  }
   const visit = (row, prefix) => {
     for (const [key, value] of Object.entries(row ?? {})) {
       const path = `${prefix}${key}`;

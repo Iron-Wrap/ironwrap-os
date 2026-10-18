@@ -7303,6 +7303,7 @@ export function buildServer(config) {
         ? null
         : await readResourceOrNull(config, "Authority Record", args.authority_record_id);
       const draft = authorityRecordDraftFromArgs(config, args, before, new Date().toISOString());
+      assertExternalAuthorityKind(draft);
       if (args.roof_job_id && draft.roof_job && draft.roof_job !== args.roof_job_id) {
         throw new Error("authority_record_roof_job_mismatch");
       }
@@ -7335,6 +7336,7 @@ export function buildServer(config) {
         ? null
         : await readResourceOrNull(config, "Authority Record", args.authority_record_id);
       const draft = authorityRecordDraftFromArgs(config, args, before, now);
+      assertExternalAuthorityKind(draft);
       if (args.roof_job_id && draft.roof_job && draft.roof_job !== args.roof_job_id) {
         throw new Error("authority_record_roof_job_mismatch");
       }
@@ -9204,6 +9206,14 @@ export function authorityRecordDraftFromArgs(config, args, before, nowIso) {
     draft.exception_reason = "";
   }
   return draft;
+}
+
+// One writer per kind: the Worker records an internal Worker Competency natively in D1 once a
+// person approves it; this rail serves the external issuer kinds only.
+export function assertExternalAuthorityKind(draft) {
+  if (!EXTERNAL_AUTHORITY_KINDS.has(draft.authority_kind)) {
+    throw new Error("authority_worker_competency_native_only");
+  }
 }
 
 export function authorityStateDigest(record) {

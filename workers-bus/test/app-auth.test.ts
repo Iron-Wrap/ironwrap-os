@@ -748,6 +748,8 @@ test("production sessions can read jobs and runway without commercial or owner a
     // Production in Frappe. Everything commercial below is still refused.
     "production:clear_gate",
     "authority:read",
+    // Production is the reviewer that approves an internal worker competency command.
+    "authority:approve",
   ]);
   // `production_gate.clear` is not advertised here: it needs a Frappe identity
   // this session may not carry, so the runway read model is where the surface

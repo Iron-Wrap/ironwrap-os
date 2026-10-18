@@ -84,6 +84,7 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 
 - Starting a job while a required gate is Blocked (gate logic and human approval enforce this)
 - Estimator pricing or customer communication
+- Recording, verifying or revoking a Worker Competency with `request_authority_record`: that tool serves external issuer kinds only and refuses an internal competency, which the Worker records natively once a person approves it
 
 ## Operating notes
 

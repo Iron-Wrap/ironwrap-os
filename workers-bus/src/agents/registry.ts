@@ -8,8 +8,11 @@
 // plus an ISO 4217 code, BCP 47 language tags, `<aggregate>_id` ids, a `reason_code` from a closed
 // vocabulary, and recipients as `to`, a canonical contact id.
 
+import { COMPETENCY_KIND } from "../authority-record-native.ts";
+import { EXTERNAL_ISSUER_AUTHORITY_KINDS, type AuthorityRequirement } from "../authority-records.ts";
+import { isReservedEvidenceUploadReference } from "../evidence-upload-reference.ts";
 import { CATALOG, catalogAction } from "./catalog.ts";
-import type { JsonSchema } from "./schema.ts";
+import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
 export type Binding =
   /** Recorded on the run only: A0 and A1 output, which has no effect. */
@@ -20,11 +23,18 @@ export type Binding =
   | { kind: "exception" }
   /** Sets a specialist's hold flag (`specialist.hold`). */
   | { kind: "specialist_hold" }
+  /**
+   * Records, verifies or revokes an internal worker competency natively in D1 once a person
+   * approves the step, with an owned-store readback (`authority.record`).
+   */
+  | { kind: "authority_record" }
   /** Strict arguments are known; the provider effect and readback are not implemented. */
   | { kind: "unavailable" };
 
 export interface RegistryEntry {
   args: JsonSchema;
+  /** A refusal the executor would give from the arguments alone, so the step is never proposed. */
+  argsError?: (args: unknown) => string | null;
   binding: Binding;
   /**
    * Whether this action's machine-permit path is implemented and proven (CAPABILITY-MATRIX.md).
@@ -159,6 +169,149 @@ const NOTE_ADD: RegistryEntry = {
   binding: { kind: "record" },
   machinePermitProven: false,
 };
+
+// No control characters and no leading or trailing space, so an authority value is stored as sent.
+const exactText = (maxLength: number, minLength = 1) => ({
+  type: "string",
+  minLength,
+  maxLength,
+  pattern: "^\\S(?:[^\\u0000-\\u001f]*\\S)?$",
+});
+const SCOPE_TYPES: AuthorityRequirement["scope_type"][] = [
+  "Tenant",
+  "Roof Job",
+  "Assignment",
+  "Work Package",
+  "Shop",
+  "Field",
+  "Trade",
+  "Manufacturer System",
+];
+// Frappe requires the roof job for these scopes (authority_policy.validate_authority_record).
+const JOB_SCOPES = new Set(["Roof Job", "Assignment", "Work Package"]);
+
+// One internal worker competency command, the same for the step's arguments and the /people
+// route's body; the Worker runs it natively once a person approves it (authority-record-native.ts).
+// Never within limits: the action is not delegable, so a person approves every command.
+const AUTHORITY_RECORD: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["operation", "authority_kind", "subject_ref", "scope_type", "scope_ref", "expected_head", "record", "reference", "reason"],
+    properties: {
+      operation: { type: "string", enum: ["record", "verify", "revoke"] },
+      authority_kind: { type: "string", const: COMPETENCY_KIND },
+      // The worker as the requirements name them (`subject_ref`), stored as the record's person.
+      subject_ref: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{2,139}$" },
+      scope_type: { type: "string", enum: SCOPE_TYPES },
+      scope_ref: exactText(140),
+      // The identity's current head the command supersedes; null only for its first version.
+      expected_head: {
+        type: ["object", "null"],
+        additionalProperties: false,
+        required: ["authority_record_id", "authority_version"],
+        properties: {
+          authority_record_id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$" },
+          authority_version: { type: "integer", minimum: 1, maximum: 999_999 },
+        },
+      },
+      // The assessment a record captures; verify and revoke carry the head's assessment forward.
+      record: {
+        type: ["object", "null"],
+        additionalProperties: false,
+        required: [
+          "authority_scope",
+          "roof_job",
+          "issuer_jurisdiction",
+          "issuer_reference",
+          "source_version",
+          "evidence_refs",
+          "effective_from",
+          "expires_at",
+        ],
+        properties: {
+          authority_scope: exactText(240, 2),
+          roof_job: nullable(exactText(200)),
+          issuer_jurisdiction: exactText(160, 2),
+          issuer_reference: exactText(240, 3),
+          source_version: exactText(120),
+          evidence_refs: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["ref", "sha256"],
+              properties: { ref: exactText(512, 3), sha256: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+            },
+          },
+          effective_from: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+          expires_at: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        },
+      },
+      // The verification reference of a verify, or the revocation reference of a revoke.
+      reference: nullable(exactText(240, 3)),
+      reason: nullable(exactText(600, 3)),
+    },
+  },
+  argsError: competencyCommandError,
+  binding: { kind: "authority_record" },
+  machinePermitProven: false,
+};
+
+export interface CompetencyCommand {
+  operation: "record" | "verify" | "revoke";
+  authority_kind: typeof COMPETENCY_KIND;
+  subject_ref: string;
+  scope_type: AuthorityRequirement["scope_type"];
+  scope_ref: string;
+  expected_head: { authority_record_id: string; authority_version: number } | null;
+  record: {
+    authority_scope: string;
+    roof_job: string | null;
+    issuer_jurisdiction: string;
+    issuer_reference: string;
+    source_version: string;
+    evidence_refs: Array<{ ref: string; sha256: string }>;
+    effective_from: string;
+    expires_at: string;
+  } | null;
+  reference: string | null;
+  reason: string | null;
+}
+
+/** The refusal a competency command earns from its own content, before any record is read. */
+export function competencyCommandError(value: unknown): string | null {
+  const kind = typeof value === "object" && value !== null ? (value as { authority_kind?: unknown }).authority_kind : undefined;
+  if (typeof kind === "string" && EXTERNAL_ISSUER_AUTHORITY_KINDS.has(kind)) return "authority_external_issuer_required";
+  if (validate(AUTHORITY_RECORD.args, value).length > 0) return "authority_command_invalid";
+  const command = value as CompetencyCommand;
+  if (command.operation === "record") {
+    const record = command.record;
+    // An unverified version carries no verification fact.
+    if (!record || command.reference !== null) return "authority_command_invalid";
+    // The stored reference list holds at most 20,000 characters (0045).
+    if (record.evidence_refs.some((entry) => isReservedEvidenceUploadReference(entry.ref)) ||
+        canonicalJson(record.evidence_refs).length > 20_000) {
+      return "authority_command_invalid";
+    }
+    if (!isoDate(record.effective_from) || !isoDate(record.expires_at) || record.effective_from > record.expires_at) {
+      return "authority_window_invalid";
+    }
+    if (JOB_SCOPES.has(command.scope_type) && record.roof_job === null) return "authority_roof_job_required";
+    return null;
+  }
+  if (command.record !== null || command.expected_head === null || command.reference === null) {
+    return "authority_command_invalid";
+  }
+  return command.operation === "revoke" && command.reason === null ? "authority_command_invalid" : null;
+}
+
+function isoDate(value: string): boolean {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 
 export const REGISTRY: Record<string, RegistryEntry | null> = {
   "purchase_order.record_acknowledgement": NOT_YET_REGISTERED,
@@ -301,7 +454,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "gate.clear": NOT_YET_REGISTERED,
   "gate.waive": NOT_YET_REGISTERED,
   "document.request": NOT_YET_REGISTERED,
-  "authority.record": NOT_YET_REGISTERED,
+  "authority.record": AUTHORITY_RECORD,
   "privacy_request.answer": NOT_YET_REGISTERED,
   "privacy_incident.contain": NOT_YET_REGISTERED,
   "access.prepare_change": NOT_YET_REGISTERED,

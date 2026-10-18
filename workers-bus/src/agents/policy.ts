@@ -128,7 +128,8 @@ export function evaluateStep(input: StepInput): PolicyDecision {
 
   const entry = (input.registry ?? registryEntry)(input.actionId);
   if (!entry) return stop("abstained", "policy_missing", "schema");
-  if (validate(entry.args, input.args).length > 0) return stop("abstained", "action_unregistered", "schema");
+  if (validate(entry.args, input.args).length > 0 || entry.argsError?.(input.args))
+    return stop("abstained", "action_unregistered", "schema");
   // Closed machine codes and forbidden targets are contract data, never model descriptions.
   const args = input.args as Record<string, unknown>;
   if (action.reason_codes && !action.reason_codes.includes(args.reason_code as string)) return stop("abstained", "action_unregistered", "schema");

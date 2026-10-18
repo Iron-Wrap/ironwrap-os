@@ -9,7 +9,7 @@ function assignment(source: string, name: string): string[] {
   return [value, ...appended].join(",").split(",");
 }
 
-test("native Work Package authority and stop guard are included in both recovery inventories", async () => {
+test("native Work Package authority, stop guard, and stop release are included in both recovery inventories", async () => {
   const migration = [
     await readFile(
       new URL(
@@ -46,6 +46,10 @@ test("native Work Package authority and stop guard are included in both recovery
       ),
       "utf8",
     ),
+    await readFile(
+      new URL("../migrations/0145_work_package_stop_releases.sql", import.meta.url),
+      "utf8",
+    ),
   ].join("\n");
   const backup = await readFile(
     new URL("../../deploy/backup-d1-to-r2.sh", import.meta.url),
@@ -59,6 +63,7 @@ test("native Work Package authority and stop guard are included in both recovery
     "work_package_events",
     "work_package_supersessions",
     "work_packages",
+    "work_package_stop_releases",
   ];
   const indexes = [
     ["idx_field_work_package_actions_event", "field_work_package_actions"],
@@ -76,6 +81,7 @@ test("native Work Package authority and stop guard are included in both recovery
       "idx_work_package_supersessions_replacement",
       "work_package_supersessions",
     ],
+    ["idx_work_package_stop_releases_package", "work_package_stop_releases"],
   ];
   const triggers = [
     ["work_package_events_authority_guard", "work_package_events"],
@@ -108,6 +114,11 @@ test("native Work Package authority and stop guard are included in both recovery
     ["work_package_events_authority_precondition_guard", "work_package_events"],
     ["work_package_supersessions_blocked_guard", "work_package_supersessions"],
     ["work_packages_blocked_status_guard", "work_packages"],
+    ["work_package_stop_releases_validate_insert", "work_package_stop_releases"],
+    ["work_package_stop_releases_apply", "work_package_stop_releases"],
+    ["work_package_stop_releases_append_only_update", "work_package_stop_releases"],
+    ["work_package_stop_releases_append_only_delete", "work_package_stop_releases"],
+    ["work_package_stop_releases_no_insert_replace", "work_package_stop_releases"],
   ];
   for (const table of tables) {
     assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));

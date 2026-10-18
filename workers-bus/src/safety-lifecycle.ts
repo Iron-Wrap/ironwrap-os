@@ -80,8 +80,11 @@ const EQUIPMENT_AUTHORITY_ROLES = new Set([
   "production",
   "shop",
 ]);
-/** Roles that may command a rescue, declare control, release a stop, or verify closure. */
-const RESPONSE_AUTHORITY_ROLES = new Set(["owner", "ops", "production"]);
+/**
+ * Roles that may command a rescue, declare control, release a stop, or verify closure. The crew
+ * stop release on a Work Package (work-package-stop-release.ts) admits the same roles.
+ */
+export const RESPONSE_AUTHORITY_ROLES = new Set(["owner", "ops", "production"]);
 /** Roles that may record a regulatory or external notification. */
 const NOTIFICATION_AUTHORITY_ROLES = new Set(["owner", "ops"]);
 

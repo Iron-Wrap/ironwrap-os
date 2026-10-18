@@ -575,6 +575,24 @@ test("qualification config: orchestrator conditions are pinned and the model com
   ]);
 });
 
+test("history config: intake fields that change later, ungated minimums, and fill gaps are refused", () => {
+  const root = fixture();
+  const config = JSON.parse(readFileSync(join(here, "history.v1.json"), "utf8"));
+  const ghl = config.specialists.lead_concierge.sources.ghl;
+  ghl.intake_fields["contact.old_lead_status"] = "option";
+  ghl.fill_gap_max = 2;
+  delete config.specialists.billing_reconciliation.bars[0].min_n;
+  writeFileSync(join(root, "agent-host/evals/history.v1.json"), JSON.stringify(config));
+  assert.deepEqual(
+    validate(root).failures.map((failure) => failure.replace(/^.*?history\.v1\.json: /, "")),
+    [
+      "lead_concierge.sources.ghl.intake_fields.contact.old_lead_status names a field that changes after intake",
+      "lead_concierge.sources.ghl.fill_gap_max must be a share between 0 and 1",
+      "billing_reconciliation.bars[0] gates without min_n",
+    ],
+  );
+});
+
 test("history config: output-only sources, privacy coverage, builder parameters, valid bars; no record files or links in evals", () => {
   const root = fixture();
   const real = JSON.parse(readFileSync(join(here, "history.v1.json"), "utf8"));
@@ -591,6 +609,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
   delete broken.privacy.contact.identifiers.email;
   delete broken.privacy.job.identifiers.sales_rep_name;
   broken.privacy.job.reviewed.push("description");
+  broken.privacy.never_copied.push("a*");
   broken.privacy.never_copied = broken.privacy.never_copied.filter((field) => field !== "monetaryValue");
   const lead = broken.specialists.lead_concierge;
   lead.sources.ghl.builder = "buildLeadCases";
@@ -616,6 +635,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
       "privacy.job.identifiers must include sales_rep_name",
       "privacy.job.reviewed lists description, which is personal",
       "privacy.never_copied must include monetaryValue",
+      "privacy.never_copied: a* is not a field or a prefix wildcard such as cf_*",
       "lead_concierge.sources.ghl.builder must be buildGhlLeadCases",
       "lead_concierge.sources.ghl.min_outcome_age_days must be a non-negative integer",
       "lead_concierge.sources.ghl.won_statuses must be a list",
@@ -628,7 +648,7 @@ test("history config: output-only sources, privacy coverage, builder parameters,
       "lead_concierge.bars[0] has min above max",
       "lead_concierge.bars[0].min_n must be an integer of at least 5",
       "painter is not a roster specialist",
-      "painter.status must be one of ready, awaiting_export, awaiting_fields, awaiting_schema, awaiting_quickbooks",
+      "painter.status must be one of ready, awaiting_export, awaiting_fields, awaiting_schema, awaiting_quickbooks, no_source",
       "painter has no history metrics",
       "painter needs at least one bar",
     ],

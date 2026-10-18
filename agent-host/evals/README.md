@@ -428,10 +428,11 @@ and reports under `output/evals/history`. Transcripts are deleted after scoring
 **Privacy before the prompt.** Business facts may reach the model; personal identifiers may not.
 - Every export field is classified per record type (`contact`, `job`, `activity`, `payment`,
   `invoice`, `ghl_contact`, `ghl_opportunity`): `identifiers`, `address`, `free_text`, `linked`
-  (records carrying a person's `name`), `named` (a record name such as "Morgan Fixture - Metal
-  Roof"), `reviewed` (business facts, never personal), or the shared `never_copied` list ("prefix*"
-  covers a prefix). A builder refuses an export with any other field and names the fields, never
-  their values, so a new personal field (a date of birth, a spouse) never passes unseen.
+  (records carrying only an id, name, type, number, email, and subject), `named` (a record name
+  such as "Morgan Fixture - Metal Roof"), `reviewed` (business facts, never personal), or the shared
+  `never_copied` list (a wildcard only as a prefix ending in "_", such as `cf_*`). A builder refuses
+  an export with any other field, or a linked record with any other field, and names the fields,
+  never their values, so a new personal field (a date of birth, a spouse) never passes unseen.
 - Every identifier becomes a stable, letters-only token keyed by a salt from `salt_env`; the
   mapping stays under `output/`. The dictionary covers the whole export: every contact, the names
   on linked records and in record names (parts made only of listed words, such as "Metal Roof",
@@ -449,19 +450,27 @@ and reports under `output/evals/history`. Transcripts are deleted after scoring
     greeting or an introduction, words seen after "from", "with", "per", or "tell" in more than
     one use in ten, and words capitalised mid-sentence twice or more never qualify.
   - In the middle of a sentence a capitalised word counts only if it is a weekday, a month, a
-    brand, or Alberta. Starting a sentence it must be in the base list and not a name: given-name
-    homonyms (Grace, Bill) count only as "Will" or "May" before an ordinary verb, surname homonyms
-    (Green, Price) not before what a person does ("Price confirmed", "Wood is coming"), and any
-    other word not before a person's verb unless it is a role or a pronoun ("Customer called", not
-    "Gold called"). A sentence in capitals needs acronyms or listed non-name words throughout.
-  - A listed municipality counts as a place only in place context: after a preposition or an
-    address placeholder, before ", AB" or "Alberta", or as a county; never before a person's verb,
-    after a title or an introduction, or next to another place. Only municipalities that share no
-    word with a name in the export qualify, so a customer called Brooks or Hanna Manning is
-    scrubbed, and a stranger called Jasper ("spoke with Jasper") drops the text.
-  A name outside the export ("my husband bob") therefore drops the text instead of passing it.
-  Residual risk: a surname homonym at the start of a sentence before an ordinary verb ("Green
-  needs a quote") still passes.
+    brand, or Alberta. Starting a sentence, a line, or the text after a label (and anywhere in a
+    sentence written in capitals), a capitalised word is a name in its possessive form ("Gold's
+    roof") or before a person's verb, adverbs skipped ("Gold just called"), unless it is a role, a
+    pronoun, or a brand. A name-like word (given-name and surname homonyms, and colours,
+    qualities, and directions that are also names: Gold, Short, West) counts only before what it
+    describes ("White fascia", "North side") or as "Will" or "May"
+    before an ordinary verb. Any other capitalised word must be in the base list.
+  - A listed municipality counts as a place only in place context: after "in", "near", "based
+    from", a distance or direction ("20 km from", "north of"), or an address placeholder, before ", AB" or
+    "Alberta", or as a county; never after a word for a message ("call from", "email to"), before
+    a person's verb, after a title or an introduction, or next to another place. Only
+    municipalities that share no word with a name in the export qualify, so a customer called
+    Brooks or Hanna Manning is scrubbed, and a stranger called Jasper ("spoke with Jasper") drops
+    the text.
+  A name outside the export ("my husband bob") therefore drops the text instead of passing it. The
+  cost is ordinary text dropped with it ("Price is 12k", "Standing Seam Roof"); `kept_text` shows
+  it. Weather and season words ("Hail damage", "Spring inspection") stay ordinary unless a
+  person's verb or the possessive ("Winter's roof") makes them a name. Residual risks: a listed
+  town after "in" or "near" read as a place where it was a person; a rare surname that is also a
+  listed word standing alone ("Referred by: Light", "Customer: Fine"); and "Will" or "May" before
+  an ordinary verb ("Will phone tomorrow").
 - Source values are mapped to `source_categories`; the raw value is never copied. Fields under
   `never_copied` (current statuses, tags, values, stages, custom fields, card and transaction
   numbers) never reach a case. Text a builder writes itself is lower case, so it cannot read as a
@@ -488,9 +497,26 @@ offsets from it; outcomes (`truths`) stay apart and never enter a prompt.
 - GoHighLevel keeps only the current status and the time of the last status change: won within the
   conversion horizon is a conversion, lost or abandoned is not, open past the horizon is not, and
   open within it is too recent to use. `won_after_horizon` and `open_past_horizon` count the labels
-  the horizon decides. Custom fields carry current state without timestamps, so only the ids listed
-  in `intake_custom_fields` are copied, as scrubbed text, and a value that reports an outcome is
-  dropped and counted.
+  the horizon decides. Contact custom fields carry current state without timestamps, so only the
+  fields `intake_fields` names by key are read, through the field definitions export:
+  - an `option` as one of the field's options, otherwise `other`. Every option must be ordinary
+    words or places and match no export name, or be listed in `reviewed_options` after the owner
+    looked at it; otherwise the build stops, naming the field and a count;
+  - `text` scrubbed; a text that reports an outcome is dropped and counted;
+  - a `source` as its category.
+  A field whose definition is missing or excluded stops the build, and the validator refuses a
+  field whose key names a status, stage, outcome, call, or date. A field filled more often for
+  converted than for other leads by over `fill_gap_max` stops the build as a likely entry made
+  during the sale; `fill_gap` records each field's difference (a field filled less often for
+  converted leads usually joined the form later). A value a person later rewrote in an intake
+  field remains a residual risk.
+- Payments are decided when they were recorded, in the production fact shapes: the payment as a
+  `bank_feed_line` with the customer it was recorded against, and each candidate invoice as an
+  `accounting_observation` with its customer, total, and the balance earlier payments left. The
+  candidates are the invoices open at that time, the payer's first, at most
+  `candidate_invoices_max`; a payment applied to an invoice the case cannot show is skipped and
+  counted (`truth_outside_candidates`). Those skips are the hard cases (an insurer paying an old
+  invoice), so the score leans easy; report the skipped share beside it. Invoice totals are current state, so a later change to a total remains a residual risk.
 
 **Scoring.** Deterministic; no judge model sees history. `history.mjs` computes the metrics raw and
 applies the bars to the raw values, then publishes aggregates only:
@@ -506,20 +532,25 @@ cell (read from `count`, or from `rate` times `n`), and `historyScore` and the q
 refuse a history section that fails it.
 
 **Specialists.**
-- `lead_concierge` (awaiting the GoHighLevel intake field ids, and the JobNimbus export): GoHighLevel
-  opportunities become ready once `intake_custom_fields` names the fields a lead fills in; without
-  them a case would hold only a source and a municipality. Its
+- `lead_concierge`: GoHighLevel opportunities with their intake fields now; JobNimbus contacts
+  when an export with activities exists. Its
   triage (`qualified`, `nurture`, `disqualified`, `spam`) is scored against conversion: AUC, the
   share of converted leads marked qualified, and the share dropped. Samples take converted and other
   leads half and half.
-- `scheduler_dispatcher` (awaiting the JobNimbus export): `schedule.draft` `planned_days` against
-  the scheduled days.
+- `scheduler_dispatcher` (`no_source`, a known gap): `schedule.draft` `planned_days` against the
+  scheduled working days. No export carries that truth yet: the JobNimbus export has no finished
+  jobs with dates, and the GoHighLevel stage dates are nearly empty and measure the sale, not the
+  crew. It stays without a history score until the owner names a source.
 - `estimator` (awaiting estimates, measurements, and job costs): price error against the quoted and
   accepted totals, margin error, and prices below actual cost, with the person's own quotes below
   cost as the baseline.
-- `billing_reconciliation` (awaiting QuickBooks): precision, recall, exact amounts, cross-customer
-  applications (a payer the records show paying that customer, such as an insurer, is legitimate),
-  and invented applications.
+- `billing_reconciliation` (advisory): JobNimbus payments now, QuickBooks later. Each `reconciliation.resolve`
+  (`bank_line_id`, `invoice_id`, `amount_cents`) is a proposed application, scored against how the
+  payment was applied: precision, recall, exact amounts, cross-customer applications (a payer the
+  records show paying that customer, such as an insurer, is legitimate), and invented applications.
+  Its gating bars need 30 applications (`min_n`), so a small export reads `insufficient`, never
+  `missed`. Playbook rule 8 resolves only an exact match tied to a verified sender, so expect most
+  cases to end in `money.flag` or an escalation; the score then mostly measures abstention.
 
 **Bars.** Each bar names a metric path with `min` or `max`, and `min_n` when the metric needs that
 many records to be read. A gating bar that is missed fails qualification; without gating bars the

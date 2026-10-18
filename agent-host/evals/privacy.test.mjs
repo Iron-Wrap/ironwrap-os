@@ -29,6 +29,12 @@ const record = () => ({
 const known = (pz) =>
   Object.entries(PRIVACY.identifiers).map(([field, kind]) => ({ kind, value: record()[field], token: pz.token(kind, record()[field]) }));
 
+test("linked records may carry only their id, name, type, number, email, and subject", async () => {
+  const { unclassifiedFields } = await import("./privacy.mjs");
+  const block = { identifiers: { jnid: "job" }, address: [], free_text: [], linked: ["related"], named: [], reviewed: [] };
+  assert.deepEqual(unclassifiedFields([{ jnid: "j", related: [{ id: "c", name: "N", email: null, spouse: "S" }] }], block, []), ["related[].spouse"]);
+});
+
 test("tokens are letters only, so none ever reads as a phone or account number", () => {
   const pz = createPseudonymizer(SALT);
   const tokens = Array.from({ length: 5000 }, (_, i) => pz.token("person", `Synthetic Person ${i}`));
@@ -84,7 +90,7 @@ test("reliability: every word must be ordinary, in any case; trade notes, places
     "i need a new roof at [street_address] edmonton",
     "ROOF LEAKING OVER THE GARAGE, ASAP",
     "Re-roof, tear off one layer, replaced flashing.",
-    "White fascia and soffit. Price is 12k.",
+    "White fascia and soffit. Green metal roof.",
     "May need a permit.",
   ]) {
     assert.equal(looksReliable(kept, PLACES), true, kept);
@@ -112,6 +118,7 @@ test("reliability: every word must be ordinary, in any case; trade notes, places
     "Will called back",
     "May called about the quote",
     "contact [mike] about the quote",
+    "Price is 12k.",
     "[street_address]",
   ]) {
     assert.equal(looksReliable(dropped, PLACES), false, dropped);
@@ -120,7 +127,7 @@ test("reliability: every word must be ordinary, in any case; trade notes, places
 
 test("towns count as places only in place context; a town name acting as a person is a name", () => {
   const towns = placesPattern(["Brooks", "Raymond", "Hanna", "Manning", "Jasper", "Devon", "Cochrane", "Strathcona County", "Red Deer"]);
-  for (const kept of ["Roof replacement in Brooks.", "Job near Cochrane, AB", "Metal roof, Strathcona County.", "Crew from Red Deer.", "at [street_address] devon"]) {
+  for (const kept of ["Roof replacement in Brooks.", "Job near Cochrane, AB", "Metal roof, Strathcona County.", "Crew based from Red Deer.", "Job 20 km from Red Deer.", "at [street_address] devon"]) {
     assert.equal(looksReliable(kept, towns), true, kept);
   }
   for (const dropped of [
@@ -132,6 +139,14 @@ test("towns count as places only in place context; a town name acting as a perso
     "Cochrane said ok",
     "Quote for Mr. Brooks",
     "Met Hanna Manning in Red Deer.",
+    "call from Raymond about the roof",
+    "voicemail from Hanna",
+    "email to Brooks",
+    "text from Devon",
+    "left by Jasper",
+    "message from Cochrane",
+    "quote from Brooks",
+    "lead from Devon",
   ]) {
     assert.equal(looksReliable(dropped, towns), false, dropped);
   }
@@ -143,6 +158,47 @@ test("capitalised words: mid-sentence only weekdays, months, brands; before a pe
   }
   for (const dropped of ["Gold called back", "Tan wants a quote", "Silver said ok", "Neighbour Gold said ok", "North called back", "called the Johnsons", "Metal Roof Quote Request"]) {
     assert.equal(looksReliable(dropped), false, dropped);
+  }
+});
+
+test("name-like words: after labels, in capitals, possessive, or before a person's verb past an adverb", () => {
+  for (const dropped of [
+    "Contact: Gold",
+    "Neighbour: Silver",
+    "Referred by: Gold",
+    "Contact: Gold\nside leaking",
+    "Caller:\nGold",
+    "Spouse; Short",
+    "GOLD CALLED BACK",
+    "TAN",
+    "GOLD",
+    "Gold's roof leaks",
+    "Green's eavestrough is sagging",
+    "White's garage needs shingles",
+    "Gold just called",
+    "Gold never answered",
+    "Tan still wants a quote",
+    "Gold also asked for a quote",
+    "Gold needs a quote",
+    "Tan is on the schedule",
+    "Winter's roof leaks",
+    "Storm's garage needs shingles",
+  ]) {
+    assert.equal(looksReliable(dropped), false, dropped);
+  }
+  for (const kept of [
+    "Colour: Charcoal",
+    "North side needs flashing.",
+    "Customer's garage needs shingles.",
+    "Kenroc's delivery is late.",
+    "WHITE FASCIA, BLACK SOFFIT",
+    "Hail damage on the north slope.",
+    "Storm damage, snow load concerns.",
+    "Spring inspection booked.",
+    "Light damage to the soffit.",
+    "That's right. There's a leak. Here's the quote. Let's book an inspection. Roof's leaking.",
+  ]) {
+    assert.equal(looksReliable(kept), true, kept);
   }
 });
 
@@ -192,6 +248,13 @@ test("places: a town that shares a word with an export name is not protected, so
   assert.deepEqual(guard(JSON.stringify({ location: { municipality: "St. Albert", province: "AB" }, note: "metal roof" })), [], "a location from the lists is not a name");
   assert.equal(guard(JSON.stringify({ note: "AB called" })).length, 1, "outside its key the same value still counts");
   assert.equal(guard("Albert asked for a quote").length, 1);
+});
+
+test("the word check stays linear: long text in capitals is dropped unread", () => {
+  const start = Date.now();
+  assert.equal(looksReliable("ROOF ".repeat(900)), true);
+  assert.equal(looksReliable("ROOF ".repeat(20000)), false);
+  assert.ok(Date.now() - start < 1000, `took ${Date.now() - start} ms`);
 });
 
 test("patterns stay fast on long and repetitive input", () => {

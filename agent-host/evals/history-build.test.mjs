@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { buildDurationCases, buildGhlLeadCases, buildLeadCases, durationOutcome, leadOutcome, relative, sampleCases, workingDays } from "./history-build.mjs";
+import { billingOutcome, buildDurationCases, buildGhlLeadCases, buildLeadCases, buildPaymentCases, durationOutcome, leadOutcome, relative, sampleCases, workingDays } from "./history-build.mjs";
 import { createGuard, createPseudonymizer, placesPattern } from "./privacy.mjs";
 
 // Synthetic JobNimbus- and GoHighLevel-shaped rows only (example.invalid, 555-01xx, invented names).
@@ -133,6 +133,16 @@ test("JobNimbus durations: finished jobs scheduled ahead only, scope scrubbed of
   assert.equal(JSON.stringify(built.cases).includes("Jordan"), false);
 });
 
+// Synthetic custom field definitions, shaped like GoHighLevel's export.
+const DEFINITIONS = [
+  { id: "f-service", fieldKey: "contact.service_type_radio", dataType: "RADIO", options: ["Metal Roofing", "Metal Siding", "Other"], eval_use: "intake_candidate" },
+  { id: "f-build", fieldKey: "contact.type_of_build", dataType: "TEXT", options: [], eval_use: "intake_candidate" },
+  { id: "f-form", fieldKey: "contact.adform_name", dataType: "TEXT", options: [], eval_use: "intake_candidate" },
+  { id: "f-source", fieldKey: "contact.jobsource", dataType: "TEXT", options: [], eval_use: "intake_candidate" },
+  { id: "f-notes", fieldKey: "contact.job_notes", dataType: "LARGE_TEXT", options: [], eval_use: "excluded: free text" },
+];
+const GHL_FIELDS = { "contact.service_type_radio": "option", "contact.type_of_build": "text", "contact.jobsource": "source" };
+
 test("GoHighLevel leads: won, abandoned, and open past the horizon; open and recent left out; nothing personal or later copied", () => {
   const iso = (seconds) => new Date(seconds * 1000).toISOString();
   const opportunity = (n, status, created, changed, extra = {}) => ({
@@ -145,7 +155,7 @@ test("GoHighLevel leads: won, abandoned, and open past the horizon; open and rec
     contact: { id: `ghl-c-${n}`, name: `Taylor Example${n}`, email: `taylor${n}@example.invalid`, phone: `+1780555014${n}`, companyName: null, tags: ["won"] },
     createdAt: iso(created),
     lastStatusChangeAt: iso(changed),
-    customFields: [{ id: "intake", fieldValueString: `Taylor Example${n} wants a metal roof quote.` }, { id: "secret", fieldValueString: "Stage: signed, paid" }],
+    customFields: [{ id: "opp-field", fieldValueString: "Stage: signed, paid" }],
     ...extra,
   });
   const opportunities = [
@@ -154,26 +164,129 @@ test("GoHighLevel leads: won, abandoned, and open past the horizon; open and rec
     opportunity(3, "open", NOW - 300 * DAY, NOW - 300 * DAY),
     opportunity(4, "open", NOW - 30 * DAY, NOW - 30 * DAY),
     opportunity(5, "won", NOW - 400 * DAY, NOW - 100 * DAY),
-    opportunity(6, "lost", NOW - 200 * DAY, NOW - 190 * DAY, { name: "Metal Roof", customFields: { id: "intake" } }),
-    opportunity(7, "lost", NOW - 200 * DAY, NOW - 190 * DAY, { customFields: [{ id: "intake", fieldValueString: "metal roof inquiry. update: signed and paid in full." }] }),
+    opportunity(6, "lost", NOW - 200 * DAY, NOW - 190 * DAY, { name: "Metal Roof" }),
+    opportunity(7, "lost", NOW - 200 * DAY, NOW - 190 * DAY),
   ];
-  const contacts = opportunities.map((row) => ({ id: row.contactId, contactName: row.contact.name, firstName: "Taylor", lastName: row.contact.name.split(" ")[1], email: row.contact.email, phone: row.contact.phone, city: "St. Albert", state: "AB", address1: "9 Sample Bay", postalCode: "T0T 0T0" }));
-  const spec = { ...specFor("lead_concierge", "ghl"), intake_custom_fields: ["intake"] };
+  const intake = (n) =>
+    n === 6
+      ? [{ id: "f-service", value: "Gutters" }]
+      : n === 7
+        ? [{ id: "f-build", value: "metal roof inquiry. update: signed and paid in full." }]
+        : [
+            { id: "f-service", value: "metal  roofing" },
+            { id: "f-build", value: `Taylor Example${n} wants a metal roof quote.` },
+            { id: "f-form", value: "Metal Roof Quote Form" },
+            { id: "f-source", value: "Facebook" },
+            { id: "f-notes", value: "Stage: signed, paid" },
+          ];
+  const contacts = opportunities.map((row, i) => ({
+    id: row.contactId,
+    contactName: row.contact.name,
+    firstName: "Taylor",
+    lastName: row.contact.name.split(" ")[1],
+    email: row.contact.email,
+    phone: row.contact.phone,
+    city: "St. Albert",
+    state: "AB",
+    address1: "9 Sample Bay",
+    postalCode: "T0T 0T0",
+    customFields: intake(i + 1),
+  }));
+  const spec = { ...specFor("lead_concierge", "ghl"), intake_fields: GHL_FIELDS };
   const pz = createPseudonymizer("synthetic-salt-history-0003");
-  const built = buildGhlLeadCases({ opportunities, contacts, exportedAt: NOW }, spec, pz);
+  const built = buildGhlLeadCases({ opportunities, contacts, customFields: DEFINITIONS, exportedAt: NOW }, spec, pz);
   assert.deepEqual(
-    [built.counts.too_recent, built.counts.won_after_horizon, built.counts.open_past_horizon, built.counts.outcome_text, built.counts.dropped_text],
-    [1, 1, 1, 1, 0],
+    [built.counts.too_recent, built.counts.won_after_horizon, built.counts.open_past_horizon, built.counts.outside_options, built.counts.outcome_text, built.counts.dropped_text],
+    [1, 1, 1, 1, 1, 0],
   );
   assert.deepEqual(built.truths.map((truth) => [truth.converted, truth.days_to_convert]), [[true, 30], [false, null], [false, null], [false, null], [false, null], [false, null]], "a win after the horizon is not a conversion");
-  assert.deepEqual(built.cases.at(-1).facts[0].data.intake_notes, [], "a field that reports the outcome is dropped");
   clean(built.cases, pz);
   const text = JSON.stringify(built.cases);
-  for (const leak of ["Taylor", "Example", "31000", "Google Ads", "signed", "paid", "Sample Bay", "ghl-"]) assert.equal(text.includes(leak), false, `${leak} reaches a case`);
-  assert.deepEqual(built.cases[0].facts[0].data.location, { municipality: "St. Albert", province: "AB" });
-  assert.equal(built.cases[0].facts[0].data.source, "google");
-  assert.equal(built.cases[0].facts[0].data.intake_notes.length, 1, "only the listed intake field, scrubbed");
-  assert.match(built.cases[0].facts[0].data.intake_notes[0], /^person-[a-p]{10} wants a metal roof quote\.$/, "a name-free opportunity name is not a person");
+  for (const leak of ["Taylor", "Example", "31000", "Google Ads", "signed", "paid", "Stage", "Sample Bay", "ghl-"]) assert.equal(text.includes(leak), false, `${leak} reaches a case`);
+  const first = built.cases[0].facts[0].data;
+  assert.deepEqual(first.location, { municipality: "St. Albert", province: "AB" });
+  assert.equal(first.source, "facebook", "the job source field decides the category");
+  assert.deepEqual(first.intake, { service_type_radio: "Metal Roofing" }, "fields not named, and excluded fields, never appear");
+  assert.equal(first.intake_notes.length, 1);
+  assert.match(first.intake_notes[0], /^person-[a-p]{10} wants a metal roof quote\.$/);
+  assert.deepEqual(built.cases.at(-2).facts[0].data.intake, { service_type_radio: "other" });
+  assert.deepEqual(built.cases.at(-1).facts[0].data.intake_notes, [], "a field that reports the outcome is dropped");
+  assert.throws(
+    () => buildGhlLeadCases({ opportunities, contacts, customFields: DEFINITIONS, exportedAt: NOW }, { ...spec, intake_fields: { "contact.job_notes": "text" } }, pz),
+    /contact\.job_notes is missing from the definitions or excluded/,
+  );
+  // An option that is a name, or that matches an export name, needs the owner's review.
+  const named = DEFINITIONS.map((field) => (field.id === "f-service" ? { ...field, options: [...field.options, "Mike Henderson", "Taylor Example1"] } : field));
+  assert.throws(() => buildGhlLeadCases({ opportunities, contacts, customFields: named, exportedAt: NOW }, spec, pz), /contact\.service_type_radio has 2 options that are not ordinary words or match an export name/);
+  const reviewed = { ...spec, reviewed_options: { "contact.service_type_radio": ["Mike Henderson", "Taylor Example1"] } };
+  assert.equal(buildGhlLeadCases({ opportunities, contacts, customFields: named, exportedAt: NOW }, reviewed, pz).cases.length, 6);
+});
+
+test("GoHighLevel: a field filled far more often for converted leads stops the build", () => {
+  const iso = (seconds) => new Date(seconds * 1000).toISOString();
+  const opportunities = Array.from({ length: 20 }, (_, i) => ({
+    id: `ghl-opp-${i}`,
+    status: i < 10 ? "won" : "lost",
+    contactId: `ghl-c-${i}`,
+    createdAt: iso(NOW - 200 * DAY),
+    lastStatusChangeAt: iso(NOW - 190 * DAY),
+  }));
+  const contacts = opportunities.map((row, i) => ({ id: row.contactId, customFields: i < 10 ? [{ id: "f-service", value: "Metal Roofing" }] : [] }));
+  const spec = { ...specFor("lead_concierge", "ghl"), intake_fields: { "contact.service_type_radio": "option" } };
+  assert.throws(
+    () => buildGhlLeadCases({ opportunities, contacts, customFields: DEFINITIONS, exportedAt: NOW }, spec, createPseudonymizer("synthetic-salt-history-0006")),
+    /contact\.service_type_radio is filled for 100% of converted and 0% of other leads/,
+  );
+  const sourced = opportunities.map((row, i) => ({ id: row.contactId, customFields: i < 10 ? [{ id: "f-source", value: "Referral" }] : [] }));
+  assert.throws(
+    () => buildGhlLeadCases({ opportunities, contacts: sourced, customFields: DEFINITIONS, exportedAt: NOW }, { ...spec, intake_fields: { "contact.jobsource": "source" } }, createPseudonymizer("synthetic-salt-history-0007")),
+    /contact\.jobsource is filled for 100% of converted/,
+    "a source field is checked too",
+  );
+});
+
+test("JobNimbus payments: open invoices at the time, balances from earlier payments, applications as truth", () => {
+  const payment = (n, at, total, applied, extra = {}) => ({
+    jnid: `synth-p-${n}`,
+    customer: `synth-c-${n}`,
+    related: [{ id: `synth-c-${n}`, name: `Morgan Fixture${n}`, type: "contact", number: "1", email: null, subject: null }],
+    total,
+    date_created: at,
+    date_payment: at,
+    card: "4111",
+    reference: "CHQ 555",
+    invoices: applied.map(([invoice, amount], i) => ({ jnid: `synth-pa-${n}-${i}`, invoice_id: invoice, invoice_no: "1001", amount, date_created: at, created_by: "u", is_active: true })),
+    ...extra,
+  });
+  const invoice = (n, customer, at, total) => ({ jnid: `synth-i-${n}`, customer, total, date_created: at, date_invoice: at, number: 1000 + n, note: "Morgan Fixture01 to pay by cheque", items: [{ description: "Roof" }] });
+  const invoices = [invoice(1, "synth-c-01", T, 1000), invoice(2, "synth-c-02", T + DAY, 500), invoice(3, "synth-c-01", T + 9 * DAY, 200), { ...invoice(4, "synth-c-05", T, 300), is_active: false }];
+  const payments = [
+    payment("01", T + 2 * DAY, 400, [["synth-i-1", 400]]),
+    payment("02", T + 3 * DAY, 500, [["synth-i-2", 500]]),
+    payment("03", T + 4 * DAY, 600, [["synth-i-1", 600]]),
+    payment("04", T + 5 * DAY, 50, [], { is_active: false }),
+    payment("05", T + 10 * DAY, 300, [["synth-i-4", 300]]),
+  ];
+  const pz = createPseudonymizer("synthetic-salt-history-0005");
+  const built = buildPaymentCases({ payments, invoices, exportedAt: NOW }, specFor("billing_reconciliation", "jobnimbus"), pz);
+  assert.deepEqual(built.counts, { payments: 5, inactive: 1, without_amount: 0, no_open_invoice: 0, truth_outside_candidates: 1 }, "a payment applied to an invoice the case cannot show is skipped");
+  const balances = built.cases.map((entry) => entry.facts.filter((fact) => fact.kind === "accounting_observation").map((fact) => fact.data.balance));
+  assert.deepEqual(balances, [["1000.00", "500.00"], ["500.00", "600.00"], ["600.00"]], "the payer's open invoices first; invoice 3 is not open yet; balances show earlier payments");
+  assert.deepEqual(Object.keys(built.cases[0].facts[0].data), ["bank_line_id", "direction", "amount", "sender_customer_id"]);
+  assert.deepEqual(Object.keys(built.cases[0].facts[1].data), ["entity_type", "doc_number", "customer_id", "total_amount", "balance", "issued_offset"]);
+  const capped = buildPaymentCases({ payments, invoices, exportedAt: NOW }, { ...specFor("billing_reconciliation", "jobnimbus"), candidate_invoices_max: 1 }, pz);
+  assert.ok(capped.cases.every((entry) => entry.facts.length <= 2), "at most candidate_invoices_max invoices per case");
+  clean(built.cases, pz);
+  const text = JSON.stringify(built.cases);
+  for (const leak of ["synth-", "Morgan", "4111", "CHQ", "cheque", "1001", "Roof"]) assert.equal(text.includes(leak), false, `${leak} reaches a case`);
+  const truth = built.truths[2];
+  assert.deepEqual(truth.applications.map((row) => row.amount_cents), [60000]);
+  const invoiceId = truth.applications[0].invoice;
+  const otherInvoice = Object.keys(truth.invoice_customers).find((id) => truth.invoice_customers[id] !== truth.payment_customer);
+  assert.deepEqual(billingOutcome([{ action_id: "reconciliation.resolve", args: { bank_line_id: truth.payment, invoice_id: invoiceId, amount_cents: 60000 } }], truth).proposed, truth.applications);
+  assert.equal(billingOutcome([{ action_id: "reconciliation.resolve", args: { bank_line_id: truth.payment, invoice_id: otherInvoice, amount_cents: 60000 } }], truth).proposed[0].invoice_customer !== truth.payment_customer, true);
+  assert.deepEqual(billingOutcome([{ action_id: "money.flag", args: {} }], truth), { proposed: [], abstained: true });
+  assert.deepEqual(billingOutcome([]), { proposed: [], abstained: true }, "no truth, no crash");
 });
 
 test("an export field the spec does not classify stops the build, named but never shown", () => {
@@ -183,10 +296,10 @@ test("an export field the spec does not classify stops the build, named but neve
     () => buildLeadCases({ contacts: [contact("01", { spouse_name: "Jordan Fixture" })], jobs: [], activities: [], exportedAt: NOW }, spec, pz),
     (error) => error.message.endsWith("history export contacts has fields the spec does not classify: spouse_name") && !error.message.includes("Jordan"),
   );
-  const ghl = { ...specFor("lead_concierge", "ghl"), intake_custom_fields: ["intake"] };
+  const ghl = { ...specFor("lead_concierge", "ghl"), intake_fields: GHL_FIELDS };
   const opportunity = { id: "ghl-opp-1", status: "lost", createdAt: new Date((NOW - 200 * DAY) * 1000).toISOString(), contact: { id: "ghl-c-1", name: "Taylor Example", nickname: "Tay" } };
-  assert.throws(() => buildGhlLeadCases({ opportunities: [opportunity], contacts: [], exportedAt: NOW }, ghl, pz), /GoHighLevel opportunities has fields the spec does not classify: contact\.nickname$/);
-  assert.throws(() => buildGhlLeadCases({ opportunities: [], contacts: [{ id: "ghl-c-2", dateOfBirth: "x", spouse: "y" }], exportedAt: NOW }, ghl, pz), /GoHighLevel contacts has fields the spec does not classify: spouse$/);
+  assert.throws(() => buildGhlLeadCases({ opportunities: [opportunity], contacts: [], customFields: DEFINITIONS, exportedAt: NOW }, ghl, pz), /GoHighLevel opportunities has fields the spec does not classify: contact\.nickname$/);
+  assert.throws(() => buildGhlLeadCases({ opportunities: [], contacts: [{ id: "ghl-c-2", dateOfBirth: "x", spouse: "y" }], customFields: DEFINITIONS, exportedAt: NOW }, ghl, pz), /GoHighLevel contacts has fields the spec does not classify: spouse$/);
 });
 
 test("sampling is deterministic and stratified; outcomes come only from proposed tool calls", () => {

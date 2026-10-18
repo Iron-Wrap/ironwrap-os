@@ -7,7 +7,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildDurationCases, buildGhlLeadCases, buildLeadCases, durationOutcome, leadOutcome } from "./history-build.mjs";
+import { billingOutcome, buildDurationCases, buildGhlLeadCases, buildLeadCases, buildPaymentCases, durationOutcome, leadOutcome } from "./history-build.mjs";
 import { MIN_BUCKET, metricKinds, validMetricPath } from "./history.mjs";
 
 const metricNames = (id) => (metricKinds(id) ? Object.keys(metricKinds(id)) : null);
@@ -715,17 +715,22 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
 // the minimum group size, names every personal field to pseudonymise, gives each source the
 // parameters its builder needs, and gives each specialist bars over metrics that exist. Record data
 // and links never live in the repository.
-const HISTORY_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields", "awaiting_schema", "awaiting_quickbooks"]);
-const SOURCE_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields"]);
-const HISTORY_OUTCOMES = { lead_concierge: "leadOutcome", scheduler_dispatcher: "durationOutcome" };
+const HISTORY_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields", "awaiting_schema", "awaiting_quickbooks", "no_source"]);
+const SOURCE_STATUSES = new Set(["ready", "awaiting_export", "awaiting_fields", "no_source"]);
+const HISTORY_OUTCOMES = { lead_concierge: "leadOutcome", scheduler_dispatcher: "durationOutcome", billing_reconciliation: "billingOutcome" };
 const HISTORY_BUILDERS = {
   lead_concierge: { ghl: "buildGhlLeadCases", jobnimbus: "buildLeadCases" },
   scheduler_dispatcher: { jobnimbus: "buildDurationCases" },
+  billing_reconciliation: { jobnimbus: "buildPaymentCases" },
 };
-const HISTORY_CODE = { buildLeadCases, buildGhlLeadCases, buildDurationCases, leadOutcome, durationOutcome };
+const HISTORY_CODE = { buildLeadCases, buildGhlLeadCases, buildDurationCases, buildPaymentCases, leadOutcome, durationOutcome, billingOutcome };
+const INTAKE_KINDS = new Set(["option", "text", "source"]);
+// Fields that change after intake never count as intake fields.
+const LATER_FIELD = /status|stage|outcome|won|lost|signed|paid|attempt|call|date/i;
 const BUILDER_PARAMS = {
   buildLeadCases: { numbers: ["intake_window_minutes", "conversion_horizon_days", "min_outcome_age_days"], lists: ["won_statuses", "excluded_record_types"], pattern: "status_change_pattern" },
-  buildGhlLeadCases: { numbers: ["intake_window_minutes", "conversion_horizon_days"], lists: ["intake_custom_fields"] },
+  buildGhlLeadCases: { numbers: ["intake_window_minutes", "conversion_horizon_days"], lists: [] },
+  buildPaymentCases: { numbers: ["candidate_invoices_max"], lists: [] },
   buildDurationCases: { numbers: ["decision_lead_days"], lists: ["completed_statuses"] },
 };
 const PRIVACY_MINIMUM = {
@@ -749,7 +754,9 @@ const PRIVACY_MINIMUM = {
   ghl_opportunity: { identifiers: ["id", "contactId", "contact.name", "contact.email", "contact.phone"], address: [], free_text: [], named: ["name"] },
 };
 const PRIVACY_CLASSES = ["address", "free_text", "linked", "named", "reviewed"];
-const NEVER_COPIED_MINIMUM = ["name", "related", "primary", "status_name", "approved_*", "date_end", "monetaryValue", "customFields", "dateOfBirth", "card", "transaction_id"];
+const NEVER_COPIED_MINIMUM = ["name", "related", "primary", "status_name", "approved_estimate_total", "date_end", "monetaryValue", "customFields", "dateOfBirth", "card", "transaction_id"];
+// A wildcard covers a whole family of fields, so it must name a prefix ending in "_" ("cf_*").
+const WILDCARD = /^[a-z][a-z0-9]*_\*$/;
 // A group holding a quantifier or alternatives, itself repeated: "(a+)+" and "(x|xx)+" backtrack
 // without end on a long note.
 const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}|](?:[^()\\]|\\.)*\)[+*{]/;
@@ -798,6 +805,7 @@ function checkHistory(root, fail) {
   }
   const neverCopied = Array.isArray(privacy.never_copied) ? privacy.never_copied : [];
   for (const field of NEVER_COPIED_MINIMUM) if (!neverCopied.includes(field)) bad(`privacy.never_copied must include ${field}`);
+  for (const field of neverCopied) if (typeof field !== "string" || (field.includes("*") && !WILDCARD.test(field))) bad(`privacy.never_copied: ${field} is not a field or a prefix wildcard such as cf_*`);
   for (const [id, spec] of Object.entries(isObject(config.specialists) ? config.specialists : {})) {
     if (!ROSTER.includes(id)) bad(`${id} is not a roster specialist`);
     if (!HISTORY_STATUSES.has(spec?.status)) bad(`${id}.status must be one of ${[...HISTORY_STATUSES].join(", ")}`);
@@ -822,7 +830,16 @@ function checkHistory(root, fail) {
           bad(`${where}.${params.pattern} is not a valid pattern`);
         }
       }
-      if (source.builder === "buildGhlLeadCases" && source.status === "ready" && !(Array.isArray(source.intake_custom_fields) && source.intake_custom_fields.length > 0)) bad(`${where} is ready but lists no intake_custom_fields`);
+      if (source.builder === "buildGhlLeadCases") {
+        const fields = isObject(source.intake_fields) ? Object.entries(source.intake_fields) : [];
+        if (source.status === "ready" && fields.length === 0) bad(`${where} is ready but names no intake_fields`);
+        for (const [key, kind] of fields) {
+          if (!INTAKE_KINDS.has(kind)) bad(`${where}.intake_fields.${key} must be one of ${[...INTAKE_KINDS].join(", ")}`);
+          if (LATER_FIELD.test(key)) bad(`${where}.intake_fields.${key} names a field that changes after intake`);
+        }
+        if (!(typeof source.fill_gap_max === "number" && source.fill_gap_max > 0 && source.fill_gap_max <= 1)) bad(`${where}.fill_gap_max must be a share between 0 and 1`);
+        if (source.reviewed_options !== undefined && (!isObject(source.reviewed_options) || Object.values(source.reviewed_options).some((options) => !Array.isArray(options)))) bad(`${where}.reviewed_options must map field keys to option lists`);
+      }
       if (source.builder === "buildLeadCases" && !(source.min_outcome_age_days >= source.conversion_horizon_days)) bad(`${where}.min_outcome_age_days must cover conversion_horizon_days`);
       if (source.builder === "buildLeadCases" && Array.isArray(source.won_statuses) && source.won_statuses.length === 0) bad(`${where}.won_statuses must not be empty`);
     }
@@ -837,6 +854,7 @@ function checkHistory(root, fail) {
       if (typeof bar?.min !== "number" && typeof bar?.max !== "number") bad(`${where} needs min or max`);
       if (typeof bar?.min === "number" && typeof bar?.max === "number" && bar.min > bar.max) bad(`${where} has min above max`);
       if (bar?.min_n !== undefined && !(Number.isInteger(bar.min_n) && bar.min_n >= MIN_BUCKET)) bad(`${where}.min_n must be an integer of at least ${MIN_BUCKET}`);
+      if (bar?.gating === true && bar?.min_n === undefined) bad(`${where} gates without min_n`);
     });
   }
 }

@@ -266,7 +266,7 @@ describe("nowResponseSchema", () => {
         id: "qbo-final-invoice:qbo_final_01JEXAMPLE0001",
         tone: "attention",
         eyebrow: "QuickBooks final invoice",
-        title: "Final invoice pending review",
+        title: "Final invoice needs a check",
         detail: "CAD 1050.00",
         job_id: "JOB-0001",
         currency: "CAD",
@@ -288,6 +288,66 @@ describe("nowResponseSchema", () => {
     ];
 
     expect(nowResponseSchema.safeParse(payload).success).toBe(true);
+  });
+
+  it("accepts the final-invoice card exactly as the Worker builds it", () => {
+    // workers-bus/src/now-read-model.ts quickBooksCard: one fixed title for every state, the
+    // amount as "CAD <balance>", and a citation that points at the same intent.
+    const payload = validPayload();
+    const href = "/accounting/quickbooks/final-invoices/qbo_final_01JEXAMPLE0001";
+    const id = "qbo-final-invoice:qbo_final_01JEXAMPLE0001";
+    payload.role = "accounting";
+    payload.sources = [
+      {
+        id: "quickbooks_final_invoices",
+        state: "current",
+        read_model_generated_at: "2026-08-13T07:59:00.000Z",
+        stale_fields: [],
+      },
+    ];
+    payload.ui.primary_action = null as never;
+    payload.ui.sections[0]!.cards = [
+      {
+        kind: "quickbooks_final_invoice",
+        id,
+        tone: "attention",
+        eyebrow: "QuickBooks final invoice",
+        title: "Final invoice needs a check",
+        detail: "CAD 1050.00",
+        job_id: "JOB-0001",
+        currency: "CAD",
+        final_balance: "1050.00",
+        invoice_state: "submitted",
+        blocker_code: null,
+        rejection_reason: null,
+        next_step: "reconcile_provider_invoice",
+        action: { label: "Review final invoice", href },
+        citations: [{ id, label: "Final invoice record", source: "owned_read_model", href }],
+      } as never,
+    ];
+
+    expect(nowResponseSchema.safeParse(payload).success).toBe(true);
+
+    // Every binding to the intent still holds: title, id, amount and citation.
+    const mutations: Array<(card: Record<string, unknown>) => void> = [
+      (card) => (card.title = "Final invoice paid"),
+      (card) => (card.id = "qbo-final-invoice:qbo_final_01JEXAMPLE0002"),
+      (card) => (card.detail = "CAD 1051.00"),
+      (card) =>
+        (card.citations = [
+          {
+            id,
+            label: "Final invoice record",
+            source: "owned_read_model",
+            href: "/accounting/quickbooks/final-invoices/qbo_final_01JEXAMPLE0002",
+          },
+        ]),
+    ];
+    for (const mutate of mutations) {
+      const changed = structuredClone(payload);
+      mutate(changed.ui.sections[0]!.cards[0] as unknown as Record<string, unknown>);
+      expect(nowResponseSchema.safeParse(changed).success).toBe(false);
+    }
   });
 
   it.each([

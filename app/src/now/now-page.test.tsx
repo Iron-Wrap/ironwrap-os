@@ -263,7 +263,7 @@ describe("NowPage", () => {
         id: "qbo-final-invoice:qbo_final_01JEXAMPLE0001",
         tone: "attention",
         eyebrow: "QuickBooks final invoice",
-        title: "Final invoice pending review",
+        title: "Final invoice needs a check",
         detail: "CAD 1050.00",
         job_id: "JOB-0001",
         currency: "CAD",

@@ -78,12 +78,11 @@ if (window.location.pathname === "/today") {
   // The router resolves `/today` before that mount for the same reason: left to the router's
   // mount effect, its first load lands inside the commit and re-renders the whole shell
   // synchronously. A load that fails here is simply repeated by that effect.
-  void Promise.all([settlePrimedFieldBootstrap(), router.load().catch(() => undefined)]).then(
-    ([bootstrap]) => {
+  void Promise.all([settlePrimedFieldBootstrap(), router.load().catch(() => undefined)])
+    .then(([bootstrap]) => {
       if (bootstrap) queryClient.setQueryData(sessionQueryKey, bootstrap);
-      startTransition(() => root.render(app));
-    },
-  );
+    })
+    .finally(() => startTransition(() => root.render(app)));
 } else {
   root.render(app);
 }

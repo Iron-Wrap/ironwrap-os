@@ -150,6 +150,7 @@ describe("crew storage status from first render", () => {
   });
 
   it("retains the same status region when the pending storage check reports a warning", () => {
+    Object.assign(outbox, { pending: 1 });
     const status = (
       <SessionProvider session={sessionFor("field")}>
         <SystemStatus variant="crew" />
@@ -164,14 +165,82 @@ describe("crew storage status from first render", () => {
         <SystemStatus variant="crew" />
       </SessionProvider>,
     );
-    expect(screen.getByText(/did not lock storage/).closest('[role="status"]')).toBe(region);
+    expect(
+      screen
+        .getByText(
+          "This device did not lock storage in place. Capture still works. Send saved work soon.",
+        )
+        .closest('[role="status"]'),
+    ).toBe(region);
+  });
+
+  it.each([
+    [{ checked: false, persistent: null, warning: undefined }],
+    [{ checked: true, persistent: true, warning: undefined }],
+    [{ checked: true, persistent: false, warning: undefined }],
+    [{ checked: true, persistent: null, warning: undefined }],
+    [{ checked: true, persistent: false, warning: "persistence_denied" }],
+    [{ checked: true, persistent: null, warning: "check_failed" }],
+  ])("says only that everything went when nothing is left on the phone: %o", (storage) => {
+    environment.storage = storage;
+    render(
+      <SessionProvider session={sessionFor("field")}>
+        <SystemStatus variant="crew" />
+      </SessionProvider>,
+    );
+    const region = screen
+      .getByText("Everything you took or filled in has reached the office, photos included.")
+      .closest('[role="status"]');
     expect(screen.getByRole("status", { name: "Sync: Nothing to send" })).toBeVisible();
+    // Beside "Nothing to send", any prompt to send or keep the app open would contradict it.
+    expect(region?.textContent).not.toMatch(/send|keep this app open|storage/i);
+    expect(region).toHaveClass("text-muted");
+  });
+
+  it("neither warns nor claims while saved work is still being read", () => {
+    environment.storage = { checked: true, persistent: false, warning: "persistence_denied" };
+    Object.assign(outbox, { readState: "checking" });
+    render(
+      <SessionProvider session={sessionFor("field")}>
+        <SystemStatus variant="crew" />
+      </SessionProvider>,
+    );
+    expect(screen.getByRole("status", { name: "Sync: Checking saved work" })).toBeVisible();
+    const region = screen.getByText("Checking saved work.").closest('[role="status"]');
+    expect(region).toHaveClass("text-muted");
+    expect(region?.textContent).not.toMatch(/reached|storage/i);
+  });
+
+  it("still warns about low space when everything went, since the next photo needs it", () => {
+    environment.storage = { checked: true, persistent: false, warning: "low_storage" };
+    render(
+      <SessionProvider session={sessionFor("field")}>
+        <SystemStatus variant="crew" />
+      </SessionProvider>,
+    );
+    expect(screen.getByText(/low on space/).closest('[role="status"]')).toHaveClass("text-warning");
+  });
+
+  it("keeps the storage prompt while saved work waits on this device", () => {
+    environment.storage = { checked: true, persistent: false, warning: "persistence_denied" };
+    Object.assign(outbox, { pending: 2 });
+    render(
+      <SessionProvider session={sessionFor("field")}>
+        <SystemStatus variant="crew" />
+      </SessionProvider>,
+    );
+    expect(
+      screen.getByText(
+        "This device did not lock storage in place. Capture still works. Send saved work soon.",
+      ),
+    ).toBeVisible();
   });
 
   it.each([true, false, null])(
-    "reports storage protection truthfully after checking: %s",
+    "reports storage protection truthfully while work waits: %s",
     (persistent) => {
       environment.storage = { checked: true, persistent, warning: undefined };
+      Object.assign(outbox, { pending: 1 });
       render(
         <SessionProvider session={sessionFor("field")}>
           <SystemStatus variant="crew" />

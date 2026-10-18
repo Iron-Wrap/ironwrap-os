@@ -10,6 +10,7 @@ import { apiCommand } from "../lib/api";
 import type { AppRole } from "../lib/roles";
 import { THEME_STORAGE_KEY } from "../lib/theme";
 import { AppShell } from "./app-shell";
+import { useShopReading } from "./shop-reading";
 
 const mocks = vi.hoisted(() => ({
   pathname: "/now",
@@ -17,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   searchStr: "",
   navigate: vi.fn(),
   removeQueries: vi.fn(),
-  outletEnvironment: undefined as string | undefined,
+  outletDensity: undefined as string | undefined,
+  outletShopReading: false,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -60,7 +62,11 @@ vi.mock("@tanstack/react-router", () => ({
       </a>
     );
   },
-  Outlet: () => <div data-testid="outlet" data-environment={mocks.outletEnvironment} />,
+  Outlet: () => {
+    // A page in Shop reading publishes it to the shell through the same hook the real pages use.
+    const [reading] = useShopReading(() => mocks.outletShopReading);
+    return <div data-testid="outlet" data-density={reading ? "glove" : mocks.outletDensity} />;
+  },
   useNavigate: () => mocks.navigate,
   useRouterState: ({
     select,
@@ -148,14 +154,15 @@ describe("AppShell", () => {
     mocks.pathname = "/now";
     mocks.search = {};
     mocks.searchStr = "";
-    mocks.outletEnvironment = undefined;
+    mocks.outletDensity = undefined;
+    mocks.outletShopReading = false;
     Object.defineProperty(window.navigator, "onLine", { configurable: true, value: true });
     vi.mocked(loadPublicEstimateConfig).mockResolvedValue({ logo_url: null } as never);
   });
 
   afterEach(() => {
     window.localStorage.clear();
-    document.documentElement.removeAttribute("data-theme");
+    document.documentElement.removeAttribute("data-mode");
   });
 
   it("uses the declared company logo without probing a missing image", async () => {
@@ -163,11 +170,13 @@ describe("AppShell", () => {
 
     await waitFor(() => expect(loadPublicEstimateConfig).toHaveBeenCalledOnce());
     expect(document.querySelector('img[src="/public/company-logo"]')).toBeNull();
-    // Without an uploaded logo the rail carries the Iron Wrap wordmark on charcoal.
-    expect(within(railOf()).getByRole("img", { name: "Iron Wrap Exteriors" })).toHaveAttribute(
-      "src",
+    // Without an uploaded logo the rail carries the Iron Wrap wordmark in both artworks, and
+    // the stylesheet shows the one the rail's mode calls for (the rail is light in office-light).
+    const wordmarks = within(railOf()).getAllByRole("img", { name: "Iron Wrap Exteriors" });
+    expect(wordmarks.map((img) => img.getAttribute("src"))).toEqual([
+      "/brand/logo.png",
       "/brand/logo-on-dark.png",
-    );
+    ]);
 
     vi.mocked(loadPublicEstimateConfig).mockResolvedValue({
       logo_url: "/public/company-logo?v=brand-1",
@@ -342,12 +351,12 @@ describe("AppShell", () => {
     expect(device).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(dark);
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement).toHaveAttribute("data-mode", "office-dark");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     expect(dark).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(device);
-    expect(document.documentElement).not.toHaveAttribute("data-theme");
+    expect(document.documentElement).not.toHaveAttribute("data-mode");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
     expect(screen.getByRole("button", { name: "Sign out", hidden: true })).toBeInTheDocument();
   });
@@ -368,7 +377,7 @@ describe("AppShell", () => {
       const target = [compact, phone].find((item) => item.media === media);
       return target ? (target as unknown as MediaQueryList) : matchMedia(media);
     });
-    mocks.outletEnvironment = "shop";
+    mocks.outletDensity = "glove";
     renderShell(ownerSession);
     await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     const drawer = screen.getByRole("dialog", { name: "Navigation" });
@@ -385,6 +394,21 @@ describe("AppShell", () => {
     });
     await waitFor(() => expect(drawer).not.toHaveAttribute("open"));
     expect(document.body.style.overflow).not.toBe("hidden");
+  });
+
+  it("keeps the office scope on the shell, and moves it to the shop scope while a page is in Shop reading", () => {
+    const office = renderShell(ownerSession);
+    const shell = office.container.querySelector(".shell");
+    expect(shell).not.toHaveAttribute("data-mode");
+    expect(shell).not.toHaveAttribute("data-density");
+    office.unmount();
+
+    mocks.outletShopReading = true;
+    const shop = renderShell(ownerSession);
+    const reading = shop.container.querySelector(".shell");
+    expect(reading).toHaveAttribute("data-mode", "shop-dark");
+    expect(reading).toHaveAttribute("data-density", "glove");
+    shop.unmount();
   });
 
   it("reaches Safety from the office header on every screen", async () => {

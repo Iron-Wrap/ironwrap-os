@@ -4,12 +4,14 @@ import { memo, useCallback, useMemo, useState, type FormEvent } from "react";
 
 import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
+import { useShopReading } from "../components/shop-reading";
 import { PageHeader } from "../components/ui/page-header";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
+import { scopes } from "../lib/theme";
 import { Notice } from "../components/ui/notice";
 import {
   loadInventoryOverview,
@@ -213,7 +215,7 @@ function InventoryDesk({
   refreshing: boolean;
 }) {
   const [barcode, setBarcode] = useState("");
-  const [shopMode, setShopMode] = useState(
+  const [shopMode, setShopMode] = useShopReading(
     () =>
       session.user.role !== "field" && Boolean(window.matchMedia?.("(max-width: 1023px)").matches),
   );
@@ -456,10 +458,7 @@ function InventoryDesk({
   }
 
   return (
-    <section
-      data-environment={shopMode ? "shop" : undefined}
-      className="mx-auto max-w-6xl space-y-6 pb-4"
-    >
+    <section {...(shopMode ? scopes.shopReading : {})} className="mx-auto max-w-6xl space-y-6 pb-4">
       <PageHeader
         title="Inventory"
         meta="Scan a stock label, check its lot and custody, then choose the next recorded action."

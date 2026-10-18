@@ -16,6 +16,7 @@ import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { useShopReading } from "../components/shop-reading";
 import { WorkspaceHeader } from "../components/workspace-header";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -24,6 +25,7 @@ import { SystemDetails } from "../components/ui/system-details";
 import { GateChip } from "../field/gate-chip";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
+import { scopes } from "../lib/theme";
 import { loadProductionRunway } from "./production-api";
 import { GateClearancePanel } from "./production-gate-clearance-panel";
 import type {
@@ -141,7 +143,7 @@ function ProductionRunwayScreen({
     model.stale_fields.length > 0;
   const canOpenJob = roleCanAccess(role, "job");
   const canOpenHistory = roleCanAccess(role, "jobHistory");
-  const [shopMode, setShopMode] = useState(() =>
+  const [shopMode, setShopMode] = useShopReading(() =>
     Boolean(window.matchMedia?.("(max-width: 1023px)").matches),
   );
   // Server-derived, not role-derived: the read model already knows whether this
@@ -150,10 +152,7 @@ function ProductionRunwayScreen({
   const canClearGates = model.allowed_actions.includes("production_gate.clear");
 
   return (
-    <section
-      data-environment={shopMode ? "shop" : undefined}
-      className="mx-auto max-w-7xl space-y-6 pb-4"
-    >
+    <section {...(shopMode ? scopes.shopReading : {})} className="mx-auto max-w-7xl space-y-6 pb-4">
       <WorkspaceHeader
         icon={<CalendarClock aria-hidden="true" />}
         title="Production plan"

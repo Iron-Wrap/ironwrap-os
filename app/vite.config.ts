@@ -8,6 +8,8 @@ import { resolve } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
 
+import { generatedTokenNames, pruneUnreadTokens, sourceTokenReads } from "./scripts/prune-tokens";
+
 /**
  * Field Companion's boot is bandwidth-bound, not CPU-bound: the acceptance
  * server and the CDN both hand the paired device ~200 KiB over a throttled
@@ -122,6 +124,30 @@ function bootStyleCspHash(): Plugin {
   };
 }
 
+/**
+ * The stylesheet is render-blocking, so every byte of it is first-paint time on the paired
+ * device. tokens.css carries all of System v2; this drops the token declarations nothing reads
+ * (see scripts/prune-tokens.ts). It prunes `styles.css` after Tailwind has generated its
+ * utilities and before Vite hashes and minifies the result, so the file name still describes the
+ * content: the pruned set depends only on the source tree. The dev server and the committed
+ * file keep every token, and scripts/verify-dist.mjs fails the build if the bundle reads one
+ * that is gone.
+ */
+function pruneUnreadTokensFromStyles(): Plugin {
+  return {
+    name: "ironwrap-prune-unread-tokens",
+    apply: "build",
+    async transform(code, id) {
+      if (!/[\\/]src[\\/]styles\.css(?:\?|$)/.test(id)) return null;
+      const names = generatedTokenNames(await readFile(resolve("src/styles/tokens.css"), "utf8"));
+      return {
+        code: pruneUnreadTokens(code, names, await sourceTokenReads(resolve("src"))),
+        map: null,
+      };
+    },
+  };
+}
+
 export function inlineStyleHashes(html: string): string[] {
   return [...html.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)].map(
     (match) =>
@@ -135,6 +161,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    pruneUnreadTokensFromStyles(),
     VitePWA({
       registerType: "prompt",
       injectRegister: false,
@@ -154,8 +181,8 @@ export default defineConfig({
         scope: "/",
         display: "standalone",
         orientation: "portrait-primary",
-        background_color: "#f3f4f2",
-        theme_color: "#1b1e22",
+        background_color: "#fbfbfa",
+        theme_color: "#f3f3f1",
         icons: [
           {
             src: "/icon-192.png",

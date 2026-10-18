@@ -29,14 +29,30 @@ function* walk(node, path = []) {
 
 function resolve(path, mode, seen = []) {
   const token = get(path);
-  if (!isToken(token)) throw new Error(`unknown token ${path}${seen.length ? ` (via ${seen.join(" -> ")})` : ""}`);
+  if (!isToken(token))
+    throw new Error(`unknown token ${path}${seen.length ? ` (via ${seen.join(" -> ")})` : ""}`);
   if (seen.includes(path)) throw new Error(`alias cycle ${[...seen, path].join(" -> ")}`);
   const raw = modesOf(token)?.[mode] ?? token.$value;
-  return isAlias(raw) ? resolve(raw.slice(1, -1), mode, [...seen, path]) : { type: token.$type, value: raw };
+  return isAlias(raw)
+    ? resolve(raw.slice(1, -1), mode, [...seen, path])
+    : { type: token.$type, value: raw };
 }
 
-const hexToRgb = (hex) => hex.slice(1, 7).match(/../g).map((part) => parseInt(part, 16) / 255);
-const toHex = (rgb) => "#" + rgb.map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+const hexToRgb = (hex) =>
+  hex
+    .slice(1, 7)
+    .match(/../g)
+    .map((part) => parseInt(part, 16) / 255);
+const toHex = (rgb) =>
+  "#" +
+  rgb
+    .map((c) =>
+      Math.round(c * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")
+    .toUpperCase();
 const colour = (path, mode) => {
   const { type, value } = resolve(path, mode);
   if (type !== "color") throw new Error(`${path} is ${type}, not color`);
@@ -79,7 +95,8 @@ for (const [path, token] of walk(tokens)) {
   }
   if (token.$type === "color" && typeof token.$value === "object" && !isAlias(token.$value)) {
     const { components, hex } = token.$value;
-    if (hex && toHex(components) !== hex.toUpperCase()) problems.push(`${path}: hex ${hex} does not match components (${toHex(components)})`);
+    if (hex && toHex(components) !== hex.toUpperCase())
+      problems.push(`${path}: hex ${hex} does not match components (${toHex(components)})`);
   }
 }
 
@@ -87,7 +104,8 @@ for (const [path, token] of walk(tokens)) {
 const minimumFor = (pair, mode) =>
   contrast.overrides.reduce((min, rule) => {
     const applies =
-      rule.modes.includes(mode) && ((rule.kinds && rule.kinds.includes(pair.kind)) || (rule.fg && rule.fg.includes(pair.fg)));
+      rule.modes.includes(mode) &&
+      ((rule.kinds && rule.kinds.includes(pair.kind)) || (rule.fg && rule.fg.includes(pair.fg)));
     return applies ? Math.max(min, rule.minimum) : min;
   }, contrast.minimum[pair.kind]);
 
@@ -99,7 +117,8 @@ for (const mode of axes["color-mode"]) {
   for (const pair of contrast.pairs) {
     const fg = colour(`semantic.${pair.fg}`, mode);
     const bg = colour(`semantic.${pair.bg}`, mode);
-    if (bg.alpha < 1 && !pair.over) throw new Error(`${pair.bg} is translucent; the pair needs "over"`);
+    if (bg.alpha < 1 && !pair.over)
+      throw new Error(`${pair.bg} is translucent; the pair needs "over"`);
     const ground = bg.alpha < 1 ? over(bg, hexToRgb(pair.over)) : bg.rgb;
     const ink = fg.alpha < 1 ? over(fg, ground) : fg.rgb;
     const value = ratio(ink, ground);
@@ -126,7 +145,9 @@ const out = [
   "Exempt from contrast (decorative or carried by another cue):",
   ...Object.entries(contrast.exempt).map(([path, why]) => `  ${path}: ${why}`),
   "",
-  problems.length ? `Structure: ${problems.length} problem(s)` : "Structure: modes complete, aliases resolve in every mode, hex matches components.",
+  problems.length
+    ? `Structure: ${problems.length} problem(s)`
+    : "Structure: modes complete, aliases resolve in every mode, hex matches components.",
   ...problems.map((problem) => `  ${problem}`),
   `Result: ${checks} checks, ${checks - failures} pass, ${failures} fail.`,
 ];

@@ -1,23 +1,24 @@
 @import "tailwindcss";
+@import "./styles/tokens.css";
+/* Not UI source: token names ("ring", "shadow", "blur") and test fixtures would otherwise ship
+   as utilities nothing renders, in a render-blocking stylesheet. */
+@source not "./design-system";
+@source not "../scripts";
 
 /*
- * Iron Wrap identity, ported from the owner-approved reference implementation
- * (iron-wrap-exteriors, src/styles/tokens.css). The world is a precision sheet-metal shop:
- * a mineral primer ground, white working sheets with hairline edges, one charcoal spine,
- * brass only where you are (focus, selection, the active place), and a stamped galvanized
- * tag on every record. Status is never colour alone: every status carries a glyph and words.
- *
- * The semantic names below are the app's own and predate the port; only their values follow
- * the reference, so every existing utility repaints. Reference name -> app name:
- *   primer -> background, sheet -> surface(-raised), ink -> foreground and primary,
- *   text-2 -> muted, text-3 -> faint, line -> border, line-soft -> border-soft,
- *   line-strong -> border-control, rail-* -> chrome-*, warn -> warning, stop -> danger.
+ * IronWrap OS System v2 (design/system-v2). Colour, density, type, motion and the brand
+ * geometry are generated into ./styles/tokens.css from src/design-system/tokens.json: change a
+ * token there and run `npm run tokens`, never in this file. What stays here is Tailwind's
+ * mapping onto those properties, the faces, and the component recipes. Status is never colour
+ * alone: every status carries a glyph and words.
  *
  * Fonts are the wght-axis Archivo and Martian Mono subsets, self-hosted with
  * `font-display: optional` like the faces they replace. The width axis the reference
  * uses for its slightly widened titles would more than double the critical-path font bytes
- * on a crew phone (90 KB against 35 KB for latin), so titles stay at normal width.
+ * on a crew phone (90 KB against 35 KB for latin), so titles stay at normal width. The tokens
+ * name Geist; --font-sans and --font-mono below move to it when the Geist faces are packaged.
  */
+
 @font-face {
   font-family: "Archivo Variable";
   font-style: normal;
@@ -85,57 +86,101 @@
   --font-sans: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Martian Mono Variable", "Martian Mono", ui-monospace, "SF Mono", monospace;
 
-  --color-background: var(--background);
-  --color-surface: var(--surface);
-  --color-surface-raised: var(--surface-raised);
-  --color-surface-muted: var(--surface-muted);
-  --color-surface-sunk: var(--surface-sunk);
-  --color-surface-hover: var(--surface-hover);
-  --color-foreground: var(--foreground);
-  --color-muted: var(--muted);
-  --color-faint: var(--faint);
-  --color-border: var(--border);
-  --color-border-soft: var(--border-soft);
-  --color-border-control: var(--border-control);
-  --color-border-strong: var(--border-strong);
-  --color-chrome: var(--chrome);
-  --color-chrome-raised: var(--chrome-raised);
-  --color-chrome-active: var(--chrome-active);
-  --color-chrome-foreground: var(--chrome-foreground);
-  --color-chrome-muted: var(--chrome-muted);
-  --color-chrome-faint: var(--chrome-faint);
-  --color-chrome-border: var(--chrome-border);
-  --color-chrome-focus: var(--chrome-focus);
-  --color-primary: var(--primary);
-  --color-primary-hover: var(--primary-hover);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-active: var(--accent-active);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent-soft: var(--accent-soft);
-  --color-accent-line: var(--accent-line);
-  --color-focus: var(--focus);
-  --color-selected: var(--selected);
-  --color-highlight: var(--highlight);
-  --color-ok: var(--ok);
-  --color-ok-soft: var(--ok-soft);
-  --color-warning: var(--warning);
-  --color-warning-soft: var(--warning-soft);
-  --color-warning-line: var(--warning-line);
-  --color-danger: var(--danger);
-  --color-danger-foreground: var(--danger-foreground);
-  --color-danger-soft: var(--danger-soft);
-  --color-danger-line: var(--danger-line);
-  --color-danger-strong: var(--danger-strong);
-  --color-danger-strong-foreground: var(--danger-strong-foreground);
-  --color-info: var(--info);
-  --color-info-soft: var(--info-soft);
-  --color-local: var(--local);
-  --color-local-soft: var(--local-soft);
-  --color-neutral: var(--neutral);
-  --color-neutral-soft: var(--neutral-soft);
-  --color-scrim: var(--scrim);
+  /* The shipped utility names point at the System v2 properties, so every bg-*, text-* and
+     border-* utility keeps working with no codemod. Roles that retired (brass, ok, warning,
+     info, local) take their neutral stand-in until each screen is repainted; the stand-ins are
+     listed in design/system-v2/MIGRATION.md. `inline` makes a utility read the property on the
+     element that uses it, so a nested data-mode scope resolves its own colour. */
+  --color-background: var(--surface-paper);
+  --color-surface: var(--surface-paper);
+  --color-surface-raised: var(--surface-paper);
+  --color-surface-muted: var(--surface-rail);
+  --color-surface-sunk: var(--surface-rail);
+  --color-surface-hover: var(--surface-selected);
+  --color-foreground: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-tertiary);
+  --color-border: var(--line-hairline);
+  --color-border-soft: var(--line-hairline);
+  --color-border-control: var(--control-border);
+  --color-border-strong: var(--control-border);
+  --color-chrome: var(--surface-rail);
+  --color-chrome-raised: var(--surface-selected);
+  --color-chrome-active: var(--surface-pressed);
+  --color-chrome-foreground: var(--text-primary);
+  --color-chrome-muted: var(--text-tertiary);
+  --color-chrome-faint: var(--text-tertiary);
+  --color-chrome-border: var(--line-hairline);
+  --color-chrome-focus: var(--focus-ring);
+  --color-primary: var(--control-fill);
+  --color-primary-hover: var(--control-fill-pressed);
+  --color-primary-foreground: var(--control-on-fill);
+  --color-accent: var(--text-primary);
+  --color-accent-foreground: var(--control-on-fill);
+  --color-accent-soft: var(--surface-selected);
+  --color-accent-line: var(--line-strong);
+  --color-focus: var(--focus-ring);
+  --color-selected: var(--surface-selected);
+  --color-highlight: var(--surface-pressed);
+  --color-ok: var(--text-primary);
+  --color-ok-soft: var(--surface-rail);
+  --color-warning: var(--text-primary);
+  --color-warning-soft: var(--surface-rail);
+  --color-warning-line: var(--line-strong);
+  --color-danger: var(--signal-held);
+  /* Text on a held-coloured fill is paper: contrast is symmetric, and signal.held on
+     surface.paper is a pair the proof already checks in every mode. */
+  --color-danger-foreground: var(--surface-paper);
+  --color-danger-soft: var(--signal-held-tint);
+  --color-danger-line: var(--signal-held-line);
+  --color-danger-strong: var(--signal-held-fill);
+  --color-danger-strong-foreground: var(--signal-held-on-fill);
+  --color-info: var(--text-secondary);
+  --color-info-soft: var(--surface-rail);
+  --color-local: var(--text-secondary);
+  --color-local-soft: var(--surface-rail);
+  --color-neutral: var(--text-secondary);
+  --color-neutral-soft: var(--surface-rail);
+  --color-scrim: var(--overlay-scrim);
+
+  /* Every System v2 role also gets a utility named after its property: bg-signal-held-tint,
+     text-signal-you, border-control-border, bg-surface-pressed. */
+  --color-surface-paper: var(--surface-paper);
+  --color-surface-rail: var(--surface-rail);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-pressed: var(--surface-pressed);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-line-hairline: var(--line-hairline);
+  --color-line-strong: var(--line-strong);
+  --color-control-border: var(--control-border);
+  --color-control-placeholder: var(--control-placeholder);
+  --color-control-fill: var(--control-fill);
+  --color-control-fill-pressed: var(--control-fill-pressed);
+  --color-control-on-fill: var(--control-on-fill);
+  --color-focus-ring: var(--focus-ring);
+  --color-signal-held: var(--signal-held);
+  --color-signal-held-tint: var(--signal-held-tint);
+  --color-signal-held-text-on-tint: var(--signal-held-text-on-tint);
+  --color-signal-held-line: var(--signal-held-line);
+  --color-signal-held-fill: var(--signal-held-fill);
+  --color-signal-held-fill-pressed: var(--signal-held-fill-pressed);
+  --color-signal-held-on-fill: var(--signal-held-on-fill);
+  --color-signal-you: var(--signal-you);
+  --color-signal-you-tint: var(--signal-you-tint);
+  --color-signal-you-tint-edge: var(--signal-you-tint-edge);
+  --color-signal-you-fill: var(--signal-you-fill);
+  --color-signal-you-fill-pressed: var(--signal-you-fill-pressed);
+  --color-signal-you-on-fill: var(--signal-you-on-fill);
+  --color-seam-open: var(--seam-open);
+  --color-seam-locked: var(--seam-locked);
+  --color-seam-pending: var(--seam-pending);
+  --color-skeleton-base: var(--skeleton-base);
+  --color-skeleton-sheen: var(--skeleton-sheen);
+  --color-overlay-plate: var(--overlay-plate);
+  --color-overlay-on-plate: var(--overlay-on-plate);
+  --color-overlay-scrim: var(--overlay-scrim);
 
   --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
@@ -143,87 +188,19 @@
   --radius-xl: 1rem;
 }
 
+/*
+ * Properties that are not tokens. The shell dimensions stay scoped to the shell (design/system-v2
+ * MIGRATION.md). The three --environment-* sizes are the pre-System-v2 floors for the touch and
+ * glove scopes below, kept to the pixel until the components read the density tokens
+ * (--control-height, --type-body-size, --type-label-size); the office values apply to
+ * everything outside a density scope.
+ */
 :root {
-  color-scheme: light;
-  --background: #f3f4f2;
-  --surface: #ffffff;
-  --surface-raised: #ffffff;
-  --surface-muted: #eef0ee;
-  --surface-sunk: #f7f8f6;
-  --surface-hover: #f4f5f3;
-  --foreground: #15181c;
-  --muted: #484e56;
-  --faint: #656c74;
-  --border: #e2e4e1;
-  --border-soft: #eceeeb;
-  /* Resting controls need a visible boundary too: 3.40:1 or better on every light surface. */
-  --border-control: #7b8289;
-  /* Hover borders, drop targets and unchecked controls use the same qualified edge. */
-  --border-strong: #7b8289;
-  --chrome: #1b1e22;
-  --chrome-raised: #262a2f;
-  --chrome-active: #2e3339;
-  --chrome-foreground: #ffffff;
-  --chrome-muted: #b8bfc5;
-  --chrome-faint: #838b93;
-  --chrome-border: #2a2e33;
-  --chrome-focus: #e0b85a;
-  /* The primary action is ink, never brass. */
-  --primary: #15181c;
-  --primary-hover: #2b3036;
-  --primary-foreground: #ffffff;
-  /* Brass marks where you are: focus, selection, the active place. It is not an action colour. */
-  --accent: #87651c;
-  --accent-hover: #7f601a;
-  --accent-active: #6b5116;
-  --accent-foreground: #ffffff;
-  --accent-soft: #f6efdc;
-  --accent-line: #dcc387;
-  --focus: #87651c;
-  --selected: #fbf6e8;
-  --highlight: #f8efd2;
-  --ok: #17603b;
-  --ok-soft: #e6f2ea;
-  --warning: #875800;
-  --warning-soft: #fbf1d9;
-  --warning-line: #e3b75c;
-  --danger: #b0261b;
-  --danger-foreground: #ffffff;
-  --danger-soft: #fcebe8;
-  --danger-line: #eaa79e;
-  /* Committed danger surface for filled controls. `--danger` is tuned so that
-     `text-danger` stays readable on each scheme's surfaces, which turns it pale
-     in dark. A stop-work, rescue, or revoke button must not go pale with it, so
-     this pair stays stop red with white text in both schemes and the dark block
-     deliberately leaves it alone. */
-  --danger-strong: #b0261b;
-  --danger-strong-foreground: #ffffff;
-  --info: #235a8e;
-  --info-soft: #e8eff8;
-  /* Saved on this device only: not yet sent, not yet confirmed by the office. */
-  --local: #5a4a8b;
-  --local-soft: #efebf8;
-  --neutral: #59606a;
-  --neutral-soft: #eef0ee;
-  --scrim: rgb(21 24 28 / 0.36);
-  /* Stamped job tags: flat galvanized metal for jobs and records, manila paper for leads. */
-  --tag-metal-fill: #dfe3e5;
-  --tag-metal-edge: #b3babf;
-  --tag-metal-text: #23282e;
-  --tag-paper-fill: #efe2bb;
-  --tag-paper-edge: #cdb676;
-  --tag-paper-text: #4a3b12;
   --rail-w: 240px;
   --inspector-w: 380px;
-  /* Office density stays explicit; local environments and input media raise these floors. */
   --environment-control-size: 2.75rem;
   --environment-body-size: 1rem;
   --environment-control-type: 0.875rem;
-  --motion-fast: 140ms;
-  --motion-standard: 220ms;
-  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --shadow-floating:
-    0 16px 40px rgb(21 24 28 / 0.16), 0 2px 6px rgb(21 24 28 / 0.08), 0 0 0 1px rgb(21 24 28 / 0.06);
   /* Hoisted from `.safe-bottom` so anything anchored above the mobile bottom nav can
      reuse the one inset rather than re-deriving it. `.safe-bottom` keeps its own
      declaration; the value is identical. */
@@ -231,267 +208,33 @@
 }
 
 /*
- * Dark follows the device unless the viewer pins an appearance from the person menu, which sets
- * `data-theme` on <html> (src/lib/theme.ts). The two dark blocks below must stay identical;
- * scripts/styles.family.test.ts compares them.
+ * A colour mode is chosen on <html> by the person (src/lib/theme.ts: office light or dark, or
+ * the device when unpinned) and on a place's own root by the place: the crew phone, the shop
+ * reading view and the customer page each carry their data-mode and data-density
+ * (src/lib/theme.ts, `scopes`). Colour and the inherited properties built from it are re-applied
+ * on every mode scope, because an inherited `color` is a computed value and would otherwise
+ * carry the parent's ink into a nested mode.
  */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --background: #141619;
-    --surface: #1b1e22;
-    --surface-raised: #23272b;
-    --surface-muted: #212428;
-    --surface-sunk: #17191c;
-    --surface-hover: #22262a;
-    --foreground: #e8eaec;
-    --muted: #b4bac1;
-    --faint: #8f969e;
-    --border: #2c3137;
-    --border-soft: #24282d;
-    --border-control: #767d85;
-    /* 3.61:1 on `--surface-raised`. Same 3:1 reasoning as the light scheme. */
-    --border-strong: #767d85;
-    --chrome: #0b0c0e;
-    --chrome-raised: #16181b;
-    --chrome-active: #1e2125;
-    --chrome-border: #1b1e21;
-    --primary: #e8eaec;
-    --primary-hover: #ffffff;
-    --primary-foreground: #111316;
-    --accent: #d8b25a;
-    --accent-hover: #e3c274;
-    --accent-active: #c9a24a;
-    --accent-foreground: #111316;
-    --accent-soft: #2a2415;
-    --accent-line: #6f5a28;
-    --focus: #e0b85a;
-    --selected: #272216;
-    --highlight: #372f18;
-    --ok: #6cc596;
-    --ok-soft: #13271c;
-    --warning: #e6b457;
-    --warning-soft: #2a2211;
-    --warning-line: #7a5d22;
-    --danger: #f08a7e;
-    --danger-foreground: #1a1d20;
-    --danger-soft: #311714;
-    --danger-line: #7d3129;
-    --info: #86b4e6;
-    --info-soft: #14202f;
-    --local: #b3a3e6;
-    --local-soft: #201c30;
-    --neutral: #a9b0b7;
-    --neutral-soft: #212428;
-    --scrim: rgb(0 0 0 / 0.6);
-    --tag-metal-fill: #cfd4d8;
-    --tag-metal-edge: #9aa2a8;
-    --tag-metal-text: #1a1e23;
-    --shadow-floating: 0 18px 44px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.07);
-  }
+[data-mode] {
+  background: var(--surface-paper);
+  color: var(--text-primary);
+  accent-color: var(--text-primary);
+  caret-color: var(--text-primary);
 }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --background: #141619;
-  --surface: #1b1e22;
-  --surface-raised: #23272b;
-  --surface-muted: #212428;
-  --surface-sunk: #17191c;
-  --surface-hover: #22262a;
-  --foreground: #e8eaec;
-  --muted: #b4bac1;
-  --faint: #8f969e;
-  --border: #2c3137;
-  --border-soft: #24282d;
-  --border-control: #767d85;
-  /* 3.61:1 on `--surface-raised`. Same 3:1 reasoning as the light scheme. */
-  --border-strong: #767d85;
-  --chrome: #0b0c0e;
-  --chrome-raised: #16181b;
-  --chrome-active: #1e2125;
-  --chrome-border: #1b1e21;
-  --primary: #e8eaec;
-  --primary-hover: #ffffff;
-  --primary-foreground: #111316;
-  --accent: #d8b25a;
-  --accent-hover: #e3c274;
-  --accent-active: #c9a24a;
-  --accent-foreground: #111316;
-  --accent-soft: #2a2415;
-  --accent-line: #6f5a28;
-  --focus: #e0b85a;
-  --selected: #272216;
-  --highlight: #372f18;
-  --ok: #6cc596;
-  --ok-soft: #13271c;
-  --warning: #e6b457;
-  --warning-soft: #2a2211;
-  --warning-line: #7a5d22;
-  --danger: #f08a7e;
-  --danger-foreground: #1a1d20;
-  --danger-soft: #311714;
-  --danger-line: #7d3129;
-  --info: #86b4e6;
-  --info-soft: #14202f;
-  --local: #b3a3e6;
-  --local-soft: #201c30;
-  --neutral: #a9b0b7;
-  --neutral-soft: #212428;
-  --scrim: rgb(0 0 0 / 0.6);
-  --tag-metal-fill: #cfd4d8;
-  --tag-metal-edge: #9aa2a8;
-  --tag-metal-text: #1a1e23;
-  --shadow-floating: 0 18px 44px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.07);
-}
-
-/* Environments are local to a shell or work surface. They never change the viewer's
-   saved appearance or make the office pay the shop's density cost. */
-:is([data-environment="field"], [data-environment="field-sun"]) {
+/* Density scopes raise the control floor and the reading size. Sizes outside them stay put. */
+[data-density="touch"] {
   --environment-control-size: 3rem;
   --environment-body-size: 1rem;
   --environment-control-type: 1rem;
   font-size: var(--environment-body-size);
 }
 
-[data-environment="customer"] {
-  --environment-control-size: 3rem;
-}
-
-[data-environment="field-sun"] {
-  color-scheme: light;
-  --background: #ffffff;
-  --surface: #ffffff;
-  --surface-raised: #ffffff;
-  --surface-muted: #f0f2ee;
-  --surface-sunk: #f7f8f6;
-  --surface-hover: #eef0ee;
-  --foreground: #15181c;
-  --muted: #343a40;
-  --faint: #444a50;
-  --border: #8d959b;
-  --border-soft: #c6cbce;
-  --border-control: #59616a;
-  --border-strong: #434a52;
-  --primary: #15181c;
-  --primary-hover: #2b3036;
-  --primary-foreground: #ffffff;
-  --accent: #62450f;
-  --accent-hover: #533a0c;
-  --accent-active: #453009;
-  --accent-foreground: #ffffff;
-  --accent-soft: #f6efdc;
-  --accent-line: #8d6c25;
-  --focus: #62450f;
-  --selected: #fbf6e8;
-  --highlight: #f8efd2;
-  --ok: #12492e;
-  --ok-soft: #e6f2ea;
-  --warning: #704500;
-  --warning-soft: #fbf1d9;
-  --warning-line: #a16b00;
-  --danger: #8e2118;
-  --danger-foreground: #ffffff;
-  --danger-soft: #fcebe8;
-  --danger-line: #b0261b;
-  --danger-strong: #8e2118;
-  --danger-strong-foreground: #ffffff;
-  --info: #174771;
-  --info-soft: #e8eff8;
-  --local: #483670;
-  --local-soft: #efebf8;
-  --neutral: #3e454d;
-  --neutral-soft: #eef0ee;
-  --tag-metal-fill: #dfe3e5;
-  --tag-metal-edge: #59616a;
-  --tag-metal-text: #15181c;
-  --tag-paper-fill: #efe2bb;
-  --tag-paper-edge: #8d6c25;
-  --tag-paper-text: #3b2d0b;
-  --scrim: rgb(21 24 28 / 0.36);
-  background: var(--background);
-  color: var(--foreground);
-}
-
-[data-environment="shop"] {
-  color-scheme: dark;
+[data-density="glove"] {
   --environment-control-size: 4rem;
   --environment-body-size: 1.5rem;
   --environment-control-type: 1.5rem;
-  --background: #0b0c0e;
-  --surface: #15181c;
-  --surface-raised: #1b1e22;
-  --surface-muted: #1b1e22;
-  --surface-sunk: #111316;
-  --surface-hover: #2a3036;
-  --foreground: #ffffff;
-  --muted: #d9dde0;
-  --faint: #c2c8cf;
-  --border: #767d85;
-  --border-soft: #434a52;
-  --border-control: #b8bfc5;
-  --border-strong: #d9dde0;
-  --primary: #ffffff;
-  --primary-hover: #e8eaec;
-  --primary-foreground: #111316;
-  --accent: #e0b85a;
-  --accent-hover: #f0cd80;
-  --accent-active: #d8b25a;
-  --accent-foreground: #111316;
-  --accent-soft: #2a2415;
-  --accent-line: #d8b25a;
-  --focus: #e0b85a;
-  --selected: #272216;
-  --highlight: #372f18;
-  --ok: #a4e2bb;
-  --ok-soft: #13271c;
-  --warning: #f0cd80;
-  --warning-soft: #2a2211;
-  --warning-line: #e6b457;
-  --danger: #ffb3a8;
-  --danger-foreground: #1a1d20;
-  --danger-soft: #311714;
-  --danger-line: #f08a7e;
-  --danger-strong: #8e2118;
-  --danger-strong-foreground: #ffffff;
-  --info: #b4d5fc;
-  --info-soft: #14202f;
-  --local: #d4c0ff;
-  --local-soft: #201c30;
-  --neutral: #d9dde0;
-  --neutral-soft: #1b1e22;
-  --tag-metal-fill: #cfd4d8;
-  --tag-metal-edge: #9aa2a8;
-  --tag-metal-text: #111316;
-  --tag-paper-fill: #efe2bb;
-  --tag-paper-edge: #cdb676;
-  --tag-paper-text: #3b2d0b;
-  --scrim: rgb(0 0 0 / 0.6);
   font-size: var(--environment-body-size);
-  background: var(--background);
-  color: var(--foreground);
-}
-
-/* Semantic tag names are shared with Figma. Declare aliases on each color scope so
-   a local environment resolves its own plate palette rather than a parent's value. */
-:is(:root, [data-environment="field-sun"], [data-environment="shop"]) {
-  --tag-case-fill: var(--tag-metal-fill);
-  --tag-case-edge: var(--tag-metal-edge);
-  --tag-case-text: var(--tag-metal-text);
-  --tag-supply-fill: var(--tag-metal-fill);
-  --tag-supply-edge: var(--tag-metal-edge);
-  --tag-supply-text: var(--tag-metal-text);
-  --tag-record-fill: var(--tag-metal-fill);
-  --tag-record-edge: var(--tag-metal-edge);
-  --tag-record-text: var(--tag-metal-text);
-  --tag-asset-fill: #30353c;
-  --tag-asset-edge: #1f2328;
-  --tag-asset-text: #eef0ee;
-}
-
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"]) {
-  accent-color: var(--foreground);
-  caret-color: var(--accent);
 }
 
 @layer base {
@@ -621,12 +364,8 @@ select {
   transform: translateX(-100%);
 }
 
+/* The motion tokens go to 0ms in the generated tokens.css; these rules stop the rest. */
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    --motion-fast: 0ms;
-    --motion-standard: 0ms;
-  }
-
   *,
   *::before,
   *::after {
@@ -918,12 +657,7 @@ a.ref-tag:focus-visible {
   --ui-control-size: 6rem;
 }
 
-:is(
-    [data-environment="field"],
-    [data-environment="field-sun"],
-    [data-environment="shop"],
-    [data-environment="customer"]
-  )
+:is([data-density="touch"], [data-density="glove"])
   :is(
     .ui-button,
     .ui-input,
@@ -936,7 +670,7 @@ a.ref-tag:focus-visible {
   min-height: max(var(--ui-control-size, 0px), var(--environment-control-size));
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+:is([data-mode^="field-"], [data-mode^="shop-"])
   :is(
     .ui-button,
     .ui-input,
@@ -949,54 +683,42 @@ a.ref-tag:focus-visible {
   line-height: 1.4;
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
+:is([data-mode^="field-"], [data-mode^="shop-"])
   :is(.environment-copy, .ui-status, .segmented-count) {
   font-size: var(--environment-body-size);
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
-  .ui-status {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .ui-status {
   white-space: normal;
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
-  .segmented-count {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .segmented-count {
   min-width: calc(var(--environment-body-size) * 1.5);
   min-height: calc(var(--environment-body-size) * 1.5);
   height: auto;
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
-  .ui-status
-  > svg {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .ui-status > svg {
   width: 1em;
   height: 1em;
 }
 
 /* Existing office utilities may occur inside shared field content. Raise only the small
    type steps, leaving the title ramp and office selectors intact. */
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
-  :is(.text-xs, .text-sm, [class*="text-[0."]) {
+:is([data-mode^="field-"], [data-mode^="shop-"]) :is(.text-xs, .text-sm, [class*="text-[0."]) {
   font-size: var(--environment-body-size);
 }
 
-[data-environment="shop"] :is(.text-base, .text-lg, .text-xl) {
+[data-mode^="shop-"] :is(.text-base, .text-lg, .text-xl) {
   font-size: var(--environment-body-size);
 }
 
-:is([data-environment="field"], [data-environment="field-sun"], [data-environment="shop"])
-  .ref-tag {
+:is([data-mode^="field-"], [data-mode^="shop-"]) .ref-tag {
   --tag-h: calc(var(--environment-body-size) * 2);
   font-size: var(--environment-body-size);
 }
 
-:is(
-    [data-environment="field"],
-    [data-environment="field-sun"],
-    [data-environment="shop"],
-    [data-environment="customer"]
-  )
-  .ref-tag[data-interactive] {
+:is([data-density="touch"], [data-density="glove"]) .ref-tag[data-interactive] {
   --tag-h: var(--environment-control-size);
   min-width: var(--environment-control-size);
 }
@@ -1041,26 +763,39 @@ a.ref-tag:focus-visible {
   z-index: 1;
 }
 
-/* The wordmark on a light or dark ground follows the appearance, pinned or from the device. */
+/* The wordmark on a light or dark ground follows the mode of the scope it sits in: the person's
+   appearance on <html> (pinned, or from the device), or the shell's own mode in Shop reading. */
 .brand-logo[data-on="dark"] {
   display: none;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .brand-logo[data-on="light"] {
+  :root:not([data-mode]) .brand-logo[data-on="light"] {
     display: none;
   }
 
-  :root:not([data-theme="light"]) .brand-logo[data-on="dark"] {
+  :root:not([data-mode]) .brand-logo[data-on="dark"] {
     display: block;
   }
 }
 
-:root[data-theme="dark"] .brand-logo[data-on="light"] {
+:is(
+    [data-mode="office-dark"],
+    [data-mode="field-night"],
+    [data-mode="shop-dark"],
+    [data-mode="customer-dark"]
+  )
+  .brand-logo[data-on="light"] {
   display: none;
 }
 
-:root[data-theme="dark"] .brand-logo[data-on="dark"] {
+:is(
+    [data-mode="office-dark"],
+    [data-mode="field-night"],
+    [data-mode="shop-dark"],
+    [data-mode="customer-dark"]
+  )
+  .brand-logo[data-on="dark"] {
   display: block;
 }
 
@@ -1095,18 +830,9 @@ a.ref-tag:focus-visible {
   overscroll-behavior: contain;
   background: var(--chrome);
   color: var(--chrome-muted);
+  box-shadow: inset -1px 0 0 var(--chrome-border);
   scrollbar-width: thin;
   scrollbar-color: var(--chrome-faint) var(--chrome);
-}
-
-:root[data-theme="dark"] .shell-rail {
-  box-shadow: inset -1px 0 0 var(--chrome-border);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .shell-rail {
-    box-shadow: inset -1px 0 0 var(--chrome-border);
-  }
 }
 
 .shell-rail :focus-visible {
@@ -1521,50 +1247,30 @@ a.ref-tag:focus-visible {
 
 /* Reading mode belongs to the active Inventory surface. Its surrounding chrome
    becomes a small set of glove-sized escapes rather than an office search toolbar. */
-.shell:has([data-environment="shop"]) {
+.shell[data-density="glove"] {
   --header-h: 5rem;
   --tabbar-h: 5.5rem;
-  --environment-control-size: 4rem;
-  --environment-body-size: 1.5rem;
-  --environment-control-type: 1.5rem;
 }
 
-.shell:has([data-environment="shop"]) .shell-topbar {
-  --background: #0b0c0e;
-  --surface: #15181c;
-  --surface-raised: #1b1e22;
-  --surface-muted: #1b1e22;
-  --surface-sunk: #111316;
-  --surface-hover: #2a3036;
-  --foreground: #ffffff;
-  --muted: #d9dde0;
-  --faint: #c2c8cf;
-  --border-control: #b8bfc5;
-  --border-strong: #d9dde0;
-  --primary: #ffffff;
-  --primary-hover: #e8eaec;
-  --primary-foreground: #111316;
-  --focus: #e0b85a;
-  --danger: #ffb3a8;
+.shell[data-density="glove"] .shell-topbar {
   font-size: var(--environment-body-size);
-  color: var(--foreground);
 }
 
-.shell:has([data-environment="shop"]) :is(.shell-search-trigger, .shell-topbar-mark) {
+.shell[data-density="glove"] :is(.shell-search-trigger, .shell-topbar-mark) {
   display: none;
 }
 
-.shell:has([data-environment="shop"]) .shell-menu-btn {
+.shell[data-density="glove"] .shell-menu-btn {
   display: inline-grid;
 }
 
 @media (min-width: 1101px) {
-  .shell:has([data-environment="shop"]) .shell-menu-btn {
+  .shell[data-density="glove"] .shell-menu-btn {
     display: none;
   }
 }
 
-.shell:has([data-environment="shop"])
+.shell[data-density="glove"]
   :is(
     .shell-topbar button,
     .shell-topbar .environment-control,
@@ -1578,33 +1284,29 @@ a.ref-tag:focus-visible {
   font-size: var(--environment-control-type);
 }
 
-.shell:has([data-environment="shop"])
+.shell[data-density="glove"]
   :is(.shell-topbar .text-xs, .shell-topbar .text-sm, .shell-nav-label, .shell-rail-foot) {
   font-size: var(--environment-body-size);
 }
 
-.shell:has([data-environment="shop"]) .shell-topbar nav[aria-label="Breadcrumb"] {
+.shell[data-density="glove"] .shell-topbar nav[aria-label="Breadcrumb"] {
   font-size: var(--environment-body-size);
 }
 
-.shell:has([data-environment="shop"])
-  .shell-topbar
-  nav[aria-label="Breadcrumb"]
-  > ol
-  > li:not(:last-child) {
+.shell[data-density="glove"] .shell-topbar nav[aria-label="Breadcrumb"] > ol > li:not(:last-child) {
   display: none;
 }
 
-.shell:has([data-environment="shop"]) .shell-person-trigger span {
+.shell[data-density="glove"] .shell-person-trigger span {
   font-size: inherit;
 }
 
-.shell:has([data-environment="shop"]) .shell-person-trigger > span[aria-hidden="true"] {
+.shell[data-density="glove"] .shell-person-trigger > span[aria-hidden="true"] {
   width: 3rem;
   height: 3rem;
 }
 
-.shell:has([data-environment="shop"]) .shell-safety-trigger > span {
+.shell[data-density="glove"] .shell-safety-trigger > span {
   position: static;
   width: auto;
   height: auto;
@@ -1614,17 +1316,17 @@ a.ref-tag:focus-visible {
   white-space: normal;
 }
 
-.shell:has([data-environment="shop"]) .shell-safety-trigger {
+.shell[data-density="glove"] .shell-safety-trigger {
   width: auto;
   padding-inline: 0.75rem;
 }
 
-.shell:has([data-environment="shop"]) .shell-topbar button > svg {
+.shell[data-density="glove"] .shell-topbar button > svg {
   width: 1.5rem;
   height: 1.5rem;
 }
 
-.shell:has([data-environment="shop"]) .shell-tab > span {
+.shell[data-density="glove"] .shell-tab > span {
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.2;

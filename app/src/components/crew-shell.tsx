@@ -1,10 +1,11 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { CircleHelp, Phone, Search, Sun } from "lucide-react";
+import { CircleHelp, Moon, Phone, Search, Sun } from "lucide-react";
 import { useState } from "react";
 
 import { useSession } from "../auth/session-context";
 import { SafetyActionPanel } from "../field/safety-action-panel";
 import { navigationForRole } from "../lib/roles";
+import { scopes } from "../lib/theme";
 import { navigationItemForPath } from "./shell-navigation";
 import { PersonMenu, SearchPalette } from "./shell-controls";
 import { useCompanyLogoUrl, useSearchPalette } from "./shell-hooks";
@@ -12,6 +13,8 @@ import { SystemStatus } from "./system-status";
 import { BrandMark } from "./ui/brand";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
+
+const NIGHT_MODE_KEY = "ironwrap.field.night-mode";
 
 /**
  * The crew phone shell (reference FieldShell): who this phone belongs to, whether its work has
@@ -27,9 +30,11 @@ export function CrewShell() {
   const search = useSearchPalette();
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpMounted, setHelpMounted] = useState(false);
-  const [sunMode, setSunMode] = useState(() => {
+  // Sun is the default even when the phone is set to dark: a phone left in dark mode would be
+  // unreadable on a roof at noon. Night is only ever this explicit choice.
+  const [night, setNight] = useState(() => {
     try {
-      return window.localStorage.getItem("ironwrap.field.sun-mode") === "on";
+      return window.localStorage.getItem(NIGHT_MODE_KEY) === "on";
     } catch {
       return false;
     }
@@ -37,7 +42,7 @@ export function CrewShell() {
   const name = session.user.display_name || session.user.email;
 
   return (
-    <div className="crew" data-environment={sunMode ? "field-sun" : "field"}>
+    <div className="crew" {...(night ? scopes.crewNight : scopes.crewSun)}>
       <a
         href="#main-content"
         className="fixed top-4 left-4 z-[60] -translate-y-24 rounded-md bg-primary px-4 py-3 font-semibold text-primary-foreground transition-transform focus:translate-y-0"
@@ -57,6 +62,7 @@ export function CrewShell() {
           )}
         </Link>
         <PersonMenu
+          appearance={false}
           triggerClassName="crew-person environment-control flex min-h-12 min-w-0 flex-1 flex-col items-start justify-center rounded-md px-1 py-2 text-left leading-tight hover:bg-surface-hover"
           trigger={
             <>
@@ -74,19 +80,24 @@ export function CrewShell() {
         <button
           type="button"
           className="crew-sun-mode environment-control inline-flex min-h-12 min-w-12 items-center justify-center gap-2 rounded-md px-3 text-base font-semibold text-foreground hover:bg-surface-hover"
-          aria-pressed={sunMode}
           onClick={() => {
-            const next = !sunMode;
-            setSunMode(next);
+            const next = !night;
+            setNight(next);
             try {
-              window.localStorage.setItem("ironwrap.field.sun-mode", next ? "on" : "off");
+              if (next) window.localStorage.setItem(NIGHT_MODE_KEY, "on");
+              else window.localStorage.removeItem(NIGHT_MODE_KEY);
             } catch {
               // The visible choice still works when this browser cannot retain preferences.
             }
           }}
         >
-          <Sun aria-hidden="true" className="size-5" />
-          Sun mode
+          {/* The label names the look it switches to, so a tap never does the opposite of the words. */}
+          {night ? (
+            <Sun aria-hidden="true" className="size-5" />
+          ) : (
+            <Moon aria-hidden="true" className="size-5" />
+          )}
+          {night ? "Use sun mode" : "Use night mode"}
         </button>
         <Button
           variant="quiet"

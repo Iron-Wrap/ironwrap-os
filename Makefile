@@ -127,6 +127,8 @@ agent-host: agent-host/node_modules/.package-lock.json
 
 app: app/node_modules/.package-lock.json
 	mkdir -p $(OUT)
+	npm run tokens:contrast --prefix app
+	npm run tokens:check --prefix app
 	npm run typecheck --prefix app
 	npm run lint --prefix app
 	npm test --prefix app 2>&1 | tee $(OUT)/app-tests.log

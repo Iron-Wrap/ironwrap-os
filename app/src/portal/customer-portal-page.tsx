@@ -5,6 +5,7 @@ import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { useCustomerScope } from "../lib/theme";
 import { describeInstallWindow } from "./install-window";
 import { MaterialComparisonSection } from "./material-comparison-section";
 import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "./portal-api";
@@ -14,6 +15,7 @@ type PortalState =
   { kind: "loading" } | { kind: "ready"; model: CustomerPortalResponse } | { kind: "error" };
 
 export function CustomerPortalPage() {
+  const scope = useCustomerScope();
   // Reuse the existing fragment scrubber: the token is never a route parameter, query key, or
   // persisted browser value. It remains only in this component while the fixed-path request runs.
   const [token] = useState(() => takeMagicLinkTokenFromWindow());
@@ -43,7 +45,7 @@ export function CustomerPortalPage() {
 
   if (!token || state.kind === "error") {
     return (
-      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
+      <main {...scope} className="grid min-h-dvh place-items-center p-4">
         <ErrorState
           title="This project link no longer works"
           message="Ask your project team for a new private link."
@@ -54,7 +56,7 @@ export function CustomerPortalPage() {
   }
   if (state.kind === "loading") {
     return (
-      <main data-environment="customer" className="grid min-h-dvh place-items-center p-4">
+      <main {...scope} className="grid min-h-dvh place-items-center p-4">
         <LoadingState label="Opening your private project page…" />
       </main>
     );
@@ -69,9 +71,10 @@ export function CustomerPortalView({
   model: CustomerPortalResponse;
   portalToken?: string;
 }) {
+  const scope = useCustomerScope();
   const quote = model.proposal?.quote;
   return (
-    <main data-environment="customer" className="min-h-dvh bg-background px-4 py-5 sm:px-6 sm:py-8">
+    <main {...scope} className="min-h-dvh bg-background px-4 py-5 sm:px-6 sm:py-8">
       <div className="mx-auto max-w-4xl space-y-6">
         <header className="border-b border-border pb-4">
           <p className="text-sm font-bold text-muted">{model.brand}</p>

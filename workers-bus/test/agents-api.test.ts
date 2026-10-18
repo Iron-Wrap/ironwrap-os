@@ -309,6 +309,10 @@ test("closing records the result; an abstention always leaves a receipt that nam
   const escalated = (await call("POST", "/api/v1/agents/runs", { signal_id: escalate, specialist_id: "lead_concierge", host_run_key: "e".repeat(40) })).body;
   const result = await call("POST", `/api/v1/agents/runs/${escalated.run_id}/close`, close({ output: { ...OUTPUT, decision: "escalate", reason_code: "person_requested" } }));
   assert.equal(result.body.terminal, "escalated");
+  // The queued exception reads in words: the specialist by name, no reason code.
+  const summaries = db.raw.prepare("SELECT summary FROM agent_exceptions WHERE source = 'step' ORDER BY rowid").all() as Array<{ summary: string }>;
+  assert.ok(summaries.length > 0);
+  for (const { summary } of summaries) assert.equal(summary, "AI receptionist stopped and needs a person.");
 });
 
 test("runs, steps and signals are append-only and every change is in the event ledger", async () => {

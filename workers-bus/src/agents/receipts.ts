@@ -1,8 +1,9 @@
 // The receipt read model: one receipt per coordination-run step, with exactly the fields
 // AI-TEAM-CONTRACT.md "Receipt fields" lists. `did`, `doing` and `needs_from_you.ask` come from
-// fixed templates over structured fields, never from model text.
+// fixed templates over structured fields, never from model text. They name the action by its plain
+// name and carry no codes; the reason stays in `policy.reason_codes`.
 
-import { catalogSpecialist } from "./catalog.ts";
+import { catalogAction, catalogSpecialist } from "./catalog.ts";
 import type { AgentDb, StepRow } from "./store.ts";
 
 export interface Receipt {
@@ -27,16 +28,22 @@ const ASKS: Record<string, string> = {
   acknowledge_and_act: "Take this over and act on it.",
 };
 
+/** The specialist and the action in words for a sentence people read: no ids, no codes. */
+export function stepWords(specialistId: string, actionId: string): { name: string; action: string | null; work: string } {
+  const action = catalogAction(actionId)?.name?.trim() || null;
+  return { name: catalogSpecialist(specialistId)?.display_name ?? "The AI team", action, work: action ?? "this step" };
+}
+
 export function receiptOf(step: StepRow): Receipt {
-  const name = catalogSpecialist(step.specialist_id)?.display_name ?? step.specialist_id;
-  const reason = step.reason_code ? step.reason_code.replaceAll("_", " ") : null;
+  const { name, action, work } = stepWords(step.specialist_id, step.action_id);
   let did: string | null = null;
   let doing: string | null = null;
-  if (step.outcome === "succeeded") did = `${name} completed ${step.action_id}.`;
-  else if (step.outcome === "abstained") did = `${name} stopped before acting: ${reason}.`;
-  else if (step.outcome === "failed") did = `${name} did not do ${step.action_id}: ${reason}.`;
-  else if (step.outcome === "unknown") doing = `${name} is confirming ${step.action_id}.`;
-  else doing = step.needs_reviewer_role ? `${name} is waiting on a person for ${step.action_id}.` : `${name} is doing ${step.action_id}.`;
+  if (step.outcome === "succeeded") did = `${name} finished ${work}.`;
+  else if (step.outcome === "abstained") did = `${name} stopped before ${work}.`;
+  else if (step.outcome === "failed") did = `${name} could not finish ${work}.`;
+  else if (step.outcome === "unknown") doing = `${name} is checking whether ${work} went through.`;
+  else if (step.needs_reviewer_role) doing = `${name} is waiting on a person before ${work}.`;
+  else doing = action ? `${name} is ${action}.` : `${name} is working on this step.`;
   return {
     specialist_id: step.specialist_id,
     run_id: step.run_id,

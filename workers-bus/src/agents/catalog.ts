@@ -26,6 +26,8 @@ export interface CatalogSpecialist {
 
 export interface CatalogAction {
   action_id: string;
+  /** The action's plain name, a lower-case gerund phrase ("sending the final invoice"). */
+  name?: string;
   owners: string[];
   aggregate: string;
   autonomy: Autonomy;

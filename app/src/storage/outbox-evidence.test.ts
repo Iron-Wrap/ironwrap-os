@@ -471,6 +471,7 @@ describe("evidence saved offline", () => {
       nextStep: "Move to a place with better signal, then try again. Nothing was lost.",
       retryable: true,
       notSent: false,
+      officeConfirmed: false,
     });
     expect(isOutboxActionSafeToRetry(stopped!)).toBe(true);
     expect((await getOutboxActionWithBlobs(saved.deviceActionId))?.blobs).toHaveLength(2);
@@ -498,6 +499,7 @@ describe("evidence saved offline", () => {
       nextStep: "Sign in again, then open the action and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
     // Nothing is thrown away, and nothing was submitted.
     expect((await getOutboxActionWithBlobs(saved.deviceActionId))?.blobs).toHaveLength(2);
@@ -671,6 +673,7 @@ describe("evidence saved offline", () => {
         "Nothing was recorded. Record the action again on the stock desk and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
   });
 
@@ -706,6 +709,7 @@ describe("evidence saved offline", () => {
       nextStep: "Nothing was submitted. Open the action and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
   });
 });

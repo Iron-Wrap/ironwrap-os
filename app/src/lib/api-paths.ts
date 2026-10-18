@@ -26,6 +26,11 @@ export const API_PATHS = {
   now: "/api/v1/now",
   operatingIntake: "/api/v1/operating-intake",
   fieldBootstrap: "/api/v1/field/bootstrap",
+  // The office's answer for items this phone holds as unconfirmed (field sessions only).
+  fieldItemResolutions: (deviceActionIds: readonly string[]) =>
+    `/api/v1/field-item-resolutions?${deviceActionIds
+      .map((id) => `device_action_id=${encodeURIComponent(id)}`)
+      .join("&")}`,
   magicLinkRequest: "/api/v1/auth/magic-link/request",
   magicLinkConsume: "/api/v1/auth/magic-link/consume",
   devicePairingConsume: "/api/v1/auth/device-pairing/consume",

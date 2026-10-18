@@ -124,9 +124,9 @@ test("0085 native photo evidence authority is complete in backup and restore con
     // Pinned through 0200: privacy, crew-stop guards, the stop release record, durable writer
     // claims and the AI team tables
     // and manual measurement history are included in both D1 inventories.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 266);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 377);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 717);
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 267);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 380);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 721);
   }
 
   for (const [name, table] of INDEXES) {

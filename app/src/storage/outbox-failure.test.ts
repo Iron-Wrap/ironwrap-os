@@ -77,6 +77,7 @@ describe("crew guidance for a stopped item", () => {
         "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
   });
 
@@ -96,6 +97,7 @@ describe("crew guidance for a stopped item", () => {
         "Sending it again will not change the answer. Keep it on this phone and tell the office.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
   });
 
@@ -118,7 +120,26 @@ describe("crew guidance for a stopped item", () => {
         "Do not save it again. Call the office and ask whether it arrived. It stays on this phone.",
       retryable: false,
       notSent: false,
+      officeConfirmed: false,
     });
+  });
+
+  it("says exactly that the office confirmed it has this once a person there checked the item", () => {
+    const guidance = outboxFailureGuidance({
+      kind: "fleet_pre_trip_inspection",
+      verification: {
+        verifiedAt: 2_000,
+        serverRef: "device-fleet-0001",
+        cursor: `fir_${"1".repeat(64)}`,
+        officeResolution: {
+          resolutionId: `fir_${"1".repeat(64)}`,
+          resolution: "arrived",
+          linkedRecord: { type: "fleet_asset_action", id: "device-fleet-0001" },
+        },
+      },
+    });
+    expect(guidance.reason).toBe("The office confirmed it has this.");
+    expect(guidance).toMatchObject({ retryable: false, notSent: false, officeConfirmed: true });
   });
 
   it("stops a collision whose stored record the office cannot read, without saying not sent", () => {
@@ -146,6 +167,7 @@ describe("crew guidance for a stopped item", () => {
       reason: "The server could not take this item yet.",
       retryable: true,
       notSent: false,
+      officeConfirmed: false,
     });
   });
 
@@ -171,6 +193,7 @@ describe("crew guidance for a stopped item", () => {
       reason: "The office copy changed after this item was saved.",
       retryable: false,
       notSent: false,
+      officeConfirmed: false,
     });
   });
 });
@@ -217,6 +240,7 @@ describe("what a saved item says when the Worker refuses its files", () => {
           "Nothing was recorded. Record the action again on the stock desk and add the files again.",
         retryable: false,
         notSent: true,
+        officeConfirmed: false,
       });
     },
   );
@@ -229,6 +253,7 @@ describe("what a saved item says when the Worker refuses its files", () => {
         nextStep: "Nothing was submitted. Open the action and add the files again.",
         retryable: false,
         notSent: true,
+        officeConfirmed: false,
       });
     },
   );
@@ -253,6 +278,7 @@ describe("what a saved item says when the Worker refuses its files", () => {
         nextStep: "Ask the owner for help. Nothing was sent.",
         retryable: false,
         notSent: true,
+        officeConfirmed: false,
       });
     }
   });
@@ -264,6 +290,7 @@ describe("what a saved item says when the Worker refuses its files", () => {
       nextStep: "Sign in again, then open the action and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     });
   });
 
@@ -275,6 +302,7 @@ describe("what a saved item says when the Worker refuses its files", () => {
       nextStep: "Move to a place with better signal, then try again. Nothing was lost.",
       retryable: true,
       notSent: false,
+      officeConfirmed: false,
     });
   });
 });

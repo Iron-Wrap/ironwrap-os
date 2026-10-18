@@ -26,6 +26,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-pan
 import { Textarea } from "../components/ui/textarea";
 import { ApiError, apiCommand } from "../lib/api";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
+import { subscribeOutboxChanges } from "../storage/outbox-store";
 import { flushOutbox } from "../storage/outbox-processor";
 import { outboxFailureGuidance } from "../storage/outbox-failure";
 import type { JsonValue, OutboxAction } from "../storage/outbox-types";
@@ -726,13 +727,14 @@ function WorkPackagePanel({
   const principal = { tenantId: session.tenant.id, userId: session.user.id };
 
   useEffect(() => {
-    if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
-      return;
-    const interval = window.setInterval(() => {
+    if (!savedAction || savedAction.state === "verified") return;
+    const refresh = () =>
       void getOutboxAction(savedAction.deviceActionId).then(
         (latest) => latest && setSavedAction(latest),
       );
-    }, 1_000);
+    // A stopped item changes only when the office settles it, so listen instead of polling.
+    if (savedAction.state === "needs_attention") return subscribeOutboxChanges(refresh);
+    const interval = window.setInterval(refresh, 1_000);
     return () => window.clearInterval(interval);
   }, [savedAction]);
 
@@ -1493,11 +1495,14 @@ function WorkPackagePanel({
 }
 
 function WorkPackageActionState({ action }: { action: OutboxAction }) {
-  const label = action.kind === "work_package_acknowledgement" ? "Plan review" : "Stop Work report";
+  const review = action.kind === "work_package_acknowledgement";
+  const label = review ? "Plan review" : "Stop Work report";
   const guidance = outboxFailureGuidance(action);
   const detail =
     action.state === "verified"
-      ? "The server got this update. Open the plan again to see the latest work state."
+      ? guidance.officeConfirmed
+        ? `The office confirmed it has your ${review ? "plan review" : label}. Nothing else to do with it.`
+        : "The server got this update. Open the plan again to see the latest work state."
       : action.state === "needs_attention"
         ? `${guidance.reason} ${guidance.nextStep} It did not change the plan or unlock work.`
         : `${label} is saved on this phone and is waiting to send. It does not change the plan or unlock work.`;
@@ -2218,13 +2223,14 @@ function CheckInFlow({
   const typedEvidence = evidenceCaptureContext();
 
   useEffect(() => {
-    if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
-      return;
-    const interval = window.setInterval(() => {
+    if (!savedAction || savedAction.state === "verified") return;
+    const refresh = () =>
       void getOutboxAction(savedAction.deviceActionId).then(
         (latest) => latest && setSavedAction(latest),
       );
-    }, 1000);
+    // A stopped item changes only when the office settles it, so listen instead of polling.
+    if (savedAction.state === "needs_attention") return subscribeOutboxChanges(refresh);
+    const interval = window.setInterval(refresh, 1000);
     return () => window.clearInterval(interval);
   }, [savedAction]);
 
@@ -2952,7 +2958,9 @@ function CheckInSaved({
       ) : (
         <p className="mt-4 leading-7 text-muted">
           {action.state === "verified"
-            ? "The server got this check-in."
+            ? guidance.officeConfirmed
+              ? guidance.reason
+              : "The server got this check-in."
             : "This check-in is safe on this phone. Keep the app open so it can send when it can."}
         </p>
       )}

@@ -27,9 +27,9 @@ import { RESPONSE_AUTHORITY_ROLES } from "./safety-lifecycle.ts";
  *   GET  /api/v1/work-packages/{id}/stop-releases  the stop holding the version and every release
  *
  * A release names the exact Blocked version and stop event, cites correction evidence captured on
- * the package's job, and gives a reason. Migration 0145 stores it append-only, re-checks every fact
- * below, and in the same statement returns the version to the status the stop interrupted, which is
- * the state office reissue accepts.
+ * the package's job after that stop, and gives a reason. Migration 0145 stores it append-only and,
+ * with 0152, re-checks every fact below, and in the same statement returns the version to the
+ * status the stop interrupted, which is the state office reissue accepts.
  *
  * Releasing roles are owner, ops and production: `RESPONSE_AUTHORITY_ROLES`, the roles that already
  * release a safety-occurrence stop, and the production supervisor the contract names. Sales,
@@ -244,7 +244,13 @@ async function recordStopRelease(
   if (person.identities.some((identity) => stopIdentities.has(identity)))
     throw new StopReleaseRefusal("work_package_stop_release_independence_required", 403);
 
-  const evidenceRefs = await citedEvidence(env, tenantId, head.job_id, input.evidenceIds);
+  const evidenceRefs = await citedEvidence(
+    env,
+    tenantId,
+    head.job_id,
+    input.evidenceIds,
+    stop.occurred_at,
+  );
   const row: StopReleaseRow = {
     release_id: `wsr_${(await sha256Hex(`${tenantId}:${deviceActionId}:stop-release`)).slice(0, 32)}`,
     tenant_id: tenantId,
@@ -275,8 +281,9 @@ async function recordStopRelease(
   // carry two different intents. It carries no time: a retry rewrites identical bytes.
   await ensureManifest(env, row);
   try {
-    // One statement: the 0145 insert trigger re-checks every fact above and its after-insert
-    // trigger restores the interrupted status, so the record and the transition commit together.
+    // One statement: the insert trigger (0145, re-created by 0152) re-checks every fact above and
+    // the after-insert trigger restores the interrupted status, so the record and the transition
+    // commit together.
     await env.DB.batch([insertRelease(env, row)]);
   } catch (error) {
     const winner = await releaseByDeviceAction(env, tenantId, deviceActionId);
@@ -453,14 +460,15 @@ async function interruptedStatus(
 
 /**
  * Every cited id must be exactly one verified, manifested, stored Work Package capture of this
- * tenant's job. The reference keeps the checksum of the stored object, read from D1, never from
- * the browser.
+ * tenant's job, captured strictly after the stop it releases. The reference keeps the checksum of
+ * the stored object, read from D1, never from the browser.
  */
 async function citedEvidence(
   env: AppEnv,
   tenantId: string,
   jobId: string,
   evidenceIds: string[],
+  stoppedAt: string,
 ): Promise<Array<{ ref: string; sha256: string }>> {
   const invalid = new StopReleaseRefusal("work_package_stop_release_evidence_invalid", 409);
   let rows: Awaited<ReturnType<typeof listJobEvidenceItemsFromD1>>;
@@ -480,6 +488,12 @@ async function citedEvidence(
   }
   if (checksums.size !== evidenceIds.length || evidenceIds.some((id) => !checksums.has(id)))
     throw invalid;
+  // A capture from before the stop shows what the crew stopped on, never the correction. Compare
+  // the capture time the evidence record carries with the stop as instants (0152 repeats this in
+  // D1); a time that does not parse never qualifies.
+  const stopTime = Date.parse(stoppedAt);
+  if (rows.some((row) => !(Date.parse(row.capturedAt) > stopTime)))
+    throw new StopReleaseRefusal("work_package_stop_release_evidence_before_stop", 409);
   return evidenceIds.map((id) => ({ ref: `field-evidence://${id}`, sha256: checksums.get(id)! }));
 }
 
@@ -575,6 +589,8 @@ function writeRefusal(error: unknown): unknown {
     return new StopReleaseRefusal("work_package_stop_release_independence_required", 403);
   if (message.includes("work_package_stop_release_evidence_invalid"))
     return new StopReleaseRefusal("work_package_stop_release_evidence_invalid", 409);
+  if (message.includes("work_package_stop_release_evidence_before_stop"))
+    return new StopReleaseRefusal("work_package_stop_release_evidence_before_stop", 409);
   if (/UNIQUE constraint failed: work_packages\./.test(message))
     return new StopReleaseRefusal("work_package_stop_release_assignment_conflict", 409);
   return error;

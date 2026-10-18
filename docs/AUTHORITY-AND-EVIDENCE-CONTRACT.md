@@ -283,22 +283,28 @@ stop. Releasing a crew stop is people-only (`safety_stop.release`, class H) and 
 service token, effect runtime or MCP actor, in the owner, ops or production role, and never the
 person who raised the stop or the user on its receipt. The request names the exact Blocked version
 and stop event, cites one to ten verified, stored Work Package captures of the same tenant and job,
-and gives a reason; until a structured office follow-up record exists, that reason and evidence
-carry the follow-up. The append-only `work_package_stop_releases` record (migration `0145`) keeps
-the version, the stop and its device action, who raised and reported it, the releaser and their
-role at that moment, the independence facts, the evidence references with their stored checksums,
-and the reason. D1 re-checks those facts, then writes the record and returns the version to the
-status the stop interrupted in one statement, beside an immutable office-action manifest. An exact
-replay returns the original record, and a changed intent under the same key conflicts. `GET` on the
-same route returns the stop holding the version and every release. Only a release of the stop that
-holds that exact version lets the `0143` guards admit a status change away from Blocked or a
-supersession; a release of another version, or of an earlier stop on the same version, unlocks
-nothing. Refusals are distinct: `work_package_stop_release_person_required`,
-`work_package_stop_release_role_required` and `work_package_stop_release_independence_required`
-(403); `work_package_stop_release_evidence_required` (400); `work_package_not_blocked`,
+each captured after that stop, and gives a reason; until a structured office follow-up record
+exists, that reason and evidence carry the follow-up. A capture taken before the stop shows what
+the crew stopped on, never its correction, so however it was verified it can never release the
+stop: its capture time, the device's capture completion or, when the device recorded none, the
+server receipt, must be strictly later than the stop event's time, compared as instants. The
+append-only `work_package_stop_releases` record (migration `0145`) keeps the version, the stop and
+its device action, who raised and reported it, the releaser and their role at that moment, the
+independence facts, the evidence references with their stored checksums, and the reason. D1
+re-checks those facts, the capture order included (migration `0152`), then writes the record and
+returns the version to the status the stop interrupted in one statement, beside an immutable
+office-action manifest. An exact replay returns the original record, and a changed intent under the
+same key conflicts. `GET` on the same route returns the stop holding the version and every release.
+Only a release of the stop that holds that exact version lets the `0143` guards admit a status
+change away from Blocked or a supersession; a release of another version, or of an earlier stop on
+the same version, unlocks nothing. Refusals are distinct:
+`work_package_stop_release_person_required`, `work_package_stop_release_role_required` and
+`work_package_stop_release_independence_required` (403);
+`work_package_stop_release_evidence_required` (400); `work_package_not_blocked`,
 `work_package_stop_release_version_conflict`, `work_package_stop_release_stop_conflict`,
-`work_package_stop_already_released`, `work_package_stop_release_evidence_invalid` and
-`work_package_stop_release_replay_conflict` (409).
+`work_package_stop_already_released`, `work_package_stop_release_evidence_invalid`,
+`work_package_stop_release_evidence_before_stop` and `work_package_stop_release_replay_conflict`
+(409).
 
 ## Physical completion
 

@@ -2275,9 +2275,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0202 the fact-version ledger.
     // 0146 adds private report evidence and review; 0147 adds governed pricing revisions and pins.
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
-    // 0150 adds the append-only field item resolution ledger.
+    // 0150 adds the append-only field item resolution ledger. 0152 requires the evidence that
+    // releases a crew stop to be captured after the stop.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 130);
+    assert.equal(migrations.length, 131);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2421,6 +2422,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
     // three named indexes and six guards.
+    // 0152 re-creates the stop release insert and replace guards under their names, so counts are
+    // unchanged.
     assert.deepEqual(
       { ...counts },
       { tables: 273, indexes: 372, triggers: 740 },
@@ -3625,6 +3628,69 @@ test("new interstitial repairs preserve a portal capture on a database already t
     );
   } finally {
     db.close();
+  }
+});
+
+test("0152 re-creates the 0145 stop release insert guards with every clause unchanged plus one", async () => {
+  const migration = async (name: string) =>
+    await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");
+  const trigger = (sql: string, name: string): string => {
+    const match = sql.match(new RegExp(`CREATE TRIGGER ${name}\\n[\\s\\S]*?\\nEND;`));
+    assert.ok(match, name);
+    return match[0];
+  };
+  const shipped = await migration("0145_work_package_stop_releases.sql");
+  const forward = await migration("0152_work_package_stop_release_evidence_order.sql");
+  const validate = "work_package_stop_releases_validate_insert";
+  const replace = "work_package_stop_releases_no_insert_replace";
+
+  // Every 0145 clause is carried verbatim and in order; the only addition is the capture-order
+  // clause, answered last.
+  const shippedClauses = trigger(shipped, validate).slice(0, -"END;".length).trimEnd();
+  const recreated = trigger(forward, validate);
+  assert.ok(recreated.startsWith(shippedClauses));
+  const added = recreated.slice(shippedClauses.length);
+  assert.equal(added.match(/RAISE\(ABORT/g)?.length, 1);
+  assert.match(added, /RAISE\(ABORT, 'work_package_stop_release_evidence_before_stop'\)/);
+  // Triggers on one table fire newest first: the replace guard, unchanged, is re-created after the
+  // insert guard so a replayed or second release still reports itself before validation.
+  assert.equal(trigger(forward, replace), trigger(shipped, replace));
+  assert.ok(forward.indexOf(`CREATE TRIGGER ${validate}`) < forward.indexOf(`CREATE TRIGGER ${replace}`));
+});
+
+test("0145 and 0152 applied after 0202 on a database already through 0146-0202 give the sorted schema", async () => {
+  // qa applied 0146–0202 before 0145 merged, so it receives 0145 and then 0152 after 0202.
+  const late = [
+    "0145_work_package_stop_releases.sql",
+    "0152_work_package_stop_release_evidence_order.sql",
+  ];
+  const migrations = await d1MigrationNames();
+  assert.deepEqual(migrations.filter((name) => late.includes(name)), late);
+  assert.ok(migrations.indexOf(late[1]!) < migrations.indexOf("0202_agent_fact_versions.sql"));
+  const sorted = new DatabaseSync(":memory:");
+  const qa = new DatabaseSync(":memory:");
+  try {
+    for (const db of [sorted, qa]) db.exec("PRAGMA foreign_keys = ON");
+    for (const name of migrations) await applyD1Migration(sorted, name);
+    for (const name of migrations.filter((candidate) => !late.includes(candidate))) {
+      await applyD1Migration(qa, name);
+    }
+    for (const name of late) await applyD1Migration(qa, name);
+    const schema = (db: DatabaseSync) =>
+      db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+        .all()
+        .map((row) => ({ ...row }));
+    assert.deepEqual(schema(qa), schema(sorted));
+    // Triggers on one table fire newest first, so each table's creation order decides which guard
+    // answers first; it matches too.
+    const firing = (db: DatabaseSync) =>
+      db.prepare("SELECT tbl_name, name FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, rowid")
+        .all()
+        .map((row) => ({ ...row }));
+    assert.deepEqual(firing(qa), firing(sorted));
+  } finally {
+    sorted.close();
+    qa.close();
   }
 });
 

@@ -4149,7 +4149,7 @@
         "watch_id": "new_inbound",
         "at": "PT0M",
         "content": {
-          "text": "Invitation to bid: metal roofing and composite metal cladding package for a 3-storey mixed-use building at 1200 Corbel Avenue NW. Drawings and specifications: https://bids.example.invalid/pkg/4471. Bids close in 9 days; optional site walk in 4 days. Please confirm whether you intend to bid. Priya Natarajan, Ridgeline Builders"
+          "text": "Invitation to bid: metal roofing and composite metal cladding package for a 3-storey mixed-use building at 1200 Corbel Avenue NW. Drawings and specifications: https://bids.example.invalid/pkg/4471. Bids close in 9 days; optional site walk in 4 days. Please confirm whether you intend to bid. Kalpana Natarajan, Ridgeline Builders"
         }
       },
       "facts": [
@@ -4180,7 +4180,7 @@
             "lifecycle_status": "untriaged",
             "source": "email",
             "source_envelope_id": "ENV-7016",
-            "contact_name": "Priya Natarajan",
+            "contact_name": "Kalpana Natarajan",
             "contact_email": "estimating@ridgeline.example.invalid",
             "organization": "Ridgeline Builders"
           }
@@ -5261,8 +5261,8 @@
             "tenant_id": "ironwrap",
             "lifecycle_status": "qualified",
             "source": "website",
-            "contact_name": "Grace Lindqvist",
-            "contact_email": "grace.lindqvist@example.invalid",
+            "contact_name": "Sigrid Lindqvist",
+            "contact_email": "sigrid.lindqvist@example.invalid",
             "brand": "iroof",
             "service": "soffit_fascia",
             "preferred_language": "en"
@@ -5321,7 +5321,7 @@
           "data": {
             "lead_id": "L-2140",
             "channel": "email",
-            "address": "grace.lindqvist@example.invalid",
+            "address": "sigrid.lindqvist@example.invalid",
             "purpose": "respond_to_inquiry_and_estimate_follow_up",
             "basis": "express",
             "status": "granted",
@@ -8779,7 +8779,7 @@
         "watch_id": "new_inbound",
         "at": "PT0M",
         "content": {
-          "text": "Thanks for checking in. Email is hard for me to keep up with, so please text me instead about the visit and the estimate. Grace"
+          "text": "Thanks for checking in. Email is hard for me to keep up with, so please text me instead about the visit and the estimate. Sigrid"
         }
       },
       "facts": [
@@ -8795,12 +8795,12 @@
             "tenant_id": "ironwrap",
             "lifecycle_status": "qualified",
             "source": "website",
-            "contact_name": "Grace Lindqvist",
+            "contact_name": "Sigrid Lindqvist",
             "contact_points": [
               {
                 "contact_id": "CP-2140-E",
                 "channel": "email",
-                "value": "grace.lindqvist@example.invalid"
+                "value": "sigrid.lindqvist@example.invalid"
               },
               {
                 "contact_id": "CP-2140-S",
@@ -8836,7 +8836,7 @@
           "data": {
             "lead_id": "L-2140",
             "channel": "email",
-            "address": "grace.lindqvist@example.invalid",
+            "address": "sigrid.lindqvist@example.invalid",
             "purpose": "respond_to_inquiry_and_estimate_follow_up",
             "basis": "express",
             "status": "granted",

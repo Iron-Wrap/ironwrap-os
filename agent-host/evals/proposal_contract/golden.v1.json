@@ -2638,13 +2638,13 @@
           "data": {
             "customer_id": "C-5108",
             "names": [
-              "Grace Okonkwo"
+              "Adaeze Okonkwo"
             ],
             "contact_points": [
               {
                 "contact_id": "CT-5108-E",
                 "kind": "email",
-                "address": "grace.okonkwo@example.invalid"
+                "address": "adaeze.okonkwo@example.invalid"
               },
               {
                 "contact_id": "CT-5108-M",
@@ -2656,7 +2656,7 @@
             "portal_identity": "verified",
             "decision_authority": [
               {
-                "name": "Grace Okonkwo",
+                "name": "Adaeze Okonkwo",
                 "basis": "owner on title",
                 "evidence": "title search on file",
                 "portal_identity": "verified"
@@ -2758,7 +2758,7 @@
             "proposal_id": "PR-5108-1",
             "terms_hash": "sha256:703b2b9f28aaf0c7ca0526d01b65dd33203ed54cdd38b09411de7ba1892f5028",
             "option": "better",
-            "decided_by": "Grace Okonkwo (owner on title; portal identity verified)",
+            "decided_by": "Adaeze Okonkwo (owner on title; portal identity verified)",
             "accepted_at": "-PT1H",
             "executed_copy_delivery": {
               "effect_id": "EFF-77311",
@@ -5529,13 +5529,13 @@
           "data": {
             "customer_id": "C-5117",
             "names": [
-              "Priya Raman"
+              "Kavya Raman"
             ],
             "contact_points": [
               {
                 "contact_id": "CT-5117-E",
                 "kind": "email",
-                "address": "priya.raman@example.invalid"
+                "address": "kavya.raman@example.invalid"
               },
               {
                 "contact_id": "CT-5117-M",
@@ -5547,7 +5547,7 @@
             "portal_identity": "verified",
             "decision_authority": [
               {
-                "name": "Priya Raman",
+                "name": "Kavya Raman",
                 "basis": "owner on title",
                 "evidence": "title search on file",
                 "portal_identity": "verified"

@@ -192,8 +192,8 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
       (the exact match), `match_key`: the first exact match in the order `phone`, `email`, `address`. `inquiry.close`: `lead_id`,
       `reason_code` (`out_of_scope`|`out_of_area`|`nurture_end`|`declined`).
     - `lead_fact.confirm`: `lead_id`, `proposal_id` (your recorded triage proposal), `fields` (an
-      object with one or more of `service`, `scope`, `address`, `timing`, and no other keys, each
-      value copied exactly from the proposal, never retyped).
+      object with exactly the keys `service`, `scope`, `address`, `timing`: each value it confirms
+      copied exactly from the proposal, never retyped, and the others `null`; at least one is set).
     - `customer_message.draft`: `to` (contact id), `purpose`, `channel` (`email`|`sms`|
       `social_reply`), `language`. `customer_message.send`: `draft_id`.
     - Shared actions follow COMMON, with the lead as `object`: `exception.escalate` uses

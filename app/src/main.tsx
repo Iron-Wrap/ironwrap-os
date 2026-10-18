@@ -1,4 +1,6 @@
 import "./styles.css";
+// First, so no contract module builds a schema before zod is told not to compile parsers.
+import "./lib/zod-jitless";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";

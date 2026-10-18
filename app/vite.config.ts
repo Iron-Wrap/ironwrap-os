@@ -263,9 +263,11 @@ export default defineConfig({
               test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-query|query-core)[\\/]/,
               priority: 3,
             },
+            // src/lib/zod-jitless.ts rides with zod: every chunk that builds a schema imports
+            // this one, so its setting is in place before the first contract module runs.
             {
               name: "contracts-vendor",
-              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge)[\\/]/,
+              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge)[\\/]|[\\/]src[\\/]lib[\\/]zod-jitless\.ts$/,
               priority: 3,
             },
             // The cross-cutting app modules default to a chunk each — the session

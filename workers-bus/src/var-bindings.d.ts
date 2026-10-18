@@ -9,6 +9,8 @@
  */
 interface Env {
   APP_DOCUMENT_GENERATION_ENABLED: string;
+  /** Reviewed-catalog cutover; false preserves the existing native import path. */
+  APP_PRICING_CATALOG_ENABLED: string;
   APP_BFF_ENABLED: string;
   APP_READINESS_ADMISSION_ENABLED: string;
   APP_EVIDENCE_UPLOADS_ENABLED: string;
@@ -149,6 +151,7 @@ interface Env {
 declare namespace Cloudflare {
   interface Env {
     APP_DOCUMENT_GENERATION_ENABLED: string;
+    APP_PRICING_CATALOG_ENABLED: string;
     APP_BFF_ENABLED: string;
     APP_READINESS_ADMISSION_ENABLED: string;
     APP_EVIDENCE_UPLOADS_ENABLED: string;

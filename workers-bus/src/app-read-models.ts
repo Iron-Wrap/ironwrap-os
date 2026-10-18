@@ -1,4 +1,9 @@
 import {
+  pricingCatalogEnabled,
+  resolveFrozenCatalogPricing,
+  resolveFrozenLegacyPricing,
+} from "./pricing-catalog.ts";
+import {
   appUserIdentities,
   type AppEnv,
   type AppRole,
@@ -46,7 +51,6 @@ import { takeoffFromGeometry, type TakeoffModel } from "./takeoff.ts";
 import {
   approvedPricingPolicyIdentity,
   priceTakeoff,
-  verifyPricingAuthority,
   type PriceList,
   type VerifiedPricingAuthority,
 } from "./pricing.ts";
@@ -2945,7 +2949,6 @@ export async function buildEstimatorWorkbenchReadModel(
     throw new Error("office_scope_required");
   if (!validJobName(jobName)) return null;
   const readModelGeneratedAt = asOf.toISOString();
-  const configuredPriceList = estimatorPriceList(env, readModelGeneratedAt);
   const [nativeSources, nativeCommercial] = await Promise.all([
     readNativeEstimatorSources(env, auth.session.tenant_id, jobName, asOf),
     readNativeCommercialJobPacket(
@@ -3092,23 +3095,35 @@ export async function buildEstimatorWorkbenchReadModel(
   const computedTakeoff = estimatorComputedTakeoff(
     geometryCapture.model ?? null,
   );
-  const pricingAuthority =
-    configuredPriceList.identity && configuredPriceList.list
-      ? await verifyPricingAuthority(
-          configuredPriceList.list,
-          pricingAuthorityRows,
-          {
-            pricedAt: readModelGeneratedAt,
-            tenantId: auth.session.tenant_id,
-          },
-        )
-      : undefined;
-  const computedEstimate = estimatorComputedEstimate(
-    configuredPriceList,
-    computedTakeoff.takeoff,
-    readModelGeneratedAt,
-    pricingAuthority ?? undefined,
-  );
+  // Saved imports keep their own authority, even after a catalog cutover or
+  // rollback. Only an import without authority uses the old environment preview.
+  let configuredPriceList: EstimatorPriceList = { state: "unconfigured" };
+  let pricingAuthority: VerifiedPricingAuthority | undefined;
+  let pricingInstant = readModelGeneratedAt;
+  if (pricingAuthorityRows.length === 1) {
+    try {
+      const rule = pricingAuthorityRows[0];
+      const pinned = rule.catalog_revision_id
+        ? await resolveFrozenCatalogPricing(
+            env,
+            auth.session.tenant_id,
+            rule,
+            nativeSources.estimatorRevisionId,
+          )
+        : await resolveFrozenLegacyPricing(
+            auth.session.tenant_id,
+            rule,
+            nativeSources.estimatorCreatedAt,
+          );
+      if (!pinned) throw new Error("pricing_authority_missing");
+      configuredPriceList = { state: "ok", list: pinned.list };
+      pricingAuthority = pinned.authority;
+      pricingInstant = pinned.pricedAt;
+    } catch { configuredPriceList = { state: "invalid" }; }
+  } else if (pricingAuthorityRows.length > 1) configuredPriceList = { state: "invalid" };
+  else if (!pricingCatalogEnabled(env))
+    configuredPriceList = estimatorPriceList(env, readModelGeneratedAt);
+  const computedEstimate = estimatorComputedEstimate(configuredPriceList, computedTakeoff.takeoff, pricingInstant, pricingAuthority);
   const staleFields: string[] = [
     ...nativeSources.staleFields,
     ...commercialSelection.staleFields,
@@ -5086,7 +5101,7 @@ function visualConfidence(value: unknown): number | null | undefined {
 // projection. They intentionally use legacy preview defaults and are never
 // policy-bound or approval-eligible. The governed Material Takeoff MCP/Frappe
 // rail is the only operational calculation path. Pricing activates only when
-// the tenant configures ESTIMATOR_PRICE_LIST_JSON; rates never live in code.
+// a human approves a D1 catalog revision and a new import pins its exact receipt.
 
 const LEGACY_PREVIEW_CALCULATION_SCHEMA = "legacy_preview/v1" as const;
 const NON_OPERATIONAL_PREVIEW_AUTHORITY = "non_operational_preview" as const;
@@ -5240,17 +5255,12 @@ type EstimatorPriceList = {
 };
 
 function estimatorPriceList(env: AppEnv, pricedAt: string): EstimatorPriceList {
-  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string })
-    .ESTIMATOR_PRICE_LIST_JSON;
-  if (!raw || !raw.trim()) return { state: "unconfigured" };
+  const raw = env.ESTIMATOR_PRICE_LIST_JSON;
+  if (!raw?.trim()) return { state: "unconfigured" };
   try {
     const parsed: unknown = JSON.parse(raw);
-    // JSON shape belongs here; all commercial semantics live in priceTakeoff's
-    // single closed validator so approved cents and legacy read-only inputs
-    // cannot drift between the runtime path and the pricing module.
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       return { state: "invalid" };
-    }
     const list = parsed as PriceList;
     if (list.approvedPolicy === undefined) return { state: "ok", list };
     return {

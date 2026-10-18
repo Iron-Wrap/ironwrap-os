@@ -1,3 +1,8 @@
+import { handlePricingCatalog } from "./pricing-catalog-api.ts";
+import { PricingCatalogError } from "./pricing-catalog.ts";
+import { handleJobMeasurementReports } from "./job-measurement-report-api.ts";
+import { handleMeasurementReportPrivacyAudit } from "./job-measurement-report-privacy.ts";
+import { handleMeasurementIntakePrivacyAudit } from "./measurement-intake-privacy.ts";
 import { handleAgentTeamAppRoute } from "./agents/api.ts";
 import { handleJobManualMeasurements } from "./job-manual-measurement-api.ts";
 import { OFFICE_LEAD_REQUEST_ID, OfficeIntakeError, parseOfficeCapture, recordOfficeIntake, readOfficeIntakeReceipt, readOfficeLeadFacts, resumeOfficeIntake } from "./office-lead-intake-store.ts";
@@ -658,6 +663,18 @@ export async function handleAuthenticatedRoute(
       ? privateAppJson(revoked.body)
       : privateAppJson({ error: revoked.error }, revoked.status);
   }
+  if (url.pathname.startsWith("/api/v1/privacy/measurement-reports")) {
+    const audit = await handleMeasurementReportPrivacyAudit(req, env, auth);
+    if (audit) return audit;
+  }
+  if (url.pathname.startsWith("/api/v1/privacy/measurement-intakes")) {
+    const audit = await handleMeasurementIntakePrivacyAudit(req, env, auth);
+    if (audit) return audit;
+  }
+  const pricingCatalogMatch = url.pathname.match(/^\/api\/v1\/pricing\/catalog(?:\/(revisions|activations))?$/);
+  if (pricingCatalogMatch) return handlePricingCatalog(req, env, auth, pricingCatalogMatch[1]);
+  const reportMatch = url.pathname.match(/^\/api\/v1\/estimator\/jobs\/([^/]+)\/measurement-reports(?:\/([^/]+)(?:\/(bytes|resume|candidate-sets|reviews))?)?$/);
+  if (reportMatch) return handleJobMeasurementReports(req, env, auth, reportMatch[1], reportMatch[2], reportMatch[3]);
   const manualMeasurementMatch = url.pathname.match(/^\/api\/v1\/estimator\/jobs\/([^/]+)\/manual-measurements$/);
   if (manualMeasurementMatch) return handleJobManualMeasurements(req, env, auth, manualMeasurementMatch[1]);
   if (req.method === "POST" && url.pathname === "/api/v1/sales/leads") {
@@ -1990,7 +2007,7 @@ async function handleEstimatorEvidenceImport(
       result.kind === "created" ? 201 : 200,
     );
   } catch (error) {
-    if (error instanceof EstimatorNativeStoreError) {
+    if (error instanceof EstimatorNativeStoreError || error instanceof PricingCatalogError) {
       return privateAppJson({ error: error.code }, error.status);
     }
     return privateAppJson({ error: "estimator_import_unavailable" }, 502);

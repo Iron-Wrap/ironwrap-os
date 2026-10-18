@@ -2273,8 +2273,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0149 adds durable evidence write claims. 0200 opens the AI team range (0200-0299) with
     // the coordination run, its steps, signals and event ledger; 0201 adds owner controls and
     // 0202 the fact-version ledger.
+    // 0146 adds private report evidence and review; 0147 adds governed pricing revisions and pins.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 124);
+    assert.equal(migrations.length, 126);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2399,7 +2400,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0133 forward-adds the envelope release-smoke marker without changing object counts. 0134
     // adds one office lead-intake receipt table, one named index, and four immutability/canonical
     // guards. 0135 adds three manual-observation tables, two named indexes, and twelve lineage,
-    // head-pointer, retention, and append-only guards. 0139 adds two upload evidence tables,
+    // head-pointer, retention, and append-only guards. 0147 adds four pricing tables,
+    // three named indexes and seventeen guards. 0139 adds two upload evidence tables,
     // one recovery index outside this test's `idx_%` subset, and seven immutability guards.
     // 0144 adds structured field measurement columns, two named indexes, and five capture,
     // correction, and immutability guards.
@@ -2413,7 +2415,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards, no index.
     assert.deepEqual(
       { ...counts },
-      { tables: 257, indexes: 357, triggers: 678 },
+      { tables: 265, indexes: 363, triggers: 712 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

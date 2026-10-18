@@ -13,6 +13,11 @@
         "valid_work",
         "same_day_swap"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "thursday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "crew_screen",
@@ -712,8 +717,10 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "job_id": "J-5375"
+              "to_specialist_id": "billing_reconciliation",
+              "object": {
+                "id": "J-5375"
+              }
             }
           }
         ],
@@ -953,8 +960,10 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "job_id": "J-5380"
+              "to_specialist_id": "customer_care_warranty",
+              "object": {
+                "id": "J-5380"
+              }
             }
           }
         ],
@@ -1000,6 +1009,11 @@
         "stop_work",
         "weather"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "12:20"
+      },
       "signal": {
         "kind": "handoff",
         "source": "orchestrator",
@@ -1438,8 +1452,10 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "job_id": "J-5392"
+              "to_specialist_id": "compliance",
+              "object": {
+                "id": "J-5392"
+              }
             }
           }
         ],
@@ -1484,6 +1500,11 @@
         "staff_request",
         "same_day_swap"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "thursday",
+        "local_time": "15:10"
+      },
       "signal": {
         "kind": "handoff",
         "source": "orchestrator",
@@ -2090,8 +2111,10 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "job_id": "J-5395"
+              "to_specialist_id": "customer_care_warranty",
+              "object": {
+                "id": "J-5395"
+              }
             }
           }
         ],
@@ -2208,7 +2231,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -2356,7 +2379,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],
@@ -2508,7 +2531,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation"
+              "to_specialist_id": "billing_reconciliation"
             }
           }
         ],
@@ -2693,7 +2716,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -2984,6 +3007,11 @@
         "language",
         "valid_work"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "thursday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "handoff",
         "source": "customer_care_warranty",
@@ -3639,8 +3667,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "ops",
-              "reason_code": "ceiling_reached"
+              "reason_code": "ceiling_reached",
+              "route_to": "ops"
             }
           }
         ],
@@ -3682,6 +3710,11 @@
         "storm",
         "impersonation_claim"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "handoff",
         "source": "orchestrator",

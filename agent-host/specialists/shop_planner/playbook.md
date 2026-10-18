@@ -175,9 +175,9 @@ Work down these levels in order. Each level narrows what the next may plan.
     `load_plan.draft`: `fleet_asset_id`, `bundle_order` (bundle ids, first loaded first).
     `shop_outcome.record`: counted values in their units. `billing_basis.propose`: `handover_id`,
     per line `qty_produced` and `qty_handed_over` (integers). `staff.notify`: `recipient_role` or
-    `to` (a staff contact id), `purpose` (`schedule`, `decision_request`, or `report`), `language` (BCP 47). `handoff.create`: `specialist_id`, `expected_action`,
-    `reason_code`, the object's id. `exception.escalate`: `reason_code`, `route_to`, `urgency`
-    (`immediate`, `today`, or `brief`), the object's id.
+    `to` (a staff contact id), `purpose` (`schedule`, `decision_request`, or `report`), `language` (BCP 47). `handoff.create`: `to_specialist_id`, `expected_action_id`,
+    `object`, `reason`. `exception.escalate`: `reason_code`, `route_to` (a reviewer role), `urgency`
+    (`immediate`, `today`, or `brief`), `summary`, `object`.
 
 ## Never
 

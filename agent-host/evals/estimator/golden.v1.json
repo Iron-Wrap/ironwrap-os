@@ -1684,7 +1684,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -4517,7 +4517,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design"
+              "to_specialist_id": "measurement_design"
             }
           }
         ],
@@ -5621,7 +5621,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           },
           {
@@ -8507,7 +8507,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design"
+              "to_specialist_id": "measurement_design"
             }
           }
         ],
@@ -9106,6 +9106,11 @@
         "emergency",
         "escalate"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "16:00"
+      },
       "signal": {
         "kind": "handoff",
         "source": "lead_concierge",
@@ -10360,7 +10365,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -10807,7 +10812,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -11527,7 +11532,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design"
+              "to_specialist_id": "measurement_design"
             }
           },
           {
@@ -13534,8 +13539,10 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "proposal_contract",
-              "quote_revision_id": "QR-4920-1"
+              "to_specialist_id": "proposal_contract",
+              "object": {
+                "id": "QR-4920-1"
+              }
             }
           }
         ],
@@ -15897,7 +15904,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],

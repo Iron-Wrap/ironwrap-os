@@ -142,6 +142,10 @@ test("receipt, draft, decision, and escalation caps", () => {
   assert.equal(stale.caps.receipt, 0.5);
   const extraAudience = one({ drafts: [...transcript().drafts, { id: "d2", audience: "owner", language: "en", text: "..." }] });
   assert.equal(extraAudience.caps.draft, 0.5);
+  const citesSignal = (fact_id) => one({ receipts: [{ ...transcript().receipts[0], sources: [...transcript().receipts[0].sources, { fact_id }] }] }).caps.receipt;
+  assert.equal(citesSignal("signal/sig-123"), 1, "the runtime cites the signal as signal/<id>");
+  assert.equal(citesSignal("signal"), 1);
+  assert.equal(citesSignal("signal/"), 0);
 });
 
 test("language matching tolerates missing subtags and rejects contradictions", () => {

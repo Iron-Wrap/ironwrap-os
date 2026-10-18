@@ -2146,7 +2146,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator"
+              "to_specialist_id": "estimator"
             }
           },
           {
@@ -2318,14 +2318,14 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design"
+              "to_specialist_id": "measurement_design"
             }
           },
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "production",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "production"
             }
           }
         ],
@@ -4574,8 +4574,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "urgency": "immediate",
-              "route_to": "production"
+              "route_to": "production",
+              "urgency": "immediate"
             }
           }
         ],
@@ -5276,8 +5276,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "production",
-              "reason_code": "fact_missing"
+              "reason_code": "fact_missing",
+              "route_to": "production"
             }
           }
         ],
@@ -6216,8 +6216,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "production",
-              "reason_code": "no_progress"
+              "reason_code": "no_progress",
+              "route_to": "production"
             }
           }
         ],
@@ -7260,8 +7260,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "production",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "production"
             }
           }
         ],
@@ -7359,7 +7359,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -7467,8 +7467,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "production",
-              "reason_code": "out_of_scope"
+              "reason_code": "out_of_scope",
+              "route_to": "production"
             }
           }
         ],
@@ -7726,10 +7726,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "inbound_id": "IN-7841",
               "reason_code": "fact_missing",
               "route_to": "production",
-              "urgency": "today"
+              "urgency": "today",
+              "object": {
+                "id": "IN-7841"
+              }
             }
           }
         ],
@@ -7885,10 +7887,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "inbound_id": "IN-7841",
               "reason_code": "fact_conflict",
               "route_to": "production",
-              "urgency": "today"
+              "urgency": "today",
+              "object": {
+                "id": "IN-7841"
+              }
             }
           }
         ],

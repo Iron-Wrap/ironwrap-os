@@ -94,7 +94,8 @@ the same amount is an identity conflict for `accounting`, never a match.
 4. Where prompt payment applies, the intent carries the company legal name and address, GST number,
    invoice date, contract reference, period, description and value of work, holdback, amount
    payable, payment contact, and a statement that it is intended as a proper invoice. A contract
-   field list missing a statutory field escalates to `compliance` (`fact_conflict`).
+   field list missing a statutory field escalates `fact_conflict` to `accounting`, which owns the
+   invoice template.
 5. Lines trace to the accepted publication or accepted change orders. Cumulative billing never
    exceeds accepted contract value plus accepted change orders; a certificate that would exceed it
    escalates to `accounting` (`fact_conflict`). Unaccepted extra work goes to `proposal_contract`.
@@ -149,7 +150,8 @@ the same amount is an identity conflict for `accounting`, never a match.
 20. Tax period: `tax_snapshot.record` (GST collected, input tax credits, net) and
     `filing.draft_packet` from cited facts; `tax_slip.capture` for tax documents received, never
     echoing a SIN. A sale missing GST, or GST without a basis, gets `money.flag` and holds both.
-21. T5018 gaps go to `accounting`'s secure capture; a SIN in plain text goes to `compliance`.
+21. T5018 gaps go to `accounting`'s secure capture; a SIN in plain text goes to `compliance`, with
+    the exception to `owner` (privacy).
 22. Refunds, credits, write-offs: `fact.explain` for the person who decides; escalate when one must.
 23. Any bank or remittance change request, including a refund to another card or account:
     `payee.freeze` at once and `exception.escalate` to the owner (immediate). Verification is a
@@ -182,8 +184,9 @@ the same amount is an identity conflict for `accounting`, never a match.
     `subject_id`; `payment_run.draft` `bill_ids`; `tax_snapshot.record` `period_id`,
     `gst_collected_cents`, `itc_cents`, `net_cents`; `filing.draft_packet` `filing_type`,
     `period_id`; `tax_slip.capture` `vendor_id`, `document_id`. Shared actions follow COMMON:
-    `exception.escalate` `reason_code`, `route_to`, `urgency`; `handoff.create` `specialist_id`,
-    `expected_action`, `reason_code`; `note.add` the object's id (`roof_job_id`), `text`, `sources`.
+    `exception.escalate` `reason_code`, `route_to`, `urgency`, `summary`, `object`;
+    `handoff.create` `to_specialist_id`, `expected_action_id`, `object`, `reason`; `note.add`
+    `object` (the job), `text`.
 
 ## Never
 
@@ -213,9 +216,9 @@ the same amount is an identity conflict for `accounting`, never a match.
 | Invoice trigger not met, cancellation window open | `fact_missing` | abstain |
 | Holdback early or lien search stale | `fact_missing`, `fact_stale` | abstain early; stale search to `accounting` |
 | Registered lien, no counsel review, lien window, notice of dispute | `out_of_scope` | `owner`, today |
-| Contract proper-invoice fields miss a statutory field | `fact_conflict` | `compliance` |
+| Contract proper-invoice fields miss a statutory field | `fact_conflict` | `accounting` |
 | Cumulative billing over contract, unidentified or ambiguous payment | `fact_conflict` | `accounting` |
-| Readback unknown; readback mismatch | `no_readback_yet`; `fact_conflict` | `accounting` |
+| Readback unknown; readback mismatch | `fact_missing`; `fact_conflict` | `accounting` |
 | Cash question with stale figures | `fact_stale` | `fact.explain`, stale part labelled |
 | Cancelled job with money paid, overpayment, refund or write-off ask | `out_of_scope` | `owner` |
 | WCB clearance not refreshable before the downstream due point | `fact_stale` | `owner`, today |

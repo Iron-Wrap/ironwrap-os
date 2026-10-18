@@ -79,7 +79,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "job_id": "J-C1"
+              "object": {
+                "id": "J-C1"
+              }
             }
           }
         ],
@@ -170,7 +172,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "inbound_receipt_id": "IB-X"
+              "object": {
+                "id": "IB-X"
+              }
             }
           }
         ],
@@ -248,7 +252,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "inbound_receipt_id": "IB-PAY"
+              "object": {
+                "id": "IB-PAY"
+              }
             }
           }
         ],
@@ -342,7 +348,9 @@
               "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "conversation_id": "CV-UNKNOWN"
+              "object": {
+                "id": "CV-UNKNOWN"
+              }
             }
           }
         ],
@@ -420,7 +428,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "inbound_receipt_id": "IB-W"
+              "object": {
+                "id": "IB-W"
+              }
             }
           }
         ],
@@ -497,7 +507,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -570,10 +582,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer",
-              "reason_code": "out_of_scope",
-              "privacy_request_id": "PR-C1"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer",
+              "object": {
+                "id": "PR-C1"
+              }
             }
           }
         ],
@@ -649,7 +662,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "inbound_receipt_id": "IB-EX"
+              "object": {
+                "id": "IB-EX"
+              }
             }
           }
         ],
@@ -726,7 +741,9 @@
               "reason_code": "out_of_scope",
               "route_to": "ops",
               "urgency": "today",
-              "inbound_receipt_id": "IB-SP"
+              "object": {
+                "id": "IB-SP"
+              }
             }
           }
         ],
@@ -823,7 +840,9 @@
               "reason_code": "out_of_scope",
               "route_to": "ops",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -945,7 +964,9 @@
               "reason_code": "person_requested",
               "route_to": "ops",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -1063,7 +1084,9 @@
               "reason_code": "injection_suspected",
               "route_to": "ops",
               "urgency": "immediate",
-              "report_id": "ER-C1"
+              "object": {
+                "id": "ER-C1"
+              }
             }
           }
         ],

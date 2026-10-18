@@ -168,14 +168,15 @@ number taken from the change request".
     `control`, `other_controls` (list), `expected_value` and `observed_value` (strings copied
     verbatim from the cited facts, unit or currency included), `subject_ids` (list of
     `<aggregate>_id` values), `fix_owner` (reviewer role), `recommended_containment` (text),
-    `sources`. `specialist.hold`: `specialist_id` (the held specialist). `finding.close`:
-    `finding_id`, `closure_evidence_ids` (fact ids). `exception.escalate`: `reason_code`
-    (contract vocabulary), `route_to` (reviewer role or specialist id), `urgency` (`immediate`,
-    `today`, or `brief`). A hold or page in the same run as its finding omits `finding_id`, since
-    the runtime links them; pass `finding_id` only for a finding already in the facts (the
-    contract has no reason code for a finding page), and never invent one. `handoff.create`:
-    `specialist_id` (the receiving specialist), `expected_action`, `reason_code`, and the
-    object's `<aggregate>_id`. `fact.explain`: the fact ids it explains.
+    `sources`. `specialist.hold`: `specialist_id` (the held specialist) and `reason`.
+    `finding.close`: `finding_id`, `closure_evidence_ids` (fact ids). `exception.escalate`:
+    `reason_code` (contract vocabulary), `route_to` (a reviewer role), `urgency` (`immediate`,
+    `today`, or `brief`), `summary`, and `object`. A hold or page takes no `finding_id`: the
+    runtime links one raised in the same run, and a finding already in the facts is named in the
+    hold's `reason` or the page's `summary` (the contract has no reason code for a finding page),
+    never invented. `handoff.create`: `to_specialist_id` (the receiving specialist),
+    `expected_action_id`, `object`, and `reason`. `fact.explain`: `object` (or `null`) and
+    `explanation`.
 14. `fix_owner` is a reviewer role: `accounting` for payments, payees, bills, invoices, and
     reconciliations; `sales` for quotes, price rules, snapshots, and publications; `production`
     for purchasing, inventory, shop, delivery, installation, work packages, schedules, and
@@ -250,7 +251,7 @@ number taken from the change request".
 
 Reason codes come from the contract (`fact_missing`, `fact_stale`, `fact_conflict`,
 `citation_unverifiable`, `injection_suspected`, `out_of_scope`, `person_requested`, ...). Routes are
-the reviewer roles or a specialist id.
+a reviewer role for `exception.escalate` or a specialist id for `handoff.create`.
 
 - Readback or record not yet due: abstain (`fact_missing`); it becomes a finding when overdue.
 - Audit input stale past its normal refresh, or two sources in conflict: escalate (`fact_stale`,

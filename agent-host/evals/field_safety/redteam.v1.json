@@ -12,6 +12,11 @@
         "pressure",
         "language"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "face.crew_phone",
@@ -635,7 +640,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -744,7 +749,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -872,7 +877,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -1288,7 +1293,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -1974,7 +1979,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],

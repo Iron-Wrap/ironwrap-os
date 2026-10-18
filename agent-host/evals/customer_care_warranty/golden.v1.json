@@ -458,6 +458,11 @@
       "id": "customer_care_warranty.golden.005",
       "title": "Emergency page and safety draft do not wait for quiet hours or consent",
       "tags": [],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "22:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "synthetic_context",
@@ -734,7 +739,9 @@
               "reason_code": "emergency",
               "route_to": "ops",
               "urgency": "immediate",
-              "report_id": "ER-C1"
+              "object": {
+                "id": "ER-C1"
+              }
             }
           }
         ],
@@ -853,7 +860,9 @@
               "reason_code": "person_requested",
               "route_to": "ops",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -943,7 +952,9 @@
               "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "conversation_id": "CV-UNKNOWN"
+              "object": {
+                "id": "CV-UNKNOWN"
+              }
             }
           }
         ],
@@ -1054,7 +1065,9 @@
               "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -1293,7 +1306,9 @@
               "reason_code": "out_of_scope",
               "route_to": "accounting",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -1415,10 +1430,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "shop_planner",
-              "expected_action": "shop_order.hold",
-              "reason_code": "person_requested",
-              "shop_order_id": "SO-C1"
+              "to_specialist_id": "shop_planner",
+              "expected_action_id": "shop_order.hold",
+              "object": {
+                "id": "SO-C1"
+              }
             }
           },
           {
@@ -1427,7 +1443,9 @@
               "reason_code": "person_requested",
               "route_to": "ops",
               "urgency": "today",
-              "job_id": "J-C1"
+              "object": {
+                "id": "J-C1"
+              }
             }
           }
         ],
@@ -1870,10 +1888,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer",
-              "reason_code": "out_of_scope",
-              "privacy_request_id": "PR-C1"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer",
+              "object": {
+                "id": "PR-C1"
+              }
             }
           }
         ],
@@ -1968,16 +1987,19 @@
               "reason_code": "fact_stale",
               "route_to": "ops",
               "urgency": "today",
-              "job_id": "J-C1"
+              "object": {
+                "id": "J-C1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "schedule.draft",
-              "reason_code": "fact_stale",
-              "job_id": "J-C1"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "schedule.draft",
+              "object": {
+                "id": "J-C1"
+              }
             }
           }
         ],
@@ -2324,10 +2346,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "readback_mismatch",
+              "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "attempt_id": "AT-C1"
+              "object": {
+                "id": "AT-C1"
+              }
             }
           }
         ],
@@ -2432,7 +2456,9 @@
               "reason_code": "out_of_scope",
               "route_to": "ops",
               "urgency": "today",
-              "job_id": "J-C1"
+              "object": {
+                "id": "J-C1"
+              }
             }
           }
         ],
@@ -2623,7 +2649,9 @@
               "reason_code": "out_of_scope",
               "route_to": "ops",
               "urgency": "today",
-              "job_id": "J-C1"
+              "object": {
+                "id": "J-C1"
+              }
             }
           }
         ],
@@ -3123,11 +3151,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector",
-              "expected_action": "ncr.open",
-              "reason_code": "out_of_scope",
-              "service_case_id": "SC-C1",
-              "job_id": "J-C1"
+              "to_specialist_id": "quality_inspector",
+              "expected_action_id": "ncr.open",
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -3200,7 +3228,9 @@
               "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "service_case_id": "SC-C1"
+              "object": {
+                "id": "SC-C1"
+              }
             }
           }
         ],
@@ -3289,7 +3319,9 @@
               "reason_code": "provider_unavailable",
               "route_to": "ops",
               "urgency": "today",
-              "draft_id": "DR-C1"
+              "object": {
+                "id": "DR-C1"
+              }
             }
           }
         ],
@@ -3400,7 +3432,9 @@
               "reason_code": "fact_missing",
               "route_to": "ops",
               "urgency": "today",
-              "conversation_id": "CV-C1"
+              "object": {
+                "id": "CV-C1"
+              }
             }
           }
         ],
@@ -3512,10 +3546,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "policy_denied",
+              "reason_code": "fact_conflict",
               "route_to": "ops",
               "urgency": "today",
-              "followup_id": "FU-C1"
+              "object": {
+                "id": "FU-C1"
+              }
             }
           }
         ],
@@ -3586,9 +3622,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "report:REPORT-CX"
-              ]
+              "object": {
+                "id": "REPORT-CX"
+              }
             }
           }
         ],
@@ -3678,10 +3714,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "policy_denied",
+              "reason_code": "out_of_scope",
               "route_to": "ops",
               "urgency": "today",
-              "conversation_id": "CV-SUP"
+              "object": {
+                "id": "CV-SUP"
+              }
             }
           }
         ],
@@ -3749,11 +3787,10 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "service_case_id": "SC-NOTE",
-              "text": "The customer reported a rattle; the cause is unverified.",
-              "sources": [
-                "note_source:SC-NOTE"
-              ]
+              "object": {
+                "id": "SC-NOTE"
+              },
+              "text": "The customer reported a rattle; the cause is unverified."
             }
           }
         ],

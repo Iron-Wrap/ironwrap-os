@@ -803,7 +803,9 @@
               "reason_code": "fact_missing",
               "route_to": "production",
               "urgency": "today",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -986,7 +988,9 @@
               "reason_code": "fact_stale",
               "route_to": "production",
               "urgency": "immediate",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -1136,8 +1140,9 @@
               "reason_code": "fact_conflict",
               "route_to": "production",
               "urgency": "today",
-              "authority_id": "AU-1",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -1322,7 +1327,9 @@
               "reason_code": "fact_stale",
               "route_to": "production",
               "urgency": "immediate",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -1464,10 +1471,11 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "safety_event",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "job_id": "J-CP1",
-              "stop_id": "ST-1"
+              "object": {
+                "id": "ST-1"
+              }
             }
           }
         ],
@@ -1477,7 +1485,7 @@
           "work_package.release_hold"
         ],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1506,7 +1514,7 @@
     },
     {
       "id": "compliance.golden.013",
-      "title": "Suspect material during active work uses the immediate field route",
+      "title": "Suspect material during active work uses the immediate production route",
       "tags": [],
       "signal": {
         "kind": "event",
@@ -1541,19 +1549,21 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "safety_event",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety",
-              "expected_action": "stop_condition.alert",
-              "reason_code": "safety_event",
-              "work_package_id": "WP-CP1",
-              "job_id": "J-CP1"
+              "to_specialist_id": "field_safety",
+              "expected_action_id": "stop_condition.alert",
+              "object": {
+                "id": "WP-CP1"
+              }
             }
           }
         ],
@@ -1562,7 +1572,7 @@
           "gate.clear"
         ],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1630,7 +1640,9 @@
               "reason_code": "out_of_scope",
               "route_to": "production",
               "urgency": "today",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -1703,7 +1715,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "filing_id": "FL-1"
+              "object": {
+                "id": "FL-1"
+              }
             }
           }
         ],
@@ -1781,7 +1795,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "gate_id": "GT-1"
+              "object": {
+                "id": "GT-1"
+              }
             }
           }
         ],
@@ -1860,7 +1876,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -1939,7 +1957,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -2040,7 +2060,9 @@
               "reason_code": "fact_conflict",
               "route_to": "owner",
               "urgency": "today",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -2175,7 +2197,9 @@
               "reason_code": "provider_unavailable",
               "route_to": "production",
               "urgency": "today",
-              "authority_id": "AU-1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -2297,7 +2321,9 @@
               "reason_code": "fact_missing",
               "route_to": "production",
               "urgency": "today",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -2418,7 +2444,9 @@
               "reason_code": "fact_missing",
               "route_to": "production",
               "urgency": "today",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -2558,8 +2586,9 @@
               "reason_code": "fact_conflict",
               "route_to": "production",
               "urgency": "today",
-              "job_id": "J-CP1",
-              "vehicle_id": "VEH-1"
+              "object": {
+                "id": "VEH-1"
+              }
             }
           }
         ],
@@ -2739,7 +2768,9 @@
               "reason_code": "person_requested",
               "route_to": "owner",
               "urgency": "today",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           }
         ],
@@ -2804,24 +2835,27 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "emergency",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "report_id": "ER-CP1"
+              "object": {
+                "id": "ER-CP1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "emergency.page",
-              "reason_code": "emergency",
-              "report_id": "ER-CP1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "emergency.page",
+              "object": {
+                "id": "ER-CP1"
+              }
             }
           }
         ],
         "forbidden_actions": [],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -2979,7 +3013,9 @@
               "reason_code": "policy_missing",
               "route_to": "production",
               "urgency": "today",
-              "authority_id": "AU-1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -3116,9 +3152,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "comparison:AC-X"
-              ]
+              "object": {
+                "id": "AC-X"
+              }
             }
           }
         ],
@@ -3186,11 +3222,10 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "authority_id": "AU-NOTE",
-              "text": "The human review packet retains both original evidence revisions.",
-              "sources": [
-                "note_source:AU-NOTE"
-              ]
+              "object": {
+                "id": "AU-NOTE"
+              },
+              "text": "The human review packet retains both original evidence revisions."
             }
           }
         ],

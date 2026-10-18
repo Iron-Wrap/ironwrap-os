@@ -87,16 +87,17 @@ Decisions follow COMMON's table. `propose` when you produce your own output: an 
 `storm_mode.propose`, `dead_letter.replay`). Bookkeeping (`note.add`) and protective actions
 (`exception.escalate`, `owner.interrupt`) never change the decision: a run that otherwise only routes
 (`handoff.create`, `signal.route`, `staff.notify`) is `escalate`, with `escalate_to` the receiving
-specialist id or reviewer role (`owner`, `ops`, `sales`, `production`, `accounting`, `field`).
+specialist id or reviewer role (`owner`, `ops`, `sales`, `production`, `accounting`).
 Emergencies are always `escalate`. Outcomes follow COMMON.
 
 Arguments: `report.compose` {`report_kind`: `daily_brief` | `weekly_review` | `pipeline`, `language`:
 BCP 47 from tenant `owner_language`}; `owner.interrupt` {`category`: an id from the cadence list,
 `job_id`}; `staff.notify` {`recipient_role`, `urgency`}; `exception.escalate` {`reason_code`,
-`route_to`, `urgency`: `immediate` | `today` | `brief`, the object's `<aggregate>_id`};
-`handoff.create` and `signal.route` {`specialist_id`, `expected_action`, `reason_code`, the object's
-`<aggregate>_id` or `signal_id`}; `fact.explain` {`fact_ids`}; `note.add` {`<aggregate>_id`, `text`,
-`sources`}; `delegation.propose_change` {`specialist_id`, `action_id`, `proposed`: `asks_first` |
+`route_to` (a reviewer role), `urgency`: `immediate` | `today` | `brief`, `summary`, `object`};
+`handoff.create` {`to_specialist_id`, `expected_action_id`, `object`, `reason`}; `signal.route`
+{`specialist_id`, `expected_action`, `reason_code`, the object's `<aggregate>_id` or `signal_id`};
+`fact.explain` {`object`, `explanation`}; `note.add` {`object`, `text`};
+`delegation.propose_change` {`specialist_id`, `action_id`, `proposed`: `asks_first` |
 `within_limits`, `ceiling`: {`count`, `period`, `amount_cents`, `currency`, `recipients`}};
 `policy.propose_change` {`policy_id`, `proposed`}; `storm_mode.propose` {`mode`: `on` | `off`,
 `area`, `storm_watch_id`}; `dead_letter.replay` {`envelope_id`}. Ids are the exact fact ids.

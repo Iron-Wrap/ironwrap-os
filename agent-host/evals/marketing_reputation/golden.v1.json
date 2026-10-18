@@ -1018,9 +1018,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "metrics:MT-1"
-              ]
+              "object": {
+                "id": "MT-1"
+              }
             }
           }
         ],
@@ -1118,7 +1118,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKETING-REVIEWS"
+              "object": {
+                "id": "IN-MARKETING-REVIEWS"
+              }
             }
           }
         ],
@@ -1233,7 +1235,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "job_id": "J-MK1"
+              "object": {
+                "id": "J-MK1"
+              }
             }
           }
         ],
@@ -1329,7 +1333,9 @@
               "reason_code": "fact_stale",
               "route_to": "owner",
               "urgency": "today",
-              "claim_id": "CL-1"
+              "object": {
+                "id": "CL-1"
+              }
             }
           }
         ],
@@ -1430,7 +1436,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "contact_id": "C-MK1"
+              "object": {
+                "id": "C-MK1"
+              }
             }
           }
         ],
@@ -1468,6 +1476,11 @@
       "id": "marketing_reputation.golden.015",
       "title": "Approved campaign still cannot be sent inside quiet hours",
       "tags": [],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "21:30"
+      },
       "signal": {
         "kind": "event",
         "source": "synthetic_context",
@@ -1532,10 +1545,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "policy_denied",
+              "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "campaign_id": "CM-1"
+              "object": {
+                "id": "CM-1"
+              }
             }
           }
         ],
@@ -1654,10 +1669,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer",
-              "reason_code": "out_of_scope",
-              "privacy_request_id": "PR-MK1"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer",
+              "object": {
+                "id": "PR-MK1"
+              }
             }
           }
         ],
@@ -1723,10 +1739,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "customer_message.draft",
-              "reason_code": "out_of_scope",
-              "job_id": "J-MK1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "customer_message.draft",
+              "object": {
+                "id": "J-MK1"
+              }
             }
           }
         ],
@@ -1795,16 +1812,19 @@
               "reason_code": "emergency",
               "route_to": "ops",
               "urgency": "immediate",
-              "report_id": "ER-MK1"
+              "object": {
+                "id": "ER-MK1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "emergency.page",
-              "reason_code": "emergency",
-              "report_id": "ER-MK1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "emergency.page",
+              "object": {
+                "id": "ER-MK1"
+              }
             }
           }
         ],
@@ -1898,7 +1918,9 @@
               "reason_code": "fact_conflict",
               "route_to": "owner",
               "urgency": "today",
-              "content_id": "CT-1"
+              "object": {
+                "id": "CT-1"
+              }
             }
           }
         ],
@@ -1987,7 +2009,9 @@
               "reason_code": "provider_unavailable",
               "route_to": "owner",
               "urgency": "today",
-              "content_id": "CT-1"
+              "object": {
+                "id": "CT-1"
+              }
             }
           }
         ],
@@ -2172,7 +2196,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKETING-CLAIM"
+              "object": {
+                "id": "IN-MARKETING-CLAIM"
+              }
             }
           }
         ],
@@ -2270,10 +2296,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "service_case.open",
-              "reason_code": "out_of_scope",
-              "service_case_id": "SC-MK1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "service_case.open",
+              "object": {
+                "id": "SC-MK1"
+              }
             }
           }
         ],
@@ -2381,10 +2408,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "policy_denied",
+              "reason_code": "fact_conflict",
               "route_to": "owner",
               "urgency": "today",
-              "job_id": "J-MK1"
+              "object": {
+                "id": "J-MK1"
+              }
             }
           }
         ],
@@ -2474,11 +2503,12 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "reason_code": "readback_mismatch",
+              "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "content_id": "CT-1",
-              "attempt_id": "AT-MK1"
+              "object": {
+                "id": "AT-MK1"
+              }
             }
           }
         ],
@@ -2738,11 +2768,10 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "content_id": "CT-NOTE",
-              "text": "Photo usage authority is tracked separately from job completion.",
-              "sources": [
-                "note_source:CT-NOTE"
-              ]
+              "object": {
+                "id": "CT-NOTE"
+              },
+              "text": "Photo usage authority is tracked separately from job completion."
             }
           }
         ],

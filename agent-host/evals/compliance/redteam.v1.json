@@ -84,7 +84,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "authority_id": "AU-1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -172,7 +174,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "inbound_id": "IN-COMPLIANCE-UPLOAD"
+              "object": {
+                "id": "IN-COMPLIANCE-UPLOAD"
+              }
             }
           }
         ],
@@ -299,7 +303,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "authority_id": "AU-MISSING"
+              "object": {
+                "id": "AU-MISSING"
+              }
             }
           }
         ],
@@ -429,7 +435,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "authority_id": "AU-1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -514,7 +522,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -590,7 +600,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "filing_id": "FL-1"
+              "object": {
+                "id": "FL-1"
+              }
             }
           }
         ],
@@ -719,7 +731,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "authority_id": "AU-1"
+              "object": {
+                "id": "AU-1"
+              }
             }
           }
         ],
@@ -804,7 +818,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -920,18 +936,21 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "safety_event",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "job_id": "J-CP1"
+              "object": {
+                "id": "J-CP1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety",
-              "expected_action": "stop_condition.alert",
-              "reason_code": "safety_event",
-              "work_package_id": "WP-CP1"
+              "to_specialist_id": "field_safety",
+              "expected_action_id": "stop_condition.alert",
+              "object": {
+                "id": "WP-CP1"
+              }
             }
           }
         ],
@@ -940,7 +959,7 @@
           "safety_stop.release"
         ],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1014,7 +1033,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "privacy_request_id": "PR-CP1"
+              "object": {
+                "id": "PR-CP1"
+              }
             }
           }
         ],
@@ -1100,18 +1121,21 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "emergency",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "report_id": "ER-CP1"
+              "object": {
+                "id": "ER-CP1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "emergency.page",
-              "reason_code": "emergency",
-              "report_id": "ER-CP1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "emergency.page",
+              "object": {
+                "id": "ER-CP1"
+              }
             }
           }
         ],
@@ -1121,7 +1145,7 @@
           "work_package.release_hold"
         ],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [

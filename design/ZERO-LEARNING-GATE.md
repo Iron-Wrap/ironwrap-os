@@ -18,7 +18,7 @@ Testers get a fresh context each, only the screens (PNG), and the task as one se
 | T1 | Owner, desktop | "Is the Harlow job on track? If not, what is stuck and is it costing us?" |
 | T2 | Owner, desktop | "Something is waiting for you on this job. Approve it." |
 | T3 | Owner, desktop | "The shop found a bad part. Find which coil it came from and which measurement the cut was based on." |
-| T4 | Owner, desktop | "What did the assistant do on this job, and does it need anything from you?" |
+| T4 | Owner, desktop | "What did the AI team do on this job, and does it need anything from you?" |
 | T5 | Owner, desktop | "Who approved the quote, and what did they see when they approved it?" |
 | T6 | Crew lead, phone, no signal | "Take a photo of the south eave." |
 | T7 | Crew lead, phone, no signal | "Record a measurement: south eave is 42 feet 7 and three-eighths inches." |
@@ -28,6 +28,13 @@ Testers get a fresh context each, only the screens (PNG), and the task as one se
 | T11 | Shop lead, tablet, gloves | "Add a photo of the bad first piece to the problem report." |
 | T12 | Shop lead, tablet | "The scanner won't read the label. Look the coil up another way." |
 | T13 | Customer, phone | "When is my roof being done, and what do I owe?" |
+| T14 | Owner, desktop | "Ask the system which jobs are stuck and why." |
+| T15 | Owner, desktop | "Let the AI receptionist send follow-up texts on its own, up to 20 a day." |
+| T16 | Owner, desktop | "Something the AI did this morning was wrong. Undo it." |
+| T17 | Owner, desktop | "You don't want the AI's quote. Price this job yourself." |
+| T18 | Owner, desktop | "A supplier emailed new bank details. Is anything being paid to them?" |
+| T19 | Crew lead, phone, gloves | "Ask how many sheets of deck board to bring for this job." |
+| T20 | Customer, phone, evening | "Ask when the crew is coming back, and get a person to call you." |
 
 Pass requires all three:
 - each tier completes at least 90% of the covered tasks on the first try;
@@ -36,12 +43,28 @@ Pass requires all three:
 
 A task the screens do not cover is reported as a coverage gap, never counted as a pass.
 
+### Clean rounds
+
+Only a clean confirmation round gates a surface; earlier rounds find defects and never count toward the verdict.
+- Every task of the surface runs in both tiers, cold, on the final screens; no result carries over from an earlier
+  round, and a change to a screen after the round re-runs every task that shows it.
+- Testers get opaque copies of the screens (`frame-01.png` …) in viewing order; no file name, folder or prompt names a
+  state, a result or an answer. The mapping stays with the judge.
+- No screen that shows the result of the last action, unless the task is about reading a result.
+- The task sentence never repeats a control label or a heading word of the path; it says the goal in the user's words.
+  The round builder checks this against a read-back of the real labels and refuses the round when they overlap.
+- A fresh judge that has not seen the builders' notes applies the rule literally: a coverage gap fails the task;
+  more than the expert path plus one fails that tier; below 90% fails, with no rounding. Its prompt is kept beside
+  its verdict.
+
 ## Z2 Plain language
 
 - **Everyday words on primary surfaces.** Internal or system terms may appear only inside an explicit "Details" disclosure. Banned on primary surfaces: work package, disposition, derived phase, outbox, idempotency, effect, capability, principal, receipt hash, digest, SHA, envelope, payload, tenant, grant.
 - **Every code needs a plain label.** A code may appear, but only beside a plain label: "Quality problem NCR-31", "Coil PMS-2231", "Survey reading S-7", "Cut list C-14", "Change order CO-3". The plain label comes first.
 - **Trade words stay but read plainly.** Trade words staff already use (eave, coil, lot, flashing, first piece, change order) are allowed. Anything else is explained in place the first time it appears on a screen.
-- **The agent is called "Assistant".** On primary surfaces it is the Assistant. "HELM" appears only in Details. Its three outcomes are "Done for you", "Blocked" and "Needs you".
+- **The AI team has one face and named specialists (IRW-R8).** The face is the tenant's brand name: "IronWrap" for Iron Wrap Exteriors, with the entry "Ask IronWrap". Each specialist is "AI" plus its job in plain words: AI receptionist, AI estimator, AI measurer, AI proposal writer, AI buyer, AI shop planner, AI scheduler, AI field coordinator, AI quality inspector, AI bookkeeper, AI compliance checker, AI customer care, AI marketer, AI market analyst, AI auditor. "Assistant" and "HELM" are not used on primary surfaces; HELM may appear only in System details.
+- **Agent outcomes use one set of words.** "Done for you", "Working on it", "Needs you", "Held" (with the reason) and "Undone by {name}". Unaccepted agent output says "Proposed". Delegation is said in words only: "Reads and watches", "Prepares", "Acts within your limits", "Asks first", "People only", "Paused". The class codes A0 to A3 and H appear only in System details.
+- **Customers always know.** Wherever a customer meets an agent, it says it is AI ("AI receptionist at Iron Wrap Exteriors") and offers a person.
 
 Pass: zero banned terms on primary surfaces, and every code carries its plain label.
 

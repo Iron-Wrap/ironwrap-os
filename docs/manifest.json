@@ -299,12 +299,32 @@
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
+      "path": "design/system-v2/AI-PRIMITIVES.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/COMPONENT-INVENTORY.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
       "path": "design/system-v2/MIGRATION.md",
       "class": "developer",
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },
     {
       "path": "design/system-v2/PIPELINE.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/TEMPLATES-GATE-TASKS.md",
+      "class": "developer",
+      "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
+    },
+    {
+      "path": "design/system-v2/TEMPLATES.md",
       "class": "developer",
       "authority": ["docs/DOCUMENTATION-CONTRACT.md"]
     },

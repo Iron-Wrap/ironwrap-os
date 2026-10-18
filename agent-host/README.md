@@ -359,8 +359,9 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   `clock`: `{ "season": "winter|spring|summer|fall", "weekday": "monday".."sunday", "local_time":
   "HH:MM" }` in Edmonton local time, with no calendar date. The season picks a month (winter
   January, spring April, summer July, fall October, in the default instant's year), the weekday the
-  first such day on or after the 8th, and the time is Edmonton's on that day, standard or daylight
-  time as Intl reports it. A stage refuses a malformed clock before any run.
+  first such day on or after the 8th, and the time is Edmonton's on that day at the offset Intl
+  reports for that day (Alberta keeps UTC-6 all year from tzdata 2026c on; the repository pins Node
+  in `.nvmrc` to a release that carries it). A stage refuses a malformed clock before any run.
 - Like every production audit, an auditor run names the run it reviews (`reviewOf`), here with the
   one family all proposer routes use, so it runs on that family's audit route (`claude_opus` for
   Codex work). A stage refuses to qualify the auditor while proposer routes span both families.

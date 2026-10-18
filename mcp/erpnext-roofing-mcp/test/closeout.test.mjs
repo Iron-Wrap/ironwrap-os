@@ -127,13 +127,25 @@ test("checkConsent enforces channel rules", () => {
 });
 
 test("checkQuietHours converts to local hour deterministically", () => {
-  // 18:00 UTC at UTC-6 (Alberta summer) is noon: allowed.
+  // 18:00 UTC at UTC-6 is noon: allowed.
   assert.deepEqual(checkQuietHours({ nowUtcIso: NOW, timezoneOffsetMinutes: -360 }), {
     ok: true, local_hour: 12, start_hour: 9, end_hour: 20,
   });
   // 04:00 UTC at UTC-6 is 22:00 local: blocked.
   assert.equal(checkQuietHours({ nowUtcIso: "2026-07-08T04:00:00.000Z", timezoneOffsetMinutes: -360 }).ok, false);
   assert.throws(() => checkQuietHours({ nowUtcIso: "not-a-date" }), /now_utc_iso_required/);
+});
+
+test("checkQuietHours reads the zone's own offset when none is given", () => {
+  // Alberta keeps UTC-6 all year (tzdata 2026c and later): 02:30 UTC in January is 20:30 there,
+  // past the 20:00 end, where the retired winter UTC-7 would have read 19:30 and allowed it.
+  assert.deepEqual(checkQuietHours({ nowUtcIso: "2027-01-15T02:30:00.000Z" }), {
+    ok: false, local_hour: 20, start_hour: 9, end_hour: 20,
+  });
+  // A zone that still changes its clocks moves with them (America/Denver: UTC-7 in winter,
+  // UTC-6 in summer), so the same UTC hour lands an hour apart.
+  assert.equal(checkQuietHours({ nowUtcIso: "2027-01-15T02:30:00.000Z", timeZone: "America/Denver" }).local_hour, 19);
+  assert.equal(checkQuietHours({ nowUtcIso: "2027-07-15T02:30:00.000Z", timeZone: "America/Denver" }).local_hour, 20);
 });
 
 test("buildCommunicationEventDraft is policy-gated and never Sent", () => {

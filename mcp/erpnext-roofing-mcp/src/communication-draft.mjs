@@ -10,15 +10,34 @@ export function checkConsent({ channel, consentBasis } = {}) {
   return { allowed: reasons.length === 0, channel, consent_basis: basis, reasons };
 }
 
+/**
+ * An IANA zone's UTC offset in minutes at an instant, as Intl reports it. The zone's rules, not a
+ * fixed number, decide the offset: Alberta keeps UTC-6 all year from tzdata 2026c on.
+ */
+export function zoneOffsetMinutes(timeZone, at) {
+  const label =
+    new Intl.DateTimeFormat("en-CA", { timeZone, timeZoneName: "longOffset" })
+      .formatToParts(new Date(at))
+      .find((part) => part.type === "timeZoneName")?.value ?? "";
+  if (label === "GMT") return 0;
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(label);
+  if (!match) throw new Error("time_zone_offset_unavailable");
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === "-" ? -minutes : minutes;
+}
+
 export function checkQuietHours({
   nowUtcIso,
-  timezoneOffsetMinutes = -360,
+  timeZone = "America/Edmonton",
+  timezoneOffsetMinutes,
   startHour = 9,
   endHour = 20,
 } = {}) {
   const ts = Date.parse(nowUtcIso ?? "");
   if (!Number.isFinite(ts)) throw new Error("now_utc_iso_required");
-  const localHour = new Date(ts + timezoneOffsetMinutes * 60_000).getUTCHours();
+  // An explicit offset wins (a caller that already resolved its zone); otherwise the zone decides.
+  const offset = timezoneOffsetMinutes ?? zoneOffsetMinutes(timeZone, ts);
+  const localHour = new Date(ts + offset * 60_000).getUTCHours();
   return {
     ok: localHour >= startHour && localHour < endHour,
     local_hour: localHour,

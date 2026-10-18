@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # The title and the commit subject reach the checker only through the
       # environment. They are attacker-controlled text and are never
@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Create or update the release pull request
         env:
@@ -134,7 +134,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # Deploy proves every push to main, so most Deploy successes are ordinary
       # commits that must not be tagged. Only the merge commit of the newest

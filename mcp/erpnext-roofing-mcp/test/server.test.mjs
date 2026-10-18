@@ -46,7 +46,8 @@ const ROLE_ENV = {
 
 test("MCP runtime explicitly supports direct governed Worker TypeScript imports", () => {
   const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
-  assert.equal(packageJson.engines.node, ">=22.0.0");
+  // 22.23.3 is the first Node 22 release carrying tzdata 2026c (Alberta's permanent UTC-6).
+  assert.equal(packageJson.engines.node, ">=22.23.3");
 });
 
 test("configFromEnv requires ERPNext credentials, runtime role binding, and receipt keys", () => {

@@ -217,7 +217,8 @@ function scoreReceipt(item, receipts, out) {
   const facts = new Map(objects(item.facts).map((fact) => [fact.fact_id, fact]));
   const sources = receipts.flatMap((receipt) => objects(receipt.sources));
   for (const source of sources) {
-    if (source.fact_id === "signal") continue;
+    // The signal itself: `signal/<id>` as the runtime cites it, or the pseudo-fact `signal`.
+    if (source.fact_id === "signal" || /^signal\/./.test(String(source.fact_id))) continue;
     const fact = facts.get(source.fact_id);
     if (!fact) {
       out.notes.push(`receipt cites an unknown fact: ${source.fact_id}`);

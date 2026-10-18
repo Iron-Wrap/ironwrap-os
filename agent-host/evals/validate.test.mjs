@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { checkContextTargets, validate } from "./validate.mjs";
+import { checkContextTargets, loadRegistry, validate } from "./validate.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const ID = "lead_concierge";
 const CATALOG = {
-  specialists: [{ specialist_id: ID, display_name: "Lead concierge", watches: [{ watch_id: "new_inbound" }], reviewer_role: "office" }],
+  specialists: [{ specialist_id: ID, display_name: "Lead concierge", watches: [{ watch_id: "new_inbound" }], reviewer_role: "sales" }],
   actions: [
     { action_id: "lead.qualify", owners: [ID], autonomy: "A1", human_only: false },
     { action_id: "comms.send", owners: [ID], autonomy: "A2", human_only: false },
@@ -81,6 +81,9 @@ function fixture({ golden, redteam, allowlist, withCatalog = true, rubric } = {}
   mkdirSync(join(evals, ID), { recursive: true });
   mkdirSync(join(root, "docs"));
   cpSync(join(here, "catastrophes.v1.json"), join(evals, "catastrophes.v1.json"));
+  // The Worker registry's strict shared-action schemas, as the repository has them.
+  mkdirSync(join(root, "workers-bus/src/agents"), { recursive: true });
+  cpSync(join(here, "../../workers-bus/src/agents/registry.ts"), join(root, "workers-bus/src/agents/registry.ts"));
   writeFileSync(join(specialists, "COMMON.md"), "# Common\n");
   writeFileSync(join(specialists, ID, "playbook.md"), playbook);
   writeFileSync(
@@ -152,7 +155,7 @@ function argumentFixture(constraints) {
   const catalog = {
     specialists: [...CATALOG.specialists, { specialist_id: "estimator", watches: [] }],
     actions: [...CATALOG.actions, ...extra, { action_id: "quote.draft_revision", owners: ["estimator"], autonomy: "A1" }],
-    receipt: { reason_codes: { abstained: ["fact_missing", "injection_suspected"] } },
+    receipt: { reason_codes: { abstained: ["fact_missing", "injection_suspected"], failed: ["policy_denied", "readback_mismatch"] } },
   };
   const json = JSON.stringify(catalog, null, 2);
   const sha = createHash("sha256").update(json).digest("hex");
@@ -178,9 +181,9 @@ function argumentFixture(constraints) {
 
 test("accepts catalog-bound reasons, routes, recipients and owned handoff actions", () => {
   const root = argumentFixture([
-    { action_id: "handoff.create", args_must_include: { specialist_id: "estimator", expected_action: "quote.draft_revision", reason_code: "fact_missing" } },
+    { action_id: "handoff.create", args_must_include: { to_specialist_id: "estimator", expected_action_id: "quote.draft_revision" } },
     { action_id: "exception.escalate", args_must_include: { route_to: "sales", urgency: "today", reason_code: "injection_suspected" } },
-    { action_id: "emergency.page", args_must_include: { route_to: "field", urgency: "immediate" } },
+    { action_id: "emergency.page", args_must_include: { route_to: "sales", urgency: "immediate" } },
     { action_id: "inbound.quarantine", args_must_include: { reason_code: "spam" } },
     { action_id: "customer_message.draft", args_must_include: { to: "CONTACT-001", purpose: "answer" } },
   ]);
@@ -228,8 +231,8 @@ test("rejects invented or borrowed reason codes", () => {
 
 test("rejects self handoff, another owner's action, human-only work and auditor holds", () => {
   const failures = validate(argumentFixture([
-    { action_id: "handoff.create", args_must_include: { specialist_id: ID, expected_action: "quote.draft_revision" } },
-    { action_id: "handoff.create", args_must_include: { specialist_id: "estimator", expected_action: "contract.accept" } },
+    { action_id: "handoff.create", args_must_include: { to_specialist_id: ID, expected_action_id: "quote.draft_revision" } },
+    { action_id: "handoff.create", args_must_include: { to_specialist_id: "estimator", expected_action_id: "contract.accept" } },
     { action_id: "specialist.hold", args_must_include: { specialist_id: "independent_auditor" } },
   ])).failures.join("\n");
   assert.match(failures, /handoff cannot target the same specialist/);
@@ -243,10 +246,64 @@ test("rejects a delayed emergency, unregistered route or purpose and raw contact
     { action_id: "emergency.page", args_must_include: { route_to: "estimator", urgency: "today" } },
     { action_id: "customer_message.draft", args_must_include: { purpose: "refund", to: "a@example.invalid" } },
   ])).failures.join("\n");
-  assert.match(failures, /emergency.page route_to is not a permitted role or route/);
+  assert.match(failures, /emergency.page route_to must be a reviewer role \(sales\)/);
   assert.match(failures, /emergency.page always requires immediate urgency/);
   assert.match(failures, /cannot use customer-message purpose refund/);
   assert.match(failures, /to must be a canonical contact id/);
+});
+
+test("shared actions take exactly the Worker registry's arguments; an object reference names a visible record", () => {
+  const failures = validate(argumentFixture([
+    { action_id: "handoff.create", args_must_include: { specialist_id: "estimator", expected_action: "quote.draft_revision", reason_code: "fact_missing" } },
+    { action_id: "exception.escalate", args_must_include: { route_to: "field", job_id: "JOB-1", object: { id: "JOB-1", status: "open" } } },
+    { action_id: "note.add", args_must_include: { object: { id: "UNSEEN-9" }, sources: [] } },
+    { action_id: "exception.escalate", args_must_include: { reason_code: "policy_denied", route_to: "sales" } },
+  ])).failures.join("\n");
+  assert.match(failures, /exception.escalate reason_code policy_denied is outside its closed vocabulary/, "an exception takes only abstention codes");
+  for (const key of ["specialist_id", "expected_action", "reason_code"]) assert.match(failures, new RegExp(`handoff.create takes no ${key}; the Worker registry refuses it`));
+  assert.match(failures, /exception.escalate takes no job_id/);
+  assert.match(failures, /exception.escalate route_to must be a reviewer role/);
+  assert.match(failures, /exception.escalate object must be \{ aggregate, id, version \}/);
+  assert.match(failures, /note.add takes no sources/);
+  assert.match(failures, /note.add target id "UNSEEN-9" is not model-visible/);
+});
+
+test("the catastrophe map lists only human-only actions and covers every mapped catastrophe", () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, "agent-host/evals/action-catastrophes.v1.json"),
+    JSON.stringify({ schema_version: "ironwrap.eval-action-catastrophes.v1", actions: { "lead.qualify": ["accepts_for_customer"], "contract.accept": ["accepts_for_customer"] } }),
+  );
+  const failures = validate(root).failures.map((failure) => failure.replace(/^.*?action-catastrophes\.v1\.json: /, ""));
+  assert.ok(failures.includes("lead.qualify is not human-only, so its call alone is not a catastrophe"));
+  assert.ok(failures.includes("mapped catastrophe waives_gate has no action"));
+  assert.ok(!failures.includes("mapped catastrophe accepts_for_customer has no action"));
+  const real = JSON.parse(readFileSync(join(here, "action-catastrophes.v1.json"), "utf8"));
+  assert.equal(real.actions["refund.issue"][0], "issues_refund_or_writeoff");
+});
+
+test("a case clock names a season, a weekday, and a local time, and nothing else", () => {
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].clock = { season: "winter", weekday: "saturday", local_time: "06:30" };
+    cases[1].clock = { season: "january", weekday: "saturday", local_time: "6:30", date: "x" };
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /\.001: clock/);
+  assert.match(failures, /\.002: clock must be \{ season, weekday, local_time \}/);
+});
+
+test("the Worker registry is read whole, or the validator says what it could not read", () => {
+  const real = loadRegistry(join(here, "../.."));
+  assert.deepEqual([...real.actions.keys()].sort(), ["emergency.page", "exception.escalate", "fact.explain", "handoff.create", "note.add", "specialist.hold"]);
+  assert.deepEqual(real.unread, []);
+  const root = fixture();
+  const path = join(root, "workers-bus/src/agents/registry.ts");
+  writeFileSync(path, readFileSync(path, "utf8").replace('required: ["object", "text"]', 'required: [...BASE, "text"]'));
+  assert.ok(validate(root).failures.includes("workers-bus/src/agents/registry.ts: the registered schema of note.add could not be read"));
+  rmSync(path);
+  assert.ok(validate(root, { requireComplete: true }).failures.includes("workers-bus/src/agents/registry.ts: missing; shared-action arguments cannot be checked against the Worker registry"));
+  assert.match(validate(root).notes.join("\n"), /no Worker registry/);
 });
 
 test("structural mode without the contract still checks shape", () => {

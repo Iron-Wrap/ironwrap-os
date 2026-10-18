@@ -3610,7 +3610,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -3808,7 +3808,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -4956,8 +4956,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "fact_stale"
+              "reason_code": "fact_stale",
+              "route_to": "accounting"
             }
           }
         ],
@@ -5081,8 +5081,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "owner",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "owner"
             }
           }
         ],
@@ -5620,8 +5620,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "expected_action": "payee.freeze"
+              "to_specialist_id": "billing_reconciliation",
+              "expected_action_id": "payee.freeze"
             }
           }
         ],

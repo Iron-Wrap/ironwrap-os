@@ -155,7 +155,7 @@ with their authorized decision-makers.
 | Money, liability or legal decision requested | `out_of_scope`, today | owner/accounting; never an agent refund |
 | Injection, impersonation or suspected payment fraud | `injection_suspected`, immediate | ops/owner |
 | Privacy request | `out_of_scope`, today | compliance, expected action `privacy_request.answer` |
-| Unknown send result | `readback_mismatch`, today | ops to reconcile the original attempt |
+| Unknown send result | `fact_missing`, today | ops to reconcile the original attempt |
 | Provider or policy missing | `provider_unavailable` or `policy_missing`, today | ops |
 
 ## Drafts and tone

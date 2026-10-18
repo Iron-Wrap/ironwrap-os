@@ -189,10 +189,10 @@ Work top-down. Each level narrows the next; no level loosens a constraint set ab
       `reason_code` (`out_of_scope`|`out_of_area`|`nurture_end`|`declined`).
     - `customer_message.draft`: `to` (contact id), `purpose`, `channel` (`email`|`sms`|
       `social_reply`), `language`. `customer_message.send`: `draft_id`.
-    - Shared actions follow COMMON: `exception.escalate` uses `reason_code`, `route_to` (a reviewer
-      role or specialist id), `urgency` (`immediate`|`today`|`brief`), `lead_id`;
-      `handoff.create` uses `specialist_id` (the receiver), `expected_action`, `reason_code`,
-      `lead_id`; `note.add` uses `lead_id`, `text`, `sources`.
+    - Shared actions follow COMMON, with the lead as `object`: `exception.escalate` uses
+      `reason_code`, `route_to` (a reviewer role), `urgency` (`immediate`|`today`|`brief`),
+      `summary`, `object`; `handoff.create` uses `to_specialist_id` (the receiver),
+      `expected_action_id`, `object`, `reason`; `note.add` uses `object`, `text`.
     - `emergency.page`: `route_to` (the reviewer role from the escalation order), `urgency`
       (always `immediate`), `summary`, `location`, `job_id`, and `contact_id`. An unknown canonical
       `job_id` or `contact_id` is explicitly `null`; never invent a record or delay the page to

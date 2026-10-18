@@ -126,6 +126,11 @@
         "document",
         "brief"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -1238,7 +1243,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation"
+              "to_specialist_id": "billing_reconciliation"
             }
           },
           {
@@ -1472,7 +1477,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1789,7 +1794,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -2228,7 +2233,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety"
+              "to_specialist_id": "field_safety"
             }
           },
           {

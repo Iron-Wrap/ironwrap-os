@@ -686,6 +686,11 @@
         "lockout",
         "safety"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "22:00"
+      },
       "signal": {
         "kind": "event",
         "source": "shop_sms_inbound",
@@ -1123,8 +1128,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "inbound.quarantine"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "inbound.quarantine"
             }
           },
           {
@@ -1271,15 +1276,15 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation"
+              "to_specialist_id": "billing_reconciliation"
             }
           },
           {
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "injection_suspected",
-              "urgency": "immediate",
-              "route_to": "owner"
+              "route_to": "owner",
+              "urgency": "immediate"
             }
           }
         ],
@@ -1465,8 +1470,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer"
             }
           }
         ],

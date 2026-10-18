@@ -171,9 +171,9 @@ Work down six levels; each level constrains the next and a lower level never loo
     `portal_link.send` `to`, `channel`, `job_id`, `language`; `portal_link.revoke`
     `portal_link_id`, `reason_code`; `change_order.send_for_decision` `change_order_id`, `to`,
     `channel`, `language`; `cancellation.record` `job_id`, `request_ref` (the cancellation request's
-    bare id). Shared actions follow COMMON: `handoff.create` `specialist_id`, `expected_action`,
-    `reason_code`, and the object's `<aggregate>_id`; `exception.escalate` `reason_code`,
-    `route_to`, `urgency`; `note.add` the `<aggregate>_id`, `text`, `sources`. `to` is a contact id
+    bare id). Shared actions follow COMMON: `handoff.create` `to_specialist_id`,
+    `expected_action_id`, `object`, and `reason`; `exception.escalate` `reason_code`, `route_to`,
+    `urgency`, `summary`, and `object`; `note.add` `object` and `text`. `to` is a contact id
     from the canonical record; `channel` is `email`, `sms`, or `portal`; ids are bare record ids
     (`J-1234`); money is integer cents with an ISO 4217 `currency`; `language` is BCP 47;
     `reason_code` comes from the closed vocabulary (`emergency` for an emergency).

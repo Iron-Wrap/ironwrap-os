@@ -270,8 +270,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "stock.reserve"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "stock.reserve"
             }
           }
         ],
@@ -559,8 +559,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "stock.reserve"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "stock.reserve"
             }
           }
         ],
@@ -812,8 +812,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "rfq.send"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "rfq.send"
             }
           }
         ],
@@ -2575,8 +2575,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector",
-              "expected_action": "ncr.open"
+              "to_specialist_id": "quality_inspector",
+              "expected_action_id": "ncr.open"
             }
           },
           {
@@ -2626,6 +2626,11 @@
         "manufacturer_instruction",
         "season"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "shop_ledger",
@@ -2958,6 +2963,11 @@
         "first_piece",
         "release"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "17:00"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "owner_app",
@@ -4282,8 +4292,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector",
-              "expected_action": "ncr.open"
+              "to_specialist_id": "quality_inspector",
+              "expected_action_id": "ncr.open"
             }
           },
           {
@@ -5391,8 +5401,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design",
-              "expected_action": "design_basis.commit"
+              "to_specialist_id": "measurement_design",
+              "expected_action_id": "design_basis.commit"
             }
           }
         ],
@@ -5490,8 +5500,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "quote.draft_revision"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "quote.draft_revision"
             }
           },
           {
@@ -5651,8 +5661,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector",
-              "expected_action": "ncr.open"
+              "to_specialist_id": "quality_inspector",
+              "expected_action_id": "ncr.open"
             }
           },
           {
@@ -6378,8 +6388,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "stock.reserve"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "stock.reserve"
             }
           }
         ],
@@ -6510,8 +6520,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "asset.assign"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "asset.assign"
             }
           }
         ],
@@ -6553,6 +6563,11 @@
         "cold",
         "due_time_gap"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "01:00"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "owner_app",
@@ -7490,8 +7505,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "stock.reserve"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "stock.reserve"
             }
           }
         ],
@@ -8048,8 +8063,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "cancellation.hold"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "cancellation.hold"
             }
           },
           {

@@ -743,13 +743,7 @@
         "decision": "propose",
         "actions": [
           {
-            "action_id": "fact.explain",
-            "args_must_include": {
-              "fact_ids": [
-                "weather:WX-1",
-                "capacity:CAP-1"
-              ]
-            }
+            "action_id": "fact.explain"
           }
         ],
         "forbidden_actions": [],
@@ -821,10 +815,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "price_book.propose_change",
-              "reason_code": "out_of_scope",
-              "price_book_id": "PB-M1"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "price_book.propose_change",
+              "object": {
+                "id": "PB-M1"
+              }
             }
           }
         ],
@@ -898,11 +893,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "quote.draft_revision",
-              "reason_code": "out_of_scope",
-              "quote_id": "Q-M1",
-              "revision": 4
+              "to_specialist_id": "estimator",
+              "expected_action_id": "quote.draft_revision",
+              "object": {
+                "id": "Q-M1"
+              }
             }
           }
         ],
@@ -967,10 +962,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "schedule.draft",
-              "reason_code": "out_of_scope",
-              "area_id": "AREA-1"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "schedule.draft",
+              "object": {
+                "id": "AREA-1"
+              }
             }
           }
         ],
@@ -1054,10 +1050,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "marketing_reputation",
-              "expected_action": "content.draft",
-              "reason_code": "out_of_scope",
-              "event_id": "EV-M1"
+              "to_specialist_id": "marketing_reputation",
+              "expected_action_id": "content.draft",
+              "object": {
+                "id": "EV-M1"
+              }
             }
           }
         ],
@@ -1158,7 +1155,9 @@
               "reason_code": "fact_stale",
               "route_to": "owner",
               "urgency": "brief",
-              "event_id": "EV-M1"
+              "object": {
+                "id": "EV-M1"
+              }
             }
           }
         ],
@@ -1232,7 +1231,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "today",
-              "event_id": "EV-M1"
+              "object": {
+                "id": "EV-M1"
+              }
             }
           }
         ],
@@ -1339,7 +1340,9 @@
               "reason_code": "fact_missing",
               "route_to": "owner",
               "urgency": "brief",
-              "cohort_id": "CO-1"
+              "object": {
+                "id": "CO-1"
+              }
             }
           }
         ],
@@ -1444,16 +1447,19 @@
               "reason_code": "fact_conflict",
               "route_to": "owner",
               "urgency": "today",
-              "price_book_id": "PB-M1"
+              "object": {
+                "id": "PB-M1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "expected_action": "price_book.propose_change",
-              "reason_code": "fact_conflict",
-              "price_book_id": "PB-M1"
+              "to_specialist_id": "purchasing_inventory",
+              "expected_action_id": "price_book.propose_change",
+              "object": {
+                "id": "PB-M1"
+              }
             }
           }
         ],
@@ -1571,7 +1577,9 @@
               "reason_code": "fact_conflict",
               "route_to": "owner",
               "urgency": "today",
-              "event_id": "EV-M1"
+              "object": {
+                "id": "EV-M1"
+              }
             }
           }
         ],
@@ -1730,13 +1738,7 @@
         "decision": "propose",
         "actions": [
           {
-            "action_id": "fact.explain",
-            "args_must_include": {
-              "fact_ids": [
-                "weather:WX-1",
-                "storm_mode:SM-1"
-              ]
-            }
+            "action_id": "fact.explain"
           }
         ],
         "forbidden_actions": [
@@ -1801,10 +1803,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer",
-              "reason_code": "out_of_scope",
-              "privacy_request_id": "PR-M1"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer",
+              "object": {
+                "id": "PR-M1"
+              }
             }
           }
         ],
@@ -1899,7 +1902,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKET-PROFILE"
+              "object": {
+                "id": "IN-MARKET-PROFILE"
+              }
             }
           }
         ],
@@ -1968,24 +1973,27 @@
             "action_id": "exception.escalate",
             "args_must_include": {
               "reason_code": "emergency",
-              "route_to": "field",
+              "route_to": "production",
               "urgency": "immediate",
-              "report_id": "ER-M1"
+              "object": {
+                "id": "ER-M1"
+              }
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "emergency.page",
-              "reason_code": "emergency",
-              "report_id": "ER-M1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "emergency.page",
+              "object": {
+                "id": "ER-M1"
+              }
             }
           }
         ],
         "forbidden_actions": [],
         "optional_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -2056,13 +2064,7 @@
         "decision": "propose",
         "actions": [
           {
-            "action_id": "fact.explain",
-            "args_must_include": {
-              "fact_ids": [
-                "forecast:FC-M1",
-                "capacity:CAP-1"
-              ]
-            }
+            "action_id": "fact.explain"
           }
         ],
         "forbidden_actions": [],
@@ -2143,7 +2145,9 @@
               "reason_code": "provider_unavailable",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKET-OUTAGE"
+              "object": {
+                "id": "IN-MARKET-OUTAGE"
+              }
             }
           }
         ],
@@ -2225,7 +2229,9 @@
               "reason_code": "policy_missing",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKET-BINDING"
+              "object": {
+                "id": "IN-MARKET-BINDING"
+              }
             }
           }
         ],
@@ -2292,11 +2298,10 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "aggregate_id": "AG-NOTE",
-              "text": "The source advert is not an executed quote.",
-              "sources": [
-                "note_source:AG-NOTE"
-              ]
+              "object": {
+                "id": "AG-NOTE"
+              },
+              "text": "The source advert is not an executed quote."
             }
           }
         ],

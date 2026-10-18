@@ -528,8 +528,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety",
-              "expected_action": "evidence.request"
+              "to_specialist_id": "field_safety",
+              "expected_action_id": "evidence.request"
             }
           }
         ],
@@ -1386,8 +1386,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "quote.draft_revision"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "quote.draft_revision"
             }
           }
         ],
@@ -1544,8 +1544,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "change_order.draft"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "change_order.draft"
             }
           }
         ],
@@ -1720,8 +1720,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "visit.hold_slot"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "visit.hold_slot"
             }
           }
         ],
@@ -2163,11 +2163,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "customer_message.draft",
-              "purpose": "evidence_request",
-              "language": "pa",
-              "channel": "sms"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -2315,11 +2312,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "customer_message.draft",
-              "purpose": "evidence_request",
-              "language": "zh-Hans",
-              "channel": "sms"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -2462,11 +2456,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "customer_message.draft",
-              "purpose": "evidence_request",
-              "language": "uk",
-              "channel": "email"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -3739,7 +3730,7 @@
         "forbidden_actions": [
           "safety_stop.release"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -4123,8 +4114,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "visit.hold_slot"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "visit.hold_slot"
             }
           }
         ],
@@ -4488,7 +4479,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator"
+              "to_specialist_id": "estimator"
             }
           }
         ],
@@ -4651,8 +4642,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "change_order.draft"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "change_order.draft"
             }
           }
         ],
@@ -5054,6 +5045,11 @@
         "snow",
         "unmeasured"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "16:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "measurement_ledger",
@@ -5307,8 +5303,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "visit.hold_slot"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "visit.hold_slot"
             }
           }
         ],
@@ -5632,8 +5628,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer"
             }
           }
         ],
@@ -6165,7 +6161,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],

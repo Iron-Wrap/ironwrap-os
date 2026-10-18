@@ -88,6 +88,56 @@ function criticalPathOrdering(): Plugin {
 }
 
 /**
+ * V8 compiles a function on the main thread the first time it is called, unless the file says
+ * otherwise. Nearly every function in the chunks `/today` boots from runs while it mounts, so on
+ * a paired phone that lazy compilation sat in front of the first paint: on Chrome 155 it was about
+ * half of module evaluation's single long task and much of the first render. The explicit compile
+ * hint `//# allFunctionsCalledOnLoad` hands it to the background thread that already parses each
+ * chunk while it downloads. Every engine that does not read the hint sees a comment.
+ *
+ * Only the entry's static chunk graph and the run sheet's own chunk carry it: compiling a route
+ * the phone may never open would only cost memory. The hint has to be a file's first line, and
+ * both the minifier (which drops comments) and Vite's preload map (prepended in its own
+ * `generateBundle`) come later than `renderChunk`, so the hint is written last. Its presence is
+ * folded into the content hash, so a hashed name still names exactly one content.
+ */
+function bootCompileHints(): Plugin {
+  const HINT = "//# allFunctionsCalledOnLoad\n";
+  let boot = new Set<string>();
+  return {
+    name: "ironwrap-boot-compile-hints",
+    apply: "build",
+    renderStart() {
+      boot = new Set();
+    },
+    renderChunk(_code, _chunk, _options, meta) {
+      if (boot.size > 0) return null;
+      const visit = (fileName: string) => {
+        if (boot.has(fileName) || !meta.chunks[fileName]) return;
+        boot.add(fileName);
+        for (const dependency of meta.chunks[fileName].imports) visit(dependency);
+      };
+      for (const chunk of Object.values(meta.chunks)) {
+        if (chunk.isEntry || chunk.name === "today-page") visit(chunk.fileName);
+      }
+      return null;
+    },
+    augmentChunkHash(chunk) {
+      return boot.has(chunk.fileName) ? HINT : undefined;
+    },
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        for (const output of Object.values(bundle)) {
+          if (output.type === "chunk" && boot.has(output.preliminaryFileName))
+            output.code = HINT + output.code;
+        }
+      },
+    },
+  };
+}
+
+/**
  * `index.html` carries one inline `<style>`: the boot shell shown from first byte until
  * React mounts. `_headers` pins `style-src 'self'`, so the browser blocked that block on
  * every cold start and the shell painted as unstyled text on a white page — the first
@@ -224,6 +274,7 @@ export default defineConfig({
       },
     }),
     criticalPathOrdering(),
+    bootCompileHints(),
     bootStyleCspHash(),
   ],
   build: {

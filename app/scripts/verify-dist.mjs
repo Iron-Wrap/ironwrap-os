@@ -155,6 +155,25 @@ for (const [constant, chunk] of [
   await stat(resolve(`dist${match[1]}`));
 }
 
+// The chunks `/today` boots from carry V8's explicit compile hint (vite.config.ts,
+// bootCompileHints), and only as their first line does it compile anything off the main thread.
+// Like the invariants above it is produced by the build, so only the budget notices its loss.
+const COMPILE_HINT = "//# allFunctionsCalledOnLoad\n";
+const bootScripts = [
+  ...indexHtml.matchAll(
+    /<(?:script type="module"|link rel="modulepreload")[^>]*?\s(?:src|href)="(\/assets\/[^"]+\.js)"/g,
+  ),
+].map((match) => match[1]);
+bootScripts.push(bootstrapPreload.match(/TODAY_ROUTE_CHUNK\s*=\s*"([^"]+)"/)[1]);
+for (const script of bootScripts) {
+  if (!(await readFile(resolve(`dist${script}`), "utf8")).startsWith(COMPILE_HINT)) {
+    throw new Error(
+      `${script} boots /today but does not open with V8's compile hint; its functions would ` +
+        "compile on the main thread in front of the first paint",
+    );
+  }
+}
+
 // The build drops the System v2 tokens nothing reads (vite.config.ts, scripts/prune-tokens.ts).
 // A token the bundle still reads but no longer declares would resolve to nothing at runtime, so
 // every `var(--token)` in the shipped files must have its declaration in the shipped stylesheets.

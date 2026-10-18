@@ -2277,11 +2277,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
     // 0150 adds the append-only field item resolution ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 128);
+    assert.equal(migrations.length, 129);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0202_agent_fact_versions.sql",
+      "0203_agent_shadow_agreement.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2414,14 +2414,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0200 adds five AI team tables, four named indexes, and sixteen append-only, finality
     // and ledger triggers. 0201 adds five control/decision/exception tables, two named indexes
     // and sixteen guards. 0202 adds the fact-version ledger table and three append-only/sequence
-    // guards, no index.
+    // guards, no index. 0203 adds the shadow, agreement and qualification tables, two named
+    // indexes and thirteen guards, and replaces the delegation owner guard in place.
     // 0145 adds the stop release table, one named index, and five validation, transition, and
     // append-only guards, and re-creates the projection guard and both 0143 guards under their names.
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
     // append-only and no-replace guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 267, indexes: 367, triggers: 721 },
+      { tables: 271, indexes: 369, triggers: 734 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

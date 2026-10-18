@@ -189,9 +189,9 @@ The host and the action server call only these Worker routes, with
 | Route | Caller | Contract |
 |---|---|---|
 | `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content |
-| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[]}, tools[]}`, optionally with `review_of: {run_id, provider} \| null`, `expected_action_id: string \| null` and `mode: "live" \| "shadow"` (missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; 409 when that key's run is already closed |
+| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[]}` with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; 409 when that key's run is already closed |
 | `GET /api/v1/agents/runs/:id/tools` | action server | the run's tools: `action_id`, `tool_name`, `autonomy`, `side_effect_class`, `undo`, `description`, strict `args_schema` |
-| `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention |
+| `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention; a shadowed action answers `decision: "shadowed"` with the decision policy would have made (`would_be`) and no receipt |
 | `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode` |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
@@ -213,6 +213,24 @@ request fields cannot claim that sign-in or a person's approval.
 | `POST /api/v1/agent-team/steps/:id/decision` | Current reviewer role or owner approves, declines or takes over the exact step version and argument hash |
 | `GET /api/v1/agent-team/exceptions` | Owner/ops queue with the assigned person and acknowledgement state |
 | `POST /api/v1/agent-team/exceptions/:id/acknowledge` | The assigned person, reviewer role or owner acknowledges the exception |
+| `POST /api/v1/agent-team/specialists/:id/shadow` | Owner turns shadow on or off for one A1-A3 non-protective action the specialist owns, exact expected revision |
+| `GET /api/v1/agent-team/shadow` | Owner/ops agreement per specialist and action: counts per verdict, match and partial rates, catastrophes, recent divergences (`specialist`, `action`, `since` filters) |
+| `GET /api/v1/agent-team/shadow/candidates` | Owner/ops list of actions that meet the bar for more delegation; the owner still sets it |
+| `POST /api/v1/agent-team/qualifications` | Owner records a qualification report's outcome for a specialist on one route (provider, model, effort) at one release (release and report SHA-256) |
+
+Earned autonomy (migration 0203): a shadowed action's proposals are decided by policy and recorded
+as shadow steps, never as receipts, so no permit, person, handoff or effect comes of them while
+people keep doing the work. Agreement records compare the agent's proposal with what a person did:
+approving the exact proposal is a match, declining it a divergence, taking it over unscored until a
+comparator sees what the person did; a shadow step with no comparable action within seven days is
+recorded unscored, never counted as agreement. A decline or take-over can flag Track D catastrophes
+(`catastrophes` on the decision). A catastrophe opens an owner exception and, for a within-limits
+action, writes an asks-first setting as `system:auto_demotion`, the one automatic delegation change.
+A candidate needs at least the last 50 compared agreements at a 95 % match rate, none of them a
+catastrophe, a passed latest qualification for the provider and model the specialist actually runs
+on (its most recent closed run), and a delegable A2/A3 action that
+does not already act within limits. An auditor's review that comes back from the reviewed run's own
+provider family closes abstained.
 
 Pause and auditor hold remain independent. Either makes non-protective actions ask first; pause
 also stops drafting. An off or revoked action stays off. Protective exceptions and holds remain

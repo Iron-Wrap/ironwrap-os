@@ -6,6 +6,8 @@
 // re-drives anything stuck; a daily cron reconciles source vs landed and emits the heartbeat.
 
 import { handleAgentHostApi, type AgentEnv } from "./agents/api.ts";
+import { sweepShadow } from "./agents/shadow.ts";
+import type { AgentDb } from "./agents/store.ts";
 import {
   ALLOWED_SOURCES,
   type Source,
@@ -411,6 +413,18 @@ export default {
             if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
           }).catch((error) =>
             log({ at: "dead_letter_auto_replay", error: String(error) }),
+          ),
+          // Earned autonomy: shadow proposals are compared or, after their window, recorded unscored.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return { compared: 0, unscored: 0 };
+            return await sweepShadow(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), (subject, text) =>
+              sendOwnerAlert(env, subject, `<p>${escapeHtml(text)}</p>`).then(() => undefined),
+            );
+          })().then((result) => {
+            if (result.compared + result.unscored > 0) log({ at: "agent_shadow_sweep", ...result });
+          }).catch((error) =>
+            log({ at: "agent_shadow_sweep", error: String(error) }),
           ),
           deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
             log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })

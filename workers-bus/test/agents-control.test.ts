@@ -6,6 +6,7 @@ import test from "node:test";
 import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.ts";
 import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
 import { currentDelegation, specialistControl } from "../src/agents/control.ts";
+import { CATASTROPHE_IDS, SHADOW_COMPARE_WINDOW_MS, sweepShadow } from "../src/agents/shadow.ts";
 import { canonicalJson } from "../src/agents/schema.ts";
 import { WorkerClient } from "../../agent-host/src/host/worker.ts";
 import type { AuthContext, AppRole } from "../src/app-types.ts";
@@ -34,6 +35,7 @@ class SqliteD1 {
           "0200_agent_coordination.sql",
           "0201_agent_delegation.sql",
           "0202_agent_fact_versions.sql",
+          "0203_agent_shadow_agreement.sql",
         ];
     for (const file of files) {
       if (!fullSchema && file === "0200_agent_coordination.sql")
@@ -190,7 +192,7 @@ function setup(fullSchema = false) {
     fetch: async (input, init) => await handleAgentHostApi(new Request(String(input), init), env, () => clock),
   });
   let sequence = 0;
-  const run = async (specialist = "lead_concierge") => {
+  const run = async (specialist = "lead_concierge", signalOverrides: Partial<Parameters<typeof appendSignal>[2]> = {}) => {
     const signal = await appendSignal(
       db,
       TENANT,
@@ -202,6 +204,7 @@ function setup(fullSchema = false) {
         subject: { aggregate: "lead", id: "synthetic-lead" },
         content: { text: "Untrusted customer request" },
         dedupe_key: `signal:${++sequence}`,
+        ...signalOverrides,
       },
       now(),
     );
@@ -1174,6 +1177,13 @@ const closeBody = (output: unknown) => ({
   duration_ms: 1200,
   tool_calls: [],
 });
+const QUALIFIED = { specialist_id: "lead_concierge", provider: "codex", model: "gpt-6.1-sol", effort: "medium", release_sha256: "e".repeat(64) };
+/** Closes one run on a model, so the candidate bar knows what the specialist actually runs on. */
+async function runsOn(s: ReturnType<typeof setup>, model = "gpt-6.1-sol", provider = "codex") {
+  const run = await s.run();
+  const body = closeBody({ ...DRAFT_OUTPUT, drafts: [] });
+  assert.equal((await s.close(run.run_id, { ...body, model: { ...body.model, provider, model, models_used: [model] } })).status, 200);
+}
 test("a paused specialist's run closes without its drafts, and the exact retry still replays", async () => {
   const s = setup();
   const run = await s.run();
@@ -1224,4 +1234,403 @@ test("holding a held specialist adds no revision, and a clear racing it re-appli
   assert.equal(third.body.outcome, "succeeded");
   assert.equal((await specialistControl(s.db, TENANT, "lead_concierge")).held, true);
   assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_specialist_controls WHERE specialist_id='lead_concierge'").n, 3);
+});
+
+// --- Earned autonomy: shadow, agreement and candidates (migration 0203) ---
+
+const shadowBody = (overrides: Record<string, unknown> = {}) => ({
+  action_id: "note.add",
+  shadow: true,
+  reason: "Owner wants to see the annotations before they count",
+  expected_revision: 0,
+  ...overrides,
+});
+
+test("the Worker's catastrophe ids are Track D's", () => {
+  const evals = JSON.parse(readFileSync(new URL("../../agent-host/evals/catastrophes.v1.json", import.meta.url), "utf8")) as { catastrophes: Array<{ id: string }> };
+  assert.deepEqual([...CATASTROPHE_IDS], evals.catastrophes.map((entry) => entry.id));
+});
+
+test("only a fresh owner session can shadow an action, and only actions with an effect to stand in for", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "ops")).status, 403);
+  for (const action_id of ["fact.explain", "exception.escalate", "emergency.page"]) {
+    const refused = await s.app("/specialists/lead_concierge/shadow", shadowBody({ action_id }), "owner", `shadow-${action_id.replace(".", "-")}`);
+    assert.equal(refused.body.error, "not_shadowable", `${action_id} ${JSON.stringify(refused)}`);
+  }
+  assert.equal((await s.app("/specialists/estimator/shadow", shadowBody({ action_id: "customer_message.send" }), "owner", "shadow-not-owner")).body.error, "not_shadowable");
+  const set = await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-note-1");
+  assert.deepEqual([set.status, set.body.revision], [200, 1]);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-note-1")).body.revision, 1);
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-note-2")).body.error, "stale_version");
+  assert.throws(() => s.db.raw.exec("UPDATE agent_shadow_settings SET shadow = 0"), /append_only/);
+});
+
+test("a shadowed action is decided but recorded as a shadow step: no receipt, task, permit or handoff", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-note")).status, 200);
+  const run = await s.run();
+  assert.equal((run as { mode?: string }).mode, "live");
+  const shadowed = await s.propose(run, "note.add", note);
+  assert.equal(shadowed.status, 200);
+  assert.deepEqual([shadowed.body.decision, shadowed.body.outcome, shadowed.body.receipt, shadowed.body.would_be], ["shadowed", null, null, "needs_approval"]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'note.add'").n, 0);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps WHERE action_id = 'note.add'").n, 1);
+  assert.equal((await s.app("/receipts?view=needs_you")).body.receipts.length, 0);
+  // The exact retry is the same shadow step; another action on the run stays live.
+  assert.equal((await s.propose(run, "note.add", note)).body.step_id, shadowed.body.step_id);
+  const live = await s.propose(run, "fact.explain", { object: null, explanation: "Synthetic explanation." });
+  assert.notEqual(live.body.decision, "shadowed");
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'fact.explain'").n, 1);
+  // Protective actions are never diverted, even on a run whose every action is shadowed.
+  const handoff = await s.run("lead_concierge", { kind: "handoff", content: { expected_action_id: "note.add", reason: "Synthetic" } });
+  assert.deepEqual([(handoff as { mode?: string }).mode, (handoff as { expected_action_id?: string }).expected_action_id], ["shadow", "note.add"]);
+  const escalated = await s.propose(handoff, "exception.escalate", { reason_code: "person_requested", summary: "Synthetic escalation", urgency: "today", reviewer_role: "sales" });
+  assert.notEqual(escalated.body.decision, "shadowed");
+});
+
+test("a person's decision on a proposal is agreement, and a flagged catastrophe demotes within-limits delegation", async () => {
+  const s = setup(true);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting())).status, 200);
+  const decide = async (decision: string, key: string, extra: Record<string, unknown> = {}) => {
+    const step = await s.propose(await s.run(), "note.add", { ...note, text: `Synthetic note ${key}` });
+    const row = s.scalar("SELECT version,args_sha256 FROM agent_run_steps WHERE step_id=?", step.body.step_id);
+    return await s.app(`/steps/${step.body.step_id}/decision`, { decision, expected_version: row.version, expected_args_sha256: row.args_sha256, ...extra }, "owner", key);
+  };
+  assert.equal((await decide("approve", "agree-approve")).status, 200);
+  assert.equal((await decide("do_it_myself", "agree-myself")).status, 200);
+  assert.equal((await decide("approve", "agree-approve-flagged", { catastrophes: ["fabricates_fact"] })).status, 400);
+  assert.equal((await decide("decline", "agree-unknown-flag", { catastrophes: ["not_a_catastrophe"] })).status, 400);
+  assert.deepEqual(
+    s.db.raw.prepare("SELECT verdict, comparator FROM agent_agreements ORDER BY verdict").all().map((row) => ({ ...row })),
+    [{ verdict: "match", comparator: "person_decision" }, { verdict: "unscored", comparator: "person_decision" }],
+  );
+  assert.equal((await currentDelegation(s.db, TENANT, "lead_concierge", "note.add"))?.setting, "within_limits");
+  const flagged = await decide("decline", "agree-flagged", { catastrophes: ["fabricates_fact"] });
+  assert.equal(flagged.status, 200);
+  const demoted = await currentDelegation(s.db, TENANT, "lead_concierge", "note.add");
+  assert.equal(demoted?.setting, "asks_first");
+  assert.equal(s.scalar("SELECT set_by_user_id u FROM agent_delegation_settings ORDER BY revision DESC LIMIT 1").u, "system:auto_demotion");
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_exceptions WHERE dedupe_key LIKE 'catastrophe:%' AND reviewer_role = 'owner'").n, 1);
+  const stats = (await s.app("/shadow")).body.agreement;
+  assert.deepEqual(stats.map((row: { action_id: string; counts: unknown; catastrophes: number }) => [row.action_id, row.counts, row.catastrophes]), [
+    ["note.add", { match: 1, partial: 0, diverge: 1, unscored: 1 }, 1],
+  ]);
+  // The automatic writer can only move a within-limits setting to asks first.
+  const insert = (setting: string, ceilingJson: string | null) =>
+    s.db.raw
+      .prepare(
+        `INSERT INTO agent_delegation_settings (setting_id,tenant_id,specialist_id,action_id,revision,control_revision,catalog_version,policy_version,setting,ceiling_json,reason,set_by_user_id,set_at,idempotency_key)
+       VALUES (?, ?, 'lead_concierge', 'note.add', ?, 0, 'v', 'p', ?, ?, 'Synthetic', 'system:auto_demotion', ?, ?)`,
+      )
+      .run(`dlg_synthetic_${setting}`, TENANT, (demoted?.revision ?? 0) + 1, setting, ceilingJson, s.now(), `synthetic-${setting}`);
+  assert.throws(() => insert("asks_first", null), /agent_control_authority/);
+  assert.throws(() => insert("within_limits", canonicalJson(ceiling)), /agent_control_authority/);
+});
+
+test("shadow steps nobody compares are recorded unscored once their window passes, once", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-sweep")).status, 200);
+  await s.propose(await s.run(), "note.add", note);
+  assert.deepEqual(await sweepShadow(s.db, TENANT, s.now(), null), { compared: 0, unscored: 0 });
+  const later = new Date(Date.parse(s.now()) + SHADOW_COMPARE_WINDOW_MS).toISOString();
+  assert.deepEqual(await sweepShadow(s.db, TENANT, later, null), { compared: 0, unscored: 1 });
+  assert.deepEqual(await sweepShadow(s.db, TENANT, later, null), { compared: 0, unscored: 0 });
+  assert.equal(s.scalar("SELECT verdict v, comparator c FROM agent_agreements").v, "unscored");
+});
+
+test("a delegation candidate needs the recent bar, no catastrophe, a passed qualification and a delegable action", async () => {
+  const s = setup(true);
+  const run = await s.run();
+  const seed = (count: number, verdict: string, catastrophes = "[]") => {
+    for (let index = 0; index < count; index += 1) {
+      const id = `sstep_seed_${verdict}_${s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps").n}`;
+      s.db.raw
+        .prepare(
+          `INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at)
+         VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`,
+        )
+        .run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
+      s.db.raw
+        .prepare(
+          `INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at)
+         VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`,
+        )
+        .run(`agr_${id}`, TENANT, id, verdict, catastrophes, new Date(Date.parse(s.now()) + s.scalar("SELECT COUNT(*) n FROM agent_agreements").n).toISOString());
+    }
+  };
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { specialist_id: string; action_id: string }) => `${row.specialist_id} ${row.action_id}`);
+  await runsOn(s);
+  seed(48, "match");
+  seed(1, "diverge", '["fabricates_fact"]');
+  seed(1, "match");
+  const qualify = (passed: boolean, key: string) =>
+    s.app("/qualifications", { ...QUALIFIED, passed, report_sha256: "a".repeat(64) }, "owner", key);
+  assert.equal((await qualify(true, "qualify-1")).status, 200);
+  // A catastrophe inside the recent window blocks it.
+  assert.deepEqual(await candidates(), []);
+  // Fifty newer clean comparisons push it out of the window: old wins and old losses both age out.
+  seed(50, "match");
+  assert.deepEqual(await candidates(), ["lead_concierge note.add"]);
+  // A later failed qualification blocks it again; ops cannot record one.
+  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: false, report_sha256: "b".repeat(64) }, "ops", "qualify-ops")).status, 403);
+  assert.equal((await qualify(false, "qualify-2")).status, 200);
+  assert.deepEqual(await candidates(), []);
+});
+
+test("an audit that came back from the reviewed run's own family is not accepted", async () => {
+  const s = setup();
+  const reviewed = await s.run();
+  const close = (output: Record<string, unknown>, provider: string) => ({
+    status: "ok",
+    reason: null,
+    detail: null,
+    output,
+    model: { provider, model: provider === "codex" ? "gpt-6.1-sol" : "claude-opus-5-5", models_used: [], auth_mode: "chatgpt", tier: "routine" },
+    hashes: { system: "a".repeat(64), prompt: "b".repeat(64), schema: "c".repeat(64) },
+    usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+    cost_usd: 0.01,
+    attempts: 1,
+    duration_ms: 10,
+    tool_calls: [],
+  });
+  const output = { decision: "propose", escalate_to: null, reason_code: null, reason: "Synthetic.", receipts: [], drafts: [], final_text: "Done." };
+  assert.equal((await s.close(reviewed.run_id, close(output, "codex"))).status, 200);
+  const audit = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
+  assert.deepEqual((audit as { review_of?: unknown }).review_of, { run_id: reviewed.run_id, provider: "codex" });
+  assert.equal((await s.close(audit.run_id, close(output, "codex"))).body.terminal, "abstained");
+  const fair = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
+  assert.equal((await s.close(fair.run_id, close(output, "claude"))).body.terminal, "completed");
+});
+
+test("shadow is a delegation value: setting it shadows the action, any other setting ends shadow", async () => {
+  const s = setup();
+  const shadowed = await s.app("/specialists/lead_concierge/delegation", setting({ setting: "shadow", ceiling: null, expected_revision: 0 }), "owner", "deleg-shadow-1");
+  assert.deepEqual([shadowed.status, shadowed.body.revision], [200, 1]);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "shadow", ceiling, expected_revision: 1 }), "owner", "deleg-shadow-ceiling")).status, 422);
+  const overview = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
+  assert.deepEqual(overview.shadow, { shadow: true, revision: 1 });
+  // Setting asks first (delegation revision 1) also writes the shadow-off revision in the same write.
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting({ setting: "asks_first", ceiling: null, expected_revision: 0 }), "owner", "deleg-asks-1")).status, 200);
+  const after = (await s.app("/specialists/lead_concierge")).body.actions.find((action: { action_id: string }) => action.action_id === "note.add");
+  assert.deepEqual([after.shadow, after.setting.setting], [{ shadow: false, revision: 2 }, "asks_first"]);
+  assert.equal((await s.propose(await s.run(), "note.add", note)).body.decision, "awaiting_approval");
+});
+
+test("a host on gateway config v2 closes with its route, review and mode; unknown model fields are still refused", async () => {
+  const s = setup();
+  const output = { decision: "propose", escalate_to: null, reason_code: null, reason: "Synthetic.", receipts: [], drafts: [], final_text: "Done." };
+  const body = (model: Record<string, unknown> | null) => ({
+    status: "ok", reason: null, detail: null, output,
+    model,
+    hashes: { system: "a".repeat(64), prompt: "b".repeat(64), schema: "c".repeat(64) },
+    usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+    cost_usd: 0.01, attempts: 1, duration_ms: 10, tool_calls: [],
+  });
+  const base = { provider: "codex", model: "gpt-6.1-sol", models_used: ["gpt-6.1-sol"], auth_mode: "chatgpt", tier: "routine" };
+  assert.equal((await s.close((await s.run()).run_id, body({ ...base, route_id: "codex_sol", review_of: null, mode: "live" }))).status, 200);
+  assert.equal((await s.close((await s.run()).run_id, body({ ...base, route_id: "codex_sol", review_of: null }))).status, 422);
+  assert.equal((await s.close((await s.run()).run_id, body({ ...base, extra: true }))).status, 422);
+  assert.equal((await s.close((await s.run()).run_id, body(base))).status, 200);
+});
+
+// --- R2 review regressions ---
+
+test("a run's shadow mode diverts nothing the owner did not shadow, and is shadow only when every expected action is", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-note-r")).status, 200);
+  const handoff = await s.run("lead_concierge", { kind: "handoff", content: { expected_action_id: "note.add", reason: "Synthetic" } });
+  assert.equal((handoff as { mode?: string }).mode, "shadow");
+  // A handoff chose the mode; the run's unshadowed action stays live.
+  const live = await s.propose(handoff, "fact.explain", { object: null, explanation: "Synthetic explanation." });
+  assert.notEqual(live.body.decision, "shadowed");
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_run_steps WHERE action_id = 'fact.explain'").n, 1);
+  // A watch is shadow only when every action it proposes is shadowed.
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ action_id: "visit.hold_slot" }), "owner", "shadow-hold-slot")).status, 200);
+  assert.equal(((await s.run("lead_concierge", { kind: "watch", watch_id: "visit_request" })) as { mode?: string }).mode, "live");
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody({ action_id: "visit.confirm" }), "owner", "shadow-confirm")).status, 200);
+  assert.equal(((await s.run("lead_concierge", { kind: "watch", watch_id: "visit_request" })) as { mode?: string }).mode, "shadow");
+});
+
+test("shadow steps count toward the run's step ceiling, and the step past it is a receipt, not a shadow row", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-ceiling")).status, 200);
+  const run = await s.run();
+  for (let index = 0; index < 12; index += 1) assert.equal((await s.propose(run, "note.add", { ...note, text: `Synthetic ${index}` })).body.decision, "shadowed");
+  const over = await s.propose(run, "note.add", { ...note, text: "Synthetic thirteenth" });
+  assert.deepEqual([over.body.outcome, over.body.reason_codes], ["abstained", ["ceiling_reached"]]);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_shadow_steps").n, 12);
+});
+
+test("a catastrophe on a take-over blocks candidacy, unscored rows never count as compared, and the bar is 95 %", async () => {
+  const s = setup(true);
+  const run = await s.run();
+  let n = 0;
+  const seed = (count: number, verdict: string, catastrophes = "[]", action = "note.add") => {
+    for (let index = 0; index < count; index += 1) {
+      const id = `sstep_bar_${++n}`;
+      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
+      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, ?, 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, catastrophes, new Date(Date.parse(s.now()) + n).toISOString());
+    }
+  };
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
+  await runsOn(s);
+  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "c".repeat(64) }, "owner", "qualify-bar")).status, 200);
+  seed(60, "unscored");
+  assert.deepEqual(await candidates(), [], "unscored rows are not comparisons");
+  seed(47, "match");
+  seed(3, "diverge");
+  assert.deepEqual(await candidates(), [], "94 % is below the bar");
+  seed(50, "match");
+  assert.deepEqual(await candidates(), ["note.add"]);
+  seed(1, "unscored", '["fabricates_fact"]');
+  assert.deepEqual(await candidates(), [], "a flagged take-over blocks it");
+  // Never-delegable and protective actions never become candidates, however good their record.
+  seed(60, "match", "[]", "exception.escalate");
+  seed(60, "match", "[]", "inquiry.classify");
+  assert.deepEqual(await candidates(), []);
+});
+
+test("an unfinished catastrophe follow-through is completed by the sweep, and the system writer needs a within-limits row", async () => {
+  const s = setup(true);
+  assert.equal((await s.app("/specialists/lead_concierge/delegation", setting())).status, 200);
+  const run = await s.run();
+  s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES ('sstep_cat', ?, ?, 'lead_concierge', 'note.add', 'sstep_cat', '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(TENANT, run.run_id, "0".repeat(64), s.now());
+  s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES ('agr_cat', ?, 'shadow', 'lead_concierge', 'note.add', 'sstep_cat', NULL, 'diverge', '["discloses_private_data"]', 'synthetic@1', NULL, ?)`).run(TENANT, s.now());
+  const notices: string[] = [];
+  await sweepShadow(s.db, TENANT, s.now(), async (subject) => void notices.push(subject));
+  assert.equal((await currentDelegation(s.db, TENANT, "lead_concierge", "note.add"))?.setting, "asks_first");
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_exceptions WHERE dedupe_key = 'catastrophe:agr_cat'").n, 1);
+  await sweepShadow(s.db, TENANT, s.now(), null);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_exceptions WHERE dedupe_key = 'catastrophe:agr_cat'").n, 1);
+  // With no prior setting row, the system writer is refused outright.
+  assert.throws(
+    () =>
+      s.db.raw
+        .prepare(`INSERT INTO agent_delegation_settings (setting_id,tenant_id,specialist_id,action_id,revision,control_revision,catalog_version,policy_version,setting,ceiling_json,reason,set_by_user_id,set_at,idempotency_key) VALUES ('dlg_sys', ?, 'lead_concierge', 'visit.confirm', 1, 0, 'v', 'p', 'asks_first', NULL, 'Synthetic', 'system:auto_demotion', ?, 'sys-no-prior')`)
+        .run(TENANT, s.now()),
+    /agent_control_authority/,
+  );
+});
+
+test("an audit closes completed only from a known family different from the reviewed run's", async () => {
+  const s = setup();
+  const reviewed = await s.run();
+  const output = { decision: "propose", escalate_to: null, reason_code: null, reason: "Synthetic.", receipts: [], drafts: [], final_text: "Done." };
+  const close = (model: Record<string, unknown> | null) => ({
+    status: "ok", reason: null, detail: null, output, model,
+    hashes: { system: "a".repeat(64), prompt: "b".repeat(64), schema: "c".repeat(64) },
+    usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 }, cost_usd: 0.01, attempts: 1, duration_ms: 10, tool_calls: [],
+  });
+  const model = (provider: string) => ({ provider, model: "synthetic-model", models_used: [], auth_mode: "oauth", tier: "audit" });
+  assert.equal((await s.close(reviewed.run_id, close(model("codex")))).status, 200);
+  for (const audited of [null, model("Codex"), model("gemini")]) {
+    const audit = await s.run("independent_auditor", { subject: { aggregate: "coordination_run", id: reviewed.run_id } });
+    assert.equal((await s.close(audit.run_id, close(audited))).body.terminal, "abstained", JSON.stringify(audited));
+  }
+});
+
+test("candidates need the full window and a delegable action; stats count only compared rows", async () => {
+  const s = setup(true);
+  const run = await s.run();
+  let n = 0;
+  const seed = (count: number, verdict: string, action = "note.add") => {
+    for (let index = 0; index < count; index += 1) {
+      const id = `sstep_win_${++n}`;
+      s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', ?, ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, action, id, "0".repeat(64), s.now());
+      s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', ?, ?, NULL, ?, '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, action, id, verdict, new Date(Date.parse(s.now()) + n).toISOString());
+    }
+  };
+  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-win")).status, 200);
+  seed(49, "match");
+  seed(5, "unscored");
+  seed(60, "match", "consent.record");
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { action_id: string }) => row.action_id);
+  await runsOn(s);
+  assert.deepEqual(await candidates(), [], "49 compared is one short of the window; consent.record is never delegable");
+  const note = (await s.app("/shadow?action=note.add")).body.agreement[0];
+  assert.deepEqual([note.compared, note.counts.unscored, note.match_rate], [49, 5, 1]);
+  seed(1, "match");
+  assert.deepEqual(await candidates(), ["note.add"]);
+});
+
+test("a watch id shared by specialists takes the run owner's list, and an unknown host mode abstains as a missing policy", async () => {
+  const s = setup();
+  for (const action_id of ["storm_watch.open", "market_alert.raise", "storm_mode.propose"])
+    assert.equal((await s.app("/specialists/market_analyst/shadow", shadowBody({ action_id }), "owner", `shadow-ma-${action_id}`)).status, 200, action_id);
+  assert.equal(((await s.run("market_analyst", { kind: "watch", watch_id: "storm_events" })) as { mode?: string }).mode, "shadow");
+  assert.equal(((await s.run("orchestrator", { kind: "watch", watch_id: "storm_events" })) as { mode?: string }).mode, "live");
+  const run = await s.run();
+  const closed = await s.close(run.run_id, {
+    status: "abstained", reason: "unknown_run_mode", detail: "Synthetic.", output: null, model: null, hashes: null,
+    usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }, cost_usd: 0, attempts: 0, duration_ms: 0, tool_calls: [],
+  });
+  assert.equal(closed.body.terminal, "abstained");
+  assert.equal(s.scalar("SELECT reason_code r FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'", run.run_id).r, "policy_missing");
+});
+
+test("a catastrophe follow-through that keeps failing never blocks the rest of the sweep", async () => {
+  const s = setup();
+  assert.equal((await s.app("/specialists/lead_concierge/shadow", shadowBody(), "owner", "shadow-sweep-iso")).status, 200);
+  const run = await s.run();
+  await s.propose(run, "note.add", note);
+  s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES ('sstep_bad', ?, ?, 'lead_concierge', 'note.add', 'sstep_bad', '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(TENANT, run.run_id, "0".repeat(64), s.now());
+  s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES ('agr_bad', ?, 'shadow', 'lead_concierge', 'note.add', 'sstep_bad', NULL, 'diverge', '["fabricates_fact"]', 'synthetic@1', NULL, ?)`).run(TENANT, s.now());
+  s.db.raw.exec("CREATE TRIGGER synthetic_exception_outage BEFORE INSERT ON agent_exceptions BEGIN SELECT RAISE(ABORT, 'synthetic outage'); END;");
+  const later = new Date(Date.parse(s.now()) + SHADOW_COMPARE_WINDOW_MS).toISOString();
+  assert.deepEqual(await sweepShadow(s.db, TENANT, later, null), { compared: 0, unscored: 1 });
+});
+
+test("the candidate bar uses the qualification for the model the specialist actually runs on", async () => {
+  const s = setup(true);
+  const run = await s.run();
+  for (let index = 0; index < 50; index += 1) {
+    const id = `sstep_model_${index}`;
+    s.db.raw.prepare(`INSERT INTO agent_shadow_steps (shadow_step_id,tenant_id,run_id,specialist_id,action_id,step_key,args_json,args_sha256,sources_json,policy_json,subject_aggregate,subject_id,proposed_at) VALUES (?, ?, ?, 'lead_concierge', 'note.add', ?, '{}', ?, '[]', '{}', NULL, NULL, ?)`).run(id, TENANT, run.run_id, id, "0".repeat(64), s.now());
+    s.db.raw.prepare(`INSERT INTO agent_agreements (agreement_id,tenant_id,source,specialist_id,action_id,shadow_step_id,step_id,verdict,catastrophes_json,comparator,actual_json,compared_at) VALUES (?, ?, 'shadow', 'lead_concierge', 'note.add', ?, NULL, 'match', '[]', 'synthetic@1', NULL, ?)`).run(`agr_${id}`, TENANT, id, new Date(Date.parse(s.now()) + index).toISOString());
+  }
+  const candidates = async () => (await s.app("/shadow/candidates")).body.candidates.map((row: { model: string }) => row.model);
+  assert.equal((await s.app("/qualifications", { ...QUALIFIED, model: "gpt-6-astra", effort: "high", passed: true, report_sha256: "a".repeat(64) }, "owner", "qualify-astra")).status, 200);
+  assert.deepEqual(await candidates(), [], "no closed run yet, so no model it runs on");
+  await runsOn(s, "gpt-6.1-sol");
+  assert.deepEqual(await candidates(), [], "a passed qualification on another model does not count");
+  assert.equal((await s.app("/qualifications", { ...QUALIFIED, passed: true, report_sha256: "b".repeat(64) }, "owner", "qualify-sol")).status, 200);
+  assert.deepEqual(await candidates(), ["gpt-6.1-sol"]);
+  s.tick(60_000);
+  await runsOn(s, "gpt-6-astra");
+  assert.deepEqual(await candidates(), ["gpt-6-astra"], "the bar follows the model the specialist moved to");
+  s.tick(60_000);
+  await runsOn(s, "gpt-6-astra", "openai");
+  assert.deepEqual(await candidates(), [], "the same model through another provider needs its own qualification");
+  // Every key is required, and an invalid one is refused.
+  for (const [field, value, code] of [["provider", "Codex", "invalid_provider"], ["effort", "", "invalid_effort"], ["release_sha256", "x", "invalid_release_hash"]] as const)
+    assert.equal((await s.app("/qualifications", { ...QUALIFIED, [field]: value, passed: true, report_sha256: "c".repeat(64) }, "owner", `qualify-bad-${field}`)).body.error, code);
+  const { release_sha256: _omitted, ...missing } = QUALIFIED;
+  assert.equal((await s.app("/qualifications", { ...missing, passed: true, report_sha256: "d".repeat(64) }, "owner", "qualify-missing")).body.error, "invalid_body");
+  // A close without a model never hides the model the specialist runs on.
+  s.tick(60_000);
+  const bare = await s.run();
+  const body = closeBody({ ...DRAFT_OUTPUT, drafts: [] });
+  assert.equal((await s.close(bare.run_id, { ...body, status: "abstained", reason: "kill_switch", output: null, model: null, hashes: null })).status, 200);
+  assert.deepEqual(await candidates(), [], "still openai gpt-6-astra, which has no qualification");
+});
+
+test("a qualification replays on its key and conflicts on any changed field; the schema refuses what the API would", async () => {
+  const s = setup();
+  const body = { ...QUALIFIED, passed: true, report_sha256: "a".repeat(64) };
+  const first = await s.app("/qualifications", body, "owner", "qualify-replay");
+  assert.equal(first.status, 200);
+  assert.equal((await s.app("/qualifications", body, "owner", "qualify-replay")).body.qualification_id, first.body.qualification_id);
+  for (const [field, value] of [["specialist_id", "estimator"], ["provider", "openai"], ["model", "gpt-6-astra"], ["effort", "high"], ["release_sha256", "f".repeat(64)], ["passed", false], ["report_sha256", "b".repeat(64)]] as const)
+    assert.equal((await s.app("/qualifications", { ...body, [field]: value }, "owner", "qualify-replay")).body.error, "idempotency_conflict", field);
+  assert.equal(s.scalar("SELECT COUNT(*) n FROM agent_qualifications").n, 1);
+  const owner = s.scalar("SELECT recorded_by_user_id u FROM agent_qualifications").u;
+  for (const [provider, effort, release] of [["Codex", "medium", "e".repeat(64)], ["codex", "", "e".repeat(64)], ["codex", "medium", "E".repeat(64)]])
+    assert.throws(
+      () =>
+        s.db.raw
+          .prepare(`INSERT INTO agent_qualifications (qualification_id,tenant_id,specialist_id,provider,model,effort,release_sha256,passed,report_sha256,recorded_by_user_id,recorded_at,idempotency_key) VALUES (?, ?, 'lead_concierge', ?, 'gpt-6.1-sol', ?, ?, 1, ?, ?, ?, ?)`)
+          .run(`qal_raw_${provider}${effort}`, TENANT, provider, effort, release, "a".repeat(64), owner, s.now(), `raw-${provider}-${effort}-${release[0]}`),
+      /CHECK constraint failed/,
+    );
 });

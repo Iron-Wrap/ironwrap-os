@@ -123,13 +123,13 @@ test("0090 operating-core tables, indexes, and guards are recoverable by both D1
   }
 
   for (const [name, expected] of [
-    // Pinned through 0202: service atomicity, both crew-stop guards, the stop release record,
+    // Pinned through 0203: service atomicity, both crew-stop guards, the stop release record,
     // and the AI team
     // coordination tables, append-only events, owner controls, human decisions, named
-    // exceptions and the fact-version ledger are included in both D1 inventories.
-    ["REQUIRED_TABLE_COUNT", 267],
-    ["REQUIRED_INDEX_COUNT", 380],
-    ["REQUIRED_TRIGGER_COUNT", 721],
+    // exceptions, the fact-version ledger and the shadow/agreement records are included in both D1 inventories.
+    ["REQUIRED_TABLE_COUNT", 271],
+    ["REQUIRED_INDEX_COUNT", 382],
+    ["REQUIRED_TRIGGER_COUNT", 734],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);

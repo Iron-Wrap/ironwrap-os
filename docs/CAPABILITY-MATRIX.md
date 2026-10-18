@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 128,
-      "latest": "0202_agent_fact_versions.sql"
+      "count": 129,
+      "latest": "0203_agent_shadow_agreement.sql"
     }
   },
   "test_observation_policy": {
@@ -236,7 +236,11 @@ Current source tracing distinguishes implemented modules from reachable producti
   item) through the role screens' readers, as far as the specialist's reviewer role may read them,
   versioned by an append-only fact-version ledger (`0202`); every cited fact is read again before
   the step is decided, and run rows keep fact refs only, never values. D1 holds no supplier or
-  conversation object yet, so those cannot be cited.
+  conversation object yet, so those cannot be cited. Shadow mode (`0203`) records a shadowed action's
+  proposals with no effect and counts agreement with people's decisions; no shadow comparator is
+  registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
+  within-limits action to asks first. An audit from the reviewed run's own provider family is not
+  accepted.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
   live provider call, deployment or reference run has happened.
 

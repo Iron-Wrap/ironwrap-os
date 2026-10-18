@@ -63,6 +63,7 @@ export function CrewShell() {
         </Link>
         <PersonMenu
           appearance={false}
+          label={`${name}, Crew phone`}
           triggerClassName="crew-person environment-control flex min-h-12 min-w-0 flex-1 flex-col items-start justify-center rounded-md px-1 py-2 text-left leading-tight hover:bg-surface-hover"
           trigger={
             <>

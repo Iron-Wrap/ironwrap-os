@@ -180,16 +180,19 @@ function OfficeShell() {
           <button
             type="button"
             className="shell-search-trigger environment-control inline-flex h-11 shrink-0 items-center gap-2.5 rounded-md bg-surface px-3 text-left text-[0.84375rem] text-faint shadow-[inset_0_0_0_1px_var(--border-control),0_1px_2px_rgb(21_24_28/0.05)] transition-shadow hover:shadow-[inset_0_0_0_1px_var(--border-strong),0_1px_2px_rgb(21_24_28/0.05)] max-[1100px]:w-11 max-[1100px]:justify-center max-[1100px]:px-0 min-[1101px]:min-w-[17.5rem]"
-            aria-label="Open search (Command or Control K)"
+            aria-label="Search work"
             aria-keyshortcuts="Control+K Meta+K"
             title="Search (⌘K / Ctrl+K)"
             onClick={search.openSearch}
           >
             <Search className="size-4 shrink-0" aria-hidden="true" />
-            <span className="max-[1100px]:hidden">Search work…</span>
-            <kbd className="ml-auto rounded border border-border bg-surface-sunk px-1.5 font-mono text-xs text-muted max-[1100px]:hidden">
-              ⌘K
-            </kbd>
+            <span className="max-[1100px]:hidden">Search work</span>
+            {/* The shortcut hint is drawn by CSS, so the button's name is exactly its words. */}
+            <kbd
+              aria-hidden="true"
+              data-keys="⌘K"
+              className="ml-auto rounded border border-border bg-surface-sunk px-1.5 font-mono text-xs text-muted after:content-[attr(data-keys)] max-[1100px]:hidden"
+            />
           </button>
           <Button
             variant="quiet"
@@ -201,17 +204,19 @@ function OfficeShell() {
             <span className="max-[1100px]:sr-only">Safety</span>
           </Button>
           <PersonMenu
+            label={`${name}, ${roleLabel(session.user.role)}`}
             triggerClassName="shell-person-trigger environment-control -mr-2 inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-2.5 rounded-md px-1 text-left hover:bg-surface-hover min-[721px]:pr-2"
             trigger={
               <>
+                {/* Initials are drawn by CSS, not text, so the words a screen reader hears start
+                    with the name the button shows (WCAG 2.5.3 label in name). */}
                 <span
                   aria-hidden="true"
-                  className="grid size-[1.875rem] shrink-0 place-items-center rounded-full border border-line-strong bg-chrome text-[0.75rem] font-[640] tracking-[0.02em] text-chrome-foreground"
-                >
-                  {initials(name)}
-                </span>
+                  data-initials={initials(name)}
+                  className="grid size-[1.875rem] shrink-0 place-items-center rounded-full border border-line-strong bg-chrome text-[0.75rem] font-[640] tracking-[0.02em] text-chrome-foreground before:content-[attr(data-initials)]"
+                />
                 <span className="hidden flex-col text-[0.84375rem] leading-tight font-[560] min-[1101px]:flex">
-                  <span className="max-w-40 truncate">{name}</span>
+                  <span className="max-w-40 truncate">{name}</span>{" "}
                   <span className="text-xs font-normal text-faint">
                     {roleLabel(session.user.role)}
                   </span>
@@ -354,10 +359,10 @@ function MoreTab({
         aria-controls="mobile-workspace-popover"
         className="shell-tab"
         data-current={current || undefined}
-        aria-label="Open all workspaces"
       >
         <LayoutGrid aria-hidden="true" />
         <span>More</span>
+        <span className="sr-only"> workspaces</span>
       </button>
       <div
         id="mobile-workspace-popover"

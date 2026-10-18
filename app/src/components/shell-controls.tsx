@@ -61,15 +61,20 @@ function useSignOut() {
 
 /**
  * The person menu: who is signed in, this viewer's appearance, and sign out. `trigger` is the
- * visible button content; the menu is a native popover, so Escape and light dismiss are free.
+ * visible button content and `label` its words, so the name a screen reader hears starts with
+ * what the button shows (WCAG 2.5.3); the menu is a native popover, so Escape and light dismiss
+ * are free.
  */
 export function PersonMenu({
   trigger,
+  label,
   triggerClassName,
   menuClassName,
   appearance = true,
 }: {
   trigger: ReactNode;
+  /** The words the trigger shows, in order; defaults to the person's name. */
+  label?: string;
   triggerClassName?: string;
   menuClassName?: string;
   /** False where the place sets its own colour mode and the office appearance would do nothing. */
@@ -86,7 +91,7 @@ export function PersonMenu({
       <button
         type="button"
         popoverTarget={menuId}
-        aria-label={`${name}, account menu`}
+        aria-label={`${label ?? name}, account menu`}
         className={triggerClassName}
       >
         {trigger}

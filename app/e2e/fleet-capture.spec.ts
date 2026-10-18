@@ -127,7 +127,7 @@ test.describe("Vehicle rail mobile acceptance", () => {
         name: `${label} tab`,
       });
     }
-    await expect(nav.getByLabel("Open all workspaces")).toHaveCount(0);
+    await expect(nav.getByRole("button", { name: "More workspaces" })).toHaveCount(0);
     await expect(nav.getByRole("link", { name: "Settings", exact: true })).toHaveCount(0);
 
     await vehicle.click();

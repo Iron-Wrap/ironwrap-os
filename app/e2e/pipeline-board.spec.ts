@@ -360,9 +360,7 @@ test.describe("Pipeline board acceptance", () => {
           await expect(breadcrumb.locator("a")).toBeHidden();
         }
       }
-      await expectTouchTarget(
-        page.getByRole("button", { name: "Open search (Command or Control K)" }),
-      );
+      await expectTouchTarget(page.getByRole("button", { name: "Search work" }));
       await expectTouchTarget(page.getByRole("button", { name: "Safety", exact: true }));
       await page.screenshot({
         path: `${shotDir}/review-overview-${viewport.label}-${testInfo.project.name}.png`,

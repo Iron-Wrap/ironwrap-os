@@ -22,12 +22,11 @@ updates:
   # Dependabot #383), so their minor updates wait for a change that keeps the budget; patches
   # still arrive. The server packages are not affected and keep every update.
   #
-  # @playwright/test also moves the budget: each Playwright minor ships a new Chromium, and that
-  # Chromium is the browser the paired-device Lighthouse leg measures with. 1.63 (Chrome 153) and
-  # 1.64 (Chrome 156) read the same bundle at LCP +80-130 ms, Speed Index +450-550 ms and about
-  # twice the TBT of 1.61/1.62 (Chrome 149/151), which dropped the budget job on main to 0.89 < 0.90
-  # (app-patch-and-minor #412). Hold the minor until the budget is re-baselined on the newer
-  # Chromium; patches still arrive.
+  # @playwright/test keeps every update. Its Chromium no longer moves the budget: the
+  # paired-device Lighthouse leg measures with the Chrome for Testing build pinned in
+  # app/scripts/chrome-for-testing.json, so a Playwright minor changes only the browser the e2e
+  # suites run. Moving the measuring browser is a deliberate edit of that pin, measured on the
+  # current bundle first, never a Dependabot update.
   - package-ecosystem: npm
     directory: /app
     schedule:
@@ -42,8 +41,6 @@ updates:
       - dependency-name: react-dom
         update-types: ['version-update:semver-minor']
       - dependency-name: zod
-        update-types: ['version-update:semver-minor']
-      - dependency-name: '@playwright/test'
         update-types: ['version-update:semver-minor']
     # Group names must differ between npm entries: Dependabot merged two same-named groups into
     # one cross-directory PR (#406) and applied neither entry's ignore list to it.

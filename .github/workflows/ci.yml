@@ -377,10 +377,24 @@ jobs:
       - name: Install app dependencies
         if: steps.scope.outputs.measure == 'true'
         run: npm ci --prefix app
-      - name: Install Playwright Chromium
+      # The budget is read on the one Chrome for Testing build pinned in
+      # app/scripts/chrome-for-testing.json, never on Playwright's Chromium, so a Playwright
+      # update cannot move the reading (app/scripts/lighthouse-chrome.mjs has the rationale).
+      # The runner image ships Google Chrome and so its system libraries; only the pinned
+      # browser is installed, from this cache while the pin is unchanged, and the install
+      # step hands its executable to the measurement as LHCI_CHROME_PATH.
+      - name: Cache the pinned Chrome for Testing
         if: steps.scope.outputs.measure == 'true'
-        working-directory: app
-        run: npx playwright install --with-deps chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/chrome-for-testing
+          key: ${{ runner.os }}-chrome-for-testing-${{ hashFiles('app/scripts/chrome-for-testing.json') }}
+      # The downloader has no socket timeout, so a stalled cold download is cut off here
+      # rather than at the job's own timeout.
+      - name: Install the pinned Chrome for Testing
+        if: steps.scope.outputs.measure == 'true'
+        timeout-minutes: 5
+        run: node app/scripts/lighthouse-chrome.mjs
       - name: Run paired-device Lighthouse thresholds
         if: steps.scope.outputs.measure == 'true'
         run: npm run test:lighthouse --prefix app

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
  * Two scopes, each fail-safe toward running:
  *   app   the PWA bundle and its Playwright and Lighthouse harness. Everything they read lives
  *         under `app/` (no import leaves it), plus the Node pin, the Makefile recipes that build
- *         and run them, ci.yml, which pins the runner and Chromium, and this file.
+ *         and run them, ci.yml, which pins the runner and installs the browsers, and this file.
  *   code  every test suite: any change except markdown. docs/CAPABILITY-MATRIX.md is not
  *         exempt, because the Worker suite and the capability evidence receipt both read it.
  *

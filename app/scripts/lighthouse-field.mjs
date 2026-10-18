@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
+import { resolveChromePath } from "./lighthouse-chrome.mjs";
 import { median } from "./lighthouse-statistics.mjs";
 
 const require = createRequire(import.meta.url);
@@ -131,11 +132,8 @@ async function stopProcess(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-async function runLighthouse(profile, runFileName, outputDir, chromeFlags) {
-  const chrome = await chromeLauncher.launch({
-    chromePath: profile.chromePath,
-    chromeFlags,
-  });
+async function runLighthouse(profile, chromePath, runFileName, outputDir, chromeFlags) {
+  const chrome = await chromeLauncher.launch({ chromePath, chromeFlags });
   let browser;
   try {
     browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${chrome.port}` });
@@ -182,6 +180,8 @@ export async function measure({
 } = {}) {
   const outputDir = resolve(profile.outputDir);
   const baseUrl = new URL(profile.baseUrl);
+  const chromePath = await resolveChromePath();
+  process.stdout.write(`Measuring with ${chromePath}\n`);
 
   // Mint the certificate before the server starts. Both this process and the server
   // ensure it exists, so leaving it to chance let them race: each minted its own, and
@@ -221,7 +221,7 @@ export async function measure({
         `Lighthouse ${profile.protocol} run ${runNumber}/${profile.numberOfRuns}\n`,
       );
       const runFile = `${runFilePrefix}-${runNumber}.json`;
-      results.push(await runLighthouse(profile, runFile, outputDir, chromeFlags));
+      results.push(await runLighthouse(profile, chromePath, runFile, outputDir, chromeFlags));
       runFiles.push(runFile);
     }
 

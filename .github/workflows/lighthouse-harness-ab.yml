@@ -22,6 +22,8 @@ on:
       - app/lighthouserc.cjs
       - app/scripts/acceptance-certificate.mjs
       - app/scripts/acceptance-server.mjs
+      - app/scripts/chrome-for-testing.json
+      - app/scripts/lighthouse-chrome.mjs
       - app/scripts/lighthouse-field.mjs
       - app/scripts/lighthouse-protocol-ab.mjs
       - app/scripts/lighthouse-statistics.mjs
@@ -49,9 +51,11 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - name: Install app dependencies
         run: npm ci --prefix app
-      - name: Install Playwright Chromium
-        working-directory: app
-        run: npx playwright install --with-deps chromium
+      # Both arms are read on the budget's own pinned Chrome for Testing build, never on
+      # Playwright's Chromium (app/scripts/lighthouse-chrome.mjs).
+      - name: Install the pinned Chrome for Testing
+        timeout-minutes: 5
+        run: node app/scripts/lighthouse-chrome.mjs
       - name: Measure the same build over HTTP/2 and HTTP/1.1
         working-directory: app
         env:

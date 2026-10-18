@@ -8,6 +8,7 @@ import { DEFAULT_CEILINGS, evaluateStep, STEP_POLICY_ID, STEP_POLICY_VERSION, ty
 import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { citedFacts, factReader, hydrate, refOf, subjectFacts, type ContextFact, type FactRef, type OmittedFact } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
+import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -69,6 +70,15 @@ export interface RunRow {
   correlation_id: string;
   catalog_version: string;
   policy_version: string;
+  /** `live`, or `shadow` when every action the run can lead to is in shadow (migration 0203). */
+  mode?: "live" | "shadow";
+}
+
+/** What the host needs to route a run: its mode, its one expected action and the run it reviews. */
+export interface RunHints {
+  mode: "live" | "shadow";
+  expected_action_id: string | null;
+  review_of: { run_id: string; provider: string } | null;
 }
 
 export interface StepRow {
@@ -230,7 +240,7 @@ export async function openRun(
   tenantId: string,
   input: { signal_id: string; specialist_id: string; host_run_key: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext; hints: RunHints } | StoreError> {
   const existing = await runByKey(db, tenantId, input.host_run_key);
   if (existing) return await resumeRun(db, tenantId, existing, input, now);
   const signal = await db
@@ -246,6 +256,7 @@ export async function openRun(
   const snapshotHash = await sha256Hex(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash }))));
   const tools = toolsFor(signal.specialist_id);
   const manifestHash = await sha256Hex(canonicalJson(tools));
+  const mode = await runMode(db, tenantId, signal.specialist_id, signalActions(signal));
   const run: RunRow = {
     run_id: `run_${crypto.randomUUID()}`,
     tenant_id: tenantId,
@@ -266,14 +277,15 @@ export async function openRun(
     correlation_id: signal.parent_run_id ?? signal.signal_id,
     catalog_version: CATALOG_VERSION,
     policy_version: `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`,
+    mode,
   };
   const inserted = await db
     .prepare(
       `INSERT INTO agent_runs (run_id, tenant_id, specialist_id, signal_id, host_run_key, goal,
         trigger_json, context_json, context_snapshot_hash, tool_manifest_json, tool_manifest_hash,
         catalog_version, policy_version, parent_run_id, correlation_id, state, attempt,
-        attempt_started_at, started_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?
+        attempt_started_at, started_at, mode)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?
        WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)`,
     )
     .bind(
@@ -294,11 +306,13 @@ export async function openRun(
       run.correlation_id,
       now,
       now,
+      mode,
       tenantId,
       input.host_run_key,
     )
     .run();
-  if (changesOf(inserted) >= 1) return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted } };
+  if (changesOf(inserted) >= 1)
+    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
   if (!winner) return { error: "run_unavailable", status: 503 };
@@ -316,7 +330,7 @@ async function resumeRun(
   existing: RunRow,
   input: { signal_id: string; specialist_id: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext; hints: RunHints } | StoreError> {
   if (existing.signal_id !== input.signal_id || existing.specialist_id !== input.specialist_id) {
     return { error: "run_key_conflict", status: 422 };
   }
@@ -331,11 +345,38 @@ async function resumeRun(
   // The same refs, read again: a fact that changed since the run opened comes back marked stale.
   const stored = runContext(existing);
   const facts = await hydrate(stored.facts, runFactReader(db, tenantId, existing, now));
+  const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, existing.signal_id).first<SignalRow>();
   return {
     run: { ...existing, attempt: existing.attempt + 1, attempt_started_at: now },
     resumed: true,
     context: { snapshot_hash: stored.snapshot_hash, facts, omitted: stored.omitted },
+    hints: await runHints(db, tenantId, existing, signal),
   };
+}
+
+/**
+ * Routing hints for the host, all from Worker records: the run's mode; the single action the
+ * signal expects (a handoff's, or a watch that proposes one action); and, for the auditor's review
+ * of another run, that run and the provider family that ran it, so the gateway can pick a
+ * reviewer of a different family (contract "Model routing").
+ */
+async function runHints(db: AgentDb, tenantId: string, run: RunRow, signal: SignalRow | null): Promise<RunHints> {
+  const actions = signal ? signalActions(signal) : [];
+  return {
+    mode: run.mode ?? "live",
+    expected_action_id: actions.length === 1 ? actions[0] : null,
+    review_of: signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null,
+  };
+}
+
+async function reviewedRun(db: AgentDb, tenantId: string, specialistId: string, signal: SignalRow): Promise<RunHints["review_of"]> {
+  if (specialistId !== "independent_auditor" || signal.subject_aggregate !== "coordination_run" || !signal.subject_id) return null;
+  const reviewed = await db
+    .prepare("SELECT run_id, close_json FROM agent_runs WHERE tenant_id = ? AND run_id = ?")
+    .bind(tenantId, signal.subject_id)
+    .first<{ run_id: string; close_json: string | null }>();
+  const provider = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model?.provider : undefined;
+  return reviewed && typeof provider === "string" ? { run_id: reviewed.run_id, provider } : null;
 }
 
 export async function getRun(db: AgentDb, tenantId: string, runId: string): Promise<RunRow | null> {
@@ -410,9 +451,13 @@ export async function proposeStep(
   input: ProposeInput,
   nowMs: number,
   notify: Notify | null = null,
-): Promise<StepRow | StoreError> {
+): Promise<StepRow | { shadow: ShadowStepRow } | StoreError> {
   const argsJson = canonicalJson(input.args ?? null);
   const argsSha = await sha256Hex(argsJson);
+  const priorShadow = await db.prepare("SELECT * FROM agent_shadow_steps WHERE run_id = ? AND step_key = ?").bind(run.run_id, input.step_key).first<ShadowStepRow>();
+  if (priorShadow) {
+    return priorShadow.action_id === input.action_id && priorShadow.args_sha256 === argsSha ? { shadow: priorShadow } : { error: "step_key_conflict", status: 409 };
+  }
   const prior = await stepByKey(db, run.run_id, input.step_key);
   if (prior) {
     const replay = await replayStep(db, tenantId, run, prior, input, argsSha);
@@ -420,9 +465,10 @@ export async function proposeStep(
     await executeStep(db, tenantId, run, replay, new Date(nowMs).toISOString(), notify);
     return (await stepByKey(db, run.run_id, input.step_key)) ?? replay;
   }
+  // Shadow steps count toward the run's step ceiling like receipts do.
   const count = await db
-    .prepare("SELECT COUNT(*) AS steps FROM agent_run_steps WHERE run_id = ?")
-    .bind(run.run_id)
+    .prepare("SELECT (SELECT COUNT(*) FROM agent_run_steps WHERE run_id = ?) + (SELECT COUNT(*) FROM agent_shadow_steps WHERE run_id = ?) AS steps")
+    .bind(run.run_id, run.run_id)
     .first<{ steps: number }>();
   const context = runContext(run);
   // Every cited fact is read again now; one this Worker cannot read is unverifiable, never current.
@@ -473,6 +519,32 @@ export async function proposeStep(
     };
   }
   const now = new Date(nowMs).toISOString();
+  // A shadowed action is decided as it would be, then recorded as a shadow step: no receipt, permit,
+  // person, handoff or effect can come of it (migration 0203).
+  // A step past the run's ceiling is not diverted: it abstains as a receipt that names a person.
+  if (!decision.reason_codes.includes("ceiling_reached") && (await divertsToShadow(db, tenantId, run, input.action_id))) {
+    const signal = await db
+      .prepare("SELECT subject_aggregate, subject_id FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+      .bind(tenantId, run.signal_id)
+      .first<{ subject_aggregate: string | null; subject_id: string | null }>();
+    const sources = input.citations.map((citation) => ({
+      fact_id: citation.fact_id,
+      version: citation.version,
+      hash: snapshot.get(citation.fact_id)?.hash ?? null,
+    }));
+    const shadow = await recordShadowStep(
+      db,
+      tenantId,
+      { run_id: run.run_id, specialist_id: run.specialist_id, subject_aggregate: signal?.subject_aggregate, subject_id: signal?.subject_id },
+      input,
+      argsJson,
+      argsSha,
+      sources,
+      decision,
+      now,
+    );
+    return "error" in shadow ? shadow : { shadow };
+  }
   const person = decision.reviewer_role ? await namedPerson(db, tenantId, decision.reviewer_role) : null;
   const protective = catalogAction(input.action_id)?.protective === true;
   const delegatedCeiling = !protective && decision.delegation_id ? delegation?.ceiling : null;
@@ -884,18 +956,8 @@ const CLOSE_SCHEMA: JsonSchema = {
     detail: { type: ["string", "null"], maxLength: 300 },
     // Checked separately: against the run output schema when the run produced output.
     output: { type: "null" },
-    model: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      required: ["provider", "model", "models_used", "auth_mode", "tier"],
-      properties: {
-        provider: { type: "string", maxLength: 32 },
-        model: { type: "string", maxLength: 128 },
-        models_used: { type: "array", maxItems: 8, items: { type: "string", maxLength: 128 } },
-        auth_mode: { type: "string", maxLength: 32 },
-        tier: { type: "string", maxLength: 16 },
-      },
-    },
+    // Checked separately: a host on gateway config v2 also reports its route (MODEL_ROUTED_SCHEMA).
+    model: { type: "null" },
     hashes: {
       type: ["object", "null"],
       additionalProperties: false,
@@ -924,7 +986,39 @@ const CLOSE_SCHEMA: JsonSchema = {
   },
 };
 
+const MODEL_PROPERTIES: Record<string, JsonSchema> = {
+  provider: { type: "string", maxLength: 32 },
+  model: { type: "string", maxLength: 128 },
+  models_used: { type: "array", maxItems: 8, items: { type: "string", maxLength: 128 } },
+  auth_mode: { type: "string", maxLength: 32 },
+  tier: { type: "string", maxLength: 16 },
+};
+const MODEL_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: Object.keys(MODEL_PROPERTIES),
+  properties: MODEL_PROPERTIES,
+};
+const MODEL_ROUTED_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [...Object.keys(MODEL_PROPERTIES), "route_id", "review_of", "mode"],
+  properties: {
+    ...MODEL_PROPERTIES,
+    route_id: { type: "string", pattern: "^[a-z][a-z0-9_.]{1,80}$" },
+    review_of: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["run_id", "provider"],
+      properties: { run_id: { type: "string", maxLength: 80 }, provider: { type: "string", maxLength: 32 } },
+    },
+    mode: { type: "string", enum: ["live", "shadow"] },
+  },
+};
+
 export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
+
+const PROVIDER_FAMILIES = new Set(["claude", "codex"]);
 
 const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   kill_switch: "provider_unavailable",
@@ -938,6 +1032,9 @@ const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   ledger_unavailable: "ceiling_reached",
   invalid_output: "no_progress",
   model_mismatch: "provider_unavailable",
+  no_independent_route: "provider_unavailable",
+  no_qualified_route: "no_qualified_route",
+  unknown_run_mode: "policy_missing",
   unknown_specialist: "policy_missing",
   tier_not_allowed: "policy_missing",
   specialist_unavailable: "policy_missing",
@@ -971,6 +1068,18 @@ export async function closeRun(
     const decision = close.output?.decision;
     result = decision === "abstain" ? "abstained" : decision === "escalate" ? "escalated" : "completed";
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
+  }
+  // Per-run independence (contract "Model routing"): an audit of another run that came back from
+  // the same provider family as that run is not an audit, so it abstains instead of completing.
+  if (close.status === "ok" && run.specialist_id === "independent_auditor") {
+    const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
+    const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
+    const provider = (body as { model?: { provider?: unknown } | null }).model?.provider;
+    // Fails closed: the audit must name a known family, and a different one from the reviewed run.
+    if (reviewed && (typeof provider !== "string" || !PROVIDER_FAMILIES.has(provider) || provider === reviewed.provider)) {
+      result = "abstained";
+      reasonCode = "provider_unavailable";
+    }
   }
   // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
   // closes, but its drafts are withheld from the record, counted and never kept.
@@ -1054,7 +1163,12 @@ function closeShapeValid(body: unknown): boolean {
     if (typeof (call as { tool: unknown }).tool !== "string" || (call as { tool: string }).tool.length > 64) return false;
   }
   if (canonicalJson(calls).length > 65_536) return false;
-  return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null }).length === 0;
+  const model = value.model;
+  if (model !== null) {
+    const routed = typeof model === "object" && !Array.isArray(model) && Object.hasOwn(model as object, "route_id");
+    if (validate(routed ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA, model).length > 0) return false;
+  }
+  return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null, model: null }).length === 0;
 }
 
 // ---------------------------------------------------------------------------------------------

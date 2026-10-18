@@ -43,7 +43,7 @@ class SqliteD1 {
       );
       this.raw.exec(readFileSync(new URL("../migrations/0201_agent_delegation.sql", import.meta.url), "utf8"));
       // The operating core that shared-memory subjects resolve against, and the fact-version ledger.
-      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql"])
+      for (const file of ["0001_init.sql", "0090_operating_core.sql", "0202_agent_fact_versions.sql", "0203_agent_shadow_agreement.sql"])
         this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const user = this.raw.prepare(
@@ -304,6 +304,12 @@ test("closing records the result; an abstention always leaves a receipt that nam
   assert.equal(receipt?.needs_from_you.reviewer_role, "sales");
   // No sales user exists, so the escalation order falls through to ops.
   assert.equal((receipt?.needs_from_you as { person_id: string }).person_id, "appu_ops_00001");
+  // A route with no qualified model abstains under its own code, not as an unavailable provider.
+  const unqualified = await signal(db, { dedupe_key: "lead-intake:L-4", subject: { aggregate: "lead", id: "L-4" } });
+  const noRoute = (await call("POST", "/api/v1/agents/runs", { signal_id: unqualified, specialist_id: "lead_concierge", host_run_key: "q".repeat(40) })).body;
+  assert.equal((await call("POST", `/api/v1/agents/runs/${noRoute.run_id}/close`, close({ status: "abstained", reason: "no_qualified_route", detail: null, output: null, model: null, hashes: null, tool_calls: [] }))).body.terminal, "abstained");
+  const codes = db.raw.prepare("SELECT reason_code FROM agent_run_steps WHERE run_id = ? AND action_id = 'exception.escalate'").all(noRoute.run_id) as Array<{ reason_code: string }>;
+  assert.deepEqual(codes.map((row) => row.reason_code), ["no_qualified_route"]);
 
   const escalate = await signal(db, { dedupe_key: "lead-intake:L-3", subject: { aggregate: "lead", id: "L-3" } });
   const escalated = (await call("POST", "/api/v1/agents/runs", { signal_id: escalate, specialist_id: "lead_concierge", host_run_key: "e".repeat(40) })).body;
@@ -398,6 +404,9 @@ test("the agent host's own client and runner work end to end against these route
             output: OUTPUT,
             specialist: r.specialist,
             tier: r.tier,
+            // This Worker sends routing fields, so the host closes with the route the gateway took.
+            routeId: "sol",
+            reviewOf: null,
             provider: "codex",
             model: "gpt-6.1-sol",
             modelsUsed: [],

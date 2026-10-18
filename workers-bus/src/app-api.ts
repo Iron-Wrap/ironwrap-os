@@ -195,6 +195,7 @@ import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
 import { handleWorkPackageStopReleaseRoute } from "./work-package-stop-release.ts";
+import { handleCrewRosterRoute } from "./crew-roster.ts";
 import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uploads.ts";
 import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
 import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
@@ -807,6 +808,12 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/work-packages/")) {
     const stopReleaseResponse = await handleWorkPackageStopReleaseRoute(req, env, auth);
     if (stopReleaseResponse) return stopReleaseResponse;
+  }
+  // Crews and their members are set by an owner or ops person only (crew-roster.ts): scheduling
+  // reads this roster, and nothing else writes it.
+  if (url.pathname.startsWith("/api/v1/admin/crews")) {
+    const rosterResponse = await handleCrewRosterRoute(req, env, auth);
+    if (rosterResponse) return rosterResponse;
   }
   // The pipeline board owns `/api/v1/pipelines` outright, and `/api/v1/admin/pipelines` with it:
   // the administration commands reshape exactly the model the board routes read, so one sub-router

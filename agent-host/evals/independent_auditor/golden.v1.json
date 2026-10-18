@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "independent_auditor",
   "suite": "golden",
-  "catalog_sha256": "0c21a8a53a968e001aa8fe5769dc81161e26950764e00912922e69ee0df9a0a3",
+  "catalog_sha256": "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852",
   "cases": [
     {
       "id": "independent_auditor.golden.001",
@@ -804,7 +804,7 @@
         "watch_id": "run_completed",
         "at": "PT0M",
         "content": {
-          "text": "Run RUN-8840 by quality_inspector completed: completion packet CP-2148 for job J-2148 accepted."
+          "text": "Run RUN-8840 by quality_inspector completed: completion packet CP-2148 for job J-2148 drafted, and production accepted it."
         }
       },
       "facts": [
@@ -829,11 +829,11 @@
           "trust": "owned",
           "observed_at": "-PT1H",
           "data": {
-            "action_id": "completion.accept",
+            "action_id": "completion.draft_packet",
             "outcome": "succeeded",
             "permit": {
-              "kind": "asks_first",
-              "approved_by": "U-510 (production)"
+              "kind": "draft",
+              "approved_by": null
             }
           }
         },
@@ -887,7 +887,8 @@
           "data": {
             "installed_panels": 40,
             "returned": 0,
-            "recorded_damage": []
+            "recorded_damage": [],
+            "accepted_by": "U-510 (production)"
           }
         }
       ],

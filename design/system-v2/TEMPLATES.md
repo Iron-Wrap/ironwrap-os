@@ -313,6 +313,7 @@ auditor, launch rule or proof-first rule (contract delegation rules 7 and 10) �
 | People only | `H` | Needs you for a person who may do it, and the names of who may ("Only you or Tom Lachance can release it") | A link to the decision ("Review the work stop"); never an action | Done by {name} |
 | Always on: protects you | `protective` | Shown after it acted: Held receipt or Done for you ("Payments held since 08:14 by AI bookkeeper") | none on the protection; lifting it is its own People only or Always asks first decision, reached by a link | — |
 | Off until you turn it on | `off_until_enabled` | Listed only in a "What it may do" side component; nothing runs | link "See in Settings › AI team" (owner only, surface `settings_ai_team`, **needed**) | — |
+| Practice only | `shadow` (the owner's setting, never a start state) | Nothing is sent or changed; the person does the real work as before | none in a generated view (the setting lives in Settings › AI team) | A "Practice run" receipt beside what the person did, never under Done for you or in Decisions; a hold or a pause stops practice runs and keeps the setting |
 | Paused / Paused here | setting / state | Nothing new starts; items already waiting stay | none | — |
 
 **Launch rule.** At launch every action with an outside effect asks first. The renderer refuses a spec that offers

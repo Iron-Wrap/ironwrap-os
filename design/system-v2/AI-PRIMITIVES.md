@@ -101,7 +101,8 @@ The contract (`docs/AI-TEAM-CONTRACT.md`, JSON block `ironwrap_ai_team_contract_
 | Contract field | Where it shows |
 |---|---|
 | specialist_id | Badge and "AI ..." name (`display_name` from the contract) |
-| run_id, action_id | System details |
+| action_id | The action's `name` from the contract ("sending a customer message"); the id only in System details |
+| run_id | System details |
 | did | "Did" row and the card title |
 | doing | "Doing" row; state Working on it |
 | needs_from_you (reviewer_role, person_id, ask) | "Needs you" row, the one primary action and who may decide |
@@ -126,6 +127,7 @@ Outcome and policy result to words:
 | outcome abstained: fact_missing, fact_stale, fact_conflict, citation_unverifiable | Held: a fact is missing / out of date / two records disagree / the source could not be checked |
 | outcome abstained: ceiling_reached | Held: it reached the limit you set |
 | outcome abstained: provider_unavailable | Held: its AI service is not answering; "Do it myself" |
+| outcome abstained: no_qualified_route | Held: no AI model is cleared for this work yet; "Do it myself" |
 | outcome abstained: injection_suspected | Held: the message looked like an attempt to trick it; a person reads it |
 | outcome abstained: person_requested | Held: the customer asked for a person |
 | outcome abstained: action_unregistered, policy_missing, out_of_scope, no_progress | Held: this is not something it may do; a person decides |
@@ -133,14 +135,18 @@ Outcome and policy result to words:
 | outcome abstained: emergency | Held: an emergency; it paged a person and does nothing else |
 
 Delegation in the contract: `default_delegation` asks_first → "Asks first"; within_limits → "Acts within your
-limits"; off_until_enabled → "Off until you turn it on". `human_only` (12 actions: delegation.set, policy.activate,
-acceptance.customer_decision, terms.legal_signoff, safety_stop.release, payee.change_details, payee.unfreeze,
-refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "People only" with no control.
+limits"; off_until_enabled → "Off until you turn it on". The owner's `shadow` setting, never a start state → "Practice
+only"; its receipts read "Practice run" and never show under Done for you or in Decisions. `human_only` (16 actions:
+delegation.set, policy.activate, settings.apply, onboarding.go_live, acceptance.customer_decision,
+terms.legal_signoff, safety_stop.release, hold_point.release, completion.accept, payee.change_details,
+payee.unfreeze, refund.issue, write_off.record, filing.submit, gate.waive, access.change) → "People only" with no
+control.
 `protective` (17 actions: stop, hold, block, freeze, escalate, quarantine, page, revoke a portal link, raise a finding,
 hold a specialist) → "Always on: protects you": never "Asks first", and they keep running while a specialist or the
-whole team is paused. `delegable: false` with asks_first (18 actions, for example storm_mode.propose,
-inbound.release, consent.record, gate.clear, hold_point.release, claim.approve, finding.close) → "Always asks first"
-with no control. Contract version: `6efb04a5` on main (16 specialists, 156 actions, 115 watches; adds crew_item.propose_resolution, A1, field_safety, watch crew_item_unconfirmed); a copy for builders
+whole team is paused. `delegable: false` with asks_first (17 actions, for example storm_mode.propose,
+inbound.release, consent.record, gate.clear, claim.approve, finding.close) → "Always asks first" with no control.
+Contract version: catalog sha `a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852` (16 specialists,
+162 actions, 115 watches; every action has a plain `name`); a copy for builders
 is `output/figma-v2/ai-kit/AI-TEAM-CONTRACT.md` and `contract.json`.
 
 ## Where the primitives go

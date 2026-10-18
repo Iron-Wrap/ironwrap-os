@@ -655,7 +655,7 @@ test("documentation gate keeps the AI auditor out of a specialist hold's reach",
 });
 
 test("documentation gate keeps the preparation of a people-only act at A1", () => {
-  for (const action of ["payee.unfreeze_prepare", "safety_stop.release_prepare"]) {
+  for (const action of ["payee.unfreeze_prepare", "safety_stop.release_prepare", "access.prepare_change"]) {
     rejectsAiTeamEdit(
       "ironwrap-ai-team-prepare-",
       (content) => content.replace(
@@ -675,6 +675,69 @@ test("documentation gate keeps a safety-stop release a people-only act", () => {
       '$1"A3"',
     ),
     /safety_stop\.release: the owner's launch rule requires class H/,
+  );
+});
+
+test("documentation gate keeps every AI team action name plain and its own", () => {
+  for (const [name, pattern] of [
+    ["staff.notify", /staff\.notify: name must be a lower-case phrase/],
+    ["Notifying staff", /staff\.notify: name must be a lower-case phrase/],
+    ["notifying staff in 2 places", /staff\.notify: name must be a lower-case phrase/],
+    ["staff notified", /staff\.notify: name must be a lower-case phrase/],
+    ["string the lights", /staff\.notify: name must be a lower-case phrase/],
+    ["ring the office", /staff\.notify: name must be a lower-case phrase/],
+    ["adding a note", /staff\.notify: name "adding a note" repeats note\.add's/],
+  ]) {
+    rejectsAiTeamEdit(
+      "ironwrap-ai-team-name-",
+      (content) => content.replace('"name": "notifying staff"', `"name": ${JSON.stringify(name)}`),
+      pattern,
+    );
+  }
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-name-missing-",
+    (content) => content.replace(', "name": "notifying staff"', ""),
+    /staff\.notify: name must be a lower-case phrase/,
+  );
+});
+
+test("documentation gate keeps the practice-run permit kind on receipts", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-permit-kinds-",
+    (content) => content.replace('"within_limits", "asks_first", "shadow"]', '"within_limits", "asks_first"]'),
+    /receipt\.permit_kinds must include shadow/,
+  );
+});
+
+test("documentation gate keeps physical acceptance and going live people-only acts", () => {
+  for (const action of ["completion.accept", "hold_point.release", "onboarding.go_live"]) {
+    rejectsAiTeamEdit(
+      "ironwrap-ai-team-people-only-",
+      (content) => content.replace(
+        new RegExp(`("action_id": "${action.replaceAll(".", "\\.")}", [^\\n]*?"autonomy": )"H"`),
+        '$1"A3"',
+      ),
+      new RegExp(`${action.replaceAll(".", "\\.")}: the owner's launch rule requires class H`),
+    );
+  }
+});
+
+test("documentation gate keeps settings a people-only act that no agent action writes", () => {
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-settings-aggregate-",
+    (content) => content.replace(
+      '"action_id": "import.retry_failed", "owners": ["orchestrator"], "aggregate": "import_run"',
+      '"action_id": "import.retry_failed", "owners": ["orchestrator"], "aggregate": "settings"',
+    ),
+    /import\.retry_failed: an A2 or A3 action may not act on settings/,
+  );
+  rejectsAiTeamEdit(
+    "ironwrap-ai-team-settings-apply-",
+    (content) => content.replace(
+      /("action_id": "settings\.apply", [^\n]*?"autonomy": )"H"/,
+      '$1"A3"',
+    ),
+    /settings\.apply: the owner's launch rule requires class H/,
   );
 });
 

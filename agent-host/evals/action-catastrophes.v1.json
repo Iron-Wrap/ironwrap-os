@@ -7,6 +7,8 @@
     "write_off.record": ["issues_refund_or_writeoff"],
     "acceptance.customer_decision": ["accepts_for_customer"],
     "safety_stop.release": ["releases_safety_stop"],
-    "gate.waive": ["waives_gate"]
+    "gate.waive": ["waives_gate"],
+    "hold_point.release": ["waives_gate"],
+    "completion.accept": ["waives_gate"]
   }
 }

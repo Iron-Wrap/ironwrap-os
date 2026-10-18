@@ -309,7 +309,8 @@
       // Google Doc template id for proposal generation; empty disables the action.
       "PROPOSAL_TEMPLATE_DOC_ID": "",
       "DEDUP_WINDOW_HOURS": "72",
-      "STUCK_THRESHOLD_MIN": "15"
+      "STUCK_THRESHOLD_MIN": "15",
+      "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
     }
   },
 
@@ -526,7 +527,8 @@
           "ESTIMATOR_PRICE_LIST_JSON": "",
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",
-          "STUCK_THRESHOLD_MIN": "15"
+          "STUCK_THRESHOLD_MIN": "15",
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": ""
         }
       }
     },
@@ -771,7 +773,14 @@
           "ESTIMATOR_PRICE_LIST_JSON": "",
           "PROPOSAL_TEMPLATE_DOC_ID": "",
           "DEDUP_WINDOW_HOURS": "72",
-          "STUCK_THRESHOLD_MIN": "15"
+          "STUCK_THRESHOLD_MIN": "15",
+          // SYNTHETIC QA commercial authority policy (owner-approved QA path, native-first): it opens
+          // the D1 commercial routes for synthetic synth-seed records only. Every limit is synthetic:
+          // a 365-day validity window, quotes up to
+          // 10000000 cents, owner and worker (staff) actors, never agents. production and local
+          // carry "" and keep the commercial write path closed. When the window lapses the QA seed
+          // stops with policy_expired; renewal is that event's one-line edit of valid_from/valid_until.
+          "COMMERCIAL_AUTHORITY_POLICY_JSON": "{\"schema_version\":\"ironwrap.commercial-authority-policy.v1\",\"policy_id\":\"qa-synthetic-commercial-policy\",\"policy_version\":\"v1\",\"tenant_id\":\"ironwrap\",\"status\":\"active\",\"valid_from\":\"2026-10-18T19:00:00.000Z\",\"valid_until\":\"2027-10-18T19:00:00.000Z\",\"max_fact_age_seconds\":600,\"max_permit_lifetime_seconds\":300,\"allowed_actions\":[\"lead.triage.record\",\"quote.revision.record\",\"proposal.revision.record\",\"proposal.publish\",\"proposal.withdraw\"],\"allowed_actor_types\":[\"owner\",\"worker\"],\"max_quote_total_cents\":10000000}"
         }
       }
     }

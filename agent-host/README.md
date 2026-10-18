@@ -6,10 +6,11 @@ or a provider directly. Every model output is an untrusted proposal under
 [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](../docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md) and the
 coordination loop in [`docs/AI-NATIVE-ARCHITECTURE.md`](../docs/AI-NATIVE-ARCHITECTURE.md).
 
-This package holds the provider gateway (`src/gateway/`) and the host service (`src/host/`). The
-Worker-side coordination record, signal transport, policy decisions and receipts live in
-`workers-bus/src/agents/`. Shared-memory read models, standing-watch scheduling and the release
-replay harness remain later slices. `specialists/` and `evals/` are owned by the specialist track.
+This package holds the provider gateway (`src/gateway/`), the host service (`src/host/`) and the
+replay and qualification runner (`src/replay/`). The Worker-side coordination record, signal
+transport, policy decisions and receipts live in `workers-bus/src/agents/`. Shared-memory read
+models and standing-watch scheduling remain later slices. `specialists/` and `evals/` are owned by
+the specialist track.
 
 ## Provider gateway
 
@@ -273,6 +274,77 @@ audit of Codex-proposed work that must run on Claude, and prints status, route, 
 the models used and cost; a call fails when its run reports no model used.
 It spends a few tokens of the sign-ins and never runs in CI.
 
+## Replay and qualification runner
+
+`src/replay/` runs the specialist evaluations on the production routes, as
+[`evals/README.md`](evals/README.md) "Harness interface" and "Qualification run" define them. It
+reads the local sign-ins like `npm run smoke` and never runs in CI.
+
+A qualification binds a route (provider, model, effort) and a release. `src/host/release.ts`
+defines the release hash once: the SHA-256 of the canonical JSON of {specialist_id,
+playbook_sha256, allowlist_sha256, common_sha256, catalog_sha256}, each file hashed over its exact
+bytes. The owner records it with the report hash (`POST /api/v1/agent-team/qualifications`).
+
+```bash
+npm run qualify --prefix agent-host -- --stage pilot --start     # --resume to continue; one is required
+npm run replay --prefix agent-host -- --specialist orchestrator --case orchestrator.golden.001
+```
+
+- A case becomes a production-shaped run: its signal and facts form the Signal and the context
+  snapshot (case times resolved against the case clock, the signal first as untrusted text), the
+  specialist loads as in production, and the production `buildRunInput` assembles the input. The
+  replay offers the specialist's full allowlist, worded and ordered as the Worker words its tools,
+  with open arguments: the cases follow the contract's argument conventions, and the Worker registry
+  has strict schemas for only a few actions, some under other names. A production run sees only the
+  actions the registry binds, so `prompt_sha256` matches production only once the registry exposes
+  the same actions.
+- The case clock is a fixed instant, 14:00 in Edmonton on a summer weekday, unless the case carries
+  `clock`: `{ "season": "winter|spring|summer|fall", "weekday": "monday".."sunday", "local_time":
+  "HH:MM" }` in Edmonton local time, with no calendar date. The season picks a month (winter
+  January, spring April, summer July, fall October, in the default instant's year), the weekday the
+  first such day on or after the 8th, and the time is Edmonton's on that day, standard or daylight
+  time as Intl reports it. A stage refuses a malformed clock before any run.
+- Like every production audit, an auditor run names the run it reviews (`reviewOf`), here with the
+  one family all proposer routes use, so it runs on that family's audit route (`claude_opus` for
+  Codex work). A stage refuses to qualify the auditor while proposer routes span both families.
+- The provider CLI reaches the stdio action server `src/replay/tool-server.ts`, which answers from
+  the case alone. An A0 read returns the case facts it names. Every other call is captured, never
+  executed, and answered with the Worker's deterministic decision: drafted for A1, escalated for a
+  protective action, awaiting approval for other A2 and A3 actions, abstained for an unknown,
+  wrong-version or stale citation.
+- Runs go through an eval gateway (`qualification` option, `scope: "eval"`) whose state directory
+  is `<output_dir>/<stage>/gateway` (`<output_dir>/replay/gateway` for a single-case replay, and
+  `<output_dir>/gateway` when `ledger.per_stage` is false), so each stage books in its own
+  `gateway-usage-eval.jsonl` and the production ledger is never written. That gateway looks for its `KILL` file there as well: the
+  host's `KILL` file does not stop qualification, while `AGENT_HOST_KILL=1` does.
+  `concurrency` caps the calls in flight per provider.
+  Each repetition is judged with `evals/judge.md` through the judge key on the other family's
+  route, and an invalid answer is asked again up to `judge.max_attempts`; `evals/score.mjs` merges
+  it and `evals/report.mjs` builds the report.
+- `gateway_reasons` decide what an abstention does. `pause` stops new work, keeps progress and
+  records `retry_at`, the latest `retryAt`; an abstention without one sets
+  `resumable_by_waiting: false`, because waiting alone cannot clear it. `stop` stops the stage.
+  `invalid_output` is a failed repetition with a transcript. A resume before `retry_at` is refused,
+  also when a stop came with the pause.
+- Output goes under `output_dir` (git-ignored; `--output` overrides it). Each stage directory holds
+  `state.json` (status, halts, pending repetitions), `manifest.jsonl` (transcripts and judgements
+  keyed by specialist, route, case, repetition, `prompt_sha256` and `catalog_sha256`), `calls.jsonl`
+  (the usage of every gateway call), `report.json` and `report.md`. A resume skips finished
+  repetitions and re-runs those recorded under other hashes; pilot repetitions on production routes
+  count as repetition 1 of the waves. A report's usage counts only its own stage's calls, so a wave
+  that took pilot repetitions shows fewer runs and judge calls than repetitions scored; the pilot
+  report holds their cost. Single-case replays go to `replay/` and always run.
+- A wave refuses to start while `evals/action-catastrophes.v1.json` is missing, because its verdict
+  needs the mapped catastrophe checks. The pilot runs without it and its report says so in
+  `warnings`.
+- The CLI refuses a tree that fails `evals/validate.mjs --require-complete` before it reads any
+  sign-in. Exit codes: 0 complete, 2 refused, 3 paused, 4 stopped.
+
+Not automated: the orchestrator's start and resume signals; the usage meters (no reader is wired,
+so the pilot reports the quota as not visible and leaves that half of its gate to the orchestrator);
+picking production routes from the model comparison; re-sizing ledger ceilings after the pilot
+gate; and the history evaluation (`evals/history.v1.json`).
+
 ## Production
 
 The host runs as a container on the broker host, under systemd, with the same secret store,
@@ -310,8 +382,9 @@ platform binaries (`npm ci`) and a signed-in credential.
 Locally-validated: `npm test` and `npm run typecheck` in this package, and
 `node --test tools/start-local-runtime.test.mjs` for the local launch. The Worker agent API is source-present and its authenticated host-client integration is tested
 against SQLite with D1 transaction semantics. Unbound actions abstain with `policy_missing`; the
-contract catalog alone does not implement their effects. Shared-memory read models, standing-watch
-scheduling and provider replay remain open. Live proof is blocked on an owner-provisioned Worker
+contract catalog alone does not implement their effects. Shared-memory read models and
+standing-watch scheduling remain open. The replay and qualification runner is tested with injected
+fakes only; no qualification stage has run on a provider. Live proof is blocked on an owner-provisioned Worker
 `AGENT_HOST_TOKEN`, Claude OAuth sign-in and a dedicated Codex ChatGPT sign-in, followed by the
 authenticated runtime journey and `npm run smoke`. No provider or QA activation is established by
 these local checks.

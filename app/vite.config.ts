@@ -291,12 +291,16 @@ export default defineConfig({
         // it saves round trips but drags office-only code into the field boot's script
         // evaluation, and the total-blocking-time cost outweighs the latency saved.
         //
-        // Total blocking time only counts the part of a task that runs past 50 ms, so a
-        // single 250 ms evaluation task costs 200 ms of TBT while five 50 ms tasks cost
-        // nothing. Evaluating the whole framework as one entry chunk produced exactly
-        // the former on the CI runner. These groups are all statically reachable from
-        // the entry, so the browser preloads them in the same wave: the bytes and the
-        // round trips stay where they were and only the evaluation is broken up.
+        // The libraries the boot needs travel in two chunks, React's and everything else's. Chrome
+        // evaluates the entry's whole static module graph in one task however many chunks carry it
+        // (the paired-device traces on Chrome 149 and 155 each show a single `v8.evaluateModule`),
+        // so a chunk per library never split that task; the compile hints (bootCompileHints) are
+        // what shortened it. What the chunk count does change is how many responses are in flight
+        // beside the render-blocking stylesheet, and the measured profile's throttle shares the
+        // link evenly between them: with a chunk per library the stylesheet, and so first paint,
+        // landed ~170 ms later. Folding React in as well moved first paint a further ~100 ms but
+        // drew the optional Archivo face into the libraries' download window and cost the largest
+        // paint ~50 ms.
         codeSplitting: {
           groups: [
             {
@@ -304,21 +308,11 @@ export default defineConfig({
               test: /[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
               priority: 3,
             },
-            {
-              name: "router-vendor",
-              test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-router|router-core|history|store)[\\/]/,
-              priority: 3,
-            },
-            {
-              name: "query-vendor",
-              test: /[\\/]node_modules[\\/]@tanstack[\\/](?:react-query|query-core)[\\/]/,
-              priority: 3,
-            },
             // src/lib/zod-jitless.ts rides with zod: every chunk that builds a schema imports
             // this one, so its setting is in place before the first contract module runs.
             {
-              name: "contracts-vendor",
-              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge)[\\/]|[\\/]src[\\/]lib[\\/]zod-jitless\.ts$/,
+              name: "vendor",
+              test: /[\\/]node_modules[\\/](?:zod|tailwind-merge|@tanstack[\\/](?:react-router|router-core|history|store|react-query|query-core))[\\/]|[\\/]src[\\/]lib[\\/]zod-jitless\.ts$/,
               priority: 3,
             },
             // The cross-cutting app modules default to a chunk each — the session

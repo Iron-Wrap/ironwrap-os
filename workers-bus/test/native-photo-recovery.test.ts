@@ -121,11 +121,12 @@ test("0085 native photo evidence authority is complete in backup and restore con
       assignment(source, "REQUIRED_TRIGGER_BINDINGS").length,
       scalar(source, "REQUIRED_TRIGGER_COUNT"),
     );
-    // Pinned through 0200: privacy, crew-stop guards, durable writer claims and the AI team tables
+    // Pinned through 0200: privacy, crew-stop guards, the stop release record, durable writer
+    // claims and the AI team tables
     // and manual measurement history are included in both D1 inventories.
-    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 265);
-    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 376);
-    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 712);
+    assert.equal(scalar(source, "REQUIRED_TABLE_COUNT"), 266);
+    assert.equal(scalar(source, "REQUIRED_INDEX_COUNT"), 377);
+    assert.equal(scalar(source, "REQUIRED_TRIGGER_COUNT"), 717);
   }
 
   for (const [name, table] of INDEXES) {

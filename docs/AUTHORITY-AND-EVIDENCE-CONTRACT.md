@@ -272,13 +272,33 @@ words are never silently cut off: the request and offline outbox accept up to 4,
 If the crew needs to report a new hazard after the work package is already Blocked, a new durable
 `report_occurrence` safety action scoped to that work package records it without trying to stop
 the same package twice. The current native stop write records the absence; the office follow-up,
-the second-hazard screen and independent release gate still need verified consumers before this
+the second-hazard screen and the release route still need verified PWA consumers before this
 workflow is accepted.
 
-A correction reason alone cannot supersede a Blocked work package. Until an independently
-verified stop-release record is available, office reissue returns
-`work_package_stop_release_required` and the package stays Blocked. This is a safe hold, not a
-completed release workflow.
+A correction reason alone cannot supersede a Blocked work package: office reissue returns
+`work_package_stop_release_required` and the package stays Blocked until a person releases the
+stop. Releasing a crew stop is people-only (`safety_stop.release`, class H) and has one write path,
+`POST /api/v1/work-packages/{id}/stop-releases` (CSRF, and an `Idempotency-Key` equal to
+`X-Device-Action-Id`). It admits only a person's own cookie session, never an agent, automation,
+service token, effect runtime or MCP actor, in the owner, ops or production role, and never the
+person who raised the stop or the user on its receipt. The request names the exact Blocked version
+and stop event, cites one to ten verified, stored Work Package captures of the same tenant and job,
+and gives a reason; until a structured office follow-up record exists, that reason and evidence
+carry the follow-up. The append-only `work_package_stop_releases` record (migration `0145`) keeps
+the version, the stop and its device action, who raised and reported it, the releaser and their
+role at that moment, the independence facts, the evidence references with their stored checksums,
+and the reason. D1 re-checks those facts, then writes the record and returns the version to the
+status the stop interrupted in one statement, beside an immutable office-action manifest. An exact
+replay returns the original record, and a changed intent under the same key conflicts. `GET` on the
+same route returns the stop holding the version and every release. Only a release of the stop that
+holds that exact version lets the `0143` guards admit a status change away from Blocked or a
+supersession; a release of another version, or of an earlier stop on the same version, unlocks
+nothing. Refusals are distinct: `work_package_stop_release_person_required`,
+`work_package_stop_release_role_required` and `work_package_stop_release_independence_required`
+(403); `work_package_stop_release_evidence_required` (400); `work_package_not_blocked`,
+`work_package_stop_release_version_conflict`, `work_package_stop_release_stop_conflict`,
+`work_package_stop_already_released`, `work_package_stop_release_evidence_invalid` and
+`work_package_stop_release_replay_conflict` (409).
 
 ## Physical completion
 

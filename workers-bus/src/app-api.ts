@@ -193,6 +193,7 @@ import { parseAuthorityRequirements } from "./authority-records.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { handleInventoryRoute } from "./inventory-control-api.ts";
+import { handleWorkPackageStopReleaseRoute } from "./work-package-stop-release.ts";
 import { handleEvidenceContentRead, handleEvidenceUpload } from "./evidence-uploads.ts";
 import { handlePrivacyEvidenceAuditRoute } from "./privacy-evidence-audit.ts";
 import { handlePrivacyEvidenceDispositionRoute } from "./privacy-evidence-disposition.ts";
@@ -799,6 +800,12 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/inventory")) {
     const inventoryResponse = await handleInventoryRoute(req, env, auth);
     if (inventoryResponse) return inventoryResponse;
+  }
+  // Releasing a crew stop is people-only: the sub-router admits only a person's own cookie session
+  // in a releasing role who neither raised nor reported the stop (docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md).
+  if (url.pathname.startsWith("/api/v1/work-packages/")) {
+    const stopReleaseResponse = await handleWorkPackageStopReleaseRoute(req, env, auth);
+    if (stopReleaseResponse) return stopReleaseResponse;
   }
   // The pipeline board owns `/api/v1/pipelines` outright, and `/api/v1/admin/pipelines` with it:
   // the administration commands reshape exactly the model the board routes read, so one sub-router

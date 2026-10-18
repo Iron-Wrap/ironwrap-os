@@ -250,14 +250,15 @@ test("0072 commercial authority is complete in migration, backup, and restore in
   // These counts move with the migration chain, and moving them is the point: the backup and
   // restore scripts must name every object the chain defines, so a migration that adds one and
   // leaves these pinned is a backup set that would silently restore an incomplete database.
-  // The merged frontier through 0201 (0140 adds the service case batch guard; 0200 adds the AI
+  // The merged frontier through 0201 (0140 adds the service case batch guard; 0145 adds the Work
+  // Package stop release record; 0200 adds the AI
   // team coordination run, its steps, signals, event ledger and host heartbeats) includes the
   // automation recipient catalog, per-cron heartbeat, durable office intake receipts, and manual
   // measurement history.
   for (const [name, expected] of [
-    ["REQUIRED_TABLE_COUNT", 265],
-    ["REQUIRED_INDEX_COUNT", 376],
-    ["REQUIRED_TRIGGER_COUNT", 712],
+    ["REQUIRED_TABLE_COUNT", 266],
+    ["REQUIRED_INDEX_COUNT", 377],
+    ["REQUIRED_TRIGGER_COUNT", 717],
   ] as const) {
     assert.equal(countAssignment(backup, name), expected, `backup ${name}`);
     assert.equal(countAssignment(restore, name), expected, `restore ${name}`);
@@ -344,6 +345,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
     // receipt table, one index, and four guards. 0135 adds three manual measurement history
     // tables, two indexes, and twelve append-only, lineage, and head-pointer guards. 0140 adds
     // the service batch assertion table and its abort trigger; 0143 adds both crew-stop guards.
+    // 0145 adds the stop release record, one index, and five guards, and re-creates three guards.
     assert.deepEqual(
       { ...counts },
       // 0110 adds three company-setup tables and their named indexes. 0111 adds the office
@@ -351,7 +353,7 @@ test("the full schema matches the recovery frontier through 0201", () => {
       // 0113 adds the pipeline board; 0114 preserves both development capture kinds; 0118 adds
       // the capability-readiness contracts. The 0107/0108 work-package and job-file evidence
       // remains part of this recovery frontier.
-      { tables: 265, indexes: 376, triggers: 712 },
+      { tables: 266, indexes: 377, triggers: 717 },
     );
     assert.equal(
       db.prepare("PRAGMA integrity_check").get()!.integrity_check,

@@ -1268,6 +1268,7 @@ interface FieldWorkPackageEvidenceD1DbRow {
   physical_context_id: string;
   capture_completed_at: string | null;
   evidence_id: string;
+  checksum_sha256: string | null;
 }
 
 /** Read typed field evidence from the canonical D1 action/media receipts. */
@@ -1286,7 +1287,8 @@ const FIELD_EVIDENCE_SELECT = `SELECT a.device_action_id, a.user_id,
               a.evidence_correction_of, a.evidence_item_correction_of,
               a.work_package_release_attempt_id, a.correction_reason,
               a.work_object_type, a.work_object_id, a.physical_context_type,
-              a.physical_context_id, a.capture_completed_at, m.evidence_id
+              a.physical_context_id, a.capture_completed_at, m.evidence_id,
+              m.checksum_sha256
          FROM field_actions a
          JOIN field_action_media m ON m.device_action_id = a.device_action_id
          LEFT JOIN app_users u ON u.user_id = a.user_id AND u.tenant_id = a.tenant_id
@@ -1374,6 +1376,37 @@ export async function listJobEvidenceFromD1(
   }
   const rows = (result.results ?? []).map(fieldEvidenceRowFrom);
   return { rows: rows.slice(0, input.limit), more: rows.length > input.limit };
+}
+
+/**
+ * The named Work Package captures of one job, under the same trust predicates as every evidence
+ * read, each with the checksum of its stored object. A stop release cites evidence by id: an id
+ * that returns no row here is not verified evidence of that job in that tenant, and an id that
+ * returns more than one row is ambiguous, so the caller refuses both.
+ */
+export async function listJobEvidenceItemsFromD1(
+  env: AppEnv,
+  input: { tenantId: string; jobId: string; evidenceIds: readonly string[] },
+): Promise<Array<FieldWorkPackageEvidenceD1Row & { checksumSha256: string }> | null> {
+  if (input.evidenceIds.length === 0) return [];
+  let result: { results?: FieldWorkPackageEvidenceD1DbRow[] };
+  try {
+    result = await env.DB.prepare(
+      `${FIELD_EVIDENCE_SELECT}
+          AND a.job_id = ? AND a.work_package_id IS NOT NULL
+          AND m.evidence_id IN (${input.evidenceIds.map(() => "?").join(", ")})
+        ORDER BY m.evidence_id ASC, a.device_action_id ASC`,
+    )
+      .bind(input.tenantId, input.jobId, ...input.evidenceIds)
+      .all<FieldWorkPackageEvidenceD1DbRow>();
+  } catch (error) {
+    if (isMissingFieldEvidenceSchema(error)) return null;
+    throw error;
+  }
+  return (result.results ?? []).map((row) => ({
+    ...fieldEvidenceRowFrom(row),
+    checksumSha256: requiredD1Text(row.checksum_sha256, "checksum_sha256"),
+  }));
 }
 
 function fieldEvidenceRowFrom(

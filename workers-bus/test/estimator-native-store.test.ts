@@ -1144,11 +1144,12 @@ test("0081 Estimator authority is included in both D1 recovery contracts", () =>
       contract,
       /estimator_evidence_revisions_immutable_update=estimator_evidence_revisions/,
     );
-    // Pinned through 0200, including privacy, crew-stop guards, durable writer claims and the AI team tables,
+    // Pinned through 0200, including privacy, crew-stop guards, the stop release record, durable
+    // writer claims and the AI team tables,
     // durable office intake receipts, and manual measurement history.
-    assert.match(contract, /REQUIRED_TABLE_COUNT=265/);
-    assert.match(contract, /REQUIRED_INDEX_COUNT=376/);
-    assert.match(contract, /REQUIRED_TRIGGER_COUNT=712/);
+    assert.match(contract, /REQUIRED_TABLE_COUNT=266/);
+    assert.match(contract, /REQUIRED_INDEX_COUNT=377/);
+    assert.match(contract, /REQUIRED_TRIGGER_COUNT=717/);
   }
 });
 

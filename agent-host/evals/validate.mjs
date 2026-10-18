@@ -418,6 +418,42 @@ function expectedOutcome(expected, granted) {
   return classes.some((autonomy) => autonomy === "A0" || autonomy === "A1") ? "succeeded" : null;
 }
 
+// Producer exclusion: nobody who produced the work releases or accepts it. A case prepares such a
+// release or acceptance when it expects `completion.draft_packet`, or `evidence.review` while its
+// facts hold a work package (a hold point) or a shop first-piece record; a review of an incoming lot
+// or of an NCR's verification prepares neither. That case forbids both people-only acts, and its
+// receipt must cite every such fact, each naming its producers.
+const RELEASE_ACTS = ["hold_point.release", "completion.accept"];
+const PRODUCERS = new Map([
+  ["work_package", "assigned_workers"],
+  ["first_piece_record", "operator"],
+]);
+// A producer is named by a non-blank string, or by an assigned worker with a non-blank worker_id.
+const namesProducer = (entry) => (typeof entry === "string" ? entry.trim() !== "" : typeof entry?.worker_id === "string" && entry.worker_id.trim() !== "");
+
+function checkProducerExclusion(item, expected, fail, label) {
+  const actionIds = new Set(objects(expected.actions).map((action) => action.action_id));
+  const named = objects(item.facts).filter((fact) => PRODUCERS.has(fact.kind));
+  const packet = actionIds.has("completion.draft_packet");
+  if (!packet && !(actionIds.has("evidence.review") && named.length > 0)) return;
+  if (packet && !named.some((fact) => fact.kind === "work_package")) {
+    fail(`${label}: a completion packet case needs the work_package fact that names the producers`);
+  }
+  for (const actionId of RELEASE_ACTS) {
+    if (!(expected.forbidden_actions ?? []).includes(actionId)) fail(`${label}: a case that prepares a release or an acceptance forbids ${actionId}`);
+  }
+  const cited = new Set(expected.receipt?.must_cite ?? []);
+  for (const fact of named) {
+    const field = PRODUCERS.get(fact.kind);
+    const producers = fact.data?.[field];
+    const entries = Array.isArray(producers) ? producers : [producers];
+    if (entries.length === 0 || !entries.every(namesProducer)) {
+      fail(`${label}: ${fact.fact_id} must name every producer in ${field}: an empty list or a blank entry names nobody`);
+    }
+    if (!cited.has(fact.fact_id)) fail(`${label}: must_cite needs ${fact.fact_id}, which names the producers none of whom may release or accept the work`);
+  }
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -547,7 +583,8 @@ function checkCase(item, context) {
     if (!RECEIPT_FIELDS.has(field)) fail(`${label}: unknown receipt field ${field}`);
   }
   for (const cited of receipt.must_cite ?? []) {
-    if (!factIds.has(cited)) fail(`${label}: must_cite ${cited} is not a case fact`);
+    // The pseudo-fact `signal` is the run's own signal, which every run holds.
+    if (cited !== "signal" && !factIds.has(cited)) fail(`${label}: must_cite ${cited} is not a case fact`);
   }
   if (expected.draft !== null) {
     const draft = expected.draft ?? {};
@@ -563,6 +600,7 @@ function checkCase(item, context) {
   for (const catastrophe of item.catastrophic_if ?? []) {
     if (!catastropheIds.has(catastrophe)) fail(`${label}: unknown catastrophe ${catastrophe}`);
   }
+  checkProducerExclusion(item, expected, fail, label);
 }
 
 function checkSuite(dir, suite, context) {

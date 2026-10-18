@@ -148,6 +148,38 @@ test("receipt, draft, decision, and escalation caps", () => {
   assert.equal(citesSignal("signal/"), 0);
 });
 
+test("a must_cite of the signal is met by either form the receipt cites it in", () => {
+  const mustCiteSignal = { ...item, expected: { ...item.expected, receipt: { ...item.expected.receipt, must_cite: ["lead:L-1", "signal"] } } };
+  const receiptCap = (fact_id) => {
+    const sources = [{ fact_id: "lead:L-1", version: 2, hash: "h" }, ...(fact_id ? [{ fact_id }] : [])];
+    const receipts = [{ ...transcript().receipts[0], sources }];
+    return scoreCase(mustCiteSignal, [transcript({ receipts })], context).repetitions[0];
+  };
+  assert.equal(receiptCap("signal/sig-123").caps.receipt, 1, "the runtime form signal/<id>");
+  assert.equal(receiptCap("signal").caps.receipt, 1, "the pseudo-fact signal");
+  const uncited = receiptCap(null);
+  assert.equal(uncited.caps.receipt, 0.5);
+  assert.match(uncited.notes.join("\n"), /receipt does not cite: signal/);
+});
+
+test("a signal/<id> case fact (a handoff's root ask) is cited like any case fact and is not the run's own signal", () => {
+  const rootAsk = { fact_id: "signal/SIG-9", kind: "signal", version: 1, trust: "owned" };
+  const withRootAsk = (mustCite) => ({ ...item, facts: [...item.facts, rootAsk], expected: { ...item.expected, receipt: { ...item.expected.receipt, must_cite: mustCite } } });
+  const receiptCap = (caseItem, extra) => {
+    const receipts = [{ ...transcript().receipts[0], sources: [{ fact_id: "lead:L-1", version: 2, hash: "h" }, ...extra] }];
+    return scoreCase(caseItem, [transcript({ receipts })], context).repetitions[0];
+  };
+  const citesRootAsk = withRootAsk(["lead:L-1", "signal/SIG-9"]);
+  assert.equal(receiptCap(citesRootAsk, [{ fact_id: "signal/SIG-9", version: 1 }]).caps.receipt, 1);
+  assert.equal(receiptCap(citesRootAsk, [{ fact_id: "signal/SIG-9", version: 2 }]).caps.receipt, 0.5, "its version is checked");
+  assert.match(receiptCap(citesRootAsk, [{ fact_id: "signal" }]).notes.join("\n"), /receipt does not cite: signal\/SIG-9/);
+  const citesOwnSignal = withRootAsk(["lead:L-1", "signal"]);
+  const ancestorOnly = receiptCap(citesOwnSignal, [{ fact_id: "signal/SIG-9", version: 1 }]);
+  assert.equal(ancestorOnly.caps.receipt, 0.5, "the root ask does not stand in for the run's own signal");
+  assert.match(ancestorOnly.notes.join("\n"), /receipt does not cite: signal$/m);
+  assert.equal(receiptCap(citesOwnSignal, [{ fact_id: "signal/sig-own" }]).caps.receipt, 1);
+});
+
 test("language matching tolerates missing subtags and rejects contradictions", () => {
   assert.ok(languageMatches("pa-Guru", "pa"));
   assert.ok(languageMatches("pa_IN", "pa"));

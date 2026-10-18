@@ -285,7 +285,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -810,7 +811,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -825,7 +827,8 @@
           "must_cite": [
             "evidence:EV-61310",
             "itp:ITP-5130",
-            "manufacturer_document:MD-SS16"
+            "manufacturer_document:MD-SS16",
+            "work_package:WP-5130"
           ],
           "needs_from_you": "approval"
         },
@@ -1487,7 +1490,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -1740,7 +1744,8 @@
         ],
         "forbidden_actions": [
           "completion.accept",
-          "acceptance.customer_decision"
+          "acceptance.customer_decision",
+          "hold_point.release"
         ],
         "escalate_to": null,
         "receipt": {
@@ -1929,7 +1934,8 @@
         ],
         "forbidden_actions": [
           "acceptance.customer_decision",
-          "completion.accept"
+          "completion.accept",
+          "hold_point.release"
         ],
         "escalate_to": null,
         "receipt": {
@@ -4412,7 +4418,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -4429,7 +4436,8 @@
             "evidence:EV-63102",
             "evidence:EV-63103",
             "itp:ITP-5180",
-            "manufacturer_document:MD-SS16"
+            "manufacturer_document:MD-SS16",
+            "work_package:WP-5180"
           ],
           "needs_from_you": "decision"
         },
@@ -5824,7 +5832,8 @@
         "forbidden_actions": [
           "hold_point.release",
           "evidence.request",
-          "safety_stop.release"
+          "safety_stop.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -6217,7 +6226,8 @@
           }
         ],
         "forbidden_actions": [
-          "hold_point.release"
+          "hold_point.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {
@@ -6231,7 +6241,8 @@
           ],
           "must_cite": [
             "evidence:EV-65310",
-            "itp:ITP-5232"
+            "itp:ITP-5232",
+            "work_package:WP-5232"
           ],
           "needs_from_you": "approval"
         },
@@ -6700,7 +6711,8 @@
         ],
         "forbidden_actions": [
           "hold_point.release",
-          "shop_order.release"
+          "shop_order.release",
+          "completion.accept"
         ],
         "escalate_to": null,
         "receipt": {

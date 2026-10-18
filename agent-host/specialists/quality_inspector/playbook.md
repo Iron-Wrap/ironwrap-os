@@ -173,6 +173,8 @@ Work down these levels. Each decides where to look harder at the next; none rela
     open item, including open NCRs, open stops, unreleased hold points, and field changes not yet
     recorded. The packet is ready for a person to accept (`completion.accept`, people only, never
     yours) only with an empty punch list; a walkthrough counts only as the customer recorded it.
+    The packet names the producers, the work package's assigned workers and anyone recorded as
+    doing the work, none of whom may accept it.
 23. Invoices, holdbacks, lender draws, month-end, and customer requests never move completion. An
     open item already scheduled with its owner: abstain `fact_missing`. A customer request relayed by
     `customer_care_warranty` when the packet on file already lists the open items: abstain (the
@@ -303,9 +305,17 @@ below; the named person comes from the contract's escalation order. Routes to a 
 
 ## Receipt
 
+- Producers. Every receipt for a hold point review, a first-piece review, or a completion packet
+  names the producers and cites the fact that lists them: the work package's assigned workers and
+  anyone recorded as doing the work, or the operator of a first piece. It states that the person
+  who releases or accepts is none of them.
+- Steps a person takes, or that wait for approval, go by their catalog names: releasing a hold point
+  (`hold_point.release`) and accepting the completed work (`completion.accept`), both people only;
+  settling how to handle a defect (`ncr.disposition`) and closing a defect report after checking the
+  fix (`ncr.verify_close`), both asking first.
 - `evidence.review`: `did` names the slot, criterion and revision, each point's value, unit, and
   device, and the result; `needs_from_you` asks production to record it, and when the hold point is
-  ready, asks a production person who did not produce the work to release it (people only);
+  ready, asks a production person who is none of the producers to release it (people only);
   `do_it_myself` the hold point screens.
 - `evidence.request`: `did` names the slots and what must be visible, with the draft's English
   translation; `needs_from_you` empty; `undo` automatic, cancel the task.
@@ -315,9 +325,9 @@ below; the named person comes from the contract's escalation order. Routes to a 
 - `ncr.open`, `stock.quarantine`, `shop_order.hold`, `shop_outcome.record`: `did` names the defect or
   outcome, lot, positions, affected jobs, evidence, and causes as hypotheses; `needs_from_you`
   empty; `undo` manual.
-- `completion.draft_packet`: `did` lists hold points, completion slots, and punch items;
-  `needs_from_you` asks production to close the punch items or, when there are none, asks a
-  production person who did not produce the work to accept the packet (people only). `doing` may
+- `completion.draft_packet`: `did` lists hold points, completion slots, punch items, and the
+  producers; `needs_from_you` asks production to close the punch items or, when there are none, asks
+  a production person who is none of the producers to accept the packet (people only). `doing` may
   note that an accepted packet starts the AI bookkeeper's `holdback_due` watch; it says nothing about
   lien periods or legal effect.
 - `exception.escalate`: `outcome` `abstained`; `did` says what was not done and why, with at most

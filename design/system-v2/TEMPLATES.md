@@ -134,10 +134,10 @@ to System v2 or Board 6 components; components that do not exist yet are marked 
 
 | Kind | Props (literal words: W; bindings: B; row fields: F) | Draws with | Status |
 |---|---|---|---|
-| `record_heading` | `name` B; `identity` B[] (max 3); `kind_words` W ("Job record") | `Page header` with breadcrumb and identity line | kind **needed**; component variant **needed** |
+| `record_heading` | `name` B; `identity` B[] (max 3; `[]` for a view without a record); `kind_words` W ("Job record") | `Page header` with breadcrumb and identity line (no identity line when `identity` is `[]`) | kind **needed**; component variant **needed** |
 | `status_line` | `counts`: max 4 of {`value` B, `one` W, `other` W, `zero` W or null} | `Status line` | kind **needed**; component **needed** |
 | `summary_cells` | `cells` B; F: `title`, `lines`, `state`, `sources` (max 5 cells) | `Summary cell` | kind **needed**; component **needed** |
-| `macro_tile` | `label` W; `value` B; `line` B or null; `source` B or null | `AI/Macro tile` (Known, Not known yet) | Track E |
+| `macro_tile` | `label` W; `value` B; `line` B or null; `source` B or null | `Stat tile` (Known, Not known yet, Proposed, Out of date, Loading) | Track E |
 | `key_values` | `heading` W or null; `rows`: max 8 of {`label` W, `value` B} | `Key-value list` | Track E; component **needed** |
 | `list` | `heading` W or null; `rows` B; F: `title`, `meta` (max 3), `state`, `proposed`, `link`; `primary` | `List row` (+ `Signal chip`, `AI/Proposed value` Inline, `AI/Delegation`) | Track E |
 | `table` | `heading` W or null; `rows` B; `columns`: max 7 of {`label` W, `field` F}; `total`: column names to sum, or null | `Table` | Track E; component **needed** |
@@ -157,6 +157,10 @@ to System v2 or Board 6 components; components that do not exist yet are marked 
 | `filter_bar` | `filters`: max 4 of {`label` W, `field` F, `equals` value} | `Filter bar` ("All" is added by the renderer) | Track E; component **needed** |
 | `empty_hint` | `words` W; `link` index into `links` or null; `action` index into `actions` or null | `Empty state` | Track E |
 
+A view without a record (the `list`, `report` and `schedule` examples) still draws its title with `record_heading`:
+`identity` is `[]` and the view's kind words are its title ("Jobs that are stuck"). The renderer makes it from the
+spec's `title` when the `heading` slot is empty (4.1).
+
 Read-model field types decide how a bound value is drawn (registry, Track E): `text`, `money` (minor units and
 currency; Geist with tabular figures, every minor digit shown), `count`, `percent`, `measure` (value and unit),
 `when` (instant; formatted by place, section 6.5), `person`, `specialist`, `code` (kind label plus code, drawn as
@@ -174,14 +178,21 @@ Everything in this section is the renderer's. The model never writes it.
 Top to bottom, desktop: breadcrumb; `title` (or `record_heading`); the **scope line**; the `status` slot; then the
 template's own slots; then "Where this came from" (closed disclosure listing every data entry's `sources`).
 
+**Title of a view without a record.** When the `heading` slot is empty, the renderer draws the `title` with
+`record_heading`, `identity: []` and the view's kind words as its title: the `Page header` with breadcrumb and no
+identity line ("Ask IronWrap › Jobs that are stuck").
+
 **Scope line** (renderer-made from the data entries' fetch times and the provider read-back times the read models
 return): "Updated 10:40 · from QuickBooks today 10:31". "Updated" is the latest successful fetch. Each outside
 provider that a bound value depends on adds "from {provider} {read time}". At most two providers are named; more
 become "from QuickBooks and 2 more" with the list in "Where this came from". The scope line and the status line sit
-in one `Status line` strip with the clock glyph, as on every reference frame.
+in one `Status line` strip with the clock glyph, as on every reference frame. A record with `summary_cells` has no
+counts sentence: its strip shows the scope line only.
 
 **Section jumps.** When the body holds three or more components with a `heading`, the renderer adds `Section tabs`
-under the status line, one per heading, with the component's row count ("AI team on this job 4", "Timeline 10").
+under the status line, one per heading. A tab carries a count only when its component holds items a person can act on (`agent_lane` cards,
+`list` and `queue` rows): the bound count ("AI team on this job 4"). Tables, timelines, cells and key-value sections
+carry none (lead ruling on template board ruling 5).
 
 ### 4.2 Ordering
 
@@ -203,8 +214,11 @@ are newest first. The renderer never re-sorts except through a filter.
   (gate r2c lesson). Primary 64 px, full width; partner 48 px under it; a consequence line above the bar when the
   action has one. The lead row keeps its words but not a second copy of the button.
 - **Partner.** The partner is the one other control the bar may hold: for a link to a decision, none; for an
-  action, the receipt's "Do it myself" path when the runtime returns one. It always names its object ("Write the
-  reply myself") or has one line under it saying what it opens (gate r2c lesson).
+  action, the receipt's "Do it myself" path when the runtime returns one. It names its object ("Write the reply
+  myself") (gate r2c lesson).
+- **The "Do it myself" line.** Wherever "Do it myself" renders (the partner, a receipt, an AI-unavailable notice), a
+  line under the buttons starts with the bold label "Do it myself:" and says what it opens ("Do it myself: opens the
+  lead with the call notes filled in; reverts nothing"; AI-PRIMITIVES copy table).
 - No primary is valid. Then the status line ends with "Nothing here waits for you" (renderer words, shown only
   when no bound item has `needs_viewer` true).
 
@@ -212,12 +226,19 @@ are newest first. The renderer never re-sorts except through a filter.
 
 | Shell density | Width | Layout |
 |---|---|---|
-| Office, comfortable (default) | main pane 1024 px and wider | Body column and a 368 px side column; two-line rows (56 px); receipt cards in two columns from 1280 px |
+| Office, comfortable (default) | main pane 1024 px and wider | Body column and a 368 px side column; two-line rows (56 px); receipt cards in two columns when the main pane is 1200 px or wider (a 1440 frame with the sidebar) |
 | Office, compact (person's choice, `Segmented control` "Comfortable / Compact" in the filter row; default for a list over 25 rows) | same | One-line rows (32 px); tables at 32 px rows; receipt cards collapse to `AI/Receipt row` (the row opens the receipt sheet); summary cells to one line; side column unchanged |
 | Office on phone or tablet (`touch`) | under 1024 px | One column. Order: heading, scope and status, summary, filters (`Segmented control` up to 3 options, else `Field/Select` "Show"), body, then each side component as a section, then "Where this came from". Rows at least 64 px; the whole row is the target and its verb is its last line; tables become stacked cards with labels above values (3 fields, then "See all details"); `Action bar` at the bottom |
-| Crew phone (`field-sun` default, `field-night`; `touch`) | 390 px | Only `record` (crew scope), `timeline` and `schedule`; read-only: no `actions`, links only to fixed crew surfaces; no money; Stop work keeps its own fixed slot from the crew shell; all text, secondary text, placeholders and code chips at 7:1 (gate r2c lesson) |
+| Crew phone (`field-sun` default, `field-night`; `touch`) | 390 px | Only `record` (crew scope), `timeline` and `schedule`; read-only: no `actions`, links only to fixed crew surfaces; no money; Stop work keeps its own fixed slot from the crew shell; all text, secondary text, placeholders and code chips at 7:1 (gate r2c lesson). A crew lead has no office screens in v1: the crew phone scope is the money-hidden view. The scope words go in the status line: "Money is not shown on the crew phone"; a read-only schedule says "Read only: the office changes the schedule" |
 | Shop tablet (`glove`) | | No generated views (open question 6) |
 | Customer pages | | No generated views; customer pages are fixed |
+
+**Side slot (368 px).** Decision links and queue rows in the side slot draw in their stacked (phone) form, and
+`fact_rows` there draw as a `Key-value list`. The side slot never holds the view's primary: a side component with
+`primary` (a primary decision link) moves to the body column, after the body's components (8.6).
+
+**Full width.** Three kinds span the body and side columns: the report `table`, the `schedule` grid and the
+`agent_lane`. The two columns go on under them.
 
 ### 4.5 Density limits (validator checks; section 7 lists them with ids)
 
@@ -242,7 +263,7 @@ Each template section lists only its differences from this table.
 | Error, one data entry | A read model fails or times out | Its components draw a `Notice` (Neutral): "Couldn't read {read model words} just now." Other components draw normally | "Try again" (fetches that entry again) |
 | Error, whole view | The heading's data entry fails, or every entry fails | "IronWrap couldn't show {title}." | one link: the template's manual surface (table in 4.7) |
 | Invalid spec | Validator rejects | Plain cited answer, or "IronWrap couldn't show this. Ask another way, or search." | the search entry |
-| AI unavailable | The face or a specialist's model is not answering (contract `provider_unavailable`) | New request: Ask IronWrap says "IronWrap's AI is not answering since 10:52" with "Do it myself: {manual surface}" chosen by keyword from the request (4.7). Open or saved view: draws normally from read models, with a `Notice` "IronWrap's AI is not answering. This view still updates from your records; nothing new is proposed." Receipts waiting on the AI show Held "its AI service is not answering" | "Do it myself: {object}" only; never an AI team action such as `staff.notify` (14.1 item 11) |
+| AI unavailable | The face or a specialist's model is not answering (contract `provider_unavailable`) | New request: Ask IronWrap says "IronWrap's AI is not answering since 10:52" with "Do it myself: {manual surface}" chosen by keyword from the request (4.7). Open or saved view: keeps updating from read models, with a `Notice` "IronWrap's AI is not answering since {time}. This view still updates from your records; nothing new is proposed."; "Updated" shows the latest read time (AI down since 10:52: "Updated 10:55", figures unchanged). Receipts waiting on the AI show Held "its AI service is not answering" | "Do it myself" only, with its "Do it myself:" line (4.3); never an AI team action such as `staff.notify` (14.1 item 11) |
 | Stale | A provider read-back is older than the read model's `fresh_for` | The scope line says "QuickBooks last read today 08:10: not checked lately"; values from it keep their value and gain the line "From QuickBooks today 08:10"; links to decisions that depend on it stay, actions on it are not offered | "Check QuickBooks again" (fetches again; the read model asks the provider) |
 | Offline | No network | The last drawn copy with "Saved 10:40. You are offline." Actions are replaced by one line; live parts that cannot be known say so ("Who is working now is not known while you are offline") | "Nothing to do: this updates when you are back online" |
 | After an action | The person pressed an action | The button shows Busy at the same size; then the row or card becomes the `AI/Receipt row` the runtime returns (Working on it "Waiting for QuickBooks to confirm", or Done for you) | the receipt's own |
@@ -270,7 +291,7 @@ Each template section lists only its differences from this table.
 |---|---|---|---|
 | **Action** | Runs a catalog `A1` or `A2` action, or asks for an `A3` proposal ("Prepare … for your approval") | Always: the runtime returns it and the renderer draws it in place | `actions[]` |
 | **Link** | Opens a fixed surface or another view; changes nothing | none | `links[]` (view level, max 3) and row links from read-model fields |
-| **View command** | Filter, show more, compact or comfortable, try again, check again, ask again, hide until tomorrow | none; reads only | the renderer |
+| **View command** | Filter, show more, compact or comfortable, try again, check again ("Check {source} again", for a provider such as QuickBooks or a supplier such as Vicwest), ask again, hide until tomorrow | none; reads only | the renderer |
 
 ### 5.2 How each delegation appears in a generated view
 
@@ -284,9 +305,9 @@ auditor, launch rule or proof-first rule (contract delegation rules 7 and 10) �
 
 | Words (chip, `AI/Delegation`) | Contract | Before the step, in a view | Control in the view | After the step |
 |---|---|---|---|---|
-| Reads and watches | `A0` | A line in a side component ("AI auditor reads and watches: checks every hour; last 10:31, next 11:31") | none | A check row: Done for you, "Nothing to undo: this only checked" |
+| Reads and watches | `A0` | A line in a side component ("AI auditor reads and watches: checks every hour; last 10:31, next 11:31") | none | A check row: Done for you, "Can't be undone: it only checked. Nothing changed, so there is nothing to undo." (one check, not a standing watch) |
 | Prepares | `A1` | Its output is Proposed (`proposed_value`, `fact_rows` proposal, `agent_lane` proposal block), never a fact | An action may start one ("Draft gutter work into a new quote"); the draft itself has no button | Receipt Done for you (drafted); the decision on it is a link |
-| Acts within your limits | `A2`, `within_limits`, effect inside IronWrap | Nothing before; it runs | An action may start one (`followup.pause` "Pause the follow-up") | Receipt Done for you; Undo lives on the receipt (link "See what it did") with "You can undo this until {time}". A step above the ceiling asks first: Needs you, "Above your limit of {limit}: it asks you" |
+| Acts within your limits | `A2`, `within_limits`, effect inside IronWrap | Nothing before; it runs | An action may start one (`followup.pause` "Pause the follow-up") | Receipt Done for you; Undo lives on the receipt (link "See receipt for {object}") with its own line "You can undo this until {time}"; a standing watch has "Stop {the watch}" in place of Undo (5.3). A step above the ceiling asks first: Needs you, "Above your limit of {limit}: it asks you" |
 | Asks first | `A3`, delegable | Needs you (blue) when the viewer may decide; "Waiting on {name}" in ink otherwise | A link to the decision ("Review purchase order"); or, when no proposal exists yet, an action "Prepare … for your approval" that creates one on Decisions | Working on it ("Waiting for QuickBooks to confirm"), then Done for you with "Approved by {name}" in Checked |
 | Always asks first | `A3`, `delegable` false | As Asks first | As Asks first; no delegation control anywhere in a generated view | As Asks first |
 | People only | `H` | Needs you for a person who may do it, and the names of who may ("Only you or Tom Lachance can release it") | A link to the decision ("Review the work stop"); never an action | Done by {name} |
@@ -303,22 +324,31 @@ for such a step before a person approved it.
 
 - A decision link opens the fixed surface: `decision` with the decision id (the HOME-05 decision detail family,
   including the approval sheet, the passkey step and the work-stop release), `decisions` (the list), `receipt`
-  with a step id (the AI/Receipt surface with Undo and Do it myself), `now`, `job_record` (until the job record is
-  generated everywhere).
+  with a step id (the AI/Receipt surface, titled "What the AI did", with Do it myself and, on Done for you only,
+  Undo), `now`, `job_record` (until the job record is generated everywhere).
 - Labels of decision links come from the decision read model and always start with "Review" ("Review the work
   stop", "Review reply", "Review purchase order", "Review payment match", "Review crew and date", "Review the
   renewal", "Review the pitch"). A link never uses the decision's own verb ("Approve", "Apply", "Release"),
   because the decision happens on the fixed surface (gate r1b lesson: a label must not promise what the click does
   not do).
-- Receipt links read "See what it did" (LIBRARY-WAVE 9). Approval links read "See what {she, he, they} saw"; their
-  accessible name carries the object ("See what Dana Whitford saw for the deposit invoice").
-- Row links come from read-model fields (`decision_link`, `receipt_link`, `record_link`), so a list of 25 rows can
-  link 25 decisions without passing the 3 view-level links.
+- Receipt links read "See receipt for {object}", the object being the step ("See receipt for filling the lead",
+  "See receipt for sending the deposit invoice"); the receipt opens with the title "What the AI did". This link has this one
+  name everywhere (ZL-8). Approval links read "See what {she, he, they} saw"; their accessible name carries the
+  object ("See what Dana Whitford saw for the deposit invoice").
+- On the receipt (AI-PRIMITIVES copy table): Undo appears only on Done for you, with its own line ("You can undo
+  this until {time}" or "Can't be undone: {reason}"); never on Needs you, Working on it or Held. A standing watch's
+  Done for you receipt has "Stop {the watch}" ("Stop the storm watch") in place of Undo, with the line "Stopping
+  ends {what it does}. You can ask IronWrap to start it again."; never "Can't be undone" for a watch. "Do it myself"
+  has its "Do it myself:" line (4.3).
+- Row links come from read-model fields (`decision_link`, `receipt_link`, `record_link`, or `next_link`: the
+  decision link when the row needs the viewer, else the record link), so a list of 25 rows can link 25 decisions
+  without passing the 3 view-level links.
 
 ### 5.4 Actions
 
 - `label` is literal (no digits), verb plus object, never "Open", "Go", "Submit", "OK". An `A3` request reads
-  "Prepare {object} for your approval".
+  "Prepare {object} for your approval". A label that names a person is a binding to the words the read model
+  returns for that action ("Send the task to Tom Lachance", 8.4), because names are facts (section 2, rule 3).
 - `target` is a binding to the id the action acts on. A row action binds with `*` and is drawn on each row.
 - The consequence line comes from the runtime's action words for that action, never from the spec: "Creates a
   proposal on Decisions. Nothing leaves IronWrap." for every `A3` request.
@@ -361,7 +391,9 @@ The renderer computes totals; read models may also return totals with the same r
 - Only two colours carry meaning. Red (`signal.held`) for held or stopped; blue (`signal.you`) for items waiting on
   the viewer. Everything else is ink with a glyph and words.
 - Blue only when the read model says `needs_viewer` true. The same item for someone else is ink: "Waiting on Dana
-  Whitford".
+  Whitford". "Waiting on {name}" (ink) is a state of the `agent_lane` card (`AI/Receipt`) and of the `AI/Receipt row`.
+- Money receipts (a payment match) and money events are hidden from a viewer without money rights; the timeline
+  then says "Showing the {n} newest events you may see".
 - Red only for `state` held: a work stop, held payments, a held receipt, a quarantined coil. "Cannot start" for a
   material shortage or a missing crew is ink (SAMPLE-DATA: red is the safety stop on IW-1038 only).
 - No colour-only meaning: every signal has its glyph and its words (`Signal chip` kinds Needs you, Held, Done,
@@ -389,7 +421,7 @@ on the Figma examples and the QA build.
 | ZL-1 | Z2 words: no banned term in any literal (work package, disposition, derived phase, outbox, idempotency, effect, capability, principal, receipt hash, digest, SHA, envelope, payload, tenant, grant; also Assistant, agent, HELM, the class codes A0 to A3 and H); AI names only as contract display names | V |
 | ZL-2 | Outcome and delegation words only from AI-PRIMITIVES (Done for you, Working on it, Needs you, Held, Undone by, Proposed; the delegation words of 5.2) | R |
 | ZL-3 | At most one filled primary per view | V, R |
-| ZL-4 | Every control label is verb plus object; none starts with Open, Go, Submit; decision links start with Review; "Do it myself" names its object or has its line | V (literal), R (bound) |
+| ZL-4 | Every control label is verb plus object; none starts with Open, Go, Submit; decision links start with Review; receipt links read "See receipt for {object}"; every "Do it myself" has its "Do it myself:" line saying what it opens | V (literal), R (bound) |
 | ZL-5 | Codes only after a plain label, code in mono | R |
 | ZL-6 | No digits, currency signs or URLs in literals; every number is bound | V |
 | ZL-7 | Counts in headings and status lines are bound counts of the rows shown; a heading count equals the rows its component draws (with "Showing {n} of {m}" when cut) | V (bound), R |
@@ -437,12 +469,12 @@ week?"
 
 **Layout.** Comfortable: body column with two-line `List row`s (title; meta with the code after its label and the
 reason; state chip and delegation chip right; proposal on a third line as `AI/Proposed value` Inline; the row link
-at the end). Compact: one-line rows, the proposal folds behind the row. Phone: 64 px rows, state under the title,
+at the end). A `list` with `heading: null` draws its Panel without a header. Compact: one-line rows, the proposal folds behind the row. Phone: 64 px rows, state under the title,
 the link verb as the last line, the primary in the `Action bar`. Crew phone: not allowed (the crew's lists are the
 fixed Today and crew items screens).
 
 **States (differences).** Empty: the status line's zero words as the title. A row whose read model sub-part fails
-keeps its row and shows "Couldn't read this row just now" with "Try again".
+keeps its title, says "Couldn't read this row just now." and offers "Try again".
 
 **Actions and links.** Row links to decisions (5.3). Row actions only for `A1`/`A2` or `A3` requests. The primary
 is the first row's link when `primary` is set on the main collection.
@@ -551,15 +583,17 @@ track, and is anything costing us?"
   JOB-14). Cell states: plain, held (red tint, the held sentence), needs you (blue: "{n} decisions need you." and
   their names), money, not known (Not known yet with its reason). A held cell says who may release it.
 - `agent_lane` ("AI team on this job"): one `AI/Receipt` per open or recent step, from the receipts read model,
-  ordered by 4.2; the proposal a receipt made sits right after it as an `AI/Proposed value` Block ("Contact rule:
-  call Linda Chu before every crew visit"). In a generated view the receipt's decision is a link ("Review the work
-  stop", "Review reply", "Review payment match"), never an approve button; "See what it did" opens the fixed
-  receipt with Undo and Do it myself. With `primary`, the first card's decision link is the view's primary.
+  ordered by 4.2 (what needs the viewer before working items); the proposals the receipts made sit after all the
+  cards, each an `AI/Proposed value` Block with a line naming the receipt it came from ("Contact rule: call Linda
+  Chu before every crew visit" · "From AI customer care's reply to Linda Chu"). In a generated view the receipt's
+  decision is a link ("Review the work stop", "Review reply", "Review payment match"), never an approve button;
+  "See receipt for {object}" opens the fixed receipt ("What the AI did") with Do it myself and, on Done for you
+  only, Undo (5.3). With `primary`, the first card's decision link is the view's primary.
 - `fact_rows` ("The roof"): label; value; provenance line (read by whom, checked by a person or not); source chips;
   a proposal drawn as `AI/Proposed value` Field without Accept and Change, with the reason and the decision link
   ("Review the pitch").
-- `timeline`: people and AI specialists mixed, newest first, each AI item with "See what it did"; 10 then "Show
-  older events".
+- `timeline`: people and AI specialists mixed, newest first, each AI item with "See receipt for {object}"; 10 then
+  "Show older events".
 - `table` ("Money on this job"): label, what it is, amount, source chip; Not known yet rows keep their place; the
   profit row is Not known yet with its reason until the job is finished and every cost is in; a closing line
   "Nothing proposed is added to these figures."
@@ -567,9 +601,10 @@ track, and is anything costing us?"
 - Crew items to confirm (JOB-14 IW-1031 state): when the job has them, the timeline read model returns them first
   under their own heading, each as a row with its decision link ("Review the check-in"), until answered.
 
-**Layout.** Comfortable: heading; scope; summary strip of cells across the body width; section tabs; `agent_lane` as
-cards in two columns (1280 px and wider), one column below; `fact_rows` and `timeline` in the body column; side
-column with approvals, related record links, contact. Compact: summary cells one line each; the lane becomes
+**Layout.** Comfortable: heading; scope; summary strip of cells across the body width; section tabs; `agent_lane`
+across the body and side columns (4.4) as cards in two columns when the main pane is 1200 px or wider (a 1440 frame
+with the sidebar), one column below; `fact_rows` and `timeline` in the body column; side column with approvals,
+related record links, contact (stacked rows, 4.4). Compact: summary cells one line each; the lane becomes
 `AI/Receipt row`s (each opens its receipt sheet); timeline one line per event. Phone: cells stacked; the lane as
 `AI/Receipt row · Phone` with the decision verb as the row's last line (LIBRARY-WAVE 4; r2 verdict fix 2: the rows
 keep the desktop card titles); side components after the body; the primary in the `Action bar`. Crew phone (crew
@@ -588,7 +623,7 @@ decisions, no `table` of money.
 | One section fails | That section draws its `Notice` with "Try again"; summary and other sections draw (a QuickBooks outage never blanks the timeline) |
 | Held (work stop open) | The held summary cell and the lane's People only card first; the primary is "Review the work stop" (Held fill) |
 | After a decision on a fixed surface | On return the record re-fetches: the cell becomes "Work stop released." with who and when ("Released by Dana Whitford … Today 14:40, with her passkey"), the decision leaves the lane, the timeline gains the events (JOB-14 work-stop-released frame) |
-| AI unavailable | Facts, money and timeline draw from read models; the lane's waiting receipts show Held "its AI service is not answering" and "Do it myself: {object}" on the receipt; no new proposals |
+| AI unavailable | Facts, money and timeline draw from read models; the lane's waiting receipts show Held "its AI service is not answering" and "Do it myself" with its "Do it myself:" line on the receipt (no Undo on Held); no new proposals |
 | Stale | Money cells and rows from QuickBooks say "From QuickBooks today 08:10"; the scope line "QuickBooks last read today 08:10: not checked lately" with "Check QuickBooks again" |
 | Offline | Saved copy, "Saved 10:40. You are offline."; decision links stay visible but open the decision in read-only with "Approvals wait until you are back online" |
 | No access | A role without money rights sees "Only Accounting and the owner see money on this job." in place of the money table and the money cell |
@@ -746,19 +781,22 @@ What the renderer draws (canonical sample, matches JOB-14 with the r2 fixes):
 | Cell 4, money | "Contract CAD 12,600.00." "Deposit invoice CAD 3,150.00 matches QuickBooks. The final payment, CAD 9,450.00, is not invoiced yet." |
 | Cell 5, not known | "Cost of the stop" · Not known yet · "Crew idle time is not tracked and the deck repair is not priced yet. It is known once the deck repair is priced and the crew's idle hours are entered." |
 | Section tabs | "AI team on this job 4 · Timeline 10 · Money on this job" |
-| Lane card 1 | AI field coordinator, Today 06:10, People only, Needs you: "Correction drafted for the work stop"; Did, Needs you ("Approve the deck repair step for Sam Keewatin's crew. The release comes after the repair and its photos; only you or Tom Lachance can release it."), Why it asks you ("Releasing a work stop is people only. The AI team never releases it, and Sam Keewatin cannot release a stop he raised."), sources "Stop report Yesterday 09:12", "North slope deck Yesterday 09:08", "Job plan"; primary `Button` Held "Review the work stop" (decision); "See what it did" |
-| Lane card 2 | AI customer care, Today 06:30, Asks first, Needs you: "Reply to Linda Chu"; source "Email from Linda Chu Yesterday 15:40"; link "Review reply" (outlined); then Proposed block "Contact rule: call Linda Chu before every crew visit · Proposed by AI customer care from her email Yesterday 15:40. It becomes part of her record only when you approve the reply." |
-| Lane card 3 | AI estimator, Today 06:45, Working on it: "Drafting the deck repair change order for Linda Chu"; Doing "Pricing the deck repair with 7/16 OSB from the price book. Nothing goes to Linda Chu until a person approves the change order."; sources stop report, north slope deck, "Price book 7/16 OSB"; "See what it did" |
-| Lane card 4 | AI bookkeeper, Today 10:31, Asks first, Needs you: "Payment from Linda Chu to apply, CAD 3,150.00"; sources "QuickBooks payment today 10:31", "Deposit invoice V1"; link "Review payment match" |
-| Timeline (10) | Today 10:31 AI bookkeeper found a payment from Linda Chu that is not applied · Today 06:45 AI estimator started the deck repair change order · Today 06:30 AI customer care drafted a reply to Linda Chu · Today 06:10 AI field coordinator drafted the correction for the work stop · Yesterday 15:40 Linda Chu emailed · Yesterday 15:12 AI bookkeeper sent the deposit invoice to QuickBooks (CAD 3,150.00, matches QuickBooks, checked today 10:31) · Yesterday 15:10 Dana Whitford approved the deposit invoice · Yesterday 09:12 Sam Keewatin stopped the work · Yesterday 09:08 Sam Keewatin took a photo: north slope deck, soft sheets marked · Yesterday 07:02 Sam Keewatin checked in on site; "Show older events" |
+| Lane card 1 | AI field coordinator, Today 06:10, People only, Needs you: "Correction drafted for the work stop"; Did, Needs you ("Approve the deck repair step for Sam Keewatin's crew. The release comes after the repair and its photos; only you or Tom Lachance can release it."), Why it asks you ("Releasing a work stop is people only. The AI team never releases it, and Sam Keewatin cannot release a stop he raised."), sources "Stop report Yesterday 09:12", "North slope deck Yesterday 09:08", "Job plan"; primary `Button` Held "Review the work stop" (decision); "See receipt for drafting the correction" |
+| Lane card 2 | AI customer care, Today 06:30, Asks first, Needs you: "Reply to Linda Chu"; source "Email from Linda Chu Yesterday 15:40"; link "Review reply" (outlined); "See receipt for drafting the reply" |
+| Lane card 3 | AI bookkeeper, Today 10:31, Asks first, Needs you: "Payment from Linda Chu to apply, CAD 3,150.00"; sources "QuickBooks payment today 10:31", "Deposit invoice V1"; link "Review payment match"; "See receipt for finding the payment" |
+| Lane card 4 | AI estimator, Today 06:10, Working on it: "Drafting the deck repair change order for Linda Chu"; Doing "Pricing the deck repair with 7/16 OSB from the price book. Nothing goes to Linda Chu until a person approves the change order."; sources stop report, north slope deck, "Price book 7/16 OSB"; "See receipt for the change order draft" |
+| Lane proposal (after the cards) | Proposed block "Contact rule: call Linda Chu before every crew visit" · "From AI customer care's reply to Linda Chu. Proposed from her email Yesterday 15:40; it becomes part of her record only when you approve the reply." |
+| Timeline (10) | Today 10:31 AI bookkeeper found a payment from Linda Chu that is not applied · Today 06:30 AI customer care drafted a reply to Linda Chu · Today 06:10 AI field coordinator drafted the correction for the work stop · Today 06:10 AI estimator started drafting the deck repair change order · Yesterday 15:40 Linda Chu emailed · Yesterday 15:12 AI bookkeeper sent the deposit invoice to QuickBooks (CAD 3,150.00, matches QuickBooks, checked today 10:31) · Yesterday 15:10 Dana Whitford approved the deposit invoice · Yesterday 09:12 Sam Keewatin stopped the work · Yesterday 09:08 Sam Keewatin took a photo: north slope deck, soft sheets marked · Yesterday 07:02 Sam Keewatin checked in on site; each AI item links its receipt with the lane's words ("See receipt for finding the payment", "See receipt for drafting the reply", "See receipt for drafting the correction", "See receipt for the change order draft", "See receipt for sending the deposit invoice"); "Show older events" |
 | Money table | Contract total CAD 12,000.00 before tax + GST 600.00 = CAD 12,600.00 (Contract) · Deposit invoice: sent Yesterday 15:12, matches QuickBooks, CAD 3,150.00 (QuickBooks check today 10:31) · Payment received: in QuickBooks, not applied to an invoice yet, CAD 3,150.00 (QuickBooks payment today 10:31) · Final payment: not invoiced, the job is not finished, CAD 9,450.00 (Contract) · Deck repair change order: Not known yet, AI estimator is pricing it · Estimated cost: from the estimate, CAD 7,800.00 (Estimate) · Cost posted so far: in QuickBooks, the total is not complete yet, CAD 2,410.00 (QuickBooks check today 10:31) · Profit: Not known yet, the job is not finished and costs are not complete |
 | Side: Who approved this (2) | Deposit invoice: Approved by Dana Whitford, Yesterday 15:10; CAD 3,150.00 (CAD 3,000.00 + GST 150.00), deposit invoice V1, to QuickBooks; matches QuickBooks, checked today 10:31; "See what she saw" · Job plan: Approved for the crew Mon 16:30 by Tom Lachance; the job plan as issued Mon 16:10 with its safety steps; expires Wed 23:59; "See what he saw" |
 | Side: contact, links | 402 Aspen Hollow NW · Linda Chu · 780-555-0153 · Crew: Sam Keewatin and Dev Sandhu · "See property record" · "See all decisions" |
 | Phone | Cells stacked; lane rows "Correction drafted for the work stop" … "Review the work stop ›" (People only, Needs you), "Reply to Linda Chu" … "Review reply ›", "Payment from Linda Chu to apply, CAD 3,150.00" … "Review payment match ›", "Drafting the deck repair change order" … Working on it; `Action bar`: "Review the work stop" (Held fill) |
 
-**Example 2: property and roof record, 1180 Tamarack Bend** (Priya Nand, Sales, office, Updated 10:40). Priya is the
+**Example 2: property and roof record, 1180 Tamarack Bend** (Priya Nand, Estimator on the Sales desk, office, Updated 10:40). Priya is the
 person who accepts measurement values for job IW-1044 (SAMPLE-DATA UF-06), so the pitch decision is hers; for Dana
 Whitford the same spec draws the pitch as "waits for Priya Nand" in ink and has no primary (open question 4).
+Priya Nand (Estimator, Sales desk) also approves quote V4 (UF-06, UF-39): on the owner's views the V4 card is ink
+"Waiting on Priya Nand" (6.4).
 
 ```json
 {
@@ -856,7 +894,7 @@ Whitford the same spec draws the pitch as "waits for Priya Nand" in ink and has 
         "meta": [{ "field": "quote_state" }],
         "state": { "field": "state" },
         "proposed": { "field": "proposal" },
-        "link": { "field": "record_link" },
+        "link": { "field": "next_link" },
         "primary": false
       },
       {
@@ -905,11 +943,11 @@ What the renderer draws (canonical sample, HOME-11 with the r2 fixes and the Tra
 | The roof: Pitch | Main roof pitch: `AI/Proposed value` Field "6/12" · "Proposed by AI measurer from the plan view on page 2, because page 4 of the report was unreadable. Nobody has accepted it yet." · "Plan view, measurement report p. 2" · Needs you · primary `Button` You "Review the pitch" (decision; Accept pitch 6/12 and Change pitch live there) |
 | The roof: On the roof now | "Asphalt shingles: 1 layer on the house, 2 layers on the garage." · "Site note Yesterday 14:12", "Front elevation Yesterday 14:30" |
 | The roof: Gutters | "Pulling away from the fascia in 2 places on the front." · "Read by AI estimator from the front elevation photo · Not checked by a person yet" · "Front elevation Yesterday 14:30" |
-| Timeline (7) | Today 07:15 AI estimator drafted quote V4 from quote V3 (Job IW-1044 · today's steel price · waits for Dana Whitford) · Today 06:20 AI measurer read the measurement report (facet areas from page 3 · pitch proposed, page 4 unreadable) · Yesterday 18:20 Kara Harlow viewed the proposal (Job IW-1042 · CAD 18,420.00, Weathered slate asphalt) · Yesterday 14:30 Priya Nand took a photo of the front elevation · Yesterday 14:12 Priya Nand noted the layers of shingles: 1 on the house, 2 on the garage · Yesterday 13:58 Priya Nand checked in for the site visit · Mon 16:05 IronWrap linked job IW-1044 to this property; AI items with "See what it did" |
+| Timeline (7) | Today 07:15 AI estimator drafted quote V4 from quote V3 (Job IW-1044 · today's steel price · waits for Priya Nand) · Today 06:20 AI measurer read the measurement report (facet areas from page 3 · pitch proposed, page 4 unreadable) · Yesterday 18:20 Kara Harlow viewed the proposal (Job IW-1042 · CAD 18,420.00, Weathered slate asphalt) · Yesterday 14:30 Priya Nand took a photo of the front elevation · Yesterday 14:12 Priya Nand noted the layers of shingles: 1 on the house, 2 on the garage · Yesterday 13:58 Priya Nand checked in for the site visit · Mon 16:05 IronWrap linked job IW-1044 to this property; AI items with "See receipt for {object}" ("See receipt for reading the report") |
 | Side: People | Kara Harlow, Homeowner, 780-555-0192 · Priya Nand, Iron Wrap estimator, site visit yesterday |
-| Side: Jobs and quotes (2) | Job IW-1044: "Quote V3 is approved, with current prices." Proposed "Quote V4 · drafted by AI estimator, waits for Dana Whitford" · "See job record" · Job IW-1042: "Proposal sent: CAD 18,420.00, Weathered slate asphalt." · "See job record" |
+| Side: Jobs and quotes (2) | Job IW-1044: "Quote V3 is approved, with current prices." Proposed "Quote V4 · drafted by AI estimator from quote V3 with today's steel price" · Asks first · Needs you · link "Review quote V4" (Priya Nand approves it; for Dana Whitford the card is ink "Waiting on Priya Nand" with "See job record") · Job IW-1042: "Proposal sent: CAD 18,420.00, Weathered slate asphalt." · "See job record" |
 | Side: Photos and notes (3) | Photo: front elevation, existing shingles, Yesterday 14:30, Priya Nand · Note: 1 layer of shingles on the house, 2 on the garage, Yesterday 14:12, Priya Nand · Check-in: site visit, Yesterday 13:58, Priya Nand |
-| Side: Warranty | On the roof now: Not known yet, "Nobody has found a warranty for the shingles on the roof now." · After the new roof: "A warranty is registered when job IW-1044 is finished." |
+| Side: Warranty (a `Key-value list` in the side slot, 4.4) | On the roof now: Not known yet, "Nobody has found a warranty for the shingles on the roof now." · After the new roof: "A warranty is registered when job IW-1044 is finished." |
 | Phone | Alert, fact rows (labels above values), timeline, then side sections; `Action bar`: "Review the pitch" (You fill) |
 
 Note: the HOME-11 frame draws the quote V4 draft at Today 06:40; the Track B lead ruling (SAMPLE-DATA) sets it at
@@ -1107,7 +1145,9 @@ from a stale provider say so in their source line.
 
 **Actions and links.** Usually none. A follow-up for a person, such as the AI auditor's proposal to find the cause of
 the IW-1019 overrun, is offered as `staff.notify` through the face: "Send the task to Tom Lachance" (A2, Acts within
-your limits, with a receipt; ruling 14.1.3). The auditor's own escalations show as receipts, never as buttons.
+your limits, with a receipt; ruling 14.1.3). The example offers it as the alert's action; its label is bound because
+it names a person (5.4). The auditor's own escalations show as receipts, never as buttons. While the AI is not
+answering the action is not offered (4.6).
 
 **Example: "Are we losing money on any job?"** (owner Dana Whitford, office, Updated 10:40)
 
@@ -1155,7 +1195,7 @@ your limits, with a receipt; ruling 14.1.3). The auditor's own escalations show 
       { "kind": "macro_tile", "label": "Jobs watched", "value": { "bind": "margins", "path": "/count_watched" }, "line": null, "source": { "bind": "margins", "path": "/jobs_source" } }
     ],
     "alerts": [
-      { "kind": "alert", "finding": { "bind": "findings", "path": "/items/0" }, "action": null }
+      { "kind": "alert", "finding": { "bind": "findings", "path": "/items/0" }, "action": 0 }
     ],
     "body": [
       { "kind": "proposed_value", "proposal": { "bind": "findings", "path": "/items/0/proposal" } },
@@ -1189,7 +1229,14 @@ your limits, with a receipt; ruling 14.1.3). The auditor's own escalations show 
       { "kind": "empty_hint", "words": "No job has an estimate and a contract yet. See the Production plan.", "link": null, "action": null }
     ]
   },
-  "actions": [],
+  "actions": [
+    {
+      "action_id": "staff.notify",
+      "label": { "bind": "findings", "path": "/items/0/proposal/notify_label" },
+      "target": { "bind": "findings", "path": "/items/0/proposal" },
+      "primary": false
+    }
+  ],
   "links": []
 }
 ```
@@ -1200,8 +1247,8 @@ What the renderer draws:
 |---|---|
 | Scope and status | "Updated 10:40 · from QuickBooks today 10:31 · No job is below zero margin · 1 job is over its estimate · 4 jobs: not known yet" |
 | Tiles | Over the estimate CAD 420.00 (1 job: Ruth Okafor; AI auditor · QuickBooks today 10:31) · Margin, finished jobs 30.6% (Planned 35.0% · 1 finished job) · Margin, jobs in progress Not known yet (4 jobs: not every cost is in yet) · Jobs watched 5 (from the job records) |
-| Alert | Risk, Found by AI auditor: "Margin fell on Ruth Okafor's job" · Today 10:32: posted costs of job IW-1019 CAD 6,520.00 against the estimate CAD 6,100.00, CAD 420.00 over; margin 30.6% against 35.0% planned; every cost is posted in QuickBooks; the cause is not known yet · "QuickBooks costs today 10:31", "Estimate IW-1019" · "For your information. Nothing here waits for you." |
-| Proposed | "Ask Tom Lachance for the material count · Proposed by AI auditor: Tom Lachance (Production) counts what is left from Ruth Okafor's job. The count shows whether extra material or a price change cost the CAD 420.00." (no control) |
+| Alert | Risk, Found by AI auditor: "Margin fell on Ruth Okafor's job" · Today 10:32: posted costs of job IW-1019 CAD 6,520.00 against the estimate CAD 6,100.00, CAD 420.00 over; margin 30.6% against 35.0% planned; every cost is posted in QuickBooks; the cause is not known yet · "QuickBooks costs today 10:31", "Estimate IW-1019" · "For your information. Nothing here waits for you." · action (outlined) "Send the task to Tom Lachance" (Acts within your limits: it runs on the press and its receipt is drawn in place, 4.6 After an action) |
+| Proposed | "Ask Tom Lachance for the material count · Proposed by AI auditor: Tom Lachance (Production) counts what is left from Ruth Okafor's job. The count shows whether extra material or a price change cost the CAD 420.00." (its control is the alert's action) |
 | Table | Ruth Okafor, Job IW-1019, finished: CAD 6,100.00 · CAD 6,520.00 (CAD 420.00 over the estimate) · 30.6% (planned 35.0%) · Not known yet, proposed: ask Tom Lachance for the material count · Linda Chu, Job IW-1038, work stopped: CAD 7,800.00 · CAD 2,410.00 so far · Not known yet · a deck repair change order is being drafted; it will add cost · Nadia Petrov, Job IW-1031, scheduled: CAD 8,840.00 · Not known yet, nothing posted · Not known yet · No costs yet · Marcel Dufresne, Job IW-1035, starts Sat 07:00: CAD 7,280.00 · Not known yet · Not known yet · No costs yet · Paul Moreau, Job IW-1036, no start date yet: CAD 5,980.00 · Not known yet · Not known yet · No costs yet |
 | Total row | Estimated cost CAD 36,000.00 · Cost so far Not known yet (3 not known yet) |
 | Side | Margin is the price before tax minus the cost, as a share of the price before tax · Ruth Okafor: CAD 9,390.48 − CAD 6,520.00 = CAD 2,870.48, which is 30.6% · Planned: CAD 9,390.48 − CAD 6,100.00 = CAD 3,290.48, which is 35.0% · "Proposed values are never added into these figures." |
@@ -1226,14 +1273,16 @@ this morning?"
 | `empty` | `empty_hint` | 1 | 1 | |
 
 **Rules.** Newest first; every time carries its day; people as `Avatar/Person`, AI specialists as `AI/Badge` with
-"AI …" in the name, customers as people; AI items link "See what it did"; an approval item links "See what {she}
-saw". The one-clock rule: no Today event later than the scope line's "Updated" time. Crew items to confirm stay on
-top under their own heading until answered (JOB-14 IW-1031 frame). Filters never hide held or waiting items without
-saying so ("2 held items hidden by this filter").
+"AI …" in the name, customers as people; AI items link "See receipt for {object}"; an approval item links "See
+what {she} saw". The one-clock rule: no Today event later than the scope line's "Updated" time. Crew items to confirm
+stay on top under their own heading until answered (JOB-14 IW-1031 frame). Filters never hide held or waiting items
+without saying so ("2 held items hidden by this filter"); a work stop counts as a held item ("1 held item is hidden
+by this filter: Sam Keewatin stopped the work."). Money events (and money receipts) are hidden from a viewer without
+money rights, and the page says "Showing the {n} newest events you may see" (6.4).
 
 **Layout.** Comfortable: time column (96 px), actor, what happened with its detail line, link at the end. Compact:
 one line per event. Phone: time above the actor line; the link as the last line; 64 px rows. Crew phone: the crew's own job
-only ("What happened on this job"), read-only, no money events, AI items without "See what it did" (receipts are
+only ("What happened on this job"), read-only, no money events, AI items without a receipt link (receipts are
 office surfaces), `field-sun` by default.
 
 **States (differences).** Empty: "Nothing has happened on this job yet." Loading: 10 skeleton rows. "Show older
@@ -1345,10 +1394,10 @@ What the renderer draws:
 |---|---|
 | Heading | "402 Aspen Hollow NW"; "Job IW-1038 · Linda Chu · Job history" |
 | Scope and status | "Updated 10:40 · 10 events · 5 by the AI team · 5 by people" |
-| Filters | All · People · AI team |
-| Events | The 10 events of the JOB-14 timeline (8.2 example 1), newest first; AI items with "See what it did"; Yesterday 15:10 "Dana Whitford approved the deposit invoice · CAD 3,150.00 · what she saw is saved" with "See what she saw" |
+| Filters | All · People · AI team. With AI team: the 5 AI events and the note "1 held item is hidden by this filter: Sam Keewatin stopped the work." |
+| Events | The 10 events of the JOB-14 timeline (8.2 example 1), newest first, the AI estimator's change order from Today 06:10; AI items with "See receipt for {object}" (Yesterday 15:12: "See receipt for sending the deposit invoice"); Yesterday 15:10 "Dana Whitford approved the deposit invoice · CAD 3,150.00 · what she saw is saved" with "See what she saw" |
 | Older page | Mon 16:30 Tom Lachance approved the job plan for the crew, and earlier events |
-| Side: Still waiting on this job (3) | Work stop · People only · Needs you · "Review the work stop" · Reply to Linda Chu · Asks first · Needs you · "Review reply" · Payment from Linda Chu to apply, CAD 3,150.00 · Asks first · Needs you · "Review payment match" (all outlined) |
+| Side: Still waiting on this job (3), stacked rows (4.4) | Work stop · People only · Needs you · "Review the work stop" · Reply to Linda Chu · Asks first · Needs you · "Review reply" · Payment from Linda Chu to apply, CAD 3,150.00 · Asks first · Needs you · "Review payment match" (all outlined) |
 
 ### 8.6 `schedule` (map or schedule)
 
@@ -1375,9 +1424,13 @@ colour); a block shows start time, the job's name and code, and its state; a pro
 "Proposed" and who proposed it; a held block is red with its reason; past days recolour to `text.tertiary`, never
 faded. Map mode (**needed**): one pin per job with the same words as its block, and the list twin always under the
 map, so nothing is only on the map. Two blocks for one resource that overlap are drawn side by side, never on top
-of each other; the schedule says nothing about a clash unless the read model returns one.
+of each other; the schedule says nothing about a clash unless the read model returns one. A day with nothing for a
+resource reads "Not set yet" in ink. A held decision row (the work stop) is red tint with Needs you and its Held
+next step.
 
-**Layout.** Comfortable: grid up to 7 day columns, resource column 200 px; the unscheduled list under the grid.
+**Layout.** Comfortable: the grid spans the body and side columns (4.4), up to 7 day columns, resource column
+200 px; under it the body column holds the unscheduled list and then the side's decision links when they hold the
+primary (4.4); the side column holds the rest.
 Compact: 32 px blocks with time and code only, the name in the block's accessible name. Phone: one day per screen
 with `Section tabs` for the days ("Wed · Thu · Fri · Sat"), blocks as rows. Crew phone: only the crew's own
 resource ("My week"), read-only, links to the fixed crew Today and job screens.
@@ -1497,9 +1550,9 @@ What the renderer draws:
 |---|---|
 | Scope and status | "Updated 10:40 · 3 jobs booked · 1 proposed · 1 cannot start · 2 not on the schedule yet" |
 | Columns | Wed (Today) · Thu · Fri · Sat |
-| Row: Sam Keewatin's crew (Sam Keewatin, Dev Sandhu) | Wed 06:30 "Linda Chu's job, IW-1038", held (red): "Cannot start: the work stop is open" · Wed 07:00 "Nadia Petrov's job, IW-1031": "Start" · Thu 07:00 Proposed (dotted) "Kyle Brandt's job, IW-1046 · proposed by AI scheduler · checked weather, certificates and delivery" · Sat 07:00 "Marcel Dufresne's job, IW-1035": "Dev Sandhu's fall protection training expires before this job; renewal uploaded, not verified"; each block links "See job record" |
+| Row: Sam Keewatin's crew (Sam Keewatin, Dev Sandhu) | Wed 06:30 "Linda Chu's job, IW-1038", held (red): "Cannot start: the work stop is open" · Wed 07:00 "Nadia Petrov's job, IW-1031": "Start" · Thu 07:00 Proposed (dotted) "Kyle Brandt's job, IW-1046 · proposed by AI scheduler · checked weather, certificates and delivery" · Sat 07:00 "Marcel Dufresne's job, IW-1035": "Dev Sandhu's fall protection training expires before this job; renewal uploaded, not verified" · Fri "Not set yet" (ink); each block links "See job record" |
 | Not on the schedule yet (2) | Paul Moreau's job · Job IW-1036 · "Clear, no start date yet" · action (outlined) "Prepare a start date for your approval" with "Creates a proposal on Decisions. Nothing leaves IronWrap." · Helen Park's job · Job IW-1041 · "Cannot start: material shortage; the asked-for date was not found" · link "Review purchase order" |
-| Side: Decisions about this week (3) | Work stop on Linda Chu's job · People only · Needs you · primary `Button` Held "Review the work stop" · Crew and date for Kyle Brandt's job · Asks first · Needs you · "Review crew and date" · Dev Sandhu's fall protection training · Always asks first · Needs you · "Review the renewal" |
+| Decisions about this week (3), in the body column under "Not on the schedule yet" (it holds the primary, 4.4) | Work stop on Linda Chu's job · red tint · People only · Needs you · primary `Button` Held "Review the work stop" · Crew and date for Kyle Brandt's job · Asks first · Needs you · "Review crew and date" · Dev Sandhu's fall protection training · Always asks first · Needs you · "Review the renewal" |
 | Side: Capacity | Next free repair crew day: Mon (AI scheduler capacity check) |
 | Phone | Day tabs Wed · Thu · Fri · Sat; blocks as rows; `Action bar`: "Review the work stop" |
 
@@ -1515,7 +1568,7 @@ controls.
 |---|---|---|
 | Now (the team brief) | HOME-01 | The owner's daily start; one count of Needs you |
 | Decisions and approvals, every decision detail, the approval sheet, passkey steps, the work-stop release, crew items to confirm | HOME-04, HOME-05 | Every Asks first, Always asks first and People only decision happens here, with its consequence and what the person saw saved |
-| Receipts and undo | AI/Receipt family, HOME-01 receipt and undo frames | Undo, Do it myself and the exact record of what an agent did |
+| Receipts and undo | AI/Receipt family ("What the AI did"), HOME-01 receipt and undo frames | Undo, Do it myself and the exact record of what the AI did |
 | Ask IronWrap | HOME-12, crew and customer entries | The face and the entry to generated views |
 | Crew phone: today, work package, capture, stop work, crew items, stop release | FIELD-01, 02, 03, 05, 06, 07, 13 to 16 | Safety and capture in the field; Stop work never moves |
 | Customer pages: request, proposal, acceptance, status, ask | CUST-01 to CUST-14 | Customer consent and AI disclosure |
@@ -1531,7 +1584,7 @@ changes a delegation setting, pauses the team or a specialist, or turns on an "O
 |---|---|---|---|
 | A Needs you or People only item ("Review the work stop", "Review purchase order") | `decision` + id | The decision detail (HOME-05 family). For a one-step decision the approval sheet opens over it; the work stop opens its two-stage release | Back to the view; the view re-fetches and the item shows its new state or receipt |
 | "See all decisions" | `decisions` | Decisions (HOME-04) | Back to the view |
-| "See what it did" on a receipt or timeline item | `receipt` + step id | The receipt, with Undo and "Do it myself: {object}" | Back to the view |
+| "See receipt for {object}" on a receipt or timeline item | `receipt` + step id | The receipt ("What the AI did"), with "Do it myself" and its "Do it myself:" line, and Undo only when it is Done for you (5.3) | Back to the view |
 | "See what she saw" | `receipt` + approval step id | The saved approval (HOME-05 approved result) | Back to the view |
 | An `A3` request ("Prepare … for your approval") | runtime, then `decision` | The press returns a receipt in place (Working on it); when the proposal is ready the row links to its decision | stays in the view |
 | A job before the job record is generated everywhere | `job_record` + id | The drawn job record | Back to the view |
@@ -1601,9 +1654,9 @@ and field types; the paths below are what the examples bind.
 | `receipts` | **needed** | `job`, `open_or_since` | `/items/*`: the contract receipt (14 fields) as display words, the decision link and the attached proposals |
 | `decisions` | **needed** | `job`, `action_id`, `scope`, `open` | `/items/*` {title, state, delegation, needs_viewer, waiting_on, review_label, decision_link}, `/count_needs_viewer` |
 | `approvals` | **needed** | `job` | `/items/*` {thing, approved_by, when, what_they_saw, link} |
-| `property_record` | **needed** | `property` | `/address`, `/owner_name`, `/job_count_words`, `/count_proposed`, `/count_read_not_checked`, `/roof_facts/*`, `/warranty_facts/*`, `/people/*`, `/jobs/*`, `/photos_and_notes/*`, `/open_quote_job` |
+| `property_record` | **needed** | `property` | `/address`, `/owner_name`, `/job_count_words`, `/count_proposed`, `/count_read_not_checked`, `/roof_facts/*`, `/warranty_facts/*`, `/people/*`, `/jobs/*` (with `next_link`), `/photos_and_notes/*`, `/open_quote_job` |
 | `property_history` | **needed** | `property`, `page_size` | as `job_history` |
-| `findings` | **needed** | `property`, `specialist`, `kind`, `open` | `/items/*` (an `AI/Alert` finding with its proposal) |
+| `findings` | **needed** | `property`, `specialist`, `kind`, `open` | `/items/*` (an `AI/Alert` finding with its proposal), `/items/*/proposal/notify_label` (the words of a `staff.notify` follow-up) |
 | `supplier_quotes` | **needed** | `job`, `item` | `/count`, `/count_proposed`, `/options/*`, `/needed_by`, `/on_hand`, `/shortage_words` |
 | `margin_watch` | **needed** | `jobs` | counts, tile values, `/jobs/*`, `/method/*`, `/costs_source`, `/jobs_source` |
 | `crew_schedule` | **needed** | `from`, `through` | `/days`, `/resources/*`, `/blocks/*`, `/unscheduled/*`, counts, `/next_free_repair_day` |
@@ -1631,7 +1684,7 @@ provider read-back times that feed the scope line (4.1).
 | `Filter bar` | `list`, `timeline`, `schedule` | All plus up to 4 filters with counts |
 | `Action bar` | all (phone) | Primary 64 px, partner, consequence line, above the tab bar |
 | `Approval row` | `record` | Thing, approved chip, who and when, what they saw, "See what she saw" |
-| `AI/Receipt · Embedded` (variant) | `record` | The receipt with its decision as a link (primary or outlined), "See what it did" |
+| `AI/Receipt · Embedded` (variant) | `record` | The receipt with its decision as a link (primary or outlined), "See receipt for {object}" |
 | `AI/Delegation` "Paused here" (variant) | all | The here-state chip |
 | `AI/Proposed value` Field without Accept and Change (variant) | `record` | Proposal with its decision link |
 | `Skeleton` variants | all | Summary cell, fact row, table row, comparison column, schedule block |
@@ -1643,6 +1696,7 @@ provider read-back times that feed the scope line (4.1).
 - `heading` on collection kinds (section jumps and counts).
 - `primary` on components, actions and links (at most one true).
 - `links[].label` (literal, verb plus object) and `links[].id` (binding or id).
+- `actions[].label` as a binding when the label names a person (5.4).
 - `alert.action` and `empty_hint.link` / `empty_hint.action` as indexes.
 - Template-level slots `heading`, `status`, `summary`, `alerts`, `filters`, `body`, `side`, `empty` (per template
   tables in section 8).
@@ -1726,3 +1780,45 @@ only).
     separate AI step. `lead_fact.confirm` (A3, Asks first, delegable) accepts values proposed on a lead, several in
     one decision, each becoming a fact with its source. `onboarding.go_live` (People only) is the owner's own launch
     control; before it, nothing with an outside effect runs.
+13. Template board rulings (`output/figma-v2/TEMPLATE-BOARD-RULINGS.md`; numbers follow `TEMPLATE-BOARD.md` "Spec
+    fixes"), plus the later lead rulings on receipts:
+    - (1) The deck repair change order is drafted from 06:10; there is no 06:45 start (8.2 lane and timeline, 8.5).
+    - (2) Rule 4.2 wins in the lane: the work stop, the reply, the payment, then the change order (8.2 example 1).
+    - (3) Priya Nand approves quote V4 ("Review quote V4" in her view); on the owner's views its card is ink "Waiting
+      on Priya Nand" (8.2 example 2, row link `next_link` in 5.3 and 12).
+    - (4) The report offers `staff.notify` "Send the task to Tom Lachance" as the alert's action, its label bound
+      because it names a person (8.4 example, 5.4, 12, 13).
+    - (5) A section tab carries a count only for items a person can act on (agent lane cards, list and queue rows); tables, timelines, cells and key-value sections carry none
+      (4.1).
+    - (6) No change here: state-frame facts live in SAMPLE-DATA "Template board additions (canonical)".
+    - (7) A view without a record draws its title with `record_heading`, `identity: []` (3, 4.1).
+    - (8) A `list` with `heading: null` draws its Panel without a header (8.1).
+    - (9) Side slot: decision links and queue rows stacked, `fact_rows` as a Key-value list; a primary moves to the
+      body (4.4; drawn in 8.2, 8.5, 8.6).
+    - (10) The report `table`, the `schedule` grid and the `agent_lane` span the body and side columns (4.4, 8.2,
+      8.6).
+    - (11) Two lane columns when the main pane is 1200 px or wider (4.4, 8.2).
+    - (12) Lane proposals sit after all the cards and name the receipt they came from (8.2).
+    - (13) A record with summary cells shows the scope line only (4.1).
+    - (14) "Waiting on {name}" is a state of the lane card and the receipt row; money receipts and money events are
+      hidden from a viewer without money rights (6.4, 8.5).
+    - (15) A crew lead has no office screens in v1; the crew phone scope is the money-hidden view (4.4).
+    - (16) A failed list row keeps its title, says "Couldn't read this row just now." and offers "Try again" (8.1).
+    - (17) AI unavailable: the open view's notice says "since {time}" and "Updated" shows the latest read (4.6).
+    - (18) Crew scope words go in the status line (4.4).
+    - (19) An empty crew day reads "Not set yet" in ink; a held decision row is red tint with Needs you and its Held
+      next step (8.6).
+    - (20) A work stop counts as a held item in the filter's hidden note (8.5).
+    - (21) "Check {source} again" covers suppliers too (5.1).
+    - (22) No change: up to 3 filter options stay a Segmented control on phone (4.4); Track L aligns the Filter bar.
+    - (23 to 30) Component gaps go to Track L build 2; `macro_tile` draws with `Stat tile` (3).
+    - Receipt link: "See receipt for {object}", one name for this link everywhere; the receipt's title is "What the
+      AI did" (5.2, 5.3, ZL-4, 8.2, 8.5, 9, 10, 13).
+    - Receipt buttons (AI-PRIMITIVES copy table, Track E gate evidence): Undo only on Done for you, with its own
+      line; a standing watch has "Stop {the watch}" with "Stopping ends {what it does}. You can ask IronWrap to start
+      it again." in place of Undo; every "Do it myself" has a line under the buttons that starts with the bold label
+      "Do it myself:" and says what it opens (4.3, 4.6, 5.2, 5.3, ZL-4, 8.2, 10).
+    - Lead follow-ups: a control label that names a person or a version binds that part from the read model ("Send
+      the task to {person}", "Review quote {version}"); the literal part has no digits. A receipt link names the step
+      in the same words as its timeline row ("See receipt for drafting the correction"): one name per step (ZL-8).
+      Section 8.6 keeps a primary `decision_links` in the side slot of the spec; the renderer draws it in the body.

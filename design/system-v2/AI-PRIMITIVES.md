@@ -64,8 +64,9 @@ specialist, and only the owner changes it. Agents never change their own setting
 | Section: sources | Where this came from | |
 | Section: why it waits for a person | Why it asks you | |
 | Section: provider read-back | Checked | "Checked in QuickBooks today 10:31" / "Not checked yet" |
-| Way out | Do it myself | Secondary button when the receipt is Needs you or Held; ghost button when it is Done for you |
-| Undo | Undo | Secondary button on Done for you (the step most likely wanted after the work is done), ghost button on Needs you; always with "You can undo this until {time}" or "Can't be undone: {reason}" |
+| Way out | Do it myself | Secondary button when the receipt is Needs you or Held; ghost button when it is Done for you. Wherever it renders, a line under the buttons starts with the bold label "Do it myself:" and says what it opens ("Do it myself: opens the lead with the call notes filled in; reverts nothing") |
+| Undo | Undo | Only on Done for you, as a secondary button, with its own line: "You can undo this until {time}" or "Can't be undone: {reason}". Never on Needs you, Working on it or Held: nothing is done yet, and testers read it as "undo my approval" (Track E Z1 r1 and r2 on the receipt card) |
+| Stop a standing watch | Stop {the watch} | On the Done for you receipt of a standing watch ("Stop the storm watch"), in place of Undo, with one line: "Stopping ends {what it does}. You can ask IronWrap to start it again." Never "Can't be undone" for a watch |
 | Entry to the face | Ask IronWrap | |
 | Owner's daily summary | Brief | "Brief made 6:50 a.m. by IronWrap" |
 | Found by an agent | Risk / Opportunity | glyph and word, never colour alone |

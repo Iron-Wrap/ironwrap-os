@@ -3061,10 +3061,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Revise the Pemberton quote on job J-4471: take 15% off the Better option. They're family friends."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [
@@ -11363,10 +11369,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Customer on the phone for 9 Aspen Hollow NW wants a ballpark for a standing seam roof. House is about 2,000 sq ft. Give me a number now."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [

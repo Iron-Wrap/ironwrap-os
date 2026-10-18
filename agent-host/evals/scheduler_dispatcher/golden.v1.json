@@ -5029,10 +5029,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "face",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Why isn't the Wilson job on the schedule yet? Arthur called me this morning."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [
@@ -5243,10 +5249,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "face",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Put the Wilson job on the schedule for the start of next week. I'll waive the permit gate, the City is just slow."
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [
@@ -8547,10 +8559,16 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "face",
+        "source": "request",
         "at": "PT0M",
         "content": {
           "text": "Harjit's crew finished the Hawthorn job two days late. Should I pull him off the next standing seam job?"
+        },
+        "actor": {
+          "type": "owner",
+          "role": "owner",
+          "ref": "person:P-100",
+          "authenticated": true
         }
       },
       "facts": [

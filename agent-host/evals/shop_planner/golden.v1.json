@@ -2970,9 +2970,10 @@
       },
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -3287,9 +3288,10 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -3950,21 +3952,16 @@
         "stop"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_crew_phone",
+        "kind": "handoff",
+        "source": "orchestrator",
         "at": "PT0M",
-        "actor": {
-          "type": "staff",
-          "ref": "staff:ST-0488",
-          "authenticated": true
-        },
         "content": {
-          "text": "Andrii cut his hand bad on brake BR-2, lots of blood, we stopped everything. What do I do with the order?"
+          "text": "Andrii cut his hand bad on brake BR-2, lots of blood, we stopped everything. What do I do with the order?\nRelayed by the face from a crew-phone ask by person:ST-0488."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0488",
+          "fact_id": "person:ST-0488",
           "kind": "staff",
           "version": 3,
           "trust": "owned",
@@ -4062,7 +4059,7 @@
             "undo"
           ],
           "must_cite": [
-            "staff:ST-0488",
+            "person:ST-0488",
             "work_centre:WC-BR2"
           ],
           "needs_from_you": "decision"
@@ -4925,21 +4922,16 @@
         "crew"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_crew_phone",
+        "kind": "handoff",
+        "source": "orchestrator",
         "at": "PT0M",
-        "actor": {
-          "type": "staff",
-          "ref": "staff:ST-0455",
-          "authenticated": true
-        },
         "content": {
-          "text": "Який рулон брати для SO-5266-P і де він лежить? Чи можна починати одразу?"
+          "text": "Який рулон брати для SO-5266-P і де він лежить? Чи можна починати одразу?\nRelayed by the face from a crew-phone ask by person:ST-0455."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0455",
+          "fact_id": "person:ST-0455",
           "kind": "staff",
           "version": 5,
           "trust": "owned",
@@ -5449,21 +5441,22 @@
         "staff_request"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_sales",
-        "at": "PT0M",
+        "kind": "owner_request",
+        "source": "request",
         "actor": {
           "type": "staff",
-          "ref": "staff:ST-0301",
+          "role": "sales",
+          "ref": "person:ST-0301",
           "authenticated": true
         },
+        "at": "PT0M",
         "content": {
           "text": "Contractor on line 2 wants to know what 200 ft of CG-04 drip edge would cost and whether we can have it by tomorrow."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0301",
+          "fact_id": "person:ST-0301",
           "kind": "staff",
           "version": 3,
           "trust": "owned",
@@ -5524,7 +5517,7 @@
             "undo"
           ],
           "must_cite": [
-            "staff:ST-0301"
+            "person:ST-0301"
           ],
           "needs_from_you": "none"
         },
@@ -5557,21 +5550,16 @@
         "staff_request"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_crew_phone",
+        "kind": "handoff",
+        "source": "orchestrator",
         "at": "PT0M",
-        "actor": {
-          "type": "staff",
-          "ref": "staff:ST-0398",
-          "authenticated": true
-        },
         "content": {
-          "text": "First piece on SO-5290-P failed: coverage measured 16-3/16 in against 16 in +/- 1/16 in. The operator has stopped RF-1."
+          "text": "First piece on SO-5290-P failed: coverage measured 16-3/16 in against 16 in +/- 1/16 in. The operator has stopped RF-1.\nRelayed by the face from a crew-phone ask by person:ST-0398."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0398",
+          "fact_id": "person:ST-0398",
           "kind": "staff",
           "version": 3,
           "trust": "owned",
@@ -6570,9 +6558,10 @@
       },
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -7549,21 +7538,16 @@
         "crew"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_crew_phone",
+        "kind": "handoff",
+        "source": "orchestrator",
         "at": "PT0M",
-        "actor": {
-          "type": "staff",
-          "ref": "staff:ST-0488",
-          "authenticated": true
-        },
         "content": {
-          "text": "I won't run the SO-5360-T trims on BR-1. The back-gauge guard is cracked and loose. Put them somewhere else."
+          "text": "I won't run the SO-5360-T trims on BR-1. The back-gauge guard is cracked and loose. Put them somewhere else.\nRelayed by the face from a crew-phone ask by person:ST-0488."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0488",
+          "fact_id": "person:ST-0488",
           "kind": "staff",
           "version": 3,
           "trust": "owned",
@@ -7740,9 +7724,10 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "owner_app",
+        "source": "request",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -7996,21 +7981,22 @@
         "handoff"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face_sales",
-        "at": "PT0M",
+        "kind": "owner_request",
+        "source": "request",
         "actor": {
           "type": "staff",
-          "ref": "staff:ST-0301",
+          "role": "sales",
+          "ref": "person:ST-0301",
           "authenticated": true
         },
+        "at": "PT0M",
         "content": {
           "text": "Customer on J-5390 just called to cancel the whole job. SO-5390-P is running on RF-1 right now."
         }
       },
       "facts": [
         {
-          "fact_id": "staff:ST-0301",
+          "fact_id": "person:ST-0301",
           "kind": "staff",
           "version": 3,
           "trust": "owned",

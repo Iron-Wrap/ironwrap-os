@@ -696,10 +696,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -870,10 +871,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -1104,10 +1106,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -1264,13 +1267,13 @@
         "stop_work"
       ],
       "signal": {
-        "kind": "event",
-        "source": "crew_app",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
           "type": "worker",
           "role": "field",
-          "ref": "worker:W-204",
+          "ref": "person:W-204",
           "authenticated": true
         },
         "at": "PT0M",
@@ -1280,7 +1283,7 @@
       },
       "facts": [
         {
-          "fact_id": "worker:W-204",
+          "fact_id": "person:W-204",
           "kind": "worker",
           "version": 1,
           "trust": "owned",
@@ -1390,11 +1393,11 @@
         "abstain"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "sales",
           "ref": "person:P-221",
           "authenticated": true
@@ -1701,10 +1704,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -1924,10 +1928,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -2120,10 +2125,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -2384,10 +2390,11 @@
       },
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -2632,10 +2639,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -2773,11 +2781,11 @@
         "staff_question"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "production",
           "ref": "person:P-140",
           "authenticated": true
@@ -3107,10 +3115,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -3261,10 +3270,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -3904,11 +3914,11 @@
         "no_price"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "ops",
           "ref": "person:P-133",
           "authenticated": true
@@ -4017,13 +4027,13 @@
         "status"
       ],
       "signal": {
-        "kind": "event",
-        "source": "crew_app",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
           "type": "worker",
           "role": "field",
-          "ref": "worker:W-227",
+          "ref": "person:W-227",
           "authenticated": true
         },
         "at": "PT0M",
@@ -4033,7 +4043,7 @@
       },
       "facts": [
         {
-          "fact_id": "worker:W-227",
+          "fact_id": "person:W-227",
           "kind": "worker",
           "version": 1,
           "trust": "owned",
@@ -4151,10 +4161,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -4287,11 +4298,11 @@
         "escalate"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "accounting",
           "ref": "person:P-160",
           "authenticated": true
@@ -4427,10 +4438,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -4573,10 +4585,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -4751,13 +4764,13 @@
         "escalate"
       ],
       "signal": {
-        "kind": "event",
-        "source": "crew_app",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
           "type": "worker",
           "role": "field",
-          "ref": "worker:W-245",
+          "ref": "person:W-245",
           "authenticated": true
         },
         "at": "PT0M",
@@ -4809,7 +4822,7 @@
           }
         },
         {
-          "fact_id": "worker:W-245",
+          "fact_id": "person:W-245",
           "kind": "worker",
           "version": 1,
           "trust": "owned",
@@ -4890,7 +4903,7 @@
             "do_it_myself"
           ],
           "must_cite": [
-            "worker:W-245",
+            "person:W-245",
             "work_package:WP-4501-r1"
           ],
           "needs_from_you": "none"
@@ -6557,11 +6570,11 @@
         "gate"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "ops",
           "ref": "person:P-133",
           "authenticated": true
@@ -6667,10 +6680,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -6795,10 +6809,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -6924,11 +6939,11 @@
         "abstain"
       ],
       "signal": {
-        "kind": "event",
-        "source": "app_chat",
+        "kind": "owner_request",
+        "source": "ask",
         "watch_id": "role_questions",
         "actor": {
-          "type": "worker",
+          "type": "staff",
           "role": "sales",
           "ref": "person:P-221",
           "authenticated": true
@@ -7022,10 +7037,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -7820,10 +7836,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },
@@ -7974,10 +7991,11 @@
       ],
       "signal": {
         "kind": "owner_request",
-        "source": "app_chat",
+        "source": "ask",
         "watch_id": "owner_requests",
         "actor": {
           "type": "owner",
+          "role": "owner",
           "ref": "person:P-100",
           "authenticated": true
         },

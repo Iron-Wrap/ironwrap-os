@@ -306,6 +306,49 @@ test("the Worker registry is read whole, or the validator says what it could not
   assert.match(validate(root).notes.join("\n"), /no Worker registry/);
 });
 
+test("signal actors follow the Worker's shape; an owner_request names the signed-in requester and its route's source", () => {
+  const owner = { type: "owner", role: "owner", ref: "person:P-100", authenticated: true };
+  const signal = (kind, source, actor, text = "Prioritise this lead.") => ({ kind, source, watch_id: "new_inbound", at: "PT0M", content: { text }, ...(actor === undefined ? {} : { actor }) });
+  // One rule broken per case, so each check is pinned on its own.
+  const signals = [
+    signal("owner_request", "request", owner),
+    signal("owner_request", "request", { ...owner, type: "staff", role: "sales" }),
+    signal("event", "email", { type: "external", role: null, ref: "channel:email", authenticated: false }, "From: x@example.invalid"),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "person:W-1", authenticated: true }, "Done."),
+    signal("owner_request", "ask", owner),
+    signal("owner_request", "request", { ...owner, type: "staff" }),
+    signal("event", "email", { type: "external", role: null, ref: "channel:email", authenticated: true }, "Hi"),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "customer:C-1", authenticated: true }, "Done."),
+    signal("watch", "worker", owner, "Due."),
+    signal("owner_request", "request"),
+    signal("owner_request", "request", { ...owner, note: "owner" }),
+    signal("owner_request", "request", { type: "owner", role: "owner", ref: "person:P-100" }),
+    signal("owner_request", "request", { ...owner, type: "staff", role: "field" }),
+    signal("owner_request", "request", { type: "worker", role: "field", ref: "person:W-1", authenticated: true }),
+    signal("event", "ask", owner),
+    signal("owner_request", "email", owner),
+    signal("handoff", "orchestrator", owner, "Relayed."),
+    signal("owner_request", "request", { type: "external", role: null, ref: "channel:web", authenticated: false }),
+    signal("owner_request", "request", { type: "customer", role: null, ref: "customer:C-1", authenticated: true }),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "worker:W-1", authenticated: true }, "Done."),
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  for (const n of ["001", "002", "003", "004"]) assert.doesNotMatch(failures, new RegExp(`\\.${n}: (signal\\.actor|an owner_request|an ask|a watch|source ")`));
+  assert.match(failures, /\.005: an ask goes to the orchestrator; a press to lead_concierge has source "request"/);
+  for (const n of ["006", "007", "008", "011", "012", "020"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.actor must be`));
+  assert.match(failures, /\.009: a watch signal has no actor/);
+  for (const n of ["010", "013", "014", "018", "019"]) {
+    assert.match(failures, new RegExp(`\\.${n}: an owner_request request names its requester as an owner or staff actor that may press view actions \\(not field\\)`));
+  }
+  assert.match(failures, /\.015: source "ask" belongs to an owner_request/);
+  assert.match(failures, /\.016: an owner_request has source "ask" or "request"/);
+  assert.match(failures, /\.017: a handoff signal has no actor/);
+});
+
 test("structural mode without the contract still checks shape", () => {
   const result = validate(fixture({ withCatalog: false }));
   assert.deepEqual(result.failures, []);

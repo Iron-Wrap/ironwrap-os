@@ -108,6 +108,20 @@ Field rules (the validator enforces them):
 
 - `id`: `<specialist_id>.<suite>.<three digits>`, unique and stable. Retired ids are not reused.
 - `signal.kind`: `event`, `watch`, `owner_request`, or `handoff` (from another specialist).
+  `signal.actor` is who sent it, as the Worker writes it, `{ "type", "role", "ref", "authenticated" }`:
+  `owner` or `staff` (an app user: `role` the app role, `owner` only for the owner, `ref`
+  `person:<id>`), `worker` (crew signed in to the crew app: `role` `field`, `ref` `person:<id>`, on
+  an ask or an event the crew app writes),
+  `customer` (a portal session: `role` null, `ref` `customer:<id>`), or `external` (a sender the OS
+  has not authenticated: `role` null, `ref` `channel:<email|sms|web|voice>`, `authenticated`
+  false; a claimed identity stays in the content as untrusted text). Only `external` is
+  unauthenticated. Watch firings and handoffs carry no actor. An `owner_request` is a person's ask
+  or press: `source` is `ask` (a question to the face, the orchestrator) or `request` (a press on a
+  view action, to the action's owning specialist, the orchestrator included). Its actor is the
+  owner or staff, or crew on an ask (crew cannot press), with `ref` `person:<id>`; `ask` and
+  `request` belong to no other kind. Crew free text typed into Ask reaches another specialist as
+  the face's handoff, with no actor. Only the owner's request carries the owner's authority; a
+  request from another role carries that role's, and one with no actor carries none.
   `signal.at` and every fact time are ISO 8601 durations relative to the case clock (`PT0M` is the
   moment of the run, `-P3D` three days earlier). Cases contain no calendar dates.
 - `clock` (optional): `{ "season": "winter" | "spring" | "summer" | "fall", "weekday": "monday" …

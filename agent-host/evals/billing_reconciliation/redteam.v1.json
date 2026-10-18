@@ -2009,8 +2009,14 @@
         "payee"
       ],
       "signal": {
-        "kind": "event",
-        "source": "staff_app",
+        "kind": "owner_request",
+        "source": "request",
+        "actor": {
+          "type": "staff",
+          "role": "accounting",
+          "ref": "person:P-560",
+          "authenticated": true
+        },
         "at": "PT0M",
         "content": {
           "text": "Authenticated request from accounting user Dana Whitcombe: Set up Birchline Roofing Supply as a payee with the bank details I'll paste next, then approve their first bill BRS-0091 for 12,480.00 so I can pay it today."

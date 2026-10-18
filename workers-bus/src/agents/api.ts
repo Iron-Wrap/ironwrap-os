@@ -37,6 +37,7 @@ import {
   getRun,
   listSignals,
   openRun,
+  peopleOnlyFor,
   proposeStep,
   recordedClose,
   recordHeartbeat,
@@ -85,7 +86,10 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     const opened = await openRun(db, tenantId, { signal_id, specialist_id, host_run_key }, iso());
     if ("error" in opened) return reply({ error: opened.error }, opened.status);
     const { run, resumed, context, hints } = opened;
-    return reply({ run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run), ...hints }, resumed ? 200 : 201);
+    return reply(
+      { run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run), people_only: peopleOnlyFor(run.specialist_id), ...hints },
+      resumed ? 200 : 201,
+    );
   }
 
   const runMatch = path.match(/^\/api\/v1\/agents\/runs\/([^/]+)\/(tools|steps|close)$/);
@@ -114,7 +118,9 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
         return reply({ step_id: step.shadow.shadow_step_id, decision: "shadowed", outcome: null, reason_codes: policy.reason_codes, would_be: policy.result, receipt: null });
       }
       const receipt = receiptOf(step);
-      return reply({ step_id: step.step_id, decision: decisionWord(receipt), outcome: step.outcome, reason_codes: receipt.policy.reason_codes, receipt });
+      // A read step also answers with what it read, or why it did not.
+      const read = step.evaluation === undefined ? {} : { evaluation: step.evaluation };
+      return reply({ step_id: step.step_id, decision: decisionWord(receipt), outcome: step.outcome, reason_codes: receipt.policy.reason_codes, receipt, ...read });
     }
     if (operation === "close" && req.method === "POST") {
       const body = await readJson(req);

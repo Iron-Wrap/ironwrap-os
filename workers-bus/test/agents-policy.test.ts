@@ -6,8 +6,10 @@ import { CATALOG_JSON, CATALOG_SHA256 } from "../src/agents/contract-catalog.ts"
 import { evaluateStep, type StepInput } from "../src/agents/policy.ts";
 import { specialistState } from "../src/agents/control.ts";
 import { REGISTRY, type RegistryEntry } from "../src/agents/registry.ts";
+import { peopleOnlyFor, toolsFor } from "../src/agents/store.ts";
 import { ABSTAIN_REASON_CODES, RUN_OUTPUT_SCHEMA } from "../src/agents/run-output.ts";
-import { canonicalJson } from "../src/agents/schema.ts";
+import { assertStrictSchema, canonicalJson, validate } from "../src/agents/schema.ts";
+import { assertStrictSchema as hostStrict } from "../../agent-host/src/gateway/schema.ts";
 // @ts-expect-error: a plain .mjs script without type declarations
 import { extractCatalogJson, renderCatalogModule } from "../scripts/sync-agent-catalog.mjs";
 
@@ -286,4 +288,215 @@ test("independent pause and hold flags compose before class shortcuts", () => {
       assert.equal(off.result, "deny");
       assert.equal(off.permit_kind, "none");
     }
+});
+
+// The follow-up registrations (output/track-a/POLICY-FOLLOWUP.md, agreed with Track D).
+
+const ASK_REF = "signal/sig_ask_1";
+const ASK_FACT = { fact_id: ASK_REF, version: 1, hash: "sha256:01", trust: "owned" as const, fresh_until: null };
+const STAFF = { type: "staff", role: "ops", ref: "person:appu_ops_1", authenticated: true };
+/** The staff member's ask a run answers, as store.ts `runRequest` hands it to policy. */
+const STAFF_ASK = { signal_ref: ASK_REF, kind: "owner_request", source: "ask", actor: STAFF };
+const PAIRING = {
+  person_ref: "person:appu_field_1",
+  change: "pair_device",
+  target_role: null,
+  device_ref: null,
+  expected_access_version: 1,
+  request_ref: ASK_REF,
+  reason: "Synthetic: pair the new crew phone.",
+};
+/** A step that cites the ask (and the signal fact every run has), with both facts current. */
+function citing(overrides: Partial<StepInput> = {}): StepInput {
+  return input({
+    citations: [{ fact_id: ASK_REF, version: 1 }],
+    snapshot: new Map([[SIGNAL_FACT.fact_id, SIGNAL_FACT], [ASK_REF, ASK_FACT]]),
+    currentVersions: new Map([["signal/sig_1", 1], [ASK_REF, 1]]),
+    ...overrides,
+  });
+}
+const prepare = (args: unknown, overrides: Partial<StepInput> = {}) =>
+  evaluateStep(citing({ specialistId: "compliance", actionId: "access.prepare_change", args, requester: STAFF_ASK, ...overrides }));
+/** Whether the step got past the registered-arguments check. */
+const schemaPassed = (decision: ReturnType<typeof evaluateStep>) => decision.checks.some((check) => check.check === "schema" && check.passed);
+
+test("the access change schema takes the agreed shape: a role only with a role change, a device only with a device change", () => {
+  const accepted = [
+    PAIRING,
+    { ...PAIRING, change: "change_role", target_role: "production" },
+    { ...PAIRING, change: "replace_device", device_ref: "device:PH-0874", expected_access_version: 3 },
+    { ...PAIRING, change: "revoke_device", device_ref: "device:PH-0874" },
+  ];
+  for (const args of accepted) {
+    const decision = prepare(args);
+    assert.deepEqual([decision.result, decision.outcome, decision.permit_kind], ["allow", "succeeded", "draft"], JSON.stringify(args));
+  }
+  const refused = [
+    { ...PAIRING, change: "change_role" },
+    { ...PAIRING, change: "change_role", target_role: "owner" },
+    { ...PAIRING, target_role: "sales" },
+    { ...PAIRING, device_ref: "device:PH-0874" },
+    { ...PAIRING, change: "revoke_device" },
+    { ...PAIRING, change: "change_role", target_role: "sales", device_ref: "device:PH-0874" },
+    { ...PAIRING, change: "add_person" },
+    { ...PAIRING, person_ref: "W-338" },
+    { ...PAIRING, change: "replace_device", device_ref: "PH-0874" },
+    { ...PAIRING, expected_access_version: 0 },
+    { ...PAIRING, reason: "" },
+    { ...PAIRING, approved_by: "owner" },
+    Object.fromEntries(Object.entries(PAIRING).filter(([key]) => key !== "device_ref")),
+  ];
+  for (const args of refused) {
+    const decision = prepare(args);
+    assert.deepEqual([decision.outcome, decision.reason_codes, schemaPassed(decision)], ["abstained", ["action_unregistered"], false], JSON.stringify(args));
+  }
+  // A request_ref that is no signal fact id is refused before the arguments are read.
+  assert.deepEqual(prepare({ ...PAIRING, request_ref: "sig_ask_1" }).reason_codes, ["out_of_scope"]);
+});
+
+test("an access change answers only the person's own ask or request, or the one at the root of its handoff chain", () => {
+  const requester = (decision: ReturnType<typeof evaluateStep>) => decision.checks.find((check) => check.check === "requester");
+  const passes = (decision: ReturnType<typeof evaluateStep>, label: string) =>
+    assert.deepEqual([decision.outcome, requester(decision)], ["succeeded", { check: "requester", passed: true }], label);
+  const stops = (decision: ReturnType<typeof evaluateStep>, label: string) =>
+    assert.deepEqual([decision.outcome, decision.reason_codes, requester(decision)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  // The face answering a staff member's own ask, and the owner's; a press on a view's action too.
+  passes(prepare(PAIRING, { specialistId: "orchestrator" }), "direct ask");
+  passes(prepare(PAIRING, { requester: { ...STAFF_ASK, actor: { ...STAFF, type: "owner", role: "owner" } } }), "owner");
+  passes(prepare(PAIRING, { requester: { ...STAFF_ASK, source: "request" } }), "request");
+  // A handoff run gets the root of its chain from the store, so policy sees the same ask.
+  passes(prepare(PAIRING), "handoff from an ask");
+  // A handoff from a non-person event: the root is no owner_request and has no actor.
+  stops(prepare({ ...PAIRING, request_ref: "signal/sig_event" }, { requester: { signal_ref: "signal/sig_event", kind: "event", source: "web_form", actor: null } }), "handoff from an event");
+  // Another chain's ask, cited and named: not the request this run answers.
+  const other = { fact_id: "signal/sig_ask_2", version: 1 };
+  stops(
+    prepare(
+      { ...PAIRING, request_ref: other.fact_id },
+      {
+        citations: [{ fact_id: ASK_REF, version: 1 }, other],
+        snapshot: new Map([[ASK_REF, ASK_FACT], [other.fact_id, { ...ASK_FACT, fact_id: other.fact_id }]]),
+        currentVersions: new Map([[ASK_REF, 1], [other.fact_id, 1]]),
+      },
+    ),
+    "a cited ask from another chain",
+  );
+  // A field worker's ask, an unauthenticated actor, another owner_request source, no chain root.
+  stops(prepare(PAIRING, { requester: { ...STAFF_ASK, actor: { ...STAFF, type: "worker", role: "field" } } }), "worker");
+  stops(prepare(PAIRING, { requester: { ...STAFF_ASK, actor: { ...STAFF, authenticated: false } } }), "unauthenticated");
+  stops(prepare(PAIRING, { requester: { ...STAFF_ASK, source: "owner_console" } }), "another source");
+  stops(prepare(PAIRING, { requester: { ...STAFF_ASK, kind: "event" } }), "not an owner_request");
+  stops(prepare(PAIRING, { requester: null }), "no root");
+  // Named but not cited.
+  stops(prepare(PAIRING, { citations: [{ fact_id: "signal/sig_1", version: 1 }] }), "not cited");
+});
+
+test("settings, import retry, lead confirmation and authority reads take exactly the agreed arguments", () => {
+  const decide = (specialistId: string, actionId: string, args: unknown) => evaluateStep(citing({ specialistId, actionId, args }));
+  const cases: Array<[string, string, unknown, boolean]> = [
+    // settings.propose_change: flat objects with the same 1 to 20 keys.
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:business_details", before: { hours_saturday: "09:00-13:00" }, after: { hours_saturday: "closed" } }, true],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:notifications-P-1", before: { new_inquiry_push: "at any time", quiet: false, limit: 3, note: null }, after: { new_inquiry_push: "until 20:00", quiet: true, limit: 5, note: "Synthetic" } }, true],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`k${n}`, n])), after: Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`k${n}`, n + 1])) }, true],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: {}, after: {} }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: Object.fromEntries(Array.from({ length: 21 }, (_, n) => [`k${n}`, n])), after: Object.fromEntries(Array.from({ length: 21 }, (_, n) => [`k${n}`, n])) }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { hours_saturday: "09:00-13:00" }, after: { hours_sunday: "closed" } }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { a: "1" }, after: { a: "1", b: "2" } }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { hours: { saturday: "09:00" } }, after: { hours: { saturday: "closed" } } }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { "Hours Saturday": "09:00" }, after: { "Hours Saturday": "closed" } }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { a: "x".repeat(601) }, after: { a: "y" } }, false],
+    ["orchestrator", "settings.propose_change", { settings_id: "settings:a", before: { a: "1" }, after: { a: "2" }, apply: true }, false],
+    // import.retry_failed: 1 to 100 unique source keys.
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-0412", source_keys: ["JN-C-20417", "JN-C-20431", "JN-C-20488"] }, true],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1", source_keys: Array.from({ length: 100 }, (_, n) => `JN-${n}`) }, true],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1", source_keys: [] }, false],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1", source_keys: Array.from({ length: 101 }, (_, n) => `JN-${n}`) }, false],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1", source_keys: ["JN-1", "JN-1"] }, false],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1", source_keys: [""] }, false],
+    ["orchestrator", "import.retry_failed", { import_run_id: "import_run:IMP-1" }, false],
+    // lead_fact.confirm: at least one of service, scope, address, timing, and no other key.
+    ["lead_concierge", "lead_fact.confirm", { lead_id: "L-5401", proposal_id: "LP-5401", fields: { service: "metal_roofing", scope: "house only", address: "1 Synthetic Way", timing: "before the first snow" } }, true],
+    ["lead_concierge", "lead_fact.confirm", { lead_id: "L-5401", proposal_id: "LP-5401", fields: { service: null, scope: null, address: "1 Synthetic Way", timing: null } }, true],
+    ["lead_concierge", "lead_fact.confirm", { lead_id: "L-5401", proposal_id: "LP-5401", fields: { service: null, scope: null, address: null, timing: null } }, false],
+    ["lead_concierge", "lead_fact.confirm", { lead_id: "L-5401", proposal_id: "LP-5401", fields: { address: "1 Synthetic Way" } }, false],
+    ["lead_concierge", "lead_fact.confirm", { lead_id: "L-5401", proposal_id: "LP-5401", fields: { service: null, scope: null, address: "1 Synthetic Way", timing: null, price: "100" } }, false],
+    // authority.evaluate: the four ids.
+    ["compliance", "authority.evaluate", { authority_id: "AU-1", job_id: "J-CP1", applicability_id: "AP-1", assignment_id: "AS-1" }, true],
+    ["compliance", "authority.evaluate", { authority_id: "AU-1", job_id: "J-CP1", applicability_id: "AP-1" }, false],
+    ["compliance", "authority.evaluate", { authority_id: "AU 1", job_id: "J-CP1", applicability_id: "AP-1", assignment_id: "AS-1" }, false],
+    ["compliance", "authority.evaluate", { authority_id: "AU-1", job_id: "J-CP1", applicability_id: "AP-1", assignment_id: "AS-1", waive: true }, false],
+  ];
+  for (const [specialistId, actionId, args, ok] of cases) {
+    const decision = decide(specialistId, actionId, args);
+    const label = `${actionId} ${JSON.stringify(args).slice(0, 120)}`;
+    assert.equal(schemaPassed(decision), ok, label);
+    if (!ok) assert.deepEqual([decision.outcome, decision.reason_codes], ["abstained", ["action_unregistered"]], label);
+  }
+  // By class: an A1 settings edit is a draft and an A0 read is done; both A3 steps ask first, the
+  // retry the owner and the confirmation sales, whatever the owner set, until a machine path exists.
+  const [settings, retry, confirm, read] = [cases[0], cases[11], cases[19], cases[23]].map(([specialistId, actionId, args]) =>
+    evaluateStep(citing({ specialistId, actionId, args, delegation: { delegation_id: "dlg_synthetic", setting: "within_limits" }, withinCeiling: true })),
+  );
+  assert.deepEqual([settings.permit_kind, settings.outcome], ["draft", "succeeded"]);
+  assert.deepEqual([read.permit_kind, read.outcome], ["none", "succeeded"]);
+  assert.deepEqual([retry.result, retry.permit_kind, retry.reviewer_role], ["needs_approval", "asks_first", "owner"]);
+  assert.deepEqual([confirm.result, confirm.permit_kind, confirm.reviewer_role], ["needs_approval", "asks_first", "sales"]);
+  for (const id of ["import.retry_failed", "lead_fact.confirm"]) assert.deepEqual([REGISTRY[id]?.binding, REGISTRY[id]?.machinePermitProven], [{ kind: "by_hand" }, false], id);
+  assert.deepEqual(REGISTRY["authority.evaluate"]?.binding, { kind: "authority_read" });
+});
+
+test("tool descriptions name the action, its aggregate and its catalog name, and mark a protective one", () => {
+  for (const action of CATALOG.actions) assert.ok(action.name?.trim(), `${action.action_id} has a catalog name`);
+  for (const specialist of CATALOG.specialists)
+    for (const tool of toolsFor(specialist.specialist_id)) {
+      const action = catalogAction(tool.action_id)!;
+      assert.equal(tool.description, `${action.action_id} on ${action.aggregate}: ${action.name}${action.protective ? " (protective)" : ""}.`);
+    }
+  assert.equal(
+    toolsFor("orchestrator").find((tool) => tool.action_id === "exception.escalate")?.description,
+    "exception.escalate on exception: raising an issue with a named person (protective).",
+  );
+  assert.equal(
+    toolsFor("orchestrator").find((tool) => tool.action_id === "import.retry_failed")?.description,
+    "import.retry_failed on import_run: retrying the failed items of an import.",
+  );
+  assert.equal(
+    toolsFor("compliance").find((tool) => tool.action_id === "authority.evaluate")?.description,
+    "authority.evaluate on authority_record: checking licences and clearances.",
+  );
+});
+
+test("a run names the people-only acts its specialist owns, by catalog name, and none is a tool", () => {
+  assert.deepEqual(peopleOnlyFor("orchestrator"), [
+    { action_id: "delegation.set", name: "setting what may run without asking" },
+    { action_id: "policy.activate", name: "putting a policy change into effect" },
+    { action_id: "settings.apply", name: "applying a settings change" },
+    { action_id: "onboarding.go_live", name: "going live after setup" },
+  ]);
+  assert.deepEqual(peopleOnlyFor("compliance"), [
+    { action_id: "filing.submit", name: "submitting a filing" },
+    { action_id: "gate.waive", name: "waiving a job gate" },
+    { action_id: "access.change", name: "changing a person's access" },
+  ]);
+  assert.deepEqual(peopleOnlyFor("lead_concierge"), []);
+  for (const specialist of CATALOG.specialists) {
+    const tools = new Set(toolsFor(specialist.specialist_id).map((tool) => tool.action_id));
+    for (const act of peopleOnlyFor(specialist.specialist_id)) assert.equal(tools.has(act.action_id), false, act.action_id);
+  }
+});
+
+test("the settings map form is for action arguments only: the strict output dialect refuses it", () => {
+  const settings = REGISTRY["settings.propose_change"]!.args;
+  const values = (settings.properties as Record<string, Record<string, unknown>>).before;
+  // validate() reads it; both strict checkers, the Worker's and the gateway's, refuse it as a schema.
+  assert.deepEqual(validate(values, { hours_saturday: "closed" }), []);
+  for (const strict of [assertStrictSchema, hostStrict]) {
+    assert.throws(() => strict(settings), /unsupported keyword propertyNames/);
+    assert.throws(() => strict(values), /unsupported keyword propertyNames/);
+    assert.throws(() => strict({ type: "object", additionalProperties: { type: "string" }, properties: {}, required: [] }), /objects must set additionalProperties to false/);
+    assert.throws(() => strict({ type: "object", additionalProperties: false, properties: {}, required: [], minProperties: 1 }), /unsupported keyword minProperties/);
+  }
+  // Every other registered schema stays in the strict dialect.
+  for (const [actionId, entry] of Object.entries(REGISTRY))
+    if (entry && actionId !== "settings.propose_change") assert.doesNotThrow(() => assertStrictSchema(entry.args), actionId);
 });

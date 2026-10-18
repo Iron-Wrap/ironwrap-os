@@ -71,6 +71,16 @@ export interface OpenedRun {
    * ask carries `view`: the strict schema of a view spec, merged in as a nullable property.
    */
   output_extension?: { view?: JsonSchema } | null;
+  /**
+   * The people-only acts this specialist may name in a receipt, by catalog name; never tools. A
+   * Worker that predates the field omits it.
+   */
+  people_only?: PeopleOnlyAct[];
+}
+
+export interface PeopleOnlyAct {
+  action_id: string;
+  name: string;
 }
 
 export interface RunClose {

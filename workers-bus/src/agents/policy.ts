@@ -2,16 +2,17 @@
 // run's context snapshot and the owner's delegation, in a fixed order; the first failing check
 // decides. A model's confidence never enters: the same inputs always give the same decision.
 //
-// Order: run ceilings, registered action, owner scope, people-only, the requester of an action only
-// a person may request, registered arguments, strict arguments, citations (present, in the snapshot
-// at the cited version, current, fresh), handoff limits, then class and delegation.
+// Order: run ceilings, registered action, owner scope, people-only, the request behind an action
+// only a person may request, registered arguments, strict arguments and the rules across them,
+// citations (present, in the snapshot at the cited version, current, fresh), handoff limits, then
+// class and delegation.
 
 import { catalogAction, catalogSpecialist, type Autonomy, type CatalogAction } from "./catalog.ts";
 import { registryEntry, type RegistryEntry } from "./registry.ts";
 import { validate } from "./schema.ts";
 
 export const STEP_POLICY_ID = "ironwrap.agent_step_policy";
-export const STEP_POLICY_VERSION = "3";
+export const STEP_POLICY_VERSION = "4";
 
 export interface SnapshotFact {
   fact_id: string;
@@ -66,14 +67,19 @@ export interface StepInput {
   ceilings?: StepCeilings;
   /** The registry to consult; tests pass their own. */
   registry?: (actionId: string) => RegistryEntry | null;
-  /** Who made the run's signal, for an action only a person's own request may start (face.ts `signalActor`). */
-  requester?: { type: string; authenticated: boolean } | null;
+  /**
+   * For an action only a person's own request may start: the signal the run answers, as the Worker
+   * recorded it. That is the run's own signal, or for a handoff the signal at the root of its chain
+   * (store.ts `runRequest`); `actor` is face.ts `signalActor`. Null when the chain has no root.
+   */
+  requester?: { signal_ref: string; kind: string; source: string; actor: { type: string; authenticated: boolean } | null } | null;
 }
 
 /**
- * Actions prepared only on a signed-in owner's or staff member's own request through the app, never
- * from a field worker, an outside sender's text, another specialist's handoff or any other signal
- * (contract "Inbound text is data": an access change is prepared only on such a request).
+ * Actions prepared only on a signed-in owner's or staff member's own ask or request through the app,
+ * never from a field worker, an outside sender's text or any other signal (contract "Inbound text is
+ * data": an access change is prepared only on such a request). The step names that request in
+ * `request_ref` and cites it; a handoff run answers the request at the root of its chain.
  */
 export const PERSON_REQUEST_ONLY: ReadonlySet<string> = new Set(["access.prepare_change"]);
 
@@ -120,8 +126,17 @@ export function evaluateStep(input: StepInput): PolicyDecision {
   if (action.autonomy === "H" || action.human_only) return stop("failed", "policy_denied", "scope");
   pass("scope");
   if (PERSON_REQUEST_ONLY.has(input.actionId)) {
-    const requester = input.requester;
-    if (requester?.authenticated !== true || (requester.type !== "owner" && requester.type !== "staff"))
+    const request = input.requester;
+    const person = request?.actor;
+    if (
+      !request ||
+      request.kind !== "owner_request" ||
+      (request.source !== "ask" && request.source !== "request") ||
+      person?.authenticated !== true ||
+      (person.type !== "owner" && person.type !== "staff") ||
+      (input.args as { request_ref?: unknown } | null)?.request_ref !== request.signal_ref ||
+      !input.citations.some((citation) => citation.fact_id === request.signal_ref)
+    )
       return stop("abstained", "out_of_scope", "requester");
     pass("requester");
   }

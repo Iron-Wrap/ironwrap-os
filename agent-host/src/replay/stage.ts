@@ -23,7 +23,8 @@ import { sha256 } from "../gateway/schema.ts";
 import type { GatewayRequest, GatewayResult, McpStdioServer, ProviderId, Route, Tier } from "../gateway/types.ts";
 import { specialistRelease } from "../host/release.ts";
 import { loadSpecialist, type Specialist } from "../host/specialists.ts";
-import { replayRun, replayTools, resolvedCase, type ReplayTool } from "./case-run.ts";
+import type { PeopleOnlyAct } from "../host/worker.ts";
+import { caseClock, replayPeopleOnly, replayRun, replayTools, resolvedCase, type ReplayTool } from "./case-run.ts";
 import {
   buildQualificationReport,
   loadRubric,
@@ -123,6 +124,7 @@ interface Loaded {
   id: string;
   specialist: Specialist;
   tools: ReplayTool[];
+  peopleOnly: PeopleOnlyAct[];
   promptSha: string;
   wave: number;
   golden: EvalCase[];
@@ -390,6 +392,7 @@ async function loadForRun(environment: ReplayEnvironment, id: string): Promise<L
   const first = golden[0] ?? redteam[0];
   if (!first) throw new Error(`${id} has no eval cases`);
   const tools = replayTools(specialist, environment.catalog);
+  const peopleOnly = replayPeopleOnly(specialist, environment.catalog);
   const gateway = environment.gatewayConfig;
   let production = gateway.routes[(Object.hasOwn(gateway.specialists, id) ? gateway.specialists[id].route : null) ?? gateway.tiers[specialist.tier]];
   let reviews: ProviderId | null = null;
@@ -407,9 +410,10 @@ async function loadForRun(environment: ReplayEnvironment, id: string): Promise<L
     id,
     specialist,
     tools,
+    peopleOnly,
     // The assembled instructions do not depend on the case (runRepetition checks), so any case
     // gives the stage's hash.
-    promptSha: sha256(replayRun(specialist, tools, first, "run_hash").input.system),
+    promptSha: sha256(replayRun(specialist, tools, first, "run_hash", caseClock(first), peopleOnly).input.system),
     wave: roster.wave,
     golden,
     redteam,
@@ -536,7 +540,7 @@ async function runRepetition(ctx: Context, work: WorkItem): Promise<void> {
   const entry = ctx.entries.get(work.key) ?? {};
   if (!entry.transcript) {
     if (halted(ctx)) return;
-    const replay = replayRun(loaded.specialist, loaded.tools, work.item, runId);
+    const replay = replayRun(loaded.specialist, loaded.tools, work.item, runId, caseClock(work.item), loaded.peopleOnly);
     if (sha256(replay.input.system) !== loaded.promptSha) throw new Error(`${loaded.id}: the assembled instructions differ between cases`);
     const toolFile = join(ctx.toolsDir, `${runId}.json`);
     writeFileSync(toolFile, JSON.stringify(replay.toolFile));

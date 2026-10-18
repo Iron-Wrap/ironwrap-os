@@ -552,6 +552,33 @@ test("approval is recorded but an unbound effect remains policy_missing with no 
   assert.equal(JSON.parse(stored.permit_json).approved_by, "appu_test_owner");
 });
 
+test("an approved import retry or lead confirmation runs nothing: the decision is recorded and its reviewer takes the work over", async () => {
+  const s = setup();
+  const steps = [
+    { specialist: "orchestrator", action: "import.retry_failed", args: { import_run_id: "import_run:synthetic-0001", source_keys: ["SRC-0001", "SRC-0002"] }, reviewer: "owner" },
+    { specialist: "lead_concierge", action: "lead_fact.confirm", args: { lead_id: "synthetic-lead", proposal_id: "proposal-0001", fields: { service: "metal_roofing", scope: null, address: null, timing: null } }, reviewer: "sales" },
+  ];
+  for (const item of steps) {
+    const proposed = await s.propose(await s.run(item.specialist), item.action, item.args);
+    assert.deepEqual(
+      [proposed.body.decision, proposed.body.receipt.permit.kind, proposed.body.receipt.needs_from_you?.reviewer_role],
+      ["awaiting_approval", "asks_first", item.reviewer],
+      item.action,
+    );
+    const row = s.scalar("SELECT version,args_sha256 FROM agent_run_steps WHERE step_id=?", proposed.body.step_id);
+    const approved = await s.app(`/steps/${proposed.body.step_id}/decision`, { decision: "approve", expected_version: row.version, expected_args_sha256: row.args_sha256 }, "owner", `approve-${item.action}`);
+    assert.deepEqual(approved.body, { outcome: "abstained", reason_code: "policy_missing" }, item.action);
+    const stored = s.scalar("SELECT tool_json,readback_json,needs_reviewer_role,needs_ask,permit_json FROM agent_run_steps WHERE step_id=?", proposed.body.step_id);
+    assert.deepEqual([stored.tool_json, stored.readback_json, stored.needs_reviewer_role, stored.needs_ask], [null, null, item.reviewer, "acknowledge_and_act"], item.action);
+    assert.equal(JSON.parse(stored.permit_json).approved_by, "appu_test_owner");
+    // The reviewer's Needs you holds it with the ask to take it over, never as done.
+    const lane = await s.app("/receipts?view=needs_you");
+    const receipt = lane.body.receipts.find((entry: { step_id: string }) => entry.step_id === proposed.body.step_id)?.receipt;
+    assert.deepEqual([receipt?.outcome, receipt?.needs_from_you?.ask], ["abstained", "Take this over and act on it."], item.action);
+    assert.match(String(receipt?.did), /stopped before/, item.action);
+  }
+});
+
 test("a stale decision transaction rolls back its decision row and permits", async () => {
   const s = setup();
   const step = await s.propose(await s.run(), "note.add", note);

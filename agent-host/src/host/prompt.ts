@@ -1,5 +1,6 @@
 // Assembles one run exactly as specialists/README.md orders it: COMMON.md, the playbook, the
-// allowlisted catalog entries, then the context snapshot and signal as data. Untrusted text is
+// allowlisted catalog entries, then the context snapshot and signal as data (with the names of the
+// people-only acts the specialist may refer to, when the Worker sends them). Untrusted text is
 // fenced by a per-run random marker, so content cannot forge the end of the data block. A run the
 // Worker opens with a view schema (the face answering a person's ask) also gets the view rules and
 // a nullable `view` in its output schema; every other run's input is unchanged.
@@ -166,6 +167,8 @@ export function buildRunInput(specialist: Specialist, run: OpenedRun, signal: Si
     goal: run.goal,
     signal,
     context_snapshot: run.context,
+    // Names for steps only a person takes, as the Worker sends them; they are never tools.
+    ...(run.people_only === undefined ? {} : { people_only: run.people_only }),
   };
   const prompt = [
     `Run ${JSON.stringify(run.run_id)} for ${specialist.id}. The goal, the signal and the context snapshot are in the data block.`,

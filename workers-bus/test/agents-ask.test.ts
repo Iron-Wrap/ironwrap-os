@@ -3,15 +3,21 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { assertStrictSchema as hostStrict } from "../../agent-host/src/gateway/schema.ts";
+import { loadSpecialist } from "../../agent-host/src/host/specialists.ts";
+import { replayPeopleOnly, replayTools } from "../../agent-host/src/replay/case-run.ts";
+// @ts-expect-error: a plain .mjs module without type declarations
+import { loadCatalog } from "../../agent-host/evals/validate.mjs";
+import { CATALOG } from "../src/agents/catalog.ts";
 import { handleAgentHostApi, handleAgentTeamAppRoute } from "../src/agents/api.ts";
 import { CATALOG_SHA256 } from "../src/agents/contract-catalog.ts";
 import { changeSpecialistControl, setDelegation } from "../src/agents/control.ts";
 import { VIEW_SCHEMA } from "../src/agents/face.ts";
 import { assertStrictSchema, canonicalJson } from "../src/agents/schema.ts";
-import { appendSignal, type BoundStatement } from "../src/agents/store.ts";
+import { appendSignal, peopleOnlyFor, toolsFor, type BoundStatement } from "../src/agents/store.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -1176,35 +1182,209 @@ test("a person's limits hold under parallel requests: exactly the limit is admit
   assert.equal((t.db.raw.prepare("SELECT COUNT(*) AS n FROM agent_signals WHERE source = 'ask:appu_sales_0001'").get() as { n: number }).n, 5);
 });
 
-test("an access change is prepared only on a signed-in owner's or staff member's own ask", async () => {
-  const t = setup();
-  const propose = async (runId: string, citation: Source) => {
-    const proposal = { action_id: "access.prepare_change", args: { user_id: "appu_field_0001", change: "phone_pairing" }, citations: [{ fact_id: citation.fact_id, version: citation.version }] };
-    return (await t.host("POST", `/api/v1/agents/runs/${runId}/steps`, { ...proposal, step_key: hex(canonicalJson(proposal)) })).body;
-  };
-  const viaAsk = async (who: Person) => {
-    const askId = await ask(t, who, `ask-access-${who}`, askBody("Pair a new crew phone for me.", null));
-    const run = await openFace(t, askId);
-    return await propose(run.run_id, factOf(run, `signal/${askId}`));
-  };
-  const requesterCheck = (result: { receipt: { policy: { checks: Array<{ check: string; passed: boolean }> } } }) =>
-    result.receipt.policy.checks.find((check) => check.check === "requester");
+/** A crew phone pairing for the synthetic field person, answering the request `requestRef` names. */
+const pairing = (requestRef: string) => ({
+  person_ref: "person:appu_field_0001",
+  change: "pair_device",
+  target_role: null,
+  device_ref: null,
+  expected_access_version: 1,
+  request_ref: requestRef,
+  reason: "Synthetic: pair the crew phone from the office.",
+});
 
-  // The owner and a staff member pass the requester check; the action has no registered arguments yet.
+type Cite = { fact_id: string; version: number };
+const cite = ({ fact_id, version }: Cite): Cite => ({ fact_id, version });
+
+async function step(t: Setup, runId: string, action_id: string, args: unknown, citations: Cite[]) {
+  const proposal = { action_id, args, citations };
+  return (await t.host("POST", `/api/v1/agents/runs/${runId}/steps`, { ...proposal, step_key: hex(canonicalJson(proposal)) })).body;
+}
+
+/** The run `from` hands an access change on `object` to `to`; returns the run opened on that handoff. */
+async function handOff(t: Setup, from: { run_id: string }, citation: Cite, object: string, to = "compliance") {
+  const args = { to_specialist_id: to, object: { aggregate: "user_access", id: object, version: 1 }, reason: "Synthetic: a crew phone pairing asked for in the office.", expected_action_id: "access.prepare_change" };
+  const handed = await step(t, from.run_id, "handoff.create", args, [citation]);
+  assert.equal(handed.decision, "recorded", JSON.stringify(handed));
+  const { signal_id } = t.db.raw.prepare("SELECT signal_id FROM agent_signals WHERE kind = 'handoff' AND parent_run_id = ?").get(from.run_id) as { signal_id: string };
+  return { ...(await t.host("POST", "/api/v1/agents/runs", { signal_id, specialist_id: to, host_run_key: `run:${signal_id}` })).body, signal_id };
+}
+
+const signalFacts = (run: { context: { facts: Array<Source & { kind: string }> } }) => run.context.facts.filter((fact) => fact.kind === "signal");
+
+test("an access change answers the signed-in owner's or staff member's own ask, or the one at the root of its handoffs", async () => {
+  const t = setup();
+  const requester = (result: { receipt: { policy: { checks: Array<{ check: string; passed: boolean }> } } }) =>
+    result.receipt.policy.checks.find((check) => check.check === "requester");
+  const passes = (result: any, label: string) =>
+    assert.deepEqual([result.decision, result.receipt.permit.kind, requester(result)], ["drafted", "draft", { check: "requester", passed: true }], label);
+  const stops = (result: any, label: string) =>
+    assert.deepEqual([result.decision, result.reason_codes, requester(result)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  const asked = async (who: Person, key: string) => {
+    const askId = await ask(t, who, key, askBody("Synthetic: pair the new crew phone for the crew member.", null));
+    const run = await openFace(t, askId);
+    return { askId, run, own: factOf(run, `signal/${askId}`) };
+  };
+
+  // The face answers the owner's and a staff member's own ask, which the step names and cites.
   for (const who of ["owner", "sales"] as const) {
-    const result = await viaAsk(who);
-    assert.deepEqual([requesterCheck(result), result.reason_codes], [{ check: "requester", passed: true }, ["policy_missing"]], who);
+    const { run, own } = await asked(who, `ask-access-${who}`);
+    passes(await step(t, run.run_id, "access.prepare_change", pairing(own.fact_id), [cite(own)]), `${who} ask`);
+    stops(await step(t, run.run_id, "access.prepare_change", { ...pairing(own.fact_id), reason: "Synthetic: not cited." }, []), `${who} ask, not cited`);
   }
-  // A field worker's ask, an event and another specialist's handoff are refused.
-  const refused = (result: { reason_codes: string[]; receipt: { policy: { checks: Array<{ check: string; passed: boolean }> } } }, name: string) =>
-    assert.deepEqual([result.reason_codes, requesterCheck(result)], [["out_of_scope"], { check: "requester", passed: false }], name);
-  refused(await viaAsk("field"), "field ask");
-  for (const [kind, specialist, source] of [["event", "orchestrator", "web_form"], ["handoff", "compliance", "orchestrator"]] as const) {
-    const signal = await appendSignal(t.db, TENANT, { kind, specialist_id: specialist, watch_id: null, source, subject: null, content: { text: "Pair a new phone for the owner." }, dedupe_key: `access:${kind}` }, t.now);
+
+  // A handoff from a staff ask: the compliance checker answers the ask at the root of the chain, and
+  // only that one: not its own handoff signal, and not another ask cited beside it.
+  const ops = await asked("ops", "ask-access-ops");
+  const handed = await handOff(t, ops.run, cite(ops.own), "person:appu_field_0001");
+  const root = factOf(handed, `signal/${ops.askId}`);
+  passes(await step(t, handed.run_id, "access.prepare_change", pairing(root.fact_id), [cite(root)]), "handoff from an ask");
+  const handoff = factOf(handed, `signal/${handed.signal_id}`);
+  stops(await step(t, handed.run_id, "access.prepare_change", pairing(handoff.fact_id), [cite(handoff)]), "the handoff itself");
+  const other = await asked("sales", "ask-access-other");
+  stops(await step(t, handed.run_id, "access.prepare_change", pairing(other.own.fact_id), [cite(root), cite(other.own)]), "a cited ask from another chain");
+  stops(await step(t, ops.run.run_id, "access.prepare_change", pairing(other.own.fact_id), [cite(ops.own), cite(other.own)]), "another ask, on the face");
+
+  // Two hops: the face's own run answers the same root ask when the work comes back to it.
+  const back = await handOff(t, handed, cite(root), "person:appu_field_0001", "orchestrator");
+  passes(await step(t, back.run_id, "access.prepare_change", pairing(root.fact_id), [cite(factOf(back, root.fact_id))]), "two handoffs from an ask");
+
+  // An owner's press on a view's action is a request; a chain from it answers that request.
+  const press = await t.app("owner", "POST", "/requests", { action_id: "settings.propose_change", target: { aggregate: "job", id: JOB }, ask_id: null }, { "idempotency-key": "press-access-owner" });
+  assert.equal(press.status, 202);
+  const requested = (await t.host("POST", "/api/v1/agents/runs", { signal_id: press.body.signal_id, specialist_id: "orchestrator", host_run_key: "access-press-run" })).body;
+  const fromPress = await handOff(t, requested, cite(factOf(requested, `signal/${press.body.signal_id}`)), "person:appu_field_0002");
+  passes(await step(t, fromPress.run_id, "access.prepare_change", pairing(`signal/${press.body.signal_id}`), [cite(factOf(fromPress, `signal/${press.body.signal_id}`))]), "handoff from a request");
+
+  // A handoff from a non-person event has no person's request at its root.
+  const event = await appendSignal(t.db, TENANT, { kind: "event", specialist_id: "orchestrator", watch_id: null, source: "web_form", subject: null, content: { text: "Synthetic: pair a phone for the owner." }, dedupe_key: "access:event" }, t.now);
+  assert.ok("signal_id" in event);
+  const eventRun = (await t.host("POST", "/api/v1/agents/runs", { signal_id: event.signal_id, specialist_id: "orchestrator", host_run_key: "access-event-run" })).body;
+  const fromEvent = await handOff(t, eventRun, cite(factOf(eventRun, `signal/${event.signal_id}`)), "person:appu_field_0003");
+  const eventHandoff = factOf(fromEvent, `signal/${fromEvent.signal_id}`);
+  stops(await step(t, fromEvent.run_id, "access.prepare_change", pairing(`signal/${event.signal_id}`), [cite(eventHandoff)]), "handoff from an event");
+  stops(await step(t, eventRun.run_id, "access.prepare_change", pairing(`signal/${event.signal_id}`), [cite(factOf(eventRun, `signal/${event.signal_id}`))]), "the event itself");
+
+  // A field worker's ask, directly and at the root of a handoff.
+  const field = await asked("field", "ask-access-field");
+  stops(await step(t, field.run.run_id, "access.prepare_change", pairing(field.own.fact_id), [cite(field.own)]), "worker ask");
+  const fromField = await handOff(t, field.run, cite(field.own), "person:appu_field_0004");
+  stops(await step(t, fromField.run_id, "access.prepare_change", pairing(field.own.fact_id), [cite(factOf(fromField, field.own.fact_id))]), "handoff from a worker ask");
+
+  // A handoff signal with no run behind it has no chain to follow.
+  const orphan = await appendSignal(t.db, TENANT, { kind: "handoff", specialist_id: "compliance", watch_id: null, source: "orchestrator", subject: null, content: { text: "Synthetic: pair a new phone for the owner." }, dedupe_key: "access:orphan" }, t.now);
+  assert.ok("signal_id" in orphan);
+  const orphaned = (await t.host("POST", "/api/v1/agents/runs", { signal_id: orphan.signal_id, specialist_id: "compliance", host_run_key: "access-orphan-run" })).body;
+  stops(await step(t, orphaned.run_id, "access.prepare_change", pairing(`signal/${orphan.signal_id}`), [cite(factOf(orphaned, `signal/${orphan.signal_id}`))]), "no chain");
+});
+
+test("a handoff run reads the person's ask at the root of its chain, and its words only as the owner", async () => {
+  const t = setup();
+  const askId = await ask(t, "ops", "ask-root-ops", askBody("Synthetic: pair a crew phone for the new crew member.", null));
+  const face = await openFace(t, askId);
+  // A run on the ask itself starts from that signal alone.
+  assert.deepEqual(signalFacts(face).map((fact) => fact.fact_id), [`signal/${askId}`]);
+
+  const handed = await handOff(t, face, cite(factOf(face, `signal/${askId}`)), "person:appu_field_0001");
+  const row = t.db.raw.prepare("SELECT received_at, content_json FROM agent_signals WHERE signal_id = ?").get(askId) as { received_at: string; content_json: string };
+  const actor = { type: "staff", role: "ops", ref: "person:appu_ops_0001", authenticated: true };
+  // The compliance checker reads as production, which may not read an ops person's ask: who asked
+  // and how, as the Worker recorded it, and not the words.
+  const data = { signal_id: askId, kind: "owner_request", source: "ask", actor };
+  assert.deepEqual(signalFacts(handed), [
+    { ...handed.context.facts[0], fact_id: `signal/${handed.signal_id}` },
+    { fact_id: `signal/${askId}`, kind: "signal", version: 1, hash: `sha256:${hex(canonicalJson(data))}`, trust: "owned", observed_at: row.received_at, fresh_until: null, data },
+  ]);
+  // It is cited and read again like any fact, and a resumed run reads it again.
+  assert.equal((await step(t, handed.run_id, "fact.explain", { object: null, explanation: "Synthetic: ops asked for this." }, [{ fact_id: `signal/${askId}`, version: 1 }])).decision, "recorded");
+  const resumed = (await t.host("POST", "/api/v1/agents/runs", { signal_id: handed.signal_id, specialist_id: "compliance", host_run_key: `run:${handed.signal_id}` })).body;
+  assert.deepEqual([resumed.resumed, signalFacts(resumed)[1]], [true, signalFacts(handed)[1]]);
+
+  // The work comes back to the face, which reads as the owner: the ask's words come too, and so
+  // the fact is untrusted text. The root is the same ask two hops up.
+  const back = await handOff(t, handed, cite(factOf(handed, `signal/${askId}`)), "person:appu_field_0001", "orchestrator");
+  const words = { ...data, content: JSON.parse(row.content_json) };
+  assert.deepEqual(words.content, { question: "Synthetic: pair a crew phone for the new crew member.", context: { route: `/jobs/${JOB}`, object: null }, asker_role: "ops" });
+  assert.deepEqual(signalFacts(back)[1], { fact_id: `signal/${askId}`, kind: "signal", version: 1, hash: `sha256:${hex(canonicalJson(words))}`, trust: "untrusted_text", observed_at: row.received_at, fresh_until: null, data: words });
+
+  // A handoff from an event has no person's request at its root, and an event run reads none.
+  const event = await appendSignal(t.db, TENANT, { kind: "event", specialist_id: "orchestrator", watch_id: null, source: "web_form", subject: null, content: { text: "Synthetic" }, dedupe_key: "root:event" }, t.now);
+  assert.ok("signal_id" in event);
+  const eventRun = (await t.host("POST", "/api/v1/agents/runs", { signal_id: event.signal_id, specialist_id: "orchestrator", host_run_key: "root-event-run" })).body;
+  assert.deepEqual(signalFacts(eventRun).map((fact) => fact.fact_id), [`signal/${event.signal_id}`]);
+  const fromEvent = await handOff(t, eventRun, cite(factOf(eventRun, `signal/${event.signal_id}`)), "person:appu_field_0002");
+  assert.deepEqual(signalFacts(fromEvent).map((fact) => fact.fact_id), [`signal/${fromEvent.signal_id}`]);
+  // Nor can another chain's ask be read into a run by citing it.
+  assert.deepEqual((await step(t, fromEvent.run_id, "fact.explain", { object: null, explanation: "Synthetic" }, [{ fact_id: `signal/${askId}`, version: 1 }])).reason_codes, ["citation_unverifiable"]);
+});
+
+test("a handoff chain that loops, or runs past the depth ceiling, has no root ask: nothing is read and the step abstains", async () => {
+  const t = setup();
+  const requester = (result: any) => result.receipt.policy.checks.find((check: { check: string }) => check.check === "requester");
+  const passes = (result: any, label: string) => assert.deepEqual([result.decision, requester(result)], ["drafted", { check: "requester", passed: true }], label);
+  const stops = (result: any, label: string) =>
+    assert.deepEqual([result.decision, result.reason_codes, requester(result)], ["abstained", ["out_of_scope"], { check: "requester", passed: false }], label);
+  const handoff = async (to: string, from: string, parentRunId: string, depth: number, key: string) => {
+    const signal = await appendSignal(t.db, TENANT, { kind: "handoff", specialist_id: to, watch_id: "handoff.created", source: from, subject: null, content: { text: `Synthetic handoff ${key}` }, dedupe_key: `chain:${key}`, parent_run_id: parentRunId, handoff_depth: depth }, t.now);
     assert.ok("signal_id" in signal);
-    const run = (await t.host("POST", "/api/v1/agents/runs", { signal_id: signal.signal_id, specialist_id: specialist, host_run_key: `access-${kind}` })).body;
-    refused(await propose(run.run_id, factOf(run, `signal/${signal.signal_id}`)), kind);
+    return { ...(await t.host("POST", "/api/v1/agents/runs", { signal_id: signal.signal_id, specialist_id: to, host_run_key: `chain-run-${key}` })).body, signal_id: signal.signal_id };
+  };
+
+  // A loop: the first handoff names the run of the second, which names the run of the first. The
+  // API cannot build it, so the run the first names is written straight to its table.
+  const looped = await handoff("compliance", "orchestrator", "run_loop_other", 1, "loop-1");
+  const second = await appendSignal(t.db, TENANT, { kind: "handoff", specialist_id: "orchestrator", watch_id: "handoff.created", source: "compliance", subject: null, content: { text: "Synthetic loop" }, dedupe_key: "chain:loop-2", parent_run_id: looped.run_id, handoff_depth: 2 }, t.now);
+  assert.ok("signal_id" in second);
+  t.db.raw
+    .prepare(
+      `INSERT INTO agent_runs (run_id, tenant_id, specialist_id, signal_id, host_run_key, goal, trigger_json, context_json, context_snapshot_hash,
+         tool_manifest_json, tool_manifest_hash, catalog_version, policy_version, correlation_id, state, attempt_started_at, started_at)
+       VALUES ('run_loop_other', ?, 'orchestrator', ?, 'chain-run-loop-other', 'Synthetic loop', '{}', '{}', ?, '[]', ?, 'test', 'test', 'loop', 'open', ?, ?)`,
+    )
+    .run(TENANT, second.signal_id, "0".repeat(64), "0".repeat(64), t.now, t.now);
+  const own = factOf(looped, `signal/${looped.signal_id}`);
+  stops(await step(t, looped.run_id, "access.prepare_change", pairing(own.fact_id), [cite(own)]), "a loop");
+  const inLoop = (await t.host("POST", "/api/v1/agents/runs", { signal_id: second.signal_id, specialist_id: "orchestrator", host_run_key: "chain-run-loop-2" })).body;
+  assert.deepEqual(signalFacts(inLoop).map((fact) => fact.fact_id), [`signal/${second.signal_id}`]);
+
+  // A chain from a staff ask: at the depth ceiling the ask is still its root; one hop past it, none.
+  const askId = await ask(t, "ops", "ask-chain-depth", askBody("Synthetic: pair a crew phone for the new crew member.", null));
+  let run: any = await openFace(t, askId);
+  let from = "orchestrator";
+  const hops: any[] = [];
+  for (let depth = 1; depth <= 5; depth += 1) {
+    const to = depth % 2 === 1 ? "compliance" : "orchestrator";
+    run = await handoff(to, from, run.run_id, depth, `depth-${depth}`);
+    hops.push(run);
+    from = to;
   }
+  const atCeiling = hops[3];
+  const root = factOf(atCeiling, `signal/${askId}`);
+  passes(await step(t, atCeiling.run_id, "access.prepare_change", pairing(root.fact_id), [cite(root)]), "four handoffs");
+  const past = hops[4];
+  assert.deepEqual(signalFacts(past).map((fact) => fact.fact_id), [`signal/${past.signal_id}`]);
+  stops(await step(t, past.run_id, "access.prepare_change", pairing(`signal/${askId}`), [cite(factOf(past, `signal/${past.signal_id}`))]), "five handoffs");
+});
+
+test("on the real catalog and allowlists, the replay words every tool and names every people-only act as the Worker does", async () => {
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const catalog = loadCatalog(repo);
+  assert.equal(catalog.sha256, CATALOG_SHA256);
+  let compared = 0;
+  for (const { specialist_id: id } of CATALOG.specialists) {
+    const specialist = await loadSpecialist(join(repo, "agent-host/specialists"), id);
+    const allowlisted = new Set(specialist.allowlist.map((entry) => entry.action_id));
+    const replayed = new Map(replayTools(specialist, catalog).map((tool) => [tool.action_id, tool]));
+    const wording = (tool: { tool_name: string; autonomy: string; side_effect_class: string; undo: string; description: string } | undefined) =>
+      tool && { tool_name: tool.tool_name, autonomy: tool.autonomy, side_effect_class: tool.side_effect_class, undo: tool.undo, description: tool.description };
+    for (const tool of toolsFor(id).filter((tool) => allowlisted.has(tool.action_id))) {
+      assert.deepEqual(wording(replayed.get(tool.action_id)), wording(tool), `${id} ${tool.action_id}`);
+      compared += 1;
+    }
+    assert.deepEqual(replayPeopleOnly(specialist, catalog), peopleOnlyFor(id), id);
+  }
+  // Every specialist's shared tools, and the follow-up registrations, are compared.
+  assert.ok(compared >= CATALOG.specialists.length * 3, String(compared));
 });
 
 test("a refused ask says when to come back: the oldest of the window leaves, and with both limits full the later of the two", async () => {

@@ -1,0 +1,132 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_stuck_jobs",
+  "run_id": "run_face_stuck_jobs",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "list",
+  "title": "Jobs that are stuck",
+  "data": [
+    {
+      "id": "stuck",
+      "read_model": "owner_now",
+      "params": {
+        "section": "cannot_start"
+      },
+      "sources": [
+        {
+          "fact_id": "job/IW-1038",
+          "version": 41,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "job/IW-1046",
+          "version": 12,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "job/IW-1041",
+          "version": 19,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "stuck",
+              "path": "/count"
+            },
+            "one": "job is stuck",
+            "other": "jobs are stuck",
+            "zero": "No job is stuck"
+          },
+          {
+            "value": {
+              "bind": "stuck",
+              "path": "/count_work_stopped"
+            },
+            "one": "work stop",
+            "other": "work stops",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "stuck",
+              "path": "/count_needs_viewer"
+            },
+            "one": "needs you",
+            "other": "need you",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "body": [
+      {
+        "kind": "list",
+        "heading": null,
+        "rows": {
+          "bind": "stuck",
+          "path": "/items"
+        },
+        "title": {
+          "field": "job_name"
+        },
+        "meta": [
+          {
+            "field": "job_code"
+          },
+          {
+            "field": "reason"
+          }
+        ],
+        "state": {
+          "field": "state"
+        },
+        "proposed": {
+          "field": "proposal"
+        },
+        "link": {
+          "field": "decision_link"
+        },
+        "primary": true
+      }
+    ],
+    "side": [
+      {
+        "kind": "text",
+        "words": "A job is stuck when it cannot start or its work is stopped."
+      },
+      {
+        "kind": "source_chips",
+        "sources": {
+          "bind": "stuck",
+          "path": "/sources"
+        }
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Nothing is stuck. See what needs you on Now.",
+        "link": 0,
+        "action": null
+      }
+    ]
+  },
+  "actions": [],
+  "links": [
+    {
+      "surface": "now",
+      "id": null,
+      "label": "See what needs you",
+      "primary": false
+    }
+  ]
+}

@@ -13,6 +13,11 @@
         "options",
         "happy_path"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -491,6 +496,11 @@
         "language",
         "direct_sales"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -964,6 +974,11 @@
         "language",
         "brand"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -1846,8 +1861,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "quote.draft_revision"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "quote.draft_revision"
             }
           }
         ],
@@ -1891,6 +1906,11 @@
         "supersede",
         "reprice"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -2835,8 +2855,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "expected_action": "invoice.commit_intent"
+              "to_specialist_id": "billing_reconciliation",
+              "expected_action_id": "invoice.commit_intent"
             }
           }
         ],
@@ -3360,22 +3380,22 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "cancellation.hold"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "cancellation.hold"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "expected_action": "money.flag"
+              "to_specialist_id": "billing_reconciliation",
+              "expected_action_id": "money.flag"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "customer_message.draft"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -3710,8 +3730,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "cancellation.hold"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "cancellation.hold"
             }
           }
         ],
@@ -4936,7 +4956,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -4980,6 +5000,11 @@
         "quote_committed",
         "decision_authority"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -5736,6 +5761,11 @@
         "language",
         "applicability"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -6127,6 +6157,11 @@
         "storm",
         "insurance"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "estimator",
@@ -7510,7 +7545,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -7715,7 +7750,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],
@@ -7963,7 +7998,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "measurement_design"
+              "to_specialist_id": "measurement_design"
             }
           }
         ],
@@ -8944,7 +8979,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -9939,7 +9974,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -10671,8 +10706,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "customer_message.draft"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -11352,8 +11387,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "service_case.open"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "service_case.open"
             }
           }
         ],
@@ -11552,8 +11587,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator",
-              "expected_action": "change_order.draft"
+              "to_specialist_id": "estimator",
+              "expected_action_id": "change_order.draft"
             }
           }
         ],
@@ -11598,6 +11633,11 @@
         "supersede",
         "validity"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -12277,8 +12317,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher",
-              "expected_action": "cancellation.hold"
+              "to_specialist_id": "scheduler_dispatcher",
+              "expected_action_id": "cancellation.hold"
             }
           }
         ],
@@ -12814,7 +12854,9 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "job_id": "J-5142"
+              "object": {
+                "id": "J-5142"
+              }
             }
           },
           {

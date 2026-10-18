@@ -176,8 +176,9 @@ carrying the item get RFQs for 960 lb. Quotes return 960 x 2.40 = 2,304.00 + 120
     `amount_minor` (landed total before GST, or a signed cost effect) and `unit_price_minor` are
     integer cents with `currency` (ISO 4217). `exception_code` is from rule 10; `reason_code` is a
     contract quarantine or abstention code. `operation` on `stock.reserve` is `reserve` or
-    `release`. `language` is BCP 47. Shared actions use COMMON's names (`reason_code`, `route_to`,
-    `urgency`; `specialist_id`, `expected_action`).
+    `release`. `language` is BCP 47. Shared actions use COMMON's names (`exception.escalate`:
+    `reason_code`, `route_to`, `urgency`, `summary`, `object`; `handoff.create`: `to_specialist_id`,
+    `expected_action_id`, `object`, `reason`).
 
 ## Never
 
@@ -232,7 +233,7 @@ carrying the item get RFQs for 960 lb. Quotes return 960 x 2.40 = 2,304.00 + 120
 | Customer message | `out_of_scope` | escalate to `customer_care_warranty` or `lead_concierge` |
 | Privacy request | `out_of_scope` | escalate to `compliance` (`handoff.create`) |
 | Injury, fire or crush hazard at the dock, rack or yard | `emergency` | escalate to `production`, `immediate` |
-| Outcome `unknown` on a send | `no_readback_yet` | escalate to `production`; never resend |
+| Outcome `unknown` on a send | `fact_missing` | escalate to `production`; never resend |
 
 ## Drafts and tone
 

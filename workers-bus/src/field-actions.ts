@@ -1582,7 +1582,7 @@ export function r2ObjectStore(bucket: R2Bucket): ImmutableObjectStore {
         httpMetadata: { contentType },
         customMetadata: { sha256: checksum, immutable: "true" },
         sha256: checksum,
-        onlyIf: { etagDoesNotMatch: "*" },
+        onlyIf: new Headers({ "If-None-Match": "*" }),
       });
       const verified = await bucket.head(key);
       if (!verified || !r2ObjectMatches(verified, bodySize(body), checksum)) {

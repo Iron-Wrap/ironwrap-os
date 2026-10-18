@@ -11,7 +11,8 @@ import {
 import type { GeometryModel } from "./geometry.ts";
 import { parseMeasurementSubmission, extractGeometry } from "./measurements.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import { approvedPricingPolicySnapshot, type PriceList } from "./pricing.ts";
+import { approvedPricingPolicySnapshot, priceTakeoff, type PriceList } from "./pricing.ts";
+import { PricingCatalogError, pricingCatalogEnabled, selectCatalogPricingForImport } from "./pricing-catalog.ts";
 import { deriveRoofGraph } from "./roof-graph.ts";
 import {
   ESTIMATOR_EVIDENCE_SCHEMA_VERSION,
@@ -76,6 +77,8 @@ export interface ImportEstimatorEvidenceInput {
 }
 
 export interface NativeEstimatorSources {
+  estimatorRevisionId: string | null;
+  estimatorCreatedAt: string | null;
   job: NativeRow;
   measurementRows: NativeRow[];
   visualModelRows: NativeRow[];
@@ -152,7 +155,7 @@ export async function importEstimatorEvidenceFromNativeSources(
     ),
     firstRow<ImportingActor>(
       env,
-      `SELECT user_id, email_normalized, role, active FROM app_users
+      `SELECT user_id, email_normalized, COALESCE(access_role, role) role, active FROM app_users
         WHERE tenant_id = ? AND user_id = ? LIMIT 1`,
       input.tenantId,
       input.importedByUserId,
@@ -241,12 +244,37 @@ export async function importEstimatorEvidenceFromNativeSources(
     input.roofJobId,
     receipt,
   );
-  const pricingAuthority = await nativePricingAuthority(
-    env,
-    input.tenantId,
-    actor,
-    now,
-  );
+  const catalogEnabled = pricingCatalogEnabled(env);
+  const selectedPricing = catalogEnabled
+    ? await selectCatalogPricingForImport(env, input.tenantId, now)
+    : null;
+  if (selectedPricing) {
+    try {
+      const priced = priceTakeoff(takeoff, selectedPricing.list, {
+        authority: selectedPricing.authority,
+        pricedAt: selectedPricing.pricedAt,
+      });
+      if (priced.unpricedProfiles.length)
+        throw new PricingCatalogError("pricing_catalog_missing_rates");
+    } catch (error) {
+      // Only the calculator's explicit missing-category refusals are catalog
+      // blockers. Invalid quantities, overflow, and unexpected errors remain failures.
+      if (error instanceof TypeError && (
+        /^priceList\.trims\.[A-Za-z0-9][A-Za-z0-9._:-]{0,127}: approved pricing requires an explicit rate for every nonzero trim category$/.test(error.message) ||
+        /^priceList\.fasteners\.(clips|clipScrews|trimScrews): approved pricing requires an explicit rate for every nonzero fastener category$/.test(error.message) ||
+        error.message === "priceList.labor: approved pricing requires an explicit rate for nonzero labor quantity"
+      )) {
+        const blocker = new PricingCatalogError("pricing_catalog_missing_rates");
+        blocker.message = `${blocker.code}: ${error.message}`;
+        blocker.cause = error;
+        throw blocker;
+      }
+      throw error;
+    }
+  }
+  const pricingAuthority = catalogEnabled
+    ? (selectedPricing?.rule ?? null)
+    : await nativePricingAuthority(env, input.tenantId, actor, now);
   const measurementName = receipt.measurement_id;
   const takeoffName = `takeoff:${takeoffSha256}`;
   const measurementNeedsReview =
@@ -548,6 +576,8 @@ export async function readNativeEstimatorSources(
       insuranceSupplementRows: [],
       scopeRows: [],
       pricingAuthorityRows: [],
+      estimatorRevisionId: null,
+      estimatorCreatedAt: null,
       ...economics.rows,
       staleFields: authority.reasons,
       partialSources: [
@@ -589,6 +619,8 @@ export async function readNativeEstimatorSources(
       (row) => ({ ...row }),
     ),
     scopeRows: authority.payload.scope_clauses.map((row) => ({ ...row })),
+    estimatorRevisionId: authority.revision.estimator_revision_id,
+    estimatorCreatedAt: authority.revision.created_at,
     pricingAuthorityRows: authority.payload.pricing_authority
       ? [authority.payload.pricing_authority]
       : [],
@@ -1065,8 +1097,7 @@ async function nativePricingAuthority(
   actor: ImportingActor,
   now: Date,
 ): Promise<NativeRow | null> {
-  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string })
-    .ESTIMATOR_PRICE_LIST_JSON;
+  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string }).ESTIMATOR_PRICE_LIST_JSON;
   if (!raw?.trim()) return null;
   let list: PriceList;
   try {
@@ -1076,9 +1107,7 @@ async function nativePricingAuthority(
   }
   if (!list.approvedPolicy) return null;
   const instant = now.toISOString();
-  const snapshot = await approvedPricingPolicySnapshot(list, instant).catch(
-    () => null,
-  );
+  const snapshot = await approvedPricingPolicySnapshot(list, instant).catch(() => null);
   if (!snapshot || snapshot.tenantId !== tenantId)
     fail("estimator_price_list_invalid", 503);
   return {

@@ -167,12 +167,12 @@ Work down six levels; a lower level never overrides a higher one.
     `customer_message.draft` `purpose` (`schedule_notice`), `channel` (`email` or `sms`),
     `language` (BCP 47, such as `en` or `zh-Hant`), `crew_assignment_id`; `customer_message.send`
     `draft_id`; `staff.notify` `to` (a list of contact ids from the crew record) and `language`;
-    `handoff.create` `specialist_id`, `expected_action` (a catalog action id), `reason_code`, and
-    the object's id; `exception.escalate` `reason_code` (the contract's abstention codes, or
-    `safety_event` or `emergency`), `route_to` (a reviewer role or specialist id), `urgency`
-    (`immediate`, `today`, `brief`), and the object's id; `fact.explain` the fact ids it explains.
-    No argument carries money, a price, a free-text address, or any number other than
-    `planned_days`.
+    `handoff.create` `to_specialist_id`, `expected_action_id` (a catalog action id), `object`, and
+    `reason`; `exception.escalate` `reason_code` (the contract's abstention codes, or
+    `safety_event` or `emergency`), `route_to` (a reviewer role), `urgency` (`immediate`, `today`,
+    `brief`), `summary`, and `object`; `fact.explain` `object` and `explanation`. No argument
+    carries money, a price, a free-text address, or any number other than `planned_days` and an
+    `object`'s `version`.
 
 ## Never
 

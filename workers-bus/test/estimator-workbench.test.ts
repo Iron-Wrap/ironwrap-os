@@ -1,3 +1,7 @@
+import {
+  createCatalogRevision,
+  activateCatalogRevision,
+} from "../src/pricing-catalog.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -264,6 +268,7 @@ async function fixture(
       },
     },
     APP_BFF_ENABLED: "true",
+    APP_PRICING_CATALOG_ENABLED: "true",
     APP_TENANT_ID: TENANT,
     APP_PUBLIC_ORIGIN: "https://app.example.invalid",
     APP_ALLOWED_ORIGINS: "https://app.example.invalid",
@@ -271,6 +276,27 @@ async function fixture(
       ? {}
       : { ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(PRICE_LIST) }),
   } as unknown as AppEnv;
+  if (options.priceList !== false) {
+    const actor = { tenantId: TENANT, userId: OWNER_ID, role: "owner" };
+    const draft = await createCatalogRevision(
+      env,
+      actor,
+      { label: "Synthetic workbench prices", price_list: PRICE_LIST },
+      "pricing:workbench:create",
+      NOW,
+    );
+    await activateCatalogRevision(
+      env,
+      actor,
+      {
+        revision_id: draft.revision.revision_id,
+        reviewed_sha256: draft.revision.snapshot_sha256,
+        expected_version: 0,
+      },
+      "pricing:workbench:activate",
+      NOW,
+    );
+  }
   if (options.importEvidence !== false) {
     await importEstimatorEvidenceFromNativeSources(
       env,
@@ -390,7 +416,7 @@ test("R2 drift withholds every derived Estimator fact", async () => {
 });
 
 test("competing Estimator heads fail closed and stay explicit", async () => {
-  const setup = await fixture();
+  const setup = await fixture({ priceList: false });
   const first = setup.db.raw
     .prepare("SELECT * FROM estimator_evidence_revisions WHERE tenant_id = ?")
     .get(TENANT) as Record<string, unknown>;
@@ -598,6 +624,96 @@ test("Estimator GET and import routes are private, CSRF-bound, and replay-safe",
   );
   assert.equal(forbidden.status, 403);
 });
+
+for (const scenario of ["expired", "missing_eave", "missing_fastener", "missing_labor", "overflow"] as const) {
+  test(`Estimator import route exposes catalog ${scenario} without changing saved evidence`, async () => {
+    const setup = await fixture();
+    try {
+      const originalEvidence = setup.db.raw
+        .prepare("SELECT * FROM estimator_evidence_revisions ORDER BY estimator_revision_id")
+        .all();
+      const originalPins = setup.db.raw
+        .prepare("SELECT * FROM estimator_pricing_catalog_pins ORDER BY estimator_revision_id")
+        .all();
+      const predecessor = originalEvidence[0] as { estimator_revision_id: string };
+      const list = structuredClone(PRICE_LIST);
+      list.approvedPolicy!.revision += 1;
+      const activatedAt = new Date(Date.now() - 120_000);
+      if (scenario === "expired") {
+        list.approvedPolicy!.effectiveAt = new Date(activatedAt.getTime() - 60_000).toISOString();
+        list.approvedPolicy!.expiresAt = new Date(activatedAt.getTime() + 30_000).toISOString();
+      } else if (scenario === "missing_eave") {
+        delete list.trims.eave_drip;
+      } else if (scenario === "missing_fastener") {
+        delete list.fasteners!.clipScrews;
+      } else if (scenario === "missing_labor") {
+        delete list.labor;
+      } else {
+        list.panel.rateCents = Number.MAX_SAFE_INTEGER;
+      }
+      const actor = { tenantId: TENANT, userId: OWNER_ID, role: "owner" };
+      const draft = await createCatalogRevision(
+        setup.env,
+        actor,
+        { label: `Synthetic ${scenario} import blocker`, price_list: list },
+        `pricing:route:create:${scenario}`,
+        activatedAt,
+      );
+      await activateCatalogRevision(
+        setup.env,
+        actor,
+        {
+          revision_id: draft.revision.revision_id,
+          reviewed_sha256: draft.revision.snapshot_sha256,
+          expected_version: 1,
+        },
+        `pricing:route:activate:${scenario}`,
+        activatedAt,
+      );
+      const owner = auth("owner");
+      const response = await handleAuthenticatedRoute(
+        new Request(
+          `https://app.example.invalid/api/v1/estimator/jobs/${encodeURIComponent(JOB_ID)}/evidence-imports`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": `estimator:route:catalog:${scenario}`,
+              "x-csrf-token": owner.csrfToken,
+            },
+            body: JSON.stringify({
+              measurement_receipt_id: RECEIPT_ID,
+              revision_number: 2,
+              supersedes_estimator_revision_id: predecessor.estimator_revision_id,
+              correction_reason: "Synthetic pricing blocker regression",
+            }),
+          },
+        ),
+        setup.env,
+        owner,
+      );
+      assert.equal(response.status, scenario === "overflow" ? 502 : 409);
+      assert.deepEqual(await response.json(), {
+        error: scenario === "expired"
+          ? "pricing_catalog_not_effective"
+          : scenario === "overflow"
+            ? "estimator_import_unavailable"
+            : "pricing_catalog_missing_rates",
+      });
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+      assert.deepEqual(
+        setup.db.raw.prepare("SELECT * FROM estimator_evidence_revisions ORDER BY estimator_revision_id").all(),
+        originalEvidence,
+      );
+      assert.deepEqual(
+        setup.db.raw.prepare("SELECT * FROM estimator_pricing_catalog_pins ORDER BY estimator_revision_id").all(),
+        originalPins,
+      );
+    } finally {
+      setup.db.raw.close();
+    }
+  });
+}
 
 test("Estimator source and route remain tenant-isolated", async () => {
   const setup = await fixture();

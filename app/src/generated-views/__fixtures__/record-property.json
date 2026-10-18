@@ -1,0 +1,262 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_property_tamarack",
+  "run_id": "run_face_property_tamarack",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "record",
+  "title": "Property and roof record",
+  "data": [
+    {
+      "id": "property",
+      "read_model": "property_record",
+      "params": {
+        "property": "prop_1180_tamarack"
+      },
+      "sources": [
+        {
+          "fact_id": "property/prop_1180_tamarack",
+          "version": 14,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "document/measurement_report_IW-1044",
+          "version": 1,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "photo/front_elevation_IW-1044",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "findings",
+      "read_model": "findings",
+      "params": {
+        "property": "prop_1180_tamarack",
+        "open": true
+      },
+      "sources": [
+        {
+          "fact_id": "finding/gutters_1180_tamarack",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "read_model": "property_history",
+      "params": {
+        "property": "prop_1180_tamarack",
+        "page_size": 10
+      },
+      "sources": [
+        {
+          "fact_id": "history/prop_1180_tamarack",
+          "version": 9,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "heading": [
+      {
+        "kind": "record_heading",
+        "name": {
+          "bind": "property",
+          "path": "/address"
+        },
+        "identity": [
+          {
+            "bind": "property",
+            "path": "/owner_name"
+          },
+          {
+            "bind": "property",
+            "path": "/job_count_words"
+          }
+        ],
+        "kind_words": "Property and roof record"
+      }
+    ],
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "property",
+              "path": "/count_proposed"
+            },
+            "one": "roof fact is proposed and waits for a person",
+            "other": "roof facts are proposed and wait for a person",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "property",
+              "path": "/count_read_not_checked"
+            },
+            "one": "fact the AI team read is not checked by a person yet",
+            "other": "facts the AI team read are not checked by a person yet",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "alerts": [
+      {
+        "kind": "alert",
+        "finding": {
+          "bind": "findings",
+          "path": "/items/0"
+        },
+        "action": 0
+      }
+    ],
+    "body": [
+      {
+        "kind": "fact_rows",
+        "heading": "The roof",
+        "facts": {
+          "bind": "property",
+          "path": "/roof_facts"
+        },
+        "primary": true
+      },
+      {
+        "kind": "timeline",
+        "heading": "Timeline",
+        "items": {
+          "bind": "history",
+          "path": "/items"
+        },
+        "when": {
+          "field": "when"
+        },
+        "actor": {
+          "field": "actor"
+        },
+        "actor_kind": {
+          "field": "actor_kind"
+        },
+        "what": {
+          "field": "what"
+        },
+        "detail": {
+          "field": "detail"
+        },
+        "link": {
+          "field": "receipt_link"
+        }
+      }
+    ],
+    "side": [
+      {
+        "kind": "list",
+        "heading": "People",
+        "rows": {
+          "bind": "property",
+          "path": "/people"
+        },
+        "title": {
+          "field": "name"
+        },
+        "meta": [
+          {
+            "field": "role_words"
+          },
+          {
+            "field": "phone"
+          }
+        ],
+        "state": null,
+        "proposed": null,
+        "link": null,
+        "primary": false
+      },
+      {
+        "kind": "list",
+        "heading": "Jobs and quotes",
+        "rows": {
+          "bind": "property",
+          "path": "/jobs"
+        },
+        "title": {
+          "field": "job_code"
+        },
+        "meta": [
+          {
+            "field": "quote_state"
+          }
+        ],
+        "state": {
+          "field": "state"
+        },
+        "proposed": {
+          "field": "proposal"
+        },
+        "link": {
+          "field": "next_link"
+        },
+        "primary": false
+      },
+      {
+        "kind": "list",
+        "heading": "Photos and notes",
+        "rows": {
+          "bind": "property",
+          "path": "/photos_and_notes"
+        },
+        "title": {
+          "field": "what"
+        },
+        "meta": [
+          {
+            "field": "when"
+          },
+          {
+            "field": "by"
+          }
+        ],
+        "state": null,
+        "proposed": null,
+        "link": null,
+        "primary": false
+      },
+      {
+        "kind": "fact_rows",
+        "heading": "Warranty",
+        "facts": {
+          "bind": "property",
+          "path": "/warranty_facts"
+        },
+        "primary": false
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Nobody has recorded anything about this roof yet. Search work for the address.",
+        "link": null,
+        "action": null
+      }
+    ]
+  },
+  "actions": [
+    {
+      "action_id": "quote.draft_revision",
+      "label": "Draft gutter work into a new quote",
+      "target": {
+        "bind": "property",
+        "path": "/open_quote_job"
+      },
+      "primary": false
+    }
+  ],
+  "links": []
+}

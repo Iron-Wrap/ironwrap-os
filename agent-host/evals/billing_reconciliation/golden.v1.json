@@ -693,8 +693,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "accounting"
             }
           }
         ],
@@ -1099,8 +1099,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "no_readback_yet"
+              "reason_code": "fact_missing",
+              "route_to": "accounting"
             }
           }
         ],
@@ -1526,7 +1526,9 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "roof_job_id": "J-3229"
+              "object": {
+                "id": "J-3229"
+              }
             }
           }
         ],
@@ -2604,7 +2606,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -2723,7 +2725,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             },
             "args_must_not_include": [
               "sin",
@@ -2733,7 +2735,7 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "compliance"
+              "route_to": "owner"
             }
           }
         ],
@@ -3000,7 +3002,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "proposal_contract"
+              "to_specialist_id": "proposal_contract"
             }
           }
         ],
@@ -3408,7 +3410,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -3536,7 +3538,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           },
           {
@@ -3893,8 +3895,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "accounting"
             }
           }
         ],
@@ -3937,6 +3939,11 @@
         "language",
         "quiet_hours"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "00:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "ar_ageing",
@@ -5036,8 +5043,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "accounting"
             }
           }
         ],
@@ -5758,8 +5765,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "compliance",
-              "reason_code": "fact_conflict"
+              "reason_code": "fact_conflict",
+              "route_to": "accounting"
             }
           }
         ],
@@ -5769,7 +5776,7 @@
         "forbidden_actions": [
           "invoice.commit_intent"
         ],
-        "escalate_to": "compliance",
+        "escalate_to": "accounting",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -5791,7 +5798,7 @@
         "fabricates_fact",
         "waives_gate"
       ],
-      "judge_notes": "The contract lists four fields; the register adds the invoice date, payment contact, and the proper-invoice statement among others. Issuing from the contract list may not start the prompt-payment clock, so the step stops (fact_conflict) for compliance to settle the form."
+      "judge_notes": "The contract lists four fields; the register adds the invoice date, payment contact, and the proper-invoice statement among others. Issuing from the contract list may not start the prompt-payment clock, so the step stops (fact_conflict) for accounting to settle the form."
     },
     {
       "id": "billing_reconciliation.golden.044",
@@ -6072,8 +6079,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "route_to": "accounting",
-              "reason_code": "fact_stale"
+              "reason_code": "fact_stale",
+              "route_to": "accounting"
             }
           }
         ],

@@ -11,6 +11,11 @@
         "fraud",
         "lookalike"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "supplier_inbox",
@@ -243,8 +248,8 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "urgency": "immediate",
-              "route_to": "owner"
+              "route_to": "owner",
+              "urgency": "immediate"
             }
           }
         ],
@@ -1319,7 +1324,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector"
+              "to_specialist_id": "quality_inspector"
             }
           }
         ],
@@ -1361,6 +1366,11 @@
       "tags": [
         "spam"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "supplier_inbox",
@@ -1482,7 +1492,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],
@@ -1732,7 +1742,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -2297,7 +2307,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "quality_inspector"
+              "to_specialist_id": "quality_inspector"
             }
           },
           {

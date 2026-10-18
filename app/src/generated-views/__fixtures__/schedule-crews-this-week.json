@@ -1,0 +1,208 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_crews_this_week",
+  "run_id": "run_face_crews_this_week",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "schedule",
+  "title": "This week's crews",
+  "data": [
+    {
+      "id": "week",
+      "read_model": "crew_schedule",
+      "params": {
+        "from": "today",
+        "through": "end_of_week"
+      },
+      "sources": [
+        {
+          "fact_id": "schedule/crews/current_week",
+          "version": 22,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "run/run_crew_1046",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "decisions",
+      "read_model": "decisions",
+      "params": {
+        "scope": "crew_schedule",
+        "open": true
+      },
+      "sources": [
+        {
+          "fact_id": "decisions/crew_schedule",
+          "version": 4,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "week",
+              "path": "/count_booked"
+            },
+            "one": "job booked",
+            "other": "jobs booked",
+            "zero": "Nothing is on the schedule this week"
+          },
+          {
+            "value": {
+              "bind": "week",
+              "path": "/count_proposed"
+            },
+            "one": "proposed",
+            "other": "proposed",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "week",
+              "path": "/count_cannot_start"
+            },
+            "one": "cannot start",
+            "other": "cannot start",
+            "zero": null
+          },
+          {
+            "value": {
+              "bind": "week",
+              "path": "/count_unscheduled"
+            },
+            "one": "not on the schedule yet",
+            "other": "not on the schedule yet",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "body": [
+      {
+        "kind": "schedule",
+        "mode": "grid",
+        "days": {
+          "bind": "week",
+          "path": "/days"
+        },
+        "resources": {
+          "bind": "week",
+          "path": "/resources"
+        },
+        "blocks": {
+          "bind": "week",
+          "path": "/blocks"
+        },
+        "resource": {
+          "field": "resource_id"
+        },
+        "day": {
+          "field": "day"
+        },
+        "start": {
+          "field": "start"
+        },
+        "title": {
+          "field": "job_name_and_code"
+        },
+        "state": {
+          "field": "state"
+        },
+        "proposed": {
+          "field": "proposal"
+        },
+        "link": {
+          "field": "record_link"
+        }
+      },
+      {
+        "kind": "list",
+        "heading": "Not on the schedule yet",
+        "rows": {
+          "bind": "week",
+          "path": "/unscheduled"
+        },
+        "title": {
+          "field": "job_name"
+        },
+        "meta": [
+          {
+            "field": "job_code"
+          },
+          {
+            "field": "reason"
+          }
+        ],
+        "state": {
+          "field": "state"
+        },
+        "proposed": null,
+        "link": {
+          "field": "decision_link"
+        },
+        "primary": false
+      }
+    ],
+    "side": [
+      {
+        "kind": "decision_links",
+        "heading": "Decisions about this week",
+        "decisions": {
+          "bind": "decisions",
+          "path": "/items"
+        },
+        "primary": true
+      },
+      {
+        "kind": "key_values",
+        "heading": "Capacity",
+        "rows": [
+          {
+            "label": "Next free repair crew day",
+            "value": {
+              "bind": "week",
+              "path": "/next_free_repair_day"
+            }
+          }
+        ]
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "Nothing is on the schedule this week. Plan crews on the Production plan.",
+        "link": 0,
+        "action": null
+      }
+    ]
+  },
+  "actions": [
+    {
+      "action_id": "crew_date.commit",
+      "label": "Prepare a start date for your approval",
+      "target": {
+        "bind": "week",
+        "path": "/unscheduled/*/needs_date_job_id"
+      },
+      "primary": false
+    }
+  ],
+  "links": [
+    {
+      "surface": "manual",
+      "id": "production_plan",
+      "label": "Plan crews myself",
+      "primary": false
+    }
+  ]
+}

@@ -226,7 +226,9 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "proposal_id": "PR-5201-1"
+              "object": {
+                "id": "PR-5201-1"
+              }
             }
           }
         ],
@@ -849,7 +851,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],
@@ -1063,8 +1065,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "expected_action": "payee.freeze"
+              "to_specialist_id": "billing_reconciliation",
+              "expected_action_id": "payee.freeze"
             }
           }
         ],
@@ -1330,7 +1332,9 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "proposal_id": "PR-5206-1"
+              "object": {
+                "id": "PR-5206-1"
+              }
             }
           }
         ],
@@ -1760,8 +1764,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation",
-              "expected_action": "payee.freeze"
+              "to_specialist_id": "billing_reconciliation",
+              "expected_action_id": "payee.freeze"
             }
           },
           {
@@ -2103,7 +2107,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             }
           }
         ],
@@ -2363,7 +2367,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           },
           {
@@ -2564,7 +2568,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -3252,7 +3256,9 @@
           {
             "action_id": "note.add",
             "args_must_include": {
-              "proposal_id": "PR-5216-1"
+              "object": {
+                "id": "PR-5216-1"
+              }
             }
           }
         ],

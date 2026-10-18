@@ -388,6 +388,17 @@ function MoneyIntentContent() {
 
 function ComparisonSection({ detail }: { detail: AccountingIntentDetailResponse }) {
   const comparison = detail.comparison;
+  // `hashes_agree` covers only the invoice's own facts, so an over- or duplicate payment can agree
+  // there and still be a mismatch; it stays the per-field detail below. The headline also follows
+  // the latest reconciliation verdict, which stays a mismatch while the over-payment is reversed
+  // (the badge then reads Compensated), and the badge, which fails closed when no verdict exists.
+  const lastVerdict = detail.reconciliations.at(-1)?.verdict;
+  const judgedAgainst =
+    lastVerdict === "mismatch" ||
+    lastVerdict === "identity_conflict" ||
+    lastVerdict === "not_found";
+  const numbersMatch =
+    comparison.hashes_agree && !judgedAgainst && detail.intent.badge !== "mismatched";
   return (
     <section aria-label="IronWrap and QuickBooks" className="border border-border bg-surface">
       <div className="border-b border-border px-4 py-4 sm:px-6">
@@ -395,7 +406,7 @@ function ComparisonSection({ detail }: { detail: AccountingIntentDetailResponse 
         <p className="mt-1 text-sm leading-6 text-muted">
           {comparison.awaiting_readback
             ? "QuickBooks has not answered yet, so there is nothing to check."
-            : comparison.hashes_agree
+            : numbersMatch
               ? `The numbers match. Last checked ${formatMoment(comparison.read_at)}.`
               : `The numbers do not match. Last checked ${formatMoment(comparison.read_at)}.`}
         </p>

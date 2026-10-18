@@ -536,7 +536,7 @@
         "forbidden_actions": [
           "work_package.issue"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1046,7 +1046,7 @@
         "forbidden_actions": [
           "work_package.hold_before_start"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1397,7 +1397,7 @@
           "work_package.hold_before_start",
           "stop_condition.alert"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1781,7 +1781,7 @@
         "forbidden_actions": [
           "safety_stop.release"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1817,6 +1817,11 @@
         "language",
         "exact_values"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "16:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "crew_phone",
@@ -2572,7 +2577,7 @@
         ],
         "optional_actions": [],
         "forbidden_actions": [],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -2717,6 +2722,11 @@
         "owner_request",
         "safety_stop"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "11:30"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "face",
@@ -3004,7 +3014,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -3287,6 +3297,11 @@
         "alert",
         "language"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "watch_clock",
@@ -3535,7 +3550,7 @@
         "forbidden_actions": [
           "safety_stop.release"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -4009,7 +4024,7 @@
         "forbidden_actions": [
           "work_package.hold_before_start"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -4242,7 +4257,7 @@
         "forbidden_actions": [
           "work_package.issue"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [

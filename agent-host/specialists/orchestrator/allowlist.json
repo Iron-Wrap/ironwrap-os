@@ -3,17 +3,17 @@
   "specialist_id": "orchestrator",
   "catalog_sha256": "0c21a8a53a968e001aa8fe5769dc81161e26950764e00912922e69ee0df9a0a3",
   "actions": [
-    {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer an authenticated owner, staff, or crew question, explain a receipt or a pending decision, within the asker's read rights; args: fact_ids"},
-    {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a person's request on a canonical object to the owning specialist; args: specialist_id, expected_action, reason_code, <aggregate>_id"},
+    {"action_id": "fact.explain", "autonomy": "A0", "purpose": "Answer an authenticated owner, staff, or crew question, explain a receipt or a pending decision, within the asker's read rights; args: object, explanation"},
+    {"action_id": "handoff.create", "autonomy": "A0", "purpose": "Hand a person's request on a canonical object to the owning specialist; args: to_specialist_id, expected_action_id, object, reason"},
     {"action_id": "signal.route", "autonomy": "A0", "purpose": "Route a signal the routing table cannot place to its owning specialist; args: specialist_id, expected_action, reason_code, signal_id"},
     {"action_id": "report.compose", "autonomy": "A1", "purpose": "Compose an owner report from cited records; args: report_kind (daily_brief, weekly_review, pipeline), language (BCP 47)"},
     {"action_id": "staff.notify", "autonomy": "A2", "purpose": "Deliver a report, a decision request, or a storm notice to named staff; args: recipient_role, urgency"},
     {"action_id": "owner.interrupt", "autonomy": "A2", "purpose": "Protective: interrupt the owner at once with an item on the owner's immediate-only list; args: category, job_id"},
-    {"action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: open an exception with its reason code for a named person and notify them; args: reason_code, route_to, urgency (immediate, today, brief), <aggregate>_id"},
+    {"action_id": "exception.escalate", "autonomy": "A2", "purpose": "Protective: open an exception with its reason code for a named person and notify them; args: reason_code, route_to (a reviewer role), urgency (immediate, today, brief), summary, object"},
     {"action_id": "delegation.propose_change", "autonomy": "A1", "purpose": "Propose a delegation change for one delegable action of another specialist, with the history preview; args: specialist_id, action_id, proposed, ceiling"},
     {"action_id": "policy.propose_change", "autonomy": "A1", "purpose": "Propose a policy, ceiling, or standing-order change for the owner; args: policy_id, proposed"},
     {"action_id": "dead_letter.replay", "autonomy": "A3", "purpose": "Propose re-driving one dead-lettered envelope after its dry run; asks first, reviewer ops; args: envelope_id"},
     {"action_id": "storm_mode.propose", "autonomy": "A3", "purpose": "Propose switching storm mode on or off for a service area; always asks the owner first; args: mode, area, storm_watch_id"},
-    {"action_id": "note.add", "autonomy": "A2", "purpose": "Attach an authenticated person's statement to the object it concerns, as proposed context; args: <aggregate>_id, text, sources"}
+    {"action_id": "note.add", "autonomy": "A2", "purpose": "Attach an authenticated person's statement to the object it concerns, as proposed context; args: object, text"}
   ]
 }

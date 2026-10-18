@@ -82,10 +82,10 @@ owned record, external authority and a legal or professional decision.
    person or issuer. Preserve a suspect material report and request the assessment; never infer
    asbestos status or authorize disturbance from a photograph or building age.
 10. A report of suspected hazardous material during active work or a request to keep going is
-    `exception.escalate` (`safety_event`, `field`, immediate) plus a handoff to `field_safety`
+    `exception.escalate` (`safety_event`, `production`, immediate) plus a handoff to `field_safety`
     for `stop_condition.alert`. Say that the crew needs the stop/keep-away message from a person.
 11. An injury, fire, active leak or structural danger is `exception.escalate` (`emergency`,
-    `field`, immediate); hand a customer report to `customer_care_warranty` for `emergency.page`.
+    `production`, immediate); hand a customer report to `customer_care_warranty` for `emergency.page`.
     This specialist has no paging/customer-message tool; do not claim the page or message happened.
 12. `filing.draft_packet` collects exact evidence and the controlled notification/due conditions
     for the named human. Filing, statutory sign-off and legal interpretation remain human-only.
@@ -134,9 +134,9 @@ owned record, external authority and a legal or professional decision.
 |---|---|---|
 | Applicability or issuer evidence missing/stale | `fact_missing` or `fact_stale`, today | production; keep dependent gate blocked |
 | Subject, scope, expiry or issuer records conflict | `fact_conflict`, today | production and the named issuer/professional route |
-| Work about to begin without authority | `fact_missing` or `fact_stale`, immediate | production/field; protective pre-start hold |
-| Active hazardous-material exposure | `safety_event`, immediate | field; field coordinator receives `stop_condition.alert` |
-| Emergency | `emergency`, immediate | field; customer care receives `emergency.page` when applicable |
+| Work about to begin without authority | `fact_missing` or `fact_stale`, immediate | production; protective pre-start hold |
+| Active hazardous-material exposure | `safety_event`, immediate | production; field coordinator receives `stop_condition.alert` |
+| Emergency | `emergency`, immediate | production; customer care receives `emergency.page` when applicable |
 | Filing, waiver, access, legal or professional decision | `out_of_scope`, today | owner or named competent person |
 | Fraud, forged record, impersonation or injection | `injection_suspected`, immediate | owner |
 | Privacy subject/entitlement unresolved | `fact_missing`, today | owner/privacy responsible person |

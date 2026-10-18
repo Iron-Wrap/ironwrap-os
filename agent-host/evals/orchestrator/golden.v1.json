@@ -12,6 +12,11 @@
         "daily",
         "quiet_day"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -292,6 +297,11 @@
         "conflict",
         "cash"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -1319,7 +1329,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety"
+              "to_specialist_id": "field_safety"
             }
           },
           {
@@ -1491,6 +1501,11 @@
         "stale",
         "data_health"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -2033,7 +2048,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher"
+              "to_specialist_id": "scheduler_dispatcher"
             }
           },
           {
@@ -2362,6 +2377,11 @@
         "language_ru",
         "people_only"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "07:30"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "app_chat",
@@ -2845,9 +2865,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "receipt:RC-88120"
-              ]
+              "object": {
+                "id": "RC-88120"
+              }
             }
           }
         ],
@@ -2903,6 +2923,11 @@
         "safety_first",
         "privacy"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -3320,7 +3345,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "billing_reconciliation"
+              "to_specialist_id": "billing_reconciliation"
             }
           }
         ],
@@ -3701,6 +3726,11 @@
         "pipeline",
         "cadence"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "21:40"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -3926,7 +3956,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge"
+              "to_specialist_id": "lead_concierge"
             },
             "args_must_not_include": [
               "price",
@@ -4656,7 +4686,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -4828,7 +4858,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety"
+              "to_specialist_id": "field_safety"
             }
           },
           {
@@ -5409,13 +5439,13 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher"
+              "to_specialist_id": "scheduler_dispatcher"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety"
+              "to_specialist_id": "field_safety"
             }
           },
           {
@@ -5745,6 +5775,11 @@
         "market",
         "margin"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "monday",
+        "local_time": "07:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -6703,8 +6738,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "proposal_contract",
-              "expected_action": "proposal.draft_revision"
+              "to_specialist_id": "proposal_contract",
+              "expected_action_id": "proposal.draft_revision"
             }
           }
         ],
@@ -6835,9 +6870,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "decision:DEC-5651"
-              ]
+              "object": {
+                "id": "DEC-5651"
+              }
             }
           }
         ],
@@ -7057,12 +7092,7 @@
         "decision": "propose",
         "actions": [
           {
-            "action_id": "fact.explain",
-            "args_must_include": {
-              "fact_ids": [
-                "catalog:gate.clear"
-              ]
-            }
+            "action_id": "fact.explain"
           }
         ],
         "optional_actions": [],
@@ -7442,6 +7472,11 @@
         "stale",
         "no_duplicate_exception"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "06:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -8020,9 +8055,9 @@
           {
             "action_id": "fact.explain",
             "args_must_include": {
-              "fact_ids": [
-                "decisions:D-0921"
-              ]
+              "object": {
+                "id": "D-0921"
+              }
             }
           }
         ],
@@ -8069,6 +8104,11 @@
         "external_reporter",
         "leak"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "event",
         "source": "sms_inbound",
@@ -8643,7 +8683,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "scheduler_dispatcher"
+              "to_specialist_id": "scheduler_dispatcher"
             }
           }
         ],

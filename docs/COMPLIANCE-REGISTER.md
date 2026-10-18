@@ -3,7 +3,8 @@
 Status: canonical control index, not legal advice
 Owner: IronWrap compliance owner
 Last source verification: 2026-07-30
-Next scheduled review: 2026-10-28
+Review events: provider-terms-change, provider-added, production-release
+Last review: provider-added (AI model providers section)
 Immediate review trigger: changed law, regulator guidance, geography, service, contract, workforce,
 vehicle, facility, product, marketing channel, or data use
 
@@ -157,6 +158,43 @@ for the threshold calculation. Reverify at each reporting period.
 Customer evidence may never be committed to the source repository. Use synthetic fixtures in Git
 and approved private evidence stores for real records.
 
+## AI model providers
+
+Every model call that can carry customer, worker or job data names one provider account below by
+its `Ref`. The agent runtime's `compliance_ref` must equal one of these refs, and the runtime refuses
+production and shadow runs for an account whose ref is missing or marked "not permitted". The
+providers in scope are the agent gateway's `claude` and `codex` routes (`agent-host/config/gateway.json`)
+and the Worker's measurement OCR call to the Anthropic API (`MEASUREMENT_OCR_API_KEY`). Provider terms
+change; re-read the sources on the review trigger above and before any account change.
+
+| Trigger | Required system control | Human/external gate | Primary source |
+|---|---|---|---|
+| Personal information goes to a model provider outside Canada (every provider below processes outside Canada; none offers Canadian inference) | Privacy policy names the countries and the purposes; notice before collection or transfer says how to get that policy and who answers questions; pseudonymise before any prompt where the runtime can; send only the fields the task needs | Privacy owner approves the policy and notice text | [PIPA s.6, s.13.1](https://kings-printer.alberta.ca/documents/Acts/P06P5.pdf), [OIPC P2010-IR-02](https://oipc.ab.ca/p2010-ir-02/) |
+| A provider account is used for business data | Account is on commercial terms with a data processing addendum, no training on business data, and the shortest retention the provider offers; the runtime records the `Ref` on every run | Owner signs the provider terms and DPA and sets the account's data controls | Per row below |
+| A provider processes on the organization's behalf | The organization stays accountable for the provider: security, breach notification path, retention limits | Privacy owner | [PIPA s.5(2), s.34, s.34.1, s.35](https://kings-printer.alberta.ca/documents/Acts/P06P5.pdf) |
+
+| Ref | Account type | Terms and DPA | Training on business data | Retention | Processing region | Production business data |
+|---|---|---|---|---|---|---|
+| `ai.anthropic.api` | Anthropic API, organization API key | [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) with the [DPA](https://www.anthropic.com/legal/data-processing-addendum) incorporated | Not used for training under the commercial terms ([source](https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training)) | Deleted within 30 days by default; zero data retention by agreement, per organization, with listed feature exceptions; policy-flagged traffic is kept longer ([retention](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention)) | Global by default; US-only inference selectable per request or workspace; no Canadian region ([data residency](https://platform.claude.com/docs/en/manage-claude/data-residency)) | **Permitted** with a workspace pinned to US inference; request zero data retention |
+| `ai.anthropic.claude-commercial` | Claude Team or Enterprise seat, Claude Code OAuth token issued from that organization | Commercial Terms and DPA ([Claude Code legal](https://code.claude.com/docs/en/legal-and-compliance)) | Not used by default ([Claude Code data usage](https://code.claude.com/docs/en/data-usage)) | 30 days; zero data retention only for qualified Enterprise organizations ([ZDR](https://code.claude.com/docs/en/zero-data-retention)) | No region control on Team; US-only inference on usage-based Enterprise | **Permitted**; issue the token from the organization, never a personal account; disable telemetry, error reporting and the feedback command |
+| `ai.anthropic.claude-consumer` | Claude Pro or Max, Claude Code OAuth token from a personal account | [Consumer Terms](https://www.anthropic.com/legal/consumer-terms); no DPA found | Used when the model-improvement setting is on ([source](https://privacy.claude.com/en/articles/10023580-is-my-data-used-for-model-training)) | Up to 5 years with model improvement on, 30 days with it off; no zero data retention ([source](https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data)) | No region control | **Not permitted**: consumer terms, no DPA, and the terms limit automated access to API keys; `eval_history` only under the recorded exception below |
+| `ai.openai.api` | OpenAI API, organization API key | [Services Agreement](https://openai.com/policies/services-agreement/) with the [DPA](https://openai.com/policies/data-processing-addendum/) | Not used unless the organization opts in ([your data](https://developers.openai.com/api/docs/guides/your-data)) | Abuse-monitoring logs up to 30 days; zero data retention or modified abuse monitoring by approval | US storage and processing selectable; Canada storage only, no Canadian inference | **Permitted** with a US project; request zero data retention or modified abuse monitoring |
+| `ai.openai.chatgpt-commercial` | ChatGPT Business or Enterprise workspace, Codex access token | Services Agreement with DPA ([enterprise privacy](https://openai.com/enterprise-privacy/)) | Not used by default ([source](https://help.openai.com/en/articles/5722486-how-your-data-is-used-to-improve-model-performance)) | Admin-set retention, deleted within 30 days; Codex zero data retention not confirmed | Business: no residency; Enterprise: Canadian storage for new customers, no Canadian inference ([residency](https://help.openai.com/en/articles/9903489-data-residency-and-inference-residency-for-chatgpt)) | **Conditional**: permitted after the owner confirms Codex retention in writing; prefer `ai.openai.api` |
+| `ai.openai.chatgpt-consumer` | ChatGPT Plus or Pro sign-in (`auth.json` from a personal account) | [Terms of Use](https://openai.com/policies/terms-of-use/); no DPA | Used unless "Improve the model for everyone" is off ([data controls](https://help.openai.com/en/articles/7730893-data-controls-in-chatgpt)) | Kept until deleted, then up to 30 days; no zero data retention | No region control | **Not permitted**: consumer terms, no DPA, and the terms prohibit programmatic extraction; `eval_history` only under the recorded exception below |
+
+Whether pseudonymised prompts still carry personal information for a provider, and whether
+consent beyond the s.13.1 notice is needed, are questions for privacy counsel; the controls above
+apply until counsel decides otherwise.
+
+### Recorded exceptions
+
+An exception narrows one "not permitted" verdict to one named run class under an explicit owner
+risk acceptance. It never extends to live or shadow runs, which stay refused on every consumer ref.
+
+| Refs | Run class allowed | Accepted by | Reason | Conditions | Ends on |
+|---|---|---|---|---|---|
+| `ai.anthropic.claude-consumer`, `ai.openai.chatgpt-consumer` | `eval_history` only: offline evaluation on real, pseudonymised history | Owner, explicit risk acceptance | Agent quality has to be measured on real history before production, and the business accounts (`ai.anthropic.claude-commercial`, `ai.openai.chatgpt-commercial`) are not yet issued; the owner accepts consumer terms without a DPA for this run class only | Pseudonymise before any prompt; history stays in git-ignored `output/` and local D1 on the operator machine; logs carry counts only; Claude's model-improvement setting and ChatGPT's "Improve the model for everyone" are off on the accounts used; every run records the consumer `Ref` and the run class | The provider's business account is issued; `eval_history` then moves to the commercial ref and this row is removed |
+
 ## Electronic and telephone marketing
 
 | Trigger | Required system control | Human/external gate | Primary source |
@@ -235,7 +273,16 @@ Reliable agents do not replace:
 
 ## Review evidence
 
-Each scheduled review must produce a compliance-review event containing:
+Review is event-triggered, never calendar-gated. A review runs on each event in the `Review events`
+header and on every `Immediate review trigger`:
+
+- `provider-terms-change`: an AI-provider, processor, or vendor changes its terms, data-use,
+  retention, or region commitments;
+- `provider-added`: a new provider, processor, or account type is proposed for business data;
+- `production-release`: before each production release is promoted.
+
+The `Last review` header names the trigger of the most recent completed review. Each review must
+produce a compliance-review event containing:
 
 - source URLs and retrieval time;
 - changed/unchanged determination;

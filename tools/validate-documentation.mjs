@@ -1590,11 +1590,31 @@ for (const entry of entries) {
 }
 
 const compliance = readFileSync(resolve(root, "docs/COMPLIANCE-REGISTER.md"), "utf8");
-const nextReview = compliance.match(/^Next scheduled review:\s+(\d{4}-\d{2}-\d{2})/m)?.[1];
-if (!nextReview) {
-  fail("docs/COMPLIANCE-REGISTER.md: missing Next scheduled review");
-} else if (nextReview < new Date().toISOString().slice(0, 10)) {
-  fail(`docs/COMPLIANCE-REGISTER.md: scheduled review expired on ${nextReview}`);
+// Review is event-triggered: the register names its review events and the trigger of the last
+// completed review. A calendar due date would fail CI on its own, so one is refused outright.
+const requiredReviewEvents = ["provider-terms-change", "provider-added", "production-release"];
+const reviewEvents = compliance
+  .match(/^Review events:\s+(.+)$/m)?.[1]
+  .split(",")
+  .map((event) => event.trim())
+  .filter(Boolean);
+const lastReviewTrigger = compliance.match(/^Last review:\s+([a-z-]+)/m)?.[1];
+if (/^Next scheduled review:/m.test(compliance)) {
+  fail("docs/COMPLIANCE-REGISTER.md: review is event-triggered; remove the Next scheduled review date");
+}
+if (!reviewEvents) {
+  fail("docs/COMPLIANCE-REGISTER.md: missing Review events");
+} else {
+  for (const event of requiredReviewEvents) {
+    if (!reviewEvents.includes(event)) {
+      fail(`docs/COMPLIANCE-REGISTER.md: Review events must include ${event}`);
+    }
+  }
+}
+if (!lastReviewTrigger) {
+  fail("docs/COMPLIANCE-REGISTER.md: missing Last review trigger");
+} else if (reviewEvents && !reviewEvents.includes(lastReviewTrigger)) {
+  fail(`docs/COMPLIANCE-REGISTER.md: Last review trigger ${lastReviewTrigger} is not a Review event`);
 }
 
 if (failures.length) {

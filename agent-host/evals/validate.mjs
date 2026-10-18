@@ -71,8 +71,10 @@ const RECEIPT_FIELDS = new Set([
   "undo",
   "do_it_myself",
 ]);
-// Reviewer roles from docs/AI-TEAM-CONTRACT.md "The team": the six PWA roles.
-const FIXED_ROUTES = new Set(["owner", "ops", "sales", "production", "accounting", "field"]);
+const SEASONS = new Set(["winter", "spring", "summer", "fall"]);
+const WEEKDAYS = new Set(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]);
+// The reviewer roles a person-bound route may name (the catalog's reviewer_role values).
+const FIXED_ROUTES = new Set(["owner", "ops", "sales", "production", "accounting"]);
 const ROSTER = [
   "orchestrator",
   "market_analyst",
@@ -118,6 +120,35 @@ const PROTECTIVE_FALLBACK = new Set([
 const isAutonomy = (value) => typeof value === "string" && Object.hasOwn(AUTONOMY_RANK, value);
 const objects = (value) => (Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object") : []);
 
+const REGISTRY_PATH = "workers-bus/src/agents/registry.ts";
+
+// The Worker action registry's strict argument schemas, read from its source: for each registered
+// action, the argument names its schema requires. The Worker's schema checker requires every
+// property (`required` equals `properties`), so `required` is the whole argument set. Returns
+// `{ actions, unread }`: `unread` lists registered entries whose schema could not be read, which
+// the caller reports, so a format change never quietly turns the check off.
+export function loadRegistry(root) {
+  const path = join(root, REGISTRY_PATH);
+  if (!existsSync(path)) return null;
+  const source = readFileSync(path, "utf8");
+  const schemas = new Map();
+  const blocks = /^(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)(?:\s*:\s*RegistryEntry)?\s*=\s*\{([\s\S]*?)^\}(?:\s*satisfies\s+RegistryEntry)?;/gm;
+  for (const match of source.matchAll(blocks)) {
+    const args = match[2].slice(match[2].indexOf("args:"));
+    const required = args.match(/required:\s*\[([^\]]*)\]/)?.[1];
+    if (required === undefined || required.includes("...")) continue;
+    schemas.set(match[1], new Set([...required.matchAll(/["']([a-z_][a-z0-9_]*)["']/g)].map((name) => name[1])));
+  }
+  const actions = new Map();
+  const unread = [];
+  for (const match of source.matchAll(/^\s+["']([a-z_]+\.[a-z_]+)["']:\s*([A-Z][A-Z0-9_]*),?\s*(?:\/\/.*)?$/gm)) {
+    if (match[2] === "NOT_YET_REGISTERED") continue;
+    if (schemas.has(match[2])) actions.set(match[1], schemas.get(match[2]));
+    else unread.push(match[1]);
+  }
+  return { actions, unread };
+}
+
 export function loadCatalog(root) {
   const path = join(root, CONTRACT_PATH);
   if (!existsSync(path)) return null;
@@ -140,30 +171,40 @@ export function loadCatalog(root) {
   return {
     sha256: createHash("sha256").update(json).digest("hex"),
     specialists: new Map(roster.map((entry) => [entry.specialist_id, entry])),
+    reviewerRoles: new Set(roster.map((entry) => entry.reviewer_role).filter(Boolean)),
     actions: new Map(actions.map((entry) => [entry.action_id, entry])),
     reasonCodes: new Set(Object.values(value.receipt?.reason_codes ?? {}).flat()),
+    // exception.escalate takes only the abstention codes (the Worker registry's enum).
+    abstainCodes: new Set(value.receipt?.reason_codes?.abstained ?? []),
     messagePurposes,
   };
 }
 
-function checkArguments(actionId, args, { id, catalog, fail, label }) {
-  if (!catalog || !args || typeof args !== "object" || Array.isArray(args)) return;
+function checkArguments(actionId, args, { id, catalog, registry, fail, label }) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return;
+  // A registered action's schema is strict: the Worker refuses any argument it does not name.
+  const registered = registry?.actions.get(actionId);
+  if (registered) {
+    for (const key of Object.keys(args)) if (!registered.has(key)) fail(`${label}: ${actionId} takes no ${key}; the Worker registry refuses it`);
+    const object = args.object;
+    if (object !== undefined && object !== null && (typeof object !== "object" || Array.isArray(object) || Object.keys(object).some((key) => !["aggregate", "id", "version"].includes(key)))) {
+      fail(`${label}: ${actionId} object must be { aggregate, id, version }`);
+    }
+  }
+  if (!catalog) return;
   const action = catalog.actions.get(actionId);
-  const reasonCodes = action?.reason_codes ??
-    (["exception.escalate", "handoff.create"].includes(actionId) ? [...catalog.reasonCodes] : null);
+  const reasonCodes = action?.reason_codes ?? (actionId === "exception.escalate" ? [...(catalog.abstainCodes.size > 0 ? catalog.abstainCodes : catalog.reasonCodes)] : null);
   if (args.reason_code !== undefined && reasonCodes && !reasonCodes.includes(args.reason_code)) {
     fail(`${label}: ${actionId} reason_code ${args.reason_code} is outside its closed vocabulary`);
   }
   if (actionId === "handoff.create") {
-    if (args.specialist_id === id) fail(`${label}: handoff cannot target the same specialist`);
-    if (args.specialist_id !== undefined && !catalog.specialists.has(args.specialist_id)) {
-      fail(`${label}: handoff target ${args.specialist_id} is not in the roster`);
-    }
-    if (args.expected_action !== undefined) {
-      const next = catalog.actions.get(args.expected_action);
-      if (!next || next.human_only || next.autonomy === "H" ||
-          (args.specialist_id !== undefined && !(next.owners ?? []).includes(args.specialist_id))) {
-        fail(`${label}: handoff expected_action ${args.expected_action} is not an agent action owned by its target`);
+    const target = args.to_specialist_id;
+    if (target === id) fail(`${label}: handoff cannot target the same specialist`);
+    if (target !== undefined && !catalog.specialists.has(target)) fail(`${label}: handoff target ${target} is not in the roster`);
+    if (args.expected_action_id !== undefined) {
+      const next = catalog.actions.get(args.expected_action_id);
+      if (!next || next.human_only || next.autonomy === "H" || (target !== undefined && !(next.owners ?? []).includes(target))) {
+        fail(`${label}: handoff expected_action_id ${args.expected_action_id} is not an agent action owned by its target`);
       }
     }
   }
@@ -171,8 +212,8 @@ function checkArguments(actionId, args, { id, catalog, fail, label }) {
     fail(`${label}: ${actionId} cannot target ${args.specialist_id}`);
   }
   if (actionId === "exception.escalate" || actionId === "emergency.page") {
-    const routes = actionId === "emergency.page" ? FIXED_ROUTES : new Set([...catalog.specialists.keys(), ...FIXED_ROUTES]);
-    if (args.route_to !== undefined && !routes.has(args.route_to)) fail(`${label}: ${actionId} route_to is not a permitted role or route`);
+    const roles = catalog.reviewerRoles.size > 0 ? catalog.reviewerRoles : FIXED_ROUTES;
+    if (args.route_to !== undefined && !roles.has(args.route_to)) fail(`${label}: ${actionId} route_to must be a reviewer role (${[...roles].join(", ")})`);
     if (args.urgency !== undefined && !["immediate", "today", "brief"].includes(args.urgency)) fail(`${label}: ${actionId} urgency is invalid`);
     if (actionId === "emergency.page" && args.urgency !== undefined && args.urgency !== "immediate") {
       fail(`${label}: emergency.page always requires immediate urgency`);
@@ -208,10 +249,11 @@ export function checkContextTargets(actionId, args, { signal, facts, catalog, fa
   const visit = (value, key = "") => {
     if (Array.isArray(value)) return value.forEach((item) => visit(item, key));
     if (value && typeof value === "object") return Object.entries(value).forEach(([key, item]) => visit(item, key));
-    if (typeof value !== "string" || !value || !(key === "to" || key === "sources" || key.endsWith("_id") || key.endsWith("_ids"))) return;
+    // `id` is an object reference's record id ({ aggregate, id, version }).
+    if (typeof value !== "string" || !value || !(key === "to" || key === "id" || key === "sources" || key.endsWith("_id") || key.endsWith("_ids"))) return;
     // Catalog control ids are supplied by the roster/tool catalog, not business records.
-    if (key === "specialist_id" || key === "action_id") {
-      const known = key === "specialist_id" ? catalog?.specialists : catalog?.actions;
+    if (["specialist_id", "to_specialist_id", "action_id", "expected_action_id"].includes(key)) {
+      const known = key.endsWith("specialist_id") ? catalog?.specialists : catalog?.actions;
       if (known && !known.has(value)) fail(`${label}: ${actionId} ${key} ${value} is not in the catalog`);
       return;
     }
@@ -360,7 +402,7 @@ function expectedOutcome(expected, granted) {
 }
 
 function checkCase(item, context) {
-  const { suite, id, granted, catalog, catastropheIds, fail, label: file } = context;
+  const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
   const pattern = new RegExp(`^${id}\\.${suite}\\.\\d{3}$`);
   if (!pattern.test(item.id ?? "")) fail(`${label}: id must match ${id}.${suite}.NNN`);
@@ -374,6 +416,13 @@ function checkCase(item, context) {
   }
   if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
     fail(`${label}: signal.content needs text or request`);
+  }
+  if (item.clock !== undefined) {
+    const clock = item.clock;
+    const valid =
+      clock && typeof clock === "object" && !Array.isArray(clock) && Object.keys(clock).length === 3 &&
+      SEASONS.has(clock.season) && WEEKDAYS.has(clock.weekday) && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clock.local_time ?? "");
+    if (!valid) fail(`${label}: clock must be { season, weekday, local_time } (${[...SEASONS].join(", ")}; monday..sunday; HH:MM)`);
   }
   if (!Array.isArray(item.facts)) fail(`${label}: facts must be an array`);
   for (const fact of item.facts ?? []) {
@@ -393,7 +442,7 @@ function checkCase(item, context) {
   if (!DECISIONS.has(expected.decision)) fail(`${label}: expected.decision invalid`);
   if (expected.decision === "escalate") {
     const routes = catalog ? new Set([...catalog.specialists.keys(), ...FIXED_ROUTES]) : new Set([...ROSTER, ...FIXED_ROUTES]);
-    if (!routes.has(expected.escalate_to)) fail(`${label}: escalate_to must be a specialist id or a reviewer role (owner, ops, sales, production, accounting, field)`);
+    if (!routes.has(expected.escalate_to)) fail(`${label}: escalate_to must be a specialist id or a reviewer role (${[...FIXED_ROUTES].join(", ")})`);
   } else if (expected.escalate_to !== null && expected.escalate_to !== undefined) {
     fail(`${label}: escalate_to is only set when decision is escalate`);
   }
@@ -415,7 +464,7 @@ function checkCase(item, context) {
     if (include !== undefined && (include === null || typeof include !== "object" || Array.isArray(include))) {
       fail(`${label}: args_must_include must be an object`);
     }
-    checkArguments(action.action_id, include, { id, catalog, fail, label });
+    checkArguments(action.action_id, include, { id, catalog, registry, fail, label });
     checkContextTargets(action.action_id, include, { signal, facts: item.facts, catalog, fail, label });
     const exclude = action.args_must_not_include;
     if (exclude !== undefined && (!Array.isArray(exclude) || exclude.some((key) => typeof key !== "string"))) {
@@ -676,12 +725,14 @@ function checkQualification(root, specialistsDir, specialistIds, requireComplete
   }
   const judgeFor = (provider) => (provider === "claude" ? judges.for_claude_proposers : judges.default);
   for (const [id, entry] of meta) {
-    const provider = gateway.routes?.[gateway.tiers?.[entry.tier] ?? entry.tier]?.provider;
-    if (!provider) {
+    // The auditor runs on audit_routes[<proposer family>], so each of those routes needs its judge.
+    const routeIds = entry.tier === "audit" && isObject(gateway.audit_routes) ? Object.values(gateway.audit_routes) : [gateway.tiers?.[entry.tier] ?? entry.tier];
+    const providers = routeIds.map((routeId) => gateway.routes?.[routeId]?.provider);
+    if (providers.length === 0 || providers.some((provider) => !provider)) {
       bad(`no gateway route for ${id} (tier ${entry.tier})`);
       continue;
     }
-    if (judgeFor(provider)?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
+    for (const provider of new Set(providers)) if (judgeFor(provider)?.provider === provider) bad(`${id} runs on ${provider}; its judge must run on another provider`);
   }
   const prices = isObject(gateway.pricing_usd_per_mtok) ? gateway.pricing_usd_per_mtok : {};
   compareRoutes.forEach((route, index) => {
@@ -872,10 +923,21 @@ export function validate(root, { requireComplete = false } = {}) {
     fail(`${CONTRACT_PATH}: ${error.message}`);
   }
   if (!catalog) notes.push(`structural mode: no catalog in ${CONTRACT_PATH}; action ids not checked`);
+  const registry = loadRegistry(root);
+  if (registry) {
+    for (const actionId of registry.unread) fail(`${REGISTRY_PATH}: the registered schema of ${actionId} could not be read`);
+    if (registry.actions.size === 0) fail(`${REGISTRY_PATH}: no registered argument schemas could be read`);
+  } else if (requireComplete) {
+    fail(`${REGISTRY_PATH}: missing; shared-action arguments cannot be checked against the Worker registry`);
+  } else {
+    notes.push(`no Worker registry at ${REGISTRY_PATH}; shared-action arguments not checked against it`);
+  }
   const vocabulary = readJson(join(evalsDir, "catastrophes.v1.json"), fail);
   const catastropheIds = new Set((vocabulary?.catastrophes ?? []).map((entry) => entry.id));
   if (catastropheIds.size === 0) fail("agent-host/evals/catastrophes.v1.json: no catastrophes");
   if (!existsSync(join(specialistsDir, "COMMON.md"))) fail("agent-host/specialists/COMMON.md: missing");
+  // A mapped catastrophe is detected from the call alone, so only human-only actions map to one:
+  // proposing an allowlisted action can be legitimate. Every "mapped" catastrophe needs an action.
   const mappingPath = join(evalsDir, "action-catastrophes.v1.json");
   if (existsSync(mappingPath)) {
     const mapping = readJson(mappingPath, fail) ?? {};
@@ -883,12 +945,18 @@ export function validate(root, { requireComplete = false } = {}) {
     if (mapping.schema_version !== "ironwrap.eval-action-catastrophes.v1") fail(`${mappingPath}: wrong schema_version`);
     if (!mapping.actions || typeof mapping.actions !== "object") fail(`${mappingPath}: actions must be an object`);
     for (const [actionId, ids] of Object.entries(mapping.actions ?? {})) {
-      if (catalog && !catalog.actions.has(actionId)) fail(`${mappingPath}: ${actionId} not in catalog`);
+      const action = catalog?.actions.get(actionId);
+      if (catalog && !action) fail(`${mappingPath}: ${actionId} not in catalog`);
+      else if (action && !(action.human_only || action.autonomy === "H")) fail(`${mappingPath}: ${actionId} is not human-only, so its call alone is not a catastrophe`);
       if (!Array.isArray(ids) || ids.length === 0) fail(`${mappingPath}: ${actionId} needs a non-empty id list`);
       for (const id of Array.isArray(ids) ? ids : []) {
         if (!mappable.has(id)) fail(`${mappingPath}: ${actionId} maps to ${id}, which is not a "mapped" catastrophe`);
       }
     }
+    const covered = new Set(Object.values(mapping.actions ?? {}).flat());
+    for (const id of mappable) if (!covered.has(id)) fail(`${mappingPath}: mapped catastrophe ${id} has no action`);
+  } else if (requireComplete) {
+    fail(`${mappingPath}: missing; wave stages need the deterministic catastrophe map`);
   }
 
   const specialistIds = directories(specialistsDir);
@@ -903,7 +971,7 @@ export function validate(root, { requireComplete = false } = {}) {
       continue;
     }
     const evalDir = join(evalsDir, id);
-    const context = { id, granted, catalog, catastropheIds, fail };
+    const context = { id, granted, catalog, registry, catastropheIds, fail };
     checkSuite(evalDir, "golden", context);
     checkSuite(evalDir, "redteam", context);
     checkRubric(evalDir, id, fail);

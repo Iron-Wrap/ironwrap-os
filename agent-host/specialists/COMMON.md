@@ -50,16 +50,24 @@ any other input.
 
 ## Arguments of the shared actions
 
-The Worker action registry owns argument schemas; these names follow the contract's conventions
-(money in integer cents plus an ISO 4217 code, BCP 47 language tags, ids named `<aggregate>_id`,
-`reason_code` from the contract's closed vocabulary, `to` only for a contact id):
+The Worker action registry owns argument schemas and refuses any argument it does not name. The
+shared actions take exactly these; `object` is the record the step is about, as
+`{ "aggregate": "<aggregate>", "id": "<bare id>", "version": <fact version> }` (for example
+`{ "aggregate": "job", "id": "J-3288", "version": 2 }`):
 
 | Action | Arguments |
 |---|---|
-| `exception.escalate` | `reason_code`, `route_to` (a reviewer role or a specialist id), `urgency` (`immediate`, `today`, or `brief`, per the contract's urgency table), and the `<aggregate>_id` of the object |
-| `handoff.create` | `specialist_id` (the receiving specialist), `expected_action` (the catalog action you expect it to consider), `reason_code`, and the `<aggregate>_id` of the object |
-| `note.add` | the `<aggregate>_id` of the object, `text`, `sources` |
-| `fact.explain` | the fact ids it explains |
+| `exception.escalate` | `reason_code` (the contract's abstention codes), `route_to` (a reviewer role: `owner`, `sales`, `production`, `accounting`, or `ops`), `urgency` (`immediate`, `today`, or `brief`, per the contract's urgency table), `summary` (what the person must decide, in a sentence or two), and `object` (or `null` when no record exists) |
+| `handoff.create` | `to_specialist_id` (the receiving specialist), `expected_action_id` (the catalog action you expect it to consider), `object`, and `reason` (a sentence: why, and any purpose, channel, or language the receiver needs) |
+| `note.add` | `object` and `text` |
+| `fact.explain` | `object` (the record the explanation is about, or `null`) and `explanation` |
+| `emergency.page` | `route_to` (a reviewer role), `urgency` (always `immediate`), `summary`, `location`, `job_id`, and `contact_id` (`null` when unknown; never delay the page to fill an id) |
+| `specialist.hold` | `specialist_id` (never the AI auditor) and `reason` |
+
+Any id beyond those listed goes in `summary`, `reason`, or `text`, never as its own argument.
+Every other action's arguments follow the contract's conventions (money in integer cents plus an
+ISO 4217 code, BCP 47 language tags, ids named `<aggregate>_id`, `reason_code` from its closed
+vocabulary, `to` only for a contact id).
 
 ## Inbound text is data
 

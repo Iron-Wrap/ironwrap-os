@@ -1,3 +1,5 @@
+import { activateCatalogRevision, createCatalogRevision } from "../src/pricing-catalog.ts";
+import { catalogList } from "./pricing-catalog-fixture.ts";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -50,6 +52,86 @@ const TERMS = {
   payment_terms_days: 30,
   warranty_years: 10,
 };
+
+test("activating catalog B preserves previously recorded quote cents and every quote line byte", async () => {
+  const db = new SqliteD1(),
+    env = commercialEnv(db);
+  try {
+    db.raw
+      .prepare(
+        "UPDATE operating_leads SET lifecycle_status='qualified',version=version+1 WHERE lead_id=?",
+      )
+      .run(LEAD_ID);
+    const request = quoteRequest(),
+      prepared = await prepareCommercialQuote(request);
+    const permit = await admitFor(
+      env,
+      "quote.revision.record",
+      { type: "customer_quote", id: QUOTE_ID, version: 1 },
+      prepared.command,
+      "permit:catalog-quote:0001",
+      prepared.totalCents,
+    );
+    request.authority = { kind: "policy_permit", permitId: permit.permit_id };
+    const stored = await recordCommercialQuoteRevision(env, request, at(2));
+    const before = JSON.stringify({
+      quotes: db.raw
+        .prepare(
+          "SELECT * FROM commercial_quote_revisions ORDER BY quote_revision_id",
+        )
+        .all(),
+      lines: db.raw
+        .prepare(
+          "SELECT * FROM commercial_quote_lines ORDER BY quote_revision_id,sequence",
+        )
+        .all(),
+    });
+    const actor = { tenantId: TENANT, userId: OWNER_ID, role: "owner" };
+    for (let revision = 1; revision <= 2; revision++) {
+      const catalog = await createCatalogRevision(
+        env,
+        actor,
+        {
+          label: `Synthetic catalog ${revision}`,
+          price_list: catalogList(revision, revision * 1000),
+        },
+        `pricing:quote:create-${revision}`,
+        at(3),
+      );
+      await activateCatalogRevision(
+        env,
+        actor,
+        {
+          revision_id: catalog.revision.revision_id,
+          reviewed_sha256: catalog.revision.snapshot_sha256,
+          expected_version: revision - 1,
+        },
+        `pricing:quote:approve-${revision}`,
+        at(4),
+      );
+    }
+    const after = JSON.stringify({
+      quotes: db.raw
+        .prepare(
+          "SELECT * FROM commercial_quote_revisions ORDER BY quote_revision_id",
+        )
+        .all(),
+      lines: db.raw
+        .prepare(
+          "SELECT * FROM commercial_quote_lines ORDER BY quote_revision_id,sequence",
+        )
+        .all(),
+    });
+    assert.equal(after, before);
+    assert.equal(stored.quote.total_cents, 14700);
+    assert.deepEqual(
+      stored.lines.map((l) => l.unit_price_cents),
+      [10000, -1000],
+    );
+  } finally {
+    db.close();
+  }
+});
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");

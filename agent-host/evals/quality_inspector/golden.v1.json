@@ -2378,7 +2378,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -2822,6 +2822,11 @@
         "ncr",
         "handoff"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "handoff",
         "source": "customer_care_warranty",
@@ -4115,15 +4120,15 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "urgency": "immediate",
               "reason_code": "safety_event",
-              "route_to": "field"
+              "route_to": "production",
+              "urgency": "immediate"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety"
+              "to_specialist_id": "field_safety"
             }
           }
         ],
@@ -4131,7 +4136,7 @@
           "evidence.request",
           "hold_point.release"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -4795,16 +4800,16 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "urgency": "immediate",
               "reason_code": "safety_event",
-              "route_to": "production"
+              "route_to": "production",
+              "urgency": "immediate"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "field_safety",
-              "expected_action": "stop_condition.alert"
+              "to_specialist_id": "field_safety",
+              "expected_action_id": "stop_condition.alert"
             }
           }
         ],
@@ -6402,7 +6407,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -6557,7 +6562,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -6732,7 +6737,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "shop_planner"
+              "to_specialist_id": "shop_planner"
             }
           }
         ],
@@ -6854,16 +6859,16 @@
           {
             "action_id": "exception.escalate",
             "args_must_include": {
-              "urgency": "immediate",
               "reason_code": "emergency",
-              "route_to": "ops"
+              "route_to": "ops",
+              "urgency": "immediate"
             }
           },
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "emergency.page"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "emergency.page"
             }
           }
         ],
@@ -6905,6 +6910,11 @@
         "crew_draft",
         "english_default"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "17:15"
+      },
       "signal": {
         "kind": "watch",
         "source": "crew_app",

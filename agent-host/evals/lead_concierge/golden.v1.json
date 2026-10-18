@@ -13,6 +13,11 @@
         "visit_request",
         "residential"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "14:20"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -327,6 +332,11 @@
         "storm",
         "missing_facts"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "11:05"
+      },
       "signal": {
         "kind": "event",
         "source": "social_message",
@@ -641,6 +651,11 @@
         "storm",
         "insurance"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "16:40"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -955,6 +970,11 @@
         "language",
         "contact_window"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "07:55"
+      },
       "signal": {
         "kind": "event",
         "source": "newo_call",
@@ -1237,6 +1257,11 @@
         "referral",
         "visit_request"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "10:30"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -1548,6 +1573,11 @@
         "language",
         "pricing_question"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "18:10"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -1830,6 +1860,11 @@
         "supply_only",
         "missing_facts"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "15:45"
+      },
       "signal": {
         "kind": "event",
         "source": "walk_in",
@@ -2069,7 +2104,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator"
+              "to_specialist_id": "estimator"
             }
           },
           {
@@ -2145,6 +2180,11 @@
         "language",
         "decision_authority"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "12:10"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -2455,6 +2495,11 @@
         "dedup",
         "voice"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:00"
+      },
       "signal": {
         "kind": "event",
         "source": "newo_call",
@@ -2714,6 +2759,11 @@
         "consent",
         "missing_facts"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:50"
+      },
       "signal": {
         "kind": "event",
         "source": "newo_call",
@@ -2932,6 +2982,11 @@
       "tags": [
         "non_lead"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:20"
+      },
       "signal": {
         "kind": "event",
         "source": "newo_call",
@@ -3137,6 +3192,11 @@
         "non_lead",
         "spam"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:35"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -3347,6 +3407,11 @@
         "routing",
         "privacy"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "17:20"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -3538,7 +3603,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -3580,6 +3645,11 @@
         "first_response",
         "stale_fact"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:10"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -3805,6 +3875,11 @@
         "existing_customer",
         "routing"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:40"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -4018,7 +4093,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty"
+              "to_specialist_id": "customer_care_warranty"
             }
           }
         ],
@@ -4063,6 +4138,11 @@
         "commercial",
         "routing"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "11:20"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -4317,6 +4397,11 @@
         "decision_authority",
         "third_party"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "14:05"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -4615,6 +4700,11 @@
         "geography",
         "intake"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:30"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -4891,6 +4981,11 @@
         "consent",
         "stale_fact"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:00"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -5139,6 +5234,11 @@
       "tags": [
         "follow_up"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:15"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -5432,6 +5532,11 @@
         "consent",
         "unsubscribe"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:40"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -5693,6 +5798,11 @@
         "contact_window",
         "intake"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "22:40"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -5974,6 +6084,11 @@
         "winter",
         "safety"
       ],
+      "clock": {
+        "season": "winter",
+        "weekday": "tuesday",
+        "local_time": "13:30"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -6271,6 +6386,11 @@
         "offer",
         "consent"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "19:30"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "owner_app",
@@ -6468,7 +6588,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "marketing_reputation"
+              "to_specialist_id": "marketing_reputation"
             }
           }
         ],
@@ -6513,6 +6633,11 @@
         "owner_request",
         "fairness"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "08:30"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "owner_app",
@@ -6702,6 +6827,11 @@
         "handoff",
         "automation_disclosure"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "15:10"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -6962,6 +7092,11 @@
         "dedup",
         "intake"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "11:45"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -7281,6 +7416,11 @@
         "instant_estimate",
         "pricing_question"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "19:05"
+      },
       "signal": {
         "kind": "event",
         "source": "instant_estimate",
@@ -7575,6 +7715,11 @@
         "dedup",
         "voice"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "12:20"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -7894,6 +8039,11 @@
         "visit_request",
         "scheduling"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "14:20"
+      },
       "signal": {
         "kind": "event",
         "source": "visit_request",
@@ -8148,6 +8298,11 @@
         "first_response",
         "contact_window"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:05"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -8386,6 +8541,11 @@
         "reception_script",
         "voice"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "16:00"
+      },
       "signal": {
         "kind": "owner_request",
         "source": "owner_app",
@@ -8589,6 +8749,11 @@
         "consent",
         "follow_up"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "11:20"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -8821,6 +8986,11 @@
         "report",
         "owner"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:45"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -9083,6 +9253,11 @@
         "pricing_question",
         "visit_request"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "15:40"
+      },
       "signal": {
         "kind": "event",
         "source": "web_chat",
@@ -9323,6 +9498,11 @@
         "third_party",
         "intake"
       ],
+      "clock": {
+        "season": "fall",
+        "weekday": "tuesday",
+        "local_time": "14:05"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -9613,6 +9793,11 @@
         "out_of_scope",
         "closure"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:10"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -9874,6 +10059,11 @@
         "electrical",
         "on_call"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "19:20"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -10146,6 +10336,11 @@
         "not_emergency",
         "intake"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:50"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -10475,6 +10670,11 @@
         "dedup",
         "near_match"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "11:30"
+      },
       "signal": {
         "kind": "event",
         "source": "web_form",
@@ -10778,6 +10978,11 @@
         "language",
         "consent"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "12:00"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -11034,6 +11239,11 @@
         "conflict",
         "voice"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:15"
+      },
       "signal": {
         "kind": "event",
         "source": "newo_call",
@@ -11263,6 +11473,11 @@
         "property_manager",
         "decision_authority"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:40"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -11506,6 +11721,11 @@
         "visit_request",
         "language"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "friday",
+        "local_time": "10:30"
+      },
       "signal": {
         "kind": "event",
         "source": "visit_request",
@@ -11781,6 +12001,11 @@
         "visit_request",
         "scheduling"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "monday",
+        "local_time": "11:00"
+      },
       "signal": {
         "kind": "event",
         "source": "visit_request",
@@ -12020,6 +12245,11 @@
         "live",
         "electrical"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "11:25"
+      },
       "signal": {
         "kind": "event",
         "source": "web_chat",
@@ -12255,6 +12485,11 @@
         "first_response",
         "contact_window"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "09:05"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -12479,6 +12714,11 @@
         "complaint",
         "handoff"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "16:20"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",
@@ -12730,6 +12970,11 @@
         "follow_up",
         "closure"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "10:30"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -13013,6 +13258,11 @@
         "report",
         "empty"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "15:15"
+      },
       "signal": {
         "kind": "watch",
         "source": "scheduler",
@@ -13187,6 +13437,11 @@
         "supply_only",
         "shop"
       ],
+      "clock": {
+        "season": "summer",
+        "weekday": "tuesday",
+        "local_time": "13:10"
+      },
       "signal": {
         "kind": "event",
         "source": "email",
@@ -13388,7 +13643,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "estimator"
+              "to_specialist_id": "estimator"
             }
           },
           {
@@ -13462,6 +13717,11 @@
         "emergency",
         "consent"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "21:35"
+      },
       "signal": {
         "kind": "event",
         "source": "sms",

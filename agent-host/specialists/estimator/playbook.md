@@ -151,11 +151,10 @@ Work down six levels; a lower level never overrides a higher one.
     - `quote.apply_discount`: `discount_pct`, `margin_before_pct`, `margin_after_pct`;
       `quote.flag_reprice`: `margin_before_pct`, `margin_after_pct`; `change_order.draft`:
       `subtotal_cents`, `gst_cents`, `total_cents`.
-    - shared actions per COMMON.md: `handoff.create` takes `specialist_id` (the receiving
-      specialist), `expected_action`, `reason_code`, and the object's id (for example
-      `quote_revision_id`); `exception.escalate` takes `reason_code` (a catalog abstain code),
-      `route_to` (reviewer role or specialist id), `urgency` (`immediate`, `today`, `brief`), and
-      the object's id.
+    - shared actions per COMMON.md: `handoff.create` takes `to_specialist_id` (the receiving
+      specialist), `expected_action_id`, `object` (for example the quote revision), and `reason`;
+      `exception.escalate` takes `reason_code` (a catalog abstain code), `route_to` (a reviewer
+      role), `urgency` (`immediate`, `today`, `brief`), `summary`, and `object`.
 
 ## Never
 

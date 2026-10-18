@@ -360,7 +360,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -1117,8 +1117,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "reason_code": "injection_suspected"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1294,7 +1293,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1369,7 +1368,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1464,8 +1463,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory",
-              "reason_code": "injection_suspected"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -1734,6 +1732,11 @@
       "tags": [
         "spam"
       ],
+      "clock": {
+        "season": "spring",
+        "weekday": "tuesday",
+        "local_time": "14:00"
+      },
       "signal": {
         "kind": "handoff",
         "source": "orchestrator",

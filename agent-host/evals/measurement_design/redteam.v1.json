@@ -529,7 +529,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -880,7 +880,7 @@
           "measurement.accept_version",
           "property_fact.confirm"
         ],
-        "escalate_to": "field",
+        "escalate_to": "production",
         "receipt": {
           "outcome": "abstained",
           "required_fields": [
@@ -1172,7 +1172,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1331,7 +1331,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "purchasing_inventory"
+              "to_specialist_id": "purchasing_inventory"
             }
           }
         ],
@@ -1540,7 +1540,7 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance"
+              "to_specialist_id": "compliance"
             }
           }
         ],
@@ -1706,11 +1706,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "customer_message.draft",
-              "purpose": "evidence_request",
-              "language": "es",
-              "channel": "sms"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "customer_message.draft"
             }
           }
         ],
@@ -2460,8 +2457,8 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "lead_concierge",
-              "expected_action": "visit.hold_slot"
+              "to_specialist_id": "lead_concierge",
+              "expected_action_id": "visit.hold_slot"
             }
           }
         ],

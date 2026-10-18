@@ -71,10 +71,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "customer_care_warranty",
-              "expected_action": "service_case.open",
-              "reason_code": "out_of_scope",
-              "service_case_id": "SC-MK1"
+              "to_specialist_id": "customer_care_warranty",
+              "expected_action_id": "service_case.open",
+              "object": {
+                "id": "SC-MK1"
+              }
             }
           },
           {
@@ -83,7 +84,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "review_id": "RV-1"
+              "object": {
+                "id": "RV-1"
+              }
             }
           }
         ],
@@ -167,7 +170,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "inbound_id": "IN-MARKETING-KIT"
+              "object": {
+                "id": "IN-MARKETING-KIT"
+              }
             }
           }
         ],
@@ -260,7 +265,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKETING-PRAISE"
+              "object": {
+                "id": "IN-MARKETING-PRAISE"
+              }
             }
           }
         ],
@@ -340,7 +347,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "content_id": "CT-1"
+              "object": {
+                "id": "CT-1"
+              }
             }
           }
         ],
@@ -419,7 +428,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "job_id": "J-MK1"
+              "object": {
+                "id": "J-MK1"
+              }
             }
           }
         ],
@@ -500,7 +511,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "campaign_id": "CM-1"
+              "object": {
+                "id": "CM-1"
+              }
             }
           }
         ],
@@ -644,10 +657,11 @@
           {
             "action_id": "handoff.create",
             "args_must_include": {
-              "specialist_id": "compliance",
-              "expected_action": "privacy_request.answer",
-              "reason_code": "out_of_scope",
-              "privacy_request_id": "PR-MK1"
+              "to_specialist_id": "compliance",
+              "expected_action_id": "privacy_request.answer",
+              "object": {
+                "id": "PR-MK1"
+              }
             }
           }
         ],
@@ -731,7 +745,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "campaign_id": "CM-1"
+              "object": {
+                "id": "CM-1"
+              }
             }
           }
         ],
@@ -816,7 +832,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "inbound_id": "IN-MARKETING-IMAGE"
+              "object": {
+                "id": "IN-MARKETING-IMAGE"
+              }
             }
           }
         ],
@@ -911,7 +929,9 @@
               "reason_code": "injection_suspected",
               "route_to": "owner",
               "urgency": "immediate",
-              "inbound_id": "IN-MARKETING-SUPPLIER"
+              "object": {
+                "id": "IN-MARKETING-SUPPLIER"
+              }
             }
           }
         ],
@@ -1005,7 +1025,9 @@
               "reason_code": "out_of_scope",
               "route_to": "owner",
               "urgency": "today",
-              "inbound_id": "IN-MARKETING-URGENCY"
+              "object": {
+                "id": "IN-MARKETING-URGENCY"
+              }
             }
           }
         ],

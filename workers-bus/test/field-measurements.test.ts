@@ -86,10 +86,11 @@ function bucket() {
       body: Blob | string,
       options: {
         customMetadata: { sha256: string };
-        onlyIf: { etagDoesNotMatch: string };
+        onlyIf: Headers;
       },
     ) {
-      assert.equal(options.onlyIf.etagDoesNotMatch, "*");
+      assert.ok(options.onlyIf instanceof Headers);
+      assert.equal(options.onlyIf.get("if-none-match"), "*");
       if (objects.has(key)) return null;
       const bytes =
         typeof body === "string"

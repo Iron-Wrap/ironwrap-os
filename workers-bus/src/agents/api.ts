@@ -29,7 +29,9 @@ import type { AuthContext } from "../app-types.ts";
 import { postAsk, postRequest, readAsk, readCurrentFacts, type Limited } from "./ask.ts";
 import { listHostHealth, listReceipts, receiptOf, type ReceiptView } from "./receipts.ts";
 import { RUN_OUTPUT_SCHEMA } from "./run-output.ts";
+import type { Notify } from "./control.ts";
 import { agreementStats, delegationCandidates, recordQualification, setShadow, validCatastrophes } from "./shadow.ts";
+import { deliverRunReport, OWNER_REPORTS, ownerReports, watchStatus } from "./watches.ts";
 import {
   closeRun,
   getRun,
@@ -53,7 +55,7 @@ const HOST_RUN_KEY = /^[A-Za-z0-9._:-]{8,128}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const STEP_KEY = /^[0-9a-f]{64}$/;
 
-export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () => Date.now()): Promise<Response> {
+export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () => Date.now(), notify: Notify | null = null): Promise<Response> {
   if (!env.AGENT_HOST_TOKEN) return reply({ error: "not_found" }, 404);
   if (!(await tokenMatches(req, env.AGENT_HOST_TOKEN))) return reply({ error: "unauthorized" }, 401);
   const tenantId = operatingTenantId(env.APP_TENANT_ID);
@@ -124,11 +126,14 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
         if (run.close_json !== canonicalJson(recorded) && run.close_json !== canonicalJson(withheldClose(recorded)))
           return reply({error: "run_closed"}, 409);
         await escalateRunAbstention(db, tenantId, run, iso(), null);
+        // A report whose delivery failed or never ran is delivered on the host's retry.
+        if (run.result === "completed") await deliverRunReport(db, tenantId, run, JSON.parse(run.close_json ?? "null"), notify, iso());
         return reply({run_id: run.run_id, terminal: run.result});
       }
       const closed = await closeRun(db, tenantId, run, body, RUN_OUTPUT_SCHEMA, iso());
       if ("error" in closed) return reply({ error: closed.error }, closed.status);
       await escalateRunAbstention(db, tenantId, run, iso(), null);
+      if (closed.result === "completed") await deliverRunReport(db, tenantId, run, body, notify, iso());
       return reply({ run_id: run.run_id, terminal: closed.result });
     }
     return reply({ error: "method_not_allowed" }, 405);
@@ -211,6 +216,14 @@ export async function handleAgentTeamAppRoute(
       return reply({ agreement: await agreementStats(db, tenantId, { specialist_id: specialistId, action_id: actionId, since }) });
     }
     if (url.pathname === "/api/v1/agent-team/shadow/candidates") return reply({ candidates: await delegationCandidates(db, tenantId) });
+    if (url.pathname === "/api/v1/agent-team/watches") return reply({ watches: await watchStatus(db, tenantId) });
+    if (url.pathname === "/api/v1/agent-team/reports") {
+      const watch = url.searchParams.get("watch");
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      if ((watch !== null && !Object.hasOwn(OWNER_REPORTS, watch)) || !Number.isInteger(limit) || limit < 1 || limit > 100)
+        return reply({ error: "invalid_query" }, 400);
+      return reply({ reports: await ownerReports(db, tenantId, watch, limit) });
+    }
     if (url.pathname === "/api/v1/agent-team/exceptions") {
       const open = url.searchParams.get("open") ?? "true";
       const limit = Number(url.searchParams.get("limit") ?? "50");

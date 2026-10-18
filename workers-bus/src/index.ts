@@ -7,6 +7,9 @@
 
 import { handleAgentHostApi, type AgentEnv } from "./agents/api.ts";
 import { sweepShadow } from "./agents/shadow.ts";
+import { retryReportDeliveries, runWatches } from "./agents/watches.ts";
+import { getCompanyProfile } from "./company-setup-store.ts";
+
 import type { AgentDb } from "./agents/store.ts";
 import {
   ALLOWED_SOURCES,
@@ -149,6 +152,23 @@ import {
   newoOperationalCounts,
   recordNewoReconciliationRun,
 } from "./newo-store.ts";
+
+/** Sends an owner report by email; a failure is logged and rethrown so the delivery is recorded as failed. */
+function reportNotify(env: Env) {
+  return (subject: string, text: string) =>
+    sendOwnerAlert(env, subject, reportHtml(text)).catch((error) => {
+      log({ at: "agent_report_delivery", subject, error: String(error) });
+      throw error;
+    });
+}
+
+/** A composed report as email HTML: paragraphs on blank lines, line breaks kept, all text escaped. */
+function reportHtml(text: string): string {
+  return text
+    .split(/\n\s*\n/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph.trim()).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
 
 type BusQueueMessage =
   | { envelope_id: string }
@@ -425,6 +445,27 @@ export default {
             if (result.compared + result.unscored > 0) log({ at: "agent_shadow_sweep", ...result });
           }).catch((error) =>
             log({ at: "agent_shadow_sweep", error: String(error) }),
+          ),
+          // Standing watches: each due condition runs once per period, then fires a signal or records an empty run.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return { fired: [], empty: [], failed: [] };
+            const profile = await getCompanyProfile(env as import("./app-types.ts").AppEnv, tenantId);
+            return await runWatches(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), profile.time_zone);
+          })().then((result) => {
+            if (result.fired.length + result.failed.length > 0) log({ at: "agent_watches", ...result });
+          }).catch((error) =>
+            log({ at: "agent_watches", error: String(error) }),
+          ),
+          // Owner reports whose delivery failed are retried after a pause, a bounded number of times.
+          (async () => {
+            const tenantId = operatingTenantId(env.APP_TENANT_ID);
+            if (!tenantId) return { sent: 0, failed: 0 };
+            return await retryReportDeliveries(env.DB as unknown as AgentDb, tenantId, new Date().toISOString(), reportNotify(env));
+          })().then((result) => {
+            if (result.sent + result.failed > 0) log({ at: "agent_report_retry", ...result });
+          }).catch((error) =>
+            log({ at: "agent_report_retry", error: String(error) }),
           ),
           deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
             log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
@@ -710,7 +751,7 @@ async function routeRequest(
   }
   // AI team host API: the agent-host service token only, never a browser session.
   if (url.pathname.startsWith("/api/v1/agents/"))
-    return await handleAgentHostApi(req, env as AgentEnv);
+    return await handleAgentHostApi(req, env as AgentEnv, undefined, reportNotify(env));
   if (url.pathname.startsWith("/api/v1/"))
     return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.

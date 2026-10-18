@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
-import { assertStrictSchema, validate } from "../src/gateway/schema.ts";
+import { assertStrictSchema, canonicalJson, sha256, validate } from "../src/gateway/schema.ts";
 import type { GatewayHealth } from "../src/gateway/gateway.ts";
 import type { GatewayRequest, GatewayResult } from "../src/gateway/types.ts";
 import { applyLocalEnv, hostEnv } from "../src/host/env.ts";
@@ -87,6 +87,73 @@ test("the run input labels the snapshot as data behind a marker the content cann
   assert.equal(data.context_snapshot.facts[0].fact_id, "lead:L-1001");
   assertStrictSchema(input.outputSchema);
   assert.deepEqual(validate(RUN_OUTPUT_SCHEMA, RUN_OUTPUT), []);
+});
+
+/** A strict schema standing in for the Worker's view spec schema. */
+const VIEW_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["template"],
+  properties: { template: { type: "string", enum: ["list"] } },
+};
+
+test("a run without a view schema keeps today's input byte for byte", async (t) => {
+  const specialist = await loadSpecialist(specialistsRoot(t), "lead_concierge");
+  const tools = [openedRun().tools[0]];
+  // Pinned from this input before views existed; an intended prompt change updates them here. The
+  // Worker's signal view now carries `actor: null` on every signal that is not a person's ask or
+  // request, which adds that one line to the data block: the prompt pin moved from 766c531a… for
+  // that line alone, and the same signal without the field still gives the old prompt.
+  for (const run of [openedRun(), openedRun({ output_extension: null }), openedRun({ output_extension: {} })]) {
+    const input = buildRunInput(specialist, run, signal(), tools, "n0nce");
+    assert.equal(input.outputSchema, RUN_OUTPUT_SCHEMA);
+    assert.deepEqual(
+      { system: sha256(input.system), prompt: sha256(input.prompt), schema: sha256(canonicalJson(input.outputSchema)) },
+      {
+        system: "d02e4e74f7486859b10a597fc9c6a30fe10df220713cc51478338ea967a61067",
+        prompt: "a43e9758ab27ce971d96e0ffe7f472846b074f0f24f5785b6d2aeb1efd499747",
+        // Moved from 66548654… when contract f3 added no_qualified_route to the abstain reason codes.
+        schema: "a1c8aa3a87c186241acd7c33c3a38842d41b464e4cb2816eefa06ca7f0ab817f",
+      },
+    );
+  }
+  const { actor: _actor, ...beforeActor } = signal();
+  const old = buildRunInput(specialist, openedRun(), beforeActor, tools, "n0nce");
+  assert.equal(sha256(old.prompt), "766c531a969a1c2e958aa8849ec5fbf506460ffa450abac4e5de505bce2e8f81");
+  const added = buildRunInput(specialist, openedRun(), signal(), tools, "n0nce").prompt.split("\n").filter((line) => !old.prompt.split("\n").includes(line));
+  assert.deepEqual(added, ['    "actor": null,']);
+});
+
+test("an ask run's view schema joins only that run's output schema, as a required nullable property", async (t) => {
+  const specialist = await loadSpecialist(specialistsRoot(t), "lead_concierge");
+  const tools = [openedRun().tools[0]];
+  const plain = buildRunInput(specialist, openedRun(), signal(), tools, "n0nce");
+  const ask = buildRunInput(specialist, openedRun({ output_extension: { view: VIEW_SCHEMA } }), signal(), tools, "n0nce");
+  assertStrictSchema(ask.outputSchema);
+  assert.deepEqual(ask.outputSchema.required, [...(RUN_OUTPUT_SCHEMA.required as string[]), "view"]);
+  assert.deepEqual(ask.outputSchema.properties, {
+    ...(RUN_OUTPUT_SCHEMA.properties as Record<string, unknown>),
+    view: { ...VIEW_SCHEMA, type: ["object", "null"] },
+  });
+  assert.deepEqual(validate(ask.outputSchema, { ...RUN_OUTPUT, view: null }), []);
+  assert.deepEqual(validate(ask.outputSchema, { ...RUN_OUTPUT, view: { template: "list" } }), []);
+  assert.deepEqual(validate(ask.outputSchema, RUN_OUTPUT), ["$: missing field view"]);
+  assert.notDeepEqual(validate(ask.outputSchema, { ...RUN_OUTPUT, view: { template: "poster" } }), []);
+  assert.deepEqual(validate(RUN_OUTPUT_SCHEMA, { ...RUN_OUTPUT, view: null }), ["$: unknown field view"], "the shared schema is untouched");
+  // The rules say when to return a view; the data block is the same as any other run's.
+  assert.equal(ask.system.startsWith(plain.system), true);
+  assert.match(ask.system.slice(plain.system.length), /^\n\n## Views\n/);
+  assert.equal(ask.prompt, plain.prompt);
+
+  const worker = fakeWorker(openedRun({ output_extension: { view: VIEW_SCHEMA } }));
+  const output = { ...RUN_OUTPUT, view: { template: "list" } };
+  const { options, requests } = runner(t, worker, async (request) => okResult(request, output));
+  await runSignal(options, signal());
+  assert.deepEqual(requests[0].outputSchema, ask.outputSchema);
+  assert.deepEqual(worker.closed[0].body.output, output);
+  const normal = runner(t, fakeWorker(), async (request) => okResult(request));
+  await runSignal(normal.options, signal());
+  assert.equal(normal.requests[0].outputSchema, RUN_OUTPUT_SCHEMA);
 });
 
 test("a signal becomes one run with only the tools both the Worker and the allowlist permit", async (t) => {

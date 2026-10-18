@@ -1,6 +1,8 @@
 // Assembles one run exactly as specialists/README.md orders it: COMMON.md, the playbook, the
 // allowlisted catalog entries, then the context snapshot and signal as data. Untrusted text is
-// fenced by a per-run random marker, so content cannot forge the end of the data block.
+// fenced by a per-run random marker, so content cannot forge the end of the data block. A run the
+// Worker opens with a view schema (the face answering a person's ask) also gets the view rules and
+// a nullable `view` in its output schema; every other run's input is unchanged.
 
 import { randomBytes } from "node:crypto";
 import type { JsonSchema } from "../gateway/types.ts";
@@ -118,10 +120,31 @@ Finish with one JSON object matching the output schema: your decision, whom you 
 null), the reason code when you abstain or escalate (or null), the reason, one receipt per action
 you proposed, any drafts, and a short final_text for the person who reads the receipt. Use exact figures from the facts; never round or correct them.`;
 
+const VIEW_RULES = `## Views
+
+This run answers a person's question. final_text always carries the plain answer. When the answer
+is a set of rows, one record, a comparison, a set of figures, a history or a schedule, you may also
+return a view in \`view\`: a view spec with one template. \`list\` is several things of one kind that
+share a condition; \`record\` is one named thing; \`comparison\` is two to four options for one choice;
+\`report\` is figures and what they mean; \`timeline\` is what happened, in order; \`schedule\` is who
+works where and when. Set \`run_id\` to this run's id. In each data entry's \`sources\`, cite only facts
+from the context snapshot, with the exact fact_id, version and hash it gives. Every fact a person
+reads is a binding into the data, never words. Otherwise, or when you are not sure the view is
+right, set \`view\` to null.`;
+
 export interface RunInput {
   system: string;
   prompt: string;
   outputSchema: JsonSchema;
+}
+
+/** The run output schema with a view: one more property, required and nullable like every optional value. */
+function withView(view: JsonSchema): JsonSchema {
+  return {
+    ...RUN_OUTPUT_SCHEMA,
+    required: [...(RUN_OUTPUT_SCHEMA.required as string[]), "view"],
+    properties: { ...(RUN_OUTPUT_SCHEMA.properties as Record<string, unknown>), view: { ...view, type: ["object", "null"] } },
+  };
 }
 
 export function buildRunInput(specialist: Specialist, run: OpenedRun, signal: Signal, tools: RunTool[], nonce = randomBytes(12).toString("hex")): RunInput {
@@ -130,11 +153,13 @@ export function buildRunInput(specialist: Specialist, run: OpenedRun, signal: Si
         .map((tool) => `- \`${tool.tool_name}\` (${tool.action_id}): ${tool.description} Autonomy ${tool.autonomy}, side effect ${tool.side_effect_class}, undo ${tool.undo}.`)
         .join("\n")
     : "No action is available to you in this run. Report what you see and abstain or escalate.";
+  const view = run.output_extension?.view;
   const system = [
     specialist.common.trim(),
     specialist.playbook.trim(),
     `## Actions you may propose in this run\n\n${catalog}`,
     OUTPUT_RULES,
+    ...(view ? [VIEW_RULES] : []),
   ].join("\n\n");
   const data = {
     run_id: run.run_id,
@@ -149,5 +174,5 @@ export function buildRunInput(specialist: Specialist, run: OpenedRun, signal: Si
     JSON.stringify(data, null, 2),
     `END DATA ${nonce}`,
   ].join("\n");
-  return { system, prompt, outputSchema: RUN_OUTPUT_SCHEMA };
+  return { system, prompt, outputSchema: view ? withView(view) : RUN_OUTPUT_SCHEMA };
 }

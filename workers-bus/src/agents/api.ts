@@ -2,8 +2,9 @@
 //
 // `/api/v1/agents/*` serves the agent host and its per-run action server. It accepts only the
 // AGENT_HOST_TOKEN bearer, never a browser session, and stays dark (404) while that secret is
-// unset. `/api/v1/agent-team/*` serves people through their app session: owner/ops queues
-// and exact proposals scoped to the named reviewer. No route here lets an agent change its own delegation.
+// unset. `/api/v1/agent-team/*` serves people through their app session: owner/ops queues,
+// exact proposals scoped to the named reviewer, and asks to the face (ask.ts). No route here lets
+// an agent change its own delegation.
 
 import { validAppCsrf } from "../app-auth.ts";
 import { canonicalJson } from "./schema.ts";
@@ -25,6 +26,7 @@ import {
 } from "./control.ts";
 import { operatingTenantId } from "../core.ts";
 import type { AuthContext } from "../app-types.ts";
+import { postAsk, postRequest, readAsk, readCurrentFacts, type Limited } from "./ask.ts";
 import { listHostHealth, listReceipts, receiptOf, type ReceiptView } from "./receipts.ts";
 import { RUN_OUTPUT_SCHEMA } from "./run-output.ts";
 import { agreementStats, delegationCandidates, recordQualification, setShadow, validCatastrophes } from "./shadow.ts";
@@ -34,6 +36,7 @@ import {
   listSignals,
   openRun,
   proposeStep,
+  recordedClose,
   recordHeartbeat,
   runTools,
   type AgentDb,
@@ -115,9 +118,10 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
       const body = await readJson(req);
       if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
       if (run.state === "closed") {
-        // An exact retry matches the close as received, or as recorded with a paused specialist's
-        // drafts withheld, so the retry still reaches the abstention escalation below.
-        if (run.close_json !== canonicalJson(body) && run.close_json !== canonicalJson(withheldClose(body)))
+        // An exact retry matches the close as recorded (an ask run's view checked), with or without
+        // a paused specialist's drafts withheld, so the retry still reaches the escalation below.
+        const recorded = recordedClose(run, body);
+        if (run.close_json !== canonicalJson(recorded) && run.close_json !== canonicalJson(withheldClose(recorded)))
           return reply({error: "run_closed"}, 409);
         await escalateRunAbstention(db, tenantId, run, iso(), null);
         return reply({run_id: run.run_id, terminal: run.result});
@@ -159,6 +163,12 @@ export async function handleAgentTeamAppRoute(
   };
   const now = new Date(clock()).toISOString();
   if (req.method === "GET") {
+    // Any role asks the face; only the person who asked, or the owner, reads the ask back.
+    const ask = url.pathname.match(/^\/api\/v1\/agent-team\/ask\/([A-Za-z0-9._:-]+)$/);
+    if (ask) {
+      const view = await readAsk(db, tenantId, actor, ask[1], now);
+      return view ? reply(view) : reply({ error: "ask_not_found" }, 404);
+    }
     const detail = url.pathname.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)$/);
     if (detail) {
       const step = await stepForDecision(db, tenantId, detail[1]);
@@ -216,8 +226,21 @@ export async function handleAgentTeamAppRoute(
   if (!validAppCsrf(req, auth)) return reply({ error: "csrf_failed" }, 403);
   const body = await readJson(req);
   if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
+  // A read with a body: versions and hashes only, so it takes no idempotency key.
+  if (url.pathname === "/api/v1/agent-team/facts/current") {
+    const result = await readCurrentFacts(db, tenantId, actor, body, now);
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
   const idempotency = req.headers.get("idempotency-key") ?? "";
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotency)) return reply({ error: "idempotency_key_required" }, 400);
+  if (url.pathname === "/api/v1/agent-team/ask") {
+    const result = await postAsk(db, tenantId, actor, body, idempotency, now);
+    return "error" in result ? limited(result) : reply({ ask_id: result.ask_id, status: "pending" }, 202);
+  }
+  if (url.pathname === "/api/v1/agent-team/requests") {
+    const result = await postRequest(db, tenantId, actor, body, idempotency, now);
+    return "error" in result ? limited(result) : reply({ signal_id: result.signal_id }, 202);
+  }
   const shadowRoute = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)\/shadow$/);
   if (shadowRoute || url.pathname === "/api/v1/agent-team/qualifications") {
     if (actor.role !== "owner") return reply({ error: "owner_role_required" }, 403);
@@ -424,11 +447,16 @@ async function tokenMatches(req: Request, expected: string): Promise<boolean> {
   return diff === 0;
 }
 
-function reply(body: unknown, status = 200): Response {
+function reply(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", ...headers },
   });
+}
+
+/** A refused ask or request; one past a person's limits says when to try again. */
+function limited(result: Limited): Response {
+  return reply({ error: result.error }, result.status, result.retryAfterSeconds ? { "retry-after": String(result.retryAfterSeconds) } : {});
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

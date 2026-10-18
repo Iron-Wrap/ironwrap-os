@@ -11,7 +11,14 @@ export interface Signal {
   kind: SignalKind;
   specialist_id: string;
   watch_id: string | null;
+  /** `ask` or `request` for a person's signal through the app, else the recorded source. */
   source: string;
+  /**
+   * Who a person's ask or request came from, as the Worker recorded it (`{type: "owner" | "staff" |
+   * "worker", role, ref: "person:<user_id>", authenticated: true}`); null for every other signal. The host
+   * passes it to the model as data and never reads it.
+   */
+  actor?: unknown;
   subject: { aggregate: string; id: string } | null;
   /** Untrusted content (a message, a form, a supplier email); always rendered as data. */
   content: unknown;
@@ -59,6 +66,11 @@ export interface OpenedRun {
   expected_action_id?: string | null;
   /** A shadow run spends the shadow budget, never the live ceilings. */
   mode?: "live" | "shadow";
+  /**
+   * Output this run may return beyond the run output schema. Only a face run answering a person's
+   * ask carries `view`: the strict schema of a view spec, merged in as a nullable property.
+   */
+  output_extension?: { view?: JsonSchema } | null;
 }
 
 export interface RunClose {

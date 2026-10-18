@@ -1,9 +1,10 @@
 // Shared memory (AI-TEAM-CONTRACT.md "Shared memory"): the canonical D1 objects as exact,
 // versioned facts. A run's context snapshot holds the signal's subject and the objects it links
-// to, read through the same rows the role screens read and only as far as the specialist's
-// reviewer role may read them. Every cited fact is read again before the step is decided.
+// to, read through the same rows the role screens read and only as far as the reader may read
+// them: the specialist's reviewer role, or the asker's role when the face answers a person's ask.
+// Every cited fact is read again before the step is decided.
 //
-// A fact is `<object>/<id>`, or `<object>/<id>#<pointer>` when the reviewer role may read only
+// A fact is `<object>/<id>`, or `<object>/<id>#<pointer>` when the reader's role may read only
 // part of the object. Its hash is `sha256:` plus the hex digest of its value in canonical JSON.
 // Its version comes from the append-only fact-version ledger: the first time a value is observed
 // it gets the next version for that fact id, so any change to anything the fact holds (a gate, a
@@ -15,7 +16,7 @@
 // resumes and when a step cites them, so a correction or erasure of the source reaches every run.
 
 import { sha256Hex } from "../app-auth.ts";
-import { permissionsForRole, type AppRole } from "../app-types.ts";
+import { permissionsForRole, ROLE_PERMISSIONS, type AppRole } from "../app-types.ts";
 import { catalogSpecialist } from "./catalog.ts";
 import type { Citation, SnapshotFact } from "./policy.ts";
 import { canonicalJson } from "./schema.ts";
@@ -51,7 +52,7 @@ export interface ObjectView {
 }
 
 export interface ObjectModel {
-  /** Widest first: a reader gets the first view its reviewer role holds the permission for. */
+  /** Widest first: a reader gets the first view its role holds the permission for. */
   views: readonly ObjectView[];
   read(db: AgentDb, tenantId: string, id: string): Promise<ObjectRead | null>;
 }
@@ -96,12 +97,19 @@ export function refOf(fact: ContextFact): FactRef {
 
 const factBytes = (fact: ContextFact) => encoder.encode(canonicalJson(fact)).length;
 
-/** The view a specialist's reviewer role is granted on an object kind, or null. */
-export function viewFor(models: Record<string, ObjectModel>, specialistId: string, kind: string): ObjectView | null {
+/**
+ * Whose read rights the facts follow: a specialist id reads as its catalog reviewer role; `{role}`
+ * reads as one person's role (the face answering that person's ask, or a screen checking its
+ * facts). A role the app does not define reads nothing.
+ */
+export type Reader = string | { role: string };
+
+/** The view a reader's role is granted on an object kind, or null. */
+export function viewFor(models: Record<string, ObjectModel>, reader: Reader, kind: string): ObjectView | null {
   const model = Object.hasOwn(models, kind) ? models[kind] : undefined;
-  const role = catalogSpecialist(specialistId)?.reviewer_role as AppRole | undefined;
-  if (!model || !role) return null;
-  const permissions = permissionsForRole(role);
+  const role = typeof reader === "string" ? catalogSpecialist(reader)?.reviewer_role : reader.role;
+  if (!model || !role || !Object.hasOwn(ROLE_PERMISSIONS, role)) return null;
+  const permissions = permissionsForRole(role as AppRole);
   return model.views.find((view) => permissions.includes(view.permission)) ?? null;
 }
 
@@ -134,20 +142,20 @@ export async function factVersion(db: AgentDb, tenantId: string, factId: string,
 }
 
 /**
- * One canonical object as facts for this specialist: the whole object, or one fact per part its
- * view shows. Null when the object does not exist or the specialist's role may not read it; a
- * failing read throws.
+ * One canonical object as facts for this reader: the whole object, or one fact per part its view
+ * shows. Null when the object does not exist or the reader's role may not read it; a failing read
+ * throws.
  */
 export async function readObjectFacts(
   db: AgentDb,
   models: Record<string, ObjectModel>,
   tenantId: string,
-  specialistId: string,
+  reader: Reader,
   kind: string,
   id: string,
   now: string,
 ): Promise<{ facts: ContextFact[]; links: ObjectRead["links"] } | null> {
-  const view = viewFor(models, specialistId, kind);
+  const view = viewFor(models, reader, kind);
   if (!view) return null;
   const read = await models[kind].read(db, tenantId, id);
   if (!read) return null;
@@ -184,14 +192,14 @@ async function tryReadObjectFacts(...args: Parameters<typeof readObjectFacts>) {
 
 /**
  * The facts a run starts from: the subject first, then the objects it links to, in link order,
- * within the snapshot limits. Objects the specialist may not read are left out silently; an object
+ * within the snapshot limits. Objects the reader may not read are left out silently; an object
  * that cannot be read, or does not fit, is named in `omitted` so the run knows it is missing.
  */
 export async function subjectFacts(
   db: AgentDb,
   models: Record<string, ObjectModel>,
   tenantId: string,
-  specialistId: string,
+  reader: Reader,
   subject: { aggregate: string; id: string } | null,
   now: string,
   budgetBytes = SNAPSHOT_LIMITS.bytes,
@@ -210,7 +218,7 @@ export async function subjectFacts(
     }
   };
   const rootKey = `${subject.aggregate}/${subject.id}`;
-  const root = await tryReadObjectFacts(db, models, tenantId, specialistId, subject.aggregate, subject.id, now);
+  const root = await tryReadObjectFacts(db, models, tenantId, reader, subject.aggregate, subject.id, now);
   if ("failed" in root) return { facts, omitted: [{ fact_id: rootKey, reason: "unreadable" }] };
   if (!root.read) return { facts, omitted };
   take(rootKey, root.read.facts);
@@ -219,7 +227,7 @@ export async function subjectFacts(
     const key = `${link.kind}/${link.id}`;
     if (seen.has(key) || !parseFactId(key)) continue;
     seen.add(key);
-    const linked = await tryReadObjectFacts(db, models, tenantId, specialistId, link.kind, link.id, now);
+    const linked = await tryReadObjectFacts(db, models, tenantId, reader, link.kind, link.id, now);
     if ("failed" in linked) omitted.push({ fact_id: key, reason: "unreadable" });
     // A linked object that does not fit is left out whole; a smaller later one may still fit.
     else if (linked.read) take(key, linked.read.facts);
@@ -253,7 +261,7 @@ export function factReader(
   db: AgentDb,
   models: Record<string, ObjectModel>,
   tenantId: string,
-  specialistId: string,
+  reader: Reader,
   now: string,
   signal: (ref: FactRef) => Promise<ContextFact | null>,
 ): FactReader {
@@ -266,7 +274,7 @@ export function factReader(
     if (!reads.has(key))
       reads.set(
         key,
-        tryReadObjectFacts(db, models, tenantId, specialistId, parsed.kind, parsed.id, now).then((result) =>
+        tryReadObjectFacts(db, models, tenantId, reader, parsed.kind, parsed.id, now).then((result) =>
           "read" in result && result.read ? new Map(result.read.facts.map((fact) => [fact.fact_id, fact])) : null,
         ),
       );
@@ -324,4 +332,70 @@ export async function citedFacts(
     currentVersions.set(citation.fact_id, fresh.version);
   }
   return { snapshot, currentVersions };
+}
+
+/**
+ * Each fact's current version and hash as this reader may read it now, never its value: what a
+ * screen checks before it shows a cited fact again. An id with a pointer carries the hash of the
+ * value it names and the version it is cited at (`citedVersion`), whatever part of the object the
+ * reader may read. A fact the reader may not read, that does not exist or that cannot be read now
+ * is unreadable.
+ */
+export async function currentFacts(
+  db: AgentDb,
+  models: Record<string, ObjectModel>,
+  tenantId: string,
+  reader: Reader,
+  factIds: string[],
+  now: string,
+): Promise<{ facts: Array<{ fact_id: string; version: number; hash: string }>; unreadable: string[] }> {
+  const objects = new Map<string, Promise<Map<string, ContextFact> | null>>();
+  const facts: Array<{ fact_id: string; version: number; hash: string }> = [];
+  const unreadable: string[] = [];
+  for (const factId of factIds) {
+    const parsed = parseFactId(factId);
+    if (!parsed) {
+      unreadable.push(factId);
+      continue;
+    }
+    const key = `${parsed.kind}/${parsed.id}`;
+    if (!objects.has(key))
+      objects.set(
+        key,
+        tryReadObjectFacts(db, models, tenantId, reader, parsed.kind, parsed.id, now).then((result) =>
+          "read" in result && result.read ? new Map(result.read.facts.map((fact) => [fact.fact_id, fact])) : null,
+        ),
+      );
+    const byId = await objects.get(key)!;
+    const under = byId ? refUnder(byId, factId) : null;
+    const value = under ? resolvePointer((under.ref as ContextFact).data, under.rest) : undefined;
+    if (!under || value === undefined) unreadable.push(factId);
+    else
+      facts.push({
+        fact_id: factId,
+        version: await citedVersion(db, tenantId, under.ref as ContextFact, under.rest, now),
+        hash: under.rest === "" ? under.ref.hash : await factHash(value),
+      });
+  }
+  return { facts, unreadable };
+}
+
+/**
+ * The version an id below a read fact is cited at, the same for every reader who may read it: that
+ * of the narrowest ledger line between the id and the fact. A part a narrower role reads as its own
+ * fact has its own line, so a wider reader (the owner, reading the whole object) gets the part's
+ * version, not the object's; a step's pointer below a fact (`citedFacts`) keeps that fact's version.
+ */
+async function citedVersion(db: AgentDb, tenantId: string, read: ContextFact, rest: string, now: string): Promise<number> {
+  const segments = rest === "" ? [] : rest.slice(1).split("/");
+  for (let depth = segments.length; depth > 0; depth -= 1) {
+    const pointer = `/${segments.slice(0, depth).join("/")}`;
+    const factId = read.fact_id.includes("#") ? `${read.fact_id}${pointer}` : `${read.fact_id}#${pointer}`;
+    const line = await db
+      .prepare("SELECT 1 AS found FROM agent_fact_versions WHERE tenant_id = ? AND fact_id = ? LIMIT 1")
+      .bind(tenantId, factId)
+      .first();
+    if (line) return await factVersion(db, tenantId, factId, await factHash(resolvePointer(read.data, pointer)), now);
+  }
+  return read.version;
 }

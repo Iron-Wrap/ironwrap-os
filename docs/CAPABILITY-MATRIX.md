@@ -76,7 +76,7 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 122,
+      "count": 124,
       "latest": "0202_agent_fact_versions.sql"
     }
   },
@@ -165,10 +165,19 @@ Current source tracing distinguishes implemented modules from reachable producti
   accepted.
 - native customer acceptance is production-reachable and atomically binds the exact quote,
   proposal, publication, terms, challenge, and customer decision.
+- The emailed acceptance token has a private, no-store preview of the current bound quote version,
+  total in cents, currency, validity date, proposal title and summary, and exact approved terms.
+  A withdrawn or changed publication stops that preview; the confirmation route still performs
+  its own binding check before committing.
 - acceptance creates exactly one durable deposit-derivation queue row in the same D1 transaction;
   authenticated accounting recovery replays that queue and derives an intent only when provider
   mapping, tax policy, and authority-ceiling facts match. Missing configuration remains blocked.
 - native assignment, work-package, safety, completion, and final-invoice derivation exist.
+- Sales can read one active job's plan and its paged native proof through `GET /api/v1/jobs/{job}`
+  and `GET /api/v1/jobs/{job}/proof` with `estimator:read`. Both reads are tenant-scoped,
+  `private, no-store`, and expose only `job.read` as an allowed action. This does not grant
+  `jobs:read:any`: job history, customer history, and the commercial phase remain closed to sales.
+  The Figma-derived estimator screen and authenticated QA are still required before acceptance.
 - acceptance projects qualified leads to `converted` and prospect customers to `active`; the
   read-only job-phase route spans the independent commercial, production, safety, accounting,
   closeout, and warranty facts without becoming a writable status. It requires `jobs:read:any`
@@ -828,9 +837,10 @@ Operator search-and-jump (2026-08-23):
   own current assignment opens); `leads` on `sales:read`; `customers` on `jobs:read:any`, and only
   for a customer that owns an openable active job, carrying the same name and phone the job
   packet's `contact` block already returns; `go_to` for every role, mirroring `navigationForRole`
-  in `app/src/lib/roles.ts`. A field session therefore cannot reach a lead, a sales session cannot
-  reach a job, customer, or money record, and an accounting session receives its own destinations
-  and neither operating register.
+  in `app/src/lib/roles.ts`. A field session therefore cannot reach a lead; search offers no job,
+  customer, or money result to sales, even though sales may read a known active job's plan through
+  the separate scoped route above. An accounting session receives its own destinations and neither
+  operating register.
 - Bounded and honest by construction: a hard cap of eight rows per group, a stable
   `<matched column> COLLATE NOCASE, <id>` order, an explicit `more_results` flag from a read of
   one row past the cap rather than silent truncation, and a stated `outcome` of `results`,
@@ -1145,12 +1155,14 @@ Implemented or represented:
 - append-only, tenant-scoped integration manifests and provider proof facts, versioned readiness
   profiles with explicit dependencies, and one deterministic fail-closed evaluator exposed through
   the authenticated owner/operations Integrations page. This is repository capability only: the
-  source creates no browser CRUD or arbitrary hook surface, and no tenant is configured or proven
-  until a governed external path appends approved manifests and fresh provider readbacks. The
-  read-only evaluator validates the recorded bindings but does not yet authenticate the external
-  proof issuer/evidence reference, and `profile_digest_sha256` has no adopted canonical digest
-  contract; the UI therefore labels success as repository checks rather than provider-authenticated
-  proof;
+  source now has default-off owner/operations manifest and profile admission commands with strict
+  registry validation, current-role checks, atomic version admission and exact replay. They append
+  declarations only; the Integrations page has no editor and no arbitrary hook surface. Newly
+  admitted profiles receive a deterministic digest of their normalized specification and source
+  identity, while historical rows are not retroactively attested. No tenant is configured or proven
+  by these commands alone: the evaluator still lacks a separately authenticated, provider-bound
+  proof issuer/readback path, and no live provider or deployment receipt has been accepted. The UI
+  therefore labels success as repository checks rather than provider-authenticated proof;
 - a per-request runtime capability signal, separate from the proof-fact evaluator above and
   answering a different question: is a capability absent from the build, switched off, on but
   unconfigured, blocked on a dependency, indeterminate, or reachable. One registry

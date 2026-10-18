@@ -191,3 +191,197 @@ describe("field response validation", () => {
     }
   });
 });
+
+describe("crew tape readings on a work plan read", () => {
+  const total = (feet: number, inches: number, eighths: number) => feet * 96 + inches * 8 + eighths;
+  function reading(overrides: Record<string, unknown> = {}) {
+    return {
+      checkin_id: "CHK-TEST-1",
+      device_action_id: "device-action-0001",
+      assignment_id: "ASSIGN-TEST",
+      measurement: {
+        feet: 42,
+        inches: 7,
+        eighths: 3,
+        area_label: "south eave",
+        total_eighth_inches: total(42, 7, 3),
+      },
+      captured_at: "2026-09-29T12:30:00.000Z",
+      recorded_by: "appu_field_test",
+      recorded_by_name: "Synthetic Crew",
+      device_id: "device-test-1",
+      correction_of: null,
+      correction_reason: null,
+      superseded_by: null,
+      work_package_id: null,
+      work_package_version: null,
+      evidence_slot_id: null,
+      evidence_item_correction_of: null,
+      work_package_release_attempt_id: null,
+      allowed_actions: ["field.measurement.correct"],
+      correction_target: { correction_of: "CHK-TEST-1" },
+      ...overrides,
+    };
+  }
+  const read = (extra: Record<string, unknown>) =>
+    contracts.workObjectResponseSchema.parse({ ...workObject(), ...extra });
+
+  it("reads the readings and whether the office holds more than this list", () => {
+    const parsed = read({ field_measurements: [reading()], field_measurements_more: true });
+    expect(parsed.field_measurements).toEqual([reading()]);
+    expect(parsed.field_measurements_more).toBe(true);
+    expect(parsed.stale_fields).toEqual([]);
+  });
+
+  it("reads an older Worker's plan with no readings as an empty list, nothing marked", () => {
+    const parsed = read({});
+    expect(parsed.field_measurements).toEqual([]);
+    expect(parsed.field_measurements_more).toBe(false);
+    expect(parsed.stale_fields).toEqual([]);
+  });
+
+  it("takes every reading the Worker can store, at its limits", () => {
+    const longest = {
+      feet: 100_000,
+      inches: 11,
+      eighths: 7,
+      area_label: "a".repeat(120),
+      total_eighth_inches: total(100_000, 11, 7),
+    };
+    const smallest = { feet: 0, inches: 0, eighths: 1, area_label: "x", total_eighth_inches: 1 };
+    const { recorded_by_name: _name, ...olderWorker } = reading();
+    const items = [
+      reading({ measurement: longest }),
+      reading({ measurement: smallest, correction_target: null, allowed_actions: [] }),
+      reading({
+        correction_target: {
+          evidence_correction_of: "EVT-TEST-1",
+          evidence_item_correction_of: "ITEM-TEST-1",
+        },
+      }),
+      reading({ recorded_by_name: null, superseded_by: "CHK-TEST-2", correction_target: null }),
+      olderWorker,
+    ];
+    const parsed = read({ field_measurements: items });
+    expect(parsed.field_measurements).toHaveLength(items.length);
+    expect(parsed.stale_fields).toEqual([]);
+  });
+
+  it("drops a list it cannot vouch for and marks it, but keeps the work plan", () => {
+    const broken: Array<[string, Record<string, unknown>]> = [
+      [
+        "inches past 11",
+        {
+          field_measurements: [
+            reading({
+              measurement: {
+                ...reading().measurement,
+                inches: 12,
+                total_eighth_inches: total(42, 12, 3),
+              },
+            }),
+          ],
+        },
+      ],
+      [
+        "eighths past 7",
+        {
+          field_measurements: [
+            reading({
+              measurement: {
+                ...reading().measurement,
+                eighths: 8,
+                total_eighth_inches: total(42, 7, 8),
+              },
+            }),
+          ],
+        },
+      ],
+      [
+        "feet past the Worker's limit",
+        {
+          field_measurements: [
+            reading({
+              measurement: {
+                ...reading().measurement,
+                feet: 100_001,
+                total_eighth_inches: total(100_001, 7, 3),
+              },
+            }),
+          ],
+        },
+      ],
+      [
+        "a total that disagrees with its parts",
+        {
+          field_measurements: [
+            reading({ measurement: { ...reading().measurement, total_eighth_inches: 1 } }),
+          ],
+        },
+      ],
+      [
+        "an empty reading",
+        {
+          field_measurements: [
+            reading({
+              measurement: {
+                feet: 0,
+                inches: 0,
+                eighths: 0,
+                area_label: "x",
+                total_eighth_inches: 0,
+              },
+            }),
+          ],
+        },
+      ],
+      [
+        "a place name past 120",
+        {
+          field_measurements: [
+            reading({ measurement: { ...reading().measurement, area_label: "a".repeat(121) } }),
+          ],
+        },
+      ],
+      [
+        "fractional feet",
+        { field_measurements: [reading({ measurement: { ...reading().measurement, feet: 4.5 } })] },
+      ],
+      ["a reading with no check-in", { field_measurements: [reading({ checkin_id: "" })] }],
+      ["a fix target naming nothing", { field_measurements: [reading({ correction_target: {} })] }],
+      ["a list that is not a list", { field_measurements: "south eave 42 ft" }],
+      [
+        "a more flag that is not a flag",
+        { field_measurements: [reading()], field_measurements_more: "yes" },
+      ],
+    ];
+    for (const [label, extra] of broken) {
+      const result = contracts.workObjectResponseSchema.safeParse({ ...workObject(), ...extra });
+      expect(result.success, label).toBe(true);
+      if (!result.success) throw new Error(`${label} hid the work plan`);
+      expect(result.data.field_measurements, label).toEqual([]);
+      expect(result.data.field_measurements_more, label).toBe(false);
+      expect(result.data.stale_fields, label).toEqual(["field_measurements.native_unavailable"]);
+      expect(result.data.work_package?.id, label).toBe("WP-TEST");
+    }
+  });
+
+  it("reads a history page whole or not at all", () => {
+    const page = {
+      ...envelope,
+      items: [reading(), reading({ checkin_id: "CHK-TEST-0", superseded_by: "CHK-TEST-1" })],
+      page_size: 100,
+      next_cursor: "WyIyMDI2LTA5LTI5VDEyOjMwOjAwLjAwMFoiXQ",
+    };
+    expect(contracts.fieldMeasurementPageSchema.parse(page).items).toHaveLength(2);
+    expect(
+      contracts.fieldMeasurementPageSchema.safeParse({
+        ...page,
+        items: [reading({ measurement: { ...reading().measurement, inches: 12 } })],
+      }).success,
+    ).toBe(false);
+    expect(contracts.fieldMeasurementPageSchema.safeParse({ ...page, page_size: 0 }).success).toBe(
+      false,
+    );
+  });
+});

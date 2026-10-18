@@ -47,6 +47,11 @@ interface NativeContract extends PreparedContract {
   quoteRevisionId: string;
   proposalRevisionId: string;
   publicationEventId: string;
+  totalCents: number;
+  currency: string;
+  validUntil: string;
+  proposalTitle: string;
+  proposalSummary: string;
 }
 
 interface NativeContractRow {
@@ -57,6 +62,11 @@ interface NativeContractRow {
   quote_revision_id: string;
   quote_id: string;
   quote_version: number;
+  total_cents: number;
+  currency: string;
+  valid_until: string;
+  proposal_title: string;
+  proposal_summary: string;
   proposal_revision_id: string;
   proposal_pack_id: string;
   quote_terms_json: string;
@@ -279,6 +289,60 @@ export async function handleCustomerPortalAcceptanceConfirm(
   if (claim.kind === "challenge_missing") return portalNotFound();
 
   return await settleAcceptanceIntent(env, claim.intent, requestContext);
+}
+
+/** The emailed token can only preview the still-current contract it was issued for. */
+export async function handleCustomerPortalAcceptancePreview(
+  req: Request,
+  env: AppEnv,
+): Promise<Response> {
+  if (req.method !== "POST" || !customerAcceptanceEnabled(env))
+    return portalNotFound();
+  if (!customerAcceptanceConfigured(env)) return portalUnavailable();
+  if (!trustedPortalOrigin(req, env)) return portalNotFound();
+
+  const request = await parseExactJson(req, ["token"]);
+  if (!request || !validToken(request.token)) return portalNotFound();
+  const tenantId = configuredTenantId(env);
+  if (!tenantId) return portalUnavailable();
+  const now = new Date();
+  try {
+    const challenge = await getAcceptanceChallengeByTokenHash(
+      env,
+      await sha256Hex(request.token),
+    );
+    if (
+      !challenge ||
+      challenge.tenant_id !== tenantId ||
+      challenge.state !== "sent" ||
+      challenge.expires_at <= now.toISOString()
+    )
+      return portalNotFound();
+    const contract = await prepareContract(
+      env,
+      {
+        tenant_id: tenantId,
+        roof_job_id: challenge.roof_job_id,
+        customer_id: challenge.customer_id,
+      },
+      challenge.created_at,
+      now.toISOString().slice(0, 10),
+    );
+    if (!contract || !sameContract(challenge, contract))
+      return acceptanceJson({ error: "acceptance_contract_changed" }, 409);
+    return acceptanceJson({
+      status: "ready",
+      quote_version: contract.quoteVersion,
+      total_cents: contract.totalCents,
+      currency: contract.currency,
+      valid_until: contract.validUntil,
+      proposal_title: contract.proposalTitle,
+      proposal_summary: contract.proposalSummary,
+      terms: JSON.parse(contract.termsJson) as Record<string, unknown>,
+    });
+  } catch {
+    return portalUnavailable();
+  }
 }
 
 /**
@@ -554,6 +618,8 @@ async function prepareContract(
             job.roof_job_id, customer.customer_id,
             quote.quote_revision_id, quote.customer_quote_id AS quote_id,
             quote.revision_number AS quote_version,
+            quote.total_cents, quote.currency, quote.valid_until,
+            proposal.title AS proposal_title, proposal.summary AS proposal_summary,
             proposal.proposal_revision_id, proposal.proposal_pack_id,
             quote.terms_json AS quote_terms_json,
             proposal.terms_json AS proposal_terms_json,
@@ -658,6 +724,13 @@ async function prepareContract(
   const quoteRevisionId = boundedText(row.quote_revision_id, 12, 160);
   const quoteId = boundedText(row.quote_id, 3, 140);
   const quoteVersion = boundedInteger(row.quote_version, 1, 1_000_000);
+  const totalCents = boundedInteger(row.total_cents, 0, 1_000_000_000_000);
+  const currency = /^[A-Z]{3}$/.test(row.currency) ? row.currency : null;
+  const validUntil = /^\d{4}-\d{2}-\d{2}$/.test(row.valid_until)
+    ? row.valid_until
+    : null;
+  const proposalTitle = boundedText(row.proposal_title, 1, 200);
+  const proposalSummary = boundedText(row.proposal_summary, 1, 4_000);
   const proposalRevisionId = boundedText(row.proposal_revision_id, 12, 160);
   const proposalPackId = boundedText(row.proposal_pack_id, 3, 140);
   const publicationEventId = boundedText(row.publication_event_id, 20, 120);
@@ -683,6 +756,11 @@ async function prepareContract(
     !quoteRevisionId ||
     !quoteId ||
     !quoteVersion ||
+    totalCents === null ||
+    !currency ||
+    !validUntil ||
+    !proposalTitle ||
+    !proposalSummary ||
     !proposalRevisionId ||
     !proposalPackId ||
     !publicationEventId ||
@@ -705,13 +783,28 @@ async function prepareContract(
     proposalRevisionId,
     proposalPackId,
     publicationEventId,
+    totalCents,
+    currency,
+    validUntil,
+    proposalTitle,
+    proposalSummary,
     termsHash,
     termsJson,
   };
 }
 
 function sameContract(
-  intent: AcceptanceIntent,
+  intent: Pick<
+    AcceptanceChallenge,
+    | "roof_job_id"
+    | "customer_id"
+    | "email_hash"
+    | "quote_id"
+    | "quote_version"
+    | "proposal_pack_id"
+    | "terms_hash"
+    | "terms_json"
+  >,
   contract: NativeContract,
 ): boolean {
   return (

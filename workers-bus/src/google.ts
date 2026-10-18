@@ -1,8 +1,8 @@
 // google.ts — Google Workspace layer: Gmail send + Drive job folders (Phase 2/3 spine).
 //
 // Auth = service account (GOOGLE_SERVICE_ACCOUNT_JSON secret) + domain-wide delegation,
-// impersonating FROM_EMAIL. Live-verified 2026-07-02: token mint, Drive drives.list (all three
-// shared drives), and a real Gmail send all succeeded with this exact flow.
+// impersonating FROM_EMAIL. Owner delegation grants and authenticated provider/runtime
+// evidence are external prerequisites; source and synthetic receipts do not establish them.
 //
 // Files live in the "IW Jobs" Shared Drive (SHARED_DRIVE_ID_JOBS var): one folder per job named
 // "<JN#> <Customer> (<Brand>)" with template subfolders 01–06. Payment/PII docs belong in
@@ -10,7 +10,7 @@
 // skip and the raw stays in R2, same pattern as before.
 
 import { isOn } from "./core.ts";
-import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
+import { adapterAuthority, assertEffectLedgerReady, EffectRuntimeError, getExternalEffectByIdempotency, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import type { AppEnv } from "./app-types.ts";
 
@@ -190,6 +190,7 @@ export interface GovernedGmailSendReceipt extends GmailSendReceipt {
   effectState: string;
   requestHash: string;
   providerResponseHash: string | null;
+  /** Hash of the accepted-send response confirmation, not an independent mailbox/body read. */
   readbackHash: string | null;
 }
 
@@ -205,54 +206,13 @@ async function gmailExpectedReadback(
   };
 }
 
-async function gmailObservedReadback(payload: unknown): Promise<{
-  to_sha256: string;
-  subject_sha256: string;
-  html_sha256: string;
-} | null> {
-  const root = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? payload as { id?: unknown; raw?: unknown }
-    : null;
-  if (typeof root?.id !== "string" || !root.id || typeof root.raw !== "string") return null;
-  let message: string;
-  try {
-    const encoded = root.raw.replace(/-/g, "+").replace(/_/g, "/");
-    const binary = atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "="));
-    message = new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
-  } catch {
-    return null;
-  }
-  const boundary = message.indexOf("\r\n\r\n");
-  if (boundary < 0) return null;
-  const headerText = message.slice(0, boundary).replace(/\r\n[ \t]+/g, " ");
-  const html = message.slice(boundary + 4);
-  const headers = new Map(headerText.split("\r\n").map((line) => {
-    const index = line.indexOf(":");
-    return index < 1 ? ["", ""] : [line.slice(0, index).toLowerCase(), line.slice(index + 1).trim()];
-  }));
-  const to = headers.get("to");
-  const encodedSubject = headers.get("subject");
-  if (!to || !encodedSubject) return null;
-  const match = /^=\?UTF-8\?B\?([^?]+)\?=$/i.exec(encodedSubject);
-  let subject = encodedSubject;
-  if (match) {
-    try {
-      const binary = atob(match[1]);
-      subject = new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
-    } catch {
-      return null;
-    }
-  }
-  return await gmailExpectedReadback(to, subject, html);
-}
-
 /** Send one email as FROM_EMAIL (impersonated). Subject is RFC2047-encoded for non-ASCII. */
 export async function sendGmail(
   env: Env,
   to: string,
   subject: string,
   html: string,
-  options: { idempotencyKey?: string; taskId?: string; actorId?: string } = {},
+  options: { idempotencyKey?: string; legacyIdempotencyKey?: string; taskId?: string; actorId?: string } = {},
 ): Promise<GmailSendReceipt> {
   const receipt = await sendGmailThroughEffect(env, to, subject, html, {
     ...options,
@@ -264,7 +224,7 @@ export async function sendGmail(
 /**
  * Governed stage-automation email. It deliberately has a distinct effect action from the
  * compatibility `customer.email.send` rail, while both actions share the same Gmail adapter,
- * provider readback and universal effect ledger.
+ * accepted-send response confirmation and universal effect ledger.
  */
 export async function sendPipelineAutomationEmail(
   env: Env,
@@ -292,6 +252,7 @@ async function sendGmailThroughEffect(
   options: {
     action: "customer.email.send" | "operations.email.send";
     idempotencyKey?: string;
+    legacyIdempotencyKey?: string;
     taskId?: string;
     actorId?: string;
     aggregate?: { type: string; id: string; version: number };
@@ -302,65 +263,82 @@ async function sendGmailThroughEffect(
   const actorId = options.actorId ?? "gmail-adapter";
   const request = { to, subject, html };
   const requestHash = await sha256Hex(canonicalJson(request));
-  const idempotencyKey = options.idempotencyKey ?? `gmail:${to}:${requestHash}`;
+  // The old default key included the recipient in several durable effect-ledger columns.
+  // Preserve an existing legacy key on replay, including an unknown outcome, so a deploy
+  // cannot silently turn the same send into a new effect. New sends use an opaque key.
+  const legacyKey = options.legacyIdempotencyKey ?? (options.idempotencyKey ? null : `gmail:${to}:${requestHash}`);
+  const newKey = options.idempotencyKey ?? `gmail:${requestHash}`;
+  const idempotencyKey = legacyKey && await getExternalEffectByIdempotency(env as never, tenantId, legacyKey)
+    ? legacyKey
+    : newKey;
   const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
   const action = options.action;
-  const result = await runExternalEffect(env as never, {
+  const expectedReadback = await gmailExpectedReadback(to, subject, html);
+  const runForKey = async (key: string) => await runExternalEffect(env as never, {
     tenantId,
     actor: { type: "agent", id: actorId },
-    taskId: options.taskId ?? `gmail:${idempotencyKey}`,
+    taskId: options.taskId ?? `gmail:${key}`,
     authority: adapterAuthority({ tenantId, provider: "gmail", action, actorId, deadlineAt, retryLimit: 1 }),
-    aggregate: options.aggregate ?? { type: "communication", id: idempotencyKey, version: 0 },
-    intentId: idempotencyKey,
+    aggregate: options.aggregate ?? { type: "communication", id: key, version: 0 },
+    intentId: key,
     action,
     request,
     requestHash,
     provider: "gmail",
-    idempotencyKey,
+    idempotencyKey: key,
     deadlineAt,
-    expectedReadback: await gmailExpectedReadback(to, subject, html),
+    expectedReadback,
     retryLimit: 1,
     compensationPlan: {},
-    correlationId: idempotencyKey,
+    correlationId: key,
   }, {
     async dispatch() {
       const value = await sendGmailDirect(env, to, subject, html);
-      return { outcome: "accepted" as const, value, providerExternalId: value.providerMessageId, providerResponse: value };
-    },
-    async readback({ providerExternalId }) {
-      if (!providerExternalId) return { status: "unavailable" as const, detailCode: "gmail_readback_id_missing" };
-      const token = await googleToken(env, env.FROM_EMAIL, GMAIL_SCOPES);
-      const query = new URLSearchParams({ format: "raw" });
-      const response = await googleFetch(env, `${GMAIL}/users/me/messages/${encodeURIComponent(providerExternalId)}?${query.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      }, "gmail_readback");
-      if (response.status === 404) return { status: "not_found" as const, detailCode: "gmail_readback_not_found" };
-      if (!response.ok) return { status: "unavailable" as const, detailCode: `gmail_readback_${response.status}` };
-      const value = await response.json() as unknown;
-      const observed = await gmailObservedReadback(value);
-      return observed
-        ? { status: "match" as const, providerExternalId, observed }
-        : { status: "conflict" as const, providerExternalId, observed: value, detailCode: "gmail_readback_conflict" };
+      // Gmail confirms this request with an immutable Message id in the successful send response.
+      // Bind that provider receipt to the original request hashes. This is response confirmation,
+      // not an independent mailbox read: gmail.send cannot call users.messages.get.
+      return {
+        outcome: "accepted" as const,
+        value,
+        providerExternalId: value.providerMessageId,
+        providerResponse: value,
+        readback: {
+          status: "match" as const,
+          providerExternalId: value.providerMessageId,
+          observed: {
+            ...expectedReadback,
+            confirmation_source: "gmail_messages_send_response",
+            provider_message_id: value.providerMessageId,
+          },
+        },
+      };
     },
     async replay({ effect }) {
       const providerMessageId = effect.provider_external_id;
       if (!providerMessageId) throw new Error("gmail_replay_id_missing");
-      const token = await googleToken(env, env.FROM_EMAIL, GMAIL_SCOPES);
-      const response = await googleFetch(
-        env,
-        `${GMAIL}/users/me/messages/${encodeURIComponent(providerMessageId)}?format=raw`,
-        { headers: { authorization: `Bearer ${token}` } },
-        "gmail_replay",
-      );
-      const observed = response.ok
-        ? await gmailObservedReadback(await response.json())
-        : null;
-      const expected = await gmailExpectedReadback(to, subject, html);
-      if (!observed || canonicalJson(observed) !== canonicalJson(expected))
-        throw new Error("gmail_replay_readback_failed");
+      // The effect envelope was checked above against this exact request and key. A succeeded
+      // record also retains the hash of Google's accepted send response, so replay never sends
+      // again or asks for a mailbox-read scope. Legacy succeeded rows use this same response hash.
+      if (!effect.readback_hash || effect.provider_response_hash !== await sha256Hex(canonicalJson({ providerMessageId }))) {
+        throw new Error("gmail_replay_receipt_mismatch");
+      }
       return { providerMessageId };
     },
   });
+  let result;
+  try {
+    result = await runForKey(idempotencyKey);
+  } catch (error) {
+    // The D1 rollover guard can reject the new key if an old Worker inserts its legacy
+    // effect after our first lookup. Re-read that exact key and replay it; never dispatch
+    // under a second key for the same send. A real DB failure still propagates.
+    if (idempotencyKey === legacyKey || !legacyKey ||
+        !(error instanceof EffectRuntimeError && error.code === "effect_proposal_failed") ||
+        !(await getExternalEffectByIdempotency(env as never, tenantId, legacyKey))) {
+      throw error;
+    }
+    result = await runForKey(legacyKey);
+  }
   if (result.effect.state !== "succeeded") throw new Error(result.effect.result_code ?? "gmail_effect_outcome_unknown");
   if (!result.value?.providerMessageId) throw new Error("gmail_effect_result_missing");
   return {

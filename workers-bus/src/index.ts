@@ -106,6 +106,7 @@ import { handleCustomerPortalResolve } from "./customer-portal.ts";
 import {
   handleCustomerPortalAcceptanceChallenge,
   handleCustomerPortalAcceptanceConfirm,
+  handleCustomerPortalAcceptancePreview,
   reconcileCustomerContractAcceptanceAttempts,
 } from "./customer-contract-acceptance.ts";
 import {
@@ -668,6 +669,12 @@ async function routeRequest(
   }
   if (url.pathname === "/api/v1/customer-portal/acceptance/challenge") {
     return await handleCustomerPortalAcceptanceChallenge(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
+  if (url.pathname === "/api/v1/customer-portal/acceptance/preview") {
+    return await handleCustomerPortalAcceptancePreview(
       req,
       env as import("./app-types.ts").AppEnv,
     );

@@ -2,10 +2,12 @@ import { apiRequest } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import {
   customerContractAcceptanceChallengeResponseSchema,
+  customerContractAcceptancePreviewResponseSchema,
   customerContractAcceptanceConfirmResponseSchema,
   customerPortalDecisionResponseSchema,
   customerPortalResponseSchema,
   type CustomerContractAcceptanceChallengeResponse,
+  type CustomerContractAcceptancePreviewResponse,
   type CustomerContractAcceptanceConfirmResponse,
   type CustomerPortalDecisionResponse,
   type CustomerPortalResponse,
@@ -36,6 +38,21 @@ export async function requestCustomerContractAcceptanceChallenge(
     method: "POST",
     body: { token },
     schema: customerContractAcceptanceChallengeResponseSchema,
+    credentials: "omit",
+    fetcher,
+  });
+}
+
+/** Read the still-current quote bound to the emailed acceptance token before asking for consent. */
+export async function loadCustomerContractAcceptancePreview(
+  token: string,
+  fetcher?: typeof fetch,
+): Promise<CustomerContractAcceptancePreviewResponse> {
+  return await apiRequest({
+    path: API_PATHS.customerPortalAcceptancePreview,
+    method: "POST",
+    body: { token },
+    schema: customerContractAcceptancePreviewResponseSchema,
     credentials: "omit",
     fetcher,
   });

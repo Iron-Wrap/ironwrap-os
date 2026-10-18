@@ -37,7 +37,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 
 governed pipeline stage automation (disabled by default)
   committed transition → immutable outbox binding → bounded cron */5 drain
-  owner-only rule revisions + deployment-owned recipient refs → universal effect runtime/Gmail readback
+  owner-only rule revisions + deployment-owned recipient refs → universal effect runtime/Gmail send receipt
 
 estimator/configurator
   │  POST /ingest/estimate  (Bearer INGEST_TOKEN)
@@ -66,6 +66,54 @@ IronWrap PWA
 ```
 
 ## Implemented mappings to canonical intake requirements
+
+Field linear observations use the existing multipart `field_checkin` outbox route:
+`POST /api/v1/jobs/:id/check-ins` (or its scoped work-object equivalent). Keep the existing
+metadata, capture times, assignment and any Work Package/evidence/correction binding. Set
+`payload.proof_slot` to `Measurement` and add this optional object:
+
+```json
+{"measurement":{"feet":42,"inches":7,"eighths":3,"area_label":"South eave"}}
+```
+
+All three numbers are integers: feet 0–100000, inches 0–11, eighths 0–7, with a nonzero total.
+The Worker normalizes label whitespace and Unicode, bounds the label to 120 characters, and
+stores `total_eighth_inches = feet * 96 + inches * 8 + eighths` (4091 for this reading).
+Migration `0144_field_structured_measurements.sql` adds immutable facts to `field_actions`,
+including the authenticated paired device and correction lineage. Hashes and immutable R2
+manifests include the structured input and device. Omitted/null measurements preserve the legacy
+request hash shape; historical free-text notes are never parsed or backfilled.
+
+The verified POST receipt returns `measurement` with `total_eighth_inches`. Job, job-history and
+scoped work-object reads expose `field_measurements` and `field_measurements_more`; only verified,
+manifested captures appear, newest first, bounded to 100 items. Each item retains its measurement,
+check-in/action/assignment identity, actor, device, capture time, predecessor/successor and any
+original Work Package binding. `recorded_by_name` is the current display name of the user who
+recorded it, or null when that user is unavailable. Each live read item has its own
+`allowed_actions` and `correction_target`. The only advertised action is
+`field.measurement.correct`, for the assigned active field actor's own unsuperseded reading.
+For a generic reading, the target contains `{correction_of: checkin_id}`. For typed evidence it
+contains `{evidence_correction_of, evidence_item_correction_of}` only when the current Work Package
+ledger has one eligible evidence item; the write checks all authority again. A correction is a new
+action with that target and a reason. The D1 guard binds the predecessor's exact assignment,
+job, actor, parent/context and Work Package version/release/slot; reassignment cannot silently
+rewrite its provenance. Office history has no correction action or target. A Blocked package
+still permits safe observations and append-only corrections under the existing field authority.
+Neither operation restarts work, clears a hold or gate, accepts evidence, or promotes a reading
+to design/cut truth.
+`GET /api/v1/jobs/:id/field-measurements?cursor=<opaque>` continues the history beyond 100
+without repeating rows when newer captures arrive. It returns the standard read envelope plus
+`{items, page_size: 100, next_cursor: string|null}`. Omit `cursor` for the first page; follow
+`next_cursor` until null. The route is private and no-store, requires office job-read authority
+or the crew member's current assignment on a live job, and refuses an invalid cursor with 400.
+Its envelope grants no action in `allowed_actions`; each item carries its own current correction
+hint. An unavailable native paginated read returns 502 rather than an empty history. An unavailable
+embedded read leaves the live job, work-object or office history available with an empty
+`field_measurements` list, `field_measurements_more: false` and
+`field_measurements.native_unavailable` in `stale_fields`.
+Neither storage verification nor these observations approve geometry, calibration, takeoff,
+physical acceptance or a commercial measurement revision. The PWA consumer must retain and render
+the new read fields and enqueue the structured object before the joined workflow is complete.
 
 | Requirement | Where |
 |---|---|
@@ -1078,7 +1126,14 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    the exact account. Store dated evidence outside this README. Idempotency uses the `bus:<id>` tag.
 2. **Google Workspace/Drive** — Gmail send and Shared Drive filing use
    `GOOGLE_SERVICE_ACCOUNT_JSON` with domain-wide delegation. Validate the configured sender,
-   mailbox authority, folder permissions, and retention against the target tenant.
+   mailbox authority, folder permissions, and retention against the target tenant. Gmail requests
+   only `gmail.send`: a successful send response with a message ID proves provider acceptance of
+   the prepared request, not independent mailbox/body readback or recipient delivery. An unreadable
+   or missing receipt remains unknown and cannot be sent again automatically. The challenge's
+   `sent` state records that acceptance only; customer acceptance requires the bound customer
+   confirmation. `email.delivery.readback` readiness still needs a separate authenticated proof,
+   and any consumer requiring an independent read must retain its scope/proof refusal. IRO-273's
+   owner grant and runtime evidence remain external to these source tests.
 3. **SMS / carrier registration** — the Worker does not send prospect SMS. Any external SMS
    bridge requires current carrier/consent evidence and separate delivery reconciliation.
 4. **QuickBooks webhook** — the receiver accepts only the configured company realm, anchors a

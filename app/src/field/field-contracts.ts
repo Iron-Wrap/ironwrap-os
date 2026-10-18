@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { MAX_AREA_LABEL, MAX_FIELD_MEASUREMENT_FEET } from "./field-measurement-input";
+
 const nullableText = z.string().nullable();
 // Construct packet validators on first parse so Today bootstrap only initializes its own
 // contract. Parsing remains synchronous, including cached packets and nested work packages.
@@ -92,6 +94,96 @@ const workPackageSchema = z.lazy(() =>
     ),
   }),
 );
+
+/**
+ * One crew reading the Worker verified and filed with its receipt: an observation for office
+ * review, never approved geometry, takeoff or price. A correction is a new reading that names the
+ * one it replaces (`correction_of`); the replaced one carries `superseded_by`. The limits are the
+ * Worker's own (`workers-bus/src/field-measurements.ts`), and the stored total must equal its parts.
+ */
+const fieldMeasurementCaptureShape = () =>
+  z.object({
+    checkin_id: z.string().min(1),
+    device_action_id: z.string().min(1),
+    assignment_id: z.string().min(1),
+    measurement: z
+      .object({
+        feet: z.number().int().min(0).max(MAX_FIELD_MEASUREMENT_FEET),
+        inches: z.number().int().min(0).max(11),
+        eighths: z.number().int().min(0).max(7),
+        area_label: z.string().min(1).max(MAX_AREA_LABEL),
+        total_eighth_inches: z.number().int().min(1),
+      })
+      .refine(
+        (value) => value.total_eighth_inches === value.feet * 96 + value.inches * 8 + value.eighths,
+      ),
+    captured_at: z.string().min(1),
+    recorded_by: z.string().min(1),
+    /** Optional while an older Worker is in use; null when the user record is gone. */
+    recorded_by_name: nullableText.optional(),
+    device_id: z.string().min(1),
+    correction_of: nullableText,
+    correction_reason: nullableText,
+    superseded_by: nullableText,
+    work_package_id: nullableText,
+    work_package_version: z.number().int().nullable(),
+    evidence_slot_id: nullableText,
+    evidence_item_correction_of: nullableText,
+    work_package_release_attempt_id: nullableText,
+    /** `field.measurement.correct` only for the paired crew member's own current reading. */
+    allowed_actions: z.array(z.string()).optional(),
+    /** What a fix of this reading must name: the reading itself, or its proof event and item. */
+    correction_target: z
+      .union([
+        z.object({ correction_of: z.string().min(1) }),
+        z.object({
+          evidence_correction_of: z.string().min(1),
+          evidence_item_correction_of: z.string().min(1),
+        }),
+      ])
+      .nullable()
+      .optional(),
+  });
+
+export const fieldMeasurementCaptureSchema = z.lazy(fieldMeasurementCaptureShape);
+
+/**
+ * Crew readings are a side list on the job, the work plan and its history. A list that does not
+ * parse is dropped and marked the way the Worker marks a failed native read, so it never hides
+ * the job or plan it rides on. An older Worker sends none: an empty list, nothing marked.
+ */
+export function keepValidFieldMeasurements<
+  T extends {
+    field_measurements?: unknown;
+    field_measurements_more?: unknown;
+    stale_fields: string[];
+  },
+>(
+  read: T,
+): Omit<T, "field_measurements" | "field_measurements_more"> & {
+  field_measurements?: FieldMeasurementCapture[];
+  field_measurements_more?: boolean;
+} {
+  const items = z
+    .array(fieldMeasurementCaptureSchema)
+    .optional()
+    .safeParse(read.field_measurements);
+  const more = z.boolean().optional().safeParse(read.field_measurements_more);
+  if (items.success && more.success) {
+    return {
+      ...read,
+      field_measurements: items.data ?? [],
+      field_measurements_more: more.data ?? false,
+    };
+  }
+  return {
+    ...read,
+    field_measurements: [],
+    field_measurements_more: false,
+    stale_fields: [...new Set([...read.stale_fields, "field_measurements.native_unavailable"])],
+  };
+}
+
 /**
  * The company contact the owner saved, as the crew job and work-object reads carry it. The same
  * rules as the customer portal's `company_contact` (`portal/portal-contracts.ts`): a dialable
@@ -218,14 +310,19 @@ export const workObjectResponseSchema = z.lazy(() =>
       }),
       assignment: assignmentSchema.nullable(),
       work_package: workPackageSchema.nullish().transform((value) => value ?? null),
+      field_measurements: z.unknown().optional(),
+      field_measurements_more: z.unknown().optional(),
       office_contact: z.unknown().optional(),
     })
-    .transform(keepValidOfficeContact),
+    .transform(keepValidOfficeContact)
+    .transform(keepValidFieldMeasurements),
 );
 
 export const jobResponseSchema = z.lazy(() =>
   envelopeSchema
     .extend({
+      field_measurements: z.unknown().optional(),
+      field_measurements_more: z.unknown().optional(),
       office_contact: z.unknown().optional(),
       job: z.object({
         id: z.string().min(1),
@@ -325,7 +422,8 @@ export const jobResponseSchema = z.lazy(() =>
         }),
       ),
     })
-    .transform(keepValidOfficeContact),
+    .transform(keepValidOfficeContact)
+    .transform(keepValidFieldMeasurements),
 );
 
 export const proofPageResponseSchema = z.lazy(() =>
@@ -335,10 +433,21 @@ export const proofPageResponseSchema = z.lazy(() =>
   }),
 );
 
+/** One page of a job's crew readings, newest first, from the read-only history route. */
+export const fieldMeasurementPageSchema = z.lazy(() =>
+  envelopeSchema.extend({
+    items: z.array(fieldMeasurementCaptureShape()),
+    page_size: z.number().int().positive(),
+    next_cursor: nullableText,
+  }),
+);
+
 export type TodayResponse = z.infer<typeof todayResponseSchema>;
 export type WorkObjectResponse = z.infer<typeof workObjectResponseSchema>;
 export type JobResponse = z.infer<typeof jobResponseSchema>;
 export type ProofStreamItem = z.infer<typeof proofStreamItemSchema>;
 export type ProofPageResponse = z.infer<typeof proofPageResponseSchema>;
+export type FieldMeasurementCapture = z.infer<typeof fieldMeasurementCaptureSchema>;
+export type FieldMeasurementPage = z.infer<typeof fieldMeasurementPageSchema>;
 export type OfficeContact = z.infer<typeof officeContactSchema>;
 export type SavedOfficeContact = z.infer<typeof savedOfficeContactSchema>;

@@ -61,6 +61,13 @@ import {
   type FieldWorkPackageEvidenceD1Row,
 } from "./field-actions.ts";
 import {
+  FIELD_MEASUREMENT_READ_LIMIT,
+  listFieldMeasurementsFromD1,
+  type FieldMeasurementCapture,
+  type FieldMeasurementCursor,
+} from "./field-measurements.ts";
+
+import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
   currentWorkPackageAuthorityDenials,
@@ -97,6 +104,91 @@ import {
   type NativePropertyRecord,
 } from "./native-job-packet-read.ts";
 import { readNativeEstimatorSources } from "./estimator-native.ts";
+
+/** A missing or damaged optional measurement panel must not hide the live work packet. */
+async function embeddedFieldMeasurements(
+  env: AppEnv,
+  input: Parameters<typeof listFieldMeasurementsFromD1>[1],
+): ReturnType<typeof listFieldMeasurementsFromD1> {
+  try {
+    return await listFieldMeasurementsFromD1(env, input);
+  } catch {
+    return null;
+  }
+}
+
+export interface FieldMeasurementReadItem extends FieldMeasurementCapture {
+  allowed_actions: Array<"field.measurement.correct">;
+  correction_target:
+    | { correction_of: string }
+    | { evidence_correction_of: string; evidence_item_correction_of: string }
+    | null;
+}
+
+/** A current-action hint for one actor and assignment; the write checks authority again. */
+function fieldMeasurementReadItems(
+  items: FieldMeasurementCapture[],
+  auth: AuthContext,
+  assignmentId: string | null,
+  workPackage: FieldWorkPackage | null,
+): FieldMeasurementReadItem[] {
+  const identities = appUserIdentities(auth.session).map((value) =>
+    value.toLowerCase(),
+  );
+  return items.map((item) => {
+    let correctionTarget: FieldMeasurementReadItem["correction_target"] = null;
+    const actorCanCorrect =
+      auth.session.active === 1 &&
+      auth.session.role === "field" &&
+      !!auth.session.device_id &&
+      item.recorded_by === auth.session.user_id &&
+      item.assignment_id === assignmentId &&
+      item.superseded_by === null;
+    if (actorCanCorrect && item.work_package_id === null) {
+      if (
+        item.work_package_version === null &&
+        item.work_package_release_attempt_id === null &&
+        item.evidence_slot_id === null
+      )
+        correctionTarget = { correction_of: item.checkin_id };
+    } else if (
+      actorCanCorrect &&
+      workPackage &&
+      item.work_package_id === workPackage.id &&
+      item.work_package_version === workPackage.version &&
+      item.work_package_release_attempt_id === workPackage.releaseAttemptId &&
+      workPackage.workerRosterKnown === true &&
+      workPackage.evidenceLedgerAvailable === true &&
+      Date.parse(workPackage.expiresAt) > Date.now() &&
+      workPackage.assignedWorkers?.some((worker) =>
+        identities.includes(worker.workerUser.toLowerCase()),
+      )
+    ) {
+      const events = (workPackage.evidence ?? []).filter(
+        (event) =>
+          event.deviceActionId === item.device_action_id &&
+          event.slotId === item.evidence_slot_id &&
+          identities.includes(event.actorUser.toLowerCase()) &&
+          event.releaseAttemptId === workPackage.releaseAttemptId &&
+          event.verification === "Verified" &&
+          event.disposition !== "Superseded" &&
+          !(workPackage.evidence ?? []).some(
+            (next) => next.correctionOf === event.eventId,
+          ),
+      );
+      if (events.length === 1)
+        correctionTarget = {
+          evidence_correction_of: events[0].eventId,
+          evidence_item_correction_of: events[0].evidenceItem,
+        };
+    }
+    return {
+      ...item,
+      allowed_actions: correctionTarget ? ["field.measurement.correct"] : [],
+      correction_target: correctionTarget,
+    };
+  });
+}
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
@@ -392,6 +484,8 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
 }
 
 export interface JobReadModel extends ReadModelEnvelope {
+  field_measurements: FieldMeasurementReadItem[];
+  field_measurements_more: boolean;
   /** Owner-saved public company contact; never a staff or customer identity. */
   office_contact: { phone: string | null; email: string | null } | null;
   job: {
@@ -1021,13 +1115,12 @@ async function activeNativeAssignmentForJob(
   env: AppEnv,
   auth: AuthContext,
   jobName: string,
+  readMode: "any" | "assigned" = jobReadMode(auth),
 ): Promise<FrappeRow | null> {
   if (!validJobName(jobName) || typeof env.DB?.prepare !== "function")
     return null;
   const actorUsers =
-    jobReadMode(auth) === "assigned"
-      ? appUserIdentities(auth.session)
-      : undefined;
+    readMode === "assigned" ? appUserIdentities(auth.session) : undefined;
   const assignments = await listCurrentOperatingJobAssignments(
     env,
     auth.session.tenant_id,
@@ -1223,13 +1316,28 @@ export async function buildUniversalWorkPackageReadModel(
   ) {
     allowedActions.push("field.checkin.create");
   }
+  const fieldMeasurements = await embeddedFieldMeasurements(env, {
+    tenantId: auth.session.tenant_id,
+    jobId: scope.workObjectId,
+    scope,
+  });
   const officeContact = await officeContactForRead(env, auth.session.tenant_id);
   return {
     ...envelope(
       auth,
       [assignment, { modified: officeContact.updatedAt }],
-      officeContact.unavailable ? ["office_contact.unavailable"] : [],
+      [
+        ...(fieldMeasurements === null ? ["field_measurements.native_unavailable"] : []),
+        ...(officeContact.unavailable ? ["office_contact.unavailable"] : []),
+      ],
     ),
+    field_measurements: fieldMeasurementReadItems(
+      fieldMeasurements?.items ?? [],
+      auth,
+      assignmentId,
+      workPackage,
+    ),
+    field_measurements_more: fieldMeasurements?.more ?? false,
     office_contact: officeContact.contact,
     work_object: scope,
     assignment: assignmentModel(assignment),
@@ -1584,10 +1692,23 @@ export async function buildJobReadModel(
   env: AppEnv,
   auth: AuthContext,
   jobName: string,
+  options: { estimatorReadOnly?: boolean } = {},
 ): Promise<JobReadModel | null> {
   if (!validJobName(jobName)) return null;
-  const readMode = jobReadMode(auth);
-  const assignmentRow = await activeNativeAssignmentForJob(env, auth, jobName);
+  const estimatorReadOnly = options.estimatorReadOnly === true;
+  if (
+    estimatorReadOnly &&
+    (auth.session.role !== "sales" ||
+      !auth.permissions.includes("estimator:read"))
+  )
+    return null;
+  const readMode = estimatorReadOnly ? "any" : jobReadMode(auth);
+  const assignmentRow = await activeNativeAssignmentForJob(
+    env,
+    auth,
+    jobName,
+    readMode,
+  );
   if (readMode === "assigned" && !assignmentRow) return null;
   const nativeJobCore = await readNativeJobCore(
     env,
@@ -1599,26 +1720,31 @@ export async function buildJobReadModel(
   if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const [gateSource, workPackage, measurementRows, officeContact] = await Promise.all([
-    nativeProductionGates(env, auth.session.tenant_id, [jobName]),
-    assignmentRow
-      ? nativeFieldWorkPackageForAssignment(
-          env,
-          auth.session.tenant_id,
-          jobName,
-          text(assignmentRow.name)!,
-        )
-      : Promise.resolve(null),
-    // The crew on the roof could not see the measurements anyone had taken of it: this slot was
-    // returned empty on the owned path while `native_measurement_revisions` held the rows the
-    // whole time. `null` on failure rather than a throw, so a measurement read that goes wrong
-    // costs the crew this one panel and keeps the rest of the job packet — and the stale marker
-    // below stays on, which is the difference between "none" and "could not read".
-    listCurrentJobMeasurements(env, auth.session.tenant_id, jobName).catch(
-      () => null as JobMeasurementSummary[] | null,
-    ),
-    officeContactForRead(env, auth.session.tenant_id),
-  ]);
+  const [gateSource, workPackage, measurementRows, fieldMeasurements, officeContact] =
+    await Promise.all([
+      nativeProductionGates(env, auth.session.tenant_id, [jobName]),
+      assignmentRow
+        ? nativeFieldWorkPackageForAssignment(
+            env,
+            auth.session.tenant_id,
+            jobName,
+            text(assignmentRow.name)!,
+          )
+        : Promise.resolve(null),
+      // The crew on the roof could not see the measurements anyone had taken of it: this slot was
+      // returned empty on the owned path while `native_measurement_revisions` held the rows the
+      // whole time. `null` on failure rather than a throw, so a measurement read that goes wrong
+      // costs the crew this one panel and keeps the rest of the job packet — and the stale marker
+      // below stays on, which is the difference between "none" and "could not read".
+      listCurrentJobMeasurements(env, auth.session.tenant_id, jobName).catch(
+        () => null as JobMeasurementSummary[] | null,
+      ),
+      embeddedFieldMeasurements(env, {
+        tenantId: auth.session.tenant_id,
+        jobId: jobName,
+      }),
+      officeContactForRead(env, auth.session.tenant_id),
+    ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
   const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
@@ -1679,6 +1805,7 @@ export async function buildJobReadModel(
     "packet.contact.access_instructions",
     "packet.scope_clauses.native_unavailable",
     ...(measurementRows === null ? ["packet.measurements.native_unavailable"] : []),
+    ...(fieldMeasurements === null ? ["field_measurements.native_unavailable"] : []),
     "packet.materials.takeoffs.native_unavailable",
     "packet.materials.supplier_orders.native_unavailable",
     "packet.change_orders.native_unavailable",
@@ -1717,19 +1844,30 @@ export async function buildJobReadModel(
   return {
     ...readEnvelope,
     office_contact: officeContact.contact,
-    allowed_actions: [
-      ...new Set([
-        ...(auth.session.role === "production"
-          ? ["job.read"]
-          : readEnvelope.allowed_actions),
-        ...(readMode === "assigned" ? workPackagePacket.allowedActions : []),
-        ...officeWorkPackageActions(
-          auth.session.role,
-          assignmentRow,
-          workPackage,
-        ),
-      ]),
-    ],
+    field_measurements: fieldMeasurementReadItems(
+      fieldMeasurements?.items ?? [],
+      auth,
+      text(assignmentRow?.name),
+      workPackage,
+    ),
+    field_measurements_more: fieldMeasurements?.more ?? false,
+    allowed_actions: estimatorReadOnly
+      ? ["job.read"]
+      : [
+          ...new Set([
+            ...(auth.session.role === "production"
+              ? ["job.read"]
+              : readEnvelope.allowed_actions),
+            ...(readMode === "assigned"
+              ? workPackagePacket.allowedActions
+              : []),
+            ...officeWorkPackageActions(
+              auth.session.role,
+              assignmentRow,
+              workPackage,
+            ),
+          ]),
+        ],
     job: {
       id: text(job.name)!,
       roof_job_id: text(job.roof_job_id),
@@ -1799,10 +1937,23 @@ export async function buildJobProofReadModel(
   auth: AuthContext,
   jobName: string,
   cursor: string | null,
+  options: { estimatorReadOnly?: boolean } = {},
 ): Promise<ProofPageReadModel | null> {
   if (!validJobName(jobName)) return null;
-  const readMode = jobReadMode(auth);
-  const assignment = await activeNativeAssignmentForJob(env, auth, jobName);
+  const estimatorReadOnly = options.estimatorReadOnly === true;
+  if (
+    estimatorReadOnly &&
+    (auth.session.role !== "sales" ||
+      !auth.permissions.includes("estimator:read"))
+  )
+    return null;
+  const readMode = estimatorReadOnly ? "any" : jobReadMode(auth);
+  const assignment = await activeNativeAssignmentForJob(
+    env,
+    auth,
+    jobName,
+    readMode,
+  );
   if (readMode === "assigned" && !assignment) return null;
   const offset = parseProofCursor(cursor);
   if (offset === null) return null;
@@ -1853,6 +2004,7 @@ export async function buildJobProofReadModel(
         ? ["proof_stream.native_scope_unavailable"]
         : [],
     ),
+    ...(estimatorReadOnly ? { allowed_actions: ["job.read"] } : {}),
     items: pageRows
       .map(evidenceProofItem)
       .filter(notNull)
@@ -1865,6 +2017,8 @@ export async function buildJobProofReadModel(
 }
 
 export interface JobHistoryReadModel extends ReadModelEnvelope {
+  field_measurements: FieldMeasurementReadItem[];
+  field_measurements_more: boolean;
   job: {
     id: string;
     roof_job_id: string | null;
@@ -1882,6 +2036,64 @@ export interface JobHistoryReadModel extends ReadModelEnvelope {
   openable: boolean;
   /** True when the evidence read could not run, so an empty stream is not read as "nothing done". */
   proof_unavailable: boolean;
+}
+
+export interface JobFieldMeasurementPageReadModel extends ReadModelEnvelope {
+  items: FieldMeasurementReadItem[];
+  next_cursor: string | null;
+  page_size: number;
+}
+
+/** A complete, stable history read under the same job/assignment gate as the live packet. */
+export async function buildJobFieldMeasurementPageReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  jobName: string,
+  cursor: FieldMeasurementCursor | null,
+): Promise<JobFieldMeasurementPageReadModel | null> {
+  if (!validJobName(jobName)) return null;
+  const readMode = jobReadMode(auth);
+  const assignment = await activeNativeAssignmentForJob(env, auth, jobName);
+  if (readMode === "assigned" && !assignment) return null;
+  const nativeJobCore = await readNativeJobCore(
+    env,
+    auth.session.tenant_id,
+    jobName,
+  );
+  if (!nativeJobCore) return null;
+  const job = nativeOperatingJobRow(nativeJobCore.job);
+  if (
+    readMode === "assigned" &&
+    !ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)
+  )
+    return null;
+  const page = await listFieldMeasurementsFromD1(env, {
+    tenantId: auth.session.tenant_id,
+    jobId: jobName,
+    cursor,
+  });
+  if (!page) throw new Error("field_measurements_native_unavailable");
+  const workPackage =
+    assignment && auth.session.role === "field"
+      ? await nativeFieldWorkPackageForAssignment(
+          env,
+          auth.session.tenant_id,
+          jobName,
+          text(assignment.name)!,
+        ).catch(() => null)
+      : null;
+  return {
+    ...envelope(auth, [job, ...(assignment ? [assignment] : [])], []),
+    allowed_actions: [],
+    items: fieldMeasurementReadItems(
+      page.items,
+      auth,
+      text(assignment?.name),
+      workPackage,
+    ),
+    next_cursor: page.nextCursor,
+    page_size: FIELD_MEASUREMENT_READ_LIMIT,
+  };
 }
 
 /**
@@ -1915,13 +2127,17 @@ export async function buildJobHistoryReadModel(
   const job = nativeOperatingJobRow(nativeJobCore.job);
   const property = nativePropertyFrappeRow(nativeJobCore.property);
   const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
-  const [gateSource, evidence] = await Promise.all([
+  const [gateSource, evidence, fieldMeasurements] = await Promise.all([
     nativeProductionGates(env, auth.session.tenant_id, [jobName]),
     listJobEvidenceFromD1(env, {
       tenantId: auth.session.tenant_id,
       jobId: jobName,
       limit: FIELD_PACKET_PROOF_PAGE_SIZE,
       offset,
+    }),
+    embeddedFieldMeasurements(env, {
+      tenantId: auth.session.tenant_id,
+      jobId: jobName,
     }),
   ]);
   const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
@@ -1938,10 +2154,20 @@ export async function buildJobHistoryReadModel(
     [
       ...(gateSource.partial ? ["gates.partial_source"] : []),
       ...(evidence === null ? ["proof_stream.unavailable"] : []),
+      ...(fieldMeasurements === null
+        ? ["field_measurements.native_unavailable"]
+        : []),
     ],
   );
   return {
     ...readEnvelope,
+    field_measurements: fieldMeasurementReadItems(
+      fieldMeasurements?.items ?? [],
+      auth,
+      null,
+      null,
+    ),
+    field_measurements_more: fieldMeasurements?.more ?? false,
     // A history read grants nothing. Nothing on this page may be mistaken for a control.
     allowed_actions: [],
     job: {

@@ -192,7 +192,18 @@ The target reuses these implemented deep modules:
 - [`operating-core.ts`](../workers-bus/src/operating-core.ts) atomically materializes customer,
   property, job, estimate, gates, consent, events, and audit state.
 - [`effect-runtime.ts`](../workers-bus/src/effect-runtime.ts) leases attempts, blocks blind retry of
-  unknown outcomes, requires provider readback, reconciles, and creates durable exceptions.
+  unknown outcomes, requires provider confirmation, reconciles, and creates durable exceptions.
+  Gmail's accepted send response is its confirmation under the send-only scope; a missing response
+  stays unknown because an independent mailbox read is not authorized. This confirms provider
+  acceptance, not independent body readback or recipient delivery; delivery readiness still needs
+  its own authenticated proof and cannot be minted by the send adapter. New default Gmail and
+  portal-decision effect keys omit the recipient; a retry first checks an existing
+  recipient-bearing legacy key so an in-flight send is not sent again under a new key.
+  The `0142` D1 guard rejects the second key if old and new Worker versions overlap; the
+  new Worker re-reads an old key that wins after its first lookup. Apply that migration
+  before routing traffic to the new Worker version. An old Worker that loses the race
+  fails closed, and rollback must keep the guard in place.
+  Historical ledger rows remain subject to the privacy workflow.
 - [`commercial-store.ts`](../workers-bus/src/commercial-store.ts) owns immutable quote/proposal
   revision chains, money checks, authority, publication, and acceptance bindings.
 - [`customer-contract-acceptance.ts`](../workers-bus/src/customer-contract-acceptance.ts) binds a

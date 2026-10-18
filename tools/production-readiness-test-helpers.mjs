@@ -692,6 +692,10 @@ export function d1IndexSql(name, table) {
     return `CREATE INDEX ${name} ON ${table}(tenant_id, job_number, created_at DESC);`;
   if (name === "idx_native_photo_evidence_items_submission")
     return `CREATE UNIQUE INDEX ${name} ON ${table}(submission_id, item_index);`;
+  if (name === "idx_field_measurement_checkin")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, checkin_id) WHERE measurement_area_label IS NOT NULL;`;
+  if (name === "idx_field_measurement_successor")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, measurement_correction_of) WHERE measurement_correction_of IS NOT NULL;`;
   return `CREATE INDEX ${name} ON ${table}(id);`;
 }
 
@@ -854,6 +858,20 @@ export function d1GenericTableSql(name, index) {
   );
   INSERT INTO native_photo_evidence_items (id)
   VALUES ('row-${index}');`;
+  // 0144: structured crew measurements live on field_actions; the backup contract checks
+  // these column constraints, so the synthetic export carries them.
+  if (name === "field_actions") return `CREATE TABLE field_actions (
+    id TEXT PRIMARY KEY, tenant_id TEXT, user_id TEXT, checkin_id TEXT, manifest_key TEXT, response_json TEXT,
+    job_id TEXT, assignment_id TEXT, work_package_id TEXT, work_package_version INTEGER, work_package_release_attempt_id TEXT,
+    measurement_area_label TEXT CHECK (measurement_area_label IS NULL OR length(measurement_area_label) BETWEEN 1 AND 80),
+    measurement_feet INTEGER CHECK (measurement_feet IS NULL OR measurement_feet >= 0),
+    measurement_inches INTEGER CHECK (measurement_inches IS NULL OR measurement_inches BETWEEN 0 AND 11),
+    measurement_eighths INTEGER CHECK (measurement_eighths IS NULL OR measurement_eighths BETWEEN 0 AND 7),
+    measurement_total_eighth_inches INTEGER CHECK (measurement_total_eighth_inches IS NULL OR measurement_total_eighth_inches >= 0),
+    measurement_device_id TEXT CHECK (measurement_device_id IS NULL OR length(measurement_device_id) > 0),
+    measurement_correction_of TEXT CHECK (measurement_correction_of IS NULL OR length(measurement_correction_of) > 0)
+  );
+  INSERT INTO field_actions (id) VALUES ('row-${index}');`;
   return `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`;
 }
 
@@ -1179,6 +1197,38 @@ export function d1TriggerSql(name, table, {
   }
   if (name.startsWith("append_production_schedule_approval_")) {
     return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name === "field_measurement_shape") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'field_measurement_shape_invalid')
+      WHERE NEW.measurement_total_eighth_inches IS NOT (NEW.measurement_feet * 96 + NEW.measurement_inches * 8 + NEW.measurement_eighths);
+      SELECT RAISE(ABORT, 'field_measurement_actor_device_invalid') WHERE NEW.measurement_device_id IS NULL;
+    END;`;
+  }
+  if (name === "field_measurement_correction_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'field_measurement_correction_invalid')
+      WHERE NOT EXISTS (SELECT 1 FROM field_actions AS predecessor
+        WHERE predecessor.id = NEW.measurement_correction_of
+          AND predecessor.tenant_id = NEW.tenant_id AND predecessor.user_id = NEW.user_id
+          AND predecessor.job_id = NEW.job_id AND predecessor.assignment_id = NEW.assignment_id
+          AND predecessor.work_package_id IS NEW.work_package_id AND predecessor.work_package_version IS NEW.work_package_version
+          AND predecessor.work_package_release_attempt_id IS NEW.work_package_release_attempt_id);
+      SELECT RAISE(ABORT, 'field_measurement_correction_conflict') WHERE NEW.measurement_correction_of = NEW.id;
+    END;`;
+  }
+  if (name === "field_measurement_no_replace" || name === "field_measurement_no_delete") {
+    const timing = name === "field_measurement_no_delete" ? "BEFORE DELETE" : "BEFORE INSERT";
+    return `CREATE TRIGGER ${name} ${timing} ON ${table} BEGIN SELECT RAISE(ABORT, 'field_measurement_immutable'); END;`;
+  }
+  if (name === "field_measurement_guard") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'field_measurement_immutable')
+      WHERE NEW.measurement_total_eighth_inches IS NOT OLD.measurement_total_eighth_inches
+        OR NEW.measurement_device_id IS NOT OLD.measurement_device_id
+        OR NEW.manifest_key IS NOT OLD.manifest_key
+        OR NEW.response_json IS NOT OLD.response_json;
+    END;`;
   }
   return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT 1; END;`;
 }

@@ -3,7 +3,7 @@
 // the owner alert an alert, not a newsletter.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readinessVerdicts, watchdogFindings } from "../src/operations.ts";
+import { readinessVerdicts, watchdogAlertHtml, watchdogFindings } from "../src/operations.ts";
 
 const CHECKS = {
   d1: true,
@@ -105,4 +105,15 @@ test("watchdog: alerts only on core failure, backlog, or fresh divergence", () =
   assert.match(noisy[0], /d1, schema/);
   assert.match(noisy[1], /backlog at 7/);
   assert.match(noisy[2], /2 failed cross-source/);
+});
+
+test("watchdog: retries keep one email identity while persistent findings get a fresh window", () => {
+  const findings = ["core readiness failing: d1"];
+  const first = watchdogAlertHtml(findings, new Date("2026-01-01T14:00:00.000Z"));
+  const retry = watchdogAlertHtml(findings, new Date("2026-01-01T14:05:00.000Z"));
+  const persistent = watchdogAlertHtml(findings, new Date("2026-01-02T14:00:00.000Z"));
+  assert.equal(retry, first);
+  assert.notEqual(persistent, first);
+  assert.match(first, /UTC check window: 2026-01-01/);
+  assert.match(persistent, /UTC check window: 2026-01-02/);
 });

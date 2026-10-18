@@ -214,6 +214,28 @@ is what the evaluator reads. They stay unknown to `tools/production-readiness.mj
 the committed file, and that verifier reports secret-backed configuration as `indeterminate` rather
 than guessing in either direction.
 
+### Governed readiness declarations
+
+The separate Integrations readiness evaluator reads immutable declarations; it is not the
+per-request capability signal above. `POST /api/v1/integrations/manifests` and
+`POST /api/v1/integrations/profiles` admit those declarations only when
+`APP_READINESS_ADMISSION_ENABLED=true`. The checked-in production, QA and local values are false.
+An active owner or operations app session must match the current D1 role and supply CSRF. Tenant,
+approver and approval time come from the server. A client supplies a stable record ID, the next
+version and its expected predecessor; the D1 insert tests the head in the same statement.
+Repeating the exact record ID and content returns the stored receipt, while a changed body, stale
+head, unknown action or extra field is refused. Responses are private and uncached.
+The closed registry's external-effect capabilities cannot be relabelled internal or inbound to
+skip auth-scope and effect-runtime checks; historical declarations with such a label remain blocked.
+
+Manifest source pointers, configuration digests and credential-binding digests are approved
+declarations, not provider authentication. These commands cannot write
+`capability_proof_facts`, execute a provider action, upload secrets, or make the read model ready
+without a fresh separately authenticated provider readback. The current Integrations page remains
+read-only (`configuration_mutations_available: false` describes that page). Enable the admission
+flag only with the Figma-derived owner workflow, an independent proof issuer, exact-head CI and
+authenticated QA proof; source checks alone do not authorize it.
+
 ## Offline
 
 The field bootstrap carries the signal so a device needs one call, not two, on a bad connection. A

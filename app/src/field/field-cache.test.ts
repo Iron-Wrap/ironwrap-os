@@ -5,6 +5,7 @@ import { storeDeviceSecret } from "../auth/device-credential";
 import { resetDatabaseForTests } from "../storage/db";
 import {
   hasCachedJobPacket,
+  loadFieldMeasurementPage,
   loadJob,
   loadOfficeContact,
   loadToday,
@@ -527,5 +528,97 @@ describe("a live read this phone cannot keep", () => {
       expect.objectContaining({ job: expect.objectContaining({ id: "JOB-B" }) }),
     );
     expect(await hasCachedJobPacket(session, "JOB-B")).toBe(false);
+  });
+});
+
+describe("crew tape readings", () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDatabaseForTests();
+  });
+
+  const reading = {
+    checkin_id: "CHK-TEST-1",
+    device_action_id: "device-action-0001",
+    assignment_id: "ASSIGN-JOB-A",
+    measurement: {
+      feet: 12,
+      inches: 3,
+      eighths: 5,
+      area_label: "north valley",
+      total_eighth_inches: 12 * 96 + 3 * 8 + 5,
+    },
+    captured_at: "2026-07-10T11:00:00.000Z",
+    recorded_by: "appu_field_test",
+    recorded_by_name: null,
+    device_id: "device-test-1",
+    correction_of: null,
+    correction_reason: null,
+    superseded_by: null,
+    work_package_id: null,
+    work_package_version: null,
+    evidence_slot_id: null,
+    evidence_item_correction_of: null,
+    work_package_release_attempt_id: null,
+    allowed_actions: [],
+    correction_target: null,
+  };
+
+  it("keeps a job's readings with its packet, offline too", async () => {
+    await loadJob(
+      session,
+      "JOB-A",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ ...job("JOB-A"), field_measurements: [reading] })),
+    );
+    const offline = await loadJob(
+      session,
+      "JOB-A",
+      vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
+    );
+    expect(offline.field_measurements).toEqual([reading]);
+    expect(offline.stale_fields).toContain("offline.cached_packet");
+  });
+
+  it("never lets a reading it cannot vouch for hide the job", async () => {
+    const model = await loadJob(
+      session,
+      "JOB-A",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          ...job("JOB-A"),
+          field_measurements: [
+            { ...reading, measurement: { ...reading.measurement, total_eighth_inches: 1 } },
+          ],
+        }),
+      ),
+    );
+    expect(model.job.id).toBe("JOB-A");
+    expect(model.field_measurements).toEqual([]);
+    expect(model.stale_fields).toContain("field_measurements.native_unavailable");
+  });
+
+  it("asks for the first page plainly and a later page by its cursor", async () => {
+    const page = {
+      version: 1,
+      source_updated_at: null,
+      read_model_generated_at: "2026-07-10T12:00:00.000Z",
+      stale_fields: [],
+      permissions: ["jobs:read:assigned"],
+      allowed_actions: [],
+      items: [reading],
+      page_size: 100,
+      next_cursor: null,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(page));
+    expect((await loadFieldMeasurementPage(session, "JOB A/1", null, fetcher)).items).toEqual([
+      reading,
+    ]);
+    await loadFieldMeasurementPage(session, "JOB A/1", "abc+/=", fetcher);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/v1/jobs/JOB%20A%2F1/field-measurements",
+      "/api/v1/jobs/JOB%20A%2F1/field-measurements?cursor=abc%2B%2F%3D",
+    ]);
   });
 });

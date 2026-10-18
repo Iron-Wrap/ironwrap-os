@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 
 /**
- * IRO-38 source inventory: every outbound `fetch(` call site in the Worker source
- * is pinned here with an explicit routing classification. The canonical external
+ * IRO-38 source inventory: every outbound `fetch(` or injected `fetcher(` call site
+ * in the Worker source is pinned here with an explicit routing classification.
+ * (`fetcher(` is the injected-transport form the accounting adapters use; IRO-250
+ * found the two files that mutate QuickBooks were invisible to a `fetch(`-only scan.) The canonical external
  * side-effect lifecycle lives in `src/effect-runtime.ts`; a mutation adapter either
  * routes through it or is recorded below as governed-unrouted debt with the exact
  * discipline it uses instead. Adding an outbound call site without deciding its
@@ -38,6 +40,8 @@ type InventoryEntry =
   | { kind: "worker-entry" };
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
+  "accounting-dispatch-binding.ts": { kind: "runtime-routed" },
+  "accounting-provider-read.ts": { kind: "read-only" },
   "erpnext.ts": { kind: "runtime-routed" },
   "facet-design-frappe-projection.ts": { kind: "runtime-routed" },
   "frappe-read.ts": { kind: "read-only" },
@@ -55,6 +59,8 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   },
   "operations.ts": { kind: "read-only" },
   "photos.ts": { kind: "read-only" },
+  "postiz.ts": { kind: "runtime-routed" },
+  "quickbooks-final-invoice.ts": { kind: "runtime-routed" },
   "solar.ts": { kind: "read-only" },
 };
 
@@ -69,8 +75,9 @@ async function sourceFiles(): Promise<string[]> {
 }
 
 function outboundFetchSites(source: string): string[] {
-  // `.fetch(` is a Worker service/DO binding (internal), not an outbound call.
-  return Array.from(source.matchAll(/(?<![.\w])fetch\(/g), (match) => {
+  // `.fetch(` is a Worker service/DO binding (internal), not an outbound call. A bare
+  // `fetcher(` is an injected transport and counts: it is how the QuickBooks adapters call out.
+  return Array.from(source.matchAll(/(?<![.\w])fetch(?:er)?\(/g), (match) => {
     const start = match.index ?? 0;
     return source.slice(Math.max(0, start - 40), start + 400);
   });

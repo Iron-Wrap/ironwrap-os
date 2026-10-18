@@ -3,7 +3,7 @@ import {
   sourceBindingChanges,
   type CommercialContextReadModel,
 } from "../src/commercial-context.ts";
-import { generateKeyPairSync } from "node:crypto";
+import { createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
@@ -38,6 +38,9 @@ const OTHER_OPS_ID = "appu_ops_0002";
 const ACCOUNTANT_ID = "appu_accounting_0001";
 const SECOND_ACCOUNTANT_ID = "appu_accounting_0002";
 const CUSTOMER_EMAIL = "customer@example.invalid";
+const CUSTOMER_PHONE = "+14035550101";
+const QB_REALM_ID = "1234567890";
+const QB_WEBHOOK_TOKEN = "iro250-synthetic-webhook-verifier-token";
 const EVIDENCE = [{
   ref: "r2://technical-reference/iro208-commercial-reference.json",
   sha256: "a".repeat(64),
@@ -308,6 +311,20 @@ class FakeIntegrations {
     return paymentId;
   }
 
+  /** Section 18.2 amount mismatch: the posted total moves, the customer does not. */
+  restateInvoiceTotal(invoiceId: string, total: string): void {
+    const invoice = this.providerInvoices.get(invoiceId);
+    if (!invoice) throw new Error("synthetic_invoice_missing");
+    this.providerInvoices.set(invoiceId, { ...invoice, TotalAmt: total, Balance: total });
+  }
+
+  /** Section 18.2 entity mismatch: the provider answers the read with a different transaction identity. */
+  misidentifyInvoice(invoiceId: string, observedId: string): void {
+    const invoice = this.providerInvoices.get(invoiceId);
+    if (!invoice) throw new Error("synthetic_invoice_missing");
+    this.providerInvoices.set(invoiceId, { ...invoice, Id: observedId });
+  }
+
   contradictInvoice(invoiceId: string): void {
     const invoice = this.providerInvoices.get(invoiceId);
     if (!invoice) throw new Error("synthetic_invoice_missing");
@@ -368,6 +385,8 @@ function env(db: SqliteD1, raw: MemoryR2, queue: QueueDouble): AppEnv {
     QB_CLIENT_SECRET: "synthetic-client-secret",
     QB_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
     QB_TOKEN_ENCRYPTION_KEY_VERSION: "test-v1",
+    QB_WEBHOOK_TOKEN: QB_WEBHOOK_TOKEN,
+    QB_EXPECTED_REALM_ID: QB_REALM_ID,
   } as AppEnv;
 }
 
@@ -512,7 +531,7 @@ function publicRequest(path: string, body: Record<string, unknown>, idempotencyK
 
 function duplicateLeadBody(): Record<string, unknown> {
   return {
-    name: "Ada Customer", email: CUSTOMER_EMAIL, phone: "+14035550101",
+    name: "Ada Customer", email: CUSTOMER_EMAIL, phone: CUSTOMER_PHONE,
     address: "100 Technical Reference Way", city: "Calgary", province: "AB", postal_code: "T2P 1J9",
     service: "Roof replacement", message: "Synthetic technical-reference intake; never customer proof.",
   };
@@ -628,12 +647,14 @@ async function runPublicationEffect(
   ids: Identities,
   effectId: string,
   mode: "success" | "refused" | "lost" | "mismatch",
+  transition: { version: number; state: "published" | "withdrawn" } = { version: 1, state: "published" },
 ): Promise<void> {
+  const action = transition.state === "published" ? "proposal.publish" : "proposal.withdraw";
   const expected = {
     proposal_revision_id: `proposal-revision:iro208:${ids.leadId}`,
     proposal_pack_id: `proposal-pack:iro208:${ids.leadId}`,
-    publication_version: 1,
-    state: "published",
+    publication_version: transition.version,
+    state: transition.state,
   };
   await runExternalEffect(
     h.env,
@@ -642,10 +663,10 @@ async function runPublicationEffect(
       authority: {
         permitRef: String(permit.permit_id), policyRef: String(permit.policy_ref), policyVersion: String(permit.policy_version),
         tenantId: TENANT, actorType: "worker", actorId: OPS_ID, expiresAt: String(permit.expires_at),
-        allowedActions: ["proposal.publish"],
+        allowedActions: [action],
       },
-      aggregate: { type: "proposal_publication", id: expected.proposal_pack_id, version: 1 },
-      intentId: expected.proposal_revision_id, action: "proposal.publish", request: expected,
+      aggregate: { type: "proposal_publication", id: expected.proposal_pack_id, version: transition.version },
+      intentId: expected.proposal_revision_id, action, request: expected,
       provider: "synthetic-publication-provider", providerAccountRef: TENANT,
       idempotencyKey: `${effectId}:key`, deadlineAt: new Date(Date.parse(String(permit.expires_at)) - 1_000).toISOString(),
       preconditions: {}, evidenceRefs: EVIDENCE.map((entry) => entry.ref), expectedReadback: expected,
@@ -702,7 +723,8 @@ async function issuePortalLink(h: Harness, ids: Identities): Promise<string> {
   return token;
 }
 
-async function acceptPublicContract(h: Harness, token: string): Promise<string> {
+/** Resolve the portal link and request the e-mail challenge; returns the single-use challenge token. */
+async function requestAcceptanceChallenge(h: Harness, token: string): Promise<string> {
   const resolved = await worker.fetch(
     publicRequest("/api/v1/customer-portal/resolve", { token }), h.env as never, {} as never,
   );
@@ -713,12 +735,30 @@ async function acceptPublicContract(h: Harness, token: string): Promise<string> 
   assert.equal(challenge.status, 200, await challenge.clone().text());
   const challengeToken = h.fake.sentEmails.at(-1)?.match(/contract-accept#token=([A-Za-z0-9_-]{43})/)?.[1];
   assert.ok(challengeToken);
-  h.db.throwNextBatchAfterCommit = true;
-  const confirmed = await worker.fetch(
-    publicRequest("/api/v1/customer-portal/acceptance/confirm", { token: challengeToken, signer_name: "Ada Customer", accepted: true }, "iro208-acceptance-0001"),
+  return challengeToken;
+}
+
+function confirmAcceptance(
+  h: Harness,
+  challengeToken: string,
+  idempotencyKey: string,
+  signerName = "Ada Customer",
+): Promise<Response> {
+  return worker.fetch(
+    publicRequest(
+      "/api/v1/customer-portal/acceptance/confirm",
+      { token: challengeToken, signer_name: signerName, accepted: true },
+      idempotencyKey,
+    ),
     h.env as never,
     {} as never,
   );
+}
+
+async function acceptPublicContract(h: Harness, token: string): Promise<string> {
+  const challengeToken = await requestAcceptanceChallenge(h, token);
+  h.db.throwNextBatchAfterCommit = true;
+  const confirmed = await confirmAcceptance(h, challengeToken, "iro208-acceptance-0001");
   assert.equal(confirmed.status, 200, await confirmed.clone().text());
   const body = await confirmed.json() as { status: string; acceptance_id: string };
   assert.equal(body.status, "accepted");
@@ -737,7 +777,7 @@ async function connectQuickBooks(h: Harness): Promise<void> {
   const callback = new URL(body.redirect_uri);
   callback.searchParams.set("state", authorization.searchParams.get("state")!);
   callback.searchParams.set("code", "synthetic-oauth-code");
-  callback.searchParams.set("realmId", "1234567890");
+  callback.searchParams.set("realmId", QB_REALM_ID);
   const connected = await worker.fetch(new Request(callback), h.env as never, {} as never);
   assert.equal(connected.status, 303, await connected.clone().text());
 }
@@ -2317,6 +2357,475 @@ test("deposit derivation blocks a superseding quote that arrives after acceptanc
     assert.equal(body.derivation.intent_id, null);
     assert.equal(body.intent, null);
   } finally {
+    h.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// IRO-250 / G2.6: the section 18.2 commercial negative scenarios, driven from the same empty D1.
+// "Decision-maker without authority" is deliberately absent: it waits on the G2.4 authority
+// contract and is not counted as covered here.
+
+/** Move a pack's publication through one more versioned transition by the same permit → effect → settle spine. */
+async function transitionPublication(
+  h: Harness,
+  ids: Identities,
+  transition: { version: number; previousState: "published" | "withdrawn"; state: "published" | "withdrawn" },
+  label: string,
+): Promise<string> {
+  const proposalRevisionId = `proposal-revision:iro208:${ids.leadId}`;
+  const proposalPackId = `proposal-pack:iro208:${ids.leadId}`;
+  const prepared = await handleAuthenticatedRoute(
+    request("/api/v1/commercial/proposal-publications/prepare", {
+      proposal_revision_id: proposalRevisionId, proposal_pack_id: proposalPackId,
+      publication_version: transition.version, previous_state: transition.previousState, state: transition.state,
+      facts_observed_at: new Date().toISOString(), evidence: EVIDENCE,
+    }, `iro250-${label}-prepare-000${transition.version}`), h.env, auth("ops"),
+  );
+  assert.equal(prepared.status, 201, await prepared.clone().text());
+  const permit = (await prepared.json() as { permit: Record<string, unknown> }).permit;
+  const effectId = `effect:iro250:${label}:v${transition.version}`;
+  await runPublicationEffect(h, permit, ids, effectId, "success", { version: transition.version, state: transition.state });
+  // Publication events are strictly ordered by occurred_at; keep two settles out of one millisecond.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const settled = await handleAuthenticatedRoute(
+    request("/api/v1/commercial/proposal-publications", {
+      proposal_revision_id: proposalRevisionId, proposal_pack_id: proposalPackId,
+      publication_version: transition.version, previous_state: transition.previousState, state: transition.state,
+      permit_id: permit.permit_id, external_effect_id: effectId,
+    }, `iro250-${label}-settle-000${transition.version}`), h.env, auth("ops"),
+  );
+  assert.equal(settled.status, 201, await settled.clone().text());
+  return (await settled.json() as { publication: { publication_event_id: string } }).publication.publication_event_id;
+}
+
+function commercialMoneyCounts(h: Harness, jobId: string): { bindings: number; derivations: number; intents: number } {
+  const count = (sql: string) => Number((h.db.raw.prepare(sql).get(TENANT, jobId) as { count: number }).count);
+  return {
+    bindings: count("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings WHERE tenant_id = ? AND roof_job_id = ?"),
+    derivations: count("SELECT COUNT(*) AS count FROM commercial_deposit_derivations WHERE tenant_id = ? AND roof_job_id = ?"),
+    intents: count("SELECT COUNT(*) AS count FROM accounting_intents WHERE tenant_id = ? AND roof_job_id = ?"),
+  };
+}
+
+/** A signed Intuit notification carrying identity only, exactly as `/webhook/quickbooks` receives it. */
+function quickBooksWebhook(entities: Array<{ name: string; id: string; operation: string }>): Request {
+  const body = JSON.stringify({
+    eventNotifications: [{ realmId: QB_REALM_ID, dataChangeEvent: { entities } }],
+  });
+  return new Request(`${PUBLIC_ORIGIN}/webhook/quickbooks`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "intuit-signature": createHmac("sha256", QB_WEBHOOK_TOKEN).update(body).digest("base64"),
+    },
+    body,
+  });
+}
+
+async function postWebhook(h: Harness, req: Request): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await worker.fetch(req.clone(), h.env as never, {} as never);
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+function projectionOutbox(h: Harness): Array<Record<string, unknown>> {
+  return h.db.raw.prepare(
+    `SELECT payload_hash, entity_type, entity_id, projection_status, attempt_count, last_error,
+            next_attempt_at, projected_at
+       FROM quickbooks_projection_outbox ORDER BY payload_hash, event_index`,
+  ).all() as Array<Record<string, unknown>>;
+}
+
+function webhookReceipts(h: Harness): Array<{ payload_hash: string; first_seen_at: string; replay_count: number; events_count: number }> {
+  return h.db.raw.prepare(
+    "SELECT payload_hash, first_seen_at, replay_count, events_count FROM quickbooks_webhook_receipts ORDER BY first_seen_at",
+  ).all() as Array<{ payload_hash: string; first_seen_at: string; replay_count: number; events_count: number }>;
+}
+
+test("IRO-250 acceptance against a superseded publication is rejected and binds nothing", async () => {
+  const h = setup();
+  try {
+    const ids = await intakeAndMaterialize(h);
+    await publishSyntheticContract(h, ids, TERMS, "superseded-publication");
+    const displayedPublication = h.db.raw.prepare(
+      `SELECT publication_event_id FROM commercial_proposal_publication_events
+        WHERE tenant_id = ? AND publication_version = 1`,
+    ).get(TENANT) as { publication_event_id: string };
+    const token = await issuePortalLink(h, ids);
+    // The customer resolves and is challenged against publication v1 ...
+    const staleChallenge = await requestAcceptanceChallenge(h, token);
+    // ... and the office supersedes it before the decision lands: withdrawn (v2), republished (v3).
+    await transitionPublication(h, ids, { version: 2, previousState: "published", state: "withdrawn" }, "superseded");
+    const currentPublication = await transitionPublication(
+      h, ids, { version: 3, previousState: "withdrawn", state: "published" }, "superseded",
+    );
+    assert.notEqual(currentPublication, displayedPublication.publication_event_id);
+
+    const rejected = await confirmAcceptance(h, staleChallenge, "iro250-superseded-confirm-0001");
+    assert.equal(rejected.status, 409);
+    assert.deepEqual(await rejected.json(), { error: "acceptance_rejected" });
+    const intent = h.db.raw.prepare(
+      "SELECT state, error_code FROM customer_portal_acceptance_intents WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(TENANT) as { state: string; error_code: string };
+    assert.deepEqual({ ...intent }, { state: "rejected", error_code: "native_contract_changed" });
+    assert.deepEqual(commercialMoneyCounts(h, ids.jobId), { bindings: 0, derivations: 0, intents: 0 });
+
+    // A replay of the rejected decision stays rejected; the challenge is spent, not reusable.
+    const replay = await confirmAcceptance(h, staleChallenge, "iro250-superseded-confirm-0001");
+    assert.equal(replay.status, 409);
+    assert.deepEqual(await replay.json(), { error: "acceptance_rejected" });
+    assert.deepEqual(commercialMoneyCounts(h, ids.jobId), { bindings: 0, derivations: 0, intents: 0 });
+
+    // Only a fresh challenge issued against the current publication can bind, and it binds to v3.
+    const freshChallenge = await requestAcceptanceChallenge(h, token);
+    const accepted = await confirmAcceptance(h, freshChallenge, "iro250-superseded-confirm-0002");
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const acceptanceId = (await accepted.json() as { acceptance_id: string }).acceptance_id;
+    assert.deepEqual(commercialMoneyCounts(h, ids.jobId), { bindings: 1, derivations: 1, intents: 0 });
+    const derivation = h.db.raw.prepare(
+      "SELECT publication_event_id, publication_version FROM commercial_deposit_derivations WHERE acceptance_id = ?",
+    ).get(acceptanceId) as { publication_event_id: string; publication_version: number };
+    assert.deepEqual({ ...derivation }, { publication_event_id: currentPublication, publication_version: 3 });
+  } finally {
+    h.restore();
+  }
+});
+
+test("IRO-250 duplicate acceptance with a repeated idempotency key replays without a second binding, derivation or intent", async () => {
+  const h = setup();
+  try {
+    const ids = await intakeAndMaterialize(h);
+    await publishSyntheticContract(h, ids, TERMS, "duplicate-acceptance");
+    const challengeToken = await requestAcceptanceChallenge(h, await issuePortalLink(h, ids));
+    const first = await confirmAcceptance(h, challengeToken, "iro250-duplicate-acceptance-0001");
+    assert.equal(first.status, 200, await first.clone().text());
+    const accepted = await first.json() as { status: string; acceptance_id: string };
+    assert.equal(accepted.status, "accepted");
+    await configureDepositAccounting(h, ids, "duplicate-acceptance");
+    const derived = await handleAuthenticatedRoute(
+      request("/api/v1/commercial/deposit-intents/reconcile", { acceptance_id: accepted.acceptance_id }, "iro250-duplicate-acceptance-derive-0001"),
+      h.env, auth("owner"),
+    );
+    assert.equal(derived.status, 200, await derived.clone().text());
+    const before = commercialMoneyCounts(h, ids.jobId);
+    assert.deepEqual(before, { bindings: 1, derivations: 1, intents: 1 });
+    const receiptsBefore = r2Snapshot(h.raw);
+
+    // Same key, same body: the stored terminal answer, byte for byte.
+    const replay = await confirmAcceptance(h, challengeToken, "iro250-duplicate-acceptance-0001");
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), accepted);
+    // Same key, different signer: an idempotency conflict, not a second acceptance.
+    const conflict = await confirmAcceptance(h, challengeToken, "iro250-duplicate-acceptance-0001", "Someone Else");
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), { error: "acceptance_idempotency_conflict" });
+    // Fresh key on a spent challenge: refused.
+    const spent = await confirmAcceptance(h, challengeToken, "iro250-duplicate-acceptance-0002");
+    assert.equal(spent.status, 409);
+    assert.deepEqual(await spent.json(), { error: "acceptance_challenge_used" });
+
+    assert.deepEqual(commercialMoneyCounts(h, ids.jobId), before);
+    assert.deepEqual(r2Snapshot(h.raw), receiptsBefore);
+    assert.equal(
+      h.db.raw.prepare("SELECT COUNT(*) AS count FROM customer_portal_acceptance_intents WHERE tenant_id = ?")
+        .get(TENANT)!.count,
+      1,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("IRO-250 a QuickBooks webhook arriving before readback stays unbound and pending until the cron reads the invoice back", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "webhook-before-readback");
+    await approveAcceptedDeposit(h, journey.intentId, "webhook-before-readback");
+    assert.equal((await readAccountingIntent(h.env, TENANT, journey.intentId))?.provider_entity_id, null);
+
+    // Intuit announces the invoice IronWrap is about to create, before any effect has settled.
+    const early = quickBooksWebhook([{ name: "Invoice", id: "901", operation: "Create" }]);
+    const first = await postWebhook(h, early);
+    assert.equal(first.status, 503);
+    assert.equal(first.body.error, "quickbooks_projection_pending");
+    assert.equal(first.body.replay, false);
+    assert.deepEqual(projectionOutbox(h).map(({ projection_status, attempt_count, last_error }) => ({ projection_status, attempt_count, last_error })), [
+      { projection_status: "pending", attempt_count: 1, last_error: "quickbooks_native_provider_identity_unbound" },
+    ]);
+    const untouched = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(untouched?.state, "submission_pending");
+    assert.equal(untouched?.provider_entity_id, null);
+    assert.equal(h.fake.providerInvoices.size, 0, "a webhook never creates provider state");
+
+    // The same signed body redelivered while still unbound is a replay, not a second receipt.
+    const replayed = await postWebhook(h, early);
+    assert.equal(replayed.status, 503);
+    assert.equal(replayed.body.replay, true);
+    assert.deepEqual(webhookReceipts(h).map(({ replay_count, events_count }) => ({ replay_count, events_count })), [
+      { replay_count: 1, events_count: 1 },
+    ]);
+    assert.equal(projectionOutbox(h).length, 1);
+
+    // Dispatch settles the invoice; the pending projection is then recovered by the frequent cron.
+    t.mock.timers.setTime(clockStart + 30_000);
+    await runFrequentCron(h, Date.now());
+    const settled = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(settled?.provider_entity_id, "901");
+    let outbox = projectionOutbox(h)[0]!;
+    for (let tick = 1; tick <= 3 && outbox.projection_status !== "projected"; tick += 1) {
+      t.mock.timers.setTime(clockStart + tick * 5 * 60_000);
+      await runFrequentCron(h, Date.now());
+      outbox = projectionOutbox(h)[0]!;
+    }
+    assert.equal(outbox.projection_status, "projected");
+    assert.ok(Number(outbox.attempt_count) >= 2, "the projection needed at least one retry");
+    const effectSettled = h.db.raw.prepare(
+      "SELECT updated_at FROM external_effects WHERE tenant_id = ? AND intent_id = ? AND state = 'succeeded'",
+    ).get(TENANT, journey.intentId) as { updated_at: string };
+    assert.ok(
+      String(outbox.projected_at) > effectSettled.updated_at && effectSettled.updated_at > webhookReceipts(h)[0]!.first_seen_at,
+      "ordering: webhook receipt, then the effect settled, then the projection re-read",
+    );
+    const reobserved = h.db.raw.prepare(
+      `SELECT source, read_at FROM accounting_observations
+        WHERE tenant_id = ? AND entity_type = 'Invoice' AND entity_id = '901' AND source = 'webhook_triggered_read'`,
+    ).get(TENANT) as { source: string; read_at: string } | undefined;
+    assert.ok(reobserved, "the recovered projection re-read the invoice with the webhook-triggered source");
+    assert.equal((await readAccountingIntent(h.env, TENANT, journey.intentId))?.state, "partially_settled");
+    assert.equal(h.fake.providerInvoices.size, 1);
+    assert.equal(
+      h.db.raw.prepare(
+        `SELECT COUNT(*) AS count FROM audit_log WHERE automation = 'quickbooks_accounting'
+          AND trigger = 'scheduled' AND action = 'authenticated_reobservation'`,
+      ).get()!.count,
+      1,
+    );
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("IRO-250 a QuickBooks webhook arriving after readback re-observes and reconciles, and its replay projects nothing twice", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "webhook-after-readback");
+    await approveAcceptedDeposit(h, journey.intentId, "webhook-after-readback");
+    await runFrequentCron(h, clockStart);
+    const posted = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(posted?.state, "partially_settled");
+    const invoiceId = posted!.provider_entity_id!;
+    const paymentId = h.fake.settleInvoice(invoiceId);
+
+    t.mock.timers.setTime(clockStart + 60_000);
+    const notification = quickBooksWebhook([{ name: "Payment", id: paymentId, operation: "Create" }]);
+    const projected = await postWebhook(h, notification);
+    assert.equal(projected.status, 200, JSON.stringify(projected.body));
+    assert.equal(projected.body.replay, false);
+    assert.equal(projected.body.provider_truth_reconciled, false, "transport success is never business completion");
+    assert.deepEqual(projected.body.native_accounting_intent_ids, [journey.intentId]);
+    const reconciled = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(reconciled?.state, "reconciled");
+    assert.equal(reconciled?.provider_reconciled_at, new Date(clockStart + 60_000).toISOString());
+    const paymentObservation = h.db.raw.prepare(
+      `SELECT source FROM accounting_observations WHERE tenant_id = ? AND entity_type = 'Payment' AND entity_id = ?`,
+    ).all(TENANT, paymentId) as Array<{ source: string }>;
+    assert.deepEqual(paymentObservation.map((row) => ({ ...row })), [{ source: "webhook_triggered_read" }]);
+    const callsAfterProjection = h.fake.quickBooksCalls.length;
+    const observationsAfterProjection = h.db.raw.prepare("SELECT COUNT(*) AS count FROM accounting_observations").get()!.count;
+    const reconciliationsAfterProjection = h.db.raw.prepare("SELECT COUNT(*) AS count FROM accounting_reconciliations").get()!.count;
+
+    t.mock.timers.setTime(clockStart + 120_000);
+    const replay = await postWebhook(h, notification);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.replay, true);
+    assert.deepEqual(replay.body.native_accounting_intent_ids, []);
+    assert.deepEqual(webhookReceipts(h).map(({ replay_count }) => replay_count), [1]);
+    assert.deepEqual(projectionOutbox(h).map(({ projection_status }) => projection_status), ["projected"]);
+    assert.equal(h.fake.quickBooksCalls.length, callsAfterProjection, "a replay reads nothing from the provider");
+    assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM accounting_observations").get()!.count, observationsAfterProjection);
+    assert.equal(h.db.raw.prepare("SELECT COUNT(*) AS count FROM accounting_reconciliations").get()!.count, reconciliationsAfterProjection);
+    const afterReplay = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(afterReplay?.version, reconciled?.version);
+    assert.equal(afterReplay?.provider_reconciled_at, reconciled?.provider_reconciled_at);
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+async function judgeAfterProviderChange(
+  h: Harness,
+  t: Parameters<Parameters<typeof test>[1]>[0],
+  clockStart: number,
+  intentId: string,
+): Promise<void> {
+  // First stale tick races the daily token refresh and is not evidence; the next tick judges.
+  const staleTick = clockStart + 24 * 60 * 60_000 + 10 * 60_000;
+  t.mock.timers.setTime(staleTick);
+  await runFrequentCron(h, Date.now());
+  assert.equal((await readAccountingIntent(h.env, TENANT, intentId))?.state, "partially_settled");
+  t.mock.timers.setTime(staleTick + 5 * 60_000);
+  await runFrequentCron(h, Date.now());
+}
+
+test("IRO-250 an amount mismatch on readback is a mismatch exception carrying the observed amount", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "amount-mismatch");
+    await approveAcceptedDeposit(h, journey.intentId, "amount-mismatch");
+    await runFrequentCron(h, clockStart);
+    const posted = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(posted?.total_amount, "262.50");
+    h.fake.restateInvoiceTotal(posted!.provider_entity_id!, "300.00");
+    await judgeAfterProviderChange(h, t, clockStart, journey.intentId);
+
+    const judged = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(judged?.state, "mismatch");
+    assert.equal(judged?.provider_reconciled_at, null);
+    const exception = h.db.raw.prepare(
+      `SELECT reason_code, detail_json FROM accounting_exceptions WHERE tenant_id = ? AND intent_id = ? AND status = 'open'`,
+    ).get(TENANT, journey.intentId) as { reason_code: string; detail_json: string };
+    assert.equal(exception.reason_code, "expected_observed_mismatch");
+    const detail = JSON.parse(exception.detail_json) as { entityId: string; expectedSha256: string; observedSha256: string };
+    assert.equal(detail.entityId, posted!.provider_entity_id);
+    assert.notEqual(detail.expectedSha256, detail.observedSha256);
+    const observed = h.db.raw.prepare(
+      `SELECT total_amount_cents FROM accounting_observations
+        WHERE tenant_id = ? AND intent_id = ? ORDER BY observation_seq DESC LIMIT 1`,
+    ).get(TENANT, journey.intentId) as { total_amount_cents: number };
+    assert.equal(observed.total_amount_cents, 30_000, "the observation records the provider's restated amount");
+    assert.equal(h.fake.providerInvoices.size, 1);
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("IRO-250 an entity identity mismatch on readback is an identity conflict, judged before any amount", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "entity-mismatch");
+    await approveAcceptedDeposit(h, journey.intentId, "entity-mismatch");
+    await runFrequentCron(h, clockStart);
+    const posted = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    const invoiceId = posted!.provider_entity_id!;
+    h.fake.misidentifyInvoice(invoiceId, "999");
+    await judgeAfterProviderChange(h, t, clockStart, journey.intentId);
+
+    const judged = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    assert.equal(judged?.provider_reconciled_at, null);
+    const exception = h.db.raw.prepare(
+      `SELECT reason_code, detail_json FROM accounting_exceptions WHERE tenant_id = ? AND intent_id = ? AND status = 'open'`,
+    ).get(TENANT, journey.intentId) as { reason_code: string; detail_json: string };
+    assert.equal(exception.reason_code, "provider_identity_conflict");
+    const detail = JSON.parse(exception.detail_json) as {
+      expected: { entityId: string; realmId: string };
+      observed: { entityId: string; realmId: string };
+    };
+    assert.deepEqual(detail.expected, { realmId: QB_REALM_ID, entityType: "Invoice", entityId: invoiceId } as never);
+    assert.equal(detail.observed.entityId, "999");
+    assert.equal(
+      h.db.raw.prepare(
+        `SELECT verdict FROM accounting_reconciliations WHERE tenant_id = ? AND intent_id = ? ORDER BY rowid DESC LIMIT 1`,
+      ).get(TENANT, journey.intentId)!.verdict,
+      "identity_conflict",
+    );
+    assert.equal(h.fake.providerInvoices.size, 1);
+  } finally {
+    t.mock.timers.reset();
+    h.restore();
+  }
+});
+
+test("IRO-250 secrets, tokens and customer PII never land in money-plane events, exceptions, dead letters, audit or outboxes", async (t) => {
+  const clockStart = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(clockStart) });
+  const h = setup();
+  try {
+    const journey = await deriveAcceptedDeposit(h, "redaction");
+    await approveAcceptedDeposit(h, journey.intentId, "redaction");
+    await runFrequentCron(h, clockStart);
+    const posted = await readAccountingIntent(h.env, TENANT, journey.intentId);
+    const paymentId = h.fake.settleInvoice(posted!.provider_entity_id!);
+    t.mock.timers.setTime(clockStart + 60_000);
+    assert.equal((await postWebhook(h, quickBooksWebhook([{ name: "Payment", id: paymentId, operation: "Create" }]))).status, 200);
+    assert.equal((await readAccountingIntent(h.env, TENANT, journey.intentId))?.state, "reconciled");
+    const portalToken = (h.fake.sentEmails.at(-1) ?? "").match(/contract-accept#token=([A-Za-z0-9_-]{43})/)?.[1];
+    assert.ok(portalToken);
+
+    const needles: Record<string, string> = {
+      qb_access_token: "synthetic-access-token",
+      qb_refresh_token: "synthetic-refresh-token",
+      qb_client_secret: "synthetic-client-secret",
+      qb_oauth_code: "synthetic-oauth-code",
+      qb_webhook_token: QB_WEBHOOK_TOKEN,
+      gmail_token: "synthetic-gmail-token",
+      auth_pepper: String(h.env.APP_AUTH_PEPPER),
+      acceptance_challenge_token: portalToken,
+      customer_email: CUSTOMER_EMAIL,
+      customer_phone: CUSTOMER_PHONE.replace("+", ""),
+    };
+    const tables = (h.db.raw.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND (
+         name LIKE '%|_events' ESCAPE '|' OR name LIKE '%|_exceptions' ESCAPE '|' OR name LIKE '%|_outbox' ESCAPE '|'
+         OR name LIKE '%|_receipts' ESCAPE '|' OR name LIKE '%audit%' OR name = 'dead_letter'
+         OR name IN ('external_effects', 'external_effect_attempts', 'accounting_reconciliations', 'accounting_intents')
+       ) ORDER BY name`,
+    ).all() as Array<{ name: string }>).map(({ name }) => name);
+    assert.ok(tables.includes("accounting_exceptions") && tables.includes("dead_letter") && tables.includes("audit_log"));
+    const leaks: string[] = [];
+    let scannedRows = 0;
+    for (const table of tables) {
+      for (const row of h.db.raw.prepare(`SELECT * FROM "${table}"`).all() as Array<Record<string, unknown>>) {
+        scannedRows += 1;
+        for (const [column, value] of Object.entries(row)) {
+          const text = typeof value === "string" ? value : JSON.stringify(value);
+          for (const [label, needle] of Object.entries(needles)) {
+            if (text?.includes(needle)) leaks.push(`${table}.${column}:${label}`);
+          }
+        }
+      }
+    }
+    // R2 money-plane objects: receipts and the signed webhook raw. The intake envelopes under
+    // `raw/<date>/` are the lead's own immutable contact record and are out of this plane.
+    const moneyPlaneKeys = r2Snapshot(h.raw).filter(([key]) => !/^raw\/\d{4}-\d{2}-\d{2}\//.test(key));
+    assert.ok(moneyPlaneKeys.some(([key]) => key.startsWith("raw/quickbooks/")));
+    assert.ok(moneyPlaneKeys.some(([key]) => key.startsWith("customer-contract-acceptance/")));
+    for (const [key, body] of moneyPlaneKeys) {
+      for (const [label, needle] of Object.entries(needles)) {
+        if (body.includes(needle)) leaks.push(`r2:${key.replace(/[0-9a-f-]{36}|acceptance_[0-9a-f-]+/g, "*")}:${label}`);
+      }
+    }
+    assert.ok(scannedRows > 50, `expected a populated money plane, scanned ${scannedRows} rows`);
+    assert.ok(tables.filter((table) => Number(h.db.raw.prepare(`SELECT COUNT(*) AS count FROM "${table}"`).get()!.count) > 0).length >= 10);
+
+    // The IRO-250 / ELEC-257 finding (a governed Gmail send keyed its effect on
+    // `gmail:<recipient>:<hash>`, writing the customer's address into the effect ledger) is
+    // closed by #367's `gmail:<hash>` key, so no clear-text address may remain anywhere.
+    const distinct = [...new Set(leaks)].sort();
+    assert.deepEqual(distinct, []);
+    const keyedOnAddress = h.db.raw.prepare(
+      "SELECT COUNT(*) AS count FROM external_effects WHERE tenant_id = ? AND intent_id LIKE ?",
+    ).get(TENANT, `gmail:${CUSTOMER_EMAIL}:%`) as { count: number };
+    assert.equal(Number(keyedOnAddress.count), 0);
+    const emailEffect = h.db.raw.prepare(
+      "SELECT provider, action FROM external_effects WHERE tenant_id = ? AND provider = 'gmail' AND action = 'customer.email.send'",
+    ).all(TENANT) as Array<{ provider: string; action: string }>;
+    // Both governed sends to this customer (portal link, acceptance challenge) still run through
+    // the ledger; the opaque key no longer reveals the recipient, so count every customer send.
+    assert.ok(emailEffect.length >= 2, `expected at least two governed customer sends, found ${emailEffect.length}`);
+    assert.deepEqual([...new Set(emailEffect.map((row) => `${row.provider}:${row.action}`))], ["gmail:customer.email.send"]);
+  } finally {
+    t.mock.timers.reset();
     h.restore();
   }
 });

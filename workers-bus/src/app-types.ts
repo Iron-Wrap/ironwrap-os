@@ -28,6 +28,9 @@ export type AppEnv = Env & {
   // Enable only after file-selection callers submit scoped upload receipts. Unset/false
   // retains the legacy evidence inputs without asserting verified upload provenance.
   APP_EVIDENCE_RECEIPTS_REQUIRED?: string;
+  // Owner-approved manifest/profile admission only. Provider proofs require a separate
+  // authenticated provider readback; unset and false refuse every configuration write.
+  APP_READINESS_ADMISSION_ENABLED?: string;
   // Dedicated owner/ops desktop draft pilot. False by default and separate from
   // field-device pairing, browser sessions, and every approved-write rail.
   APP_HERMES_DESKTOP_ENABLED?: string;

@@ -369,6 +369,15 @@ export function watchdogFindings(input: {
   return findings;
 }
 
+/** Keep retries in one UTC check window identical, while a persistent fault alerts again later. */
+export function watchdogAlertHtml(findings: string[], now: Date): string {
+  const checkWindow = now.toISOString().slice(0, 10);
+  const items = findings.map((finding) => `<li>${finding}</li>`).join("");
+  return `<p>The daily self-check found:</p><ul>${items}</ul>` +
+    `<p>UTC check window: ${checkWindow}.</p>` +
+    `<p>Diagnostics: /ready and /admin/measurements/exceptions and /admin/measurements/deltas (admin token).</p>`;
+}
+
 /**
  * Daily self-observation: compute the signals the system already produces and
  * email the owner ONLY when something needs attention (alert, not newsletter).
@@ -408,13 +417,11 @@ export async function runOwnerWatchdog(
   const ownerEmail = ((env as { OWNER_ALERT_EMAIL?: string }).OWNER_ALERT_EMAIL ?? "").trim();
   if (!ownerEmail || !gmailConfigured(env)) return { alerted: false, findings };
   try {
-    const items = findings.map((finding) => `<li>${finding}</li>`).join("");
     await sendGmail(
       env,
       ownerEmail,
       "IronWrap bus watchdog: attention required",
-      `<p>The daily self-check found:</p><ul>${items}</ul>` +
-        `<p>Diagnostics: /ready and /admin/measurements/exceptions and /admin/measurements/deltas (admin token).</p>`,
+      watchdogAlertHtml(findings, now),
     );
     return { alerted: true, findings };
   } catch (error) {

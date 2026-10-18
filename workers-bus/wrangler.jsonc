@@ -129,6 +129,7 @@
       // secret of at least 32 characters. Magic-link email goes through Gmail in production
       // (the dev_outbox capture is localhost-only).
       "APP_BFF_ENABLED": "true",
+      "APP_READINESS_ADMISSION_ENABLED": "false",
       "APP_EVIDENCE_UPLOADS_ENABLED": "false",
       "APP_HERMES_DESKTOP_ENABLED": "false",
       "APP_CUSTOMER_PORTAL_ENABLED": "true",
@@ -365,6 +366,7 @@
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
+          "APP_READINESS_ADMISSION_ENABLED": "false",
           "APP_EVIDENCE_UPLOADS_ENABLED": "false",
           "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "true",
@@ -583,6 +585,7 @@
         "CFG_APP": {
           "APP_DOCUMENT_GENERATION_ENABLED": "false",
           "APP_BFF_ENABLED": "true",
+          "APP_READINESS_ADMISSION_ENABLED": "false",
           "APP_EVIDENCE_UPLOADS_ENABLED": "false",
           "APP_HERMES_DESKTOP_ENABLED": "false",
           "APP_CUSTOMER_PORTAL_ENABLED": "false",

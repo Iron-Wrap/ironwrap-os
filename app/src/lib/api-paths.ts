@@ -32,6 +32,7 @@ export const API_PATHS = {
   hermesDesktopPairings: "/api/v1/hermes/desktop-pairings",
   customerPortalResolve: "/api/v1/customer-portal/resolve",
   customerPortalAcceptanceChallenge: "/api/v1/customer-portal/acceptance/challenge",
+  customerPortalAcceptancePreview: "/api/v1/customer-portal/acceptance/preview",
   customerPortalAcceptanceConfirm: "/api/v1/customer-portal/acceptance/confirm",
   customerPortalDecision: "/api/v1/customer-portal/decision",
   customerPortalLinks: "/api/v1/customer-portal/links",

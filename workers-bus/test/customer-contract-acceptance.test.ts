@@ -244,12 +244,9 @@ class MemoryR2 {
   }
 }
 
-type GmailReadbackDrift = "recipient" | "subject" | "body";
-
 async function setup(
   options: {
     contracts?: 0 | 1 | 2;
-    gmailReadbackDrift?: GmailReadbackDrift;
   } = {},
 ) {
   const db = new SqliteD1();
@@ -280,26 +277,7 @@ async function setup(
       return Response.json({ id: `gmail-${sentEmails.length}` });
     }
     if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
-      const messageId = decodeURIComponent(
-        url.pathname.split("/").at(-1) ?? "",
-      );
-      const index = Number(messageId.replace(/^gmail-/, "")) - 1;
-      let rawMessage = sentEmails[index];
-      assert.equal(typeof rawMessage, "string");
-      if (options.gmailReadbackDrift === "recipient") {
-        rawMessage = rawMessage!.replace(
-          `To: ${CUSTOMER_EMAIL}`,
-          "To: other@example.invalid",
-        );
-      }
-      if (options.gmailReadbackDrift === "subject") {
-        rawMessage = rawMessage!.replace(/^Subject: .*$/m, "Subject: changed");
-      }
-      if (options.gmailReadbackDrift === "body") rawMessage += "changed";
-      return Response.json({
-        id: messageId,
-        raw: Buffer.from(rawMessage!).toString("base64url"),
-      });
+      return new Response("read scope required", { status: 403 });
     }
     throw new Error(`unexpected non-Gmail fetch ${url.href}`);
   };
@@ -484,9 +462,11 @@ async function recordPublicationTransition(
   chain: NativeChain,
   state: "published" | "withdrawn",
   now: Date,
+  previousState: "draft" | "published" | "withdrawn" =
+    state === "published" ? "draft" : "published",
 ): Promise<void> {
   const publicationVersion =
-    chain.publicationVersion + (state === "published" ? 0 : 1);
+    chain.publicationVersion + (previousState === "draft" ? 0 : 1);
   const action =
     state === "published" ? "proposal.publish" : "proposal.withdraw";
   const input: RecordCommercialPublicationInput = {
@@ -494,7 +474,7 @@ async function recordPublicationTransition(
     proposalRevisionId: chain.proposalRevisionId,
     proposalPackId: chain.proposalPackId,
     publicationVersion,
-    previousState: state === "published" ? "draft" : "published",
+    previousState,
     state,
     authority: { kind: "policy_permit", permitId: "pending" },
     idempotencyKey: `acceptance:publication:${chain.proposalPackId}:${publicationVersion}`,
@@ -753,6 +733,20 @@ function confirmRequest(
   );
 }
 
+function previewRequest(token: string): Request {
+  return new Request(
+    `${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/preview`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: PUBLIC_ORIGIN,
+      },
+      body: JSON.stringify({ token }),
+    },
+  );
+}
+
 function authenticatedRouteRequest(
   acceptanceId: string,
   idempotencyKey: string,
@@ -840,6 +834,23 @@ test("native customer acceptance is pinned, receipt-backed, atomically bound, an
     );
 
     const challengeToken = emailChallengeToken(h.sentEmails);
+    const preview = await worker.fetch(
+      previewRequest(challengeToken),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(preview.status, 200, await preview.clone().text());
+    assert.equal(preview.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await preview.json(), {
+      status: "ready",
+      quote_version: 1,
+      total_cents: 105_000,
+      currency: "CAD",
+      valid_until: QUOTE_VALID_UNTIL,
+      proposal_title: "Complete roof replacement proposal",
+      proposal_summary: "Approved scope, price, schedule assumptions, and warranty.",
+      terms: TERMS,
+    });
     const persistedChallenge = h.db.raw
       .prepare("SELECT * FROM customer_portal_acceptance_challenges")
       .get() as Record<string, unknown>;
@@ -872,6 +883,12 @@ test("native customer acceptance is pinned, receipt-backed, atomically bound, an
     };
     assert.equal(accepted.status, "accepted");
     assert.match(accepted.acceptance_id, /^acceptance_[0-9a-f-]{36}$/);
+    const consumedPreview = await worker.fetch(
+      previewRequest(challengeToken),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(consumedPreview.status, 404);
 
     const binding = h.db.raw
       .prepare(
@@ -1132,6 +1149,13 @@ test("confirmation rejects and replays when the published contract changed after
       new Date(Date.parse(challenge.created_at) + 1),
     );
     const token = emailChallengeToken(h.sentEmails);
+    const preview = await worker.fetch(
+      previewRequest(token),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(preview.status, 409);
+    assert.deepEqual(await preview.json(), { error: "acceptance_contract_changed" });
     const first = await worker.fetch(
       confirmRequest(token, "acceptance-contract-drift-0001"),
       h.env as never,
@@ -1163,6 +1187,120 @@ test("confirmation rejects and replays when the published contract changed after
     h.restore();
   }
 });
+
+for (const reviseProposal of [false, true]) {
+  test(`preview and confirmation reject same-terms republication with ${reviseProposal ? "a new" : "the same"} proposal revision`, async () => {
+    const h = await setup();
+    try {
+      const portalToken = await seedPortalLink(h.db);
+      assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+      const challenge = h.db.raw
+        .prepare(
+          "SELECT created_at, quote_id, quote_version, terms_hash FROM customer_portal_acceptance_challenges",
+        )
+        .get() as {
+        created_at: string;
+        quote_id: string;
+        quote_version: number;
+        terms_hash: string;
+      };
+      const chain = h.chain!;
+      const issuedAt = Date.parse(challenge.created_at);
+      await recordPublicationTransition(
+        h.env,
+        chain,
+        "withdrawn",
+        new Date(issuedAt + 1),
+      );
+      if (reviseProposal) {
+        const input: RecordCommercialProposalInput = {
+          tenantId: TENANT,
+          proposalRevisionId: "proposal-revision:acceptance:primary:2",
+          proposalPackId: chain.proposalPackId,
+          revisionNumber: 2,
+          quoteRevisionId: chain.quoteRevisionId,
+          roofJobId: JOB_ID,
+          customerId: CUSTOMER_ID,
+          supersedesProposalRevisionId: chain.proposalRevisionId,
+          title: "Revised roof replacement proposal",
+          summary: "Updated presentation with unchanged scope, price, and terms.",
+          terms: TERMS,
+          contentRef: "r2://commercial/proposals/primary-revised.pdf",
+          contentHash: "c".repeat(64),
+          evidence: EVIDENCE,
+          authority: { kind: "policy_permit", permitId: "pending" },
+          idempotencyKey: "acceptance:proposal:primary:2",
+        };
+        const prepared = await prepareCommercialProposal(input);
+        const permit = await admitFor(
+          h.env,
+          "proposal.revision.record",
+          { type: "proposal", id: chain.proposalPackId, version: 2 },
+          prepared.command,
+          "permit:acceptance:proposal:primary:2",
+          new Date(issuedAt + 10),
+        );
+        input.authority = { kind: "policy_permit", permitId: permit.permit_id };
+        const result = await recordCommercialProposalRevision(
+          h.env,
+          input,
+          new Date(issuedAt + 11),
+        );
+        assert.equal(result.kind, "created");
+        assert.equal(result.proposal.terms_hash, challenge.terms_hash);
+        chain.proposalRevisionId = result.proposal.proposal_revision_id;
+      }
+      const republishedAt = issuedAt + 21;
+      await recordPublicationTransition(
+        h.env,
+        chain,
+        "published",
+        new Date(republishedAt - 1),
+        "withdrawn",
+      );
+      // Both publications must be in the past for a current-time preview to
+      // expose the stale-token bug rather than refuse a future fixture event.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, republishedAt - Date.now() + 1)),
+      );
+      assert.equal(chain.publicationVersion, 3);
+      assert.equal(challenge.quote_id, chain.quoteId);
+      assert.equal(challenge.quote_version, 1);
+      assert.equal(challenge.terms_hash, TERMS_HASH);
+
+      const token = emailChallengeToken(h.sentEmails);
+      const preview = await worker.fetch(
+        previewRequest(token),
+        h.env as never,
+        {} as never,
+      );
+      const confirmation = await worker.fetch(
+        confirmRequest(token, "acceptance-republished-contract-0001"),
+        h.env as never,
+        {} as never,
+      );
+      assert.equal(confirmation.status, 409);
+      assert.deepEqual(await confirmation.json(), { error: "acceptance_rejected" });
+      const intent = h.db.raw
+        .prepare("SELECT state, error_code FROM customer_portal_acceptance_intents")
+        .get() as { state: string; error_code: string };
+      assert.equal(intent.state, "rejected");
+      assert.equal(intent.error_code, "native_contract_changed");
+      assert.equal(
+        h.db.raw
+          .prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings")
+          .get()!.count,
+        0,
+      );
+      assert.equal(h.sentEmails.length, 1);
+      assert.equal(preview.headers.get("cache-control"), "private, no-store");
+      assert.equal(preview.status, 409);
+      assert.deepEqual(await preview.json(), { error: "acceptance_contract_changed" });
+    } finally {
+      h.restore();
+    }
+  });
+}
 
 test("missing or ambiguous native contract chains fail closed before email delivery", async () => {
   for (const contracts of [0, 2] as const) {
@@ -1223,31 +1361,41 @@ test("native acceptance snapshot and commit require a qualified lead atomically"
   }
 });
 
-test("Gmail readback still binds recipient, subject, and HTML without persisting content", async () => {
-  for (const drift of ["recipient", "subject", "body"] as const) {
-    const h = await setup({ gmailReadbackDrift: drift });
-    try {
-      const portalToken = await seedPortalLink(h.db);
-      const challenge = await issueChallenge(h.env, portalToken);
-      assert.equal(challenge.status, 502, drift);
-      const effect = h.db.raw
-        .prepare(
-          `SELECT state, expected_readback_json FROM external_effects
-          WHERE provider = 'gmail' ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get() as { state: string; expected_readback_json: string };
-      assert.equal(effect.state, "manual_exception", drift);
-      assert.deepEqual(
-        Object.keys(JSON.parse(effect.expected_readback_json)).sort(),
-        ["html_sha256", "subject_sha256", "to_sha256"],
-      );
-      assert.equal(
-        effect.expected_readback_json.includes(CUSTOMER_EMAIL),
-        false,
-      );
-    } finally {
-      h.restore();
-    }
+test("Gmail send response confirms the prepared message with a send-only grant", async () => {
+  const h = await setup();
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    const challenge = await issueChallenge(h.env, portalToken);
+    assert.equal(challenge.status, 200);
+    assert.equal(h.sentEmails.length, 1);
+    assert.match(h.sentEmails[0]!, new RegExp(`^To: ${CUSTOMER_EMAIL}$`, "m"));
+    assert.match(h.sentEmails[0]!, /^Subject: =\?UTF-8\?B\?[^?]+\?=$/m);
+    assert.ok(h.sentEmails[0]!.includes(emailChallengeToken(h.sentEmails)));
+    assert.equal(h.fetchUrls.filter((url) => url.includes("/messages/send")).length, 1);
+    assert.equal(h.fetchUrls.some((url) => /\/messages\/[^/]+\?/.test(url)), false);
+    const effect = h.db.raw
+      .prepare(
+        `SELECT state, expected_readback_json, provider_external_id, provider_response_hash, readback_hash
+         FROM external_effects WHERE provider = 'gmail' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get() as {
+        state: string;
+        expected_readback_json: string;
+        provider_external_id: string;
+        provider_response_hash: string;
+        readback_hash: string;
+      };
+    assert.equal(effect.state, "succeeded");
+    assert.equal(effect.provider_external_id, "gmail-1");
+    assert.match(effect.provider_response_hash, /^[0-9a-f]{64}$/);
+    assert.match(effect.readback_hash, /^[0-9a-f]{64}$/);
+    assert.deepEqual(
+      Object.keys(JSON.parse(effect.expected_readback_json)).sort(),
+      ["html_sha256", "subject_sha256", "to_sha256"],
+    );
+    assert.equal(effect.expected_readback_json.includes(CUSTOMER_EMAIL), false);
+  } finally {
+    h.restore();
   }
 });
 

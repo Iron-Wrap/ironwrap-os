@@ -7,6 +7,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 const migrations = [
   "0042_external_effect_runtime.sql",
   "0062_external_effect_insert_replace_guards.sql",
+  "0142_gmail_effect_key_rollover_guard.sql",
 ].map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
 const effectSql = /\bexternal_effect(?:s|_attempts|_events|_exceptions)\b/i;
 

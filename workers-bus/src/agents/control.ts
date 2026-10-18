@@ -964,7 +964,8 @@ export async function escalateRunAbstention(
     )
     .bind(tenantId, run.run_id)
     .all<StepRow>();
-  for (const step of rows.results)
+  for (const step of rows.results) {
+    const name = catalogSpecialist(run.specialist_id)?.display_name ?? "The AI team";
     await openException(
       db,
       tenantId,
@@ -977,12 +978,13 @@ export async function escalateRunAbstention(
         reason_code: step.reason_code ?? "out_of_scope",
         urgency: "today",
         reviewer_role: step.needs_reviewer_role!,
-        summary: `${catalogSpecialist(run.specialist_id)?.display_name ?? run.specialist_id} stopped before acting: ${(step.reason_code ?? "out_of_scope").replaceAll("_", " ")}.`,
+        summary: `${name} stopped and needs a person.`,
         dedupe_key: `step:${step.step_id}`,
       },
       now,
       notify,
     );
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

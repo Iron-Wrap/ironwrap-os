@@ -957,6 +957,9 @@ const AI_TEAM_AGGREGATES = new Set([
   "tax_slip",
   "specialist_hold",
   "field_item",
+  "settings",
+  "import_run",
+  "tenant",
 ]);
 const AI_TEAM_RECEIPT_FIELDS = [
   "specialist_id",
@@ -1014,7 +1017,6 @@ const AI_TEAM_OWNER_ASKS_FIRST = [
   "consent.record",
   "cancellation.record",
   "authority.record",
-  "completion.accept",
 ];
 // Releasing a protection, approving a control the agents work under, or an owner-only right:
 // these ask first whatever the owner delegates elsewhere.
@@ -1023,7 +1025,6 @@ const AI_TEAM_ALWAYS_ASKS_FIRST = [
   "stock.release_quarantine",
   "work_package.release_hold",
   "gate.clear",
-  "hold_point.release",
   "claim.approve",
   "reception_script.publish",
   "finding.close",
@@ -1052,9 +1053,13 @@ const AI_TEAM_PEOPLE_ONLY = [
   "policy.activate",
   "access.change",
   "payee.unfreeze",
+  "settings.apply",
+  "completion.accept",
+  "hold_point.release",
+  "onboarding.go_live",
 ];
 // An agent prepares these people-only acts for the person and never performs them.
-const AI_TEAM_PREPARES_PEOPLE_ONLY = ["payee.unfreeze_prepare", "safety_stop.release_prepare"];
+const AI_TEAM_PREPARES_PEOPLE_ONLY = ["payee.unfreeze_prepare", "safety_stop.release_prepare", "access.prepare_change"];
 const AI_TEAM_CUSTOMER_DISCLOSURE_REQUIRED = [
   "customer_message.send",
   "conversation.answer_live",
@@ -1073,8 +1078,9 @@ const AI_TEAM_EXTERNAL_A2 = [
   "privacy_incident.contain",
   "content.stop",
 ];
-// Delegation, policy and access change only by owner acts; no agent action may write them.
-const AI_TEAM_OWNER_ONLY_AGGREGATES = new Set(["delegation", "policy", "user_access"]);
+// Delegation, policy, settings, the tenant and access change only by people's own acts; no agent
+// action may write them.
+const AI_TEAM_OWNER_ONLY_AGGREGATES = new Set(["delegation", "policy", "settings", "tenant", "user_access"]);
 // Closed reason_code vocabularies: each pair shares one list, and the prose table repeats it.
 const AI_TEAM_REASON_CODE_PAIRS = [
   ["stock.quarantine", "stock.release_quarantine"],
@@ -1095,6 +1101,15 @@ const AI_TEAM_REQUIRED_WATCHES = [
   ["page_unacknowledged", "orchestrator", null],
 ];
 const AI_TEAM_ACTION_ID = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+// The words a screen shows for an action ("… finished sending a customer message"): a lower-case
+// phrase that starts with a gerund, with no code, id or digit in it. A gerund's stem before "ing"
+// has two or more letters and a vowel, so "string" and "ring" are not gerunds.
+const AI_TEAM_ACTION_NAME = /^[a-z]+ing(?:[ ,'-]+[a-z]+)*$/;
+const AI_TEAM_ACTION_NAME_MAX = 60;
+const aiTeamGerundName = (name) => {
+  const stem = /^([a-z]+)ing\b/.exec(name)?.[1] ?? "";
+  return stem.length >= 2 && /[aeiouy]/.test(stem);
+};
 const AI_TEAM_WATCH_ID = /^[a-z][a-z0-9_]*$/;
 const AI_TEAM_EVENT = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
 const AI_TEAM_DURATION =
@@ -1126,6 +1141,14 @@ function validateAiTeamAction(action, actionById) {
   if (actionById.has(id)) fail(`${AI_TEAM_LABEL}: duplicate action_id ${id}`);
   actionById.set(id, action);
   const where = `${AI_TEAM_LABEL}: ${id}`;
+  if (
+    typeof action.name !== "string" ||
+    action.name.length > AI_TEAM_ACTION_NAME_MAX ||
+    !AI_TEAM_ACTION_NAME.test(action.name) ||
+    !aiTeamGerundName(action.name)
+  ) {
+    fail(`${where}: name must be a lower-case phrase of at most ${AI_TEAM_ACTION_NAME_MAX} characters that starts with a gerund and holds no code (no ".", "_" or digit)`);
+  }
   const owners = Array.isArray(action.owners) ? action.owners : [];
   if (owners.length === 0 && action.autonomy !== "H") fail(`${where}: owners must be a non-empty array unless the act is H`);
   if (new Set(owners).size !== owners.length) fail(`${where}: duplicate owner`);
@@ -1259,6 +1282,13 @@ function validateAiTeamContract(contract, content) {
 
   const actionById = new Map();
   for (const action of actions) validateAiTeamAction(action, actionById);
+  const actionByName = new Map();
+  for (const action of actions) {
+    if (typeof action?.name !== "string") continue;
+    if (actionByName.has(action.name)) {
+      fail(`${AI_TEAM_LABEL}: ${action.action_id}: name "${action.name}" repeats ${actionByName.get(action.name)}'s; every action needs its own name`);
+    } else actionByName.set(action.name, action.action_id);
+  }
   const pins = [
     [AI_TEAM_OWNER_ASKS_FIRST, (action) => action.autonomy === "A3", "the owner's launch rule requires class A3"],
     [AI_TEAM_ALWAYS_ASKS_FIRST, (action) => action.autonomy === "A3", "always asks first, so it must be class A3"],
@@ -1329,6 +1359,10 @@ function validateAiTeamContract(contract, content) {
   }
   if (!sameList(receipt.outcomes, AI_TEAM_OUTCOMES)) {
     fail(`${AI_TEAM_LABEL}: receipt.outcomes must be exactly ${AI_TEAM_OUTCOMES.join(", ")}`);
+  }
+  // A practice run's receipt carries permit.kind shadow (contract "Delegation", practice runs).
+  if (!Array.isArray(receipt.permit_kinds) || !receipt.permit_kinds.includes("shadow")) {
+    fail(`${AI_TEAM_LABEL}: receipt.permit_kinds must include shadow, the mark of a practice run`);
   }
 
   const reviewerOf = new Map(specialists.map((specialist) => [specialist?.specialist_id, specialist?.reviewer_role]));

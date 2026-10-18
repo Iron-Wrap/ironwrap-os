@@ -72,6 +72,7 @@ export const ABSTAIN_REASON_CODES = [
   "ceiling_reached",
   "no_progress",
   "provider_unavailable",
+  "no_qualified_route",
   "injection_suspected",
   "out_of_scope",
   "person_requested",

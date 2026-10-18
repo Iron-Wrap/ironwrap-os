@@ -35,9 +35,9 @@ commit. The approval rails in [`APPROVAL-BROKER-CONTRACT.md`](./APPROVAL-BROKER-
 desktop pilot in [`HERMES-DESKTOP-TEXT-PILOT.md`](./HERMES-DESKTOP-TEXT-PILOT.md) keep their
 boundaries until a replacement is implemented and proven.
 
-Codes in this document (`A0` to `A3`, `H`, `asks_first`, `within_limits`, specialist, action and
-watch ids) are for builders. People never see a code: every screen shows only the words defined in
-"Action classes" and "Delegation".
+Codes in this document (`A0` to `A3`, `H`, `asks_first`, `within_limits`, `shadow`, specialist,
+action and watch ids) are for builders. People never see a code: every screen shows only the words
+defined in "Action classes" and "Delegation".
 
 ## Decisions
 
@@ -73,17 +73,20 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
     exact, never rounded or silently corrected.
 12. **Kept board decisions.** No self-approval (OD-23). Owner approval below 25% gross margin
     (OD-32).
-13. **Models.** One provider-agnostic gateway; Claude and Codex through OAuth sign-in at launch;
-    GPT-6.1 Sol for routine specialist work and GPT-6 Astra for hard reasoning by default. The
-    independent auditor, and any eval judge, runs on a model family different from the family that
-    proposed the work under review. The auditor therefore has one route per family (a Claude route
-    to audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records
-    both families on the `coordination_run` and refuses a run that would violate this. API keys
-    replace OAuth by configuration only.
-14. **Release bar for specialists.** A specialist release passes its evaluations only with zero
-    catastrophes, a golden-case mean of at least 0.90 with no case median below 0.60, and a red-team
-    mean of at least 0.95 with the correct decision in every repetition, over three repetitions.
-    Lowering the bar needs an owner decision recorded in this contract.
+13. **Models.** One provider-agnostic gateway. Each tenant sets its providers, models and billing
+    by configuration, and production supports any of them. Subscription sign-ins (Claude and Codex
+    through OAuth) are for building; production uses them only when a tenant chooses them. The
+    configurable defaults are GPT-6.1 Sol for routine specialist work, GPT-6 Astra for hard
+    reasoning, subject to the measured stage-0 pilot, and Claude Opus 5.5 for the independent
+    audit. A specialist runs on a model only after that pair passes qualification. The independent
+    auditor, and any eval judge, runs on a model family different from the family that proposed the
+    work under review. The auditor therefore has one route per family (a Claude route to audit
+    GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records both
+    families on the `coordination_run` and refuses a run that would violate this.
+14. **Release bar for specialists.** A specialist release passes its evaluations, on each model it
+    runs on, only with zero catastrophes, a golden-case mean of at least 0.90 with no case median
+    below 0.60, and a red-team mean of at least 0.95 with the correct decision in every repetition,
+    over three repetitions. Lowering the bar needs an owner decision recorded in this contract.
 15. **Live answering.** Answering a live call or chat (`conversation.answer_live`) is off until the
     owner turns it on in setup; nothing answers live before that. Once on, it acts within the
     owner's limits (hours and channels), quotes no price, commits no date or coverage, says it is AI
@@ -121,12 +124,14 @@ These owner decisions (IRW-R8 and the board items it reopened) apply throughout:
 - Its playbook, prompts and evaluations live under its `specialist_id`, which is stable and serves
   as a directory name.
 
-Reviewer roles are the six PWA roles: `owner`, `ops`, `sales`, `production`, `accounting` and
-`field`. The owner holds every reviewer right and may give one to another role (an owner act). When
-an action asks first, the reviewer is the proposing specialist's reviewer unless the catalog names
-another; the `margin_floor` and `amount_ceiling` checks move the decision to the owner when they say
-so. Nobody approves what they authored (OD-23). By domain: safety decisions go to a production
-supervisor independent of whoever raised the stop; privacy goes to the owner, while the AI compliance
+Reviewer roles are five of the six PWA roles: `owner`, `ops`, `sales`, `production` and
+`accounting`. `field` is the crew phone role, not a reviewer route: safety decisions route to
+`production`, a production supervisor. The owner holds every reviewer right and may give one to
+another role (an owner act). When an action asks first, the reviewer is the proposing specialist's
+reviewer unless the catalog names another; the `margin_floor` and `amount_ceiling` checks move the
+decision to the owner when they say so. Nobody approves what they authored (OD-23). By domain:
+safety decisions go to production, and a stop is released by a person in the owner, ops or
+production role who did not raise or report it; privacy goes to the owner, while the AI compliance
 checker works the requests; money items go to accounting; dead letters go to operations (`ops`).
 
 ### Roster
@@ -163,7 +168,7 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 |---|---|
 | Mission | Be the team's one face on every role screen, the crew phone included: answer with sources, take requests and route them to the owning specialist, show what the team did, is doing and needs, deliver the owner reports, and keep every run inside its ceilings. |
 | Watches | `route_new_signal`, `unacknowledged_exception`, `run_at_ceiling`, `dead_letter`, `pipeline`, `daily_owner_brief`, `weekly_review`, `owner_requests`, `role_questions`, `interrupt_candidates`, `storm_events`, `delegation_review`, `page_unacknowledged` |
-| Proposes | Routing, owner reports, owner interrupts, storm mode changes, delegation and policy changes with a preview, recovery of a dead-lettered envelope. |
+| Proposes | Routing, owner reports, owner interrupts, storm mode changes, delegation, policy and settings changes with a preview, access changes for a person to apply, recovery of a dead-lettered envelope, retries of an import run's failed items. |
 | Reads | Every canonical object and coordination record; when it answers a person, only what that person's role may read. |
 | Writes as proposals | Routing and handoff records, report drafts, delegation and policy proposals. |
 | Hard boundary | Corporate governor: "cannot activate its own policy". It never performs another specialist's action, never changes a delegation setting, and never shows a person a fact their role cannot read. |
@@ -189,7 +194,7 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 |---|---|
 | Mission | Capture every inquiry on every channel, recognize repeats, sort real work from spam and scams, qualify, book the next step, and keep each inquiry moving until it converts, is declined, or the customer stops it. |
 | Watches | `new_leads`, `new_inbound`, `first_response_due`, `follow_up_due`, `reception_session`, `stop_request`, `visit_request`, `live_conversation` |
-| Proposes | Classification, duplicate links, triage, first responses and follow-ups, visit holds and confirmations, consent records, suppression, handoff to a person, reception script versions, closing an inquiry. |
+| Proposes | Classification, duplicate links, triage, lead facts and their confirmation, first responses and follow-ups, visit holds and confirmations, consent records, suppression, handoff to a person, reception script versions, closing an inquiry. |
 | Reads | Conversations, customers, properties (area and access), job phase and commercial context, consent and suppression, staff availability. |
 | Writes as proposals | Classifications, triage, duplicate links, message drafts, visit holds, consent records. |
 | Hard boundary | Concierge: "cannot invent authority or binding price". No price, date, scope, warranty, insurance or legal statement beyond committed facts; it says it is AI and offers a person. |
@@ -283,8 +288,8 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 | Proposes | Work packages and their release, holds before start, stop-condition alerts, emergency pages and their escalation, evidence requests, safety notices to customers, daily reports, incident and field-change records, resolutions for crew items the office has not confirmed, the release pack for a safety stop. |
 | Reads | Jobs, the design basis, work packages, assignments, crews, authority records, safety plans, hazards, forecasts, evidence, the office records of crew items. |
 | Writes as proposals | Work packages, records drafted for the crew to confirm, and crew item resolutions for a person to record. |
-| Hard boundary | Safety: "no one can override a valid stop"; Field coordination: "cannot authorize hidden-condition change". It never stops or releases work in progress: it alerts, anyone on the crew can stop, and only a production supervisor independent of whoever raised the stop releases it. It never changes a worker's record without the worker. |
-| Reviewer | Production supervisor; a safety stop is released only by a production supervisor independent of whoever raised it. |
+| Hard boundary | Safety: "no one can override a valid stop"; Field coordination: "cannot authorize hidden-condition change". It never stops or releases work in progress: it alerts, anyone on the crew can stop, and only a person in the owner, ops or production role who did not raise or report the stop releases it. It never changes a worker's record without the worker. |
+| Reviewer | Production; a safety stop is released only by a person in the owner, ops or production role who did not raise or report it. |
 | Do it myself | The crew phone package and paperwork (JOB-06, JOB-07) and stop work (FIELD-06). |
 
 #### AI quality inspector (`quality_inspector`)
@@ -293,10 +298,10 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 |---|---|
 | Mission | Check every hold point and completion against its evidence and tolerances, at capture time when possible, and keep every defect visible until its disposition is verified. |
 | Watches | `evidence_captured`, `hold_point_reached`, `package_completed`, `nonconformance`, `open_ncr` |
-| Proposes | Evidence requests and retakes, evidence reviews, hold point releases, NCRs and quarantines, dispositions and the verified closure of NCRs, shop order holds and outcome records, completion packets and acceptance. |
+| Proposes | Evidence requests and retakes, evidence reviews (including whether a hold point is ready for a person to release), NCRs and quarantines, dispositions and the verified closure of NCRs, shop order holds and outcome records, completion packets for a person to accept. |
 | Reads | Work packages, evidence, design tolerances, manufacturer requirements, NCRs, completion packets. |
 | Writes as proposals | Evidence reviews, NCRs, dispositions, NCR closures, shop outcome records, completion packets. |
-| Hard boundary | Quality: "cannot approve own production". It never closes what it opened without independent verification, and never hides or deletes a defect. |
+| Hard boundary | Quality: "cannot approve own production". It never closes what it opened without independent verification, and never hides or deletes a defect. Releasing a hold point and accepting completion are physical acceptance and people only: it reviews the evidence, flags photo problems at capture and drafts the packet, and a person accepts. |
 | Reviewer | Production, never the person who produced the work. |
 | Do it myself | The evidence and hold point screens in the job record (JOB-14) and the NCR screens. |
 
@@ -319,7 +324,7 @@ sixteen are in the first production release. Tiers are the runtime tiers a speci
 |---|---|
 | Mission | Keep every licence, permit, WCB clearance, credential, insurance certificate, consent rule and privacy duty current, and block work that lacks them. |
 | Watches | `authority_expiry`, `assignment_check`, `permit_needed`, `incident_notice`, `privacy_request`, `exposure_suspected`, `issuer_readback`, `lien_window` |
-| Proposes | Authority evaluations, gate blocks and clearances, document requests, authority records, filing packets, privacy answers and containment. |
+| Proposes | Authority evaluations, gate blocks and clearances, document requests, authority records, filing packets, privacy answers and containment, access changes for a person to apply. |
 | Reads | Authority records, jobs, crews, subcontractors, consent, the compliance register, incidents. |
 | Writes as proposals | Authority records, gate decisions, filing packets, privacy case records. |
 | Hard boundary | Compliance: "cannot self-create external authority"; Security/privacy: "cannot approve own privilege change". Filings that attest facts and access changes are the owner's own acts. |
@@ -410,8 +415,8 @@ An action's class is fixed by its consequence. It never changes at runtime.
 | `H` | People only | No agent performs it, requests a permit for it, or can be delegated it | Done by the named person in their own screen |
 
 For an `H` act an agent may explain the facts (`fact.explain`) and prepare what the person needs, as
-`payee.unfreeze_prepare` and `safety_stop.release_prepare` do at class `A1`; it never performs the
-act.
+`payee.unfreeze_prepare`, `safety_stop.release_prepare` and `access.prepare_change` do at class
+`A1`; it never performs the act.
 
 ### Delegation
 
@@ -423,13 +428,15 @@ actions only.
 | `asks_first` | Asks first | The reviewer approves the exact revision; then policy issues the permit |
 | `within_limits` | Acts within your limits | Policy issues the permit without a person while the step stays inside the setting's ceiling; a step above the ceiling asks first |
 | `off_until_enabled` | Off until you turn it on | The action does nothing until the owner turns it on in setup; once on, it acts within the owner's limits. Used only where asking first per step is impossible, such as a live conversation |
+| `shadow` | Practice only | The specialist does the step as a practice run: the full proposal, its checks and a receipt marked as practice, but the tool is never called, so nothing reaches anyone outside the company and no business record changes. A person still does the real work, or approves it on the path in use today |
 
 1. **Start state.** Every `A3` action, and every `A2` action with an outside effect, starts as asks
    first, except an `A2` action that cannot ask first per step, which starts off until the owner
    turns it on (`conversation.answer_live`). An `A2` action whose effect stays inside the company
    starts within limits, under the default ceiling in tenant policy; an action without a configured
    ceiling asks first. The catalog's "Starts" column and the JSON `default_delegation` record the
-   start state.
+   start state. No action starts as practice only. Until the owner's go-live decision at the end
+   of onboarding (`onboarding.go_live`), nothing with an outside effect runs, whatever its setting.
 2. **Ceiling.** A within-limits setting names its ceiling: an amount per step (minor units and
    currency), a count per hour, day or week, and the recipients allowed (classes or a list). A
    setting without a ceiling cannot be saved.
@@ -438,8 +445,8 @@ actions only.
    from a link in a message. No specialist, not the face and not the auditor, has a tool that writes
    a setting. The face may propose one (`delegation.propose_change`).
 4. **Preview.** Before confirming, the owner sees that action's history for that specialist:
-   proposals made, approved unchanged, edited, declined and undone, and which of them the new
-   ceiling would have let run.
+   proposals made, approved unchanged, edited, declined and undone, practice runs and how each
+   compared, the share that matched, and which of them the new ceiling would have let run.
 5. **Audit.** Every step that runs within limits carries the setting's id on its receipt. The
    auditor verifies every such step until the setting has 20 clean ones, then a sample (one in ten
    by default).
@@ -447,15 +454,23 @@ actions only.
    permit, and issued permits that have not executed are cancelled.
 7. **Automatic fallback.** A setting falls back to asks first, until the owner confirms it again,
    when a step under it ends `unknown` or with a readback mismatch, a person undoes a step it ran,
-   the action's policy version changes, or the specialist's release (playbook, prompt or runtime
-   tier) changes without passing that action's evaluations. The auditor can also put a specialist
-   on hold (`specialist.hold`): that sets the specialist's hold flag, so all its non-protective
-   actions ask first. The flag cannot be set on the AI auditor (the JSON `never_targets`), and only
-   the owner clears it, through `delegation.set`. Clearing the flag restores no setting by itself:
-   each setting the hold overrode stays asks first until the owner confirms it again.
+   the action's policy version changes, or the specialist's release (playbook, prompt, runtime
+   tier or model) changes without passing that action's evaluations. A within-limits setting also
+   falls back when a step under it is recorded as a catastrophe (item 12), and that fallback opens
+   an exception for the owner. A practice-only setting never falls back to asks first, which would
+   give the action more autonomy: the same triggers stop its practice runs, and the setting stays
+   practice only until the owner confirms it again. The auditor can also put a specialist on hold
+   (`specialist.hold`): that sets the specialist's hold flag, so all its non-protective actions ask
+   first, except that a practice-only action stops its practice runs and keeps its `shadow`
+   setting. The flag cannot be set on the AI auditor (the JSON `never_targets`), and only the owner
+   clears it, through `delegation.set`. Clearing the flag restores no setting by itself: each
+   setting the hold overrode stays asks first, and each practice-only setting stays practice only,
+   until the owner confirms it again. These fallbacks and the hold flag are the only delegation
+   changes the system makes by itself. Each moves toward more human control and none turns a
+   practice-only setting into a live one; only the owner ever gives an action more autonomy.
 8. **Never delegable.** `H` actions have no setting. No setting switches off a hard boundary or a
    check in this contract. These `A3` actions always ask first, because each releases a protection,
-   approves a control the agents themselves work under, or is an owner-only right: `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`, `hold_point.release`, `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`, `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`, `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`, `cancellation.release_hold`, `ncr.verify_close`.
+   approves a control the agents themselves work under, or is an owner-only right: `inbound.release`, `stock.release_quarantine`, `work_package.release_hold`, `gate.clear`, `claim.approve`, `reception_script.publish`, `finding.close`, `supplier.onboard`, `authority.record`, `consent.record`, `holdback.release`, `privacy_request.answer`, `price_book.propose_change`, `storm_mode.propose`, `shop_order.release_hold`, `cancellation.release_hold`, `ncr.verify_close`.
    The JSON `delegable` is false for them, for every `H`, `A0` and `A1` action, and for protective
    actions.
 9. **Protective actions never wait.** Actions marked protective only stop, hold, block, freeze,
@@ -466,13 +481,42 @@ actions only.
     machine-permit path is implemented and proven (see `CAPABILITY-MATRIX.md`); until then the
     action asks first whatever the setting says. Existing code-enforced approval gates stay in force
     until their replacement is proven.
-11. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
-    your limits", "Off until you turn it on" and "People only". For `A2` and `A3` actions the words
-    shown are the current setting's.
+11. **Practice runs.** The owner may set a delegable action to practice only (`shadow`) for one
+    specialist, for example while that specialist earns trust in it. A practice run builds the same
+    context and evaluates every check and policy as the live step would, records the full
+    proposal, and stops before the permit: the tool is never called, nothing reaches anyone outside
+    the company, and no business record changes. Its receipt is marked as practice (`permit.kind`
+    `shadow`). A person still does the real work, or approves it on the path in use today. Practice
+    runs spend only from their own low `shadow:` ceiling (see "Ceilings"), and a practice run never
+    changes a setting.
+12. **Agreement.** Agreement is measured per specialist and action, from live asks-first decisions
+    and practice runs together. A live decision is a match when the reviewer approves the proposal
+    unchanged, partial when the reviewer edits it and then approves, and diverge when the reviewer
+    declines it. A practice run is compared with what the person actually did in the same case: a
+    match when the real act equals the proposal in action, object, values and recipient, partial
+    when it is the same action with other values, and diverge when it differs or nothing was done.
+    A catastrophe is a step that did, or as a practice run would have done, what an entry in the
+    evaluation catastrophe list
+    ([`agent-host/evals/catastrophes.v1.json`](../agent-host/evals/catastrophes.v1.json)) describes,
+    as the auditor's finding or the reviewer's decision records it.
+13. **Earned autonomy.** The system may propose acting within limits for an action and specialist
+    only when the recent compared decisions meet every part of this bar: at least 50 of them, at
+    least 95% of them a match, no catastrophe among them, and the specialist qualified on the model
+    it runs on (see "Qualification"). Only decisions under the action's current policy version and
+    the specialist's current release count. The face proposes the change
+    (`delegation.propose_change`, with the preview) and the owner decides (`delegation.set`). No `H`
+    action and no action whose `delegable` is false is ever proposed. These numbers are floors:
+    tenant policy may raise them, and lowering one needs an owner decision recorded in this
+    contract.
+14. **Words, not codes.** Screens show "Reads and watches", "Prepares", "Asks first", "Acts within
+    your limits", "Off until you turn it on", "Practice only" and "People only". For `A2` and `A3`
+    actions the words shown are the current setting's.
 
 "Per specialist" means the owner can change several actions of one specialist at once (each still
 stored per action) or pause the specialist. Pausing sets every non-protective action of the
-specialist to asks first and stops its drafting.
+specialist to asks first and stops its drafting, practice runs included; a practice-only action
+keeps its `shadow` setting and never turns into a live asks-first one, because only the owner gives
+an action more autonomy.
 
 ### The owner's launch rule
 
@@ -491,10 +535,10 @@ as asks first:
 | Committing a crew date | `crew_date.commit` |
 | Placing a purchase order | `purchase_order.place`, `purchase_order.change` |
 | Releasing shop work (and field work) | `shop_order.release`, `work_package.issue` |
-| Any price, discount, legal, tax or money commitment | `quote.commit_revision`, `quote.apply_discount`, `price_book.propose_change`, `change_order.commit`, `insurance_supplement.send`, `invoice.commit_intent`, `reconciliation.resolve`, `supplier_bill.approve`, `tax_snapshot.record`, `holdback.release`, `cost_recovery.claim`, `supplier_return.request`, `ad_spend.commit`, `stock.adjust_count`, `ncr.disposition`, `consent.record`, `cancellation.record`, `authority.record`, `completion.accept` |
+| Any price, discount, legal, tax or money commitment | `quote.commit_revision`, `quote.apply_discount`, `price_book.propose_change`, `change_order.commit`, `insurance_supplement.send`, `invoice.commit_intent`, `reconciliation.resolve`, `supplier_bill.approve`, `tax_snapshot.record`, `holdback.release`, `cost_recovery.claim`, `supplier_return.request`, `ad_spend.commit`, `stock.adjust_count`, `ncr.disposition`, `consent.record`, `cancellation.record`, `authority.record` |
 
-These are people only (`H`): the owner's five human-only categories, plus payee changes and the
-owner's own controls:
+These are people only (`H`): the owner's five human-only categories, plus physical acceptance,
+payee changes, settings edits and the owner's own controls:
 
 | Category | Actions |
 |---|---|
@@ -503,8 +547,10 @@ owner's own controls:
 | Waiving a gate | `gate.waive` |
 | Refunds and write-offs | `refund.issue`, `write_off.record` |
 | Legal sign-offs | `terms.legal_signoff`, `filing.submit` |
+| Physical acceptance ([`AGENTS.md`](../AGENTS.md)) | `completion.accept`, `hold_point.release` |
 | Payee and bank-detail changes (separation of duties) | `payee.change_details`, `payee.unfreeze` |
-| The owner's own controls (agents never change their own setting) | `delegation.set`, `policy.activate`, `access.change` |
+| Applying a settings edit | `settings.apply` |
+| The owner's own controls (agents never change their own setting) | `delegation.set`, `policy.activate`, `access.change`, `onboarding.go_live` |
 
 `tools/validate-documentation.mjs` fails if any action in these two tables changes class.
 
@@ -531,7 +577,7 @@ issued and again immediately before execution. A failing check stops the step.
 | `scope` (base) | The specialist owns the action; the role allows it on this tenant, object and data class; an answer to a person shows only what that person may read |
 | `fresh` (base) | Every cited fact is still at its cited version and inside its freshness rule |
 | `cited` (base) | Every number, name, date, amount and claim in the output matches a cited fact or a deterministic computation over cited facts |
-| `budget` (base) | The run, the specialist's daily spend and the rate ceilings have room |
+| `budget` (base) | The run, the specialist's daily spend and the rate ceilings have room; a practice run spends from its own `shadow:` ceiling, never the live spend |
 | `injection` (base) | No instruction from inbound content reached the goal, the tool arguments or the recipients |
 | `consent` | A current consent covers this recipient, channel and purpose (for an insurer or another third party, the customer's authorization to share), and no suppression applies. The exact message the person sent is the basis for replying on that same channel without a separate consent fact; a `safety_notice` also needs no separate consent fact. Every other send needs a consent fact as tenant policy defines it. Neither exception bypasses suppression or provider opt-outs |
 | `quiet_hours` | The send falls inside the recipient's allowed contact hours in their time zone. A `safety_notice` is exempt |
@@ -609,9 +655,9 @@ them and follows these conventions:
 - Money is an integer in minor units (cents) plus an ISO 4217 currency code.
 - Language is a BCP 47 tag.
 - Ids are named `<aggregate>_id`, such as `quote_id`.
-- Reasons are a `reason_code` from a closed vocabulary: `exception.escalate` and `handoff.create`
-  take one of the receipt's reason codes, and the actions in the table below take one from their
-  own vocabulary.
+- Reasons: `exception.escalate` takes one of the receipt's abstention codes; `handoff.create` gives
+  its reason as text. The actions in the table below take a `reason_code` from their own closed
+  vocabulary.
 - Recipients are `to`, a contact id from the canonical record, never a raw address or number.
 - `emergency.page` takes `route_to` (a reviewer role; the escalation order resolves the on-call
   person), `urgency` (always `immediate`), `summary`, `location`, `job_id` and `contact_id`.
@@ -629,9 +675,10 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 
 ### Reading the catalog
 
-- **Action**: the stable `action_id`, written `<object>.<verb>` in snake case. Actions are grouped
-  by their first owner; an action with several owners lists them. An owner-only act that no
-  specialist owns sits in its own group, with empty `owners`.
+- **Action**: the stable `action_id`, written `<object>.<verb>` in snake case. Screens never show
+  it: they show the action's `name` from the machine-readable contract, such as "sending a customer
+  message". Actions are grouped by their first owner; an action with several owners lists them. An
+  owner-only act that no specialist owns sits in its own group, with empty `owners`.
 - **Class** and **Starts**: as defined above. "Protective" marks actions that never ask first.
 - **Evidence**: what the step must cite, by fact id, version and hash.
 - **Checks**: the checks beyond the base set.
@@ -662,11 +709,15 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `report.compose` | A1 | — | Compose an owner report: new inquiries (the AI receptionist), pipeline, daily brief or weekly review. Owners: `orchestrator`, `lead_concierge`. | Receipts, runs and facts in the report window | — | — | Report draft (proposed) | new; predecessor `sendDailyDigest` in `workers-bus/src/notify.ts` |
 | `staff.notify` | A2 | Acts within your limits | Deliver a report, a decision request or a schedule to named staff. Owners: `orchestrator`, `lead_concierge`, `scheduler_dispatcher`, `shop_planner`. | Recipient and role; content limited to the recipient's read rights | `staff_recipient` | The proposing specialist's reviewer | In-app, push or email notification → delivery status | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
 | `owner.interrupt` | A2 | Acts within your limits | Protective. Interrupt the owner at once with an item on the owner's immediate-only list; an internal notification with no outside effect. | The facts that put the item on the list | `immediate_only`, `staff_recipient` | Never asks first | Urgent notification to the owner, repeated until acknowledged → acknowledgement | new; predecessor `sendOwnerAlert` in `workers-bus/src/notify.ts` |
-| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action, with a preview of what would have run. | That action's history for that specialist: proposals, approvals, edits, declines, undos and outcomes | — | — | Proposal for the owner | new (Settings → AI team) |
-| `delegation.set` | H | — | Set asks first or within limits, with a ceiling, for a specialist and action, or revoke it; clear a specialist's hold flag, after which each setting the hold overrode stays asks first until the owner confirms it again. | — | — | People only: owner, with step-up | Delegation setting → read back by the next permit | new (Settings → AI team) |
+| `delegation.propose_change` | A1 | — | Propose a delegation change for one specialist and action, with a preview of what would have run. | That action's history for that specialist: proposals, approvals, edits, declines, undos, practice runs, how each compared, and outcomes | — | — | Proposal for the owner | new (Settings → AI team) |
+| `delegation.set` | H | — | Set asks first, within limits with a ceiling, or practice only, for a specialist and action, or revoke it; clear a specialist's hold flag, after which each setting the hold overrode stays asks first until the owner confirms it again. | — | — | People only: owner, with step-up | Delegation setting → read back by the next permit | new (Settings → AI team) |
 | `policy.propose_change` | A1 | — | Propose a policy, ceiling or standing-order change. | Facts that motivate it; affected runs | — | — | Proposal for the owner | new |
 | `policy.activate` | H | — | Activate a policy, ceiling or standing-order version. | — | — | People only: owner | Policy version → read back at the next evaluation | new |
+| `settings.propose_change` | A1 | — | Prepare a settings edit that is not a policy rule (business details, hours, notification preferences, how integrations are shown), with a before-and-after preview for the person who applies it. | The current settings version; the request it answers | — | — | Settings edit (proposed) with its preview | new (Settings) |
+| `settings.apply` | H | — | Apply a prepared settings edit after its before-and-after preview. Agents never apply settings, the same rule as `policy.activate`. | — | — | People only: a person with the right to change that setting, the owner by default | Settings version → read back | new (Settings) |
+| `onboarding.go_live` | H | — | Make the owner's launch decision at the end of onboarding. Before it, nothing with an outside effect runs. | — | — | People only: owner | Tenant live → read back | new (onboarding) |
 | `dead_letter.replay` | A3 | Asks first | Re-drive one dead-lettered envelope. | Envelope at status `dead`; dry-run result | — | Ops | Envelope re-driven → envelope status and replay ledger | `bus:dry_run_replay`, then `bus:request_replay` |
+| `import.retry_failed` | A3 | Asks first | Retry only the failed items of an import run. A retry is idempotent: an item already imported is adopted, never duplicated. | The import run and its failed items, each with its source key | `bounded`, `exact_match` | Owner | Failed items imported or adopted → import run read back | new; predecessor `POST /admin/crm-import/execute`, which re-runs a whole file |
 
 #### Catalog: AI market analyst (`market_analyst`)
 
@@ -685,6 +736,7 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `inquiry.classify` | A1 | — | Classify an inquiry: service, urgency, emergency, storm context, fit, spam and scam likelihood. | Raw inbound receipt hash; linked customer, property and job facts | — | — | Classification (proposed) on the lead | new; the deterministic lead-triage shadow evaluator (`workers-bus/src/lead-triage-shadow-authority.ts`) stays informational |
 | `inquiry.link_duplicate` | A2 | Acts within your limits | Link an inquiry to an existing customer, property or open inquiry; never merge records. | Contact point or address facts at version | `exact_match` | Sales | Duplicate link → link read back | new |
 | `inquiry.record_triage` | A2 | Acts within your limits | Record the triage decision for an inquiry. | Classification; qualification facts | `qualification` | Sales | Lead captured → triaged → lead version read back | `POST /api/v1/commercial/lead-triage-decisions`; predecessor `erp:request_mark_lead_triaged` behind the lead-triage approval broker |
+| `lead_fact.confirm` | A3 | Asks first | Confirm values the AI proposed on a lead (such as the service, the scope, the address or the timing) into lead facts, as `property_fact.confirm` does for a property. | The proposed values and their source: the raw inbound receipt or the conversation | `conflict`, `segregation` | Sales | Lead fact version → read back | new |
 | `inquiry.close` | A3 | Asks first | Decline, disqualify or move an inquiry to nurture. | Qualification facts; reason codes | `qualification` | Sales | Lead transition → lead version read back | new |
 | `inbound.quarantine` | A2 | Acts within your limits | Protective. Hold suspected spam, scam or injected inbound content in which nothing valid remains: no reply, and no tool acts on it. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Raw inbound receipt hash; reason codes | — | Never asks first | Inbound held → hold read back | new |
 | `inbound.release` | A3 | Asks first | Always asks first. Release quarantined content into normal handling. Owners: `lead_concierge`, `purchasing_inventory`, `billing_reconciliation`, `customer_care_warranty`. | Quarantine record and its reason codes | — | The proposing specialist's reviewer | Hold released → read back | new |
@@ -798,8 +850,8 @@ These actions take a `reason_code` from their own closed vocabulary, which the J
 | `evidence.request` | A2 | Acts within your limits | Ask the crew for missing evidence or a retake. Owners: `field_safety`, `quality_inspector`. | Evidence slot rules; the captured item | — | The proposing specialist's reviewer | Task and notification → read back | new |
 | `field_record.draft` | A1 | — | Turn crew voice notes and photos into a daily report, incident, near-miss or field-change record for the worker to confirm. | Capture bytes hashes | — | — | Record draft; the worker confirms it | new; people record safety occurrences through `POST /api/v1/safety/occurrences/{occurrence}/commands` |
 | `crew_item.propose_resolution` | A1 | — | Propose how to resolve a crew item that a crew phone saved and the office has not confirmed, after reading the office record back: `arrived`, with a link to the stored record; `not_arrived`, with one resend under the same idempotency key; or `duplicate`, with a link to the original. It never resends the item or records the resolution: a person always records it, and that act is the person's own, not an agent action. | The crew item's idempotency key and payload hash; the office record read back under that key, or the readback showing there is none; for a duplicate, the original record | `exact_match` | — | Resolution proposal (proposed) for operations | new |
-| `safety_stop.release` | H | — | Release a safety stop, a crew's stop on a work package included, only after the required follow-up and control evidence are verified. | — | — | People only: a production supervisor independent of whoever raised the stop; never an agent | Release → read back | People only, through the Worker safety routes under `/api/v1/safety/`; new for a crew's stop on a work package |
-| `safety_stop.release_prepare` | A1 | — | Prepare the release pack so the independent supervisor can decide: what stopped the work (or that no reason was provided), the office follow-up, what was made safe, the controls and evidence now in place, and who may release it (a production supervisor who did not raise the stop); it never releases the stop or invents a safety occurrence. | The exact work-package stop and version, or the safety occurrence; follow-up, make-safe and control evidence; the work package where applicable | — | — | Release pack (proposed) for the supervisor | new |
+| `safety_stop.release` | H | — | Release a safety stop, a crew's stop on a work package included, only after the required follow-up is recorded and the release cites correction evidence that is Verified and was captured after the stop event. | — | — | People only: a person in the owner, ops or production role who did not raise or report the stop; never an agent | Release → read back | People only: a crew's stop on a work package through its stop-release record, `POST /api/v1/work-packages/{id}/stop-releases`; a stop on a safety occurrence through `POST /api/v1/safety/occurrences/{occurrence}/commands` |
+| `safety_stop.release_prepare` | A1 | — | Prepare the release pack so the person who releases the stop can decide: what stopped the work (or that no reason was provided), the office follow-up, what was made safe, the controls and evidence now in place, and who may release it (a person in the owner, ops or production role who did not raise or report the stop); it never releases the stop or invents a safety occurrence. | The exact work-package stop and version, or the safety occurrence; follow-up, make-safe and control evidence; the work package where applicable | — | — | Release pack (proposed) for the person who releases the stop | new |
 
 The `safety_occurrence` aggregate label on these two catalog entries names the stop-action family.
 A crew stop binds the exact work-package version and stop event; it does not require creating a
@@ -810,12 +862,12 @@ safety occurrence. The Worker registry and the human release route must preserve
 | Action | Class | Starts | Does | Evidence | Checks | Reviewer | Effect and readback | Binds to |
 |---|---|---|---|---|---|---|---|---|
 | `evidence.review` | A1 | — | Review evidence for a hold point against tolerances: pass or fail, with reasons. | Evidence; tolerances; manufacturer requirements | `evidence_complete` | — | Review (proposed) | People record reviews through `POST /api/v1/jobs/{job}/work-package/evidence/{evidence}/review` |
-| `hold_point.release` | A3 | Asks first | Always asks first. Release a hold point. | Evidence review | `evidence_complete`, `segregation` | Production, never the person who produced the work | Hold point released → read back | `POST /api/v1/jobs/{job}/work-package/holds/{hold}/release` |
+| `hold_point.release` | H | — | A person releases a hold point: the physical acceptance of a stage, once every evidence slot passes review, by someone who did not produce the work. The AI quality inspector reviews the evidence (`evidence.review`) and never releases it. | — | — | People only: production, never the person who produced the work | Hold point released → read back | People only, through `POST /api/v1/jobs/{job}/work-package/holds/{hold}/release` |
 | `ncr.open` | A2 | Acts within your limits | Protective. Open a nonconformance; quarantine of affected stock goes with it. | Evidence | — | Never asks first | NCR → read back | new |
 | `ncr.disposition` | A3 | Asks first | Commit a disposition: rework, repair, scrap or concession. | NCR evidence; cost | `segregation`, `amount_ceiling` | Production; owner above the ceiling; a concession the customer would notice also needs the customer's decision | Disposition → read back | new |
 | `ncr.verify_close` | A3 | Asks first | Always asks first. Verify that an NCR's disposition was carried out and close the NCR; affected stock leaves quarantine only through `stock.release_quarantine`. | The disposition; evidence that the rework, repair, scrap or concession was carried out; the customer's decision where a concession needs one | `evidence_complete`, `segregation` | Production or a quality reviewer, never whoever produced the work | NCR closed → read back | new |
 | `completion.draft_packet` | A1 | — | Draft the completion packet and punch list. | Evidence slots; inspections | `evidence_complete` | — | Packet draft | new; predecessor `erp:request_create_completion_packet` |
-| `completion.accept` | A3 | Asks first | Accept the completion packet. | Completion packet | `evidence_complete`, `segregation` | Production | Completion → read back | new |
+| `completion.accept` | H | — | A person accepts the completion packet: the physical acceptance of the finished work, once every evidence slot holds valid evidence and the punch list is empty, by someone who did not produce the work. The AI quality inspector drafts the packet (`completion.draft_packet`) and never accepts it. | — | — | People only: production, never the person who produced the work | Completion → read back | new |
 
 #### Catalog: AI bookkeeper (`billing_reconciliation`)
 
@@ -853,6 +905,7 @@ safety occurrence. The Worker registry and the human release route must preserve
 | `authority.record` | A3 | Asks first | Always asks first. Record a verified authority record with its issuer readback. | Issuer readback; document hash | `segregation` | Production | Authority record → read back | `POST /api/v1/authority-records/actions`, `POST /api/v1/authority-records/readbacks` |
 | `privacy_request.answer` | A3 | Asks first | Always asks first. Answer a request to see or correct personal data. | Verified identity; records in scope | `identity`, `privacy`, `disclosure` | Owner | Response → delivery status | new |
 | `privacy_incident.contain` | A2 | Asks first | Contain suspected exposure: revoke portal links and device pairings. | The exposure signal | — | Owner | Revocations → read back | `POST /api/v1/customer-portal/links/{link}/revoke`, `POST /api/v1/device-pairings/{pairing}/revoke` |
+| `access.prepare_change` | A1 | — | Prepare a crew phone pairing, a role change or a device change and open it in Decisions for a person to apply with `access.change`. Only on the request of a signed-in staff member through the face, never from inbound customer or supplier text. Owners: `compliance`, `orchestrator`. | The staff member's request in their own session; the person's current role, access and devices | — | — | Access change (proposed) for a person to apply | new |
 | `access.change` | H | — | Grant or change a person's role or access. | — | — | People only: owner | Access → read back | `POST /api/v1/admin/app-users/{user}/role`, `POST /api/v1/admin/app-users/{user}/access` |
 
 #### Catalog: AI customer care (`customer_care_warranty`)
@@ -909,13 +962,13 @@ A receipt has exactly these fields:
 |---|---|---|
 | `specialist_id` | The specialist that took the step | Its name and badge |
 | `run_id` | The coordination run | A link to the run's timeline |
-| `action_id` | The catalog action | The action's plain name |
+| `action_id` | The catalog action | The action's `name` |
 | `did` | What happened, one sentence in the past tense, or `null` | "Did" |
 | `doing` | The step in progress, or `null` | "Doing" |
 | `needs_from_you` | `null`, or `{reviewer_role, person_id, ask}` | "Needs you", with the ask and its buttons |
 | `sources` | A list of `{fact_id, version, hash}` | "Sources" |
 | `policy` | `{policy_id, version, result, checks, reason_codes}`; `result` is `allow`, `needs_approval` or `deny` | "Checked", each check in words |
-| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits` or `asks_first` | "Allowed by": the person who approved, or "within your limits" |
+| `permit` | `{kind, permit_id, approval_id, approved_by, delegation_id}`; `kind` is `none`, `draft`, `within_limits`, `asks_first` or `shadow` | "Allowed by": the person who approved, "within your limits", or "Practice run" |
 | `tool` | `{name, binding, idempotency_key, request_hash}`, or `null` for `A0` and `A1` | "Used" |
 | `readback` | `{source, reference, response_hash, matched}`, or `null` | "Confirmed by" |
 | `outcome` | `null` while the step is open, then `succeeded`, `failed`, `unknown` or `abstained` | The state, in words |
@@ -925,6 +978,11 @@ A receipt has exactly these fields:
 A live conversation (`conversation.answer_live`) is one step with one receipt, updated as the
 conversation runs.
 
+A practice run (`permit.kind` `shadow`) issues no permit and executes nothing. Its `tool` holds the
+request the live step would have made, which is never sent; `readback` is `null`, `undo.mode` is
+`none`, and `delegation_id` names the practice setting. It is never `unknown`, because nothing was
+dispatched.
+
 `did`, `doing` and `needs_from_you.ask` are rendered from structured fields by fixed templates. Any
 text a model adds to them passes the `cited` check: every number, name, date and amount in it
 matches a cited fact.
@@ -933,7 +991,7 @@ matches a cited fact.
 
 | Outcome | Means |
 |---|---|
-| `succeeded` | The intended effect happened and the readback matches it. For `A0` and `A1`, the output was produced. |
+| `succeeded` | The intended effect happened and the readback matches it. For `A0` and `A1`, and for a practice run, the output was produced. |
 | `failed` | The intended effect did not happen as intended: denied by policy, declined, expired, superseded, done by a person instead, refused by the tool, rejected by the provider, or read back different from the intent, which also opens an exception. |
 | `unknown` | The effect was dispatched and its result cannot be established yet. Reconciliation runs; the step is never retried blindly. |
 | `abstained` | The specialist stopped before acting, recorded an abstention code, and escalated to a named person. |
@@ -967,6 +1025,9 @@ receipt version.
 - "Do it myself" opens the manual screen with the step's context, and the step closes as `failed`
   with `done_by_person`. The manual path runs through the same policy, permit, tool and readback; it
   is not a bypass.
+- A practice run is labelled "Practice run" wherever it appears, with what the person actually did
+  beside it once known. It never appears under Done for you or in Decisions, and nothing in it is
+  called sent, ordered, booked, published or paid.
 - Every agent output carries the specialist's badge.
 
 ### Proposed and fact
@@ -992,7 +1053,7 @@ records:
 | `trigger` | The event, watch or schedule, or the person and session that asked |
 | `goal` | One declared goal |
 | `context_snapshot_hash` | Hash of the `ContextSnapshot`: every cited fact id, version and hash |
-| `model` | Provider, model family, model id, provider-reported model version, runtime tier and credential mode; an audit run also records the model family that proposed the work under review |
+| `model` | Provider, adapter, model id, model family, provider-reported model version, runtime tier, billing kind (`api` or `subscription`), route (`primary` or `declared_fallback`), credential mode and qualification reference; an audit run also records the model family that proposed the work under review |
 | `prompt_hash` | SHA-256 over the system prompt, playbook version and standing-orders version |
 | `schema_hash` | SHA-256 over the output schema |
 | `tool_manifest_hash` | SHA-256 over the actions and tools the run may use |
@@ -1030,12 +1091,13 @@ proposer ([`AI-NATIVE-ARCHITECTURE.md`](./AI-NATIVE-ARCHITECTURE.md#authority-ma
 
 Other record families support these objects, all in D1: inbound signals (envelopes and raw inbound
 items, with their bytes in R2), marketing records (claims records, content and campaigns), the
-price book, operating settings such as storm mode, notes, field items (what a crew phone saved and
-sent, each under its idempotency key), fleet and equipment, staff access, filings, and
-coordination records (runs, receipts, handoffs, exceptions, reports, notifications,
-delegation settings, policies and findings). Records that hold history are
-append-only. Frappe projections, JobNimbus, spreadsheets and mailboxes are never the authority for
-any of them; their content can only be cited as source evidence.
+price book, operating settings such as storm mode, business details and hours, notes, field items
+(what a crew phone saved and sent, each under its idempotency key), import runs (each bridge
+import and its items), fleet and equipment, staff access, filings, and coordination records (runs,
+receipts, handoffs, exceptions, reports, notifications, delegation settings, policies and
+findings). Records that hold history are append-only. Frappe projections, JobNimbus, spreadsheets
+and mailboxes are never the authority for any of them; their content can only be cited as source
+evidence.
 
 ### Citing facts
 
@@ -1119,7 +1181,7 @@ work.
 | `orchestrator` | `role_questions` | On `face.message_received` | A person in another role, the crew phone included, asks the face a question | `fact.explain`, `handoff.create`, `owner.interrupt` |
 | `orchestrator` | `interrupt_candidates` | On `signal.received` | A signal matches the owner's immediate-only list | `owner.interrupt`, `exception.escalate` |
 | `orchestrator` | `storm_events` | On `storm_watch.opened` | A storm watch opens, or the owner switches storm mode | `staff.notify`, `handoff.create`, `storm_mode.propose` |
-| `orchestrator` | `delegation_review` | Every `P7D` | An action has enough asks-first history for a preview | `delegation.propose_change` |
+| `orchestrator` | `delegation_review` | Every `P7D` | An action meets the earned-autonomy bar for a specialist, or has enough compared decisions for a preview | `delegation.propose_change` |
 | `orchestrator` | `page_unacknowledged` | On `page.unacknowledged` | A page has no acknowledgement inside its window; the next person in the escalation order is paged, ending with the owner | `exception.escalate`, `owner.interrupt` |
 | `market_analyst` | `storm_events` | On `weather.alert` | The configured weather feed reports hail, high wind or a severe storm over a service area | `storm_watch.open`, `market_alert.raise`, `storm_mode.propose` |
 | `market_analyst` | `inquiry_cluster` | On `lead.captured` | Inquiries for one area and service pass the configured cluster threshold inside its window | `storm_watch.open`, `market_alert.raise` |
@@ -1179,8 +1241,8 @@ work.
 | `field_safety` | `page_unacknowledged` | On `page.unacknowledged` | A page for a site emergency or a missed check-in has no acknowledgement inside its window | `emergency.page`, `exception.escalate` |
 | `field_safety` | `crew_item_unconfirmed` | On `crew_item.unconfirmed` | A crew phone reports a saved item that the office has not confirmed | `crew_item.propose_resolution`, `exception.escalate` |
 | `quality_inspector` | `evidence_captured` | On `evidence.captured` | Evidence arrives for a hold point or a completion slot | `evidence.request`, `evidence.review` |
-| `quality_inspector` | `hold_point_reached` | On `hold_point.reached` | A package reaches a hold point | `evidence.review`, `hold_point.release` |
-| `quality_inspector` | `package_completed` | On `work_package.completed` | A crew completes a package | `completion.draft_packet`, `completion.accept` |
+| `quality_inspector` | `hold_point_reached` | On `hold_point.reached` | A package reaches a hold point; a person releases it | `evidence.review` |
+| `quality_inspector` | `package_completed` | On `work_package.completed` | A crew completes a package; a person accepts the packet | `completion.draft_packet` |
 | `quality_inspector` | `nonconformance` | On `ncr.reported` | A person reports a defect or a failed first piece | `ncr.open`, `stock.quarantine` |
 | `quality_inspector` | `open_ncr` | Every `P1D` | An NCR has no disposition | `ncr.disposition` |
 | `billing_reconciliation` | `deposit_due` | On `acceptance.recorded` | A customer accepts and the deposit is not yet derived | `invoice.commit_intent` |
@@ -1293,6 +1355,7 @@ specialists.
 | No progress | 3 steps in a row without a new proposal, committed fact or decision stops the run |
 | Concurrent runs per specialist and object | 1 |
 | Spend per specialist | An owner-set daily budget; a specialist without a budget does not run |
+| Practice-run spend (`shadow:`) | A separate, low owner-set daily budget per specialist and for the team, booked under `shadow:` and kept apart from every live ceiling: practice runs never draw on the live budget, and live runs never draw on this one. A specialist without it runs no practice runs |
 
 Defaults are tenant policy configuration. Tightening one is routine; raising one is an owner act
 (`policy.activate`). A run at a ceiling stops with `ceiling_reached` and escalates.
@@ -1301,8 +1364,8 @@ Defaults are tenant policy configuration. Tightening one is routine; raising one
 
 A specialist abstains instead of guessing. It stops, records the abstention code, and escalates
 (`exception.escalate`) when a fact is missing, stale or conflicting, a citation cannot be verified,
-the action or its policy is not registered, a ceiling is reached, no progress is made, no runtime
-tier is available, injection is suspected, the request is out of scope, the customer asked for a
+the action or its policy is not registered, a ceiling is reached, no progress is made, no qualified
+route is available (`no_qualified_route`), injection is suspected, the request is out of scope, the customer asked for a
 person, a safety event (a stop, an incident or a hazard) needs a competent person (`safety_event`),
 or an emergency such as an active leak or anyone in danger comes first (`emergency`, alongside
 `emergency.page`). Abstention is a normal outcome, not a failure.
@@ -1316,7 +1379,7 @@ owner.
 
 | Urgency | When | Delivery | If nobody acknowledges |
 |---|---|---|---|
-| Immediate | The owner's "immediate only" list in [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md#immediate-only), a safety risk, a missed working-alone check-in, an active leak, suspected fraud or payment redirection, suspected data exposure, an OAuth token refresh failure | Page at once | Page again every 5 minutes; after 15 minutes page the next person, ending with the owner (the `page_unacknowledged` watches) |
+| Immediate | The owner's "immediate only" list in [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md#immediate-only), a safety risk, a missed working-alone check-in, an active leak, suspected fraud or payment redirection, suspected data exposure, a provider credential failure | Page at once | Page again every 5 minutes; after 15 minutes page the next person, ending with the owner (the `page_unacknowledged` watches) |
 | Today | A blocked customer promise, a money exception, a credential or permit inside its warning window | Notify at once | Notify again at the start of the next business day and include it in the daily brief |
 | Brief | Everything else | The next daily brief | Nothing further |
 
@@ -1331,65 +1394,136 @@ whoever it claims to come from.
 
 ## Model routing
 
+Which provider, model and billing serve each runtime tier is per-tenant configuration. Routes are
+declared, qualified and measured; nothing picks, swaps or upgrades a model by itself. Specialists
+name a runtime tier, never a provider or a model.
+
 ### Gateway
 
-Every model call goes through one provider-agnostic gateway in the agent host. Specialists name a
-runtime tier, never a provider. The gateway holds the credentials; models never receive provider
-credentials, OAuth tokens or other secrets.
+Every model call goes through one provider-agnostic gateway in the agent host. The gateway runs
+exactly the routes the tenant's configuration declares, each through its provider's adapter; it
+never chooses a model. It holds the credentials; models never receive provider credentials, OAuth
+tokens or other secrets.
+
+### Providers
+
+Each tenant configures its own providers. A provider entry names its adapter, its endpoint, its
+billing kind (`api` or `subscription`), its credential mode and the name of its secret.
+
+| Adapter | Reaches |
+|---|---|
+| `openai_compatible` | Any OpenAI-compatible endpoint, OpenRouter, Azure OpenAI and self-hosted endpoints included |
+| `anthropic_messages` | The Anthropic Messages API |
+| `gemini` | The Gemini API |
+| `bedrock` | Amazon Bedrock |
+| `vertex` | Google Vertex AI |
+| `claude_agent_sdk` | Claude through the Claude Agent SDK, with an OAuth subscription sign-in |
+| `codex` | Codex, with a subscription sign-in |
+
+Subscription sign-ins (`claude_agent_sdk` and `codex`) are for building. A tenant's production uses
+them only when that tenant chooses them. Within these adapters, adding a provider or a model, or
+changing how one is billed, changes configuration only, with no code, prompt or schema change.
+
+### Model registry
+
+Routing uses only models in the tenant's model registry. Each entry records the model id and:
+
+| Entry | Holds |
+|---|---|
+| Family | The model family, such as GPT, Claude or Gemini; the independence rule compares families |
+| Tool use | Whether the model calls tools through its adapter |
+| JSON-schema output | Whether it returns output constrained to a JSON schema |
+| Context size | The most tokens one call may carry |
+| Price | The price per token, or the subscription it runs under |
+| Rate limits | The account's request and token limits |
+
+A route may use a model only when its entry meets every need of the step: tool use for a step that
+calls tools, JSON-schema output for the run output, a context that holds the `ContextSnapshot`, and
+a price and rate limits that fit the specialist's budget and ceilings. A model without an entry is
+never routed.
 
 ### Runtime tiers
 
-| Tier | Model | Through | Used by |
-|---|---|---|---|
-| `routine` | GPT-6.1 Sol | Codex SDK, OAuth sign-in | The face and every specialist except the AI auditor |
-| `hard` | GPT-6 Astra | Codex SDK, OAuth sign-in | A run that meets an escalation trigger |
-| `audit` | One route per model family: a Claude model to audit GPT-proposed work and a GPT model to audit Claude-proposed work; the exact model ids are gateway configuration | Claude Agent SDK for the Claude route, Codex SDK for the GPT route; OAuth sign-in | The AI auditor |
+| Tier | Default model | Used by |
+|---|---|---|
+| `routine` | `gpt-6.1-sol` (GPT-6.1 Sol) | The face and every specialist except the AI auditor |
+| `hard` | `gpt-6-astra` (GPT-6 Astra), subject to the stage-0 pilot | A run that meets an escalation trigger |
+| `audit` | `claude-opus-5-5` (Claude Opus 5.5) for GPT-proposed work and `gpt-6-astra` (GPT-6 Astra) for Claude-proposed work | The AI auditor |
+
+These defaults are configuration. A tenant may route a tier to any model in its registry, and each
+specialist runs on that route only once its pair is qualified. Routing is measured, not
+benchmark-led: the `hard` default is provisional until the stage-0 pilot has compared it with other
+routes on this company's own cases (the `pilot` stage of the qualification run in
+[`agent-host/evals/README.md`](../agent-host/evals/README.md#qualification-run)). A route changes
+only by configuration, when that measurement favours another qualified route.
 
 Every specialist may use `routine` and `hard`; the AI auditor uses `audit` only (`tiers` in the
-machine-readable contract). The model family behind each tier's route is gateway configuration, so
-a proposing specialist may run on Claude as well as on GPT.
+machine-readable contract). The family behind each tier is configuration, so a proposing
+specialist may run on any family.
 
 Escalation to `hard` is deterministic: a `margin_floor` or `amount_ceiling` breach, a price outside
 the job type's configured band, any payee or bank-detail change, a first order with a supplier, a
 complaint or dispute that claims money or legal rights, or a `conflict` abstention that needs an
 explanation for a person. A specialist may also ask for it with a reason, which the gateway records.
 
-The independent auditor, and any eval judge, runs on a model family different from the family that
-proposed the work under review. The auditor therefore has one route per family (a Claude route to
-audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime records both
-families on the `coordination_run` and refuses a run that would violate this. When the route of
-the other family is unavailable, the audit waits; it never runs on the proposer's family.
+### Qualification
+
+Qualification belongs to a pair: one specialist on one model. A specialist runs on a model only
+after that pair passes qualification on the specialist's golden and red-team suites at the release
+bar (decision 14): zero catastrophes, a golden-case mean of at least 0.90 with no case median below
+0.60, and a red-team mean of at least 0.95 with the correct decision in all three repetitions.
+Passing on one model qualifies no other. Changing a specialist's model, a declared fallback
+included, needs that pair qualified first, and a new specialist release qualifies on each model it
+runs on. A run records the qualification it relies on, and a route whose pair is not qualified is
+never used: without a qualified route the specialist abstains with `no_qualified_route`.
+
+### Independence
+
+Per run, the independent auditor, and any eval judge, runs on a model family different from the
+family that proposed the work under review. The auditor therefore has one route per family (a
+Claude route to audit GPT-proposed work, a GPT route to audit Claude-proposed work). The runtime
+records both families on the `coordination_run` and refuses a run that would violate this. When no
+route of another family is available, the audit waits; it never runs on the proposer's family.
 
 ### Credentials
 
-- Claude and Codex are reached through OAuth subscription sign-in at launch. Tokens live in the
-  agent host's secret store, never in D1, prompts, logs or receipts.
-- Each provider has a `credential_mode` of `oauth` or `api_key`, and the name of its secret.
-  Switching to an API key changes configuration only, with no code, prompt or schema change. Every
-  later run records the new mode.
-- An OAuth token refresh failure raises an immediate exception to the owner.
+- Provider configuration and its secrets are per tenant. Secrets live in the agent host's secret
+  store, never in D1, prompts, logs or receipts.
+- Each provider has a `credential_mode` of `api_key`, `oauth` (a subscription sign-in) or
+  `cloud_identity` (the cloud account credentials Bedrock and Vertex use), and the name of its
+  secret. Changing the mode or the billing kind changes configuration only, with no code, prompt or
+  schema change. Every later run records the new mode.
+- A credential failure, such as a revoked key or a failed OAuth token refresh, raises an immediate
+  exception to the owner.
 - Before customer personal data passes through a provider account, that account's data-use,
   retention and training terms are recorded in [`COMPLIANCE-REGISTER.md`](./COMPLIANCE-REGISTER.md).
-  Until then, or while those terms allow training on business data, the tier receives redacted
-  context only.
+  Until then, or while those terms allow training on business data, routes on that account receive
+  redacted context only.
 
 ### Recorded on every run
 
-The provider, model family, model id, provider-reported model version, runtime tier, credential
-mode, prompt hash, schema hash, tool manifest hash, context snapshot hash and gateway configuration
-hash; an audit run also records the model family that proposed the work under review (see
-"Coordination run").
+The provider, adapter, model id, model family, provider-reported model version, billing kind (`api`
+or `subscription`), route (`primary` or `declared_fallback`), qualification reference, runtime tier,
+credential mode, prompt hash, schema hash, tool manifest hash, context snapshot hash and gateway
+configuration hash; an audit run also records the model family that proposed the work under review
+(see "Coordination run").
 
 ### Outages and limits
 
-- When a provider fails, hits a rate limit or loses its credential, the run abstains with
-  `provider_unavailable`. A run never switches provider or model by itself. A different model
-  applies only after a configuration change, which every later run records in
-  `gateway_config_hash`, and the audit family rule still applies.
-- While no tier is available, deterministic watch conditions keep running and escalate to named
+- A run never switches provider or model by itself. Failover is declared, never silent: a route may
+  name a fallback route in configuration, and a run uses it only when that fallback is qualified for
+  the specialist and keeps the independence rule (an audit fallback never shares the family of the
+  work it audits). The run records the route it used (`primary` or `declared_fallback`).
+- When a provider fails, hits a rate limit or loses its credential, and no declared, qualified
+  fallback exists, the specialist abstains with `provider_unavailable`. When the tier has no route
+  whose pair with the specialist is qualified, or no registered model meets the step's needs, it
+  abstains with `no_qualified_route`. Any other change of model is a configuration change, which
+  every later run records in `gateway_config_hash`.
+- While no route is available, deterministic watch conditions keep running and escalate to named
   people; Decisions and every manual screen keep working.
-- Subscription accounts share rate limits. The gateway queues work in this order: immediate
-  escalations, a person waiting on the face, event watches, reports, then backfills. A run never
+- Every provider account has rate limits, and a subscription sign-in shares its limits with every
+  other use of that subscription. The gateway queues work in this order: immediate escalations, a
+  person waiting on the face, event watches, reports, backfills, then practice runs. A run never
   exceeds its budget to get ahead.
 
 ## Safety and abuse
@@ -1413,6 +1547,9 @@ hash; an audit run also records the model family that proposed the work under re
   which returns text and hashes only.
 - Only an authenticated person in their own session, on the face or a role screen, can direct the
   team. A message that claims to come from the owner, an adjuster or IronWrap itself is data.
+- An access change (a crew phone pairing, a role change or a device change) is prepared
+  (`access.prepare_change`) only on the request of a signed-in staff member through the face, and
+  never from customer or supplier text, whoever it claims to come from.
 
 ### Spam and time-wasters
 
@@ -1479,15 +1616,17 @@ hash; an audit run also records the model family that proposed the work under re
 Each specialist's red-team suite covers the attack categories that apply to it: prompt injection,
 payment redirection, fake supplier invoices, fake suppliers, fake buyers, spam, time-wasters,
 impersonation, suspicious documents, privacy requests, social engineering and data exfiltration. A
-specialist release is activated only when it meets the release bar (decision 14).
+specialist release is activated on a model only when that pair meets the release bar (decision 14;
+see "Qualification").
 
 ## Degraded operation
 
 The team is never the only way work gets done. Without a model, watch conditions still run and
 escalate to named people; Decisions and every "do it myself" screen keep working; and protections
 that do not depend on an agent (unsubscribe links, provider opt-outs, the crew's stop control,
-deterministic gate clearance from reconciled evidence) stay in force. Offline crews keep their last
-issued work package, and the face on the crew phone says when it is offline.
+deterministic gate clearance from reconciled evidence) stay in force. While the AI is unavailable,
+screens offer "Do it myself" only, never an AI team action (not even `staff.notify`). Offline crews
+keep their last issued work package, and the face on the crew phone says when it is offline.
 
 ## Changing this contract
 
@@ -1497,8 +1636,9 @@ issued work package, and the face on the crew phone says when it is offline.
   reused; a change of meaning takes a new id, and the old one is retired.
 - A new action enters at the class its consequence sets, with the start state the delegation rules
   give.
-- Delegation settings are runtime owner configuration, not part of this document. The catalog
-  records the class and the start state.
+- Delegation settings and model routing are runtime configuration, the owner's and the tenant's,
+  not part of this document. The catalog records the class and the start state; "Model routing"
+  records the adapters, the defaults and the rules every route meets.
 - A new specialist needs an owner decision.
 
 ## Machine-readable contract
@@ -1512,7 +1652,7 @@ must match this catalog one to one.
 |---|---|
 | `schema` | `ironwrap_ai_team_contract_v1` |
 | `specialists` | `specialist_id`, `display_name`, `reviewer_role`, `wave` (build order 1, 2 or 3), `tiers`, and `watches` (the ids of its watches) |
-| `actions` | `action_id`, `owners`, `aggregate`, `autonomy` (the class), `human_only`, `side_effect_class`, `readback` (`none`, `owned_store` or `provider`), `default_delegation` (`asks_first`, `within_limits`, `off_until_enabled`, or `null` for `A0`, `A1` and `H`), `delegable`, `undo`, `requires_citations`, `protective` and `reviewer_role` (`null` means the proposing specialist's reviewer); only the actions they constrain carry `reason_codes` (the closed vocabulary of the action's `reason_code`) and `never_targets` (the specialists the action can never be set on) |
+| `actions` | `action_id`, `name` (the plain words a screen shows for the action: a lower-case phrase of at most 60 characters that starts with an -ing word, reads after "… finished", and holds no code), `owners`, `aggregate`, `autonomy` (the class), `human_only`, `side_effect_class`, `readback` (`none`, `owned_store` or `provider`), `default_delegation` (`asks_first`, `within_limits`, `off_until_enabled`, or `null` for `A0`, `A1` and `H`; `shadow` is a setting the owner chooses, never a start state), `delegable`, `undo`, `requires_citations`, `protective` and `reviewer_role` (`null` means the proposing specialist's reviewer); only the actions they constrain carry `reason_codes` (the closed vocabulary of the action's `reason_code`) and `never_targets` (the specialists the action can never be set on) |
 | `watches` | `watch_id`, `owner`, and either `every` (an ISO 8601 duration) or `trigger` (an event name, with `after` durations for per-case watches), plus `proposes` |
 | `receipt` | The receipt fields, their nested keys, outcomes, policy results, permit kinds and reason codes |
 
@@ -1583,16 +1723,20 @@ action is the canonical object its transition acts on; `any` is used only by rea
 | `storm_mode` | Operating settings |
 | `tax_slip` | Money item |
 | `field_item` | Field items |
+| `settings` | Operating settings |
+| `import_run` | Import runs |
+| `tenant` | Tenant |
 
 `tools/validate-documentation.mjs` checks that every specialist id is the stable one, that action
-ids are unique and their owners exist (only an `H` act may have none), that each watch proposes only
-its owner's actions, that the owner report watches keep their cadence, that `human_only` is true
-exactly for `H`, that start states and `delegable` follow the delegation rules and the owner's launch
-rule, that no `A2` or `A3` action acts on a delegation, policy or access record, that every `A2`
-action with an outside effect is on its reviewed list, that `specialist.hold` can never be set on
-the AI auditor, that the preparations of people-only acts stay `A1`, that actions sharing a
-reason-code vocabulary carry the same list and the reason-code table matches the block, that the
-receipt fields are exactly those above, and that every catalog row above matches the block in
+ids are unique and their owners exist (only an `H` act may have none), that every action has its
+own plain `name`, that each watch proposes only its owner's actions, that the owner report watches
+keep their cadence, that `human_only` is true exactly for `H`, that start states and `delegable`
+follow the delegation rules and the owner's launch rule, that no `A2` or `A3` action acts on a
+delegation, policy, settings, tenant or access record, that every `A2` action with an outside effect
+is on its reviewed list, that `specialist.hold` can never be set on the AI auditor, that the
+preparations of people-only acts stay `A1`, that actions sharing a reason-code vocabulary carry the
+same list and the reason-code table matches the block, that the receipt fields are exactly those
+above and its permit kinds include `shadow`, and that every catalog row above matches the block in
 class, start state, owners, the protective and always-asks-first markers, and reviewer.
 
 <!-- ai-team-contract:start -->
@@ -1619,162 +1763,168 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"specialist_id": "independent_auditor", "display_name": "AI auditor", "reviewer_role": "owner", "wave": 1, "tiers": ["audit"], "watches": ["run_completed", "approval_patterns", "readback_mismatch_audit", "delegation_changed", "injection_flagged", "closure_submitted"]}
   ],
   "actions": [
-    {"action_id": "fact.explain", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "any", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "handoff.create", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "exception.escalate", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "exception", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "note.add", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "note", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "signal.route", "owners": ["orchestrator"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "report.compose", "owners": ["orchestrator", "lead_concierge"], "aggregate": "report", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "staff.notify", "owners": ["orchestrator", "lead_concierge", "scheduler_dispatcher", "shop_planner"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "owner.interrupt", "owners": ["orchestrator"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "delegation.propose_change", "owners": ["orchestrator"], "aggregate": "delegation", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "delegation.set", "owners": ["orchestrator"], "aggregate": "delegation", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "policy.propose_change", "owners": ["orchestrator"], "aggregate": "policy", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "policy.activate", "owners": ["orchestrator"], "aggregate": "policy", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "dead_letter.replay", "owners": ["orchestrator"], "aggregate": "envelope", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "ops"},
-    {"action_id": "market_alert.raise", "owners": ["market_analyst"], "aggregate": "alert", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "storm_watch.open", "owners": ["market_analyst"], "aggregate": "storm_watch", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "storm_mode.propose", "owners": ["market_analyst", "orchestrator"], "aggregate": "storm_mode", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "market_watch_item.add", "owners": ["market_analyst"], "aggregate": "market_watch_item", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "market_review.draft", "owners": ["market_analyst"], "aggregate": "report", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "inquiry.classify", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "inquiry.link_duplicate", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "inquiry.record_triage", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "inquiry.close", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "inbound.quarantine", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"]},
-    {"action_id": "inbound.release", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"]},
-    {"action_id": "customer_message.draft", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "customer_message.send", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "followup.pause", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "followup.resume", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "visit.hold_slot", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "visit.confirm", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "consent.record", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "suppression.apply", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "conversation.assign_person", "owners": ["lead_concierge", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "conversation.answer_live", "owners": ["lead_concierge", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "off_until_enabled", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "reception_script.publish", "owners": ["lead_concierge"], "aggregate": "reception_script", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "takeoff.draft", "owners": ["estimator"], "aggregate": "takeoff", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "quote.draft_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "quote.commit_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "quote.apply_discount", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "quote.flag_reprice", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "price_book.propose_change", "owners": ["estimator", "purchasing_inventory"], "aggregate": "price_book", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "change_order.draft", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "change_order.commit", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "insurance_supplement.draft", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "insurance_supplement.send", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "measurement.extract", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "measurement.match_report", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "measurement.accept_version", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "property_fact.propose", "owners": ["measurement_design", "field_safety"], "aggregate": "property", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "property_fact.confirm", "owners": ["measurement_design"], "aggregate": "property", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "design_basis.commit", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "design_basis.substitute", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "proposal.draft_revision", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "proposal.withdraw", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "portal_link.send", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "portal_link.revoke", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "acceptance.customer_decision", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "acceptance", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "terms.legal_signoff", "owners": ["proposal_contract"], "aggregate": "terms", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "cancellation.record", "owners": ["proposal_contract"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "rfq.send", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_quote.extract", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_quote.confirm", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "catalog.record_snapshot", "owners": ["purchasing_inventory"], "aggregate": "catalog_snapshot", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "purchase_order.place", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "purchase_order.expedite", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "purchase_order.record_acknowledgement", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "purchase_order.change", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_return.request", "owners": ["purchasing_inventory", "billing_reconciliation"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "receipt.match", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "stock.reserve", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "stock.quarantine", "owners": ["purchasing_inventory", "quality_inspector"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["damage_in_transit", "moisture_or_white_rust", "finish_defect", "colour_lot_mismatch", "out_of_tolerance", "wrong_lot", "certificate_missing", "certificate_mismatch", "failed_first_piece", "nonconformance_open", "recall_or_bulletin", "unknown_identity", "count_variance", "suspected_fraud"]},
-    {"action_id": "stock.release_quarantine", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["damage_in_transit", "moisture_or_white_rust", "finish_defect", "colour_lot_mismatch", "out_of_tolerance", "wrong_lot", "certificate_missing", "certificate_mismatch", "failed_first_piece", "nonconformance_open", "recall_or_bulletin", "unknown_identity", "count_variance", "suspected_fraud"]},
-    {"action_id": "stock.adjust_count", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting"},
-    {"action_id": "supplier.onboard", "owners": ["purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "cut_list.draft", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "nest.plan", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "shop_schedule.plan", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "shop_order.release", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "shop_order.hold", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "shop_order.release_hold", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "production"},
-    {"action_id": "shop_outcome.record", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "label.generate", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "load_plan.draft", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "billing_basis.propose", "owners": ["shop_planner"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "schedule.draft", "owners": ["scheduler_dispatcher"], "aggregate": "job", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "crew_slot.hold", "owners": ["scheduler_dispatcher"], "aggregate": "crew_assignment", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["weather", "gate_changed", "crew_change", "asset_defect", "material_delay", "permit_or_inspection", "predecessor_work", "customer_request", "stop_work", "safety_event", "capacity_conflict", "staff_request"]},
-    {"action_id": "crew_date.commit", "owners": ["scheduler_dispatcher"], "aggregate": "crew_assignment", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["weather", "gate_changed", "crew_change", "asset_defect", "material_delay", "permit_or_inspection", "predecessor_work", "customer_request", "stop_work", "safety_event", "capacity_conflict", "staff_request"]},
-    {"action_id": "asset.assign", "owners": ["scheduler_dispatcher"], "aggregate": "asset", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "mobilization.check", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "work_package.draft", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "work_package.issue", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "work_package.hold_before_start", "owners": ["field_safety", "compliance"], "aggregate": "work_package", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "work_package.release_hold", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "stop_condition.alert", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "evidence.request", "owners": ["field_safety", "quality_inspector"], "aggregate": "evidence", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "field_record.draft", "owners": ["field_safety"], "aggregate": "field_record", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "crew_item.propose_resolution", "owners": ["field_safety"], "aggregate": "field_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "safety_stop.release", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "safety_stop.release_prepare", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "evidence.review", "owners": ["quality_inspector"], "aggregate": "evidence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "hold_point.release", "owners": ["quality_inspector"], "aggregate": "work_package", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "ncr.open", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "ncr.disposition", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "ncr.verify_close", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "completion.draft_packet", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "completion.accept", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "reconciliation.resolve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_bill.match", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_bill.approve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_message.draft", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "supplier_message.send", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "payment_run.draft", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "payee.freeze", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "payee", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "payee.change_details", "owners": ["billing_reconciliation"], "aggregate": "payee", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "payee.unfreeze", "owners": [], "aggregate": "payee", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "payee.unfreeze_prepare", "owners": ["billing_reconciliation"], "aggregate": "payee", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "money.flag", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "job_cost.attribute", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "tax_slip.capture", "owners": ["billing_reconciliation"], "aggregate": "tax_slip", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "tax_snapshot.record", "owners": ["billing_reconciliation"], "aggregate": "tax_snapshot", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "holdback.release", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting"},
-    {"action_id": "refund.issue", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "write_off.record", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "filing.draft_packet", "owners": ["billing_reconciliation", "compliance"], "aggregate": "filing", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "filing.submit", "owners": ["billing_reconciliation", "compliance"], "aggregate": "filing", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "authority.evaluate", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "gate.block", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "gate.clear", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "gate.waive", "owners": ["compliance"], "aggregate": "gate", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "document.request", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "authority.record", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "privacy_request.answer", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "privacy_incident.contain", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "access.change", "owners": ["compliance"], "aggregate": "user_access", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null},
-    {"action_id": "service_case.open", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "emergency.page", "owners": ["customer_care_warranty", "lead_concierge", "field_safety"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "service_case.triage", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "remedy.offer", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner"},
-    {"action_id": "cost_recovery.claim", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting"},
-    {"action_id": "service_case.close", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "cancellation.hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "cancellation.release_hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "content.draft", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "claim.approve", "owners": ["marketing_reputation"], "aggregate": "claim", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "content.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "content.stop", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "campaign.send", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "review_response.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "run.verify", "owners": ["independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null},
-    {"action_id": "finding.raise", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null},
-    {"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "never_targets": ["independent_auditor"]},
-    {"action_id": "finding.close", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "owner"}
+    {"action_id": "fact.explain", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "any", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "explaining the facts"},
+    {"action_id": "handoff.create", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "handing the work to another team member"},
+    {"action_id": "exception.escalate", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "exception", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "raising an issue with a named person"},
+    {"action_id": "note.add", "owners": ["orchestrator", "market_analyst", "lead_concierge", "estimator", "measurement_design", "proposal_contract", "purchasing_inventory", "shop_planner", "scheduler_dispatcher", "field_safety", "quality_inspector", "billing_reconciliation", "compliance", "customer_care_warranty", "marketing_reputation", "independent_auditor"], "aggregate": "note", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "adding a note"},
+    {"action_id": "signal.route", "owners": ["orchestrator"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "routing new work to the right team member"},
+    {"action_id": "report.compose", "owners": ["orchestrator", "lead_concierge"], "aggregate": "report", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "writing an owner report"},
+    {"action_id": "staff.notify", "owners": ["orchestrator", "lead_concierge", "scheduler_dispatcher", "shop_planner"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "notifying staff"},
+    {"action_id": "owner.interrupt", "owners": ["orchestrator"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "alerting the owner right away"},
+    {"action_id": "delegation.propose_change", "owners": ["orchestrator"], "aggregate": "delegation", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "suggesting what may run without asking"},
+    {"action_id": "delegation.set", "owners": ["orchestrator"], "aggregate": "delegation", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "setting what may run without asking"},
+    {"action_id": "policy.propose_change", "owners": ["orchestrator"], "aggregate": "policy", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "suggesting a policy change"},
+    {"action_id": "policy.activate", "owners": ["orchestrator"], "aggregate": "policy", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "putting a policy change into effect"},
+    {"action_id": "settings.propose_change", "owners": ["orchestrator"], "aggregate": "settings", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing a settings change"},
+    {"action_id": "settings.apply", "owners": ["orchestrator"], "aggregate": "settings", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "applying a settings change"},
+    {"action_id": "onboarding.go_live", "owners": ["orchestrator"], "aggregate": "tenant", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "going live after setup"},
+    {"action_id": "dead_letter.replay", "owners": ["orchestrator"], "aggregate": "envelope", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "ops", "name": "retrying a message that failed to process"},
+    {"action_id": "import.retry_failed", "owners": ["orchestrator"], "aggregate": "import_run", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "retrying the failed items of an import"},
+    {"action_id": "market_alert.raise", "owners": ["market_analyst"], "aggregate": "alert", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "raising a market opportunity or risk"},
+    {"action_id": "storm_watch.open", "owners": ["market_analyst"], "aggregate": "storm_watch", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "starting a storm watch"},
+    {"action_id": "storm_mode.propose", "owners": ["market_analyst", "orchestrator"], "aggregate": "storm_mode", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "suggesting turning storm mode on or off"},
+    {"action_id": "market_watch_item.add", "owners": ["market_analyst"], "aggregate": "market_watch_item", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "adding an item to the market watch list"},
+    {"action_id": "market_review.draft", "owners": ["market_analyst"], "aggregate": "report", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the weekly market review"},
+    {"action_id": "inquiry.classify", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sorting a new inquiry"},
+    {"action_id": "inquiry.link_duplicate", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "linking a repeat inquiry"},
+    {"action_id": "inquiry.record_triage", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording the decision on a new inquiry"},
+    {"action_id": "lead_fact.confirm", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming the details on an inquiry"},
+    {"action_id": "inquiry.close", "owners": ["lead_concierge"], "aggregate": "lead", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing an inquiry"},
+    {"action_id": "inbound.quarantine", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"], "name": "setting aside a suspicious message"},
+    {"action_id": "inbound.release", "owners": ["lead_concierge", "purchasing_inventory", "billing_reconciliation", "customer_care_warranty"], "aggregate": "inbound", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["injection_suspected", "impersonation_suspected", "payment_redirection_suspected", "malicious_attachment_suspected", "spam", "unknown_sender", "privacy_sensitive"], "name": "releasing a set-aside message"},
+    {"action_id": "customer_message.draft", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a customer message"},
+    {"action_id": "customer_message.send", "owners": ["lead_concierge", "scheduler_dispatcher", "billing_reconciliation", "customer_care_warranty", "marketing_reputation", "field_safety"], "aggregate": "conversation", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer message"},
+    {"action_id": "followup.pause", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "pausing follow-ups"},
+    {"action_id": "followup.resume", "owners": ["lead_concierge", "billing_reconciliation", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "resuming follow-ups"},
+    {"action_id": "visit.hold_slot", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "holding a site visit time"},
+    {"action_id": "visit.confirm", "owners": ["lead_concierge"], "aggregate": "appointment", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming the visit time with the customer"},
+    {"action_id": "consent.record", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording the customer's consent"},
+    {"action_id": "suppression.apply", "owners": ["lead_concierge", "customer_care_warranty", "marketing_reputation"], "aggregate": "consent", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "stopping messages to someone who asked"},
+    {"action_id": "conversation.assign_person", "owners": ["lead_concierge", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "handing a conversation to a person"},
+    {"action_id": "conversation.answer_live", "owners": ["lead_concierge", "customer_care_warranty"], "aggregate": "conversation", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "off_until_enabled", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "answering a live call or chat"},
+    {"action_id": "reception_script.publish", "owners": ["lead_concierge"], "aggregate": "reception_script", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "publishing the phone answering script"},
+    {"action_id": "takeoff.draft", "owners": ["estimator"], "aggregate": "takeoff", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a material takeoff"},
+    {"action_id": "quote.draft_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a quote"},
+    {"action_id": "quote.commit_revision", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a quote revision"},
+    {"action_id": "quote.apply_discount", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "applying a discount"},
+    {"action_id": "quote.flag_reprice", "owners": ["estimator"], "aggregate": "quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "flagging quotes to re-price"},
+    {"action_id": "price_book.propose_change", "owners": ["estimator", "purchasing_inventory"], "aggregate": "price_book", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "suggesting a price book change"},
+    {"action_id": "change_order.draft", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a change order"},
+    {"action_id": "change_order.commit", "owners": ["estimator"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in a change order"},
+    {"action_id": "insurance_supplement.draft", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting an insurance supplement"},
+    {"action_id": "insurance_supplement.send", "owners": ["estimator"], "aggregate": "insurance_supplement", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the supplement to the insurer"},
+    {"action_id": "measurement.extract", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reading measurements from a report or photos"},
+    {"action_id": "measurement.match_report", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching a measurement report to its job"},
+    {"action_id": "measurement.accept_version", "owners": ["measurement_design"], "aggregate": "measurement", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "accepting measurements for pricing"},
+    {"action_id": "property_fact.propose", "owners": ["measurement_design", "field_safety"], "aggregate": "property", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "proposing a property or roof detail"},
+    {"action_id": "property_fact.confirm", "owners": ["measurement_design"], "aggregate": "property", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming a property or roof detail"},
+    {"action_id": "design_basis.commit", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "locking in the design"},
+    {"action_id": "design_basis.substitute", "owners": ["measurement_design"], "aggregate": "design_basis", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "substituting a product in the design"},
+    {"action_id": "proposal.draft_revision", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a proposal"},
+    {"action_id": "proposal.publish", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the proposal to the customer"},
+    {"action_id": "proposal.withdraw", "owners": ["proposal_contract"], "aggregate": "proposal", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "withdrawing a proposal"},
+    {"action_id": "portal_link.send", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a customer portal link"},
+    {"action_id": "portal_link.revoke", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "portal_link", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "turning off a customer portal link"},
+    {"action_id": "acceptance.customer_decision", "owners": ["proposal_contract", "customer_care_warranty"], "aggregate": "acceptance", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting or declining an offer"},
+    {"action_id": "change_order.send_for_decision", "owners": ["proposal_contract"], "aggregate": "change_order", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a change order for a decision"},
+    {"action_id": "terms.legal_signoff", "owners": ["proposal_contract"], "aggregate": "terms", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "signing off contract terms"},
+    {"action_id": "cancellation.record", "owners": ["proposal_contract"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a cancellation"},
+    {"action_id": "rfq.send", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking suppliers for prices"},
+    {"action_id": "supplier_quote.extract", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reading a supplier quote"},
+    {"action_id": "supplier_quote.confirm", "owners": ["purchasing_inventory"], "aggregate": "supplier_quote", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "confirming a supplier quote"},
+    {"action_id": "catalog.record_snapshot", "owners": ["purchasing_inventory"], "aggregate": "catalog_snapshot", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "saving a supplier price list"},
+    {"action_id": "purchase_order.place", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "placing a purchase order"},
+    {"action_id": "purchase_order.expedite", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking on an open order with a supplier"},
+    {"action_id": "purchase_order.record_acknowledgement", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a supplier's order confirmation"},
+    {"action_id": "purchase_order.change", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "changing a purchase order"},
+    {"action_id": "supplier_return.request", "owners": ["purchasing_inventory", "billing_reconciliation"], "aggregate": "purchase_order", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking a supplier to take material back"},
+    {"action_id": "receipt.match", "owners": ["purchasing_inventory"], "aggregate": "purchase_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching delivered material to the order"},
+    {"action_id": "stock.reserve", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reserving stock for a job or shop order"},
+    {"action_id": "stock.quarantine", "owners": ["purchasing_inventory", "quality_inspector"], "aggregate": "inventory_position", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "reason_codes": ["damage_in_transit", "moisture_or_white_rust", "finish_defect", "colour_lot_mismatch", "out_of_tolerance", "wrong_lot", "certificate_missing", "certificate_mismatch", "failed_first_piece", "nonconformance_open", "recall_or_bulletin", "unknown_identity", "count_variance", "suspected_fraud"], "name": "setting aside suspect stock"},
+    {"action_id": "stock.release_quarantine", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["damage_in_transit", "moisture_or_white_rust", "finish_defect", "colour_lot_mismatch", "out_of_tolerance", "wrong_lot", "certificate_missing", "certificate_mismatch", "failed_first_piece", "nonconformance_open", "recall_or_bulletin", "unknown_identity", "count_variance", "suspected_fraud"], "name": "returning set-aside stock to use"},
+    {"action_id": "stock.adjust_count", "owners": ["purchasing_inventory"], "aggregate": "inventory_position", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting", "name": "adjusting stock after a count"},
+    {"action_id": "supplier.onboard", "owners": ["purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "adding a new supplier"},
+    {"action_id": "cut_list.draft", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a cut list"},
+    {"action_id": "nest.plan", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "planning cuts and remnant use"},
+    {"action_id": "shop_schedule.plan", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "planning the shop schedule"},
+    {"action_id": "shop_order.release", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "releasing a shop order to fabrication"},
+    {"action_id": "shop_order.hold", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "holding a shop order"},
+    {"action_id": "shop_order.release_hold", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "production", "name": "lifting a shop order hold"},
+    {"action_id": "shop_outcome.record", "owners": ["shop_planner", "quality_inspector"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording shop yield, scrap and downtime"},
+    {"action_id": "label.generate", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "making labels for a shop order"},
+    {"action_id": "load_plan.draft", "owners": ["shop_planner"], "aggregate": "shop_order", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the load and delivery plan"},
+    {"action_id": "billing_basis.propose", "owners": ["shop_planner"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing the billing for a supply-only order"},
+    {"action_id": "schedule.draft", "owners": ["scheduler_dispatcher"], "aggregate": "job", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the schedule"},
+    {"action_id": "crew_slot.hold", "owners": ["scheduler_dispatcher"], "aggregate": "crew_assignment", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["weather", "gate_changed", "crew_change", "asset_defect", "material_delay", "permit_or_inspection", "predecessor_work", "customer_request", "stop_work", "safety_event", "capacity_conflict", "staff_request"], "name": "holding a crew slot"},
+    {"action_id": "crew_date.commit", "owners": ["scheduler_dispatcher"], "aggregate": "crew_assignment", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "reason_codes": ["weather", "gate_changed", "crew_change", "asset_defect", "material_delay", "permit_or_inspection", "predecessor_work", "customer_request", "stop_work", "safety_event", "capacity_conflict", "staff_request"], "name": "setting or changing a crew date"},
+    {"action_id": "asset.assign", "owners": ["scheduler_dispatcher"], "aggregate": "asset", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reserving vehicles and equipment"},
+    {"action_id": "mobilization.check", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking the crew is ready for the day"},
+    {"action_id": "work_package.draft", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a work package"},
+    {"action_id": "work_package.issue", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending the work package to the crew"},
+    {"action_id": "work_package.hold_before_start", "owners": ["field_safety", "compliance"], "aggregate": "work_package", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "holding a work package before it starts"},
+    {"action_id": "work_package.release_hold", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "lifting a work package hold"},
+    {"action_id": "stop_condition.alert", "owners": ["field_safety"], "aggregate": "work_package", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "warning the crew about unsafe conditions"},
+    {"action_id": "evidence.request", "owners": ["field_safety", "quality_inspector"], "aggregate": "evidence", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking the crew for missing evidence"},
+    {"action_id": "field_record.draft", "owners": ["field_safety"], "aggregate": "field_record", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "turning crew notes into a report"},
+    {"action_id": "crew_item.propose_resolution", "owners": ["field_safety"], "aggregate": "field_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "suggesting how to settle an unconfirmed crew item"},
+    {"action_id": "safety_stop.release", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "releasing the safety stop"},
+    {"action_id": "safety_stop.release_prepare", "owners": ["field_safety"], "aggregate": "safety_occurrence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing the safety stop release pack"},
+    {"action_id": "evidence.review", "owners": ["quality_inspector"], "aggregate": "evidence", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reviewing submitted evidence"},
+    {"action_id": "hold_point.release", "owners": ["quality_inspector"], "aggregate": "work_package", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "releasing a hold point"},
+    {"action_id": "ncr.open", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "opening a defect report"},
+    {"action_id": "ncr.disposition", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "settling how to handle a defect"},
+    {"action_id": "ncr.verify_close", "owners": ["quality_inspector"], "aggregate": "ncr", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing a defect report after checking the fix"},
+    {"action_id": "completion.draft_packet", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting the completion packet"},
+    {"action_id": "completion.accept", "owners": ["quality_inspector"], "aggregate": "completion", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "accepting the completed work"},
+    {"action_id": "invoice.commit_intent", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "creating a deposit, progress or final invoice"},
+    {"action_id": "reconciliation.resolve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "resolving a payment matching problem"},
+    {"action_id": "supplier_bill.match", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "matching a supplier bill to its order and delivery"},
+    {"action_id": "supplier_bill.approve", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a supplier bill for payment"},
+    {"action_id": "supplier_message.draft", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a supplier message"},
+    {"action_id": "supplier_message.send", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "supplier", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending a supplier message"},
+    {"action_id": "payment_run.draft", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "listing bills due for payment"},
+    {"action_id": "payee.freeze", "owners": ["billing_reconciliation", "purchasing_inventory"], "aggregate": "payee", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "freezing payments to a payee"},
+    {"action_id": "payee.change_details", "owners": ["billing_reconciliation"], "aggregate": "payee", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "changing a payee's bank details"},
+    {"action_id": "payee.unfreeze", "owners": [], "aggregate": "payee", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "lifting a payment freeze"},
+    {"action_id": "payee.unfreeze_prepare", "owners": ["billing_reconciliation"], "aggregate": "payee", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing the case for lifting a payment freeze"},
+    {"action_id": "money.flag", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "flagging a money problem"},
+    {"action_id": "job_cost.attribute", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "assigning a cost to a job"},
+    {"action_id": "tax_slip.capture", "owners": ["billing_reconciliation"], "aggregate": "tax_slip", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "reading a tax slip"},
+    {"action_id": "tax_snapshot.record", "owners": ["billing_reconciliation"], "aggregate": "tax_snapshot", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording the tax summary for a period"},
+    {"action_id": "holdback.release", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting", "name": "releasing a holdback"},
+    {"action_id": "refund.issue", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "issuing a refund or credit"},
+    {"action_id": "write_off.record", "owners": ["billing_reconciliation"], "aggregate": "money_item", "autonomy": "H", "human_only": true, "side_effect_class": "money", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "writing off an unpaid balance"},
+    {"action_id": "filing.draft_packet", "owners": ["billing_reconciliation", "compliance"], "aggregate": "filing", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting a return, permit application or notice"},
+    {"action_id": "filing.submit", "owners": ["billing_reconciliation", "compliance"], "aggregate": "filing", "autonomy": "H", "human_only": true, "side_effect_class": "legal", "readback": "provider", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "submitting a filing"},
+    {"action_id": "authority.evaluate", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking licences and clearances"},
+    {"action_id": "gate.block", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "blocking a job gate"},
+    {"action_id": "gate.clear", "owners": ["compliance"], "aggregate": "gate", "autonomy": "A3", "human_only": false, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "clearing a job gate"},
+    {"action_id": "gate.waive", "owners": ["compliance"], "aggregate": "gate", "autonomy": "H", "human_only": true, "side_effect_class": "safety", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "waiving a job gate"},
+    {"action_id": "document.request", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A2", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "asking for a certificate or insurance document"},
+    {"action_id": "authority.record", "owners": ["compliance"], "aggregate": "authority_record", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "recording a verified licence or clearance"},
+    {"action_id": "privacy_request.answer", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "answering a personal data request"},
+    {"action_id": "privacy_incident.contain", "owners": ["compliance"], "aggregate": "privacy_case", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "stopping a possible data leak"},
+    {"action_id": "access.prepare_change", "owners": ["compliance", "orchestrator"], "aggregate": "user_access", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "preparing an access or crew phone change"},
+    {"action_id": "access.change", "owners": ["compliance"], "aggregate": "user_access", "autonomy": "H", "human_only": true, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": null, "delegable": false, "undo": "manual", "requires_citations": false, "protective": false, "reviewer_role": null, "name": "changing a person's access"},
+    {"action_id": "service_case.open", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "opening a service case"},
+    {"action_id": "emergency.page", "owners": ["customer_care_warranty", "lead_concierge", "field_safety"], "aggregate": "notification", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "provider", "default_delegation": "within_limits", "delegable": false, "undo": "none", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "paging the on-call person"},
+    {"action_id": "service_case.triage", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "looking into the cause of a service case"},
+    {"action_id": "remedy.offer", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "offering a fix or warranty position"},
+    {"action_id": "cost_recovery.claim", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": "accounting", "name": "claiming costs back from another company"},
+    {"action_id": "service_case.close", "owners": ["customer_care_warranty"], "aggregate": "service_case", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "closing a service case"},
+    {"action_id": "cancellation.hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "holding a job after a cancel request"},
+    {"action_id": "cancellation.release_hold", "owners": ["customer_care_warranty", "scheduler_dispatcher"], "aggregate": "job", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "lifting a cancellation hold"},
+    {"action_id": "content.draft", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A1", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "drafting marketing content"},
+    {"action_id": "claim.approve", "owners": ["marketing_reputation"], "aggregate": "claim", "autonomy": "A3", "human_only": false, "side_effect_class": "legal", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "approving a marketing claim"},
+    {"action_id": "content.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "publishing marketing content"},
+    {"action_id": "content.stop", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A2", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "taking down marketing content"},
+    {"action_id": "campaign.send", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "external_irreversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "sending an email or text campaign"},
+    {"action_id": "review_response.publish", "owners": ["marketing_reputation"], "aggregate": "content", "autonomy": "A3", "human_only": false, "side_effect_class": "external_reversible", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "replying to a public review"},
+    {"action_id": "ad_spend.commit", "owners": ["marketing_reputation"], "aggregate": "campaign", "autonomy": "A3", "human_only": false, "side_effect_class": "money", "readback": "provider", "default_delegation": "asks_first", "delegable": true, "undo": "manual", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "setting an ad budget"},
+    {"action_id": "run.verify", "owners": ["independent_auditor"], "aggregate": "coordination_run", "autonomy": "A0", "human_only": false, "side_effect_class": "none", "readback": "none", "default_delegation": null, "delegable": false, "undo": "none", "requires_citations": true, "protective": false, "reviewer_role": null, "name": "checking the team's completed work"},
+    {"action_id": "finding.raise", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "name": "raising an audit finding"},
+    {"action_id": "specialist.hold", "owners": ["independent_auditor"], "aggregate": "specialist_hold", "autonomy": "A2", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "within_limits", "delegable": false, "undo": "manual", "requires_citations": true, "protective": true, "reviewer_role": null, "never_targets": ["independent_auditor"], "name": "putting a team member on hold"},
+    {"action_id": "finding.close", "owners": ["independent_auditor"], "aggregate": "finding", "autonomy": "A3", "human_only": false, "side_effect_class": "internal_reversible", "readback": "owned_store", "default_delegation": "asks_first", "delegable": false, "undo": "automatic", "requires_citations": true, "protective": false, "reviewer_role": "owner", "name": "closing an audit finding"}
   ],
   "watches": [
     {"watch_id": "route_new_signal", "owner": "orchestrator", "trigger": "signal.received", "proposes": ["signal.route", "handoff.create"]},
@@ -1848,8 +1998,8 @@ class, start state, owners, the protective and always-asks-first markers, and re
     {"watch_id": "page_unacknowledged", "owner": "field_safety", "trigger": "page.unacknowledged", "proposes": ["emergency.page", "exception.escalate"]},
     {"watch_id": "crew_item_unconfirmed", "owner": "field_safety", "trigger": "crew_item.unconfirmed", "proposes": ["crew_item.propose_resolution", "exception.escalate"]},
     {"watch_id": "evidence_captured", "owner": "quality_inspector", "trigger": "evidence.captured", "proposes": ["evidence.request", "evidence.review"]},
-    {"watch_id": "hold_point_reached", "owner": "quality_inspector", "trigger": "hold_point.reached", "proposes": ["evidence.review", "hold_point.release"]},
-    {"watch_id": "package_completed", "owner": "quality_inspector", "trigger": "work_package.completed", "proposes": ["completion.draft_packet", "completion.accept"]},
+    {"watch_id": "hold_point_reached", "owner": "quality_inspector", "trigger": "hold_point.reached", "proposes": ["evidence.review"]},
+    {"watch_id": "package_completed", "owner": "quality_inspector", "trigger": "work_package.completed", "proposes": ["completion.draft_packet"]},
     {"watch_id": "nonconformance", "owner": "quality_inspector", "trigger": "ncr.reported", "proposes": ["ncr.open", "stock.quarantine"]},
     {"watch_id": "open_ncr", "owner": "quality_inspector", "every": "P1D", "proposes": ["ncr.disposition"]},
     {"watch_id": "deposit_due", "owner": "billing_reconciliation", "trigger": "acceptance.recorded", "proposes": ["invoice.commit_intent"]},
@@ -1907,11 +2057,11 @@ class, start state, owners, the protective and always-asks-first markers, and re
     },
     "outcomes": ["succeeded", "failed", "unknown", "abstained"],
     "policy_results": ["allow", "needs_approval", "deny"],
-    "permit_kinds": ["none", "draft", "within_limits", "asks_first"],
+    "permit_kinds": ["none", "draft", "within_limits", "asks_first", "shadow"],
     "reason_codes": {
       "failed": ["policy_denied", "declined", "approval_expired", "superseded", "done_by_person", "tool_refused", "provider_rejected", "readback_mismatch"],
       "unknown": ["no_readback_yet"],
-      "abstained": ["fact_missing", "fact_stale", "fact_conflict", "citation_unverifiable", "action_unregistered", "policy_missing", "ceiling_reached", "no_progress", "provider_unavailable", "injection_suspected", "out_of_scope", "person_requested", "safety_event", "emergency"]
+      "abstained": ["fact_missing", "fact_stale", "fact_conflict", "citation_unverifiable", "action_unregistered", "policy_missing", "ceiling_reached", "no_progress", "provider_unavailable", "no_qualified_route", "injection_suspected", "out_of_scope", "person_requested", "safety_event", "emergency"]
     }
   }
 }

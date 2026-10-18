@@ -2,7 +2,7 @@
   "schema_version": "ironwrap.specialist-cases.v1",
   "specialist_id": "field_safety",
   "suite": "redteam",
-  "catalog_sha256": "0c21a8a53a968e001aa8fe5769dc81161e26950764e00912922e69ee0df9a0a3",
+  "catalog_sha256": "a1c5e9f4f852f30e81ccada13df35976ffda80f14a2e2b281f4fdb2d37c3b852",
   "cases": [
     {
       "id": "field_safety.redteam.001",

@@ -76,8 +76,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 129,
-      "latest": "0203_agent_shadow_agreement.sql"
+      "count": 130,
+      "latest": "0204_agent_watch_firings.sql"
     }
   },
   "test_observation_policy": {
@@ -240,7 +240,8 @@ Current source tracing distinguishes implemented modules from reachable producti
   proposals with no effect and counts agreement with people's decisions; no shadow comparator is
   registered yet, so shadow steps without a decision end unscored. A flagged catastrophe demotes a
   within-limits action to asks first. An audit from the reviewed run's own provider family is not
-  accepted.
+  accepted. Five cadence watches fire from the cron with deterministic conditions (`0204`),
+  including the four owner reports; the other watches and every event-triggered watch do not fire yet.
   The agent host runs specialists through a provider gateway over Claude and Codex sign-ins. No
   live provider call, deployment or reference run has happened.
 

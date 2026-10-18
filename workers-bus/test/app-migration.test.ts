@@ -2277,11 +2277,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0145 adds the person-owned stop release record that alone lifts a crew stop.
     // 0150 adds the append-only field item resolution ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 129);
+    assert.equal(migrations.length, 130);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0203_agent_shadow_agreement.sql",
+      "0204_agent_watch_firings.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2419,10 +2419,11 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // 0145 adds the stop release table, one named index, and five validation, transition, and
     // append-only guards, and re-creates the projection guard and both 0143 guards under their names.
     // 0150 adds the field item resolution ledger, three named indexes, and four person,
-    // append-only and no-replace guards.
+    // append-only and no-replace guards. 0204 adds the watch firing and report delivery ledgers,
+    // three named indexes and six guards.
     assert.deepEqual(
       { ...counts },
-      { tables: 271, indexes: 369, triggers: 734 },
+      { tables: 273, indexes: 372, triggers: 740 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

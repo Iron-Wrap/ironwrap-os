@@ -230,6 +230,26 @@ first waiting ask stops counting. A replay of an earlier request is never limite
 | `GET /api/v1/agent-team/shadow` | Owner/ops agreement per specialist and action: counts per verdict, match and partial rates, catastrophes, recent divergences (`specialist`, `action`, `since` filters) |
 | `GET /api/v1/agent-team/shadow/candidates` | Owner/ops list of actions that meet the bar for more delegation; the owner still sets it |
 | `POST /api/v1/agent-team/qualifications` | Owner records a qualification report's outcome for a specialist on one route (provider, model, effort) at one release (release and report SHA-256) |
+| `GET /api/v1/agent-team/watches` | Owner/ops: every catalog watch, whether its condition is registered, and its last firing |
+| `GET /api/v1/agent-team/reports` | Owner/ops: recent owner reports (new inquiries, pipeline, daily brief, weekly review) with their run's result and composed text (`watch`, `limit`) |
+
+Watches (migration 0204): the five-minute cron evaluates every cadence watch whose deterministic
+condition is registered (`workers-bus/src/agents/watches.ts`: `new_leads`, `pipeline`,
+`daily_owner_brief`, `weekly_review`, `unacknowledged_exception`), once per period: sub-day cadences
+use fixed UTC slots, daily, weekly and monthly ones run at the tenant's local time (company profile
+time zone; 07:00 daily, Monday 08:00 weekly by default). The condition costs no model call; when it
+holds, a watch signal naming the objects it found goes to the owning specialist, whose run starts
+from those objects (whole, within one snapshot's limits); when it does not, the firing is recorded as
+an empty run. Conditions hold on change since the last firing, never on standing state: a decision
+already waiting does not fire the pipeline again, and an unacknowledged exception is raised again
+only after a four-hour cooldown. Periods are computed on calendar dates, so a daylight-saving change
+never shifts or repeats one, and an invalid tenant time zone falls back to the default. A completed
+owner report also reaches the owner outside the app: the daily brief and weekly review always, new
+inquiries when there are any, the pipeline only when a decision waits. Each attempt is recorded
+(`agent_report_deliveries`). A failed delivery is retried by the Worker cron after fifteen minutes,
+up to five attempts in all; a close that never reached delivery delivers on the host's close replay;
+a report recorded as sent is not sent again. Watches without a registered condition, and event-triggered watches, do
+not fire yet.
 
 Earned autonomy (migration 0203): a shadowed action's proposals are decided by policy and recorded
 as shadow steps, never as receipts, so no permit, person, handoff or effect comes of them while

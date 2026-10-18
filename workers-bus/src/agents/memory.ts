@@ -235,6 +235,44 @@ export async function subjectFacts(
   return { facts, omitted };
 }
 
+/**
+ * The facts for several subjects (a watch's objects), in order, sharing one snapshot's limits.
+ * A fact already taken for an earlier subject is not repeated.
+ */
+export async function subjectsFacts(
+  db: AgentDb,
+  models: Record<string, ObjectModel>,
+  tenantId: string,
+  specialistId: string,
+  subjects: Array<{ aggregate: string; id: string }>,
+  now: string,
+): Promise<{ facts: ContextFact[]; omitted: OmittedFact[] }> {
+  const facts: ContextFact[] = [];
+  const omitted: OmittedFact[] = [];
+  const taken = new Set<string>();
+  let bytes = 0;
+  for (const subject of subjects) {
+    if (facts.length >= SNAPSHOT_LIMITS.facts) {
+      omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
+      continue;
+    }
+    const part = await subjectFacts(db, models, tenantId, specialistId, subject, now, SNAPSHOT_LIMITS.bytes - bytes);
+    const fresh = part.facts.filter((fact) => !taken.has(fact.fact_id));
+    // A subject's facts go in whole or not at all, so a run never mistakes a part for the object.
+    if (facts.length + fresh.length > SNAPSHOT_LIMITS.facts) {
+      omitted.push({ fact_id: `${subject.aggregate}/${subject.id}`, reason: "limit_reached" });
+      continue;
+    }
+    for (const fact of fresh) {
+      taken.add(fact.fact_id);
+      facts.push(fact);
+      bytes += factBytes(fact);
+    }
+    omitted.push(...part.omitted.filter((entry) => !taken.has(entry.fact_id)));
+  }
+  return { facts, omitted };
+}
+
 /** The ref a citation falls under: the fact itself, or the part of it the pointer names. */
 function refUnder(byId: Map<string, FactRef>, citation: string): { ref: FactRef; rest: string } | null {
   const parsed = parseFactId(citation);

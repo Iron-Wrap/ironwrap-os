@@ -7,9 +7,10 @@ import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } 
 import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
 import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
-import { citedFacts, factReader, hydrate, refOf, subjectFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
+import { citedFacts, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
 import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
+import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -271,7 +272,11 @@ export async function openRun(
   // older than its wait already reads not answered, so no run starts on it (409: the host skips it).
   const asker = askerRole(signal);
   if (asker !== null && Date.parse(now) - Date.parse(signal.received_at) > ASK_UNANSWERED_MS) return { error: "ask_expired", status: 409 };
-  const memory = await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
+  // A watch names the objects its condition found; the run starts from each of them.
+  const watchObjects = watchSubjects(signal);
+  const memory = watchObjects
+    ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
+    : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
   const facts = [signalFact(signal), ...memory.facts];
   const snapshotHash = await sha256Hex(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash }))));
   const tools = toolsFor(signal.specialist_id);
@@ -459,14 +464,28 @@ export function runTools(run: RunRow): RunTool[] {
   return JSON.parse(run.tool_manifest_json);
 }
 
-/** The signal itself is the first fact of every run: immutable, and untrusted as text. */
+/** The objects a scheduler watch's condition named, or null for any other signal. */
+function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string }> | null {
+  if (signal.kind !== "watch" || signal.source !== WATCH_SIGNAL_SOURCE) return null;
+  const objects = (JSON.parse(signal.content_json) as { objects?: unknown }).objects;
+  if (!Array.isArray(objects)) return null;
+  return objects.filter(
+    (entry): entry is { aggregate: string; id: string } =>
+      typeof entry === "object" && entry !== null && typeof (entry as { aggregate?: unknown }).aggregate === "string" && typeof (entry as { id?: unknown }).id === "string",
+  );
+}
+
+/**
+ * The signal itself is the first fact of every run: immutable. Its text is untrusted, except a
+ * watch the Worker's scheduler wrote from its own records.
+ */
 function signalFact(signal: SignalRow): ContextFact {
   return {
     fact_id: `signal/${signal.signal_id}`,
     kind: "signal",
     version: 1,
     hash: `sha256:${signal.content_sha256}`,
-    trust: "untrusted_text",
+    trust: signal.kind === "watch" && signal.source === WATCH_SIGNAL_SOURCE ? "owned" : "untrusted_text",
     observed_at: signal.received_at,
     fresh_until: null,
     data: JSON.parse(signal.content_json),

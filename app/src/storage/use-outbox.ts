@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { DeviceProofProvider } from "../auth/device-credential";
 import { emptyOutboxSummary, getOutboxSummary, subscribeOutboxChanges } from "./outbox-store";
-import { getOutboxActionsNeedingAttention } from "./outbox";
+import { getOutboxActionsNeedingAttention, getOutboxActionsSettledByOffice } from "./outbox";
 import { flushOutbox, initializeOutbox } from "./outbox-processor";
 import type { OutboxAction, OutboxSummary } from "./outbox-types";
 
@@ -61,17 +61,33 @@ export function useOutboxActionsNeedingAttention(principal: {
   tenantId: string;
   userId: string;
 }): OutboxAction[] {
+  return useOutboxActions(principal, getOutboxActionsNeedingAttention, "need attention");
+}
+
+/** Items a person in the office settled that this person has not read yet. */
+export function useOutboxActionsSettledByOffice(principal: {
+  tenantId: string;
+  userId: string;
+}): OutboxAction[] {
+  return useOutboxActions(principal, getOutboxActionsSettledByOffice, "the office settled");
+}
+
+function useOutboxActions(
+  principal: { tenantId: string; userId: string },
+  read: (principal: { tenantId: string; userId: string }) => Promise<OutboxAction[]>,
+  what: string,
+): OutboxAction[] {
   const { tenantId, userId } = principal;
   const [actions, setActions] = useState<OutboxAction[]>([]);
   useEffect(() => {
     let active = true;
     const refresh = () => {
-      void getOutboxActionsNeedingAttention({ tenantId, userId })
+      void read({ tenantId, userId })
         .then((next) => {
           if (active) setActions(next);
         })
         .catch((error: unknown) => {
-          console.error("Could not read saved items that need attention", error);
+          console.error(`Could not read saved items that ${what}`, error);
           if (active) setActions([]);
         });
     };
@@ -81,7 +97,7 @@ export function useOutboxActionsNeedingAttention(principal: {
       active = false;
       unsubscribe();
     };
-  }, [tenantId, userId]);
+  }, [read, tenantId, userId, what]);
   return actions;
 }
 

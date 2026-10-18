@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
-import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
+import {
+  useOutboxActionsNeedingAttention,
+  useOutboxActionsSettledByOffice,
+} from "../storage/use-outbox";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { TodayResponse } from "./field-contracts";
 import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
@@ -23,6 +26,7 @@ vi.mock("./field-cache", () => ({
 
 vi.mock("../storage/use-outbox", () => ({
   useOutboxActionsNeedingAttention: vi.fn(),
+  useOutboxActionsSettledByOffice: vi.fn(() => []),
 }));
 
 vi.mock("../operating-intake/operating-intake-api", () => ({
@@ -182,6 +186,7 @@ describe("TodayPage", () => {
       return Object.fromEntries(model.jobs.map((job) => [job.id, true]));
     });
     vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
+    vi.mocked(useOutboxActionsSettledByOffice).mockReturnValue([]);
     vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
   });
 
@@ -383,5 +388,44 @@ describe("TodayPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Field check-in · job JOB-BLOCKED" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("says the office has an item it settled instead of letting it vanish", async () => {
+    vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
+    vi.mocked(useOutboxActionsSettledByOffice).mockReturnValue([
+      {
+        deviceActionId: "settled-by-office",
+        tenantId: fieldSession.tenant.id,
+        userId: fieldSession.user.id,
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/JOB-BLOCKED/check-ins",
+        method: "POST",
+        payload: {},
+        attachments: [],
+        state: "verified",
+        attempts: 1,
+        nextAttemptAt: 0,
+        createdAt: 1_000,
+        updatedAt: 3_000,
+        verification: {
+          verifiedAt: 3_000,
+          officeResolution: {
+            resolutionId: `fir_${"1".repeat(64)}`,
+            resolution: "arrived",
+            linkedRecord: { type: "field_action", id: "settled-by-office" },
+          },
+        },
+        version: 2,
+      } satisfies OutboxAction,
+    ]);
+    renderToday();
+
+    expect(
+      await screen.findByRole("heading", { name: "The office has your saved item" }),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Field check-in · job JOB-BLOCKED" })).toBeVisible();
+    expect(screen.getByText("The office confirmed it has this.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Got it" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /needs review/ })).not.toBeInTheDocument();
   });
 });

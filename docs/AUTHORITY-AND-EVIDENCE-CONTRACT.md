@@ -597,6 +597,51 @@ Every critical workflow defines:
 
 No critical safety instruction or emergency contact may depend solely on a live cloud response.
 
+### Unconfirmed crew items
+
+A crew phone stops a saved item as unconfirmed when the office answered but the phone could not
+verify that the office holds that exact item (`verification_mismatch`,
+`fleet_collision_storage_mismatch` in `app/src/storage/outbox-failure.ts`). The phone keeps the item
+and tells the crew member to call the office. A person in the office answers it; an agent never
+does.
+
+- `POST /api/v1/field-item-resolutions` records the answer: `arrived`, `duplicate` or
+  `not_arrived`. It takes an owner or ops session (the roles that already pair and revoke crew
+  devices), the CSRF token and an `Idempotency-Key` of the form `field-item-resolution:<uuid>`. An
+  exact replay returns the original answer; the same key with a changed request conflicts; a second
+  answer for the same item conflicts. Any request carrying a machine credential (an
+  `Authorization` header, or the Hermes desktop headers) is refused as `person_session_required`,
+  and so is any in-process actor that is not a person.
+- The answer is bound to the exact saved item: the device action id the phone used as its
+  `Idempotency-Key`, the item kind, and `payload_sha256`, which is the Worker's own stored request
+  hash for that crew write (`payload_hash`, an inventory `request_fingerprint_sha256`, or a
+  configured value's `command_fingerprint`). The phone cannot recompute that hash for most kinds
+  and the Worker keeps no copy of the raw request, so the stored hash is the only payload identity
+  the Worker can check against the stored write; the phone binds the answer by its own device
+  action id, and for an inventory scan it also checks the fingerprint it computed itself.
+- `arrived` and `duplicate` must cite the stored crew write as the linked record, and the Worker
+  checks that the write exists in this tenant, is settled (a verified action, an applied
+  inventory command, a recorded scan or configured value), belongs to the named crew member, and
+  carries the cited hash. `not_arrived` cites nothing and is written only while no crew write
+  exists for that device action id in any bound store, checked again inside the insert.
+- The AI field coordinator may propose an answer. The person sends its proposal reference (the
+  `field_safety` agent id and the agent run step id) in the same request; the Worker checks that
+  the step is that coordinator's `field_item.propose_resolution` proposal about the same item and
+  answer, and records the person as the resolver. The reference is provenance only.
+- `field_item_resolutions` (migration `0150`) is append-only and tenant-scoped, with one answer
+  per tenant, device action id and payload hash; each answer writes an `audit_log` event in the
+  same batch.
+- `GET /api/v1/field-item-resolutions?device_action_id=…` (up to 50 ids, field sessions only)
+  returns the answers for items the caller created (never by device id, which an inventory scan
+  supplies itself), with a minimal link for an item the office holds. When online, the phone settles `arrived` and `duplicate`
+  without a resend and shows "The office confirmed it has this."; on `not_arrived` it sends the
+  item once more under the same key and the normal verification decides; with no answer it keeps
+  the call-the-office guidance.
+- Collision reports and corrective-action evidence are stored under their own record ids without
+  the device action id, so the route refuses both kinds (`field_item_kind_unbound`) and those items
+  stay on the call-the-office path. A crew write that exists but is not settled cannot be answered
+  either way.
+
 ## Customer-facing behavior
 
 Agents must:

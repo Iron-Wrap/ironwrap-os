@@ -5,6 +5,7 @@ import { handleMeasurementReportPrivacyAudit } from "./job-measurement-report-pr
 import { handleMeasurementIntakePrivacyAudit } from "./measurement-intake-privacy.ts";
 import { handleAgentTeamAppRoute } from "./agents/api.ts";
 import { handleJobManualMeasurements } from "./job-manual-measurement-api.ts";
+import { handleFieldItemResolutions } from "./field-item-resolutions.ts";
 import { OFFICE_LEAD_REQUEST_ID, OfficeIntakeError, parseOfficeCapture, recordOfficeIntake, readOfficeIntakeReceipt, readOfficeLeadFacts, resumeOfficeIntake } from "./office-lead-intake-store.ts";
 import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
 import { handlePipelineRoute } from "./pipeline-board-api.ts";
@@ -1271,6 +1272,9 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "approval_store_unavailable" }, 502);
     }
   }
+  // An office person's answer to an unconfirmed crew item, and the crew phone's read of it.
+  if (url.pathname === "/api/v1/field-item-resolutions")
+    return await handleFieldItemResolutions(req, env, auth);
   if (req.method === "GET" && url.pathname === "/api/v1/field-users") {
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
       return appJson({ error: "office_role_required" }, 403);

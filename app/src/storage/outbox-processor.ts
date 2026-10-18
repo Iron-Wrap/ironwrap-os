@@ -12,10 +12,16 @@ import {
 import { evidenceTransferTimeoutMs } from "../evidence/evidence-upload";
 import { API_PATHS } from "../lib/api-paths";
 
-import { classifyOutboxFailure } from "./outbox-failure";
+import {
+  fieldItemResolutionsResponseSchema,
+  type FieldItemResolution,
+} from "./field-item-resolution-contracts";
+import { classifyOutboxFailure, isUnconfirmedFailureCode } from "./outbox-failure";
 import {
   claimNextQueuedAction,
+  getOutboxActionsNeedingAttention,
   getOutboxActionWithBlobs,
+  markOutboxConfirmedByOffice,
   markOutboxNeedsAttention,
   markOutboxVerified,
   OUTBOX_UPLOAD_HEARTBEAT_MS,
@@ -23,6 +29,7 @@ import {
   recoverResumableOutboxActions,
   renewOutboxUploadLease,
   requeueOutboxAction,
+  requeueOutboxForOfficeResend,
 } from "./outbox";
 import type {
   JsonValue,
@@ -121,6 +128,18 @@ async function executeFlush(
   if (!csrfToken || csrfToken === "offline-session-no-csrf") return result;
   if (typeof navigator !== "undefined" && !navigator.onLine) return result;
   const deviceProof = await options.deviceProof?.();
+  // Before sending anything, settle what the office has answered about unconfirmed items: an
+  // item resent here is then sent and verified by the loop below, in this same flush. A failed
+  // check changes nothing and never holds back the rest of the queue.
+  await applyOfficeResolutions(
+    principal,
+    options.fetcher ?? fetch,
+    deviceProof,
+    options.signal,
+    now,
+  ).catch((error: unknown) => {
+    console.error("Could not check the office's answer for unconfirmed saved items", error);
+  });
 
   while (result.processed < maxActions && !options.signal?.aborted) {
     const action = await claimNextQueuedAction(principal, now());
@@ -182,6 +201,85 @@ async function executeFlush(
     }
   }
   return result;
+}
+
+const OFFICE_RESOLUTION_BATCH = 50;
+
+/**
+ * Ask the office about items this phone holds as unconfirmed, and act only on an answer about
+ * this exact item: its own device action id and kind (and, for an inventory scan, the
+ * fingerprint the phone computed itself). "It arrived" or "it is a duplicate" settles the item
+ * without a resend; "it did not arrive" queues it once more under the same device action id. No
+ * answer, an unreadable answer or no signal leaves every item exactly as it was.
+ */
+async function applyOfficeResolutions(
+  principal: { tenantId: string; userId: string },
+  fetcher: typeof fetch,
+  deviceProof: string | undefined,
+  signal: AbortSignal | undefined,
+  now: () => number,
+): Promise<void> {
+  const unconfirmed = (await getOutboxActionsNeedingAttention(principal))
+    .filter((action) => !action.conflict && isUnconfirmedFailureCode(action.lastError?.code))
+    .slice(0, OFFICE_RESOLUTION_BATCH);
+  if (unconfirmed.length === 0) return;
+  const headers = new Headers({ Accept: "application/json" });
+  if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
+  let answers: FieldItemResolution[];
+  try {
+    const response = await fetcher(
+      API_PATHS.fieldItemResolutions(unconfirmed.map((action) => action.deviceActionId)),
+      { method: "GET", credentials: "same-origin", cache: "no-store", headers, signal },
+    );
+    if (!response.ok) return;
+    const parsed = fieldItemResolutionsResponseSchema.safeParse(await safeJson(response));
+    if (!parsed.success) return;
+    answers = parsed.data.resolutions;
+  } catch {
+    return;
+  }
+  for (const action of unconfirmed) {
+    const forItem = answers.filter(
+      (answer) =>
+        answer.device_action_id === action.deviceActionId && answer.item_kind === action.kind,
+    );
+    const held = forItem.find(
+      (answer) =>
+        answer.resolution !== "not_arrived" &&
+        answer.linked_record !== null &&
+        payloadHashMatches(action, answer.payload_sha256),
+    );
+    if (held?.linked_record && held.resolution !== "not_arrived") {
+      await markOutboxConfirmedByOffice(
+        action.deviceActionId,
+        {
+          resolutionId: held.resolution_id,
+          resolution: held.resolution,
+          linkedRecord: held.linked_record,
+        },
+        now(),
+      );
+      continue;
+    }
+    const missing = forItem.find((answer) => answer.resolution === "not_arrived");
+    if (missing)
+      await requeueOutboxForOfficeResend(action.deviceActionId, missing.resolution_id, now());
+  }
+}
+
+/**
+ * The phone can recompute the stored hash only for an inventory scan, whose fingerprint it
+ * computed and sent itself; for every other kind the Worker binds the hash to this device action
+ * id against its own stored write (`workers-bus/src/field-item-resolutions.ts`).
+ */
+function payloadHashMatches(action: OutboxAction, payloadSha256: string | null): boolean {
+  if (action.kind !== "inventory_scan") return true;
+  const payload = action.payload;
+  const fingerprint =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload.request_fingerprint_sha256
+      : undefined;
+  return typeof fingerprint === "string" && fingerprint === payloadSha256;
 }
 
 function startUploadLeaseHeartbeat(

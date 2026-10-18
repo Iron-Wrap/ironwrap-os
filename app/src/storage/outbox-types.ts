@@ -109,6 +109,19 @@ export interface OutboxVerification {
   serverRef?: string;
   cursor?: string;
   verifiedAt: number;
+  /**
+   * Set when a person in the office, not the upload's own answer, confirmed that the office
+   * holds this exact item (`GET /api/v1/field-item-resolutions`).
+   */
+  officeResolution?: OutboxOfficeResolution;
+}
+
+export interface OutboxOfficeResolution {
+  resolutionId: string;
+  resolution: "arrived" | "duplicate";
+  linkedRecord: { type: string; id: string };
+  /** Set once the person read the office's answer on Today; the notice there then leaves. */
+  seenAt?: number;
 }
 
 export interface OutboxAction {
@@ -133,6 +146,11 @@ export interface OutboxAction {
   lastError?: OutboxErrorDetail;
   conflict?: OutboxConflict;
   verification?: OutboxVerification;
+  /**
+   * The office answered "it did not arrive" and this phone has used its one resend for that
+   * answer. A later answer with another id allows one more; the same answer never does.
+   */
+  officeResend?: { resolutionId: string; requeuedAt: number };
   version: 2;
 }
 

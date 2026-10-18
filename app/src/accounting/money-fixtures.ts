@@ -276,3 +276,63 @@ export function exceptionListResponse(
     exceptions,
   };
 }
+
+/**
+ * A QuickBooks invoice whose own facts match ours while linked payments exceed it: a verdict of
+ * mismatch with an agreeing invoice hash. Copied from
+ * workers-bus/test/fixtures/quickbooks/invoice-overpaid-linked.json; scripts/accounting-fixtures.test.ts
+ * keeps the copy equal.
+ */
+export const overpaidLinkedInvoice = {
+  Invoice: {
+    Id: "2001",
+    SyncToken: "0",
+    MetaData: {
+      CreateTime: "2026-08-19T12:00:00-07:00",
+      LastUpdatedTime: "2026-08-19T12:00:00-07:00",
+    },
+    DocNumber: "1001",
+    TxnDate: "2026-08-19",
+    DueDate: "2026-09-18",
+    CurrencyRef: {
+      value: "CAD",
+      name: "Canadian Dollar",
+    },
+    CustomerRef: {
+      value: "42",
+      name: "Synthetic Customer",
+    },
+    TxnTaxDetail: {
+      TotalTax: 60.0,
+      TxnTaxCodeRef: {
+        value: "5",
+      },
+    },
+    Line: [
+      {
+        Id: "1",
+        LineNum: 1,
+        Amount: 1200.0,
+        DetailType: "SalesItemLineDetail",
+        SalesItemLineDetail: {
+          ItemRef: {
+            value: "7",
+            name: "Metal roofing - synthetic",
+          },
+          TaxCodeRef: {
+            value: "TAX",
+          },
+        },
+      },
+    ],
+    TotalAmt: 1260.0,
+    Balance: 0.0,
+    LinkedTxn: [
+      {
+        TxnId: "3005",
+        TxnType: "Payment",
+      },
+    ],
+  },
+  time: "2026-08-19T12:00:00.000-07:00",
+} as const;

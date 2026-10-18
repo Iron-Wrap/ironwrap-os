@@ -368,10 +368,14 @@ The runner keeps transcripts, judge outputs, and reports under `output_dir`, whi
 `report.mjs` turns each specialist's scored repetitions and usage into the report. The runner
 passes, per specialist run, `specialist_id`, `wave`, `tier`, `model`, `judge_model`,
 `prompt_sha256`, the parsed `rubric`, `expectedIds`, the scored `cases`, `usage` (the fields in the
-example below), and for a comparison run its `route` (`provider`, `model`, `effort`); for the
+example below), its `route` (`provider`, `model`, `effort`) for a comparison run and whenever it
+ran off its tier's route (the auditor's audit route, a gateway override), `compared`,
+`production_route` (whether that route is the specialist's production route), and the `release` it
+hashed when it loaded the specialist; for the
 report it passes the gateway `routes`, the `config`, and for the pilot the `quota` and per-model
-`batches` meter readings. A run is on its production route only when its route equals the
-gateway route of its tier, effort included. A suite is
+`batches` meter readings. A run is on its production route as the runner says
+(`production_route`); without that flag, only when its route equals the gateway route of its tier,
+effort included. Only `compared` rows enter the pilot's model comparison. A suite is
 scored only when every case holds exactly repetitions 1 to `repetitions`; a missing repetition, a
 repeated or out-of-range index, or an unknown case leaves it `incomplete` with `data_errors`, and
 catastrophes found so far are shown either way.
@@ -406,9 +410,11 @@ catastrophes found so far are shown either way.
       "catastrophes_so_far": [],
       "weakest_cases": [ { "case_id": "estimator.golden.012", "suite": "golden", "mean": 0.83, "decisions": [1, 1, 1] } ],
       "usage": { "runs": 159, "judge_calls": 159, "rejudges": 0, "input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "wall_time_ms": 0, "cost_usd": 0, "judge_cost_usd": 0, "cache_hit_ratio": null },
-      "usage_complete": true
+      "usage_complete": true,
+      "release": { "specialist_id": "estimator", "playbook_sha256": "<hash>", "allowlist_sha256": "<hash>", "common_sha256": "<hash>", "catalog_sha256": "<hash>", "release_sha256": "<hash>" }
     }
   ],
+  "qualifications": [ { "specialist_id": "estimator", "provider": "codex", "model": "<model>", "effort": "medium", "release_sha256": "<hash>", "passed": true } ],
   "comparison": null,
   "batches": null,
   "totals": { "qualified": 1, "not_qualified": 0, "incomplete": 0, "runs": 159, "...": "summed usage" }
@@ -417,6 +423,17 @@ catastrophes found so far are shown either way.
 
 `result` is `evaluateSuite` output, `null` until the suite is complete. `input_tokens` counts every
 prompt token and `cached_input_tokens` the part served from the cache.
+
+`release` is the specialist's release as `agent-host/src/host/release.ts` defines it (the one
+definition): the hashes of its exact `playbook.md`, `allowlist.json`, and `COMMON.md` bytes and the
+catalog, and `release_sha256` over them, hashed when the runner loaded the specialist so a later edit
+is never recorded as run. The report checks `release_sha256` against the four hashes, the
+release's specialist against the row's, and its catalog against the run's, and refuses a
+scored wave row without a release or without a complete route. `qualifications` (not in the pilot)
+lists one row per scored (specialist, route): the provider, model, and effort it ran on, the
+release, and whether it passed. The owner records
+each row in `agent_qualifications`, the qualification authority, adding the SHA-256 of the written
+report file as `report_sha256`; an incomplete suite records nothing.
 
 For the pilot, `comparison` lists each compared specialist's routes with rank, completeness
 (`cases_scored` of `cases_expected`), mean, golden and red-team means, catastrophes, cost and

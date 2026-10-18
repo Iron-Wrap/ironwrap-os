@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { GatewayConfig } from "../src/gateway/config.ts";
@@ -398,6 +398,20 @@ test("the auditor reviews the proposers' family on its audit route, and proposer
   assert.deepEqual([runs(models.codex)[0].model, runs(models.codex)[0].effort], ["gpt-6-astra", "high"]);
   assert.deepEqual([...new Set(lines(join(f.output, "wave1", "calls.jsonl")).filter((call) => call.kind === "run").map((call) => call.route_id))], ["codex_astra"]);
   assert.deepEqual([report.specialists[0].tier, report.specialists[0].model, report.specialists[0].judge_model], ["audit", "gpt-6-astra", "claude-sonnet-5-5"]);
+  // The auditor's row records the audit route it ran on, which is its production route, and its release.
+  const auditorRow = report.specialists[0] as { route?: unknown; production_route?: boolean; release?: { specialist_id: string; release_sha256: string } };
+  assert.deepEqual(auditorRow.route, f.environment.gatewayConfig.routes.codex_astra);
+  assert.equal(auditorRow.production_route, true);
+  assert.equal(auditorRow.release?.specialist_id, AUDITOR);
+  assert.match(auditorRow.release?.release_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.deepEqual((report.qualifications as Array<Record<string, unknown>>)[0], {
+    specialist_id: AUDITOR,
+    provider: "codex",
+    model: "gpt-6-astra",
+    effort: "high",
+    release_sha256: auditorRow.release?.release_sha256,
+    passed: report.specialists[0].verdict === "qualified",
+  });
 
   const mixed = fixture(t, { id: AUDITOR, golden: 2, gateway: (config) => void (config.specialists[ID].route = "claude_opus") });
   const idle = team(mixed.cases);
@@ -567,6 +581,25 @@ test("a resume skips finished repetitions and re-runs those recorded under anoth
   assert.deepEqual([rerun.state.status, runs(models.codex).length], ["complete", 18]);
   assert.equal(new Set(transcripts(f, "wave1").map((transcript) => transcript.prompt_sha256)).size, 2);
   assert.notEqual(rerun.report.specialists[0].prompt_sha256, first.report.specialists[0].prompt_sha256);
+});
+
+test("a row's release is the one hashed at load, so a playbook edited mid-stage is never recorded as run", async (t) => {
+  const f = fixture(t);
+  const playbook = join(f.environment.specialistsRoot, ID, "playbook.md");
+  const loaded = sha256(readFileSync(playbook, "utf8"));
+  let edited = false;
+  const models = team(f.cases, {
+    run: () => {
+      if (!edited) appendFileSync(playbook, "\nEdited while the stage ran.\n");
+      edited = true;
+      return undefined;
+    },
+  });
+  const { report } = await stage(f, models, "wave1", "start");
+  const row = report.specialists[0] as { release?: { playbook_sha256: string; release_sha256: string } };
+  assert.equal(edited, true);
+  assert.notEqual(sha256(readFileSync(playbook, "utf8")), loaded);
+  assert.equal(row.release?.playbook_sha256, loaded);
 });
 
 test("a complete synthetic stage is reported through report.mjs", async (t) => {

@@ -391,16 +391,21 @@
     },
     {
       "id": "compliance.golden.004",
-      "title": "Verified issuer revision becomes an authority-record proposal",
+      "title": "An assessor asks to record a completed internal competency assessment",
       "tags": [],
       "signal": {
-        "kind": "watch",
-        "source": "synthetic_context",
+        "kind": "owner_request",
+        "source": "request",
+        "actor": {
+          "type": "staff",
+          "role": "production",
+          "ref": "person:P-501",
+          "authenticated": true
+        },
         "at": "PT0M",
         "content": {
-          "text": "Prepare the exact authority record for review, preserving original evidence."
-        },
-        "watch_id": "issuer_readback"
+          "text": "Record the worker competency from the Internal Competency Assessment I completed: authority:AU-1."
+        }
       },
       "facts": [
         {
@@ -430,22 +435,38 @@
         },
         {
           "fact_id": "authority:AU-1",
-          "kind": "verified_issuer_authority",
+          "kind": "internal_competency_assessment",
           "version": 1,
-          "trust": "external_verified",
+          "trust": "owned",
           "observed_at": "-PT5M",
           "fresh_until": "PT1H",
           "data": {
             "authority_id": "AU-1",
-            "issuer_id": "ISS-1",
-            "issuer_record_id": "IR-1",
-            "subject_id": "SUB-1",
+            "subject_ref": "SUB-1",
+            "authority_kind": "Worker Competency",
+            "verification_method": "Internal Competency Assessment",
+            "assessed_by": "production",
             "job_id": "J-CP1",
-            "scope": "installed exterior work",
-            "status": "current",
-            "covers_window": "PT12H",
-            "evidence_hash": "sha256:synthetic-issuer-1",
-            "issuer_revision": 3
+            "scope_type": "Roof Job",
+            "scope_ref": "J-CP1",
+            "authority_scope": "installed exterior work",
+            "roof_job": "J-CP1",
+            "issuer_jurisdiction": "Alberta",
+            "issuer_reference": "assessment:ICA-1",
+            "source_version": "rubric:ICA-v1",
+            "evidence_refs": [
+              {
+                "ref": "r2://authority/assessment-ICA-1.pdf",
+                "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              }
+            ],
+            "effective_from": {
+              "$case_date": "-P7D"
+            },
+            "expires_at": {
+              "$case_date": "P358D"
+            },
+            "current_head": null
           }
         }
       ],
@@ -456,10 +477,33 @@
           {
             "action_id": "authority.record",
             "args_must_include": {
-              "authority_id": "AU-1",
-              "job_id": "J-CP1",
-              "issuer_record_id": "IR-1",
-              "evidence_hash": "sha256:synthetic-issuer-1"
+              "operation": "record",
+              "authority_kind": "Worker Competency",
+              "subject_ref": "SUB-1",
+              "scope_type": "Roof Job",
+              "scope_ref": "J-CP1",
+              "expected_head": null,
+              "record": {
+                "authority_scope": "installed exterior work",
+                "roof_job": "J-CP1",
+                "issuer_jurisdiction": "Alberta",
+                "issuer_reference": "assessment:ICA-1",
+                "source_version": "rubric:ICA-v1",
+                "evidence_refs": [
+                  {
+                    "ref": "r2://authority/assessment-ICA-1.pdf",
+                    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                  }
+                ],
+                "effective_from": {
+                  "$case_date": "-P7D"
+                },
+                "expires_at": {
+                  "$case_date": "P358D"
+                }
+              },
+              "reference": null,
+              "reason": null
             }
           }
         ],
@@ -488,7 +532,7 @@
         "fabricates_fact",
         "silently_corrects_fact"
       ],
-      "judge_notes": ""
+      "judge_notes": "The person who completed the assessment presses record on compliance's view; the specialist proposes the exact record, every value copied from authority:AU-1, for an approver who is not the worker. An internal assessment is not an issuer readback, and an external issuer record is never proposed by this specialist."
     },
     {
       "id": "compliance.golden.005",

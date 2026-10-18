@@ -470,6 +470,21 @@ async function stop(
   return stopEventIdFor(deviceActionId, packet.tenantId);
 }
 
+/** The stop event's own time, as the ledger recorded it. */
+function stopOccurredAt(env: TestEnv, stopEventId: string): string {
+  return (
+    env.DB.sqlite
+      .prepare("SELECT occurred_at FROM work_package_events WHERE event_id = ?")
+      .get(stopEventId) as { occurred_at: string }
+  ).occurred_at;
+}
+
+/** The current time once the clock has passed `instant`, so a capture taken now is later. */
+async function momentAfter(instant: string): Promise<string> {
+  while (Date.now() <= Date.parse(instant)) await new Promise((resolve) => setTimeout(resolve, 1));
+  return new Date().toISOString();
+}
+
 interface CaptureInput {
   tenantId?: string;
   jobId: string;
@@ -482,13 +497,25 @@ interface CaptureInput {
   deviceActionId: string;
   status?: "verified" | "r2_stored";
   manifested?: boolean;
+  /** When the device finished the capture; null stores none, like a capture from before 0092. */
+  capturedAt?: string | null;
+  /** When the Worker received, verified and stored it; the capture time unless a test says. */
+  receivedAt?: string;
 }
 
-/** One stored field capture, verified and manifested unless a test says otherwise. */
+/**
+ * One stored field capture, verified and manifested unless a test says otherwise. Without a capture
+ * time it was taken at minute 30 of the fixture clock, hours before any stop in this file, so it
+ * releases no stop; a test that needs a correction times its capture after the stop.
+ */
 function insertCapture(env: TestEnv, input: CaptureInput) {
   const sqlite = env.DB.sqlite;
   const verified = (input.status ?? "verified") === "verified";
   const typed = input.workPackageId !== null;
+  const capturedAt = input.capturedAt === undefined ? at(30) : input.capturedAt;
+  const receivedAt = input.receivedAt ?? capturedAt ?? at(30);
+  const startedAt =
+    capturedAt === null ? null : new Date(Date.parse(capturedAt) - 60_000).toISOString();
   sqlite
     .prepare(
       `INSERT INTO field_actions (
@@ -515,9 +542,9 @@ function insertCapture(env: TestEnv, input: CaptureInput) {
       `checkin_${input.deviceActionId}`,
       input.manifested === false ? null : `evidence/${input.deviceActionId}.json`,
       verified ? JSON.stringify({ status: "verified" }) : null,
-      at(30),
-      at(30),
-      verified ? at(30) : null,
+      receivedAt,
+      receivedAt,
+      verified ? receivedAt : null,
       input.workPackageId,
       typed ? input.version ?? 1 : null,
       typed ? input.slotId ?? "step:1" : null,
@@ -533,8 +560,8 @@ function insertCapture(env: TestEnv, input: CaptureInput) {
       input.jobId,
       "Roof Site",
       input.jobId,
-      at(29),
-      at(30),
+      startedAt,
+      capturedAt,
     );
   sqlite
     .prepare(
@@ -544,7 +571,7 @@ function insertCapture(env: TestEnv, input: CaptureInput) {
        VALUES (?, ?, ?, ?, ?, 'image/jpeg', 128, ?)`,
     )
     .run(input.deviceActionId, `attachment-${input.deviceActionId}`, input.evidenceId,
-      `evidence/raw/${input.deviceActionId}.jpg`, mediaChecksum(input.evidenceId), at(30));
+      `evidence/raw/${input.deviceActionId}.jpg`, mediaChecksum(input.evidenceId), receivedAt);
 }
 
 function captureFor(
@@ -572,6 +599,8 @@ interface StoppedPackage {
   stopEventId: string;
   stopDeviceActionId: string;
   evidence: string;
+  /** When `evidence` was captured: strictly after the stop. */
+  capturedAt: string;
 }
 
 async function stoppedPackage(
@@ -588,8 +617,12 @@ async function stoppedPackage(
     await act(env, packet, kind, `${kind}-${packet.workPackageId}-${packet.version}`);
   const stopDeviceActionId = `stop-${packet.workPackageId}-${packet.version}`;
   const stopEventId = await stop(env, packet, stopDeviceActionId, options.reporterUserId);
-  const evidence = captureFor(env, packet, `${packet.workPackageId}-${packet.version}-fixed`);
-  return { packet, stopEventId, stopDeviceActionId, evidence };
+  // The correction is captured after the stop; nothing captured earlier can release it.
+  const capturedAt = await momentAfter(stopOccurredAt(env, stopEventId));
+  const evidence = captureFor(env, packet, `${packet.workPackageId}-${packet.version}-fixed`, {
+    capturedAt,
+  });
+  return { packet, stopEventId, stopDeviceActionId, evidence, capturedAt };
 }
 
 // --- Person sessions and requests --------------------------------------------------------------
@@ -894,11 +927,26 @@ test("an independent person releases the holding stop and the version resumes ex
   assert.equal(repeated.status, 409);
   assert.deepEqual(repeated.body, { error: "work_package_stop_already_released" });
   const owner = await personAuth(env, USERS.owner.id);
-  const second = await postRelease(
+  // The fix that released the first stop was captured before the second one, so it cannot release
+  // the second stop; a capture taken after it can.
+  const reused = await postRelease(
     env,
     owner,
     packet.workPackageId,
     releaseBody(stopped, { stop_event_id: secondStopEventId }),
+    { key: "stop-release-second-reused-0001" },
+  );
+  assert.equal(reused.status, 409);
+  assert.deepEqual(reused.body, { error: "work_package_stop_release_evidence_before_stop" });
+  const secondFix = captureFor(env, packet, "second-fix", {
+    slotId: "hold:1",
+    capturedAt: await momentAfter(stopOccurredAt(env, secondStopEventId)),
+  });
+  const second = await postRelease(
+    env,
+    owner,
+    packet.workPackageId,
+    releaseBody(stopped, { stop_event_id: secondStopEventId, evidence_ids: [secondFix] }),
     { key: "stop-release-second-0001" },
   );
   assert.equal(second.status, 200, JSON.stringify(second.body));
@@ -943,7 +991,10 @@ test("a release restores exactly the status the stop interrupted", async () => {
 test("an exact replay returns the original release and a changed intent conflicts", async () => {
   const env = testEnv();
   const stopped = await stoppedPackage(env);
-  const second = captureFor(env, stopped.packet, "replay-second", { slotId: "hold:1" });
+  const second = captureFor(env, stopped.packet, "replay-second", {
+    slotId: "hold:1",
+    capturedAt: stopped.capturedAt,
+  });
   const production = await personAuth(env, USERS.production.id);
   const body = releaseBody(stopped, { evidence_ids: [stopped.evidence, second] });
 
@@ -1144,6 +1195,44 @@ test("the person who raised or reported the stop can never release it", async ()
   assert.equal(independent.body.release.stop_actor_user_id, USERS.crew.id);
 });
 
+test("independence holds across aliases: the raiser or reporter under another identity is refused", async () => {
+  // Each alias ties the production releaser to the crew member who raised the stop, or to the ops
+  // user on its receipt, through a Frappe login equal to the other person's email.
+  for (const [label, stopper, aliasedUserId, login] of [
+    ["the releaser's Frappe login is the raiser's email", "raiser", USERS.production.id, USERS.crew.email],
+    ["the raiser's Frappe login is the releaser's email", "raiser", USERS.crew.id, USERS.production.email],
+    ["the releaser's Frappe login is the reporter's email", "reporter", USERS.production.id, USERS.ops.email],
+    ["the reporter's Frappe login is the releaser's email", "reporter", USERS.ops.id, USERS.production.email],
+  ] as const) {
+    const env = testEnv();
+    const reporter = stopper === "reporter" ? USERS.ops.id : USERS.crew.id;
+    const stopped = await stoppedPackage(env, { reporterUserId: reporter });
+    env.DB.sqlite.prepare("UPDATE app_users SET frappe_user_id = ? WHERE user_id = ?")
+      .run(login, aliasedUserId);
+    const production = await personAuth(env, USERS.production.id);
+    const refused = await postRelease(env, production, stopped.packet.workPackageId, releaseBody(stopped), {
+      key: "stop-release-alias-0001",
+    });
+    assert.equal(refused.status, 403, `${label}: ${JSON.stringify(refused.body)}`);
+    assert.deepEqual(refused.body, { error: "work_package_stop_release_independence_required" }, label);
+    // The route refuses before it writes anything, and D1 joins the same identities itself.
+    assert.equal(env.RAW.objects.has(`work-packages/office-actions/${TENANT}/stop-release-alias-0001.json`),
+      false, label);
+    assert.throws(
+      () => insertReleaseRow(env, directReleaseRow(stopped, "Released", { stop_reporter_user_id: reporter })),
+      /work_package_stop_release_independence_required/,
+      label,
+    );
+    assert.equal(releaseCount(env), 0, label);
+    // A releaser no alias ties to the stop still may.
+    const owner = await personAuth(env, USERS.owner.id);
+    const independent = await postRelease(env, owner, stopped.packet.workPackageId, releaseBody(stopped), {
+      key: "stop-release-alias-0002",
+    });
+    assert.equal(independent.status, 200, `${label}: ${JSON.stringify(independent.body)}`);
+  }
+});
+
 test("correction evidence must be verified, stored captures of this tenant and job", async () => {
   const env = testEnv();
   const stopped = await stoppedPackage(env);
@@ -1231,6 +1320,65 @@ test("correction evidence must be verified, stored captures of this tenant and j
     key: "stop-release-evidence-accepted",
   });
   assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+});
+
+test("a verified capture taken before the stop never releases it, on the route or in D1", async () => {
+  const env = testEnv();
+  const stopped = await stoppedPackage(env);
+  const { packet } = stopped;
+  const production = await personAuth(env, USERS.production.id);
+  // Every capture is verified, manifested and stored on this job; only its capture time is wrong.
+  const before = captureFor(env, packet, "before-stop", { slotId: "hold:1" });
+  const uploadedAfter = captureFor(env, packet, "uploaded-after-stop", {
+    slotId: "step:1",
+    userId: USERS.ops.id,
+    receivedAt: stopped.capturedAt,
+  });
+  const atStop = captureFor(env, packet, "at-stop", {
+    slotId: "hold:1",
+    userId: USERS.ops.id,
+    capturedAt: stopOccurredAt(env, stopped.stopEventId),
+  });
+  const legacy = captureFor(env, packet, "no-device-time", {
+    slotId: "step:1",
+    userId: USERS.owner.id,
+    capturedAt: null,
+  });
+  const cases = [
+    ["captured before the stop", [before]],
+    ["captured before the stop and uploaded after it", [uploadedAfter]],
+    ["captured at the stop's own instant", [atStop]],
+    ["no device time, received before the stop", [legacy]],
+    ["one capture after the stop and one before it", [stopped.evidence, before]],
+  ] as const;
+  for (const [index, [label, ids]] of cases.entries()) {
+    const key = `stop-release-before-stop-${index}`;
+    const result = await postRelease(env, production, packet.workPackageId,
+      releaseBody(stopped, { evidence_ids: [...ids] }), { key });
+    assert.equal(result.status, 409, `${label}: ${JSON.stringify(result.body)}`);
+    assert.deepEqual(result.body, { error: "work_package_stop_release_evidence_before_stop" }, label);
+    // The route refuses before it writes anything, the office-action manifest included.
+    assert.equal(env.RAW.objects.has(`work-packages/office-actions/${TENANT}/${key}.json`), false, label);
+    // D1 refuses the same citation on a direct insert.
+    assert.throws(
+      () => insertReleaseRow(env, directReleaseRow(stopped, "Released", {
+        evidence_refs_json: canonicalJson(
+          ids.map((id) => ({ ref: `field-evidence://${id}`, sha256: mediaChecksum(id) })),
+        ),
+      })),
+      /work_package_stop_release_evidence_before_stop/,
+      label,
+    );
+  }
+  assert.equal(releaseCount(env), 0);
+  assert.equal(packageStatus(env, packet.workPackageId), "Blocked");
+
+  // The correction captured after the stop releases it.
+  const released = await postRelease(env, production, packet.workPackageId, releaseBody(stopped), {
+    key: "stop-release-after-stop",
+  });
+  assert.equal(released.status, 200, JSON.stringify(released.body));
+  assert.equal(packageStatus(env, packet.workPackageId), "Released");
 });
 
 test("a release is invisible and impossible across tenants", async () => {
@@ -1699,6 +1847,7 @@ test("office reissue of a stopped package is refused until a person releases the
     releaseAttemptId,
     evidenceId: evidence,
     deviceActionId: "capture-office-fixed-anchor",
+    capturedAt: await momentAfter(stopOccurredAt(env, stopEventIdFor(stopKey))),
   });
   const production = await personAuth(env, USERS.production.id);
   const release = await postRelease(env, production, v1, {

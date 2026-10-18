@@ -3,16 +3,23 @@
 // Delegation settings and specialist controls are append-only revisions written only from an
 // owner session; no agent route reaches them. Decisions on steps that ask first bind the exact
 // step version and argument hash. Protective steps whose machine path is proven (an exception for
-// a named person, a specialist hold) execute here with an owned-store readback.
+// a named person, a specialist hold) execute here with an owned-store readback, and so does an
+// approved `authority.record`, inside its decision's own transaction.
 
+import { ROLE_PERMISSIONS, type AppRole } from "../app-types.ts";
+import { competencyApproverRefusal, planCompetencyCommand } from "../authority-record-native.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./catalog.ts";
-import { STEP_POLICY_ID, STEP_POLICY_VERSION, type DelegationSetting } from "./policy.ts";
-import { registryEntry } from "./registry.ts";
+import { citedFacts } from "./memory.ts";
+import { STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type DelegationSetting } from "./policy.ts";
+import { competencyCommandError, registryEntry, type CompetencyCommand } from "./registry.ts";
 import { afterCatastrophe, decisionAgreement, shadowSetting } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
   changesOf,
+  getRun,
   namedPerson,
+  runContext,
+  runFactReader,
   type AgentDb,
   type BoundStatement,
   type RunRow,
@@ -1074,35 +1081,39 @@ export async function decideStep(
   }
   const step = await stepForDecision(db, tenantId, stepId);
   if (!step) return { error: "step_not_found", status: 404 };
-  const policy = JSON.parse(step.policy_json) as { result: string };
+  const policy = JSON.parse(step.policy_json) as { result: string; checks: unknown[]; reason_codes: string[] };
   if (step.outcome !== null || policy.result !== "needs_approval" || catalogAction(step.action_id)?.human_only)
     return { error: "not_awaiting_decision", status: 409 };
   if (step.version !== expectedVersion || step.args_sha256 !== expectedHash)
     return { error: "stale_version", status: 409 };
   if (decider.role !== "owner" && decider.role !== step.needs_reviewer_role) return { error: "forbidden", status: 403 };
-  const run = await db
-    .prepare("SELECT catalog_version,policy_version FROM agent_runs WHERE tenant_id=? AND run_id=?")
-    .bind(tenantId, step.run_id)
-    .first<{ catalog_version: string; policy_version: string }>();
+  // Only an approver decides an authority record, and never the worker it is about, either way.
+  if (registryEntry(step.action_id)?.binding.kind === "authority_record") {
+    if (decision === "approve" && !ROLE_PERMISSIONS[decider.role as AppRole]?.includes("authority:approve"))
+      return { error: "authority_approve_required", status: 403 };
+    const subject = (JSON.parse(step.args_json) as { subject_ref?: unknown }).subject_ref;
+    const refusal = await competencyApproverRefusal(db, tenantId, decider.user_id, typeof subject === "string" ? subject : "");
+    if (refusal) return { error: refusal, status: 403 };
+  }
+  const run = await getRun(db, tenantId, step.run_id);
   if (decision === "approve" && (run?.catalog_version !== CATALOG_VERSION || run?.policy_version !== POLICY_VERSION))
     return { error: "policy_changed", status: 409 };
   // A revoke applies to the next permit (contract "Delegation"): an action switched off after the
   // step was proposed cannot be approved, though it can still be declined or done by hand.
-  if (decision === "approve" && (await currentDelegation(db, tenantId, step.specialist_id, step.action_id))?.setting === "off")
-    return { error: "delegation_off", status: 409 };
-  // Human approval is recorded truthfully, but no non-protective effect adapter is implemented
-  // in this slice. It cannot turn the existing receipt-only binding into a business success.
-  const finalPolicy =
-    decision === "approve"
-      ? canonicalJson({
-          ...JSON.parse(step.policy_json),
-          result: "deny",
-          reason_codes: ["policy_missing"],
-          checks: [...JSON.parse(step.policy_json).checks, { check: "effect_binding", passed: false }],
-        })
-      : step.policy_json;
-  const outcome = decision === "approve" ? "abstained" : "failed";
-  const reason = decision === "approve" ? "policy_missing" : decision === "decline" ? "declined" : "done_by_person";
+  const delegation = decision === "approve" ? await currentDelegation(db, tenantId, step.specialist_id, step.action_id) : null;
+  if (delegation?.setting === "off") return { error: "delegation_off", status: 409 };
+  const effect = decision === "approve" && run ? await approvalEffect(db, tenantId, run, step, decider, now) : null;
+  if (effect && "error" in effect) return effect;
+  const finalPolicy = effect
+    ? canonicalJson({
+        ...policy,
+        result: effect.outcome === "succeeded" ? policy.result : "deny",
+        reason_codes: effect.reason ? [effect.reason] : policy.reason_codes,
+        checks: [...policy.checks, effect.check],
+      })
+    : step.policy_json;
+  const outcome = effect ? effect.outcome : "failed";
+  const reason = effect ? effect.reason : decision === "decline" ? "declined" : "done_by_person";
   const decisionId = `dec_${crypto.randomUUID()}`;
   const permit = canonicalJson({
     kind: "asks_first",
@@ -1115,6 +1126,17 @@ export async function decideStep(
   try {
     await db.batch([
       humanGuard(db, tenantId, decider, now, false),
+      // The delegation the approval was read under is still the one in force at commit.
+      ...(decision === "approve"
+        ? [
+            db
+              .prepare(
+                `INSERT INTO agent_control_guard (kind) SELECT 'version' WHERE (SELECT setting_id FROM agent_delegation_settings
+          WHERE tenant_id=? AND specialist_id=? AND action_id=? ORDER BY revision DESC LIMIT 1) IS NOT ?`,
+              )
+              .bind(tenantId, step.specialist_id, step.action_id, delegation?.delegation_id ?? null),
+          ]
+        : []),
       db
         .prepare(
           `INSERT INTO agent_step_decisions (decision_id,tenant_id,step_id,decision,step_version,args_sha256,decided_by_user_id,decided_role,decided_at,idempotency_key)
@@ -1132,9 +1154,10 @@ export async function decideStep(
           now,
           idempotencyKey,
         ),
+      ...(effect?.statements ?? []),
       db
         .prepare(
-          `UPDATE agent_run_steps SET outcome=?,reason_code=?,permit_json=?,policy_json=?,needs_ask=?,decided_at=?,version=version+1
+          `UPDATE agent_run_steps SET outcome=?,reason_code=?,permit_json=?,policy_json=?,needs_ask=?,tool_json=?,readback_json=?,decided_at=?,version=version+1
         WHERE tenant_id=? AND step_id=? AND version=? AND args_sha256=? AND outcome IS NULL`,
         )
         .bind(
@@ -1143,6 +1166,8 @@ export async function decideStep(
           permit,
           finalPolicy,
           decision === "approve" ? "acknowledge_and_act" : step.needs_ask,
+          effect?.tool ?? step.tool_json,
+          effect?.readback ?? step.readback_json,
           now,
           tenantId,
           stepId,
@@ -1187,6 +1212,86 @@ export async function decideStep(
       notify,
     );
   return { outcome, reason_code: reason };
+}
+
+interface ApprovalEffect {
+  outcome: "succeeded" | "failed" | "abstained";
+  reason: string | null;
+  check: { check: string; passed: boolean };
+  statements: BoundStatement[];
+  tool: string | null;
+  readback: string | null;
+}
+
+/**
+ * What approving a step does. Its cited facts are read again first: one that changed since the
+ * proposal stops the step. Only `authority.record` has an effect binding; it runs natively inside
+ * the decision's transaction. Any other approval is recorded truthfully and abstains.
+ */
+async function approvalEffect(
+  db: AgentDb,
+  tenantId: string,
+  run: RunRow,
+  step: StepRow,
+  decider: HumanPrincipal,
+  now: string,
+): Promise<ApprovalEffect | StoreError> {
+  const stop = (outcome: "failed" | "abstained", reason: string, check: string): ApprovalEffect => ({
+    outcome,
+    reason,
+    check: { check, passed: false },
+    statements: [],
+    tool: null,
+    readback: null,
+  });
+  const citations = (JSON.parse(step.sources_json) as Citation[]).map(({ fact_id, version }) => ({ fact_id, version }));
+  const { currentVersions } = await citedFacts(citations, runContext(run).facts, runFactReader(db, tenantId, run, now));
+  for (const citation of citations) {
+    const current = currentVersions.get(citation.fact_id);
+    if (current === undefined || current === null) return stop("abstained", "citation_unverifiable", "fresh");
+    if (current !== citation.version) return stop("abstained", "fact_stale", "fresh");
+  }
+  if (registryEntry(step.action_id)?.binding.kind !== "authority_record")
+    return stop("abstained", "policy_missing", "effect_binding");
+  const args: unknown = JSON.parse(step.args_json);
+  if (competencyCommandError(args)) return stop("failed", "tool_refused", "effect_binding");
+  // No client can send `#` in an authority idempotency key, so no one can claim this step's first.
+  const idempotencyKey = `step#${step.step_id}`;
+  const plan = await planCompetencyCommand(db, {
+    tenantId,
+    command: args as CompetencyCommand,
+    approverUserId: decider.user_id,
+    actionId: `authority_${crypto.randomUUID()}`,
+    idempotencyKey,
+    now,
+  });
+  if ("refusal" in plan) {
+    // Another approver can still decide a step this person may not.
+    if (plan.refusal === "authority_approver_required" || plan.refusal === "authority_self_approval_forbidden")
+      return { error: plan.refusal, status: 403 };
+    if (plan.refusal === "authority_head_changed") return stop("abstained", "fact_stale", "fresh");
+    if (plan.refusal === "authority_ambiguous" || plan.refusal === "authority_contradictory")
+      return stop("abstained", "fact_conflict", "fresh");
+    return stop("failed", "tool_refused", "effect_binding");
+  }
+  return {
+    outcome: "succeeded",
+    reason: null,
+    check: { check: "effect_binding", passed: true },
+    statements: plan.statements,
+    tool: canonicalJson({
+      name: "authority.record",
+      binding: "authority_record_readbacks",
+      idempotency_key: idempotencyKey,
+      request_hash: step.args_sha256,
+    }),
+    readback: canonicalJson({
+      source: "owned_store",
+      reference: plan.readbackId,
+      response_hash: plan.observationFingerprint,
+      matched: true,
+    }),
+  };
 }
 
 export async function stepForDecision(db: AgentDb, tenantId: string, stepId: string): Promise<StepRow | null> {

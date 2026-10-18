@@ -84,7 +84,8 @@
       ],
       "forbidden": [
         "Final accounting or payment mutation (no such tool exists; QuickBooks stays accounting truth)",
-        "Sending contract/legal communications without explicit human send; Newo send operations additionally require exact receipts and the global outbound gate"
+        "Sending contract/legal communications without explicit human send; Newo send operations additionally require exact receipts and the global outbound gate",
+        "Recording, verifying or revoking a Worker Competency with request_authority_record: that tool serves external issuer kinds only and refuses an internal competency, which the Worker records natively once a person approves it"
       ]
     },
     "lead-concierge": {
@@ -178,7 +179,8 @@
       ],
       "forbidden": [
         "Starting a job while a required gate is Blocked (gate logic and human approval enforce this)",
-        "Estimator pricing or customer communication"
+        "Estimator pricing or customer communication",
+        "Recording, verifying or revoking a Worker Competency with request_authority_record: that tool serves external issuer kinds only and refuses an internal competency, which the Worker records natively once a person approves it"
       ]
     },
     "field-companion": {

@@ -7,10 +7,9 @@
 // idempotent by its natural key and expected version, and writes one audit_log event in the same
 // batch, so a roster change and its audit commit together or not at all.
 
-import { validAppCsrf } from "./app-auth.ts";
+import { personCookieSession, validAppCsrf } from "./app-auth.ts";
 import type { AppEnv, AppRole, AuthContext } from "./app-types.ts";
 import { sha256Hex } from "./newo-hash.ts";
-import { personSession } from "./work-package-stop-release.ts";
 
 const CREWS_PATH = "/api/v1/admin/crews";
 const MEMBERS_PATH = /^\/api\/v1\/admin\/crews\/([^/]+)\/members$/;
@@ -62,7 +61,7 @@ export async function handleCrewRosterRoute(
     if (req.method === "GET" && !memberMatch) return reply({ crews: await listCrews(env, tenantId) });
     if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
     if (!validAppCsrf(req, auth)) throw new RosterRefusal("csrf_failed", 403);
-    const person = await personSession(env, auth);
+    const person = await personCookieSession(env, auth);
     if (!person) throw new RosterRefusal("person_session_required", 403);
     if (!ROSTER_ROLES.has(person.role)) throw new RosterRefusal("crew_roster_role_required", 403);
     const body = await readBody(req);

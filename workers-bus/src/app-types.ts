@@ -318,6 +318,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     ...ACCOUNTING_PERMISSIONS,
     "authority:read",
     "authority:write",
+    "authority:approve",
   ],
   ops: [
     "session:read",
@@ -355,6 +356,10 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "production:read",
     "production:clear_gate",
     "authority:read",
+    // Approving an internal worker competency command, which the Worker then records natively
+    // (authority-record-native.ts). Production is the catalog's reviewer for `authority.record`;
+    // `ops` is deliberately absent, because every non-owner is stored as `ops`.
+    "authority:approve",
   ],
   accounting: [
     "session:read",

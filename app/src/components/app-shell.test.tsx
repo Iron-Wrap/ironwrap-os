@@ -192,9 +192,7 @@ describe("AppShell", () => {
 
   it("shows the operator search surface for an authenticated office session", () => {
     renderShell(ownerSession);
-    expect(
-      screen.getByRole("button", { name: "Open search (Command or Control K)" }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Search work" })).toBeVisible();
   });
 
   it("groups the rail the way the reference does and shows only what the role can open", () => {
@@ -301,12 +299,12 @@ describe("AppShell", () => {
       "Leads",
       "Jobs",
     ]);
-    expect(within(bar).getByRole("button", { name: "Open all workspaces" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "More workspaces" })).toBeInTheDocument();
 
     cleanup();
     renderShell(sessionAs("sales"));
     expect(phoneBar().querySelectorAll(":scope > a")).toHaveLength(3);
-    expect(within(phoneBar()).queryByRole("button", { name: "Open all workspaces" })).toBeNull();
+    expect(within(phoneBar()).queryByRole("button", { name: "More workspaces" })).toBeNull();
   });
 
   it("closes the drawer and restores page scrolling when resized beyond tablet", async () => {
@@ -344,7 +342,7 @@ describe("AppShell", () => {
 
   it("pins the viewer's appearance from the person menu and remembers it", async () => {
     renderShell(ownerSession);
-    expect(screen.getByRole("button", { name: "Owner, account menu" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Owner, Owner, account menu" })).toBeInTheDocument();
     const appearance = screen.getByRole("group", { name: "Appearance", hidden: true });
     const dark = within(appearance).getByRole("button", { name: "Dark", hidden: true });
     const device = within(appearance).getByRole("button", { name: "Match device", hidden: true });
@@ -422,7 +420,7 @@ describe("AppShell", () => {
   it("keeps the session and reports a failed sign-out with a retry", async () => {
     vi.mocked(apiCommand).mockRejectedValue(new Error("network unavailable"));
     renderShell(ownerSession);
-    await userEvent.click(screen.getByRole("button", { name: "Owner, account menu" }));
+    await userEvent.click(screen.getByRole("button", { name: "Owner, Owner, account menu" }));
     const signOut = screen.getByRole("button", { name: "Sign out", hidden: true });
     await userEvent.click(signOut);
     expect(await screen.findByRole("alert", { hidden: true })).toHaveTextContent(
@@ -446,9 +444,9 @@ describe("AppShell", () => {
     renderShell(sessionAs("field"));
 
     expect(screen.queryByRole("button", { name: "Open navigation" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Field Crew, account menu" })).toHaveTextContent(
-      "Field CrewCrew phone",
-    );
+    expect(
+      screen.getByRole("button", { name: "Field Crew, Crew phone, account menu" }),
+    ).toHaveTextContent("Field CrewCrew phone");
     const tabs = screen.getByRole("navigation", { name: "Main navigation" });
     expect(
       within(tabs)
@@ -496,7 +494,7 @@ describe("AppShell", () => {
 
   it("keeps the loaded palette mounted until its close effect restores trigger focus", async () => {
     renderShell(ownerSession);
-    const trigger = screen.getByRole("button", { name: "Open search (Command or Control K)" });
+    const trigger = screen.getByRole("button", { name: "Search work" });
 
     await userEvent.click(trigger);
     const input = await screen.findByRole("combobox", {

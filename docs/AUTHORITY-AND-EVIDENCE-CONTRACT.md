@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-30
+Last verified: 2026-10-18
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -197,10 +197,32 @@ Authority mutations use one governed proof chain: an authenticated Owner/Product
 one tenant-scoped D1 action, and the separately authenticated executor binds the exact command,
 authority version, evidence, and (where required) genuine issuer receipt before committing the
 versioned D1 aggregate and immutable transition atomically. It then reads the material D1 state
-back, verifies its digest and all bound fields, and only then records the terminal receipt. A
-browser session may request or observe the action but cannot mint an issuer readback or set an
-applied result. Frappe may receive a compatibility projection after the D1 commit, but a Frappe
-role, document, or readback cannot grant authority or make the D1 transition succeed. External,
+back, verifies its digest and all bound fields, and only then records the terminal receipt. An
+internal Worker Competency has no external issuer, so the Worker is its executor: an Owner or
+Production approver's command, or their approval of the compliance specialist's step, claims the
+action, appends the new version that supersedes the identity's current head, completes the action,
+and reads the stored version back in one D1 transaction. That transaction re-checks the expected
+head, and that no login the worker's reference names shares a user id, email or Frappe user with
+the approver's login. Two logins of one person that share none of those cannot be linked without a
+person-to-user record, which does not exist yet; until it does, that self-approval is not
+detected. Every change, including a verification or revocation, is a new version, never an edit,
+and none is projected to Frappe. One identity holds at most 32 versions, the bound the fence reads
+in one lineage, and its last slot is kept for a revocation. Once 31 versions exist only a
+revocation may take the last slot, so when the 31st is already a revocation, or is not verified,
+or once the 32nd revokes the competency, the identity is full: every further command
+is refused and the fence keeps refusing the work that needs it, so it fails closed. A person can
+start a new competency only as a new identity, by recording it under another scope reference such
+as the next roof job. Nothing retires a full identity so that its scope can be reused, so a
+requirement that names that scope stays refused; this is a known limit. Verification and
+revocation references and correction reasons about a colleague are personnel and safety text: only
+a reader holding `authority:approve` sees them, and a field login never does. A revocation is not terminal: a new
+assessment may supersede it, and once another approver verifies that assessment, the worker is
+admitted again. A
+browser session cannot mint an issuer readback or set an applied result: for an external kind it
+may only request or observe the action, and for an internal competency the Worker derives the
+result from the approver's command. Frappe may receive a compatibility projection after the D1
+commit, but a Frappe role, document, or readback cannot grant authority or make the D1 transition
+succeed. External,
 legal, customer, physical, and professional authority remains with the genuine actor or issuer and
 blocks release when its readback is missing, stale, contradictory, or mismatched.
 
@@ -283,22 +305,28 @@ stop. Releasing a crew stop is people-only (`safety_stop.release`, class H) and 
 service token, effect runtime or MCP actor, in the owner, ops or production role, and never the
 person who raised the stop or the user on its receipt. The request names the exact Blocked version
 and stop event, cites one to ten verified, stored Work Package captures of the same tenant and job,
-and gives a reason; until a structured office follow-up record exists, that reason and evidence
-carry the follow-up. The append-only `work_package_stop_releases` record (migration `0145`) keeps
-the version, the stop and its device action, who raised and reported it, the releaser and their
-role at that moment, the independence facts, the evidence references with their stored checksums,
-and the reason. D1 re-checks those facts, then writes the record and returns the version to the
-status the stop interrupted in one statement, beside an immutable office-action manifest. An exact
-replay returns the original record, and a changed intent under the same key conflicts. `GET` on the
-same route returns the stop holding the version and every release. Only a release of the stop that
-holds that exact version lets the `0143` guards admit a status change away from Blocked or a
-supersession; a release of another version, or of an earlier stop on the same version, unlocks
-nothing. Refusals are distinct: `work_package_stop_release_person_required`,
-`work_package_stop_release_role_required` and `work_package_stop_release_independence_required`
-(403); `work_package_stop_release_evidence_required` (400); `work_package_not_blocked`,
+each captured after that stop, and gives a reason; until a structured office follow-up record
+exists, that reason and evidence carry the follow-up. A capture taken before the stop shows what
+the crew stopped on, never its correction, so however it was verified it can never release the
+stop: its capture time, the device's capture completion or, when the device recorded none, the
+server receipt, must be strictly later than the stop event's time, compared as instants. The
+append-only `work_package_stop_releases` record (migration `0145`) keeps the version, the stop and
+its device action, who raised and reported it, the releaser and their role at that moment, the
+independence facts, the evidence references with their stored checksums, and the reason. D1
+re-checks those facts, the capture order included (migration `0152`), then writes the record and
+returns the version to the status the stop interrupted in one statement, beside an immutable
+office-action manifest. An exact replay returns the original record, and a changed intent under the
+same key conflicts. `GET` on the same route returns the stop holding the version and every release.
+Only a release of the stop that holds that exact version lets the `0143` guards admit a status
+change away from Blocked or a supersession; a release of another version, or of an earlier stop on
+the same version, unlocks nothing. Refusals are distinct:
+`work_package_stop_release_person_required`, `work_package_stop_release_role_required` and
+`work_package_stop_release_independence_required` (403);
+`work_package_stop_release_evidence_required` (400); `work_package_not_blocked`,
 `work_package_stop_release_version_conflict`, `work_package_stop_release_stop_conflict`,
-`work_package_stop_already_released`, `work_package_stop_release_evidence_invalid` and
-`work_package_stop_release_replay_conflict` (409).
+`work_package_stop_already_released`, `work_package_stop_release_evidence_invalid`,
+`work_package_stop_release_evidence_before_stop` and `work_package_stop_release_replay_conflict`
+(409).
 
 ## Physical completion
 
@@ -641,6 +669,26 @@ does.
   the device action id, so the route refuses both kinds (`field_item_kind_unbound`) and those items
   stay on the call-the-office path. A crew write that exists but is not settled cannot be answered
   either way.
+
+### Failed Newo handoffs
+
+A failed handoff (`newo_sessions.handoff_status = 'failed'`) is a caller who asked for a person
+and was not put through. It stays open until a person records how it ended; there is no lookback
+window, because a window would retire a failure nobody decided.
+
+- `POST /api/v1/newo/operations/handoffs/{session_id}/resolution` (CSRF + `Idempotency-Key`)
+  records `outcome` = `called_back`, `unreachable` or `not_needed` and an optional note, with
+  `resolved_by` (the person's user id), their role and `resolved_at`. `GET` on the same path returns
+  the handoff and its resolution.
+- People-only: a person's own cookie session in the owner or ops role, read from the live session
+  (`newo_handoff_resolution_person_required`, `newo_handoff_resolution_role_required`). Agents,
+  automations, connectors, service tokens, the effect runtime and MCP actors are refused.
+- `newo_handoff_resolutions` (migration `0151`) is append-only and tenant-scoped with at most one
+  resolution per failed handoff. D1 re-checks that the session is failed and that the resolver is an
+  active owner or ops user holding that role; an exact replay returns the stored record and a
+  changed intent conflicts (`newo_handoff_resolution_replay_conflict`, `newo_handoff_already_resolved`).
+- The Newo reconcile count (`failed_handoffs`) and the operations exception list count only failed
+  handoffs with no resolution, through one shared predicate.
 
 ## Customer-facing behavior
 

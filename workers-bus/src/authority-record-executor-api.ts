@@ -1,6 +1,8 @@
 import { sha256Hex } from "./app-auth.ts";
 import {
+  AUTHORITY_MATERIAL_FIELDS,
   AUTHORITY_VERIFICATION_METHODS,
+  authorityStateDigest,
   claimAuthorityRecordAction,
   completeAuthorityRecordAction,
   EXTERNAL_ISSUER_AUTHORITY_KINDS,
@@ -37,42 +39,6 @@ const D1_TO_FRAPPE_BUSINESS_ROLE = {
   owner: "IronWrap Owner",
   ops: "IronWrap Production",
 } as const;
-const MATERIAL_FIELDS = [
-  "authority_record_id",
-  "tenant",
-  "subject_type",
-  "subject_role",
-  "person_user",
-  "organization",
-  "authority_kind",
-  "authority_scope",
-  "scope_type",
-  "scope_ref",
-  "roof_job",
-  "scope_json",
-  "issuer_name",
-  "issuer_jurisdiction",
-  "issuer_reference",
-  "source_version",
-  "evidence_refs_json",
-  "evidence_sha256",
-  "effective_from",
-  "expires_at",
-  "version",
-  "status",
-  "verification_method",
-  "verified_at",
-  "verification_reference",
-  "verified_by",
-  "revoked_at",
-  "revocation_reference",
-  "revoked_by",
-  "supersedes",
-  "correction_reason",
-  "exception_status",
-  "exception_reason",
-  "issuer_readback_json",
-] as const;
 type JsonRecord = Record<string, unknown>;
 
 function json(body: unknown, status = 200): Response {
@@ -188,13 +154,6 @@ function optionalField(record: JsonRecord, name: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-async function authorityStateDigestAsync(record: JsonRecord): Promise<string> {
-  const payload = Object.fromEntries(MATERIAL_FIELDS
-    .filter((name) => name !== "issuer_readback_json")
-    .map((name) => [name, field(record, name)]));
-  return await sha256Hex(canonicalJson(payload));
-}
-
 function expectedStatus(operation: AuthorityRecordOperation): string {
   if (operation === "record") return "Unverified";
   if (operation === "revoke") return "Revoked";
@@ -209,7 +168,7 @@ function authorityReadbackState(status: string): "verified" | "revoked" | "contr
 }
 
 function compareMaterialToCommand(command: JsonRecord, material: JsonRecord): string | null {
-  for (const name of MATERIAL_FIELDS) {
+  for (const name of AUTHORITY_MATERIAL_FIELDS) {
     if (name === "issuer_readback_json") continue;
     const expected = field(command, name);
     const actual = field(material, name);
@@ -398,7 +357,7 @@ export async function handleAuthorityRecordExecutorRoute(
       compareMaterialToCommand(command, material)) {
     return await completeReconciliation(env, actionId, action, "material_frappe_readback_mismatch");
   }
-  const stateDigest = await authorityStateDigestAsync(material);
+  const stateDigest = await authorityStateDigest(material);
   if (!SHA256.test(String(material.state_digest_sha256 ?? "")) || material.state_digest_sha256 !== stateDigest) {
     return await completeReconciliation(env, actionId, action, "material_frappe_state_digest_mismatch");
   }

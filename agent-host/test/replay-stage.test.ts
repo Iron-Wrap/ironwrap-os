@@ -7,6 +7,7 @@ import type { GatewayConfig } from "../src/gateway/config.ts";
 import { sha256 } from "../src/gateway/schema.ts";
 import { ProviderError, type CredentialState, type ProviderAdapter, type ProviderCall, type ProviderId, type ProviderOutcome } from "../src/gateway/types.ts";
 import { PLAYBOOK_HEADINGS } from "../src/host/specialists.ts";
+import { resolvedCase } from "../src/replay/case-run.ts";
 import { DIMENSIONS, scoreCase, type Catalog, type CatalogAction, type EvalCase, type QualificationConfig, type ReplayEnvironment, type Transcript } from "../src/replay/evals.ts";
 import { replayCase, runStage, StageRefusal, type MeterReading, type StageOptions } from "../src/replay/stage.ts";
 import { outcome, QUALIFICATION_PATH, shippedConfig, tempDir } from "./helpers.ts";
@@ -700,6 +701,38 @@ test("a malformed case clock refuses the stage before any run", async (t) => {
   await assert.rejects(stage(f, models, "wave1", "start"), (error) => error instanceof StageRefusal && /^lead_concierge\.golden\.002: clock must be/.test(error.message));
   assert.equal(models.codex.calls.length + models.claude.calls.length, 0);
   assert.equal(existsSync(join(f.output, "wave1", "state.json")), false);
+});
+
+test("a malformed case date in fact data refuses the stage before any run", async (t) => {
+  for (const bad of [{ $case_day: "P1D" }, { $case_date: "P1W" }]) {
+    const f = fixture(t, { golden: 2 });
+    f.rewrite((item) => {
+      if (item.id.endsWith("golden.002")) item.facts[0].data = { service: "roof_replacement", visit: { on: bad } };
+    });
+    const models = team(f.cases);
+    await assert.rejects(stage(f, models, "wave1", "start"), (error) => error instanceof StageRefusal && /^lead_concierge\.golden\.002: lead:L-2 data\.visit\.on must be exactly/.test(error.message), JSON.stringify(bad));
+    await assert.rejects(replayCase({ environment: f.environment, outputDir: f.output, env: {}, adapters: { claude: models.claude, codex: models.codex }, specialistId: ID, caseId: `${ID}.golden.001` }), StageRefusal);
+    assert.equal(models.codex.calls.length + models.claude.calls.length, 0);
+    assert.equal(existsSync(join(f.output, "wave1", "state.json")), false);
+  }
+});
+
+test("the model, the scorer and the judge read the same case dates", async (t) => {
+  const f = fixture(t, { golden: 1 });
+  f.rewrite((item) => {
+    if (!item.id.endsWith("golden.001")) return;
+    item.facts[0].data = { service: "roof_replacement", visit_on: { $case_date: "P2D" } };
+    (item.expected.actions as Array<{ args_must_include: object }>)[0].args_must_include = { lead_id: "L-1", visit_on: { $case_date: "P2D" } };
+  });
+  // The specialist copies the date it was shown.
+  const models = team(f.cases.map((item) => resolvedCase(item)));
+  const result = await replayCase({ environment: f.environment, outputDir: f.output, env: {}, adapters: { claude: models.claude, codex: models.codex }, specialistId: ID, caseId: `${ID}.golden.001` });
+  const [run] = [...runs(models.codex), ...runs(models.claude)];
+  const [judge] = [...judges(models.claude), ...judges(models.codex)];
+  assert.equal(dataBlock(run.prompt).context_snapshot.facts[1].data.visit_on, "2026-07-09");
+  assert.deepEqual(result.transcript?.tool_calls.map((call) => call.args), [{ lead_id: "L-1", visit_on: "2026-07-09" }]);
+  assert.deepEqual(dataBlock(judge.prompt).case.expected.actions[0].args_must_include, { lead_id: "L-1", visit_on: "2026-07-09" });
+  assert.equal(judgements(f, "replay")[0].deterministic.caps.actions, 1);
 });
 
 test("a cancellation between a run and its judge stops a single-case replay as aborted", async (t) => {

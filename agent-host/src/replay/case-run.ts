@@ -1,10 +1,10 @@
 // One eval case as one production-shaped run. The case signal and facts become the Signal and the
-// context snapshot the Worker would hand the host, with case times resolved against the case clock,
-// and the production buildRunInput assembles the input. The replay offers the specialist's full
-// allowlist, in catalog order and worded as the Worker words its tools; a production run sees only
-// the actions the Worker registry binds, so `prompt_sha256` matches production only once the
-// registry exposes the same actions. Nothing the model sees names the case, its suite or its
-// expectations.
+// context snapshot the Worker would hand the host, with case times and the case dates and times in
+// fact data resolved against the case clock, and the production buildRunInput assembles the input.
+// The replay offers the specialist's full allowlist, in catalog order and worded as the Worker
+// words its tools; a production run sees only the actions the Worker registry binds, so
+// `prompt_sha256` matches production only once the registry exposes the same actions. Nothing the
+// model sees names the case, its suite or its expectations.
 //
 // The Worker side of the run is answerCall: a deterministic decision for every proposed step,
 // served by tool-server.ts, which never executes anything.
@@ -65,13 +65,66 @@ function edmontonOffsetMinutes(at: number): number {
 
 const DURATION = /^(-?)P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
 
-/** A case time (an ISO 8601 duration from the case clock, evals/README.md) as a timestamp. */
-export function caseTime(duration: string, clockMs = CASE_CLOCK_MS): string {
+function durationMs(duration: string): number {
   const match = DURATION.exec(duration);
   if (!match) throw new Error(`case time ${JSON.stringify(duration)} is not a relative ISO 8601 duration`);
   const [, sign, days = "0", hours = "0", minutes = "0", seconds = "0"] = match;
   const ms = (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000;
-  return new Date(clockMs + (sign ? -ms : ms)).toISOString();
+  return sign ? -ms : ms;
+}
+
+/** A case time (an ISO 8601 duration from the case clock, evals/README.md) as a timestamp. */
+export function caseTime(duration: string, clockMs = CASE_CLOCK_MS): string {
+  return new Date(clockMs + durationMs(duration)).toISOString();
+}
+
+/**
+ * A case date: the America/Edmonton calendar date (YYYY-MM-DD) a duration away from the case clock.
+ * The duration moves the clock's Edmonton wall time, so a daylight-saving change in between never
+ * shifts the date.
+ */
+export function caseDate(duration: string, clockMs = CASE_CLOCK_MS): string {
+  return new Date(clockMs + edmontonOffsetMinutes(clockMs) * 60_000 + durationMs(duration)).toISOString().slice(0, 10);
+}
+
+const CASE_VALUES: Record<string, (duration: string, clockMs: number) => string> = { $case_date: caseDate, $case_time: caseTime };
+
+/**
+ * Case data with its case-relative values resolved: an object that is exactly
+ * {"$case_date": duration} becomes that caseDate, and {"$case_time": duration} that caseTime. Any
+ * other object with a `$` key, or a malformed duration, is refused, so a misspelt marker never
+ * reaches the model. Data without markers comes back as the same value, so its hash is unchanged.
+ */
+export function resolveCaseData(value: unknown, clockMs = CASE_CLOCK_MS, path = "data"): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map((item, index) => resolveCaseData(item, clockMs, `${path}[${index}]`));
+    return items.some((item, index) => item !== value[index]) ? items : value;
+  }
+  if (!isObject(value)) return value;
+  const keys = Object.keys(value);
+  if (keys.some((key) => key.startsWith("$"))) {
+    const duration = value[keys[0]];
+    if (keys.length !== 1 || !Object.hasOwn(CASE_VALUES, keys[0]) || typeof duration !== "string" || !DURATION.test(duration)) {
+      throw new Error(`${path} must be exactly {"$case_date": duration} or {"$case_time": duration} with a relative ISO 8601 duration, not ${JSON.stringify(value)}`);
+    }
+    return CASE_VALUES[keys[0]](duration, clockMs);
+  }
+  const entries = keys.map((key) => [key, resolveCaseData(value[key], clockMs, `${path}.${key}`)] as const);
+  return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
+}
+
+/**
+ * A case with the case dates and times in its fact data and its expectations resolved against its
+ * clock, so the scorer and the judge read the values the model saw. A case without them comes back
+ * as it is.
+ */
+export function resolvedCase(item: EvalCase, clockMs = caseClock(item)): EvalCase {
+  const facts = item.facts.map((fact) => {
+    const data = resolveCaseData(fact.data, clockMs, `${fact.fact_id} data`);
+    return data === fact.data ? fact : { ...fact, data };
+  });
+  const expected = resolveCaseData(item.expected, clockMs, "expected") as EvalCase["expected"];
+  return expected === item.expected && facts.every((fact, index) => fact === item.facts[index]) ? item : { ...item, facts, expected };
 }
 
 /** A run tool with the catalog marks the Worker's answer depends on. */
@@ -151,7 +204,7 @@ export function replayRun(specialist: Specialist, tools: ReplayTool[], item: Eva
         fact.trust,
         caseTime(fact.observed_at, clockMs),
         fact.fresh_until === undefined ? null : caseTime(fact.fresh_until, clockMs),
-        fact.data ?? null,
+        resolveCaseData(fact.data ?? null, clockMs, `${fact.fact_id} data`),
       ),
     ),
   ];

@@ -1,0 +1,258 @@
+{
+  "schema": "ironwrap_view_spec_v1",
+  "spec_id": "vs_margin_watch",
+  "run_id": "run_face_margin_watch",
+  "specialist_id": "orchestrator",
+  "catalog_sha256": "sha256:…",
+  "template": "report",
+  "title": "Margin watch",
+  "data": [
+    {
+      "id": "margins",
+      "read_model": "margin_watch",
+      "params": {
+        "jobs": "with_estimate_and_contract"
+      },
+      "sources": [
+        {
+          "fact_id": "quickbooks/costs",
+          "version": 31,
+          "hash": "sha256:…"
+        },
+        {
+          "fact_id": "estimate/IW-1019",
+          "version": 2,
+          "hash": "sha256:…"
+        }
+      ]
+    },
+    {
+      "id": "findings",
+      "read_model": "findings",
+      "params": {
+        "specialist": "independent_auditor",
+        "kind": "margin",
+        "open": true
+      },
+      "sources": [
+        {
+          "fact_id": "finding/margin_IW-1019",
+          "version": 1,
+          "hash": "sha256:…"
+        }
+      ]
+    }
+  ],
+  "slots": {
+    "status": [
+      {
+        "kind": "status_line",
+        "counts": [
+          {
+            "value": {
+              "bind": "margins",
+              "path": "/count_below_zero"
+            },
+            "one": "job is below zero margin",
+            "other": "jobs are below zero margin",
+            "zero": "No job is below zero margin"
+          },
+          {
+            "value": {
+              "bind": "margins",
+              "path": "/count_over_estimate"
+            },
+            "one": "job is over its estimate",
+            "other": "jobs are over their estimate",
+            "zero": "No job is over its estimate"
+          },
+          {
+            "value": {
+              "bind": "margins",
+              "path": "/count_not_known"
+            },
+            "one": "job: not known yet",
+            "other": "jobs: not known yet",
+            "zero": null
+          }
+        ]
+      }
+    ],
+    "summary": [
+      {
+        "kind": "macro_tile",
+        "label": "Over the estimate",
+        "value": {
+          "bind": "margins",
+          "path": "/over_estimate_total"
+        },
+        "line": {
+          "bind": "margins",
+          "path": "/over_estimate_jobs_words"
+        },
+        "source": {
+          "bind": "margins",
+          "path": "/costs_source"
+        }
+      },
+      {
+        "kind": "macro_tile",
+        "label": "Margin, finished jobs",
+        "value": {
+          "bind": "margins",
+          "path": "/margin_finished"
+        },
+        "line": {
+          "bind": "margins",
+          "path": "/margin_finished_planned_words"
+        },
+        "source": {
+          "bind": "margins",
+          "path": "/costs_source"
+        }
+      },
+      {
+        "kind": "macro_tile",
+        "label": "Margin, jobs in progress",
+        "value": {
+          "bind": "margins",
+          "path": "/margin_in_progress"
+        },
+        "line": {
+          "bind": "margins",
+          "path": "/margin_in_progress_reason"
+        },
+        "source": null
+      },
+      {
+        "kind": "macro_tile",
+        "label": "Jobs watched",
+        "value": {
+          "bind": "margins",
+          "path": "/count_watched"
+        },
+        "line": null,
+        "source": {
+          "bind": "margins",
+          "path": "/jobs_source"
+        }
+      }
+    ],
+    "alerts": [
+      {
+        "kind": "alert",
+        "finding": {
+          "bind": "findings",
+          "path": "/items/0"
+        },
+        "action": 0
+      }
+    ],
+    "body": [
+      {
+        "kind": "proposed_value",
+        "proposal": {
+          "bind": "findings",
+          "path": "/items/0/proposal"
+        }
+      },
+      {
+        "kind": "table",
+        "heading": "Jobs: cost against the estimate",
+        "rows": {
+          "bind": "margins",
+          "path": "/jobs"
+        },
+        "columns": [
+          {
+            "label": "Job",
+            "field": {
+              "field": "job"
+            }
+          },
+          {
+            "label": "Estimated cost",
+            "field": {
+              "field": "estimated_cost"
+            }
+          },
+          {
+            "label": "Cost so far",
+            "field": {
+              "field": "cost_so_far"
+            }
+          },
+          {
+            "label": "Margin",
+            "field": {
+              "field": "margin"
+            }
+          },
+          {
+            "label": "Cause",
+            "field": {
+              "field": "cause"
+            }
+          }
+        ],
+        "total": ["Estimated cost", "Cost so far"]
+      }
+    ],
+    "side": [
+      {
+        "kind": "key_values",
+        "heading": "How the margin is worked out",
+        "rows": [
+          {
+            "label": "Rule",
+            "value": {
+              "bind": "margins",
+              "path": "/method/rule_words"
+            }
+          },
+          {
+            "label": "Finished job",
+            "value": {
+              "bind": "margins",
+              "path": "/method/finished_example"
+            }
+          },
+          {
+            "label": "Planned",
+            "value": {
+              "bind": "margins",
+              "path": "/method/planned_example"
+            }
+          }
+        ]
+      },
+      {
+        "kind": "text",
+        "words": "Proposed values are never added into these figures."
+      }
+    ],
+    "empty": [
+      {
+        "kind": "empty_hint",
+        "words": "No job has an estimate and a contract yet. See the Production plan.",
+        "link": null,
+        "action": null
+      }
+    ]
+  },
+  "actions": [
+    {
+      "action_id": "staff.notify",
+      "label": {
+        "bind": "findings",
+        "path": "/items/0/proposal/notify_label"
+      },
+      "target": {
+        "bind": "findings",
+        "path": "/items/0/proposal"
+      },
+      "primary": false
+    }
+  ],
+  "links": []
+}

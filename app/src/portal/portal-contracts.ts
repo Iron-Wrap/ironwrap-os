@@ -144,6 +144,19 @@ export const customerContractAcceptanceChallengeResponseSchema = z
   })
   .strict();
 
+export const customerContractAcceptancePreviewResponseSchema = z
+  .object({
+    status: z.literal("ready"),
+    quote_version: z.number().int().min(1),
+    total_cents: z.number().int().min(0).max(1_000_000_000_000),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    valid_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    proposal_title: z.string().min(1).max(200),
+    proposal_summary: z.string().min(1).max(4_000),
+    terms: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 export const customerContractAcceptanceConfirmResponseSchema = z
   .object({
     status: z.union([z.literal("accepted"), z.literal("uncertain")]),
@@ -163,6 +176,9 @@ export type CustomerPortalDecisionResponse = z.infer<typeof customerPortalDecisi
 
 export type CustomerContractAcceptanceChallengeResponse = z.infer<
   typeof customerContractAcceptanceChallengeResponseSchema
+>;
+export type CustomerContractAcceptancePreviewResponse = z.infer<
+  typeof customerContractAcceptancePreviewResponseSchema
 >;
 export type CustomerContractAcceptanceConfirmResponse = z.infer<
   typeof customerContractAcceptanceConfirmResponseSchema

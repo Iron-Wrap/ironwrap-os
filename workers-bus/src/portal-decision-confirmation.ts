@@ -4,6 +4,7 @@
 
 import { appPublicOrigin, devOutboxCapture } from "./app-auth.ts";
 import { gmailConfigured, sendGmail, type GmailSendReceipt } from "./google.ts";
+import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export interface PortalDecisionConfirmationInput {
@@ -99,7 +100,10 @@ export async function recordPortalDecisionConfirmation(
     const receipt = deps.sendEmail
       ? await deps.sendEmail(env, recipient, subject, html)
       : await sendGmail(env, recipient, subject, html, {
-        idempotencyKey: `portal-decision-confirmation:${input.tenantId}:${input.decisionId}:${recipient}`,
+        idempotencyKey: `portal-decision-confirmation:${await sha256Hex(canonicalJson({
+          tenantId: input.tenantId, decisionId: input.decisionId, recipient,
+        }))}`,
+        legacyIdempotencyKey: `portal-decision-confirmation:${input.tenantId}:${input.decisionId}:${recipient}`,
         taskId: `portal-decision-confirmation:${input.tenantId}:${input.decisionId}`,
       });
     return await insertConfirmation(env, input, {

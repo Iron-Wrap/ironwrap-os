@@ -380,6 +380,61 @@ describe("offline outbox", () => {
     ).toMatchObject({ processed: 1, verified: 1 });
   });
 
+  it("preserves an exact structured measurement and tape photo when its assignment correction is refused", async () => {
+    const measurement = { feet: 42, inches: 7, eighths: 3, area_label: "Synthetic south eave" };
+    const payload = {
+      assignment_id: "ASSIGN-MEASUREMENT",
+      proof_slot: "Measurement",
+      measurement,
+      evidence_correction_of: `wpe_${"a".repeat(32)}`,
+      evidence_item_correction_of: `evi_${"a".repeat(32)}`,
+      correction_reason: "Read the tape again",
+      work_package_id: "WP-MEASUREMENT",
+      work_package_version: 3,
+      work_package_release_attempt_id: "release-exact",
+      evidence_slot_id: "step:1",
+      evidence_requirement: "Synthetic tape reading and photo",
+      evidence_source: "field-companion",
+    };
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "measurement-assignment-refused",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-MEASUREMENT/check-ins",
+      payload,
+      attachments: [
+        {
+          attachmentId: "measurement-tape",
+          blob: new Blob(["synthetic tape photo"], { type: "image/jpeg" }),
+          fileName: "tape.jpg",
+        },
+      ],
+    });
+    await queueOutboxAction("measurement-assignment-refused", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Idempotency-Key")).toBe("measurement-assignment-refused");
+      expect(headers.get("X-CSRF-Token")).toBe("current-csrf");
+      expect(JSON.parse(String((init?.body as FormData).get("metadata"))).payload).toEqual(payload);
+      return Response.json(
+        { error: "field_measurement_correction_invalid", retryable: false },
+        { status: 409 },
+      );
+    });
+    expect(
+      await flushOutbox({ ...principal, fetcher, csrfToken: "current-csrf", now: () => 3_000 }),
+    ).toMatchObject({ verified: 0, needsAttention: 1, requeued: 0 });
+    const saved = await getOutboxActionWithBlobs("measurement-assignment-refused");
+    expect(saved?.action).toMatchObject({ state: "needs_attention", payload });
+    expect(saved?.blobs).toHaveLength(1);
+    expect(isOutboxActionSafeToRetry(saved!.action)).toBe(false);
+    await expect(retryOutboxAction("measurement-assignment-refused")).rejects.toThrow(
+      "cannot be retried safely",
+    );
+    await flushOutbox({ ...principal, fetcher, csrfToken: "current-csrf", now: () => 4_000 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("retains action and Blob evidence when the server reports a conflict", async () => {
     const blob = new Blob(["new photo"], { type: "image/jpeg" });
     await saveOutboxAction({

@@ -342,7 +342,7 @@ recovery boundaries.
   and the tenant owner has added at least one recipient on the Recipients screen
   (`/settings/configuration/automations/recipients`, backed by
   `POST /api/v1/admin/automation-recipients`). No deploy secret and no developer are involved.
-- [ ] All 122 D1 migrations through `0202_agent_fact_versions.sql` applied to the tenant database.
+- [ ] All 124 D1 migrations through `0202_agent_fact_versions.sql` applied to the tenant database.
 - [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
   unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
   an older snapshot, elapsed time or empty RAW read does not authorize clearing them.
@@ -351,6 +351,9 @@ recovery boundaries.
   CI builds checksum-pinned SQLite 3.54.1 for these full-schema proofs. This verifier is separate
   from the pinned Wrangler/workerd D1 engine; do not remove or simplify guards to fit an old CLI.
   SQLite documents the parser change in its [3.46 release notes](https://www.sqlite.org/releaselog/3_46_0.html).
+- [ ] Evidence upload lifecycle remains disabled until runtime-owned quiescence proof covers old
+  unclaimed requests and pending provider PUTs. Preserve unresolved write claims on backup/restore;
+  an older snapshot, elapsed time or empty RAW read does not authorize clearing them.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
   to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and

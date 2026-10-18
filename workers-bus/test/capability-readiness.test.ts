@@ -233,6 +233,28 @@ test("every execution contract and mutation auth scope is required", () => {
     "email_delivery",
   ).blockers.includes("auth_scope_names_missing"));
 
+  const mislabeledProvider = structuredClone(READY_DATASET);
+  const email = mislabeledProvider.manifests.find(
+    (row) => row.capability_id === "email_delivery",
+  )!;
+  email.direction = "internal";
+  email.auth_scope_names_json = "[]";
+  mislabeledProvider.effect_runtime_ready = false;
+  const mislabeled = capability(
+    evaluateCapabilityReadiness(
+      "reference_journey",
+      mislabeledProvider,
+      EVALUATED_AT,
+    ),
+    "email_delivery",
+  );
+  for (const blocker of [
+    "provider_direction_invalid",
+    "auth_scope_names_missing",
+    "effect_runtime_unready",
+  ])
+    assert.ok(mislabeled.blockers.includes(blocker), blocker);
+
   const internalReadback = structuredClone(READY_DATASET);
   internalReadback.manifests.find((row) => row.capability_id === "cloudflare_worker")!
     .auth_scope_names_json = "[]";

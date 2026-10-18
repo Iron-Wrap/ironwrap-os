@@ -1,4 +1,5 @@
 import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
+import { fieldMeasurementValue, parseFieldMeasurement, type FieldMeasurementInput, type FieldMeasurementValue } from "./field-measurements.ts";
 
 export const MAX_FIELD_MEDIA_COUNT = 12;
 export const MAX_FIELD_MEDIA_BYTES = 12 * 1024 * 1024;
@@ -59,6 +60,7 @@ export interface FieldActionPayload {
   capture_started_at: string;
   capture_completed_at: string;
   notes: string | null;
+  measurement?: FieldMeasurementInput | null;
   blocker: boolean;
   blocker_category: string | null;
   blocker_summary: string | null;
@@ -118,6 +120,7 @@ export interface VerifiedFieldActionResponse {
   server_ref: string;
   cursor: string;
   checkin_id: string;
+  measurement?: FieldMeasurementValue;
   media: Array<{
     attachment_id: string;
     evidence_id: string;
@@ -179,6 +182,9 @@ interface ClaimInput {
   physicalContextId: string | null;
   captureStartedAt: string;
   captureCompletedAt: string;
+  measurement: FieldMeasurementInput | null;
+  measurementDeviceId: string | null;
+  measurementCorrectionOf: string | null;
 }
 
 type ClaimResult =
@@ -603,6 +609,18 @@ export async function processFieldSubmission(
   auth: AuthContext,
   dependencies: ProcessFieldDependencies,
 ): Promise<VerifiedFieldActionResponse> {
+  const measurement = measurementFromPayload(submission.payload);
+  if (measurement) {
+    if (auth.session.role !== "field" || !auth.session.active)
+      throw new FieldActionError("field_role_required", 403, "An active assigned field account is required.");
+    if (!auth.session.device_id)
+      throw new FieldActionError("field_measurement_device_required", 403, "Reconnect this paired device before sending the measurement.");
+    submission = { ...submission, payload: { ...submission.payload, measurement } };
+  } else if ("measurement" in submission.payload) {
+    // Omitted/null keeps the exact legacy hash shape used by saved offline actions.
+    const { measurement: _absent, ...payload } = submission.payload;
+    submission = { ...submission, payload };
+  }
   validateSubmission(submission);
   // Treat a slot-only payload as typed as well.  The HTTP parser rejects this
   // shape, but callers can construct FieldSubmission objects directly (for
@@ -770,6 +788,7 @@ export async function processFieldSubmission(
       assignment_id: submission.assignmentId,
       scope: submission.scope ?? null,
       payload: submission.payload,
+      ...(measurement ? { measurement_device_id: auth.session.device_id } : {}),
       media: prepared.map(({ blob: _blob, ...item }) => item),
     }),
   );
@@ -849,6 +868,9 @@ export async function processFieldSubmission(
     physicalContextId: submission.scope?.physicalContextId ?? null,
     captureStartedAt: submission.payload.capture_started_at,
     captureCompletedAt: submission.payload.capture_completed_at,
+    measurement,
+    measurementDeviceId: measurement ? auth.session.device_id : null,
+    measurementCorrectionOf: measurement ? submission.payload.correction_of : null,
   };
   let claim: ClaimResult;
   try {
@@ -929,6 +951,7 @@ export async function processFieldSubmission(
       scope: submission.scope ?? null,
       device_action_id: submission.deviceActionId,
       payload: submission.payload,
+      ...(measurement ? { measurement_device_id: auth.session.device_id } : {}),
       media: receipts,
     });
     const manifestKey = manifestObjectKey(scopeDigest, checkinId);
@@ -953,6 +976,7 @@ export async function processFieldSubmission(
       server_ref: checkinId,
       cursor: checkinId,
       checkin_id: checkinId,
+      ...(measurement ? { measurement: fieldMeasurementValue(measurement) } : {}),
       media: persistedReceipts.map((item) => ({
         attachment_id: item.attachmentId,
         evidence_id: item.evidenceId,
@@ -980,6 +1004,15 @@ export async function processFieldSubmission(
 export function d1FieldActionStore(env: AppEnv): FieldActionStore {
   return {
     async claim(input) {
+      let measurementCorrectionOf = input.measurementCorrectionOf;
+      if (input.measurement && input.evidenceItemCorrectionOf) {
+        const predecessor = await env.DB.prepare(
+          `SELECT a.checkin_id FROM field_actions a JOIN field_action_media m USING(device_action_id)
+            WHERE a.tenant_id = ? AND a.job_id = ? AND m.evidence_id = ?
+              AND a.measurement_area_label IS NOT NULL AND a.status = 'verified'`,
+        ).bind(input.tenantId, input.jobId, input.evidenceItemCorrectionOf).first<{ checkin_id: string }>();
+        measurementCorrectionOf = predecessor?.checkin_id ?? null;
+      }
       await env.DB.prepare(
         `INSERT OR IGNORE INTO field_actions
          (device_action_id, tenant_id, user_id, job_id, assignment_id, action_kind, payload_hash,
@@ -989,8 +1022,11 @@ export function d1FieldActionStore(env: AppEnv): FieldActionStore {
            evidence_verification, evidence_disposition, evidence_correction_of,
            evidence_item_correction_of, work_package_release_attempt_id, correction_reason,
            work_object_type, work_object_id, physical_context_type, physical_context_id,
-           capture_started_at, capture_completed_at)
-         VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           capture_started_at, capture_completed_at, measurement_area_label, measurement_feet,
+           measurement_inches, measurement_eighths, measurement_total_eighth_inches,
+           measurement_device_id, measurement_correction_of)
+         SELECT ?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE NOT EXISTS (SELECT 1 FROM field_actions WHERE device_action_id = ?)`,
       )
         .bind(
           input.deviceActionId,
@@ -1024,6 +1060,14 @@ export function d1FieldActionStore(env: AppEnv): FieldActionStore {
           input.physicalContextId,
           input.captureStartedAt,
           input.captureCompletedAt,
+          input.measurement?.area_label ?? null,
+          input.measurement?.feet ?? null,
+          input.measurement?.inches ?? null,
+          input.measurement?.eighths ?? null,
+          input.measurement ? fieldMeasurementValue(input.measurement).total_eighth_inches : null,
+          input.measurementDeviceId,
+          measurementCorrectionOf,
+          input.deviceActionId,
         )
         .run();
       let row = await fieldActionRow(env, input.deviceActionId);
@@ -1034,6 +1078,12 @@ export function d1FieldActionStore(env: AppEnv): FieldActionStore {
         row.payload_hash !== input.payloadHash ||
         row.job_id !== input.jobId ||
         row.assignment_id !== input.assignmentId ||
+        !sameNullable(row.measurement_area_label, input.measurement?.area_label ?? null) ||
+        !sameNullableNumber(row.measurement_feet, input.measurement?.feet ?? null) ||
+        !sameNullableNumber(row.measurement_inches, input.measurement?.inches ?? null) ||
+        !sameNullableNumber(row.measurement_eighths, input.measurement?.eighths ?? null) ||
+        !sameNullable(row.measurement_device_id, input.measurementDeviceId) ||
+        !sameNullable(row.measurement_correction_of, measurementCorrectionOf) ||
         !sameNullable(row.work_package_id, input.workPackageId) ||
         !sameNullableNumber(
           row.work_package_version,
@@ -1466,6 +1516,12 @@ interface FieldActionRow {
   physical_context_id: string | null;
   capture_started_at: string | null;
   capture_completed_at: string | null;
+  measurement_area_label: string | null;
+  measurement_feet: number | null;
+  measurement_inches: number | null;
+  measurement_eighths: number | null;
+  measurement_device_id: string | null;
+  measurement_correction_of: string | null;
 }
 
 interface FieldMediaRow {
@@ -1489,7 +1545,8 @@ async function fieldActionRow(
             evidence_correction_of, evidence_item_correction_of,
             work_package_release_attempt_id, correction_reason,
             work_object_type, work_object_id, physical_context_type, physical_context_id,
-            capture_started_at, capture_completed_at
+            capture_started_at, capture_completed_at, measurement_area_label, measurement_feet,
+            measurement_inches, measurement_eighths, measurement_device_id, measurement_correction_of
      FROM field_actions WHERE device_action_id = ?`,
   )
     .bind(deviceActionId)
@@ -1731,6 +1788,7 @@ function parsePayload(
     capture_started_at: captureStarted,
     capture_completed_at: captureCompleted,
     notes: optionalText(value.notes, 2000),
+    ...(value.measurement != null ? { measurement: measurementFromPayload(value) } : {}),
     blocker,
     blocker_category: blocker ? blockerCategory : null,
     blocker_summary: blocker ? blockerSummary : null,
@@ -1758,6 +1816,17 @@ function parsePayload(
     evidence_disposition: evidenceDisposition,
     customer_safe_requested: value.customer_safe_requested === true,
   };
+}
+
+function measurementFromPayload(payload: { proof_slot?: unknown; measurement?: unknown }): FieldMeasurementInput | null {
+  if (payload.measurement == null) return null;
+  if (payload.proof_slot !== "Measurement")
+    throw new FieldActionError("field_measurement_slot_required", 400, "Save a measurement in the Measurement proof slot.");
+  try {
+    return parseFieldMeasurement(payload.measurement);
+  } catch {
+    throw new FieldActionError("invalid_field_measurement", 400, "Enter a location and a nonzero reading using whole feet, 0–11 inches and 0–7 eighths.");
+  }
 }
 
 function validateSubmission(

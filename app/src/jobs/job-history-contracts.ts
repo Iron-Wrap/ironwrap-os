@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { envelopeSchema, proofStreamItemSchema } from "../field/field-contracts";
+import {
+  envelopeSchema,
+  keepValidFieldMeasurements,
+  proofStreamItemSchema,
+} from "../field/field-contracts";
 
 /**
  * The read contract for `GET /api/v1/jobs/:jobId/history` (`buildJobHistoryReadModel`).
@@ -24,42 +28,47 @@ export function jobHistoryQueryKey(
   return ["job-history", tenantId, userId, jobId] as const;
 }
 
-export const jobHistoryResponseSchema = envelopeSchema.extend({
-  job: z
-    .object({
-      id: z.string().min(1),
-      roof_job_id: z.string().nullable(),
-      job_number: z.string().nullable(),
-      brand: z.string().nullable(),
-      service_type: z.string().nullable(),
-      status: z.string().nullable(),
-      address: z.string().nullable(),
-      current_gate_state: z.string().nullable(),
-    })
-    .passthrough(),
-  customer: z
-    .object({ display_name: z.string().nullable(), phone: z.string().nullable() })
-    .passthrough()
-    .nullable(),
-  gates: z.array(
-    z
+export const jobHistoryResponseSchema = envelopeSchema
+  .extend({
+    job: z
       .object({
         id: z.string().min(1),
-        name: z.string().nullable(),
-        state: z.string().nullable(),
-        blocker_reason: z.string().nullable(),
-        owner: z.string().nullable(),
-        due_at: z.string().nullable(),
+        roof_job_id: z.string().nullable(),
+        job_number: z.string().nullable(),
+        brand: z.string().nullable(),
+        service_type: z.string().nullable(),
+        status: z.string().nullable(),
+        address: z.string().nullable(),
+        current_gate_state: z.string().nullable(),
       })
       .passthrough(),
-  ),
-  proof: z.object({
-    items: z.array(proofStreamItemSchema),
-    next_cursor: z.string().nullable(),
-  }),
-  openable: z.boolean(),
-  /** The evidence read could not run. An empty stream then means "unknown", not "nothing done". */
-  proof_unavailable: z.boolean(),
-});
+    customer: z
+      .object({ display_name: z.string().nullable(), phone: z.string().nullable() })
+      .passthrough()
+      .nullable(),
+    gates: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          name: z.string().nullable(),
+          state: z.string().nullable(),
+          blocker_reason: z.string().nullable(),
+          owner: z.string().nullable(),
+          due_at: z.string().nullable(),
+        })
+        .passthrough(),
+    ),
+    proof: z.object({
+      items: z.array(proofStreamItemSchema),
+      next_cursor: z.string().nullable(),
+    }),
+    openable: z.boolean(),
+    /** The evidence read could not run. An empty stream then means "unknown", not "nothing done". */
+    proof_unavailable: z.boolean(),
+    /** Crew tape readings, newest 100; a list that does not parse never hides the record. */
+    field_measurements: z.unknown().optional(),
+    field_measurements_more: z.unknown().optional(),
+  })
+  .transform(keepValidFieldMeasurements);
 
 export type JobHistoryResponse = z.infer<typeof jobHistoryResponseSchema>;

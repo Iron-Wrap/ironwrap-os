@@ -4,6 +4,7 @@ import type {
   AuthContext,
   WorkObjectScope,
 } from "./app-types.ts";
+import { appUserIdentities } from "./app-types.ts";
 import {
   authorityCurrentPrecondition,
   parseAuthorityRequirements,
@@ -382,10 +383,7 @@ export async function authorizeFieldEvidence(
       "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
     );
   }
-  const actorCandidates = [
-    auth.session.email_normalized,
-    auth.session.frappe_user_id,
-  ].filter((value): value is string => Boolean(value?.trim()));
+  const actorCandidates = appUserIdentities(auth.session);
   if (
     !workPackage.workerRosterKnown ||
     !workPackage.assignedWorkers?.some((worker) =>

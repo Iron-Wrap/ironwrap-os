@@ -2265,6 +2265,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // forward-adds `envelopes.release_smoke` so a production release proof's own rows are
     // distinguishable from customer leads; it adds no table, index, or trigger. 0134 adds immutable
     // office lead-intake receipts, 0135 adds the separate manual-observation ledger and heads,
+    // and 0139 adds scoped upload receipts, manifests, and intake replay identity. 0144 adds
+    // structured field observations on the existing field evidence authority.
     // 0139 adds scoped upload receipts, manifests, and intake replay identity; 0140 guards atomic
     // service steps. 0141 separates legal holds, disposition and audit events from immutable
     // upload provenance. 0143 preserves a crew stop across supersession and status replay.
@@ -2272,7 +2274,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // the coordination run, its steps, signals and event ledger; 0201 adds owner controls and
     // 0202 the fact-version ledger.
     // The 0070–0078 and 0083–0089 gaps are reserved or abandoned collision numbers, not missing files.
-    assert.equal(migrations.length, 122);
+    assert.equal(migrations.length, 124);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -2399,6 +2401,8 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards. 0135 adds three manual-observation tables, two named indexes, and twelve lineage,
     // head-pointer, retention, and append-only guards. 0139 adds two upload evidence tables,
     // one recovery index outside this test's `idx_%` subset, and seven immutability guards.
+    // 0144 adds structured field measurement columns, two named indexes, and five capture,
+    // correction, and immutability guards.
     // 0140 adds the service batch assertion table and abort trigger.
     // 0141 adds three privacy tables, three named indexes outside that subset,
     // two live-link views and twenty-eight guards. 0143 adds two crew-stop guards.
@@ -2409,7 +2413,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // guards, no index.
     assert.deepEqual(
       { ...counts },
-      { tables: 257, indexes: 355, triggers: 672 },
+      { tables: 257, indexes: 357, triggers: 678 },
     );
     assert.deepEqual((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'view'
       AND name LIKE 'evidence_upload_%' ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name),

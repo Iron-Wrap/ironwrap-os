@@ -3,12 +3,14 @@ import { getDeviceSecret } from "../auth/device-credential";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { getDatabase } from "../storage/db";
 import {
+  fieldMeasurementPageSchema,
   jobResponseSchema,
   NOT_SAVED_ON_DEVICE,
   proofPageResponseSchema,
   savedOfficeContactSchema,
   todayResponseSchema,
   workObjectResponseSchema,
+  type FieldMeasurementPage,
   type JobResponse,
   type ProofPageResponse,
   type SavedOfficeContact,
@@ -168,6 +170,22 @@ export async function loadProofPage(
   return await apiRequest({
     path: `/api/v1/jobs/${encodeURIComponent(jobId)}/proof?cursor=${encodeURIComponent(cursor)}`,
     schema: proofPageResponseSchema,
+    fetcher,
+    deviceProof: proofFor(session),
+  });
+}
+
+/** One page of a job's crew readings, newest first; `null` asks for the first page. Online only. */
+export async function loadFieldMeasurementPage(
+  session: AuthenticatedSession,
+  jobId: string,
+  cursor: string | null,
+  fetcher: typeof fetch = fetch,
+): Promise<FieldMeasurementPage> {
+  const query = cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  return await apiRequest({
+    path: `/api/v1/jobs/${encodeURIComponent(jobId)}/field-measurements${query}`,
+    schema: fieldMeasurementPageSchema,
     fetcher,
     deviceProof: proofFor(session),
   });

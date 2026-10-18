@@ -98,7 +98,18 @@ export const CAPABILITY_ACTION_REGISTRY: Readonly<Record<CapabilityId, readonly 
   public_estimator: ["public_estimate.submit", "public_estimate.readback"],
 };
 
-const PROFILE_REQUIREMENTS: Readonly<Record<ReadinessProfileKey, readonly CapabilityId[]>> = {
+/** Provider effects cannot become internal work by changing a manifest's direction label. */
+export const EXTERNAL_EFFECT_CAPABILITIES: ReadonlySet<CapabilityId> = new Set([
+  "email_delivery",
+  "facet_association",
+  "quickbooks",
+  "measurement_ocr",
+  "supplier_rail",
+  "communications_rail",
+  "postiz",
+]);
+
+export const PROFILE_REQUIREMENTS: Readonly<Record<ReadinessProfileKey, readonly CapabilityId[]>> = {
   core: [
     "email_delivery",
     "magic_link",
@@ -116,7 +127,7 @@ const PROFILE_REQUIREMENTS: Readonly<Record<ReadinessProfileKey, readonly Capabi
   reference_journey: [],
 };
 
-const PROFILE_DEPENDENCIES: Readonly<
+export const PROFILE_DEPENDENCIES: Readonly<
   Record<ReadinessProfileKey, readonly Exclude<ReadinessProfileKey, "reference_journey">[]>
 > = {
   core: [],
@@ -436,13 +447,23 @@ function evaluateCapability(
     }
     const authScopes = parseScopeNames(manifest.auth_scope_names_json);
     if (!authScopes) blockers.push("auth_scope_names_invalid");
+    const externalEffect = EXTERNAL_EFFECT_CAPABILITIES.has(capability);
+    if (
+      externalEffect &&
+      manifest.direction !== "outbound" &&
+      manifest.direction !== "bidirectional"
+    )
+      blockers.push("provider_direction_invalid");
     const requiresExternalEffect =
-      manifest.direction !== "internal" &&
-      manifest.direction !== "inbound" &&
-      actions.some(
-        (action) =>
-          action.enabled && !action.name.endsWith(".read") && !action.name.endsWith(".readback"),
-      );
+      externalEffect ||
+      (manifest.direction !== "internal" &&
+        manifest.direction !== "inbound" &&
+        actions.some(
+          (action) =>
+            action.enabled &&
+            !action.name.endsWith(".read") &&
+            !action.name.endsWith(".readback"),
+        ));
     if (requiresExternalEffect && authScopes?.length === 0)
       blockers.push("auth_scope_names_missing");
     if (requiresExternalEffect && data.effect_runtime_ready !== true)
@@ -695,7 +716,7 @@ function selectHead<T>(
   return { value: heads[0] ?? null, ambiguous: heads.length !== 1 };
 }
 
-function parseProfileCapabilities(value: string): ProfileCapabilitySpec[] | null {
+export function parseProfileCapabilities(value: string): ProfileCapabilitySpec[] | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return null;
@@ -731,7 +752,7 @@ function parseProfileCapabilities(value: string): ProfileCapabilitySpec[] | null
   }
 }
 
-function parseProfileDependencies(value: string): ProfileDependencySpec[] | null {
+export function parseProfileDependencies(value: string): ProfileDependencySpec[] | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return null;
@@ -764,7 +785,7 @@ function parseProfileDependencies(value: string): ProfileDependencySpec[] | null
   }
 }
 
-function parseManifestActions(
+export function parseManifestActions(
   value: string,
 ): { ok: true; actions: ManifestAction[] } | { ok: false; blocker: string } {
   try {
@@ -794,7 +815,7 @@ function parseManifestActions(
   }
 }
 
-function parseScopeNames(value: string): string[] | null {
+export function parseScopeNames(value: string): string[] | null {
   const scopes = parseStringArray(value);
   return scopes?.every((scope) => /^[a-z][a-z0-9._:-]{0,119}$/.test(scope)) ? scopes : null;
 }
@@ -822,7 +843,7 @@ function canonicalUtcMillis(value: string): number | null {
   return new Date(milliseconds).toISOString() === value ? milliseconds : null;
 }
 
-function usableContract(value: string): boolean {
+export function usableContract(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return normalized.length >= 3 && !["none", "n/a", "na", "unavailable"].includes(normalized);
 }

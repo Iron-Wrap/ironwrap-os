@@ -81,9 +81,11 @@ Each committed stage transition has one immutable outbox binding. The five-minut
 binds it to the active revision that pre-dated the transition, records an explicit `no_rule`
 completion when none matches, and never changes an existing binding after a rule edit or disablement.
 Invocation claims and lease recovery use exact lease references. Sends go through the universal
-effect runtime and Gmail provider readback under the distinct `operations.email.send` action; an
-unknown provider result is terminal for automation. The linked effect ledger remains the later
-authority for reconciliation evidence, but automation does not automatically reopen or redispatch it.
+effect runtime and Gmail's accepted send response under the distinct `operations.email.send`
+action. The response's message ID confirms the send without mailbox-read permission; a missing
+or lost response remains unknown and is never sent again automatically. The linked effect ledger
+remains the later authority for reconciliation evidence, but automation does not automatically
+reopen or redispatch it.
 The feature is disabled by default and runs only when the effect runtime, Gmail, and recipient mapping
 are available.
 

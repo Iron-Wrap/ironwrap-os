@@ -5,6 +5,10 @@ import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-ap
 import { handlePipelineRoute } from "./pipeline-board-api.ts";
 import { buildCapabilitySignalReadModel } from "./capability-signal-api.ts";
 import {
+  admitCapabilityManifest,
+  admitCapabilityProfile,
+} from "./capability-admission.ts";
+import {
   ingestLead,
   officeLeadPayload,
   parseOfficeLead,
@@ -110,6 +114,7 @@ import {
   activeAssignmentForJob,
   activeAssignmentForWorkObject,
   buildEstimatorWorkbenchReadModel,
+  buildJobFieldMeasurementPageReadModel,
   buildJobProofReadModel,
   buildJobHistoryReadModel,
   buildJobReadModel,
@@ -120,6 +125,7 @@ import {
   buildUniversalWorkPackageReadModel,
   fleetAssetForFieldActor,
 } from "./app-read-models.ts";
+import { parseFieldMeasurementCursor } from "./field-measurements.ts";
 import {
   importEstimatorEvidenceFromNativeSources,
   type ImportEstimatorEvidenceInput,
@@ -1302,20 +1308,25 @@ export async function handleAuthenticatedRoute(
   }
   const proofMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/proof$/);
   if (req.method === "GET" && proofMatch) {
-    if (!canReadJobs(auth))
+    const estimatorReadOnly =
+      auth.session.role === "sales" && hasPermission(auth, "estimator:read");
+    if (!canReadJobs(auth) && !estimatorReadOnly)
       return privateAppJson({ error: "job_read_required" }, 403);
     const jobName = decodedPathSegment(proofMatch[1]);
-    if (!jobName) return appJson({ error: "not_found" }, 404);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildJobProofReadModel(
         env,
         auth,
         jobName,
         url.searchParams.get("cursor"),
+        { estimatorReadOnly },
       );
-      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
     } catch {
-      return appJson({ error: "upstream_unavailable" }, 502);
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
   const checkInMatch = url.pathname.match(
@@ -1651,6 +1662,36 @@ export async function handleAuthenticatedRoute(
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  const jobFieldMeasurementsMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/field-measurements$/,
+  );
+  if (req.method === "GET" && jobFieldMeasurementsMatch) {
+    if (!canReadJobs(auth))
+      return privateAppJson({ error: "job_read_required" }, 403);
+    const jobName = decodedPathSegment(jobFieldMeasurementsMatch[1]);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+    if (
+      [...url.searchParams.keys()].some((key) => key !== "cursor") ||
+      url.searchParams.getAll("cursor").length > 1
+    )
+      return privateAppJson({ error: "invalid_field_measurement_cursor" }, 400);
+    const cursor = parseFieldMeasurementCursor(url.searchParams.get("cursor"));
+    if (cursor === undefined)
+      return privateAppJson({ error: "invalid_field_measurement_cursor" }, 400);
+    try {
+      const model = await buildJobFieldMeasurementPageReadModel(
+        env,
+        auth,
+        jobName,
+        cursor,
+      );
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "field_measurements_unavailable" }, 502);
+    }
+  }
   const jobHistoryMatch = url.pathname.match(
     /^\/api\/v1\/jobs\/([^/]+)\/history$/,
   );
@@ -1696,13 +1737,21 @@ export async function handleAuthenticatedRoute(
     }
   }
   if (req.method === "GET" && jobMatch) {
-    if (!canReadJobs(auth))
+    // Sales may inspect the job plan through this one read. Do not grant jobs:read:any: it also
+    // opens history, commercial phase and other records that are outside the estimator view.
+    const estimatorReadOnly =
+      auth.session.role === "sales" && hasPermission(auth, "estimator:read");
+    if (!canReadJobs(auth) && !estimatorReadOnly)
       return privateAppJson({ error: "job_read_required" }, 403);
     const jobName = decodedPathSegment(jobMatch[1]);
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
-      const model = await buildJobReadModel(env, auth, jobName);
-      return model ? privateAppJson(model) : privateAppJson({ error: "not_found" }, 404);
+      const model = await buildJobReadModel(env, auth, jobName, {
+        estimatorReadOnly,
+      });
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
@@ -1815,6 +1864,28 @@ export async function handleAuthenticatedRoute(
       ));
     } catch {
       return privateAppJson({ error: "integration_readiness_unavailable" }, 502);
+    }
+  }
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/api/v1/integrations/manifests" ||
+      url.pathname === "/api/v1/integrations/profiles")
+  ) {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    if (!validAppCsrf(req, auth))
+      return privateAppJson({ error: "csrf_failed" }, 403);
+    if (String(env.APP_READINESS_ADMISSION_ENABLED ?? "") !== "true")
+      return privateAppJson({ error: "integration_admission_disabled" }, 503);
+    const parsed = await readBoundedJson(req, 16 * 1024);
+    if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+    try {
+      const result = url.pathname.endsWith("/manifests")
+        ? await admitCapabilityManifest(env, auth, parsed.value)
+        : await admitCapabilityProfile(env, auth, parsed.value);
+      return privateAppJson(result.body, result.status);
+    } catch {
+      return privateAppJson({ error: "integration_admission_store_unavailable" }, 502);
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {
@@ -7729,6 +7800,43 @@ async function readJson(
     return { ok: false, error: "payload_too_large", status: 413 };
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false, error: "invalid_json", status: 400 };
+  }
+}
+
+async function readBoundedJson(
+  req: Request,
+  maxBytes: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; error: string; status: number }> {
+  const declared = req.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes)
+    return { ok: false, error: "payload_too_large", status: 413 };
+  const reader = req.body?.getReader();
+  if (!reader) return { ok: false, error: "invalid_json", status: 400 };
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false, error: "payload_too_large", status: 413 };
+      }
+      chunks.push(value);
+    }
+    const body = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return {
+      ok: true,
+      value: JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body)),
+    };
   } catch {
     return { ok: false, error: "invalid_json", status: 400 };
   }

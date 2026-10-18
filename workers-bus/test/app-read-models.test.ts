@@ -1920,6 +1920,40 @@ test("typed Shop Order packet is served through the universal BFF route without 
       body.allowed_actions.includes("work_package.acknowledge"),
       true,
     );
+    const degradedEnv = env({
+      typedAssignments: [nativeTypedAssignment()],
+      workPackages: [shopPackage],
+    });
+    const realDb = degradedEnv.DB;
+    degradedEnv.DB = {
+      ...realDb,
+      prepare(sql: string) {
+        if (
+          sql.includes("a.measurement_area_label") &&
+          sql.includes("ORDER BY a.created_at DESC")
+        )
+          throw new Error("field_measurement_storage_mismatch");
+        return realDb.prepare(sql);
+      },
+    } as never;
+    const degradedResponse = await handleAuthenticatedRoute(
+      new Request(
+        "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
+      ),
+      degradedEnv,
+      auth("field", "crew@example.com"),
+    );
+    assert.equal(degradedResponse.status, 200);
+    const degraded = (await degradedResponse.json()) as {
+      stale_fields: string[];
+      field_measurements: unknown[];
+      field_measurements_more: boolean;
+    };
+    assert.ok(
+      degraded.stale_fields.includes("field_measurements.native_unavailable"),
+    );
+    assert.deepEqual(degraded.field_measurements, []);
+    assert.equal(degraded.field_measurements_more, false);
     assert.equal(
       mock.requests.some((request) => request.resource === "Job Assignment"),
       false,
@@ -3679,7 +3713,7 @@ test("production runway HTTP route is private and starts no upstream read for fi
   }
 });
 
-test("Sales Desk HTTP route is private and never starts office reads for field sessions", async () => {
+test("Sales Desk and scoped job-plan reads keep sales out of other job records", async () => {
   const mock = installFrappeMock();
   try {
     const request = new Request("https://app.example.com/api/v1/sales");
@@ -3731,11 +3765,45 @@ test("Sales Desk HTTP route is private and never starts office reads for field s
       assert.equal(salesNowDoctypes.includes(forbidden), false, forbidden);
     }
 
+    const salesJob = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/jobs/JOB-A"),
+      env(),
+      auth("sales", "sales@example.com"),
+    );
+    assert.equal(salesJob.status, 200);
+    assert.equal(salesJob.headers.get("cache-control"), "private, no-store");
+    const salesJobBody = (await salesJob.json()) as {
+      job: { id: string };
+      permissions: string[];
+      allowed_actions: string[];
+      packet: { work_package: null | { id: string; status: string } };
+    };
+    assert.equal(salesJobBody.job.id, "JOB-A");
+    assert.equal(salesJobBody.packet.work_package?.id, "work_package_a");
+    assert.equal(salesJobBody.packet.work_package?.status, "Released");
+    assert.equal(salesJobBody.permissions.includes("jobs:read:any"), false);
+    assert.deepEqual(salesJobBody.allowed_actions, ["job.read"]);
+
+    const salesProof = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/jobs/JOB-A/proof"),
+      env(),
+      auth("sales", "sales@example.com"),
+    );
+    assert.equal(salesProof.status, 200);
+    assert.equal(salesProof.headers.get("cache-control"), "private, no-store");
+    const salesProofBody = (await salesProof.json()) as {
+      allowed_actions: string[];
+      items: unknown[];
+    };
+    assert.deepEqual(salesProofBody.allowed_actions, ["job.read"]);
+    assert.ok(Array.isArray(salesProofBody.items));
+
     for (const [path, error] of [
       ["/api/v1/field/bootstrap", "today_read_required"],
       ["/api/v1/today", "today_read_required"],
-      ["/api/v1/jobs/JOB-A", "job_read_required"],
-      ["/api/v1/jobs/JOB-A/proof", "job_read_required"],
+      ["/api/v1/jobs/JOB-A/history", "job_read_any_required"],
+      ["/api/v1/jobs/JOB-A/customer-history", "job_read_any_required"],
+      ["/api/v1/jobs/JOB-A/phase", "job_read_any_required"],
     ] as const) {
       const callsBeforeDeniedRead = mock.requests.length;
       const deniedRead = await handleAuthenticatedRoute(

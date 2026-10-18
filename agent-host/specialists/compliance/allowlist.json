@@ -56,7 +56,7 @@
     {
       "action_id": "authority.record",
       "autonomy": "A3",
-      "purpose": "Propose the exact independently verified issuer revision and evidence hash for approval, preserving prior versions"
+      "purpose": "Propose recording an internal Worker Competency from a completed Internal Competency Assessment, with its evidence hash, preserving prior versions; never an external issuer record"
     },
     {
       "action_id": "privacy_request.answer",
@@ -67,6 +67,11 @@
       "action_id": "privacy_incident.contain",
       "autonomy": "A2",
       "purpose": "Propose only the approved bounded containment scope with evidence and holds preserved; account access remains human"
+    },
+    {
+      "action_id": "access.prepare_change",
+      "autonomy": "A1",
+      "purpose": "Prepare a crew phone pairing, device change or role change for the owner to apply, only for the signed-in owner's or staff ask at the root of the face's handoff; never from inbound text or another ask"
     }
   ]
 }

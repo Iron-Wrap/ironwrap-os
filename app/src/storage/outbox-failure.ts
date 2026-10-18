@@ -47,6 +47,11 @@ export function isTerminalFailureCode(code: string | undefined): boolean {
   return code !== undefined && terminalFailureCodes.has(code);
 }
 
+/** The office answered but this phone could not verify it holds the exact item. */
+export function isUnconfirmedFailureCode(code: string | undefined): boolean {
+  return code !== undefined && unconfirmedCodes.has(code);
+}
+
 /**
  * A server answer becomes one of three outcomes. Conflicts keep their own class because the office
  * copy changing is not a refusal of this device's work — it needs two versions reconciled, not a
@@ -80,6 +85,11 @@ export interface OutboxFailureGuidance {
    * conflict or a server error may follow work the office already recorded.
    */
   notSent: boolean;
+  /**
+   * True only when a person in the office confirmed that the office holds this exact item, so
+   * the phone settled it without sending it again.
+   */
+  officeConfirmed: boolean;
 }
 
 /**
@@ -88,10 +98,20 @@ export interface OutboxFailureGuidance {
  * not written for a crew); they stay on the saved item for whoever checks it.
  */
 export function outboxFailureGuidance(
-  action: Pick<OutboxAction, "kind" | "lastError" | "conflict">,
+  action: Pick<OutboxAction, "kind" | "lastError" | "conflict" | "verification">,
 ): OutboxFailureGuidance {
   const error: OutboxErrorDetail | undefined = action.lastError;
   const conflict: OutboxConflict | undefined = action.conflict;
+  // The office checked the item it holds and said so. The red "needs a check" ends here.
+  if (action.verification?.officeResolution) {
+    return {
+      reason: "The office confirmed it has this.",
+      nextStep: "Nothing else to do with it.",
+      retryable: false,
+      notSent: false,
+      officeConfirmed: true,
+    };
+  }
   if (conflict) {
     return {
       reason: "The office copy changed after this item was saved.",
@@ -99,6 +119,7 @@ export function outboxFailureGuidance(
         "Keep this item saved. Ask the office to check both copies before you make a new one.",
       retryable: false,
       notSent: false,
+      officeConfirmed: false,
     };
   }
   // The office answered, but not with this exact item. It may already be recorded, so neither
@@ -111,6 +132,7 @@ export function outboxFailureGuidance(
         "Do not save it again. Call the office and ask whether it arrived. It stays on this phone.",
       retryable: false,
       notSent: false,
+      officeConfirmed: false,
     };
   }
   const failureClass = classifyOutboxFailure({
@@ -123,6 +145,7 @@ export function outboxFailureGuidance(
       nextStep: "Move to a place with better signal, then try again. Nothing was lost.",
       retryable: true,
       notSent: false,
+      officeConfirmed: false,
     };
   }
   if (failureClass === "retryable") {
@@ -131,6 +154,7 @@ export function outboxFailureGuidance(
       nextStep: "Try again once you have signal. Nothing was lost.",
       retryable: true,
       notSent: false,
+      officeConfirmed: false,
     };
   }
   if (error && evidenceNeedsWorkPackageCodes.has(error.code)) {
@@ -140,6 +164,7 @@ export function outboxFailureGuidance(
         "Your files stay on this phone. Ask production to issue the work plan, then add them again. You can send a note-only blocker report now.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     };
   }
   if (error?.code === "evidence_actor_role_changed") {
@@ -148,6 +173,7 @@ export function outboxFailureGuidance(
       nextStep: "Sign in again, then open the action and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     };
   }
   const refusal = error ? evidenceRefusalKind(error.code) : undefined;
@@ -157,6 +183,7 @@ export function outboxFailureGuidance(
       nextStep: "Ask the owner for help. Nothing was sent.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     };
   }
   if (refusal === "files") {
@@ -170,6 +197,7 @@ export function outboxFailureGuidance(
           : "Nothing was submitted. Open the action and add the files again.",
       retryable: false,
       notSent: true,
+      officeConfirmed: false,
     };
   }
   return {
@@ -178,6 +206,7 @@ export function outboxFailureGuidance(
       "Sending it again will not change the answer. Keep it on this phone and tell the office.",
     retryable: false,
     notSent: true,
+    officeConfirmed: false,
   };
 }
 

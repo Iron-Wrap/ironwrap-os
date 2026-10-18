@@ -12,6 +12,7 @@ import { sha256 } from "./schema.ts";
 import {
   ProviderError,
   classifyText,
+  limitResetMs,
   zeroUsage,
   type ProviderAdapter,
   type ProviderCall,
@@ -121,7 +122,9 @@ export function createClaudeAdapter(
         }
       } catch (error) {
         if (request.signal.aborted) throw new ProviderError("aborted", "the run was cancelled");
-        throw new ProviderError(classifyText(String(error)), `claude: ${String(error)}`);
+        const now = Date.now();
+        const resetsAt = rateLimitResetMs ?? limitResetMs(String(error), now);
+        throw new ProviderError(resetsAt !== undefined ? "rate_limit" : classifyText(String(error)), `claude: ${String(error)}`, resetsAt === undefined ? {} : { retryAfterMs: Math.max(0, resetsAt - now) });
       } finally {
         request.signal.removeEventListener("abort", onAbort);
         await rm(cwd, { recursive: true, force: true });
@@ -159,6 +162,15 @@ export function createClaudeAdapter(
       }
       const detail = result.subtype === "success" ? result.result : result.errors.join("; ");
       const status = result.subtype === "success" ? result.api_error_status ?? undefined : undefined;
+      // A subscription limit can arrive only as text ("You've hit your weekly limit · resets …").
+      if (rateLimitResetMs === undefined) {
+        const now = Date.now();
+        const resetsAt = limitResetMs(detail, now);
+        if (resetsAt !== undefined) {
+          rateLimitResetMs = resetsAt;
+          extra.retryAfterMs = Math.max(0, resetsAt - now);
+        }
+      }
       const kind = rateLimitResetMs !== undefined ? "rate_limit" : classify(assistantError, status, detail);
       throw new ProviderError(kind, `claude: ${assistantError ?? result.subtype}: ${detail}`, extra);
     },

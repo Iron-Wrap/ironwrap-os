@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { getDeviceSecret } from "../auth/device-credential";
@@ -6,21 +6,32 @@ import type { AuthenticatedSession } from "../auth/session";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { Button } from "../components/ui/button";
 import { dateTimeFormatter } from "../lib/intl-cache";
-import { isOutboxActionSafeToRetry, retryOutboxAction } from "../storage/outbox";
+import {
+  isOutboxActionSafeToRetry,
+  markOfficeSettlementSeen,
+  retryOutboxAction,
+} from "../storage/outbox";
 import { outboxFailureGuidance } from "../storage/outbox-failure";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
-import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
+import {
+  useOutboxActionsNeedingAttention,
+  useOutboxActionsSettledByOffice,
+} from "../storage/use-outbox";
 
 export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSession }) {
   const actions = useOutboxActionsNeedingAttention({
     tenantId: session.tenant.id,
     userId: session.user.id,
   });
+  const settled = useOutboxActionsSettledByOffice({
+    tenantId: session.tenant.id,
+    userId: session.user.id,
+  });
   const [retryingActionId, setRetryingActionId] = useState<string>();
   const [retryError, setRetryError] = useState<Record<string, string>>({});
 
-  if (actions.length === 0) return null;
+  if (actions.length === 0 && settled.length === 0) return null;
 
   async function retry(action: OutboxAction) {
     setRetryingActionId(action.deviceActionId);
@@ -49,85 +60,138 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
   }
 
   return (
+    <>
+      {settled.length > 0 ? <OfficeSettledItems actions={settled} /> : null}
+      {actions.length > 0 ? (
+        <section
+          id="saved-work"
+          className="border-2 border-danger/55 bg-danger-soft/45 p-4 sm:p-5"
+          aria-labelledby="saved-work-heading"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
+            <div>
+              <p className="text-sm font-semibold text-danger">Saved work</p>
+              <h2 id="saved-work-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
+                {actions.length === 1
+                  ? "One saved item needs review"
+                  : `${actions.length} saved items need review`}
+              </h2>
+              <p className="mt-2 max-w-3xl leading-6 text-muted">
+                Each saved item and any attached files remain on this device. Review why it stopped
+                before trying anything again.
+              </p>
+            </div>
+          </div>
+
+          <ol className="mt-5 space-y-3">
+            {actions.map((action) => {
+              // A conflict is never safe to retry, so this one call covers both refusal shapes.
+              const retryable = isOutboxActionSafeToRetry(action);
+              const guidance = outboxFailureGuidance(action);
+              const busy = retryingActionId === action.deviceActionId;
+              return (
+                <li
+                  key={action.deviceActionId}
+                  className="border border-danger/25 bg-surface-raised p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-bold">{actionLabel(action)}</h3>
+                      <p className="mt-1 text-sm text-muted">
+                        Saved {formatSavedAt(action.updatedAt, session.tenant.locale)}
+                      </p>
+                    </div>
+                    <OutboxStateBadge state={action.state} />
+                  </div>
+
+                  <dl className="mt-4 border-y border-border/80 py-3 text-sm">
+                    <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
+                      <dt className="font-semibold text-muted">Why it stopped</dt>
+                      <dd className="leading-6">{guidance.reason}</dd>
+                    </div>
+                    <div className="mt-3 grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
+                      <dt className="font-semibold text-muted">Do this next</dt>
+                      <dd className="leading-6 font-bold">{guidance.nextStep}</dd>
+                    </div>
+                  </dl>
+
+                  {retryable ? (
+                    <div className="mt-4">
+                      <Button
+                        type="button"
+                        size="compact"
+                        variant="outline"
+                        busy={busy}
+                        onClick={() => void retry(action)}
+                      >
+                        <RefreshCw aria-hidden="true" />
+                        Try again
+                      </Button>
+                      <p className="mt-2 text-sm leading-6 text-muted" role="status">
+                        This only tries to send the same saved item again. It does not make a copy.
+                      </p>
+                    </div>
+                  ) : null}
+                  {retryError[action.deviceActionId] ? (
+                    <p className="mt-3 text-sm font-semibold text-danger" role="alert">
+                      {retryError[action.deviceActionId]}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Items that had stopped as "Needs a check" until a person in the office confirmed the office has
+ * them. They leave the red list, so this says why, until the person has read it.
+ */
+function OfficeSettledItems({ actions }: { actions: OutboxAction[] }) {
+  return (
     <section
-      id="saved-work"
-      className="border-2 border-danger/55 bg-danger-soft/45 p-4 sm:p-5"
-      aria-labelledby="saved-work-heading"
+      className="border-2 border-border bg-surface-raised p-4 sm:p-5"
+      aria-labelledby="office-settled-heading"
     >
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
+        <CheckCircle2 className="mt-1 size-5 shrink-0" aria-hidden="true" />
         <div>
-          <p className="text-sm font-semibold text-danger">Saved work</p>
-          <h2 id="saved-work-heading" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
+          <h2 id="office-settled-heading" className="text-2xl font-bold tracking-[-0.03em]">
             {actions.length === 1
-              ? "One saved item needs review"
-              : `${actions.length} saved items need review`}
+              ? "The office has your saved item"
+              : `The office has your ${actions.length} saved items`}
           </h2>
           <p className="mt-2 max-w-3xl leading-6 text-muted">
-            Each saved item and any attached files remain on this device. Review why it stopped
-            before trying anything again.
+            A person in the office confirmed it. Nothing for you to do.
           </p>
         </div>
       </div>
-
-      <ol className="mt-5 space-y-3">
-        {actions.map((action) => {
-          // A conflict is never safe to retry, so this one call covers both refusal shapes.
-          const retryable = isOutboxActionSafeToRetry(action);
-          const guidance = outboxFailureGuidance(action);
-          const busy = retryingActionId === action.deviceActionId;
-          return (
-            <li
-              key={action.deviceActionId}
-              className="border border-danger/25 bg-surface-raised p-4"
+      <ul className="mt-4 space-y-3">
+        {actions.map((action) => (
+          <li
+            key={action.deviceActionId}
+            className="flex flex-wrap items-center justify-between gap-3 border-t border-border/80 pt-3"
+          >
+            <div>
+              <h3 className="font-bold">{actionLabel(action)}</h3>
+              <p className="mt-1 text-sm leading-6 text-muted">The office confirmed it has this.</p>
+            </div>
+            <Button
+              type="button"
+              size="field"
+              variant="outline"
+              onClick={() => void markOfficeSettlementSeen(action.deviceActionId)}
             >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 className="font-bold">{actionLabel(action)}</h3>
-                  <p className="mt-1 text-sm text-muted">
-                    Saved {formatSavedAt(action.updatedAt, session.tenant.locale)}
-                  </p>
-                </div>
-                <OutboxStateBadge state={action.state} />
-              </div>
-
-              <dl className="mt-4 border-y border-border/80 py-3 text-sm">
-                <div className="grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
-                  <dt className="font-semibold text-muted">Why it stopped</dt>
-                  <dd className="leading-6">{guidance.reason}</dd>
-                </div>
-                <div className="mt-3 grid gap-1 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4">
-                  <dt className="font-semibold text-muted">Do this next</dt>
-                  <dd className="leading-6 font-bold">{guidance.nextStep}</dd>
-                </div>
-              </dl>
-
-              {retryable ? (
-                <div className="mt-4">
-                  <Button
-                    type="button"
-                    size="compact"
-                    variant="outline"
-                    busy={busy}
-                    onClick={() => void retry(action)}
-                  >
-                    <RefreshCw aria-hidden="true" />
-                    Try again
-                  </Button>
-                  <p className="mt-2 text-sm leading-6 text-muted" role="status">
-                    This only tries to send the same saved item again. It does not make a copy.
-                  </p>
-                </div>
-              ) : null}
-              {retryError[action.deviceActionId] ? (
-                <p className="mt-3 text-sm font-semibold text-danger" role="alert">
-                  {retryError[action.deviceActionId]}
-                </p>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+              Got it
+            </Button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

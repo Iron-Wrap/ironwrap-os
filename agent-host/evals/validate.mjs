@@ -28,6 +28,23 @@ const PLAYBOOK_HEADINGS = [
   "Receipt",
 ];
 const SIGNAL_KINDS = new Set(["event", "watch", "owner_request", "handoff"]);
+// The app roles a person's ask or press names (the Worker writes the role, never the user).
+const APP_ROLES = new Set(["owner", "ops", "sales", "production", "accounting", "field"]);
+// Signal actors by type: the role they carry, their ref, and whether the OS authenticated them.
+const ACTOR_TYPES = new Map([
+  ["owner", { roles: new Set(["owner"]), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["staff", { roles: new Set([...APP_ROLES].filter((role) => role !== "owner")), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  // A crew member signed in to the crew app: on an ask, or on an event the crew app writes.
+  ["worker", { roles: new Set(["field"]), ref: /^person:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["customer", { roles: new Set([null]), ref: /^customer:[A-Za-z0-9._-]+$/, authenticated: true }],
+  ["external", { roles: new Set([null]), ref: /^channel:(?:email|sms|web|voice)$/, authenticated: false }],
+]);
+function validActor(actor) {
+  if (!actor || typeof actor !== "object" || Array.isArray(actor)) return false;
+  const rule = ACTOR_TYPES.get(actor.type);
+  const keys = Object.keys(actor).sort().join(",");
+  return Boolean(rule) && keys === "authenticated,ref,role,type" && rule.roles.has(actor.role) && rule.ref.test(actor.ref ?? "") && actor.authenticated === rule.authenticated;
+}
 const TRUST = new Set(["owned", "external_verified", "external_unverified", "untrusted_text"]);
 const DECISIONS = new Set(["propose", "abstain", "escalate", "ignore"]);
 const OUTCOMES = new Set(["succeeded", "failed", "unknown", "abstained"]);
@@ -401,6 +418,42 @@ function expectedOutcome(expected, granted) {
   return classes.some((autonomy) => autonomy === "A0" || autonomy === "A1") ? "succeeded" : null;
 }
 
+// Producer exclusion: nobody who produced the work releases or accepts it. A case prepares such a
+// release or acceptance when it expects `completion.draft_packet`, or `evidence.review` while its
+// facts hold a work package (a hold point) or a shop first-piece record; a review of an incoming lot
+// or of an NCR's verification prepares neither. That case forbids both people-only acts, and its
+// receipt must cite every such fact, each naming its producers.
+const RELEASE_ACTS = ["hold_point.release", "completion.accept"];
+const PRODUCERS = new Map([
+  ["work_package", "assigned_workers"],
+  ["first_piece_record", "operator"],
+]);
+// A producer is named by a non-blank string, or by an assigned worker with a non-blank worker_id.
+const namesProducer = (entry) => (typeof entry === "string" ? entry.trim() !== "" : typeof entry?.worker_id === "string" && entry.worker_id.trim() !== "");
+
+function checkProducerExclusion(item, expected, fail, label) {
+  const actionIds = new Set(objects(expected.actions).map((action) => action.action_id));
+  const named = objects(item.facts).filter((fact) => PRODUCERS.has(fact.kind));
+  const packet = actionIds.has("completion.draft_packet");
+  if (!packet && !(actionIds.has("evidence.review") && named.length > 0)) return;
+  if (packet && !named.some((fact) => fact.kind === "work_package")) {
+    fail(`${label}: a completion packet case needs the work_package fact that names the producers`);
+  }
+  for (const actionId of RELEASE_ACTS) {
+    if (!(expected.forbidden_actions ?? []).includes(actionId)) fail(`${label}: a case that prepares a release or an acceptance forbids ${actionId}`);
+  }
+  const cited = new Set(expected.receipt?.must_cite ?? []);
+  for (const fact of named) {
+    const field = PRODUCERS.get(fact.kind);
+    const producers = fact.data?.[field];
+    const entries = Array.isArray(producers) ? producers : [producers];
+    if (entries.length === 0 || !entries.every(namesProducer)) {
+      fail(`${label}: ${fact.fact_id} must name every producer in ${field}: an empty list or a blank entry names nobody`);
+    }
+    if (!cited.has(fact.fact_id)) fail(`${label}: must_cite needs ${fact.fact_id}, which names the producers none of whom may release or accept the work`);
+  }
+}
+
 function checkCase(item, context) {
   const { suite, id, granted, catalog, registry, catastropheIds, fail, label: file } = context;
   const label = `${file}: ${item.id ?? "<no id>"}`;
@@ -416,6 +469,27 @@ function checkCase(item, context) {
   }
   if (!signal.content || (typeof signal.content.text !== "string" && !signal.content.request)) {
     fail(`${label}: signal.content needs text or request`);
+  }
+  // The signal's actor, as the Worker writes it: who sent it, or null for the Worker's own watch
+  // firings and specialist handoffs. Only an external sender is unauthenticated.
+  const actor = signal.actor ?? null;
+  if (actor !== null && !validActor(actor)) {
+    fail(`${label}: signal.actor must be { type, role, ref, authenticated } as the Worker writes it (${[...ACTOR_TYPES.keys()].join(", ")})`);
+  }
+  if (["watch", "handoff"].includes(signal.kind) && actor !== null) fail(`${label}: a ${signal.kind} signal has no actor; its source says who`);
+  // A person's ask goes to the face (`ask`) and a press on a view action to the action's owning
+  // specialist (`request`). Both name the signed-in person; crew can ask but cannot press.
+  if (signal.kind === "owner_request") {
+    if (signal.source === "ask" && id !== "orchestrator") fail(`${label}: an ask goes to the orchestrator; a press to ${id} has source "request"`);
+    if (!["ask", "request"].includes(signal.source)) fail(`${label}: an owner_request has source "ask" or "request"`);
+    const requesters = signal.source === "ask" ? ["owner", "staff", "worker"] : ["owner", "staff"];
+    if (!requesters.includes(actor?.type) || (signal.source === "request" && actor.role === "field")) {
+      const named = requesters.length > 2 ? `${requesters.slice(0, -1).join(", ")}, or ${requesters.at(-1)}` : requesters.join(" or ");
+      fail(`${label}: an owner_request ${signal.source} names its requester as an ${named} actor${signal.source === "request" ? " that may press view actions (not field)" : ""}`);
+    }
+    if (actor && !actor.ref?.startsWith("person:")) fail(`${label}: an owner_request names the signed-in person (ref person:<id>)`);
+  } else if (["ask", "request"].includes(signal.source)) {
+    fail(`${label}: source "${signal.source}" belongs to an owner_request`);
   }
   if (item.clock !== undefined) {
     const clock = item.clock;
@@ -509,7 +583,8 @@ function checkCase(item, context) {
     if (!RECEIPT_FIELDS.has(field)) fail(`${label}: unknown receipt field ${field}`);
   }
   for (const cited of receipt.must_cite ?? []) {
-    if (!factIds.has(cited)) fail(`${label}: must_cite ${cited} is not a case fact`);
+    // The pseudo-fact `signal` is the run's own signal, which every run holds.
+    if (cited !== "signal" && !factIds.has(cited)) fail(`${label}: must_cite ${cited} is not a case fact`);
   }
   if (expected.draft !== null) {
     const draft = expected.draft ?? {};
@@ -525,6 +600,7 @@ function checkCase(item, context) {
   for (const catastrophe of item.catastrophic_if ?? []) {
     if (!catastropheIds.has(catastrophe)) fail(`${label}: unknown catastrophe ${catastrophe}`);
   }
+  checkProducerExclusion(item, expected, fail, label);
 }
 
 function checkSuite(dir, suite, context) {

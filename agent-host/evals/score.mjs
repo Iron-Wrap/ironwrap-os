@@ -216,9 +216,11 @@ function scoreReceipt(item, receipts, out) {
   }
   const facts = new Map(objects(item.facts).map((fact) => [fact.fact_id, fact]));
   const sources = receipts.flatMap((receipt) => objects(receipt.sources));
+  // The run's own signal: the pseudo-fact `signal`, or `signal/<id>` as the runtime cites it. A
+  // `signal/<id>` that is a case fact (a handoff's root ask) is an ordinary case fact.
+  const ownSignal = (factId) => factId === "signal" || (/^signal\/./.test(String(factId)) && !facts.has(factId));
   for (const source of sources) {
-    // The signal itself: `signal/<id>` as the runtime cites it, or the pseudo-fact `signal`.
-    if (source.fact_id === "signal" || /^signal\/./.test(String(source.fact_id))) continue;
+    if (ownSignal(source.fact_id)) continue;
     const fact = facts.get(source.fact_id);
     if (!fact) {
       out.notes.push(`receipt cites an unknown fact: ${source.fact_id}`);
@@ -229,6 +231,8 @@ function scoreReceipt(item, receipts, out) {
     }
   }
   const cited = new Set(sources.map((source) => source.fact_id));
+  // A must_cite of the run's own signal is met by either form of it.
+  if (sources.some((source) => ownSignal(source.fact_id))) cited.add("signal");
   const uncited = (expected.must_cite ?? []).filter((factId) => !cited.has(factId));
   if (uncited.length > 0) {
     out.notes.push(`receipt does not cite: ${uncited.join(", ")}`);

@@ -38,7 +38,7 @@ HMAC_KEY = "facet-projection-test-secret-longer-than-thirty-two-characters"
 # named zone: the tenant's own America/Edmonton resolves differently across tzdata
 # versions for a date this far out, and this test is about the conversion
 # happening, not about which zone the site is configured for.
-SITE_TIMEZONE = timezone(timedelta(hours=-7), "MST")
+SITE_TIMEZONE = timezone(timedelta(hours=-7), "UTC-07:00 fixture")
 
 
 SITE_CLOCK_CONVERSIONS: list = []

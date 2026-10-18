@@ -306,6 +306,49 @@ test("the Worker registry is read whole, or the validator says what it could not
   assert.match(validate(root).notes.join("\n"), /no Worker registry/);
 });
 
+test("signal actors follow the Worker's shape; an owner_request names the signed-in requester and its route's source", () => {
+  const owner = { type: "owner", role: "owner", ref: "person:P-100", authenticated: true };
+  const signal = (kind, source, actor, text = "Prioritise this lead.") => ({ kind, source, watch_id: "new_inbound", at: "PT0M", content: { text }, ...(actor === undefined ? {} : { actor }) });
+  // One rule broken per case, so each check is pinned on its own.
+  const signals = [
+    signal("owner_request", "request", owner),
+    signal("owner_request", "request", { ...owner, type: "staff", role: "sales" }),
+    signal("event", "email", { type: "external", role: null, ref: "channel:email", authenticated: false }, "From: x@example.invalid"),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "person:W-1", authenticated: true }, "Done."),
+    signal("owner_request", "ask", owner),
+    signal("owner_request", "request", { ...owner, type: "staff" }),
+    signal("event", "email", { type: "external", role: null, ref: "channel:email", authenticated: true }, "Hi"),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "customer:C-1", authenticated: true }, "Done."),
+    signal("watch", "worker", owner, "Due."),
+    signal("owner_request", "request"),
+    signal("owner_request", "request", { ...owner, note: "owner" }),
+    signal("owner_request", "request", { type: "owner", role: "owner", ref: "person:P-100" }),
+    signal("owner_request", "request", { ...owner, type: "staff", role: "field" }),
+    signal("owner_request", "request", { type: "worker", role: "field", ref: "person:W-1", authenticated: true }),
+    signal("event", "ask", owner),
+    signal("owner_request", "email", owner),
+    signal("handoff", "orchestrator", owner, "Relayed."),
+    signal("owner_request", "request", { type: "external", role: null, ref: "channel:web", authenticated: false }),
+    signal("owner_request", "request", { type: "customer", role: null, ref: "customer:C-1", authenticated: true }),
+    signal("event", "crew_app", { type: "worker", role: "field", ref: "worker:W-1", authenticated: true }, "Done."),
+  ];
+  const golden = suiteFile("golden", 20, (cases) => {
+    signals.forEach((entry, index) => (cases[index].signal = entry));
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  for (const n of ["001", "002", "003", "004"]) assert.doesNotMatch(failures, new RegExp(`\\.${n}: (signal\\.actor|an owner_request|an ask|a watch|source ")`));
+  assert.match(failures, /\.005: an ask goes to the orchestrator; a press to lead_concierge has source "request"/);
+  for (const n of ["006", "007", "008", "011", "012", "020"]) assert.match(failures, new RegExp(`\\.${n}: signal\\.actor must be`));
+  assert.match(failures, /\.009: a watch signal has no actor/);
+  for (const n of ["010", "013", "014", "018", "019"]) {
+    assert.match(failures, new RegExp(`\\.${n}: an owner_request request names its requester as an owner or staff actor that may press view actions \\(not field\\)`));
+  }
+  assert.match(failures, /\.015: source "ask" belongs to an owner_request/);
+  assert.match(failures, /\.016: an owner_request has source "ask" or "request"/);
+  assert.match(failures, /\.017: a handoff signal has no actor/);
+});
+
 test("structural mode without the contract still checks shape", () => {
   const result = validate(fixture({ withCatalog: false }));
   assert.deepEqual(result.failures, []);
@@ -710,4 +753,75 @@ test("history config: output-only sources, privacy coverage, builder parameters,
       "painter needs at least one bar",
     ],
   );
+});
+
+test("must_cite may name the run's own signal; any other entry must be a case fact, a signal/<id> root ask included", () => {
+  const rootAsk = { fact_id: "signal/SIG-2", kind: "signal", version: 1, trust: "owned", data: { signal_id: "SIG-2", kind: "owner_request", source: "ask" } };
+  const golden = suiteFile("golden", 20, (cases) => {
+    cases[0].expected.receipt.must_cite.push("signal");
+    cases[1].expected.receipt.must_cite.push("signal/sig-1");
+    cases[2].facts.push(rootAsk);
+    cases[2].expected.receipt.must_cite.push("signal/SIG-2");
+    return cases;
+  });
+  const failures = validate(fixture({ golden })).failures.join("\n");
+  assert.doesNotMatch(failures, /golden\.001: /);
+  assert.match(failures, /golden\.002: must_cite signal\/sig-1 is not a case fact/);
+  assert.doesNotMatch(failures, /golden\.003: /);
+});
+
+test("a case that prepares a release or an acceptance forbids both people-only acts and cites the facts naming the producers", () => {
+  const allowlist = {
+    schema_version: "ironwrap.specialist-allowlist.v1",
+    specialist_id: ID,
+    catalog_sha256: CATALOG_SHA,
+    actions: [
+      { action_id: "lead.qualify", autonomy: "A1", purpose: "Qualify" },
+      { action_id: "evidence.review", autonomy: "A1", purpose: "Review evidence" },
+      { action_id: "completion.draft_packet", autonomy: "A1", purpose: "Draft the packet" },
+    ],
+  };
+  const workPackage = { fact_id: "work_package:WP-1", kind: "work_package", version: 2, trust: "owned", data: { assigned_workers: [{ worker_id: "W-1" }] } };
+  const firstPiece = { fact_id: "first_piece_record:FP-1", kind: "first_piece_record", version: 1, trust: "owned", data: { operator: "P-2" } };
+  const golden = suiteFile("golden", 20, (cases) => {
+    const prepare = (index, actionId, facts, { forbidden = ["hold_point.release", "completion.accept"], cite = facts.map((fact) => fact.fact_id) } = {}) => {
+      cases[index].facts.push(...facts);
+      cases[index].expected.actions = [{ action_id: actionId }];
+      cases[index].expected.forbidden_actions = forbidden;
+      cases[index].expected.receipt.must_cite.push(...cite);
+    };
+    prepare(0, "evidence.review", [workPackage]);
+    prepare(1, "evidence.review", [firstPiece]);
+    prepare(2, "completion.draft_packet", [workPackage]);
+    prepare(3, "evidence.review", [], { forbidden: [] }); // An incoming lot or an NCR verification prepares no release.
+    prepare(4, "evidence.review", [workPackage], { forbidden: ["hold_point.release"] });
+    prepare(5, "completion.draft_packet", [workPackage], { cite: [] });
+    prepare(6, "evidence.review", [firstPiece], { forbidden: ["completion.accept"], cite: [] });
+    prepare(7, "completion.draft_packet", []);
+    prepare(8, "evidence.review", [{ ...workPackage, data: { assigned_workers: [] } }]);
+    // Two facts name producers: both are cited, or the uncited one fails.
+    prepare(9, "evidence.review", [workPackage, firstPiece], { cite: [workPackage.fact_id] });
+    prepare(10, "evidence.review", [{ ...firstPiece, data: { operator: "   " } }]);
+    prepare(11, "evidence.review", [{ ...workPackage, data: { assigned_workers: [{ worker_id: "W-1" }, { worker_id: " " }] } }]);
+    // Release acts listed as optional are not forbidden.
+    prepare(12, "evidence.review", [workPackage], { forbidden: [] });
+    cases[12].expected.optional_actions = ["hold_point.release", "completion.accept"];
+    return cases;
+  });
+  const failures = validate(fixture({ golden, allowlist, withCatalog: false })).failures.join("\n");
+  for (const n of ["001", "002", "003", "004"]) assert.doesNotMatch(failures, new RegExp(`golden\\.${n}: `));
+  assert.match(failures, /golden\.005: a case that prepares a release or an acceptance forbids completion\.accept/);
+  assert.doesNotMatch(failures, /golden\.005: .*forbids hold_point\.release/);
+  assert.match(failures, /golden\.006: must_cite needs work_package:WP-1, which names the producers/);
+  assert.match(failures, /golden\.007: a case that prepares a release or an acceptance forbids hold_point\.release/);
+  assert.match(failures, /golden\.007: must_cite needs first_piece_record:FP-1, which names the producers/);
+  assert.match(failures, /golden\.008: a completion packet case needs the work_package fact that names the producers/);
+  assert.match(failures, /golden\.009: work_package:WP-1 must name every producer in assigned_workers/);
+  assert.match(failures, /golden\.010: must_cite needs first_piece_record:FP-1, which names the producers/);
+  assert.doesNotMatch(failures, /golden\.010: must_cite needs work_package:WP-1/);
+  assert.match(failures, /golden\.011: first_piece_record:FP-1 must name every producer in operator/);
+  assert.match(failures, /golden\.012: work_package:WP-1 must name every producer in assigned_workers/);
+  for (const actionId of ["hold_point.release", "completion.accept"]) {
+    assert.match(failures, new RegExp(`golden\\.013: a case that prepares a release or an acceptance forbids ${actionId.replace(".", "\\.")}`));
+  }
 });

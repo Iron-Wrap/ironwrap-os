@@ -4,10 +4,13 @@
 
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
-import { DEFAULT_CEILINGS, evaluateStep, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
+import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
 import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
-import { citedFacts, factReader, hydrate, refOf, subjectFacts, type ContextFact, type FactRef, type OmittedFact } from "./memory.ts";
+import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
+import { citedFacts, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
+import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
+import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
 import { registryEntry } from "./registry.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 
@@ -69,6 +72,16 @@ export interface RunRow {
   correlation_id: string;
   catalog_version: string;
   policy_version: string;
+  /** `live`, or `shadow` when every action the run can lead to is in shadow (migration 0203). */
+  mode?: "live" | "shadow";
+}
+
+/** What the host needs to route a run: its mode, its one expected action and the run it reviews. */
+export interface RunHints {
+  mode: "live" | "shadow";
+  expected_action_id: string | null;
+  review_of: { run_id: string; provider: string } | null;
+  output_extension?: { view: JsonSchema };
 }
 
 export interface StepRow {
@@ -107,6 +120,7 @@ export interface RunContext {
   omitted: OmittedFact[];
 }
 
+/** What the host needs beyond the context and tools: an ask run may also return a view. */
 export interface RunTool {
   action_id: string;
   tool_name: string;
@@ -136,6 +150,10 @@ export async function appendSignal(
     handoff_depth?: number;
   },
   now: string,
+  /** Statements that must pass in the insert's transaction, such as a person's live session. */
+  guards: BoundStatement[] = [],
+  /** A condition the insert itself checks, such as a person's limits; refused, it answers `signal_not_admitted`. */
+  admission: { where: string; values: unknown[] } | null = null,
 ): Promise<{ signal_id: string; created: boolean } | StoreError> {
   if (!SIGNAL_KINDS.has(input.kind)) return { error: "invalid_signal_kind", status: 422 };
   if (!catalogSpecialist(input.specialist_id)) return { error: "unknown_specialist", status: 422 };
@@ -146,13 +164,13 @@ export async function appendSignal(
   if (existing) return { signal_id: existing.signal_id, created: false };
   const contentJson = canonicalJson(input.content ?? null);
   const signalId = `sig_${crypto.randomUUID()}`;
-  const inserted = await db
+  const insert = db
     .prepare(
       `INSERT INTO agent_signals (signal_id, tenant_id, kind, specialist_id, watch_id, source,
         subject_aggregate, subject_id, content_json, content_sha256, dedupe_key, parent_run_id,
         handoff_depth, received_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM agent_signals WHERE tenant_id = ? AND dedupe_key = ?)`,
+       WHERE NOT EXISTS (SELECT 1 FROM agent_signals WHERE tenant_id = ? AND dedupe_key = ?)${admission ? ` AND ${admission.where}` : ""}`,
     )
     .bind(
       signalId,
@@ -171,12 +189,14 @@ export async function appendSignal(
       now,
       tenantId,
       input.dedupe_key,
-    )
-    .run();
+      ...(admission?.values ?? []),
+    );
+  const inserted = guards.length > 0 ? (await db.batch([...guards, insert])).at(-1) : await insert.run();
   if (changesOf(inserted) > 0) return { signal_id: signalId, created: true };
   const winner = await db.prepare("SELECT signal_id FROM agent_signals WHERE tenant_id = ? AND dedupe_key = ?")
     .bind(tenantId, input.dedupe_key).first<{signal_id: string}>();
-  return winner ? {signal_id: winner.signal_id, created: false} : {error: "signal_unavailable", status: 503};
+  if (winner) return { signal_id: winner.signal_id, created: false };
+  return admission ? { error: "signal_not_admitted", status: 429 } : { error: "signal_unavailable", status: 503 };
 }
 
 export async function listSignals(db: AgentDb, tenantId: string, after: number, limit: number) {
@@ -189,13 +209,20 @@ export async function listSignals(db: AgentDb, tenantId: string, after: number, 
   return { signals, next_cursor: last ? String(last.signal_seq) : after > 0 ? String(after) : null };
 }
 
+/**
+ * A signal as the host and the model see it. A person's ask or request shows its route's word and
+ * who made it (face.ts `signalActor`); the column keeps `ask:<user_id>` for the asker's check.
+ * Every other signal carries `actor: null` and its source as recorded.
+ */
 function signalView(row: SignalRow) {
+  const actor = signalActor(row);
   return {
     signal_id: row.signal_id,
     kind: row.kind,
     specialist_id: row.specialist_id,
     watch_id: row.watch_id,
-    source: row.source,
+    source: actor ? actorWord(row) : row.source,
+    actor,
     subject: row.subject_aggregate && row.subject_id ? { aggregate: row.subject_aggregate, id: row.subject_id } : null,
     content: JSON.parse(row.content_json),
     received_at: row.received_at,
@@ -230,7 +257,7 @@ export async function openRun(
   tenantId: string,
   input: { signal_id: string; specialist_id: string; host_run_key: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext; hints: RunHints } | StoreError> {
   const existing = await runByKey(db, tenantId, input.host_run_key);
   if (existing) return await resumeRun(db, tenantId, existing, input, now);
   const signal = await db
@@ -241,11 +268,20 @@ export async function openRun(
   if (signal.specialist_id !== input.specialist_id) return { error: "specialist_mismatch", status: 422 };
 
   const subject = signal.subject_aggregate && signal.subject_id ? { aggregate: signal.subject_aggregate, id: signal.subject_id } : null;
-  const memory = await subjectFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, subject, now);
+  // The face answering a person's ask reads as that person's role at ask time (face.ts). An ask
+  // older than its wait already reads not answered, so no run starts on it (409: the host skips it).
+  const asker = askerRole(signal);
+  if (asker !== null && Date.parse(now) - Date.parse(signal.received_at) > ASK_UNANSWERED_MS) return { error: "ask_expired", status: 409 };
+  // A watch names the objects its condition found; the run starts from each of them.
+  const watchObjects = watchSubjects(signal);
+  const memory = watchObjects
+    ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
+    : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
   const facts = [signalFact(signal), ...memory.facts];
   const snapshotHash = await sha256Hex(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash }))));
   const tools = toolsFor(signal.specialist_id);
   const manifestHash = await sha256Hex(canonicalJson(tools));
+  const mode = await runMode(db, tenantId, signal.specialist_id, signalActions(signal));
   const run: RunRow = {
     run_id: `run_${crypto.randomUUID()}`,
     tenant_id: tenantId,
@@ -253,8 +289,14 @@ export async function openRun(
     signal_id: signal.signal_id,
     host_run_key: input.host_run_key,
     goal: goalFor(signal),
-    // The run row keeps fact refs only; values stay in the canonical rows (memory.ts).
-    context_json: canonicalJson({ snapshot_hash: snapshotHash, facts: facts.map(refOf), omitted: memory.omitted }),
+    // The run row keeps fact refs only; values stay in the canonical rows (memory.ts). An ask run
+    // also keeps whose role it reads as, so a resume or a citation reads exactly as the open did.
+    context_json: canonicalJson({
+      snapshot_hash: snapshotHash,
+      facts: facts.map(refOf),
+      omitted: memory.omitted,
+      ...(asker === null ? {} : { asker_role: asker }),
+    }),
     context_snapshot_hash: snapshotHash,
     tool_manifest_json: canonicalJson(tools),
     state: "open",
@@ -266,14 +308,15 @@ export async function openRun(
     correlation_id: signal.parent_run_id ?? signal.signal_id,
     catalog_version: CATALOG_VERSION,
     policy_version: `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`,
+    mode,
   };
   const inserted = await db
     .prepare(
       `INSERT INTO agent_runs (run_id, tenant_id, specialist_id, signal_id, host_run_key, goal,
         trigger_json, context_json, context_snapshot_hash, tool_manifest_json, tool_manifest_hash,
         catalog_version, policy_version, parent_run_id, correlation_id, state, attempt,
-        attempt_started_at, started_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?
+        attempt_started_at, started_at, mode)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?
        WHERE NOT EXISTS (SELECT 1 FROM agent_runs WHERE tenant_id = ? AND host_run_key = ?)`,
     )
     .bind(
@@ -294,11 +337,13 @@ export async function openRun(
       run.correlation_id,
       now,
       now,
+      mode,
       tenantId,
       input.host_run_key,
     )
     .run();
-  if (changesOf(inserted) >= 1) return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted } };
+  if (changesOf(inserted) >= 1)
+    return { run, resumed: false, context: { snapshot_hash: snapshotHash, facts, omitted: memory.omitted }, hints: await runHints(db, tenantId, run, signal) };
   // Another open for the same key won the insert: that run is the one, so resume it.
   const winner = await runByKey(db, tenantId, input.host_run_key);
   if (!winner) return { error: "run_unavailable", status: 503 };
@@ -316,7 +361,7 @@ async function resumeRun(
   existing: RunRow,
   input: { signal_id: string; specialist_id: string },
   now: string,
-): Promise<{ run: RunRow; resumed: boolean; context: RunContext } | StoreError> {
+): Promise<{ run: RunRow; resumed: boolean; context: RunContext; hints: RunHints } | StoreError> {
   if (existing.signal_id !== input.signal_id || existing.specialist_id !== input.specialist_id) {
     return { error: "run_key_conflict", status: 422 };
   }
@@ -331,20 +376,67 @@ async function resumeRun(
   // The same refs, read again: a fact that changed since the run opened comes back marked stale.
   const stored = runContext(existing);
   const facts = await hydrate(stored.facts, runFactReader(db, tenantId, existing, now));
+  const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, existing.signal_id).first<SignalRow>();
   return {
     run: { ...existing, attempt: existing.attempt + 1, attempt_started_at: now },
     resumed: true,
     context: { snapshot_hash: stored.snapshot_hash, facts, omitted: stored.omitted },
+    hints: await runHints(db, tenantId, existing, signal),
   };
+}
+
+/**
+ * Routing hints for the host, all from Worker records: the run's mode; the single action the
+ * signal expects (a handoff's, or a watch that proposes one action); and, for the auditor's review
+ * of another run, that run and the provider family that ran it, so the gateway can pick a
+ * reviewer of a different family (contract "Model routing").
+ */
+async function runHints(db: AgentDb, tenantId: string, run: RunRow, signal: SignalRow | null): Promise<RunHints> {
+  const actions = signal ? signalActions(signal) : [];
+  return {
+    mode: run.mode ?? "live",
+    expected_action_id: actions.length === 1 ? actions[0] : null,
+    review_of: signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null,
+    // Only an ask run may return a view, so only its open carries the view schema (face.ts).
+    ...(askRun(run) ? { output_extension: { view: VIEW_SCHEMA } } : {}),
+  };
+}
+
+async function reviewedRun(db: AgentDb, tenantId: string, specialistId: string, signal: SignalRow): Promise<RunHints["review_of"]> {
+  if (specialistId !== "independent_auditor" || signal.subject_aggregate !== "coordination_run" || !signal.subject_id) return null;
+  const reviewed = await db
+    .prepare("SELECT run_id, close_json FROM agent_runs WHERE tenant_id = ? AND run_id = ?")
+    .bind(tenantId, signal.subject_id)
+    .first<{ run_id: string; close_json: string | null }>();
+  const provider = reviewed?.close_json ? (JSON.parse(reviewed.close_json) as { model?: { provider?: unknown } | null }).model?.provider : undefined;
+  return reviewed && typeof provider === "string" ? { run_id: reviewed.run_id, provider } : null;
 }
 
 export async function getRun(db: AgentDb, tenantId: string, runId: string): Promise<RunRow | null> {
   return await db.prepare("SELECT * FROM agent_runs WHERE tenant_id = ? AND run_id = ?").bind(tenantId, runId).first<RunRow>();
 }
 
-export function runContext(run: RunRow): { snapshot_hash: string; facts: FactRef[]; omitted: OmittedFact[] } {
-  const context = JSON.parse(run.context_json) as { snapshot_hash: string; facts: FactRef[]; omitted?: OmittedFact[] };
-  return { snapshot_hash: context.snapshot_hash, facts: context.facts.map(refOnly), omitted: context.omitted ?? [] };
+/** `asker_role` is set only on a run that answers a person's ask: the role its facts are read as. */
+export function runContext(run: RunRow): { snapshot_hash: string; facts: FactRef[]; omitted: OmittedFact[]; asker_role: string | null } {
+  const context = JSON.parse(run.context_json) as { snapshot_hash: string; facts: FactRef[]; omitted?: OmittedFact[]; asker_role?: string };
+  return {
+    snapshot_hash: context.snapshot_hash,
+    facts: context.facts.map(refOnly),
+    omitted: context.omitted ?? [],
+    asker_role: context.asker_role ?? null,
+  };
+}
+
+/** The run as an ask run's close is checked, or null for any other run. */
+function askRun(run: RunRow): AskRun | null {
+  const context = runContext(run);
+  return context.asker_role === null ? null : { run_id: run.run_id, facts: context.facts, asker_role: context.asker_role };
+}
+
+/** Whose read rights a run's facts follow: the asker's role on an ask run, else the specialist's. */
+function runReader(run: RunRow): Reader {
+  const asker = runContext(run).asker_role;
+  return asker === null ? run.specialist_id : { role: asker };
 }
 
 /** A ref without any value a row written before refs-only storage may still carry. */
@@ -355,7 +447,7 @@ function refOnly(fact: FactRef & { data?: unknown }): FactRef {
 
 /** Reads a run's facts again: canonical objects through the read models, the signal from its row. */
 function runFactReader(db: AgentDb, tenantId: string, run: RunRow, now: string) {
-  return factReader(db, OBJECT_MODELS, tenantId, run.specialist_id, now, async (ref) => {
+  return factReader(db, OBJECT_MODELS, tenantId, runReader(run), now, async (ref) => {
     try {
       const signal = await db
         .prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
@@ -372,23 +464,44 @@ export function runTools(run: RunRow): RunTool[] {
   return JSON.parse(run.tool_manifest_json);
 }
 
-/** The signal itself is the first fact of every run: immutable, and untrusted as text. */
+/** The objects a scheduler watch's condition named, or null for any other signal. */
+function watchSubjects(signal: SignalRow): Array<{ aggregate: string; id: string }> | null {
+  if (signal.kind !== "watch" || signal.source !== WATCH_SIGNAL_SOURCE) return null;
+  const objects = (JSON.parse(signal.content_json) as { objects?: unknown }).objects;
+  if (!Array.isArray(objects)) return null;
+  return objects.filter(
+    (entry): entry is { aggregate: string; id: string } =>
+      typeof entry === "object" && entry !== null && typeof (entry as { aggregate?: unknown }).aggregate === "string" && typeof (entry as { id?: unknown }).id === "string",
+  );
+}
+
+/**
+ * The signal itself is the first fact of every run: immutable. Its text is untrusted, except a
+ * watch the Worker's scheduler wrote from its own records.
+ */
 function signalFact(signal: SignalRow): ContextFact {
   return {
     fact_id: `signal/${signal.signal_id}`,
     kind: "signal",
     version: 1,
     hash: `sha256:${signal.content_sha256}`,
-    trust: "untrusted_text",
+    trust: signal.kind === "watch" && signal.source === WATCH_SIGNAL_SOURCE ? "owned" : "untrusted_text",
     observed_at: signal.received_at,
     fresh_until: null,
     data: JSON.parse(signal.content_json),
   };
 }
 
+/** A person's ask or request reads "ask from sales" or "request from owner", never "owner request" for anyone else. */
 function goalFor(signal: SignalRow): string {
   const subject = signal.subject_aggregate ? ` about ${signal.subject_aggregate}/${signal.subject_id}` : "";
-  const origin = signal.kind === "watch" ? `watch ${signal.watch_id}` : `${signal.kind.replace("_", " ")} from ${signal.source}`;
+  const actor = signalActor(signal);
+  const origin =
+    signal.kind === "watch"
+      ? `watch ${signal.watch_id}`
+      : actor
+        ? `${actorWord(signal)} from ${actor.role}`
+        : `${signal.kind.replace("_", " ")} from ${signal.source}`;
   return `Act on the ${origin}${subject} (signal ${signal.signal_id}).`;
 }
 
@@ -410,9 +523,13 @@ export async function proposeStep(
   input: ProposeInput,
   nowMs: number,
   notify: Notify | null = null,
-): Promise<StepRow | StoreError> {
+): Promise<StepRow | { shadow: ShadowStepRow } | StoreError> {
   const argsJson = canonicalJson(input.args ?? null);
   const argsSha = await sha256Hex(argsJson);
+  const priorShadow = await db.prepare("SELECT * FROM agent_shadow_steps WHERE run_id = ? AND step_key = ?").bind(run.run_id, input.step_key).first<ShadowStepRow>();
+  if (priorShadow) {
+    return priorShadow.action_id === input.action_id && priorShadow.args_sha256 === argsSha ? { shadow: priorShadow } : { error: "step_key_conflict", status: 409 };
+  }
   const prior = await stepByKey(db, run.run_id, input.step_key);
   if (prior) {
     const replay = await replayStep(db, tenantId, run, prior, input, argsSha);
@@ -420,9 +537,10 @@ export async function proposeStep(
     await executeStep(db, tenantId, run, replay, new Date(nowMs).toISOString(), notify);
     return (await stepByKey(db, run.run_id, input.step_key)) ?? replay;
   }
+  // Shadow steps count toward the run's step ceiling like receipts do.
   const count = await db
-    .prepare("SELECT COUNT(*) AS steps FROM agent_run_steps WHERE run_id = ?")
-    .bind(run.run_id)
+    .prepare("SELECT (SELECT COUNT(*) FROM agent_run_steps WHERE run_id = ?) + (SELECT COUNT(*) FROM agent_shadow_steps WHERE run_id = ?) AS steps")
+    .bind(run.run_id, run.run_id)
     .first<{ steps: number }>();
   const context = runContext(run);
   // Every cited fact is read again now; one this Worker cannot read is unverifiable, never current.
@@ -440,7 +558,10 @@ export async function proposeStep(
     delegation?.setting === "within_limits"
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
       : false;
+  // An action only a person's own request may start is checked against who made the run's signal.
+  const requester = PERSON_REQUEST_ONLY.has(input.action_id) ? signalActor(await runSignalRow(db, tenantId, run)) : undefined;
   let decision = evaluateStep({
+    requester,
     specialistId: run.specialist_id,
     specialistState: specialistState(control),
     actionId: input.action_id,
@@ -472,7 +593,34 @@ export async function proposeStep(
       reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
     };
   }
+  decision = askReviewer(run, input.action_id, decision);
   const now = new Date(nowMs).toISOString();
+  // A shadowed action is decided as it would be, then recorded as a shadow step: no receipt, permit,
+  // person, handoff or effect can come of it (migration 0203).
+  // A step past the run's ceiling is not diverted: it abstains as a receipt that names a person.
+  if (!decision.reason_codes.includes("ceiling_reached") && (await divertsToShadow(db, tenantId, run, input.action_id))) {
+    const signal = await db
+      .prepare("SELECT subject_aggregate, subject_id FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
+      .bind(tenantId, run.signal_id)
+      .first<{ subject_aggregate: string | null; subject_id: string | null }>();
+    const sources = input.citations.map((citation) => ({
+      fact_id: citation.fact_id,
+      version: citation.version,
+      hash: snapshot.get(citation.fact_id)?.hash ?? null,
+    }));
+    const shadow = await recordShadowStep(
+      db,
+      tenantId,
+      { run_id: run.run_id, specialist_id: run.specialist_id, subject_aggregate: signal?.subject_aggregate, subject_id: signal?.subject_id },
+      input,
+      argsJson,
+      argsSha,
+      sources,
+      decision,
+      now,
+    );
+    return "error" in shadow ? shadow : { shadow };
+  }
   const person = decision.reviewer_role ? await namedPerson(db, tenantId, decision.reviewer_role) : null;
   const protective = catalogAction(input.action_id)?.protective === true;
   const delegatedCeiling = !protective && decision.delegation_id ? delegation?.ceiling : null;
@@ -545,7 +693,7 @@ export async function proposeStep(
           latestDelegation?.fallback !== delegation?.fallback);
       // A proposal overtaken by a committed owner control fails `superseded` (contract reason codes):
       // the owner's own change decided it, so no person is handed a task. A ceiling loser abstains.
-      const capped: PolicyDecision = {
+      const capped = askReviewer(run, input.action_id, {
         ...decision,
         result: "deny",
         outcome: superseded ? "failed" : "abstained",
@@ -554,7 +702,7 @@ export async function proposeStep(
         permit_kind: "none",
         delegation_id: null,
         reviewer_role: superseded ? null : reviewer,
-      };
+      });
       await stepInsert(
         db,
         tenantId,
@@ -563,7 +711,7 @@ export async function proposeStep(
         argsJson,
         argsSha,
         capped,
-        superseded ? null : await namedPerson(db, tenantId, reviewer),
+        capped.reviewer_role ? await namedPerson(db, tenantId, capped.reviewer_role) : null,
         now,
         null,
         undefined,
@@ -581,6 +729,22 @@ export async function proposeStep(
   if ("error" in replay) return replay;
   await executeStep(db, tenantId, run, step, now, notify);
   return (await stepByKey(db, run.run_id, input.step_key)) ?? step;
+}
+
+/**
+ * A question to the face asks nothing of anyone else: on an ask run, a step that stops waits on no
+ * reviewer, so a question never lands in a Needs you lane. A protective step (an escalation that
+ * names its role, a hold) keeps naming its role.
+ */
+function askReviewer(run: RunRow, actionId: string, decision: PolicyDecision): PolicyDecision {
+  if (decision.outcome !== "abstained" || !askRun(run) || catalogAction(actionId)?.protective === true) return decision;
+  return { ...decision, reviewer_role: null };
+}
+
+async function runSignalRow(db: AgentDb, tenantId: string, run: RunRow): Promise<SignalRow> {
+  const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
+  if (!signal) throw new Error("run_signal_missing");
+  return signal;
 }
 
 async function stepByKey(db: AgentDb, runId: string, stepKey: string): Promise<StepRow | null> {
@@ -884,18 +1048,8 @@ const CLOSE_SCHEMA: JsonSchema = {
     detail: { type: ["string", "null"], maxLength: 300 },
     // Checked separately: against the run output schema when the run produced output.
     output: { type: "null" },
-    model: {
-      type: ["object", "null"],
-      additionalProperties: false,
-      required: ["provider", "model", "models_used", "auth_mode", "tier"],
-      properties: {
-        provider: { type: "string", maxLength: 32 },
-        model: { type: "string", maxLength: 128 },
-        models_used: { type: "array", maxItems: 8, items: { type: "string", maxLength: 128 } },
-        auth_mode: { type: "string", maxLength: 32 },
-        tier: { type: "string", maxLength: 16 },
-      },
-    },
+    // Checked separately: a host on gateway config v2 also reports its route (MODEL_ROUTED_SCHEMA).
+    model: { type: "null" },
     hashes: {
       type: ["object", "null"],
       additionalProperties: false,
@@ -924,7 +1078,39 @@ const CLOSE_SCHEMA: JsonSchema = {
   },
 };
 
+const MODEL_PROPERTIES: Record<string, JsonSchema> = {
+  provider: { type: "string", maxLength: 32 },
+  model: { type: "string", maxLength: 128 },
+  models_used: { type: "array", maxItems: 8, items: { type: "string", maxLength: 128 } },
+  auth_mode: { type: "string", maxLength: 32 },
+  tier: { type: "string", maxLength: 16 },
+};
+const MODEL_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: Object.keys(MODEL_PROPERTIES),
+  properties: MODEL_PROPERTIES,
+};
+const MODEL_ROUTED_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [...Object.keys(MODEL_PROPERTIES), "route_id", "review_of", "mode"],
+  properties: {
+    ...MODEL_PROPERTIES,
+    route_id: { type: "string", pattern: "^[a-z][a-z0-9_.]{1,80}$" },
+    review_of: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["run_id", "provider"],
+      properties: { run_id: { type: "string", maxLength: 80 }, provider: { type: "string", maxLength: 32 } },
+    },
+    mode: { type: "string", enum: ["live", "shadow"] },
+  },
+};
+
 export type RunResult = "completed" | "abstained" | "escalated" | "ceiling_reached" | "cancelled";
+
+const PROVIDER_FAMILIES = new Set(["claude", "codex"]);
 
 const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   kill_switch: "provider_unavailable",
@@ -938,6 +1124,9 @@ const GATEWAY_REASON_TO_CODE: Record<string, string> = {
   ledger_unavailable: "ceiling_reached",
   invalid_output: "no_progress",
   model_mismatch: "provider_unavailable",
+  no_independent_route: "provider_unavailable",
+  no_qualified_route: "no_qualified_route",
+  unknown_run_mode: "policy_missing",
   unknown_specialist: "policy_missing",
   tier_not_allowed: "policy_missing",
   specialist_unavailable: "policy_missing",
@@ -959,7 +1148,10 @@ export async function closeRun(
     reason: string | null;
     output: { decision?: string; reason_code?: string | null } | null;
   };
-  if (close.status === "ok" && (close.output === null || validate(runOutputSchema, close.output).length > 0)) {
+  // Only an ask run may carry a view; the view is checked apart from the run output (face.ts), so
+  // on any other run a `view` is an unknown field.
+  const ask = askRun(run);
+  if (close.status === "ok" && (close.output === null || validate(runOutputSchema, ask ? withoutView(close.output) : close.output).length > 0)) {
     return { error: "invalid_close", status: 422 };
   }
   let result: RunResult;
@@ -972,13 +1164,38 @@ export async function closeRun(
     result = decision === "abstain" ? "abstained" : decision === "escalate" ? "escalated" : "completed";
     if (result !== "completed") reasonCode = close.output?.reason_code ?? "out_of_scope";
   }
+  // Per-run independence (contract "Model routing"): an audit of another run that came back from
+  // the same provider family as that run is not an audit, so it abstains instead of completing.
+  if (close.status === "ok" && run.specialist_id === "independent_auditor") {
+    const signal = await db.prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?").bind(tenantId, run.signal_id).first<SignalRow>();
+    const reviewed = signal ? await reviewedRun(db, tenantId, run.specialist_id, signal) : null;
+    const provider = (body as { model?: { provider?: unknown } | null }).model?.provider;
+    // Fails closed: the audit must name a known family, and a different one from the reviewed run.
+    if (reviewed && (typeof provider !== "string" || !PROVIDER_FAMILIES.has(provider) || provider === reviewed.provider)) {
+      result = "abstained";
+      reasonCode = "provider_unavailable";
+    }
+  }
+  const checked = ask ? recordAskClose(body, ask) : { body, verdict: null };
   // Pausing a specialist stops its drafting (contract "Delegation"): a paused specialist's run
   // closes, but its drafts are withheld from the record, counted and never kept.
-  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(body) : body;
+  const recorded = (await specialistControl(db, tenantId, run.specialist_id)).paused ? withheldClose(checked.body) : checked.body;
   // The abstention receipt and the close commit together, receipt first, so a closed run never
-  // lacks the receipt that names a person and no step lands after the close.
+  // lacks the receipt that names a person and no step lands after the close. A completed ask
+  // closes with the face's answer receipt the same way.
   const statements: BoundStatement[] = [];
-  if (reasonCode && !(await namesAPerson(db, run.run_id))) statements.push(await abstentionStep(db, tenantId, run, reasonCode, now));
+  // An ask's abstention goes back to its asker: the close always records its receipt, which names
+  // nobody, so it lands in no one's Needs you. A question that raises an emergency, a safety event
+  // or suspected injection is the exception: its receipt names a person exactly as on any other
+  // run, unless an escalating step of the run already named one (that step's exception stands).
+  const named = reasonCode ? await namesAPerson(db, run.run_id) : false;
+  if (reasonCode && (ask || !named))
+    statements.push(await abstentionStep(db, tenantId, run, reasonCode, now, !ask || (PERSON_CODES.has(reasonCode) && !named)));
+  // A run that completes yet raises an emergency, a safety event or suspected injection still
+  // reaches a named person, unless one of its steps already named one.
+  const raised = result === "completed" && PERSON_CODES.has(close.output?.reason_code ?? "") ? (close.output?.reason_code as string) : null;
+  if (raised && !(await namesAPerson(db, run.run_id))) statements.push(await abstentionStep(db, tenantId, run, raised, now, true));
+  if (ask && result === "completed") statements.push(await answerStep(db, tenantId, run, checked.verdict, now));
   statements.push(
     db
       .prepare("UPDATE agent_runs SET state = 'closed', result = ?, close_json = ?, ended_at = ?, version = version + 1 WHERE run_id = ? AND state = 'open'")
@@ -992,6 +1209,18 @@ export async function closeRun(
     return { error: "run_closed", status: 409 };
   }
   return { result };
+}
+
+/** A close as the Worker records it before any pause: an ask run's view checked, else as received. */
+export function recordedClose(run: RunRow, body: unknown): unknown {
+  const ask = askRun(run);
+  return ask ? recordAskClose(body, ask).body : body;
+}
+
+function withoutView(output: unknown): unknown {
+  if (typeof output !== "object" || output === null || Array.isArray(output)) return output;
+  const { view: _view, ...rest } = output as Record<string, unknown>;
+  return rest;
 }
 
 /** A close as recorded for a paused specialist: drafts removed and counted. Unchanged without drafts. */
@@ -1015,9 +1244,9 @@ async function namesAPerson(db: AgentDb, runId: string): Promise<boolean> {
   return step !== null;
 }
 
-/** The specialist's own receipt for an abstaining or escalating run: it names a person. */
-async function abstentionStep(db: AgentDb, tenantId: string, run: RunRow, reasonCode: string, now: string): Promise<BoundStatement> {
-  const reviewer = catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner";
+/** The specialist's own receipt for an abstaining or escalating run: it names a person, except on an ask. */
+async function abstentionStep(db: AgentDb, tenantId: string, run: RunRow, reasonCode: string, now: string, namesPerson: boolean): Promise<BoundStatement> {
+  const reviewer = namesPerson ? (catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner") : null;
   const args = { reason_code: reasonCode };
   const argsJson = canonicalJson(args);
   return stepInsert(
@@ -1031,15 +1260,75 @@ async function abstentionStep(db: AgentDb, tenantId: string, run: RunRow, reason
       result: "allow",
       outcome: "abstained",
       reason_codes: [reasonCode],
-      checks: [{ check: "named_person", passed: true }],
+      checks: reviewer ? [{ check: "named_person", passed: true }] : [],
       permit_kind: "within_limits",
       delegation_id: null,
       autonomy: "A2",
       reviewer_role: reviewer,
     },
-    await namedPerson(db, tenantId, reviewer),
+    reviewer ? await namedPerson(db, tenantId, reviewer) : null,
     now,
   );
+}
+
+/**
+ * A completed ask's close receipt: the face answered (`fact.explain`, nothing to permit) from the
+ * facts its admitted steps cited and the facts its shown view cites, and, when it returned a view,
+ * whether the view was shown. A refused view gives the one reason code `view_spec_invalid`, its
+ * issues stay in the run record, and its unchecked sources are not the answer's.
+ */
+async function answerStep(db: AgentDb, tenantId: string, run: RunRow, verdict: ViewVerdict | null, now: string): Promise<BoundStatement> {
+  const cited = await citedSources(db, run.run_id);
+  const sources = [...cited, ...viewSources(verdict?.view ?? null).filter((source) => !cited.some((fact) => fact.fact_id === source.fact_id))];
+  const args = { ask_id: run.signal_id };
+  const argsJson = canonicalJson(args);
+  const refused = verdict?.issues.length ? ["view_spec_invalid"] : [];
+  return stepInsert(
+    db,
+    tenantId,
+    run,
+    { action_id: "fact.explain", args, citations: sources.map(({ fact_id, version }) => ({ fact_id, version })), step_key: `answer:${run.run_id}` },
+    argsJson,
+    await sha256Hex(argsJson),
+    {
+      result: "allow",
+      outcome: "succeeded",
+      reason_codes: refused,
+      checks: verdict?.offered ? [{ check: "view_spec", passed: refused.length === 0 }] : [],
+      permit_kind: "none",
+      delegation_id: null,
+      autonomy: "A0",
+      reviewer_role: null,
+    },
+    null,
+    now,
+    null,
+    undefined,
+    null,
+    new Map(sources.map((source) => [source.fact_id, { hash: source.hash }])),
+  );
+}
+
+/**
+ * The facts a run's admitted steps cited, each once, in step order. A step policy admitted (open,
+ * succeeded or awaiting its readback) passed the cited and fresh checks; a refused or abstained
+ * step's citations (stale, outside the snapshot, denied) stay out. Read before the answer receipt.
+ */
+export async function citedSources(db: AgentDb, runId: string): Promise<Array<{ fact_id: string; version: number; hash: string }>> {
+  const rows = await db
+    .prepare("SELECT sources_json FROM agent_run_steps WHERE run_id = ? AND (outcome IS NULL OR outcome IN ('succeeded', 'unknown')) ORDER BY step_seq")
+    .bind(runId)
+    .all<{ sources_json: string }>();
+  const seen = new Set<string>();
+  const sources: Array<{ fact_id: string; version: number; hash: string }> = [];
+  for (const row of rows.results) {
+    for (const source of JSON.parse(row.sources_json) as Array<{ fact_id: string; version: number; hash: string | null }>) {
+      if (source.hash === null || seen.has(source.fact_id)) continue;
+      seen.add(source.fact_id);
+      sources.push({ fact_id: source.fact_id, version: source.version, hash: source.hash });
+    }
+  }
+  return sources;
 }
 
 function closeShapeValid(body: unknown): boolean {
@@ -1054,7 +1343,12 @@ function closeShapeValid(body: unknown): boolean {
     if (typeof (call as { tool: unknown }).tool !== "string" || (call as { tool: string }).tool.length > 64) return false;
   }
   if (canonicalJson(calls).length > 65_536) return false;
-  return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null }).length === 0;
+  const model = value.model;
+  if (model !== null) {
+    const routed = typeof model === "object" && !Array.isArray(model) && Object.hasOwn(model as object, "route_id");
+    if (validate(routed ? MODEL_ROUTED_SCHEMA : MODEL_SCHEMA, model).length > 0) return false;
+  }
+  return validate(CLOSE_SCHEMA, { ...value, output: null, tool_calls: null, model: null }).length === 0;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist } from "./catalog.ts";
 import { STEP_POLICY_ID, STEP_POLICY_VERSION, type DelegationSetting } from "./policy.ts";
 import { registryEntry } from "./registry.ts";
+import { afterCatastrophe, decisionAgreement, shadowSetting } from "./shadow.ts";
 import { canonicalJson, validate, type JsonSchema } from "./schema.ts";
 import {
   changesOf,
@@ -30,7 +31,7 @@ export const STEP_UP_MAX_AGE_MS = 5 * 60_000;
 const POLICY_VERSION = `${STEP_POLICY_ID}@${STEP_POLICY_VERSION}`;
 
 /** Re-read the signed-in person inside the write transaction; body fields grant no authority. */
-function humanGuard(
+export function humanGuard(
   db: AgentDb,
   tenantId: string,
   actor: HumanPrincipal,
@@ -59,11 +60,11 @@ function humanGuard(
     );
 }
 
-function changedGuard(db: AgentDb, kind: "version" | "step"): BoundStatement {
+export function changedGuard(db: AgentDb, kind: "version" | "step"): BoundStatement {
   return db.prepare("INSERT INTO agent_control_guard (kind) SELECT ? WHERE changes() <> 1").bind(kind);
 }
 
-function controlError(error: unknown): StoreError | null {
+export function controlError(error: unknown): StoreError | null {
   const text = String(error);
   if (text.includes("agent_control_authority")) return { error: "session_authority_changed", status: 403 };
   if (
@@ -339,6 +340,29 @@ export async function setDelegation(
           idempotencyKey,
         ),
       changedGuard(db, "version"),
+      // Any other setting ends shadow for the action, in the same transaction.
+      db
+        .prepare(
+          `INSERT INTO agent_shadow_settings (setting_id,tenant_id,specialist_id,action_id,revision,shadow,reason,set_by_user_id,set_at,idempotency_key)
+        SELECT ?,?,?,?,(SELECT MAX(revision)+1 FROM agent_shadow_settings WHERE tenant_id=? AND specialist_id=? AND action_id=?),0,?,?,?,?
+        WHERE (SELECT shadow FROM agent_shadow_settings WHERE tenant_id=? AND specialist_id=? AND action_id=? ORDER BY revision DESC LIMIT 1) = 1`,
+        )
+        .bind(
+          `shd_${crypto.randomUUID()}`,
+          tenantId,
+          input.specialist_id,
+          input.action_id,
+          tenantId,
+          input.specialist_id,
+          input.action_id,
+          input.reason.trim(),
+          actor.user_id,
+          now,
+          `${idempotencyKey}:shadow_off`,
+          tenantId,
+          input.specialist_id,
+          input.action_id,
+        ),
       // Supersede every unexecuted permit issued under the prior setting, inside this transaction.
       db
         .prepare(
@@ -411,6 +435,8 @@ export async function delegationOverview(db: AgentDb, tenantId: string, speciali
         done_by_person: Number(history?.done_by_person ?? 0),
       },
       machine_path_proven: registryEntry(action.action_id)?.machinePermitProven ?? false,
+      // Shadow is the fourth delegation value, kept in its own revisions (migration 0203).
+      shadow: await shadowSetting(db, tenantId, specialistId, action.action_id),
     });
   }
   return {
@@ -710,7 +736,7 @@ export async function acknowledgeException(
 }
 
 /** OAuth and sign-in failures the host reports are immediate exceptions for the owner. */
-const IMMEDIATE_HOST_ALERTS = new Set(["claude_auth_failed", "codex_auth_failed", "codex_signin_not_refreshing"]);
+const IMMEDIATE_HOST_ALERTS = new Set(["claude_auth_failed", "codex_auth_failed", "codex_signin_not_refreshing", "codex_plan_lacks_model"]);
 
 export async function escalateHostAlerts(
   db: AgentDb,
@@ -747,7 +773,10 @@ export async function escalateHostAlerts(
         reason_code: "provider_unavailable",
         urgency: "immediate",
         reviewer_role: "owner",
-        summary: `The AI team host ${hostId} reports ${alert.replaceAll("_", " ")}: an AI sign-in needs renewing, and the specialists on it abstain until it is.`,
+        summary:
+          alert === "codex_plan_lacks_model"
+            ? `The AI team host ${hostId} reports that its Codex sign-in's plan does not include a routed model: sign the host's Codex home in with a plan that does; the specialists on it abstain until then.`
+            : `The AI team host ${hostId} reports ${alert.replaceAll("_", " ")}: an AI sign-in needs renewing, and the specialists on it abstain until it is.`,
         dedupe_key: `host:${hostId}:${alert}:${last?.exception_id ?? "initial"}`,
       },
       now,
@@ -957,6 +986,8 @@ export async function escalateRunAbstention(
   now: string,
   notify: Notify | null,
 ): Promise<void> {
+  // An ask's receipts that name nobody (store.ts) stay out by their null reviewer; a stopped
+  // protective step or a safety close of an ask reaches the queue like any other run's.
   const rows = await db
     .prepare(
       `SELECT * FROM agent_run_steps WHERE tenant_id=? AND run_id=? AND action_id='exception.escalate'
@@ -1002,6 +1033,8 @@ export async function decideStep(
   decider: HumanPrincipal,
   idempotencyKey: string,
   now: string,
+  catastrophes: string[] = [],
+  notify: Notify | null = null,
 ): Promise<{ outcome: string | null; reason_code: string | null } | StoreError> {
   const prior = await db
     .prepare(
@@ -1078,6 +1111,7 @@ export async function decideStep(
     approved_by: decision === "approve" ? decider.user_id : null,
     delegation_id: null,
   });
+  const agreement = decisionAgreement(db, tenantId, step, decision, decider.role, catastrophes, now);
   try {
     await db.batch([
       humanGuard(db, tenantId, decider, now, false),
@@ -1116,6 +1150,8 @@ export async function decideStep(
           expectedHash,
         ),
       changedGuard(db, "step"),
+      // The person judged the exact proposal: that is the strongest agreement signal.
+      agreement.statement,
     ]);
   } catch (error) {
     const refusal = controlError(error);
@@ -1136,10 +1172,20 @@ export async function decideStep(
         decider,
         idempotencyKey,
         now,
+        catastrophes,
+        notify,
       );
     if (refusal) return refusal;
     throw error;
   }
+  if (catastrophes.length > 0)
+    await afterCatastrophe(
+      db,
+      tenantId,
+      { agreement_id: agreement.agreementId, specialist_id: step.specialist_id, action_id: step.action_id, catastrophes, run_id: step.run_id, step_id: step.step_id },
+      now,
+      notify,
+    );
   return { outcome, reason_code: reason };
 }
 

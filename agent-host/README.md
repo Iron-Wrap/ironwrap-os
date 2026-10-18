@@ -156,8 +156,10 @@ closes the run too, with its reason.
 The context snapshot starts with the signal (`signal/<id>`, untrusted text) and then holds the
 signal's subject and the canonical objects it links to, read by the Worker's shared-memory read
 models (`workers-bus/src/agents/read-models.ts`) through the same readers as the role screens and
-only as far as the specialist's reviewer role may read them: a role that may read part of an object
-gets one fact per part, such as `job/<id>#/facts/commercial/quote`. Each fact carries `{fact_id,
+only as far as the specialist's reviewer role may read them. The face answering a person's ask
+reads them as that person's role at ask time instead, on open, on resume and for every citation, so
+it never sees a fact the asker could not. A role that may read part of an object gets one fact per
+part, such as `job/<id>#/facts/commercial/quote`. Each fact carries `{fact_id,
 kind, version, hash, trust, observed_at, fresh_until, data}`; its version comes from the Worker's
 append-only fact-version ledger, so it moves whenever the value does. An object that belongs in the
 snapshot but cannot be read or does not fit is named in `context.omitted` with its reason. A step
@@ -188,11 +190,11 @@ The host and the action server call only these Worker routes, with
 
 | Route | Caller | Contract |
 |---|---|---|
-| `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content |
-| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[]}, tools[]}`, optionally with `review_of: {run_id, provider} \| null`, `expected_action_id: string \| null` and `mode: "live" \| "shadow"` (missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; 409 when that key's run is already closed |
+| `GET /api/v1/agents/signals?after&limit` | host | `{signals[], next_cursor}`; a signal names its specialist, kind (`event`, `watch`, `owner_request`, `handoff`), subject and untrusted content, and `actor`: for a person's ask or request through the app, `source` is `ask` or `request` and `actor` is `{type: "owner" \| "staff" \| "worker", role, ref: "person:<user_id>", authenticated: true}` from the Worker's record (`owner` only for the owner, `worker` for a field person, `staff` for every other role); every other signal has `actor: null` |
+| `POST /api/v1/agents/runs` | host | `{signal_id, specialist_id, host_run_key}` opens or returns the run: `{run_id, goal, context: {snapshot_hash, facts[], omitted[]}, tools[]}` with the routing hints `review_of: {run_id, provider} \| null` (when the auditor reviews another run, so the gateway picks a different family), `expected_action_id: string \| null` (the signal's single expected action) and `mode: "live" \| "shadow"` (`shadow` when every action the signal can lead to is in shadow; missing reads as null and live; any other mode closes the run `unknown_run_mode` with no model call), which reach the gateway as `reviewOf`, `action` and scope; a face run answering a person's ask also carries `output_extension: {view}`, the strict view spec schema, which the host adds to that run's output schema as a required, nullable `view` (every other run's input is unchanged); 409 when that key's run is already closed |
 | `GET /api/v1/agents/runs/:id/tools` | action server | the run's tools: `action_id`, `tool_name`, `autonomy`, `side_effect_class`, `undo`, `description`, strict `args_schema` |
-| `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention |
-| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode` |
+| `POST /api/v1/agents/runs/:id/steps` | action server | `{action_id, args, citations[{fact_id, version}], step_key}` returns the Worker's decision; `step_key` (SHA-256 of the canonical step) makes a repeated proposal answer once; unknown action, unknown field, missing or stale citation is an abstention; a shadowed action answers `decision: "shadowed"` with the decision policy would have made (`would_be`) and no receipt |
+| `POST /api/v1/agents/runs/:id/close` | host | terminal outcome: status, abstention reason, structured output, model and models used, hashes, usage, cost, tool calls; `model` and `hashes` are null when no model ran, and `model` is null for `no_independent_route`; when the open carried any routing field, `model` also holds `route_id`, `review_of` and `mode`; only an ask run's output may carry `view`, which the Worker checks and records as the spec or null |
 | `POST /api/v1/agents/host/heartbeat` | host | readiness, alerts, `in_flight` and the close and dead-letter `backlog`, so a sign-in that stopped refreshing or a stalled feed reaches the owner |
 
 ### Owner controls and human decisions
@@ -213,6 +215,55 @@ request fields cannot claim that sign-in or a person's approval.
 | `POST /api/v1/agent-team/steps/:id/decision` | Current reviewer role or owner approves, declines or takes over the exact step version and argument hash |
 | `GET /api/v1/agent-team/exceptions` | Owner/ops queue with the assigned person and acknowledgement state |
 | `POST /api/v1/agent-team/exceptions/:id/acknowledge` | The assigned person, reviewer role or owner acknowledges the exception |
+| `POST /api/v1/agent-team/ask` | Anyone signed in asks the face: `{question, context: {route, object} \| null}` becomes an `owner_request` to `orchestrator` from `ask:<user_id>`, answering 202 `{ask_id, status: "pending"}`; a replay returns the same ask, another request under the key conflicts. A run never starts on an ask older than 15 minutes (the run open answers 409 `ask_expired`) |
+| `GET /api/v1/agent-team/ask/:id` | The asker or the owner (404 for anyone else): `pending`; `done` with the answer, its sources (every fact the steps and the shown view cite), the checked view, the answer receipt and each offered action's delegation; or `abstained` with the close's receipt, whose `needs_from_you` is always null here (a close that names a person reaches that person's Needs you, not the asker). `reason` is `null`, `not_answered` (no run took the ask up within 15 minutes, or its run outlived the run lifetime; no receipt) or `cancelled` |
+| `POST /api/v1/agent-team/facts/current` | A read, so CSRF but no Idempotency-Key: `{fact_ids[]}` (100 at most) returns `{facts: [{fact_id, version, hash}], unreadable[]}` as the viewer's role reads them now, never a value. A part keeps the version it is cited at for every reader; an ask's own `signal/<ask_id>` reads for its asker and the owner, no other signal |
+| `POST /api/v1/agent-team/requests` | A press on a view's action: `{action_id, target, ask_id}` becomes an `owner_request` to the action's owning specialist, answering 202 `{signal_id}`; it executes nothing, and refuses an unknown, unowned or people-only action, one a view may not offer, and a role that may not request it |
+
+Each person may make 20 asks and 20 requests in any ten minutes, and have 5 asks waiting at once
+(those that still read `pending`). The signal insert checks both limits itself, so parallel
+requests cannot pass them together; past either the route answers 429 `rate_limited` or
+`too_many_pending_asks` with `Retry-After`, the seconds until the window's oldest leaves or the
+first waiting ask stops counting. A replay of an earlier request is never limited.
+
+| `POST /api/v1/agent-team/specialists/:id/shadow` | Owner turns shadow on or off for one A1-A3 non-protective action the specialist owns, exact expected revision |
+| `GET /api/v1/agent-team/shadow` | Owner/ops agreement per specialist and action: counts per verdict, match and partial rates, catastrophes, recent divergences (`specialist`, `action`, `since` filters) |
+| `GET /api/v1/agent-team/shadow/candidates` | Owner/ops list of actions that meet the bar for more delegation; the owner still sets it |
+| `POST /api/v1/agent-team/qualifications` | Owner records a qualification report's outcome for a specialist on one route (provider, model, effort) at one release (release and report SHA-256) |
+| `GET /api/v1/agent-team/watches` | Owner/ops: every catalog watch, whether its condition is registered, and its last firing |
+| `GET /api/v1/agent-team/reports` | Owner/ops: recent owner reports (new inquiries, pipeline, daily brief, weekly review) with their run's result and composed text (`watch`, `limit`) |
+
+Watches (migration 0204): the five-minute cron evaluates every cadence watch whose deterministic
+condition is registered (`workers-bus/src/agents/watches.ts`: `new_leads`, `pipeline`,
+`daily_owner_brief`, `weekly_review`, `unacknowledged_exception`), once per period: sub-day cadences
+use fixed UTC slots, daily, weekly and monthly ones run at the tenant's local time (company profile
+time zone; 07:00 daily, Monday 08:00 weekly by default). The condition costs no model call; when it
+holds, a watch signal naming the objects it found goes to the owning specialist, whose run starts
+from those objects (whole, within one snapshot's limits); when it does not, the firing is recorded as
+an empty run. Conditions hold on change since the last firing, never on standing state: a decision
+already waiting does not fire the pipeline again, and an unacknowledged exception is raised again
+only after a four-hour cooldown. Periods are computed on calendar dates, so a daylight-saving change
+never shifts or repeats one, and an invalid tenant time zone falls back to the default. A completed
+owner report also reaches the owner outside the app: the daily brief and weekly review always, new
+inquiries when there are any, the pipeline only when a decision waits. Each attempt is recorded
+(`agent_report_deliveries`). A failed delivery is retried by the Worker cron after fifteen minutes,
+up to five attempts in all; a close that never reached delivery delivers on the host's close replay;
+a report recorded as sent is not sent again. Watches without a registered condition, and event-triggered watches, do
+not fire yet.
+
+Earned autonomy (migration 0203): a shadowed action's proposals are decided by policy and recorded
+as shadow steps, never as receipts, so no permit, person, handoff or effect comes of them while
+people keep doing the work. Agreement records compare the agent's proposal with what a person did:
+approving the exact proposal is a match, declining it a divergence, taking it over unscored until a
+comparator sees what the person did; a shadow step with no comparable action within seven days is
+recorded unscored, never counted as agreement. A decline or take-over can flag Track D catastrophes
+(`catastrophes` on the decision). A catastrophe opens an owner exception and, for a within-limits
+action, writes an asks-first setting as `system:auto_demotion`, the one automatic delegation change.
+A candidate needs at least the last 50 compared agreements at a 95 % match rate, none of them a
+catastrophe, a passed latest qualification for the provider and model the specialist actually runs
+on (its most recent closed run), and a delegable A2/A3 action that
+does not already act within limits. An auditor's review that comes back from the reviewed run's own
+provider family closes abstained.
 
 Pause and auditor hold remain independent. Either makes non-protective actions ask first; pause
 also stops drafting. An off or revoked action stays off. Protective exceptions and holds remain
@@ -235,7 +286,13 @@ Host OAuth-failure and stale-sign-in alerts open one immediate exception for a n
 person acknowledges it; a continuing alert opens another exception after that acknowledgement.
 A vacant reviewer assignment stays null and visible; the Worker never invents a person.
 No credential renewal or provider switch is performed by the Worker. A replayed run close repairs
-its exception queue entry without adding another run or receipt.
+its exception queue entry without adding another run or receipt. An ask that ends without an answer
+opens no exception and waits in no one's Needs you, and a step the face stops on a question names
+nobody either: the asker reads it as abstained. A question that raises an emergency, a safety event
+or suspected injection still names a person and opens an exception, as on any run, unless the face's
+own escalation already did; the face's protective escalations name their role as on any run.
+`access.prepare_change` is refused (`out_of_scope`) unless the run's signal is a signed-in owner's or
+staff member's own ask or request.
 
 Only a refusal of the request's own content (400, 410, 413, 422) is permanent: that signal goes to
 `<state>/rejected-signals.jsonl` with its payload, or that close to `<state>/rejected-closes/`.
@@ -302,8 +359,9 @@ npm run replay --prefix agent-host -- --specialist orchestrator --case orchestra
   `clock`: `{ "season": "winter|spring|summer|fall", "weekday": "monday".."sunday", "local_time":
   "HH:MM" }` in Edmonton local time, with no calendar date. The season picks a month (winter
   January, spring April, summer July, fall October, in the default instant's year), the weekday the
-  first such day on or after the 8th, and the time is Edmonton's on that day, standard or daylight
-  time as Intl reports it. A stage refuses a malformed clock before any run.
+  first such day on or after the 8th, and the time is Edmonton's on that day at the offset Intl
+  reports for that day (Alberta keeps UTC-6 all year from tzdata 2026c on; the repository pins Node
+  in `.nvmrc` to a release that carries it). A stage refuses a malformed clock before any run.
 - Like every production audit, an auditor run names the run it reviews (`reviewOf`), here with the
   one family all proposer routes use, so it runs on that family's audit route (`claude_opus` for
   Codex work). A stage refuses to qualify the auditor while proposer routes span both families.

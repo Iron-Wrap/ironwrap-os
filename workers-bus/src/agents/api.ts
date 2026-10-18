@@ -2,8 +2,9 @@
 //
 // `/api/v1/agents/*` serves the agent host and its per-run action server. It accepts only the
 // AGENT_HOST_TOKEN bearer, never a browser session, and stays dark (404) while that secret is
-// unset. `/api/v1/agent-team/*` serves people through their app session: owner/ops queues
-// and exact proposals scoped to the named reviewer. No route here lets an agent change its own delegation.
+// unset. `/api/v1/agent-team/*` serves people through their app session: owner/ops queues,
+// exact proposals scoped to the named reviewer, and asks to the face (ask.ts). No route here lets
+// an agent change its own delegation.
 
 import { validAppCsrf } from "../app-auth.ts";
 import { canonicalJson } from "./schema.ts";
@@ -25,14 +26,19 @@ import {
 } from "./control.ts";
 import { operatingTenantId } from "../core.ts";
 import type { AuthContext } from "../app-types.ts";
+import { postAsk, postRequest, readAsk, readCurrentFacts, type Limited } from "./ask.ts";
 import { listHostHealth, listReceipts, receiptOf, type ReceiptView } from "./receipts.ts";
 import { RUN_OUTPUT_SCHEMA } from "./run-output.ts";
+import type { Notify } from "./control.ts";
+import { agreementStats, delegationCandidates, recordQualification, setShadow, validCatastrophes } from "./shadow.ts";
+import { deliverRunReport, OWNER_REPORTS, ownerReports, watchStatus } from "./watches.ts";
 import {
   closeRun,
   getRun,
   listSignals,
   openRun,
   proposeStep,
+  recordedClose,
   recordHeartbeat,
   runTools,
   type AgentDb,
@@ -49,7 +55,7 @@ const HOST_RUN_KEY = /^[A-Za-z0-9._:-]{8,128}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const STEP_KEY = /^[0-9a-f]{64}$/;
 
-export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () => Date.now()): Promise<Response> {
+export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () => Date.now(), notify: Notify | null = null): Promise<Response> {
   if (!env.AGENT_HOST_TOKEN) return reply({ error: "not_found" }, 404);
   if (!(await tokenMatches(req, env.AGENT_HOST_TOKEN))) return reply({ error: "unauthorized" }, 401);
   const tenantId = operatingTenantId(env.APP_TENANT_ID);
@@ -78,8 +84,8 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
     }
     const opened = await openRun(db, tenantId, { signal_id, specialist_id, host_run_key }, iso());
     if ("error" in opened) return reply({ error: opened.error }, opened.status);
-    const { run, resumed, context } = opened;
-    return reply({ run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run) }, resumed ? 200 : 201);
+    const { run, resumed, context, hints } = opened;
+    return reply({ run_id: run.run_id, goal: run.goal, resumed, context, tools: runTools(run), ...hints }, resumed ? 200 : 201);
   }
 
   const runMatch = path.match(/^\/api\/v1\/agents\/runs\/([^/]+)\/(tools|steps|close)$/);
@@ -102,6 +108,11 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
       if (!citations) return reply({ error: "invalid_body" }, 400);
       const step = await proposeStep(db, tenantId, run, { action_id: body.action_id, args: body.args, citations, step_key: body.step_key }, now());
       if ("error" in step) return reply({ error: step.error }, step.status);
+      if ("shadow" in step) {
+        // Shadow: recorded with the decision policy would have made, and nothing else happens.
+        const policy = JSON.parse(step.shadow.policy_json) as { result: string; reason_codes: string[] };
+        return reply({ step_id: step.shadow.shadow_step_id, decision: "shadowed", outcome: null, reason_codes: policy.reason_codes, would_be: policy.result, receipt: null });
+      }
       const receipt = receiptOf(step);
       return reply({ step_id: step.step_id, decision: decisionWord(receipt), outcome: step.outcome, reason_codes: receipt.policy.reason_codes, receipt });
     }
@@ -109,16 +120,20 @@ export async function handleAgentHostApi(req: Request, env: AgentEnv, now = () =
       const body = await readJson(req);
       if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
       if (run.state === "closed") {
-        // An exact retry matches the close as received, or as recorded with a paused specialist's
-        // drafts withheld, so the retry still reaches the abstention escalation below.
-        if (run.close_json !== canonicalJson(body) && run.close_json !== canonicalJson(withheldClose(body)))
+        // An exact retry matches the close as recorded (an ask run's view checked), with or without
+        // a paused specialist's drafts withheld, so the retry still reaches the escalation below.
+        const recorded = recordedClose(run, body);
+        if (run.close_json !== canonicalJson(recorded) && run.close_json !== canonicalJson(withheldClose(recorded)))
           return reply({error: "run_closed"}, 409);
         await escalateRunAbstention(db, tenantId, run, iso(), null);
+        // A report whose delivery failed or never ran is delivered on the host's retry.
+        if (run.result === "completed") await deliverRunReport(db, tenantId, run, JSON.parse(run.close_json ?? "null"), notify, iso());
         return reply({run_id: run.run_id, terminal: run.result});
       }
       const closed = await closeRun(db, tenantId, run, body, RUN_OUTPUT_SCHEMA, iso());
       if ("error" in closed) return reply({ error: closed.error }, closed.status);
       await escalateRunAbstention(db, tenantId, run, iso(), null);
+      if (closed.result === "completed") await deliverRunReport(db, tenantId, run, body, notify, iso());
       return reply({ run_id: run.run_id, terminal: closed.result });
     }
     return reply({ error: "method_not_allowed" }, 405);
@@ -153,6 +168,12 @@ export async function handleAgentTeamAppRoute(
   };
   const now = new Date(clock()).toISOString();
   if (req.method === "GET") {
+    // Any role asks the face; only the person who asked, or the owner, reads the ask back.
+    const ask = url.pathname.match(/^\/api\/v1\/agent-team\/ask\/([A-Za-z0-9._:-]+)$/);
+    if (ask) {
+      const view = await readAsk(db, tenantId, actor, ask[1], now);
+      return view ? reply(view) : reply({ error: "ask_not_found" }, 404);
+    }
     const detail = url.pathname.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)$/);
     if (detail) {
       const step = await stepForDecision(db, tenantId, detail[1]);
@@ -186,6 +207,23 @@ export async function handleAgentTeamAppRoute(
       const overview = await delegationOverview(db, tenantId, specialist[1]);
       return overview ? reply(overview) : reply({ error: "unknown_specialist" }, 404);
     }
+    if (url.pathname === "/api/v1/agent-team/shadow") {
+      const specialistId = url.searchParams.get("specialist");
+      const actionId = url.searchParams.get("action");
+      const since = url.searchParams.get("since");
+      if ((specialistId !== null && !/^[a-z_]{2,64}$/.test(specialistId)) || (actionId !== null && !/^[a-z_]+\.[a-z_]+$/.test(actionId)) || (since !== null && !Number.isFinite(Date.parse(since))))
+        return reply({ error: "invalid_query" }, 400);
+      return reply({ agreement: await agreementStats(db, tenantId, { specialist_id: specialistId, action_id: actionId, since }) });
+    }
+    if (url.pathname === "/api/v1/agent-team/shadow/candidates") return reply({ candidates: await delegationCandidates(db, tenantId) });
+    if (url.pathname === "/api/v1/agent-team/watches") return reply({ watches: await watchStatus(db, tenantId) });
+    if (url.pathname === "/api/v1/agent-team/reports") {
+      const watch = url.searchParams.get("watch");
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      if ((watch !== null && !Object.hasOwn(OWNER_REPORTS, watch)) || !Number.isInteger(limit) || limit < 1 || limit > 100)
+        return reply({ error: "invalid_query" }, 400);
+      return reply({ reports: await ownerReports(db, tenantId, watch, limit) });
+    }
     if (url.pathname === "/api/v1/agent-team/exceptions") {
       const open = url.searchParams.get("open") ?? "true";
       const limit = Number(url.searchParams.get("limit") ?? "50");
@@ -201,8 +239,71 @@ export async function handleAgentTeamAppRoute(
   if (!validAppCsrf(req, auth)) return reply({ error: "csrf_failed" }, 403);
   const body = await readJson(req);
   if (body === TOO_LARGE) return reply({ error: "body_too_large" }, 413);
+  // A read with a body: versions and hashes only, so it takes no idempotency key.
+  if (url.pathname === "/api/v1/agent-team/facts/current") {
+    const result = await readCurrentFacts(db, tenantId, actor, body, now);
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
   const idempotency = req.headers.get("idempotency-key") ?? "";
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotency)) return reply({ error: "idempotency_key_required" }, 400);
+  if (url.pathname === "/api/v1/agent-team/ask") {
+    const result = await postAsk(db, tenantId, actor, body, idempotency, now);
+    return "error" in result ? limited(result) : reply({ ask_id: result.ask_id, status: "pending" }, 202);
+  }
+  if (url.pathname === "/api/v1/agent-team/requests") {
+    const result = await postRequest(db, tenantId, actor, body, idempotency, now);
+    return "error" in result ? limited(result) : reply({ signal_id: result.signal_id }, 202);
+  }
+  const shadowRoute = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)\/shadow$/);
+  if (shadowRoute || url.pathname === "/api/v1/agent-team/qualifications") {
+    if (actor.role !== "owner") return reply({ error: "owner_role_required" }, 403);
+    const created = Date.parse(auth.session.session_created_at);
+    if (!Number.isFinite(created) || created > clock() || clock() - created > STEP_UP_MAX_AGE_MS)
+      return reply({ error: "fresh_owner_session_required" }, 403);
+    if (shadowRoute) {
+      if (
+        !isRecord(body) ||
+        !exactKeys(body, ["action_id", "shadow", "reason", "expected_revision"]) ||
+        typeof body.action_id !== "string" ||
+        typeof body.shadow !== "boolean" ||
+        typeof body.reason !== "string"
+      )
+        return reply({ error: "invalid_body" }, 400);
+      const result = await setShadow(
+        db,
+        tenantId,
+        { specialist_id: shadowRoute[1], action_id: body.action_id, shadow: body.shadow, reason: body.reason, expected_revision: body.expected_revision as number },
+        actor,
+        idempotency,
+        now,
+      );
+      return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+    }
+    if (
+      !isRecord(body) ||
+      !exactKeys(body, ["specialist_id", "provider", "model", "effort", "release_sha256", "passed", "report_sha256"]) ||
+      typeof body.specialist_id !== "string" ||
+      typeof body.passed !== "boolean"
+    )
+      return reply({ error: "invalid_body" }, 400);
+    const result = await recordQualification(
+      db,
+      tenantId,
+      {
+        specialist_id: body.specialist_id,
+        provider: body.provider as string,
+        model: body.model as string,
+        effort: body.effort as string,
+        release_sha256: body.release_sha256 as string,
+        passed: body.passed,
+        report_sha256: body.report_sha256 as string,
+      },
+      actor,
+      idempotency,
+      now,
+    );
+    return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
+  }
   const control = url.pathname.match(/^\/api\/v1\/agent-team\/specialists\/([a-z_]+)\/(delegation|control)$/);
   if (control) {
     if (actor.role !== "owner") return reply({ error: "owner_role_required" }, 403);
@@ -214,10 +315,24 @@ export async function handleAgentTeamAppRoute(
         !isRecord(body) ||
         !exactKeys(body, ["action_id", "setting", "ceiling", "reason", "expected_revision"]) ||
         typeof body.action_id !== "string" ||
-        !["asks_first", "within_limits", "off"].includes(body.setting as string) ||
+        !["asks_first", "within_limits", "off", "shadow"].includes(body.setting as string) ||
         typeof body.reason !== "string"
       )
         return reply({ error: "invalid_body" }, 400);
+      // `shadow` is a delegation value backed by its own revisions; its expected revision is the
+      // shadow revision the overview shows.
+      if (body.setting === "shadow") {
+        if (body.ceiling !== null) return reply({ error: "ceiling_required" }, 422);
+        const shadowed = await setShadow(
+          db,
+          tenantId,
+          { specialist_id: control[1], action_id: body.action_id, shadow: true, reason: body.reason, expected_revision: body.expected_revision as number },
+          actor,
+          idempotency,
+          now,
+        );
+        return "error" in shadowed ? reply({ error: shadowed.error }, shadowed.status) : reply(shadowed);
+      }
       const result = await setDelegation(
         db,
         tenantId,
@@ -251,9 +366,15 @@ export async function handleAgentTeamAppRoute(
   }
   const decision = url.pathname.match(/^\/api\/v1\/agent-team\/steps\/([A-Za-z0-9._:-]+)\/decision$/);
   if (decision) {
+    // `catastrophes` (Track D's catastrophe ids) is optional, and only a decline or a take-over can
+    // carry it: a person flags what the proposal would have done.
+    const keys = isRecord(body) && Object.hasOwn(body, "catastrophes") ? ["decision", "expected_version", "expected_args_sha256", "catastrophes"] : ["decision", "expected_version", "expected_args_sha256"];
+    const catastrophes = isRecord(body) ? validCatastrophes(body.catastrophes) : null;
     if (
       !isRecord(body) ||
-      !exactKeys(body, ["decision", "expected_version", "expected_args_sha256"]) ||
+      !exactKeys(body, keys) ||
+      catastrophes === null ||
+      (catastrophes.length > 0 && body.decision === "approve") ||
       !["approve", "decline", "do_it_myself"].includes(body.decision as string) ||
       !Number.isSafeInteger(body.expected_version) ||
       typeof body.expected_args_sha256 !== "string" ||
@@ -270,6 +391,7 @@ export async function handleAgentTeamAppRoute(
       actor,
       idempotency,
       now,
+      catastrophes,
     );
     return "error" in result ? reply({ error: result.error }, result.status) : reply(result);
   }
@@ -338,11 +460,16 @@ async function tokenMatches(req: Request, expected: string): Promise<boolean> {
   return diff === 0;
 }
 
-function reply(body: unknown, status = 200): Response {
+function reply(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", ...headers },
   });
+}
+
+/** A refused ask or request; one past a person's limits says when to try again. */
+function limited(result: Limited): Response {
+  return reply({ error: result.error }, result.status, result.retryAfterSeconds ? { "retry-after": String(result.retryAfterSeconds) } : {});
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

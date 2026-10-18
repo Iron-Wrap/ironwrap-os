@@ -19,6 +19,7 @@ import type {
   OutboxErrorDetail,
   OutboxEvidenceFile,
   OutboxEvidenceInput,
+  OutboxOfficeResolution,
   OutboxState,
   OutboxVerification,
   SaveOutboxActionInput,
@@ -75,7 +76,8 @@ const allowedTransitions: Record<OutboxState, readonly OutboxState[]> = {
   queued: ["uploading", "needs_attention"],
   uploading: ["queued", "verified", "needs_attention"],
   verified: [],
-  needs_attention: ["queued"],
+  // `verified` from here only when a person in the office confirmed the office holds the item.
+  needs_attention: ["queued", "verified"],
 };
 
 // This mirrors the server-side field-action lease. The client renews while a
@@ -299,6 +301,50 @@ export async function getOutboxActionsNeedingAttention(principal: {
   return actions.sort(
     (left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt,
   );
+}
+
+/**
+ * Items a person in the office settled that this person has not read yet. Once an item leaves the
+ * needs-attention list, this is where the crew learns why, instead of it vanishing.
+ */
+export async function getOutboxActionsSettledByOffice(principal: {
+  tenantId: string;
+  userId: string;
+}): Promise<OutboxAction[]> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readonly");
+  const actions = await transaction.store
+    .index("by_principal_state")
+    .getAll([principal.tenantId, principal.userId, "verified"]);
+  await transaction.done;
+  return actions
+    .filter(
+      (action) =>
+        action.verification?.officeResolution && !action.verification.officeResolution.seenAt,
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt);
+}
+
+/** The person read the office's answer about this item. */
+export async function markOfficeSettlementSeen(
+  deviceActionId: string,
+  now = Date.now(),
+): Promise<void> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readwrite");
+  const action = await transaction.store.get(deviceActionId);
+  const officeResolution = action?.verification?.officeResolution;
+  if (action?.verification && officeResolution && !officeResolution.seenAt) {
+    await transaction.store.put({
+      ...action,
+      verification: {
+        ...action.verification,
+        officeResolution: { ...officeResolution, seenAt: now },
+      },
+    });
+  }
+  await transaction.done;
+  notifyOutboxChanged();
 }
 
 /**
@@ -527,6 +573,86 @@ export async function markOutboxNeedsAttention(
     },
     expectedUploadLeaseId,
   );
+}
+
+/**
+ * Settle an unconfirmed item the office says it holds: no resend, and the saved files go the
+ * same way a verified upload's do. Only an item still waiting on that check is touched.
+ */
+export async function markOutboxConfirmedByOffice(
+  deviceActionId: string,
+  officeResolution: OutboxOfficeResolution,
+  now = Date.now(),
+): Promise<OutboxAction | undefined> {
+  const database = await getDatabase();
+  const transaction = database.transaction(["outbox_actions", "outbox_blobs"], "readwrite");
+  const actionStore = transaction.objectStore("outbox_actions");
+  const action = await actionStore.get(deviceActionId);
+  if (action?.state !== "needs_attention") {
+    await transaction.done;
+    return undefined;
+  }
+  assertTransition(action.state, "verified");
+  const updated: OutboxAction = {
+    ...action,
+    state: "verified",
+    verification: {
+      verifiedAt: now,
+      serverRef: officeResolution.linkedRecord.id,
+      cursor: officeResolution.resolutionId,
+      officeResolution,
+    },
+    uploadLeaseId: undefined,
+    uploadLeaseExpiresAt: undefined,
+    lastError: undefined,
+    conflict: undefined,
+    updatedAt: now,
+  };
+  await actionStore.put(updated);
+  const blobStore = transaction.objectStore("outbox_blobs");
+  for (const blob of await blobStore.index("by_action").getAll(deviceActionId)) {
+    await blobStore.delete(blob.blobKey);
+  }
+  await transaction.done;
+  notifyOutboxChanged();
+  return updated;
+}
+
+/**
+ * The office says this item never arrived: queue it once more under the same device action id,
+ * so the Worker's own idempotency and the normal verification decide what happens next. One
+ * resend per office answer; the same answer read again never queues it twice.
+ */
+export async function requeueOutboxForOfficeResend(
+  deviceActionId: string,
+  resolutionId: string,
+  now = Date.now(),
+): Promise<OutboxAction | undefined> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readwrite");
+  const store = transaction.objectStore("outbox_actions");
+  const action = await store.get(deviceActionId);
+  if (action?.state !== "needs_attention" || action.officeResend?.resolutionId === resolutionId) {
+    await transaction.done;
+    return undefined;
+  }
+  assertTransition(action.state, "queued");
+  const queued: OutboxAction = {
+    ...action,
+    state: "queued",
+    attempts: 0,
+    nextAttemptAt: now,
+    uploadLeaseId: undefined,
+    uploadLeaseExpiresAt: undefined,
+    lastError: undefined,
+    conflict: undefined,
+    officeResend: { resolutionId, requeuedAt: now },
+    updatedAt: now,
+  };
+  await store.put(queued);
+  await transaction.done;
+  notifyOutboxChanged();
+  return queued;
 }
 
 export async function requeueOutboxAction(

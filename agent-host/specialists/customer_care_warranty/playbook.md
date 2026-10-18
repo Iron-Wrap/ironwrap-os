@@ -176,3 +176,5 @@ contains one fact or decision, never a request that the customer waive safety or
 `undo` distinguishes pausing a follow-up, releasing a cancellation hold with approval and an
 irreversible delivered message. `do_it_myself` points to the existing case/contact route supplied
 by context. The receipt does not certify physical completion, legal effect, coverage or settlement.
+The people-only step goes by its catalog name: accepting or declining an offer
+(`acceptance.customer_decision`) is the customer's own.

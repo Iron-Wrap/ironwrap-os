@@ -146,6 +146,7 @@ interface Env {
   PROPOSAL_TEMPLATE_DOC_ID: string;
   DEDUP_WINDOW_HOURS: string;
   STUCK_THRESHOLD_MIN: string;
+  COMMERCIAL_AUTHORITY_POLICY_JSON: string;
 }
 
 declare namespace Cloudflare {
@@ -287,5 +288,6 @@ declare namespace Cloudflare {
     PROPOSAL_TEMPLATE_DOC_ID: string;
     DEDUP_WINDOW_HOURS: string;
     STUCK_THRESHOLD_MIN: string;
+    COMMERCIAL_AUTHORITY_POLICY_JSON: string;
   }
 }

@@ -17,6 +17,7 @@ vi.mock("./field-cache", () => ({
 
 vi.mock("../storage/use-outbox", () => ({
   useOutboxActionsNeedingAttention: () => [],
+  useOutboxActionsSettledByOffice: () => [],
 }));
 
 vi.mock("../auth/device-credential", () => ({

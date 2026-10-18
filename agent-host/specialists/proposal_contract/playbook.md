@@ -258,3 +258,6 @@ explanations are for the `sales` reviewer or the owner.
 - `undo`: decline a draft; withdraw a publication by a new decision; a delivered message cannot
   be unsent; only the customer reverses a cancellation. `do_it_myself`: the publication preview
   (SALES-08), "what accepting does and does not do" (SALES-12), or the proposal screen.
+- People-only steps go by their catalog names: accepting or declining an offer
+  (`acceptance.customer_decision`), the customer's own, and signing off contract terms
+  (`terms.legal_signoff`), the owner's.

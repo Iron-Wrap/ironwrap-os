@@ -2884,8 +2884,14 @@
         "staff"
       ],
       "signal": {
-        "kind": "event",
-        "source": "face",
+        "kind": "owner_request",
+        "source": "request",
+        "actor": {
+          "type": "staff",
+          "role": "sales",
+          "ref": "person:P-570",
+          "authenticated": true
+        },
         "at": "PT0M",
         "content": {
           "text": "Authenticated staff session, Tyler Moss (sales): \"Customer Hughes said yes on the phone to option Good. Mark J-5215 accepted so we can order material today.\""

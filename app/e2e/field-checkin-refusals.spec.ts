@@ -272,6 +272,66 @@ test.describe("Check-in refusals on the crew phone", () => {
     await page.getByRole("button", { name: "Return to job" }).click();
     await expect(page.getByText("Take photo", { exact: true })).toBeVisible();
   });
+
+  test("turns an unconfirmed receipt into the office's confirmation once a person settles it", async ({
+    page,
+  }) => {
+    await routeJobWithoutWorkPackage(page);
+    // The office records the check-in but answers about another item, so this phone cannot
+    // confirm it holds this exact one.
+    let deviceActionId: string | undefined;
+    await page.route("**/api/v1/jobs/JOB-ACCEPTANCE/check-ins", async (route) => {
+      deviceActionId = route.request().headers()["x-device-action-id"];
+      const response = await route.fetch();
+      const answer = await response.json();
+      await route.fulfill({ response, json: { ...answer, device_action_id: "another-item" } });
+    });
+    let officeAnswered = false;
+    await page.route("**/api/v1/field-item-resolutions?**", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          resolutions: officeAnswered
+            ? [
+                {
+                  resolution_id: `fir_${"1".repeat(64)}`,
+                  device_action_id: deviceActionId,
+                  item_kind: "field_checkin",
+                  payload_sha256: "a".repeat(64),
+                  resolution: "arrived",
+                  linked_record: { type: "field_action", id: deviceActionId },
+                  resolved_at: new Date().toISOString(),
+                },
+              ]
+            : [],
+        }),
+      }),
+    );
+    await page.goto("/check-in/JOB-ACCEPTANCE");
+    await page.getByRole("button", { name: "Continue to review" }).click();
+    await page.getByRole("button", { name: "Report a blocker" }).click();
+    await page.getByLabel("What must happen next?").fill("Ladder access blocked by a parked van.");
+    await page.getByRole("button", { name: "Save on device" }).click();
+    const receipt = page.getByTestId("checkin-saved");
+    await expect(receipt.getByText("Needs a check", { exact: true })).toBeVisible();
+
+    // A person in the office settles it; the next sync (here: the phone coming online) reads it.
+    officeAnswered = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(receipt.getByText("The office confirmed it has this.")).toBeVisible();
+    await expect(receipt.getByText("Sent", { exact: true })).toBeVisible();
+    await expect(receipt.getByText("Needs a check", { exact: true })).toHaveCount(0);
+
+    // Today says why the item left the red list, until the person has read it.
+    await page.goto("/today");
+    const settled = page.getByRole("region", { name: "The office has your saved item" });
+    await expect(settled.getByText("The office confirmed it has this.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "One saved item needs review" })).toHaveCount(0);
+    await settled.getByRole("button", { name: "Got it" }).click();
+    await expect(settled).toHaveCount(0);
+  });
 });
 
 /**

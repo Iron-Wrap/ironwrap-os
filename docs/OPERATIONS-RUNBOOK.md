@@ -185,6 +185,33 @@ attempted (only the two flag-gated bootstrap codes and the pipeline-board owner 
 it); `failed` means attempted and did not succeed, for example a stale `INGEST_TOKEN` answering
 401 on an intake write - that is the case that moves the exit code to `3`.
 
+### QA commercial journey
+
+`tools/seed-qa-journey.mjs` puts one synthetic commercial journey into `qa` through the governed
+routes only. It signs in as the seed owner `qa-seed@example.invalid`, then runs office lead (no
+acknowledgement mail), triage, an approved quote, a proposal, the publication (prepare, a
+`qa-synthetic-publication` effect claimed and settled through `/admin/effects/*`, record), a
+customer portal link and the accounting tester as an app user. Customer acceptance, the deposit
+and its approval stay with the two named testers. It never writes D1 directly, calls only an
+allowlist of routes, refuses any target that is not one of qa's own origins, and refuses any
+identity outside `example.invalid` and the two testers.
+
+```bash
+node tools/qa-seed-owner.mjs --sql-out output/qa/owner-access/qa-seed-owner.sql \
+  --secrets ~/.secrets/ironwrap/qa-release.env --apply
+QA_SEED_MAGIC_LINK_TOKEN=... EFFECT_RUNTIME_TOKEN=... node tools/seed-qa-journey.mjs \
+  --base-url https://<qa origin> --customer-tester <email> --accounting-tester <email>
+```
+
+`qa-seed-owner.mjs` writes one guarded batch: the seed owner, only when the email is absent and an
+active owner exists, with one `app_auth_audit` row (`owner:qa_seed_owner_directed_grant_outside_ui`),
+plus a fresh single-use sign-in with the app's own 15-minute lifetime. The raw token goes only to the
+secrets file; each journey run consumes one. Every journey step reads the job's commercial context
+first and does only what is missing, so a second run reports `created: 0`. The portal URL goes to
+`output/seed-env/qa/portal-link.json` (mode 600) and is never printed. The journey stops with
+`policy_expired` when the qa policy window in `workers-bus/wrangler.jsonc` has lapsed (renew it with a
+one-line edit), and with `seed_sign_in_refused` when the link was already used (mint a new one).
+
 ## Incident Triage
 
 1. Record UTC start time, affected source/tenant, release commit, Worker deployment, image digest,

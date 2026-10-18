@@ -26,6 +26,7 @@ import {
   productionIdentifiers,
   resolveTarget,
   summarize,
+  syntheticEstimate,
   syntheticLeads,
 } from "./seed-env.mjs";
 
@@ -314,6 +315,18 @@ test("syntheticLeads is deterministic, bounded, and clearly synthetic", () => {
   }
   assert.notEqual(leads[0].email, leads[1].email);
   assert.ok(MAX_LEADS === 25);
+});
+
+test("syntheticEstimate sends services as strings, the only shape the operating core materializes", () => {
+  // workers-bus/src/operating-core.ts smallJsonArray answers operating_core_json_invalid (a
+  // terminal 422 native_operating_core_rejected) to any non-string item; QA rejected the old
+  // object-shaped services, and its spent -001 key must not come back.
+  const { idempotencyKey, body } = syntheticEstimate();
+  assert.equal(idempotencyKey, "synth-seed-est-002");
+  assert.ok(Array.isArray(body.services) && body.services.length > 0);
+  assert.ok(body.services.every((service) => typeof service === "string" && service.length <= 200));
+  assert.match(body.email, /@example\.invalid$/);
+  assert.match(body.phone, /^\+1-780-555-\d{4}$/);
 });
 
 test("summarize shapes counts and run blocks, carrying exactly the step keys it was handed (R4.2: no capability_probe)", () => {

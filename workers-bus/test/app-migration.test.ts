@@ -115,14 +115,15 @@ test("non-production Worker environments never bind the production D1 database",
   }
 });
 
-test("document generation stays explicitly disabled in every checked-in Worker environment", async () => {
+test("document generation stays disabled in production and local, and is on in qa for owner testing", async () => {
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   flattenParsedVars(config.vars);
   for (const name of ["local", "qa"]) flattenParsedVars(config.env[name].vars);
   assert.equal(config.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
-  for (const name of ["local", "qa"])
-    assert.equal(config.env[name].vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_DOCUMENT_GENERATION_ENABLED, "false");
+  // qa writes generated documents only to its own R2 bucket; nothing leaves the environment.
+  assert.equal(config.env.qa.vars.APP_DOCUMENT_GENERATION_ENABLED, "true");
 });
 
 test("Wrangler environments declare Newo explicitly and qa keeps its queue isolated", async () => {
@@ -158,9 +159,13 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
   // The customer portal and its contract-acceptance half are on wherever the office control
   // plane exists. customerAcceptanceBackendConfigured now depends only on the native D1/R2
   // authority path plus mail delivery; retired Frappe/HMAC acceptance secrets are irrelevant.
+  // qa runs the BFF since 2026-10-02 (sign-in by magic link from the operator's mailbox), so the
+  // customer page family is on there too: its mail goes only to the customer address on the qa
+  // record, which is synthetic or a tester's own.
   for (const [name, environment] of [
     ["production", config],
     ["local", config.env.local],
+    ["qa", config.env.qa],
   ] as const) {
     assert.equal(
       environment.vars.APP_CUSTOMER_PORTAL_ENABLED,
@@ -173,16 +178,11 @@ test("Wrangler environments declare Newo explicitly and qa keeps its queue isola
       `${name} contract acceptance`,
     );
   }
-  // qa runs the BFF since 2026-10-02 (sign-in by magic link from the operator's mailbox), with
-  // the customer portal still off. The BFF is the only control plane that can revoke a live
-  // customer link, so customerPortalConfigured reports false whenever the portal is on and the
-  // BFF is off, which turns `/ready` red and blocks the release; the loop below keeps that pair.
+  // The BFF is the only control plane that can revoke a live customer link, so
+  // customerPortalConfigured reports false whenever the portal is on and the BFF is off, which
+  // turns `/ready` red and blocks the release; the loop below keeps that pair.
   assert.equal(config.env.qa.vars.APP_BFF_ENABLED, "true");
-  assert.equal(config.env.qa.vars.APP_CUSTOMER_PORTAL_ENABLED, "false");
-  assert.equal(
-    config.env.qa.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
-    "false",
-  );
+  assert.equal(config.env.qa.vars.APP_CUSTOMER_PORTAL_DECISION_ENABLED, "true");
   // The coupling itself, so a future flip of either flag alone cannot pass review.
   for (const environment of [config, config.env.local, config.env.qa]) {
     if (environment.vars.APP_CUSTOMER_PORTAL_ENABLED === "true") {
@@ -274,7 +274,7 @@ test("Wrangler gives measurement processing an isolated queue and DLQ in every e
     ],
     [
       // OCR is off in qa (owner decision 2026-09-29). Qa is a copy of the retired staging
-      // environment, not of production: 14 vars differ from top-level, six of them flags.
+      // environment, not of production, so several of its vars differ from the top level.
       "qa",
       config.env.qa,
       "ironwrap-qa-measurements",

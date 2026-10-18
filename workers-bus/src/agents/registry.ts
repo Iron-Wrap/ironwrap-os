@@ -6,8 +6,10 @@
 //
 // Argument conventions (AI-TEAM-CONTRACT.md "Argument conventions"): money in integer minor units
 // plus an ISO 4217 code, BCP 47 language tags, `<aggregate>_id` ids, a `reason_code` from a closed
-// vocabulary, and recipients as `to`, a canonical contact id.
+// vocabulary, and recipients as `to`, a canonical contact id. A reference that carries its kind is
+// `<kind>_ref`: `person:<id>`, `device:<id>`, or a signal's fact id, `signal/<id>`.
 
+import { ROLE_PERMISSIONS } from "../app-types.ts";
 import { COMPETENCY_KIND } from "../authority-record-native.ts";
 import { EXTERNAL_ISSUER_AUTHORITY_KINDS, type AuthorityRequirement } from "../authority-records.ts";
 import { isReservedEvidenceUploadReference } from "../evidence-upload-reference.ts";
@@ -23,6 +25,13 @@ export type Binding =
   | { kind: "exception" }
   /** Sets a specialist's hold flag (`specialist.hold`). */
   | { kind: "specialist_hold" }
+  /** An A0 read of the authority records, answered with the step's decision and never written (authority-read.ts). */
+  | { kind: "authority_read" }
+  /**
+   * No executor exists yet: the step asks first, and an approval records the decision and hands the
+   * work back to its reviewer to do by hand (control.ts `decideStep`). Nothing runs for it.
+   */
+  | { kind: "by_hand" }
   /**
    * Records, verifies or revokes an internal worker competency natively in D1 once a person
    * approves the step, with an owned-store readback (`authority.record`).
@@ -33,7 +42,11 @@ export type Binding =
 
 export interface RegistryEntry {
   args: JsonSchema;
-  /** A refusal the executor would give from the arguments alone, so the step is never proposed. */
+  /**
+   * A refusal from the arguments alone, so the step is never proposed: a rule the strict dialect
+   * cannot state (a field set only with one value of another), or one the executor would give. It
+   * runs on arguments the schema accepted; a code refuses them like the schema, null accepts.
+   */
   argsError?: (args: unknown) => string | null;
   binding: Binding;
   /**
@@ -58,13 +71,15 @@ const nullable = (schema: JsonSchema) => ({
   ...schema,
   type: [schema.type as string, "null"],
 });
+const recordId = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$" };
+const ref = (prefix: string) => ({ type: "string", pattern: `^${prefix}[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$` });
 const objectRef = {
   type: "object",
   additionalProperties: false,
   required: ["aggregate", "id", "version"],
   properties: {
     aggregate: { type: "string", pattern: "^[a-z][a-z0-9_]{1,40}$" },
-    id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$" },
+    id: recordId,
     version: { type: "integer", minimum: 0 },
   },
 };
@@ -169,6 +184,121 @@ const NOTE_ADD: RegistryEntry = {
   binding: { kind: "record" },
   machinePermitProven: false,
 };
+
+/** The roles a role change may give: every app role but the owner's. */
+const TARGET_ROLES = Object.keys(ROLE_PERMISSIONS).filter((role) => role !== "owner");
+const DEVICE_CHANGES = new Set(["replace_device", "revoke_device"]);
+
+// Prepared for a person to apply with access.change (H). Policy also checks `request_ref` against
+// the ask or request the run answers (policy.ts PERSON_REQUEST_ONLY).
+const ACCESS_PREPARE_CHANGE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["person_ref", "change", "target_role", "device_ref", "expected_access_version", "request_ref", "reason"],
+    properties: {
+      person_ref: ref("person:"),
+      change: { type: "string", enum: ["pair_device", "replace_device", "revoke_device", "change_role"] },
+      target_role: { type: ["string", "null"], enum: [...TARGET_ROLES, null] },
+      device_ref: nullable(ref("device:")),
+      // Checked against the person's access when a person applies the change.
+      expected_access_version: { type: "integer", minimum: 1 },
+      request_ref: ref("signal/"),
+      reason: text(600),
+    },
+  },
+  // A role change names its role and nothing else does; a device change names its device.
+  argsError: (args) => {
+    const { change, target_role, device_ref } = args as Record<string, unknown>;
+    return (target_role !== null) === (change === "change_role") && (device_ref !== null) === DEVICE_CHANGES.has(change as string)
+      ? null
+      : "access_change_fields";
+  },
+  binding: { kind: "record" },
+  machinePermitProven: false,
+};
+
+const AUTHORITY_EVALUATE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["authority_id", "job_id", "applicability_id", "assignment_id"],
+    properties: { authority_id: recordId, job_id: recordId, applicability_id: recordId, assignment_id: recordId },
+  },
+  binding: { kind: "authority_read" },
+  machinePermitProven: false,
+};
+
+/** A settings edit's values by key, flat: 1 to 20 keys, each a scalar. */
+const settingValues = {
+  type: "object",
+  additionalProperties: { type: ["string", "number", "boolean", "null"], maxLength: 600 },
+  propertyNames: { type: "string", pattern: "^[a-z][a-z0-9_]{0,63}$" },
+  minProperties: 1,
+  maxProperties: 20,
+};
+
+// A preview for the person who applies it (settings.apply, H). `before` must still equal the
+// current values when they do.
+const SETTINGS_PROPOSE_CHANGE: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["settings_id", "before", "after"],
+    properties: { settings_id: recordId, before: settingValues, after: settingValues },
+  },
+  argsError: (args) => {
+    const { before, after } = args as Record<string, Record<string, unknown>>;
+    return sameKeys(before, after) ? null : "settings_keys_differ";
+  },
+  binding: { kind: "record" },
+  machinePermitProven: false,
+};
+
+const IMPORT_RETRY_FAILED: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["import_run_id", "source_keys"],
+    properties: {
+      import_run_id: recordId,
+      // The failed items only, each by its source key as the import recorded it.
+      source_keys: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: text(240) },
+    },
+  },
+  // The predecessor re-runs a whole file (POST /admin/crm-import/execute), so no executor retries
+  // failed items yet: the owner approves, then takes the retry over.
+  binding: { kind: "by_hand" },
+  machinePermitProven: false,
+};
+
+const LEAD_FACT_CONFIRM: RegistryEntry = {
+  args: {
+    type: "object",
+    additionalProperties: false,
+    required: ["lead_id", "proposal_id", "fields"],
+    properties: {
+      lead_id: recordId,
+      proposal_id: recordId,
+      // Values copied from the proposal; null leaves that fact unconfirmed. At least one is set.
+      fields: {
+        type: "object",
+        additionalProperties: false,
+        required: ["service", "scope", "address", "timing"],
+        properties: { service: nullable(text(200)), scope: nullable(text(2000)), address: nullable(text(600)), timing: nullable(text(600)) },
+      },
+    },
+  },
+  argsError: (args) => (Object.values((args as { fields: Record<string, unknown> }).fields).some((value) => value !== null) ? null : "lead_fields_empty"),
+  // No executor writes lead facts yet: sales approves, then confirms them by hand.
+  binding: { kind: "by_hand" },
+  machinePermitProven: false,
+};
+
+function sameKeys(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key));
+}
 
 // No control characters and no leading or trailing space, so an authority value is stored as sent.
 const exactText = (maxLength: number, minLength = 1) => ({
@@ -336,11 +466,11 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "delegation.set": NOT_YET_REGISTERED,
   "policy.propose_change": NOT_YET_REGISTERED,
   "policy.activate": NOT_YET_REGISTERED,
-  "settings.propose_change": NOT_YET_REGISTERED,
+  "settings.propose_change": SETTINGS_PROPOSE_CHANGE,
   "settings.apply": NOT_YET_REGISTERED,
   "onboarding.go_live": NOT_YET_REGISTERED,
   "dead_letter.replay": NOT_YET_REGISTERED,
-  "import.retry_failed": NOT_YET_REGISTERED,
+  "import.retry_failed": IMPORT_RETRY_FAILED,
   "market_alert.raise": NOT_YET_REGISTERED,
   "storm_watch.open": NOT_YET_REGISTERED,
   "storm_mode.propose": NOT_YET_REGISTERED,
@@ -349,7 +479,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "inquiry.classify": NOT_YET_REGISTERED,
   "inquiry.link_duplicate": NOT_YET_REGISTERED,
   "inquiry.record_triage": NOT_YET_REGISTERED,
-  "lead_fact.confirm": NOT_YET_REGISTERED,
+  "lead_fact.confirm": LEAD_FACT_CONFIRM,
   "inquiry.close": NOT_YET_REGISTERED,
   "inbound.quarantine": NOT_YET_REGISTERED,
   "inbound.release": NOT_YET_REGISTERED,
@@ -449,7 +579,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "write_off.record": NOT_YET_REGISTERED,
   "filing.draft_packet": NOT_YET_REGISTERED,
   "filing.submit": NOT_YET_REGISTERED,
-  "authority.evaluate": NOT_YET_REGISTERED,
+  "authority.evaluate": AUTHORITY_EVALUATE,
   "gate.block": NOT_YET_REGISTERED,
   "gate.clear": NOT_YET_REGISTERED,
   "gate.waive": NOT_YET_REGISTERED,
@@ -457,7 +587,7 @@ export const REGISTRY: Record<string, RegistryEntry | null> = {
   "authority.record": AUTHORITY_RECORD,
   "privacy_request.answer": NOT_YET_REGISTERED,
   "privacy_incident.contain": NOT_YET_REGISTERED,
-  "access.prepare_change": NOT_YET_REGISTERED,
+  "access.prepare_change": ACCESS_PREPARE_CHANGE,
   "access.change": NOT_YET_REGISTERED,
   "service_case.open": NOT_YET_REGISTERED,
   "emergency.page": EMERGENCY_PAGE,

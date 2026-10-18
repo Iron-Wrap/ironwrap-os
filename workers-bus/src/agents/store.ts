@@ -4,10 +4,11 @@
 
 import { sha256Hex } from "../app-auth.ts";
 import { CATALOG, CATALOG_VERSION, catalogAction, catalogSpecialist, toolName } from "./catalog.ts";
-import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision } from "./policy.ts";
+import { DEFAULT_CEILINGS, evaluateStep, PERSON_REQUEST_ONLY, STEP_POLICY_ID, STEP_POLICY_VERSION, type Citation, type PolicyDecision, type StepInput } from "./policy.ts";
+import { evaluateAuthority, type AuthorityEvaluation, type AuthorityReadRefusal } from "./authority-read.ts";
 import { currentDelegation, specialistControl, specialistState, withinCeiling, executeStep, type Notify } from "./control.ts";
 import { actorWord, ASK_UNANSWERED_MS, askerRole, PERSON_CODES, recordAskClose, signalActor, VIEW_SCHEMA, viewSources, type AskRun, type ViewVerdict } from "./face.ts";
-import { citedFacts, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
+import { citedFacts, factHash, factReader, hydrate, refOf, subjectFacts, subjectsFacts, type ContextFact, type FactRef, type OmittedFact, type Reader } from "./memory.ts";
 import { OBJECT_MODELS } from "./read-models.ts";
 import { divertsToShadow, recordShadowStep, runMode, signalActions, type ShadowStepRow } from "./shadow.ts";
 import { WATCH_SIGNAL_SOURCE } from "./watches.ts";
@@ -241,11 +242,22 @@ export function toolsFor(specialistId: string): RunTool[] {
       autonomy: action.autonomy,
       side_effect_class: action.side_effect_class,
       undo: action.undo,
-      description: `${action.action_id} on ${action.aggregate}${action.protective ? " (protective)" : ""}.`,
+      description: `${action.action_id} on ${action.aggregate}: ${action.name ?? action.action_id}${action.protective ? " (protective)" : ""}.`,
       args_schema: entry.args,
     });
   }
   return tools;
+}
+
+/**
+ * The people-only acts a specialist's run may name in its receipts, by catalog name: the H actions
+ * it owns. Names only, never tools. The Worker reads no allowlist, and an allowlist names no H
+ * action (agent-host/specialists/README.md), so these are all of them.
+ */
+export function peopleOnlyFor(specialistId: string): Array<{ action_id: string; name: string }> {
+  return catalogActionsOwnedBy(specialistId)
+    .filter((action) => action.autonomy === "H" || action.human_only)
+    .map((action) => ({ action_id: action.action_id, name: action.name ?? action.action_id }));
 }
 
 function catalogActionsOwnedBy(specialistId: string) {
@@ -277,7 +289,10 @@ export async function openRun(
   const memory = watchObjects
     ? await subjectsFacts(db, OBJECT_MODELS, tenantId, signal.specialist_id, watchObjects, now)
     : await subjectFacts(db, OBJECT_MODELS, tenantId, asker === null ? signal.specialist_id : { role: asker }, subject, now);
-  const facts = [signalFact(signal), ...memory.facts];
+  // A handoff run also starts from the person's ask or request at the root of its chain.
+  const root = signal.kind === "handoff" ? await rootOf(db, tenantId, signal) : null;
+  const request = root ? await rootRequestFact(root, signal.specialist_id) : null;
+  const facts = [signalFact(signal), ...(request ? [request] : []), ...memory.facts];
   const snapshotHash = await sha256Hex(canonicalJson(facts.map(({ fact_id, version, hash }) => ({ fact_id, version, hash }))));
   const tools = toolsFor(signal.specialist_id);
   const manifestHash = await sha256Hex(canonicalJson(tools));
@@ -445,19 +460,82 @@ function refOnly(fact: FactRef & { data?: unknown }): FactRef {
   return ref;
 }
 
-/** Reads a run's facts again: canonical objects through the read models, the signal from its row. */
+/**
+ * Reads a run's facts again: canonical objects through the read models, and from their rows the
+ * run's signal and, on a handoff run, the ask or request at the root of its chain.
+ */
 export function runFactReader(db: AgentDb, tenantId: string, run: RunRow, now: string) {
   return factReader(db, OBJECT_MODELS, tenantId, runReader(run), now, async (ref) => {
     try {
-      const signal = await db
-        .prepare("SELECT * FROM agent_signals WHERE tenant_id = ? AND signal_id = ?")
-        .bind(tenantId, ref.fact_id.slice("signal/".length))
-        .first<SignalRow>();
-      return signal && signal.signal_id === run.signal_id ? signalFact(signal) : null;
+      const signal = await runSignalRow(db, tenantId, run);
+      if (ref.fact_id === `signal/${signal.signal_id}`) return signalFact(signal);
+      const root = signal.kind === "handoff" ? await rootOf(db, tenantId, signal) : null;
+      return root && ref.fact_id === `signal/${root.signal_id}` ? await rootRequestFact(root, run.specialist_id) : null;
     } catch {
       return null; // Unreadable now: unverifiable, never assumed current.
     }
   });
+}
+
+/**
+ * The signal a chain of handoffs started from: each handoff leads to the run that created it
+ * (`parent_run_id`) and on to that run's signal. Null when a link is missing, or when more handoffs
+ * than the depth ceiling allows lead back from it, which also ends a chain that loops. Any other
+ * signal is its own root.
+ */
+async function rootOf(db: AgentDb, tenantId: string, signal: SignalRow): Promise<SignalRow | null> {
+  let current = signal;
+  for (let hops = 0; current.kind === "handoff"; hops += 1) {
+    if (!current.parent_run_id || hops >= DEFAULT_CEILINGS.handoffDepth) return null;
+    const parent = await db
+      .prepare(
+        `SELECT s.* FROM agent_runs r JOIN agent_signals s ON s.tenant_id = r.tenant_id AND s.signal_id = r.signal_id
+          WHERE r.tenant_id = ? AND r.run_id = ?`,
+      )
+      .bind(tenantId, current.parent_run_id)
+      .first<SignalRow>();
+    if (!parent) return null;
+    current = parent;
+  }
+  return current;
+}
+
+/**
+ * The person's ask or request at the root of a handoff run's chain, as fact `signal/<id>` at version
+ * 1, or null when the root is no such signal. Its `source` and `actor` are the Worker's record. An
+ * ask reads back only for its asker and the owner (ask.ts `askFor`), and a run reads as a role, so
+ * `content` is there only for a run that reads as the owner; a fact with it is untrusted text, as
+ * every signal's content is, and one without it is the Worker's own.
+ */
+async function rootRequestFact(root: SignalRow, specialistId: string): Promise<ContextFact | null> {
+  const actor = signalActor(root);
+  if (!actor) return null;
+  const readsContent = catalogSpecialist(specialistId)?.reviewer_role === "owner";
+  const data = {
+    signal_id: root.signal_id,
+    kind: root.kind,
+    source: actorWord(root),
+    actor,
+    ...(readsContent ? { content: JSON.parse(root.content_json) as unknown } : {}),
+  };
+  return {
+    fact_id: `signal/${root.signal_id}`,
+    kind: "signal",
+    version: 1,
+    hash: await factHash(data),
+    trust: readsContent ? "untrusted_text" : "owned",
+    observed_at: root.received_at,
+    fresh_until: null,
+    data,
+  };
+}
+
+/** The signal a run answers, for policy's `requester`: its own, or the root of its handoff chain. */
+async function runRequest(db: AgentDb, tenantId: string, run: RunRow): Promise<StepInput["requester"]> {
+  const root = await rootOf(db, tenantId, await runSignalRow(db, tenantId, run));
+  if (!root) return null;
+  const actor = signalActor(root);
+  return { signal_ref: `signal/${root.signal_id}`, kind: root.kind, source: actor ? actorWord(root) : root.source, actor };
 }
 
 export function runTools(run: RunRow): RunTool[] {
@@ -523,7 +601,7 @@ export async function proposeStep(
   input: ProposeInput,
   nowMs: number,
   notify: Notify | null = null,
-): Promise<StepRow | { shadow: ShadowStepRow } | StoreError> {
+): Promise<(StepRow & StepRead) | { shadow: ShadowStepRow } | StoreError> {
   const argsJson = canonicalJson(input.args ?? null);
   const argsSha = await sha256Hex(argsJson);
   const priorShadow = await db.prepare("SELECT * FROM agent_shadow_steps WHERE run_id = ? AND step_key = ?").bind(run.run_id, input.step_key).first<ShadowStepRow>();
@@ -535,7 +613,9 @@ export async function proposeStep(
     const replay = await replayStep(db, tenantId, run, prior, input, argsSha);
     if ("error" in replay) return replay;
     await executeStep(db, tenantId, run, replay, new Date(nowMs).toISOString(), notify);
-    return (await stepByKey(db, run.run_id, input.step_key)) ?? replay;
+    // A repeated read answers with the records as they read now.
+    const repeated = (await stepByKey(db, run.run_id, input.step_key)) ?? replay;
+    return answered(repeated, repeated.outcome === "succeeded" ? await stepRead(db, tenantId, run, repeated.action_id, input.args, new Date(nowMs).toISOString()) : null);
   }
   // Shadow steps count toward the run's step ceiling like receipts do.
   const count = await db
@@ -558,8 +638,8 @@ export async function proposeStep(
     delegation?.setting === "within_limits"
       ? await withinCeiling(db, tenantId, run.specialist_id, input.action_id, delegation.ceiling, input.args, nowMs)
       : false;
-  // An action only a person's own request may start is checked against who made the run's signal.
-  const requester = PERSON_REQUEST_ONLY.has(input.action_id) ? signalActor(await runSignalRow(db, tenantId, run)) : undefined;
+  // An action only a person's own request may start is checked against the request the run answers.
+  const requester = PERSON_REQUEST_ONLY.has(input.action_id) ? await runRequest(db, tenantId, run) : undefined;
   let decision = evaluateStep({
     requester,
     specialistId: run.specialist_id,
@@ -593,8 +673,12 @@ export async function proposeStep(
       reviewer_role: catalogSpecialist(run.specialist_id)?.reviewer_role ?? "owner",
     };
   }
-  decision = askReviewer(run, input.action_id, decision);
   const now = new Date(nowMs).toISOString();
+  // An admitted read reads now. One its reader may not make, or that fails, stops as an
+  // abstention instead of being recorded as done.
+  const read = decision.outcome === "succeeded" ? await stepRead(db, tenantId, run, input.action_id, input.args, now) : null;
+  if (read && "reason" in read.evaluation) decision = readStop(decision, read.evaluation.reason, run.specialist_id);
+  decision = askReviewer(run, input.action_id, decision);
   // A shadowed action is decided as it would be, then recorded as a shadow step: no receipt, permit,
   // person, handoff or effect can come of it (migration 0203).
   // A step past the run's ceiling is not diverted: it abstains as a receipt that names a person.
@@ -728,7 +812,57 @@ export async function proposeStep(
   const replay = await replayStep(db, tenantId, run, step, input, argsSha);
   if ("error" in replay) return replay;
   await executeStep(db, tenantId, run, step, now, notify);
-  return (await stepByKey(db, run.run_id, input.step_key)) ?? step;
+  return answered((await stepByKey(db, run.run_id, input.step_key)) ?? step, read);
+}
+
+/**
+ * What a read step answers besides its decision (`authority.evaluate`, registry binding
+ * `authority_read`): the authority records as its run's reader may read them, or why they were not
+ * read. Empty for every other step.
+ */
+export interface StepRead {
+  evaluation?: AuthorityEvaluation | AuthorityReadRefusal;
+}
+
+/** The closest abstention code, and the failed check the receipt keeps, for a read that stopped. */
+const READ_STOPS = {
+  role_may_not_read: { code: "out_of_scope", check: "read_rights" },
+  read_failed: { code: "fact_missing", check: "read" },
+} as const;
+
+async function stepRead(db: AgentDb, tenantId: string, run: RunRow, actionId: string, args: unknown, now: string): Promise<Required<StepRead> | null> {
+  if (registryEntry(actionId)?.binding.kind !== "authority_read") return null;
+  const reader = runReader(run);
+  const role = typeof reader === "string" ? (catalogSpecialist(reader)?.reviewer_role ?? null) : reader.role;
+  return { evaluation: await evaluateAuthority(db, tenantId, role, args as { authority_id: string; job_id: string; assignment_id: string }, now) };
+}
+
+/** A read that stopped abstains for the specialist's reviewer, with the reason the read gave. */
+function readStop(decision: PolicyDecision, reason: AuthorityReadRefusal["reason"], specialistId: string): PolicyDecision {
+  return {
+    ...decision,
+    result: "deny",
+    outcome: "abstained",
+    reason_codes: [READ_STOPS[reason].code],
+    checks: [...decision.checks, { check: READ_STOPS[reason].check, passed: false }],
+    permit_kind: "none",
+    delegation_id: null,
+    reviewer_role: catalogSpecialist(specialistId)?.reviewer_role ?? "owner",
+  };
+}
+
+/**
+ * The step with what its read answers: the evaluation only when the step is recorded as done, and
+ * the reason when the read stopped it, which a repeat reads back from the receipt's failed check.
+ */
+function answered(step: StepRow, read: Required<StepRead> | null): StepRow & StepRead {
+  if (registryEntry(step.action_id)?.binding.kind !== "authority_read") return step;
+  const checks = (JSON.parse(step.policy_json) as { checks: Array<{ check: string; passed: boolean }> }).checks;
+  const stopped = (Object.keys(READ_STOPS) as Array<AuthorityReadRefusal["reason"]>).find((reason) =>
+    checks.some((check) => check.check === READ_STOPS[reason].check && !check.passed),
+  );
+  if (stopped) return { ...step, evaluation: { reason: stopped } };
+  return step.outcome === "succeeded" && read ? { ...step, evaluation: read.evaluation } : step;
 }
 
 /**
